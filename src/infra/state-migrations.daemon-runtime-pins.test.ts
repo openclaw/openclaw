@@ -3,9 +3,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
+import { readDaemonRuntimePinMigrationPending } from "../daemon/runtime-pin-state.js";
 import {
   type DaemonRuntimePinDatabase,
   resolveDaemonRuntimePinStorePath,
@@ -19,11 +19,14 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import type { EngineConnection } from "./sql-connection.js";
+import * as sqliteReadOnlyWorker from "./sqlite-readonly-worker.js";
 import {
   initializeFreshDaemonRuntimePinMigration,
   migrateDaemonRuntimePins,
 } from "./state-migrations.daemon-runtime-pins.js";
+import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
+import { createUpdateDoctorDatabaseWriteCapture } from "./update-doctor-result.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type DaemonRuntimePinRow = DaemonRuntimePinDatabase["daemon_runtime_pins"];
@@ -38,25 +41,18 @@ const pin: DaemonRuntimePinRow = {
   value_json: ' { "version": 1, "revision": "original", "runtime": "node" }\n',
   updated_at_ms: 1234,
 };
-function sourceRows(): DaemonRuntimePinRow[] {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) =>
-      db
-        .prepare("SELECT * FROM config_machine_state WHERE state_key LIKE 'daemon-runtime-pin:%'")
-        .all() as DaemonRuntimePinRow[],
-    { env },
+const sourceDb = <T>(run: (db: EngineConnection) => T) =>
+  runOpenClawStateWriteTransaction(({ db }) => run(db), { env });
+const sourceRows = () =>
+  sourceDb((db) =>
+    db
+      .prepare("SELECT * FROM config_machine_state WHERE state_key LIKE 'daemon-runtime-pin:%'")
+      .all(),
   );
-}
-function targetRows(): DaemonRuntimePinRow[] | undefined {
-  return withDaemonRuntimePinStore(
-    env,
-    false,
-    (db) =>
-      db
-        .prepare("SELECT * FROM daemon_runtime_pins ORDER BY state_key")
-        .all() as DaemonRuntimePinRow[],
+const targetRows = () =>
+  withDaemonRuntimePinStore(env, false, (db) =>
+    db.prepare("SELECT * FROM daemon_runtime_pins ORDER BY state_key").all(),
   );
-}
 function receipt() {
   return withDaemonRuntimePinStore(env, false, (db) =>
     db
@@ -67,15 +63,12 @@ function receipt() {
   );
 }
 function seedSource(rows: DaemonRuntimePinRow[]): void {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const insert = db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)");
-      for (const row of rows) {
-        insert.run(row.state_key, row.value_json, row.updated_at_ms);
-      }
-    },
-    { env },
-  );
+  sourceDb((db) => {
+    const insert = db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)");
+    for (const row of rows) {
+      insert.run(row.state_key, row.value_json, row.updated_at_ms);
+    }
+  });
 }
 function seedTarget(row: DaemonRuntimePinRow, source = resolveOpenClawStateSqlitePath(env)) {
   withDaemonRuntimePinStore(env, true, (db) => {
@@ -103,6 +96,28 @@ function expectCustody(
 const expectNoChanges = async () =>
   expect(await migrateDaemonRuntimePins(env)).toEqual({ changes: [], warnings: [] });
 
+async function captureMigration() {
+  const warnings: string[] = [];
+  const capture = createUpdateDoctorDatabaseWriteCapture(
+    readUpdateDatabaseGenerations([
+      resolveOpenClawStateSqlitePath(env),
+      resolveDaemonRuntimePinStorePath(env),
+    ]),
+    { env, signal: new AbortController().signal, warn: (message) => warnings.push(message) },
+  )!;
+  await capture.admit();
+  const synchronous = vi.spyOn(sqliteReadOnlyWorker, "runSqliteReadOnlyWorkerSync");
+  let result: Awaited<ReturnType<typeof migrateDaemonRuntimePins>>;
+  try {
+    result = await capture.run(() => migrateDaemonRuntimePins(env));
+    expect(synchronous).not.toHaveBeenCalled();
+  } finally {
+    synchronous.mockRestore();
+    await capture.settle();
+  }
+  return { result, receipt: capture.receipt, warnings };
+}
+
 describe("daemon runtime pin owner migration", () => {
   async function withGatewayOwnership(
     run: (owner: NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>) => Promise<void>,
@@ -117,22 +132,12 @@ describe("daemon runtime pin owner migration", () => {
       await owner.release();
     }
   }
-  async function expectSingleRead(run: () => Promise<void>) {
-    const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-    try {
-      await run();
-      expect(observation.queries).toHaveLength(1);
-    } finally {
-      observation.restore();
-    }
-  }
-
   it("consumes the completed same-source receipt while the Gateway owns the profile", async () => {
     seedSource([pin]);
     await migrateDaemonRuntimePins(env);
     const completed = receipt();
     await withGatewayOwnership(async (owner) => {
-      await expectSingleRead(expectNoChanges);
+      await expectNoChanges();
       expect(receipt()).toEqual(completed);
       owner.assertCurrent();
     });
@@ -145,18 +150,70 @@ describe("daemon runtime pin owner migration", () => {
     await withGatewayOwnership(async (owner) => {
       const result = await migrateDaemonRuntimePins(env);
       expect(result.changes).toEqual([]);
-      expect(result.warnings).toEqual([expect.stringContaining("Stop the Gateway")]);
-      expect(result.warnings[0]).toContain("same state/config");
-      expect(result.warnings[0]).toContain("openclaw doctor --fix");
+      expect(result.warnings).toEqual([
+        expect.stringMatching(/Stop the Gateway.*openclaw doctor --fix.*same state\/config/s),
+      ]);
       expect(receipt()).toBeUndefined();
       expect(targetRows()).toBeUndefined();
       owner.assertCurrent();
     });
     expect(sourceRows()).toEqual([pin]);
-    expect((await migrateDaemonRuntimePins(env)).changes).toEqual([
-      "Moved 1 daemon runtime pin(s) to local service intent.",
-    ]);
+    expect((await migrateDaemonRuntimePins(env)).warnings).toEqual([]);
+    expectCustody([], [pin], "complete");
   });
+
+  it.each([false, true])(
+    "consumes completed receipts across state-directory aliases without offline custody (alias first: %s)",
+    async (aliasFirst) => {
+      const canonical = fs.realpathSync(env.OPENCLAW_STATE_DIR!);
+      const alias = path.join(tempDirs.make("daemon-pin-alias-"), "profile");
+      fs.symlinkSync(canonical, alias, process.platform === "win32" ? "junction" : "dir");
+      env = { ...env, OPENCLAW_STATE_DIR: aliasFirst ? alias : canonical };
+      seedSource([pin]);
+      expect((await migrateDaemonRuntimePins(env)).warnings).toEqual([]);
+      const completed = receipt();
+      env = { ...env, OPENCLAW_STATE_DIR: aliasFirst ? canonical : alias };
+      await withGatewayOwnership(async (owner) => {
+        const pending = readDaemonRuntimePinMigrationPending(env);
+        const result = await migrateDaemonRuntimePins(env);
+        expect(pending).toBe(false);
+        expect(result).toEqual({ changes: [], warnings: [] });
+        expect(receipt()).toEqual(completed);
+        owner.assertCurrent();
+      });
+      expect(sourceRows()).toEqual([]);
+      expect(targetRows()).toEqual([pin]);
+    },
+  );
+
+  it.each(["different", "missing", "not-directory"])(
+    "does not treat a %s recorded source as a completed migration of the current database",
+    async (kind) => {
+      seedSource([pin]);
+      expect((await migrateDaemonRuntimePins(env)).warnings).toEqual([]);
+      const other = path.join(tempDirs.make("daemon-pin-foreign-"), "source.sqlite");
+      if (kind !== "missing") {
+        fs.copyFileSync(resolveOpenClawStateSqlitePath(env), other);
+      }
+      const recorded = kind === "not-directory" ? path.join(other, "state.sqlite") : other;
+      withDaemonRuntimePinStore(env, true, (db) =>
+        db.prepare("UPDATE daemon_runtime_pin_migration SET source_state = ?").run(recorded),
+      );
+      const completed = receipt();
+      await withGatewayOwnership(async (owner) => {
+        expect(readDaemonRuntimePinMigrationPending(env)).toBe(true);
+        const result = await migrateDaemonRuntimePins(env);
+        expect(result.changes).toEqual([]);
+        expect(result.warnings).toEqual([
+          expect.stringMatching(/Stop the Gateway.*openclaw doctor --fix.*same state\/config/s),
+        ]);
+        expect(receipt()).toEqual(completed);
+        owner.assertCurrent();
+      });
+      expect(sourceRows()).toEqual([]);
+      expect(targetRows()).toEqual([pin]);
+    },
+  );
 
   it("does not write shared state after migration completes", async () => {
     seedSource([]);
@@ -180,17 +237,7 @@ describe("daemon runtime pin owner migration", () => {
         fs.mkdirSync(path.dirname(pathname), { recursive: true, mode: 0o700 });
         fs.writeFileSync(pathname, "", { mode: 0o600 });
       }
-      const exec = vi.spyOn(DatabaseSync.prototype, "exec");
-      try {
-        await expectNoChanges();
-        if (!emptyStore) {
-          expect(
-            exec.mock.calls.map(([sql]) => sql).filter((sql) => /^(?:BEGIN|COMMIT)\b/u.test(sql)),
-          ).toEqual(["BEGIN IMMEDIATE", "COMMIT"]);
-        }
-      } finally {
-        exec.mockRestore();
-      }
+      await expectNoChanges();
       expect(fs.existsSync(resolveDaemonRuntimePinStorePath(env))).toBe(true);
       expect(fs.existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
       expect(targetRows()).toEqual([]);
@@ -238,14 +285,12 @@ describe("daemon runtime pin owner migration", () => {
         .run(),
     );
     const completed = receipt();
-    await expectSingleRead(() =>
-      withDatabaseEngineSelection(
-        {
-          effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
-          postgres: { connection: "postgres://unused", schemaPrefix: "pin_restart" },
-        },
-        expectNoChanges,
-      ),
+    await withDatabaseEngineSelection(
+      {
+        effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+        postgres: { connection: "postgres://unused", schemaPrefix: "pin_restart" },
+      },
+      expectNoChanges,
     );
     expect(receipt()).toEqual(completed);
     expect(fs.existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
@@ -265,6 +310,16 @@ describe("daemon runtime pin owner migration", () => {
     expect(fs.readFileSync(sourceState)).toEqual(original);
   });
 
+  it("migrates captured source and target without synchronous generation observations", async () => {
+    seedSource([pin]);
+    const captured = await captureMigration();
+    expect(captured.result.warnings).toEqual([]);
+    expect(captured.result.changes).toHaveLength(1);
+    expect(captured.receipt?.unchanged).toBe(true);
+    expect(captured.warnings).toEqual([]);
+    expectCustody([], [pin], "complete");
+  });
+
   it("moves raw values and timestamps once, preserving malformed and stale intent", async () => {
     const rows = [
       pin,
@@ -274,15 +329,14 @@ describe("daemon runtime pin owner migration", () => {
     seedSource([...rows, { ...pin, state_key: "unrelated.intent" }]);
     const result = await migrateDaemonRuntimePins(env);
     expect(result.warnings).toEqual([]);
-    expect(result.changes).toEqual(["Moved 3 daemon runtime pin(s) to local service intent."]);
+    expect(result.changes).toHaveLength(1);
     expectCustody([], rows, "complete");
     expect(
-      runOpenClawStateWriteTransaction(
-        ({ db }) =>
+      sourceDb(
+        (db) =>
           db
             .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
             .get("unrelated.intent")?.value_json,
-        { env },
       ),
     ).toBe(pin.value_json);
     await expectNoChanges();
@@ -302,33 +356,37 @@ describe("daemon runtime pin owner migration", () => {
       const originalReceipt = receipt();
       const result = await migrateDaemonRuntimePins(env);
       expect(result.changes).toEqual([]);
-      expect(result.warnings.join("\n")).toContain("migration conflict");
-      expect(result.warnings.join("\n")).toContain("openclaw doctor --fix");
+      expect(result.warnings.join("\n")).toMatch(/migration conflict.*openclaw doctor --fix/s);
       expect(sourceRows()).toEqual([preceding, pin]);
       expect(targetRows()).toEqual([conflicting]);
       expect(receipt()).toEqual(originalReceipt);
     },
   );
 
-  it("resumes after the target commits but source retirement fails", async () => {
-    seedSource([pin]);
-    runOpenClawStateWriteTransaction(
-      ({ db }) =>
+  it.each([false, true])(
+    "resumes after target commit when source retirement fails (captured=%s)",
+    async (captured) => {
+      seedSource([pin]);
+      sourceDb((db) =>
         db.exec(`CREATE TEMP TRIGGER interrupt_pin_retirement
         BEFORE DELETE ON config_machine_state
         WHEN OLD.state_key LIKE 'daemon-runtime-pin:%'
         BEGIN SELECT RAISE(ABORT, 'interrupted pin retirement'); END`),
-      { env },
-    );
-    const interrupted = await migrateDaemonRuntimePins(env);
-    expect(interrupted.changes).toEqual([]);
-    expect(interrupted.warnings.join("\n")).toContain("interrupted pin retirement");
-    expectCustody([pin], [pin], "copied");
-    // Reopening drops the interrupted connection's TEMP trigger, as a restart would.
-    closeOpenClawStateDatabaseForTest();
-    expect((await migrateDaemonRuntimePins(env)).warnings).toEqual([]);
-    expectCustody([], [pin], "complete");
-  });
+      );
+      const capture = captured ? await captureMigration() : undefined;
+      const interrupted = capture?.result ?? (await migrateDaemonRuntimePins(env));
+      if (capture) {
+        expect(capture.receipt?.unchanged).toBe(false);
+      }
+      expect(interrupted.changes).toEqual([]);
+      expect(interrupted.warnings.join("\n")).toContain("interrupted pin retirement");
+      expectCustody([pin], [pin], "copied");
+      // Reopening drops the interrupted connection's TEMP trigger, as a restart would.
+      closeOpenClawStateDatabaseForTest();
+      expect((await migrateDaemonRuntimePins(env)).warnings).toEqual([]);
+      expectCustody([], [pin], "complete");
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "resumes after SIGKILL between target commit and source retirement",

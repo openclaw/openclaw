@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { z } from "zod";
 import { readCodexNativeSubagentRunId } from "../app-server/native-subagent-assignment.js";
@@ -18,6 +19,28 @@ import {
   CODEX_APP_SERVER_BINDING_NAMESPACE,
 } from "../app-server/session-binding-meta.js";
 import type { StoredCodexAppServerBinding } from "../app-server/session-binding-record.js";
+
+const loadSessionBindingRecord = createLazyRuntimeModule(
+  () => import("../app-server/session-binding-record.js"),
+);
+const loadSqliteRuntime = createLazyRuntimeModule(async () => {
+  const {
+    withSqliteReadOnlyInspection,
+    executeSqliteQuerySync,
+    getNodeSqliteKysely,
+    openNodeSqliteDatabase,
+    resolveExistingSqliteFileUri,
+    runSqliteImmediateTransactionSync,
+  } = await import("openclaw/plugin-sdk/sqlite-runtime");
+  return {
+    withSqliteReadOnlyInspection,
+    executeSqliteQuerySync,
+    getNodeSqliteKysely,
+    openNodeSqliteDatabase,
+    resolveExistingSqliteFileUri,
+    runSqliteImmediateTransactionSync,
+  };
+});
 
 type Params = Parameters<PluginDoctorStateMigration["migrateLegacyState"]>[0];
 type AssignmentSessionStore = Pick<
@@ -112,9 +135,8 @@ async function inspect(params: Params) {
     }
     throw error;
   }
-  const { bindingStoreKey, readStoredCodexAppServerBinding } =
-    await import("../app-server/session-binding-record.js");
-  const { withSqliteReadOnlyInspection } = await import("openclaw/plugin-sdk/sqlite-runtime");
+  const { bindingStoreKey, readStoredCodexAppServerBinding } = await loadSessionBindingRecord();
+  const { withSqliteReadOnlyInspection } = await loadSqliteRuntime();
   const { executeSqliteQuerySync, getNodeSqliteKysely, tableExists } =
     await import("openclaw/plugin-sdk/sqlite-worker-runtime");
   return await withSqliteReadOnlyInspection(source, (db) => {
@@ -273,9 +295,8 @@ async function settleHistoricalDelivery(
     openNodeSqliteDatabase,
     resolveExistingSqliteFileUri,
     runSqliteImmediateTransactionSync,
-  } = await import("openclaw/plugin-sdk/sqlite-runtime");
-  const { readStoredCodexAppServerBinding } =
-    await import("../app-server/session-binding-record.js");
+  } = await loadSqliteRuntime();
+  const { readStoredCodexAppServerBinding } = await loadSessionBindingRecord();
   const db = openNodeSqliteDatabase(resolveExistingSqliteFileUri(databasePath(params)));
   try {
     const sql = getNodeSqliteKysely<LegacyDatabase>(db);
@@ -358,8 +379,7 @@ export const codexNativeTaskAssignmentMigration = {
     if (rows.length === 0) {
       return { changes: [], warnings };
     }
-    const { bindingStoreKey, readStoredCodexAppServerBinding } =
-      await import("../app-server/session-binding-record.js");
+    const { bindingStoreKey, readStoredCodexAppServerBinding } = await loadSessionBindingRecord();
     const { getSessionEntry, resolveStorePath } =
       await import("openclaw/plugin-sdk/session-store-runtime");
     const sessionStore: AssignmentSessionStore = { getSessionEntry, resolveStorePath };

@@ -7,6 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/control-ui";
 import { createMemo, createSignal, Errored, isPending, latest, Loading } from "solid-js";
 import { createTranslator } from "./i18n/index.ts";
+import { loadMessages } from "./i18n/locales.ts";
 import { memoriesView } from "./memories.tsx";
 import { createMemoryOverview, type MemoryOverviewStatus } from "./overview.tsx";
 
@@ -15,6 +16,7 @@ export const settingsViews: readonly ControlUiSettingsView[] = [
   {
     placement: { section: "memory", panel: "overview" },
     mount(container, context) {
+      void loadMessages(context.props.locale);
       let current = context.props;
       let active = true;
       let request: object | undefined;
@@ -144,6 +146,7 @@ export const settingsViews: readonly ControlUiSettingsView[] = [
             return;
           }
           const changedScope = scope(current) !== scope(next);
+          void loadMessages(next.locale);
           current = next;
           setSnapshot(next);
           if (changedScope) {

@@ -70,10 +70,7 @@ export type SessionChangedEventInfo = {
 export function sanitizeSessionRow(row: GatewaySessionRow): GatewaySessionRow {
   let next = row;
   for (const [key, value] of Object.entries(row)) {
-    if (
-      value === undefined ||
-      (key === "totalTokensFresh" && value === false && row.totalTokens === undefined)
-    ) {
+    if (value === undefined) {
       if (next === row) {
         next = { ...row };
       }
@@ -221,35 +218,6 @@ function rememberAncestor(row: GatewaySessionRow, offered: GatewaySessionRow, re
   }
 }
 
-function reconcileAncestorReference(
-  existing: GatewaySessionRow | undefined,
-  info: SessionChangedEventInfo,
-  source: Record<string, unknown>,
-  options: SessionReconcileOptions,
-  project?: SessionChangedRowProjection,
-): SessionChangedRowResult {
-  const { key } = info;
-  if (
-    !existing ||
-    !info.sessionId ||
-    existing.sessionId !== info.sessionId ||
-    typeof source.revision !== "string" ||
-    ancestorRevisions.get(existing) !== source.revision ||
-    info.snapshotAt === undefined ||
-    !matchesExistingSession(existing, key, info.agentId) ||
-    isSessionRowOutsideResultScope(existing, options)
-  ) {
-    return { applied: false, key, row: existing };
-  }
-  const retained = {
-    ...existing,
-    snapshotAt: Math.max(existing.snapshotAt ?? 0, info.snapshotAt),
-  };
-  const row = project?.(retained, existing, Object.keys(existing), info) ?? retained;
-  rememberAncestor(row, retained, source.revision);
-  return { applied: true, key, row, admittedRow: row, reconciled: true };
-}
-
 export function parseSessionChangedEvent(payload: unknown): ParsedSessionChangedEvent | null {
   const event = recordOrNull(payload);
   if (!event) {
@@ -372,11 +340,12 @@ export function readSessionChangedEvent(payload: unknown): SessionChangedEventIn
   return parseSessionChangedEvent(payload)?.[0] ?? null;
 }
 
-// Null source confirms inheritance; omission on a lifecycle event preserves selection.
+// Null is a fact here: inherited pin source, allowed workspace read; omission preserves selection.
 const NULLABLE_SESSION_ROW_FIELDS = new Set<string>([
   "updatedAt",
   "activeLeafEntryId",
   "modelOverrideSource",
+  "workspaceReadDisabledReason",
 ]);
 
 export type SessionRowObservation = {
@@ -512,7 +481,26 @@ export function reconcileParsedSessionChangedRow(
   const [info, event, source] = parsed;
   const { key, reason } = info;
   if (info.isAncestorReference) {
-    return reconcileAncestorReference(existing, info, source, options, project);
+    const { key: ancestorReferenceKey } = info;
+    if (
+      !existing ||
+      !info.sessionId ||
+      existing.sessionId !== info.sessionId ||
+      typeof source.revision !== "string" ||
+      ancestorRevisions.get(existing) !== source.revision ||
+      info.snapshotAt === undefined ||
+      !matchesExistingSession(existing, ancestorReferenceKey, info.agentId) ||
+      isSessionRowOutsideResultScope(existing, options)
+    ) {
+      return { applied: false, key: ancestorReferenceKey, row: existing };
+    }
+    const retained = {
+      ...existing,
+      snapshotAt: Math.max(existing.snapshotAt ?? 0, info.snapshotAt),
+    };
+    const row = project?.(retained, existing, Object.keys(existing), info) ?? retained;
+    rememberAncestor(row, retained, source.revision);
+    return { applied: true, key: ancestorReferenceKey, row, admittedRow: row, reconciled: true };
   }
   const {
     agentId: _agentId,

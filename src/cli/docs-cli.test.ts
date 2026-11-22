@@ -1,6 +1,9 @@
 import { Command } from "commander";
+import { JSDOM } from "jsdom";
+import { marked } from "marked";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { isRich } from "../../packages/terminal-core/src/theme.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { registerDocsCli } from "./docs-cli.js";
 
 const runtime = vi.hoisted(() => ({
@@ -128,35 +131,29 @@ it.each([
   },
 );
 
-it.each([
-  {
-    rich: false,
-    output: [
-      "# Docs search: plugin \\[allowlist\\]\n\n- [Plugin \\[allowlist\\]](https://docs.openclaw.ai/plugins/allowlist) - How to \\(configure\\).",
-    ],
-  },
-  {
-    rich: true,
-    output: [
-      "Docs search: plugin [allowlist]",
-      "- Plugin [allowlist] (docs.openclaw.ai/plugins/allowlisthttps://docs.openclaw.ai/plugins/allowlist)",
-      "  How to (configure).",
-    ],
-  },
-])("renders search results with rich=$rich", async ({ rich, output }) => {
+it.each([false, true])("renders literal search text with rich=%s", async (rich) => {
+  const literal = "Use <options> &copy; **bold** `PATH` [a]";
   vi.mocked(isRich).mockReturnValue(rich);
-  respond([
-    {
-      title: "Plugin [allowlist]",
-      link: "https://docs.openclaw.ai/plugins/allowlist",
-      snippet: "How to (configure).",
-    },
-  ]);
-  await search(["plugin", "[allowlist]"]);
-
+  respond([{ title: literal, link: "https://docs.openclaw.ai/cli/docs", snippet: literal }]);
+  await search([literal]);
   expect(runtime.error).not.toHaveBeenCalled();
   expect(runtime.exit).not.toHaveBeenCalled();
-  expect(runtime.log.mock.calls).toEqual(output.map((line) => [line]));
+  if (rich) {
+    expect(runtime.log.mock.calls).toEqual([
+      [`Docs search: ${literal}`],
+      [`- ${literal} (docs.openclaw.ai/cli/docshttps://docs.openclaw.ai/cli/docs)`],
+      [`  ${literal}`],
+    ]);
+    return;
+  }
+  const document = new JSDOM(await marked.parse(String(runtime.log.mock.calls[0]?.[0]))).window
+    .document;
+  expect([
+    document.querySelector("h1")?.textContent,
+    document.querySelector("a")?.textContent,
+    document.querySelector("li")?.textContent,
+  ]).toEqual([`Docs search: ${literal}`, literal, `${literal} - ${literal}`]);
+  expect(document.querySelector("a")?.href).toBe("https://docs.openclaw.ai/cli/docs");
 });
 
 it("rejects oversized docs search responses", async () => {
@@ -177,49 +174,44 @@ it("rejects oversized docs search responses", async () => {
   );
   expect(cancel).toHaveBeenCalledOnce();
 });
-it("settles a known HTTP error before a retained clone reaches EOF", async () => {
+it.each([503, 200])("settles a retained HTTP %i body on error or interruption", async (status) => {
+  const scope = new AsyncWorkScope();
   let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
   let requestSignal: AbortSignal | null | undefined;
   const source = new ReadableStream<Uint8Array>({
     start(controller) {
       streamController = controller;
-      controller.enqueue(new TextEncoder().encode("held response"));
     },
   });
-  const response = new Response(source, { status: 503 });
+  const response = new Response(source, { status });
   const capture = response.clone();
   fetchMock.mockImplementation(async (_url, init) => {
     requestSignal = init?.signal;
     requestSignal?.addEventListener(
       "abort",
-      () => {
-        streamController?.error(new DOMException("fixture aborted", "AbortError"));
-      },
+      () => streamController?.error(new DOMException("fixture aborted", "AbortError")),
       { once: true },
     );
+    if (status === 200) {
+      scope.beginClose();
+    }
     return response;
   });
-  const pending = search(["held-error"], { json: true }).then(
-    () => ({ ok: true as const }),
-    (error: unknown) => ({ ok: false as const, error }),
-  );
-  let deadline: ReturnType<typeof setTimeout> | undefined;
+  vi.useFakeTimers();
+  const settled = vi.fn();
+  const pending = scope
+    .run(() => search(["held-error"], { json: true }))
+    .then(() => settled(), settled);
   try {
-    const result = await Promise.race([
-      pending,
-      new Promise<null>((resolve) => {
-        deadline = setTimeout(() => resolve(null), 500);
-      }),
-    ]);
-    expect(result).toMatchObject({ ok: false, error: { message: "Docs search failed: HTTP 503" } });
+    await vi.advanceTimersByTimeAsync(0);
+    const message = status === 503 ? "Docs search failed: HTTP 503" : undefined;
+    expect(settled.mock.calls).toEqual(message ? [[expect.objectContaining({ message })]] : [[]]);
     expect(requestSignal?.aborted).toBe(true);
+    expect(runtime.log).not.toHaveBeenCalled();
   } finally {
-    if (deadline) {
-      clearTimeout(deadline);
-    }
     streamController?.error(new DOMException("fixture cleanup", "AbortError"));
     await capture.body?.cancel().catch(() => undefined);
     await pending;
-    vi.unstubAllGlobals();
+    vi.useRealTimers();
   }
 });

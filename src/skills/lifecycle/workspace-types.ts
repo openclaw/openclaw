@@ -175,6 +175,7 @@ export type SkillSourceOrigin = {
 export type CommittedSkillChange = {
   action: PluginHookSkillChangedEvent["action"];
   source: PluginHookSkillChangedEvent["source"];
+  pluginId?: string;
   workspaceDir: string;
   before?: PluginHookSkillArtifact;
   after?: PluginHookSkillArtifact;

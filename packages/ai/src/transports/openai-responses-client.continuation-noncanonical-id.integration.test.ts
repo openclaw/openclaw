@@ -1,9 +1,10 @@
-import { createServer } from "node:http";
-import type { AddressInfo, Server } from "node:net";
+import { createServer, type Server } from "node:http";
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { afterEach, assert, describe, expect, it } from "vitest";
+import { listenLoopback } from "../../../../test/helpers/gateway-integration-fixtures.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
-import { cleanupSessionResources } from "../session-resources.js";
+import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
+import { claimConversationProviderState, cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
@@ -42,11 +43,7 @@ class ScriptedResponsesServer {
         res.end();
       });
     });
-    await new Promise<void>((resolve) => {
-      this.server?.listen(0, "127.0.0.1", resolve);
-    });
-    const address = this.server?.address() as AddressInfo;
-    return `http://127.0.0.1:${address.port}/v1`;
+    return `${await listenLoopback(this.server)}/v1`;
   }
 
   async close(): Promise<void> {
@@ -106,6 +103,7 @@ async function run(
   const stream = await createOpenAIResponsesTransportStreamFn()(model, { messages, tools: [] }, {
     apiKey: "test-key",
     sessionId,
+    [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
     transport: "sse",
     reasoningEffort: "low",
     onPayload: (payload: Record<string, unknown>) => ({ ...payload, store: true }),
@@ -204,6 +202,7 @@ describe("HTTP continuation across a non-canonical replayed tool-call id (loopba
       const options = {
         apiKey: "test-key",
         sessionId: "real-sse-store-policy",
+        [PROVIDER_STATE_SCOPE]: claimConversationProviderState("real-sse-store-policy"),
         transport: "sse",
         reasoningEffort: "low",
       } satisfies OpenAIResponsesOptions;

@@ -1,11 +1,13 @@
 import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
-import { compareMcpCatalogTools, mcpCatalogToolsSignature } from "./agent-bundle-mcp-names.js";
-import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
-import { SESSION_MCP_MAX_LIVE_RUNTIMES } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
   McpCatalogTool,
   McpServerCatalog,
   McpToolCatalog,
+} from "./agent-bundle-mcp-catalog.types.js";
+import { compareMcpCatalogTools, mcpCatalogToolsSignature } from "./agent-bundle-mcp-names.js";
+import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
+import { SESSION_MCP_MAX_LIVE_RUNTIMES } from "./agent-bundle-mcp-runtime-shared.js";
+import type {
   RequesterScopedMcpRuntimeHandle,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
@@ -25,9 +27,25 @@ type AdvertisedScopedCatalogEntry = SessionMcpCatalogBinding & {
   signaturesByServer: Map<string, string>;
 };
 export type SessionMcpCatalogStore = {
+  lastListedCatalogByServerIdentity: Map<string, McpToolCatalog>;
   catalogByRuntimeKey: Map<string, RuntimeCatalogEntry>;
   advertisedScopedCatalogBySessionId: Map<string, AdvertisedScopedCatalogEntry>;
 };
+
+export function rememberListedMcpCatalog(
+  catalogs: Map<string, McpToolCatalog> | undefined,
+  identity: string,
+  catalog: McpToolCatalog,
+) {
+  if (!catalogs) {
+    return;
+  }
+  catalogs.delete(identity);
+  catalogs.set(identity, catalog);
+  if (catalogs.size > SESSION_MCP_MAX_LIVE_RUNTIMES) {
+    catalogs.delete(catalogs.keys().next().value!);
+  }
+}
 
 function matchesBinding(current: SessionMcpCatalogBinding, binding: SessionMcpCatalogBinding) {
   return (
@@ -45,6 +63,7 @@ export function createSessionMcpCatalogStore(
   now: () => number,
 ) {
   const store: SessionMcpCatalogStore = {
+    lastListedCatalogByServerIdentity: new Map(),
     catalogByRuntimeKey: new Map(),
     advertisedScopedCatalogBySessionId: new Map(),
   };
@@ -215,7 +234,10 @@ export function createSessionMcpCatalogStore(
     getAdvertisedScopedCatalog,
     reconcileAdvertisedScopedCatalogConfig,
     prune,
-    clear: () => {
+    clear: (scope: "all" | "sessions" = "all") => {
+      if (scope === "all") {
+        store.lastListedCatalogByServerIdentity.clear();
+      }
       catalogByRuntimeKey.clear();
       advertisedScopedCatalogBySessionId.clear();
     },

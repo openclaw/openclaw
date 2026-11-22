@@ -13,6 +13,7 @@ import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import {
   bindExecutionGuards,
@@ -48,7 +49,7 @@ async function executeOwned(
 
 function expectBeforeActivation() {
   expect(mocks.serviceStopped).toBe(false);
-  expect(mocks.validateCanary).not.toHaveBeenCalled();
+  expect(mocks.checkCandidate).not.toHaveBeenCalled();
 }
 
 export function registerNativeAdmissionTests() {
@@ -160,7 +161,6 @@ export function registerNativeAdmissionTests() {
     running?: boolean;
     late?: boolean;
     refused?: boolean;
-    route?: "git";
     consumer?: "selected" | "same-profile-other-service";
     unreadableFirst?: boolean;
     selectedRunning?: boolean;
@@ -171,34 +171,13 @@ export function registerNativeAdmissionTests() {
     ["stopped shared root", { running: false, refused: false }],
     ["live disjoint root", { shared: false, refused: false }],
     ["selected live + shared sibling", { selectedRunning: true }],
-    [
-      "selected live + disjoint sibling",
-      {
-        shared: false,
-        refused: false,
-        selectedRunning: true,
-      },
-    ],
-    [
-      "sibling starts during selected stop",
-      {
-        selectedRunning: true,
-        startsDuringStop: true,
-      },
-    ],
+    ["selected live + disjoint sibling", { shared: false, refused: false, selectedRunning: true }],
+    ["sibling starts during selected stop", { selectedRunning: true, startsDuringStop: true }],
     ["disjoint roots, shared entrypoint", { shared: false, linkedDist: true }],
     ["sibling starts during staging", { late: true }],
-    ["Git shared publication", { route: "git" }],
     ["selected package no-restart", { consumer: "selected", refused: false }],
     ["same-profile other service", { consumer: "same-profile-other-service" }],
-    [
-      "unreadable unrelated definition",
-      {
-        unreadableFirst: true,
-        shared: false,
-        refused: false,
-      },
-    ],
+    ["unreadable unrelated definition", { unreadableFirst: true, shared: false, refused: false }],
     ["live sibling after unreadable definition", { unreadableFirst: true }],
   ];
   it.each(consumerCases)(
@@ -217,13 +196,10 @@ export function registerNativeAdmissionTests() {
         const candidate = path.join(dir, "candidate");
         for (const location of new Set([root, otherRoot, candidate])) {
           await fs.mkdir(path.join(location, "dist"), { recursive: true });
-          await fs.writeFile(
-            path.join(location, "package.json"),
-            JSON.stringify({
-              name: "openclaw",
-              version: location === candidate ? "1.0.1" : "1.0.0",
-            }),
-          );
+          await writeFixtureJson(path.join(location, "package.json"), {
+            name: "openclaw",
+            version: location === candidate ? "1.0.1" : "1.0.0",
+          });
           await fs.writeFile(path.join(location, "dist", "entry.js"), "original runtime");
         }
         if (scenario.linkedDist) {
@@ -350,17 +326,8 @@ export function registerNativeAdmissionTests() {
           await fs.writeFile(artifact, "replacement runtime");
           return successfulUpdate;
         });
-        mocks.runGitUpdate.mockImplementation(
-          async (options: Parameters<typeof updateGitInstall>[0]) => {
-            const target = { schemaVersions: { state: 15, agent: 19 } };
-            await options.inspectGitTarget?.(target);
-            await options.beforeGitMutation?.(target);
-            await fs.writeFile(artifact, "replacement runtime");
-            return { ...successfulUpdate, mode: "git" };
-          },
-        );
         const params = {
-          ...executionParams(scenario.route ?? "package"),
+          ...executionParams("package"),
           root,
           ...(scenario.consumer ? { shouldRestart: false } : {}),
         };

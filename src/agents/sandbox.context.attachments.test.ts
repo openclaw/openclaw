@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { registerSandboxBackend } from "./sandbox/backend.js";
+import { createConfig as createCustodyConfig } from "./sandbox/context-custody.test-support.js";
 import { resolveSandboxContext } from "./sandbox/context.js";
 import { resolveSubagentSessionAttachmentRootDir } from "./subagents/subagent-attachment-paths.js";
 
@@ -35,19 +36,11 @@ it("isolates a session attachment projection from sibling agent-scoped sessions"
     capabilities: { readOnlyResourceMounts: true },
     factory: backendFactory,
   });
-  const cfg: OpenClawConfig = {
-    agents: {
-      defaults: {
-        sandbox: {
-          mode: "all",
-          backend: "attachment-scope-backend",
-          scope: "agent",
-          workspaceAccess: "none",
-          prune: { idleHours: 0, maxAgeDays: 0 },
-        },
-      },
-    },
-  };
+  const cfg: OpenClawConfig = createCustodyConfig({
+    backend: "attachment-scope-backend",
+    scope: "agent",
+    workspaceAccess: "none",
+  });
 
   try {
     await fs.mkdir(workspaceDir, { recursive: true });

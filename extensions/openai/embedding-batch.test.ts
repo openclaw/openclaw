@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback as listenLoopbackServer } from "../test-support/hanging-loopback-server.js";
 import { cancelTrackedTextResponse } from "../test-support/streaming-error-response.js";
 import { runOpenAiEmbeddingBatches } from "./embedding-batch.js";
 
@@ -160,21 +161,6 @@ function parseStringBody(init: RequestInit | undefined): unknown {
   return JSON.parse(init.body) as unknown;
 }
 
-async function listenLoopbackServer(server: ReturnType<typeof createServer>): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("expected loopback TCP address"));
-        return;
-      }
-      resolve(address.port);
-    });
-  });
-}
-
 async function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     server.close((err) => {
@@ -193,6 +179,81 @@ afterEach(() => {
 });
 
 describe("OpenAI embedding batch output", () => {
+  it.each([
+    ["non-array", '"poison"', "invalid"],
+    ["array-like object", '{"length":1}', "invalid"],
+    ["boolean", "false", "empty"],
+    ["string coordinate", '["poison"]', "invalid"],
+    ["null coordinate", "[null]", "invalid"],
+    ["positive overflow coordinate", "[1e309]", "invalid"],
+    ["negative overflow coordinate", "[-1e309]", "invalid"],
+    ["empty vector", "[]", "empty"],
+  ])("rejects a %s in batch output", async (_name, embedding, condition) => {
+    const fetchImpl = batchFetch({
+      output: new Response(
+        `{"custom_id":"0","response":{"status_code":200,"body":{"data":[{"embedding":${embedding}}]}}}`,
+      ),
+    });
+
+    await expect(
+      runOpenAiEmbeddingBatches(singleRequestBatchParams(fetchImpl, 1, 1_000)),
+    ).rejects.toThrow(`openai batch batch-0 failed: 0: ${condition} embedding`);
+  });
+
+  it.each([
+    {
+      name: "line error before response error",
+      line: {
+        error: { message: "provider failed" },
+        response: { status_code: 500, body: { error: { message: "secondary error" } } },
+      },
+      detail: "provider failed",
+    },
+    {
+      name: "nested response error",
+      line: { response: { status_code: 500, body: { error: { message: "internal" } } } },
+      detail: "internal",
+    },
+    {
+      name: "response message fallback",
+      line: { response: { status_code: 500, message: "provider response failed", body: "" } },
+      detail: "provider response failed",
+    },
+    {
+      name: "missing embedding",
+      line: { response: { status_code: 200, body: { data: [] } } },
+      detail: "empty embedding",
+    },
+  ])("reports $name through the batch runner", async ({ line, detail }) => {
+    const fetchImpl = batchFetch({
+      output: Response.json({ custom_id: "0", ...line }),
+    });
+
+    await expect(
+      runOpenAiEmbeddingBatches(singleRequestBatchParams(fetchImpl, 1, 1_000)),
+    ).rejects.toThrow(`openai batch batch-0 failed: 0: ${detail}`);
+  });
+
+  it.each(["unsubmitted", "duplicate"])(
+    "ignores a %s ID without losing missing-response accounting",
+    async (kind) => {
+      const output = [
+        outputLine("0", [1]),
+        { custom_id: kind === "duplicate" ? "0" : "unknown", error: { message: "ignored" } },
+      ];
+      const fetchImpl = batchFetch({
+        output: new Response(output.map((line) => JSON.stringify(line)).join("\n")),
+      });
+
+      await expect(
+        runOpenAiEmbeddingBatches({
+          ...singleRequestBatchParams(fetchImpl, 1, 1_000),
+          requests: batchRequests(2),
+        }),
+      ).rejects.toThrow("openai batch batch-0 missing 1 embedding responses");
+    },
+  );
+
   it.each(["/files", "/batches", "/files/output-0/content"])(
     "refreshes and retries only the rejected %s request",
     async (expiredPath) => {
@@ -356,7 +417,7 @@ describe("OpenAI embedding batch output", () => {
       ...singleRequestBatchParams(fetchImpl, scenario.pollIntervalMs, 1_000),
       debug: (message) => {
         if (scenario.advanceClock && message.includes("batch-0 in_progress")) {
-          vi.setSystemTime(500);
+          vi.advanceTimersByTime(500);
         }
         if (message.startsWith("openai batch batch-0 ") && message.includes("; waiting ")) {
           pollTimeoutIndexes.push(setTimeoutSpy.mock.calls.length);
@@ -388,7 +449,7 @@ describe("OpenAI embedding batch output", () => {
       expect(statusCalls).toBe(scenario.expectedStatusTimes.length);
       expect(statusTimes).toEqual(scenario.expectedStatusTimes);
     } finally {
-      vi.setSystemTime(1_000);
+      vi.advanceTimersByTime(Math.max(0, 1_000 - performance.now()));
       try {
         await vi.runOnlyPendingTimersAsync();
       } finally {

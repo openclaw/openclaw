@@ -2,7 +2,13 @@
 // Kept import-free of chat-page modules so lifecycle and history layers
 // can consume ack types without forming import cycles.
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import { t } from "../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
+
+registerChatComposerEnglish();
 
 type ChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
 
@@ -12,6 +18,15 @@ export type ChatSendAck = {
   stopReason?: "restart";
   messageSeq?: number;
 };
+
+const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
+
+export function isActiveLeafChangedError(err: unknown): err is GatewayRequestError {
+  return (
+    err instanceof GatewayRequestError &&
+    asOptionalRecord(err.details)?.reason === ACTIVE_LEAF_CHANGED_ERROR_REASON
+  );
+}
 
 export function normalizeChatSendAckStatus(status: unknown): ChatSendAckStatus {
   return status === "in_flight" || status === "ok" || status === "timeout" || status === "error"
@@ -49,8 +64,8 @@ export function formatTerminalChatSendAckError(
   context: "chat" | "detached",
 ): string {
   return ack.status === "error"
-    ? "Chat failed before the run started; try again."
+    ? t("chat.sendErrors.sendFailed")
     : context === "detached"
-      ? "The active run ended before the detached message was accepted."
-      : "The run ended before the message was accepted.";
+      ? t("chat.sendErrors.detachedMessageNotAccepted")
+      : t("chat.sendErrors.messageNotAccepted");
 }

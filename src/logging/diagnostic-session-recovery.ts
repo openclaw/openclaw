@@ -3,20 +3,7 @@ import type {
   DiagnosticSessionState,
 } from "../infra/diagnostic-events.js";
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
-
-type DiagnosticSessionRecoverySkipReason =
-  | "active_embedded_run"
-  | "model_attempt_recovery"
-  | "active_reply_work"
-  | "human_input_wait"
-  | "runtime_owned_wait"
-  | "deferred_maintenance_wait"
-  | "terminal_outcome_committed"
-  | "global_lane_wait"
-  | "active_lane_task"
-  | "already_in_flight"
-  | "missing_session_ref"
-  | "stale_session_state";
+import type { SessionAttentionClassification } from "./diagnostic-session-attention.js";
 
 export type StuckSessionRecoveryRequest = {
   /** Exact captured controller owner; diagnostic IDs and map absence grant no authority. */
@@ -42,6 +29,12 @@ export type StuckSessionRecoveryRequest = {
    * It never grants ownerless recovery or changes the controller deadline.
    */
   compactionSafetyTimeoutMs?: number;
+  /**
+   * Attention classification that triggered this recovery. Carried through so the
+   * abort branch can report the semantic cause (e.g. `blocked_tool_call`) instead
+   * of a cause-free literal. Never grants recovery authority on its own.
+   */
+  classification?: SessionAttentionClassification;
 };
 
 type DiagnosticSessionRecoveryBaseOutcome = {
@@ -66,6 +59,12 @@ export type StuckSessionRecoveryOutcome =
       forceCleared: boolean;
       released: number;
       queuedCount?: number;
+      /**
+       * Semantic cause the recovery acted on when it killed the run (e.g.
+       * `blocked_tool_call`). The other terminal branches each carry a reason;
+       * this one previously dropped it, leaving a cause-free history entry.
+       */
+      reason?: string;
     })
   | (DiagnosticSessionRecoveryBaseOutcome & {
       status: "released";
@@ -77,7 +76,19 @@ export type StuckSessionRecoveryOutcome =
   | (DiagnosticSessionRecoveryBaseOutcome & {
       status: "skipped";
       action: "observe_only" | "keep_lane";
-      reason: DiagnosticSessionRecoverySkipReason;
+      reason:
+        | "active_embedded_run"
+        | "model_attempt_recovery"
+        | "active_reply_work"
+        | "human_input_wait"
+        | "runtime_owned_wait"
+        | "deferred_maintenance_wait"
+        | "terminal_outcome_committed"
+        | "global_lane_wait"
+        | "active_lane_task"
+        | "already_in_flight"
+        | "missing_session_ref"
+        | "stale_session_state";
       activeCount?: number;
       queuedCount?: number;
     })

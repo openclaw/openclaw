@@ -3,17 +3,21 @@ import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveBundledProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { AgentDeletionRecoveryHoldPredicate } from "../state/agent-deletion-journal-recovery.kernel.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { readDefaultProactiveJobReceiptsAsync } from "./proactive-job-receipt.js";
+import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import { readDefaultProactiveJobReceiptsByKeyAsync } from "./proactive-job-receipt.js";
 import { computeJobNextRunAtMs } from "./service/jobs-scheduling.js";
 import { runCronRuntimeMutation } from "./service/runtime-mutation.js";
-import { publishCronJobsStoreMutation } from "./store.js";
+import { noteCronJobsStoreCommit, publishCronJobsStoreMutation } from "./store.js";
+import { resolveCronStoreSelectionAsync } from "./store/paths.js";
 import type { CronStoredJob } from "./types.js";
 
 export const DEFAULT_PROACTIVE_PROMPT =
@@ -24,6 +28,7 @@ export function createDefaultProactiveJob(
   agentId: string,
   nowMs: number,
   cadenceMs = 30 * 60 * 1000,
+  { enabled } = { enabled: true },
 ): CronStoredJob {
   const owner = normalizeAgentId(agentId);
   const sessionKey =
@@ -34,7 +39,7 @@ export function createDefaultProactiveJob(
     id: randomUUID(),
     agentId: owner,
     name: `Proactive check (${owner})`,
-    enabled: true,
+    enabled,
     createdAtMs: nowMs,
     updatedAtMs: nowMs,
     schedule: { kind: "every", everyMs: cadenceMs, anchorMs: nowMs },
@@ -56,7 +61,10 @@ export function resolveDefaultProactiveCadenceMs(
   agentId: string,
   env: NodeJS.ProcessEnv = process.env,
 ): number | undefined {
-  const provider = resolveDefaultModelForAgent({ cfg, agentId }).provider;
+  const provider = resolveDefaultModelForAgent({ cfg, agentId })?.provider;
+  if (!provider) {
+    return undefined;
+  }
   return resolveBundledProviderPolicySurface(provider)?.resolveProactiveCadenceMs?.({
     provider,
     config: cfg,
@@ -79,6 +87,7 @@ export async function provisionDefaultProactiveJob(
     return undefined;
   }
   const recoveryHoldPredicate = structuredClone(options.recoveryHoldPredicate);
+  const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
   const context = captureOpenClawStateWorkerContext(options);
   const assertCurrent = () => {
     context.admission.assertCurrent();
@@ -87,8 +96,15 @@ export async function provisionDefaultProactiveJob(
   assertCurrent();
   const configuredStore = asOptionalRecord(cfg.cron)?.store;
   const storePath = typeof configuredStore === "string" ? configuredStore : undefined;
+  await runOpenClawStateWorkerOperation(context, async () => assertCurrent(), { assertCurrent });
+  const selection = await resolveCronStoreSelectionAsync(storePath, env, context);
+  assertCurrent();
+  if (selection.status === "unresolved") {
+    createSubsystemLogger("cron").warn(selection.message);
+    return undefined;
+  }
   const previous = (
-    await readDefaultProactiveJobReceiptsAsync(storePath, [owner], options, {
+    await readDefaultProactiveJobReceiptsByKeyAsync(selection.storeKey, [owner], options, {
       context,
       current: true,
     })
@@ -98,14 +114,24 @@ export async function provisionDefaultProactiveJob(
   const cadenceMs =
     options.cadenceMs ??
     (previous ? undefined : resolveDefaultProactiveCadenceMs(cfg, owner, options.env));
-  const planned = createDefaultProactiveJob(cfg, owner, nowMs, cadenceMs);
+  const planned = createDefaultProactiveJob(cfg, owner, nowMs, cadenceMs, { enabled: false });
   let job: CronStoredJob | undefined;
   await runCronRuntimeMutation({
     context,
     type: "cron.provisionDefaultProactive",
-    input: { storePath, agentId: owner, planned, recoveryHoldPredicate },
+    input: {
+      storeKey: selection.storeKey,
+      agentId: owner,
+      planned,
+      recoveryHoldPredicate,
+    },
     assertCurrent,
     snapshot: {},
+    onSettled: (outcome) => {
+      if (outcome === "unknown") {
+        noteCronJobsStoreCommit();
+      }
+    },
     publish: (outcome) => {
       if (outcome.created) {
         publishCronJobsStoreMutation(outcome.storeKey);

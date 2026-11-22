@@ -10,6 +10,7 @@ import {
   createSqliteAuditRecordWriter,
 } from "../infra/sqlite-audit-record-store.async.js";
 import { getUpdateAvailable, type UpdateAvailable } from "../infra/update-status-state.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 import { formatSystemAgentStartupMessage, type SystemAgentOverview } from "./overview.js";
 
 const SYSTEM_AGENT_GREETING_SCOPE = "system-agent-greeting";
@@ -129,7 +130,7 @@ function accountLooksDegraded(account: Record<string, unknown>): boolean {
 }
 
 /** Extract only degraded channel labels from the gateway's existing cached health aggregate. */
-export function systemAgentGreetingChannelHealth(
+function systemAgentGreetingChannelHealth(
   health: HealthSummary | null,
 ): SystemAgentGreetingFacts["channelHealth"] {
   if (!health) {
@@ -382,7 +383,6 @@ type ResolveSystemAgentGreetingParams = {
   cacheStore: SystemAgentGreetingCacheStore;
   /** The Gateway session owner retains flight/backoff identity across captured reads. */
   cacheOwner?: object;
-  now?: () => number;
 };
 
 export async function resolveSystemAgentGreeting(
@@ -426,7 +426,7 @@ async function resolveSystemAgentGreetingText(
 
   cacheStore.assertCurrent();
   const cacheKey = params.cacheOwner ?? cacheStore;
-  const at = (params.now ?? Date.now)();
+  const at = Date.now();
   // Audit acknowledgement uses the captured monotonic sequence, not this cache timestamp.
   const failure = greetingFailures.get(cacheKey);
   if (failure?.factsHash === factsHash && failure.retryAfter > at) {
@@ -435,11 +435,7 @@ async function resolveSystemAgentGreetingText(
   if (failure && failure.retryAfter <= at) {
     greetingFailures.delete(cacheKey);
   }
-  let flights = greetingFlights.get(cacheKey);
-  if (!flights) {
-    flights = new Map();
-    greetingFlights.set(cacheKey, flights);
-  }
+  const flights = getOrCreateWeakOwnerMap(greetingFlights, cacheKey);
   const existingFlight = flights.get(factsHash);
   if (existingFlight) {
     const result = await existingFlight;

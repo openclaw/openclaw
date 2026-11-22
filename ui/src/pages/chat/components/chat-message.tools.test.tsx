@@ -1,12 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
+import { createNestedToolActivity } from "../../../../../src/sessions/nested-tool-activity.js";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-fixtures.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
-import { attachHistoryActivity } from "../chat-history-request.ts";
-import { createInitializationContext } from "../chat-pane.test-support.ts";
+import { createInitializationContext } from "../chat-application-context.test-support.ts";
+import { attachHistoryActivity } from "../chat-history-snapshot.ts";
+import { groupsOf } from "../chat-thread-fixtures.test-support.ts";
+import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
 import {
   createChatMessageHarness,
   type RenderMessageGroupOptions,
@@ -14,24 +17,22 @@ import {
 } from "./chat-message-render.test-support.tsx";
 import {
   createAssistantMessage,
-  createToolResultBlock,
   createAssistantCanvasBlock,
   createToolCall,
   createToolResultMessage,
-  prepareHistoryGroups,
   createMessageGroup,
   createMessageEntry,
   createToolGroup,
   type TestMessage,
 } from "./chat-message.test-support.ts";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
+import { projectTranscriptChain } from "./chat-transcript-message-index.ts";
 
 const harness = createChatMessageHarness();
 const {
   renderActivityGroup,
   requireElement,
   element,
-  elements,
   elementText,
   expectCount,
   expectAbsent,
@@ -39,18 +40,105 @@ const {
   renderToolMessage,
   renderToolGroups,
   renderGroupedMessage,
-  markdownRenderMock,
 } = harness;
 
 describe("grouped chat rendering", () => {
-  function toolFixture(message: unknown, grouped = false) {
-    document.body.append(harness.view);
-    const groups = grouped ? [createMessageGroup(message, "tool")] : [];
-    return (expanded: boolean, options: Partial<RenderMessageGroupOptions> = {}) =>
-      grouped
-        ? renderToolGroups(groups, { isToolMessageExpanded: () => expanded, ...options })
-        : renderToolMessage(message, { isToolExpanded: () => expanded, ...options });
-  }
+  beforeEach(() => document.body.append(harness.view));
+  const expandedTools = { isToolExpanded: () => true, isToolMessageExpanded: () => true };
+
+  it("keeps completed agents at result time, adjacent only, and once per execution", async () => {
+    const worker = {
+      runId: "child-one",
+      sessionKey: "agent:main:subagent:worker",
+      label: "Worker01",
+      status: "done",
+    };
+    const second = { ...worker, runId: "child-two", label: "Worker02" };
+    const output = JSON.stringify({
+      completed: [worker, second, { ...worker, runId: "failed", status: "failed" }],
+    });
+    const at = (message: TestMessage, timestamp: number, extra?: TestMessage): TestMessage => ({
+      ...message,
+      timestamp,
+      runId: "parent",
+      ...extra,
+    });
+    const collect = createToolCall("collect", "agents_wait", {});
+    const call = at(createAssistantMessage([collect]), 10);
+    const result = at(createToolResultMessage("collect", "agents_wait", output), 30);
+    // Results carried inside the call message, including bounded ones that keep only receipts.
+    const block = { type: "tool_result", id: "collect", name: "agents_wait", timestamp: 30 };
+    const inline = (text: string, extra?: TestMessage) =>
+      at(createAssistantMessage([collect, { ...block, text, ...extra }]), 10);
+    const receipts = { subagentCompletions: [worker, second] };
+    const receipt = (runId: string, timestamp: number) => ({
+      role: "assistant",
+      phase: "commentary",
+      runId: "parent",
+      timestamp,
+      content: [{ type: "subagent_completion" }],
+      subagentCompletions: [{ ...worker, runId }],
+    });
+    const say = (text: string, timestamp: number, phase = "commentary") =>
+      at(createAssistantMessage(text), timestamp, { phase });
+    const show = (messages: TestMessage[]) =>
+      renderToolGroups(groupsOf(buildItems({ messages })), {});
+    const executions: TestMessage[][] = [
+      [call, result],
+      [inline(output)],
+      [inline("[Nested tool output omitted: exceeds display limit]", receipts)],
+      [call, { ...result, content: "Omitted large output", ...receipts }],
+    ];
+    for (const execution of executions) {
+      await show([
+        { role: "user", content: "Collect the workers", timestamp: 1 },
+        execution[0]!,
+        say("Waiting here.", 20),
+        {
+          role: "user",
+          content: "Also check the summary.",
+          timestamp: 25,
+          __openclaw: { id: "steer", steerTargetRunId: "parent" },
+        },
+        ...execution.slice(1),
+        receipt(worker.runId, 31),
+        say("Read after collection.", 32),
+        receipt("child-next-run", 33),
+        at(createAssistantMessage([createToolCall("collect-again", "agents_wait", {})]), 34),
+        at(createToolResultMessage("collect-again", "agents_wait", output), 35),
+        say("All collected.", 40, "final_answer"),
+        {
+          role: "user",
+          content: "Queued later request.",
+          timestamp: 28,
+          __openclaw: { id: "pending-next", kind: "pending-send" },
+        },
+      ]);
+      const text = harness.view.textContent!;
+      const positions = [
+        "Waiting here.",
+        "Also check the summary.",
+        "Worker01 and Worker02 finished",
+        "Read after collection.",
+        "Worker01 finished",
+        "Queued later request.",
+      ].map((part) => text.indexOf(part));
+      expect(positions).not.toContain(-1);
+      expect(positions).toEqual(positions.toSorted((a, b) => a - b));
+      expect(text.match(/Worker01 finished/g)).toHaveLength(1);
+    }
+    await show([{ ...result, __openclaw: { catalogSource: true } }]);
+    expect(harness.view.textContent).not.toContain("finished");
+    const third = { ...worker, runId: "child-three", label: "Worker03" };
+    await show([
+      { ...receipt(third.runId, 10), subagentCompletions: [third] },
+      createAssistantMessage("Earlier result.", { timestamp: 11, phase: "commentary" }),
+      receipt(worker.runId, 20),
+      { ...receipt(second.runId, 21), subagentCompletions: [second, third] },
+    ]);
+    expect(harness.view.textContent).toContain("Worker03 finished");
+    expect(harness.view.textContent).toContain("Worker01 and Worker02 finished");
+  });
 
   function toolResultEntry(key: string, ...args: Parameters<typeof createToolResultMessage>) {
     return createMessageEntry(key, createToolResultMessage(...args));
@@ -71,8 +159,7 @@ describe("grouped chat rendering", () => {
     return widget;
   }
 
-  it("counts one exec and one wait across completed history, live snapshots, and separated activity groups", async () => {
-    document.body.append(harness.view);
+  it("deduplicates exec and wait across completed history, live snapshots, and separated activity groups", async () => {
     const messages: TestMessage[] = [];
     const toolMessages: TestMessage[] = [];
     for (const [index, name] of ["exec", "wait"].entries()) {
@@ -104,20 +191,7 @@ describe("grouped chat rendering", () => {
         }),
       );
     }
-    messages.push(
-      createToolResultMessage("call-wait", "wait", "wait finished", {
-        runId: "run-count",
-        timestamp: 30,
-        activity: [
-          projectAgentToolActivity({
-            toolCallId: "call-wait",
-            name: "wait",
-            phase: "result",
-            isError: false,
-          }),
-        ],
-      }),
-    );
+    messages.push({ ...messages.at(-1)!, timestamp: 30 });
     const items = buildItems({
       paneId: "counting",
       runId: "run-count",
@@ -129,14 +203,11 @@ describe("grouped chat rendering", () => {
     expect(items.filter((item) => item.kind === "stream")).toHaveLength(1);
     renderActivityGroup(groups, { showReasoning: false, isToolMessageExpanded: () => true });
     await settleToolBridges(harness.view);
-    expect(elementText(".chat-activity-group__label")?.trim()).toBe(
-      "1 command · 1 other operation",
-    );
+    expect(elementText(".chat-activity-group__label")?.trim()).toBe("Ran commands");
     expectCount(".chat-tool-row", 2);
   });
 
-  it("renders a persisted call with an unknown outcome until its matching result arrives", async () => {
-    document.body.append(harness.view);
+  it("keeps a persisted call provisional until its matching result arrives", async () => {
     const call = createAssistantMessage(
       [createToolCall("orphan", "exec", { command: "check-workspace" })],
       { __openclaw: { id: "orphan-call", runId: "historic-run" } },
@@ -147,13 +218,19 @@ describe("grouped chat rendering", () => {
         paneId: "unknown-historic-outcome",
         messages: history.messages,
       });
+      const { interruptedRunIds } = projectTranscriptChain(items, {
+        sessionKey: "abort-test",
+        messages: history.messages,
+        runWorking: false,
+        searchActive: false,
+      });
       renderActivityGroup(
         items.filter((item) => item.kind === "group"),
         {
           showReasoning: false,
           runActive: false,
-          isToolMessageExpanded: () => true,
-          isToolExpanded: () => true,
+          interruptedRunIds,
+          ...expandedTools,
         },
       );
       await settleToolBridges(harness.view);
@@ -162,74 +239,58 @@ describe("grouped chat rendering", () => {
     const unknown = await renderHistory([call]);
     expect(unknown.activity[0]?.items[0]).toMatchObject({
       phase: "end",
-      summary: "Outcome unknown",
+      unpairedCall: true,
     });
     expect(unknown.activity[0]?.items[0]).not.toHaveProperty("status");
-    expect(elementText(".chat-activity-group__label")).toBe("1 command · 1 unknown");
+    expect(elementText(".chat-activity-group__label")).toBe("Commands");
+    expect(harness.view.textContent).not.toContain("Outcome unknown");
+    expect(harness.view.textContent).toContain("No result available.");
     expectAbsent(".chat-tool-row--running");
     expect(harness.view.textContent).toContain("check-workspace");
 
+    for (const disposition of ["timeout", "error", "aborted"] as const) {
+      const terminal = createAssistantMessage([], { stopReason: "aborted" });
+      rememberLiveTerminalRun(terminal, "historic-run", disposition);
+      const chain = projectTranscriptChain([], {
+        sessionKey: "live-abort-test",
+        messages: [terminal],
+        runWorking: false,
+        searchActive: false,
+      });
+      expect(chain.interruptedRunIds.has("historic-run")).toBe(disposition === "aborted");
+    }
+    const abort = createAssistantMessage([], {
+      openclawAbort: { aborted: true, origin: "rpc", runId: "historic-run" },
+      excludeFromContext: true,
+    });
+    await renderHistory([call, abort]);
+    expect(elementText(".chat-activity-group__label")).toBe("Interrupted actions");
+    expect(harness.view.textContent).toContain("No result available.");
+    await renderHistory([{ ...call, __openclaw: { id: "next-call", runId: "next-run" } }, abort]);
+    expect(elementText(".chat-activity-group__label")).toBe("Commands");
     const completed = await renderHistory([
       call,
+      abort,
       createToolResultMessage("orphan", "exec", "Workspace checked.", {
         isError: false,
         __openclaw: { id: "orphan-result", runId: "historic-run" },
       }),
     ]);
     expect(completed.activity[0]?.items[0]).toMatchObject({ phase: "end", status: "completed" });
-    expect(elementText(".chat-activity-group__label")).toBe("1 command");
+    expectAbsent(".chat-activity-group__summary");
+    expect(elementText(".chat-tool-row__cmd")).toBe("check-workspace");
     expect(harness.view.textContent).not.toContain("outcome unknown");
     expect(harness.view.textContent).toContain("Workspace checked.");
     expectCount(".chat-tool-row", 1);
     expectAbsent(".chat-tool-row--running");
   });
 
-  it("keeps a persisted tool review icon-only until its command activity expands", async () => {
-    document.body.append(harness.view);
-    const group = createToolGroup("reviewed-tool-group", [
-      toolResultEntry("reviewed-tool-message", "call-reviewed", "run_command", "completed", {
-        details: {
-          approvalReviews: [
-            {
-              id: "review-1",
-              label: "Guardian",
-              status: "approved",
-              riskLevel: "low",
-              userAuthorization: "high",
-              rationale: "Narrowly scoped to the requested file.",
-            },
-          ],
-          approvalReviewOutcome: "approved",
-        },
-        timestamp: 1000,
-      }),
-    ]);
-
-    await renderToolGroups([group], {
-      isToolMessageExpanded: (id) => (id === "activity:reviewed-tool-group" ? false : undefined),
-    });
-    expect(element('.chat-activity-group__review-status[data-outcome="approved"]')).not.toBeNull();
-    expect(harness.view.textContent).not.toContain("Guardian approved");
-
-    await renderToolGroups([group], {
-      isToolMessageExpanded: () => true,
-      isToolExpanded: () => true,
-    });
-    const review = element('.chat-tool-review[data-review-status="approved"]');
-    expect(review?.textContent).toContain("Guardian approved");
-    expect(review?.textContent).toContain("Narrowly scoped to the requested file.");
-    expectPresent(".chat-tool-msg-body");
-    expectCount(".chat-tool-review", 1);
-  });
-
   it("keeps aggregate expansion and accessibility ids stable when groups append", () => {
-    const groups = [
-      createToolGroup("stable-first", [toolResultEntry("stable-1", "call-1", "read_file", "one")]),
-      createToolGroup("stable-second", [toolResultEntry("stable-2", "call-2", "read_file", "two")]),
-      createToolGroup("stable-third", [
-        toolResultEntry("stable-3", "call-3", "read_file", "three"),
+    const groups = ["first", "second", "third"].map((key, index) =>
+      createToolGroup(`stable-${key}`, [
+        toolResultEntry(`stable-${index}`, `call-${index}`, "read_file", key),
       ]),
-    ];
+    );
     const opts: RenderMessageGroupOptions = {
       showReasoning: true,
       showToolCalls: true,
@@ -248,108 +309,26 @@ describe("grouped chat rendering", () => {
     expect(appendedSummary.getAttribute("aria-controls")).toBe(initialBodyId);
     expect(appendedSummary.getAttribute("aria-expanded")).toBe("true");
     expectCount(".chat-activity-group__body > .chat-bubble", 3);
-  });
-
-  it("keeps failed activity collapsed with neutral chain chrome", async () => {
-    document.body.append(harness.view);
-    const onToggleToolMessageExpanded = vi.fn();
-    const group = createToolGroup("tool-group", [
-      toolResultEntry(
-        "tool-message-1",
-        "call-1",
-        "read_file",
-        JSON.stringify({ error: "Read failed" }),
-        {
-          isError: true,
-          timestamp: 1000,
-        },
-      ),
-      toolResultEntry("tool-message-2", "call-2", "run_command", "Command output", {
-        timestamp: 1001,
-        isError: false,
-      }),
-    ]);
-
-    await renderToolGroups([group], { onToggleToolMessageExpanded });
-    expect(elementText(".chat-activity-group__label")).toBe("Raw details");
-    expect(elementText(".chat-activity-group__summary")).not.toContain("1 failed");
-
-    await renderToolGroups(prepareHistoryGroups([group]), {
-      onToggleToolMessageExpanded,
-    });
-
-    expectAbsent(".chat-activity-group.is-open");
-    const activitySummary = requireElement(".chat-activity-group__summary", HTMLButtonElement);
-    expect(activitySummary.classList.contains("chat-activity-group__summary--error")).toBe(false);
-    expect(activitySummary.getAttribute("aria-label")).toBeNull();
-    expect(activitySummary.getAttribute("aria-expanded")).toBe("false");
-    expect(activitySummary.textContent).toContain("1 failed");
-    expect(harness.view.textContent).not.toContain("Read failed");
-    expect(activitySummary.querySelector(".chat-activity-group__badge")).toBeNull();
-    expectAbsent(".chat-tool-msg-body");
-    activitySummary.click();
-
-    expect(onToggleToolMessageExpanded).toHaveBeenCalledWith("activity:tool-group", false);
-    harness.view.remove();
-  });
-
-  it("keeps inline tool cards collapsed by default and renders expanded state", async () => {
-    const show = toolFixture(
-      createAssistantMessage(
-        [
-          createToolCall("call-1", "browser.open", { url: "https://example.com" }),
-          createToolResultBlock("call-1", "browser.open", "Opened page", {
-            type: "toolresult",
-          }),
-        ],
-        { id: "assistant-1", toolCallId: "call-1" },
-      ),
+    renderActivityGroup(
+      [
+        ...groups,
+        createToolGroup("launch", [
+          toolResultEntry("launch", "spawn", "sessions_spawn", "Child accepted"),
+        ]),
+      ],
+      opts,
     );
-    await show(false);
-
-    expectAbsent(".chat-tool-msg-body");
-
-    await show(true);
-
-    // Simple object args render as key-value rows; only the output keeps a block.
-    const kvRow = element(".chat-tool-kv__row");
-    expect(kvRow?.querySelector(".chat-tool-kv__key")?.textContent).toBe("url:");
-    expect(kvRow?.querySelector(".chat-tool-kv__value")?.textContent).toBe("https://example.com");
-    const blocks = elements(".chat-tool-card__block");
-    // Plain output is the block's default content, so it carries no header.
-    expect(blocks[0]?.querySelector(".chat-tool-card__block-label")).toBeNull();
-    expect(blocks[0]?.querySelector("code")?.textContent).toBe("Opened page");
-  });
-
-  it("keeps top-level tool-name results collapsed", async () => {
-    document.body.append(harness.view);
-    markdownRenderMock.mockClear();
-    await renderToolMessage(
-      createAssistantMessage("A long tool result that should stay behind the disclosure.", {
-        toolName: "bash",
-      }),
-      { isToolMessageExpanded: () => false },
-    );
-    requireElement(".chat-bubble--tool-shell", HTMLElement);
-    requireElement(".chat-tool-msg-summary", HTMLButtonElement);
-    expectAbsent(".chat-tool-msg-body");
-    expectAbsent(".chat-text");
-    expect(markdownRenderMock).not.toHaveBeenCalled();
+    expect(requireElement(".chat-activity-group__summary", HTMLButtonElement)).toBe(initialSummary);
+    expect(initialSummary.getAttribute("aria-controls")).toBe(initialBodyId);
+    expectCount(".chat-tool-msg-summary", 4);
   });
 
   it("keeps one readable label for standalone tool results with duplicate names", async () => {
-    document.body.append(harness.view);
     const message = createToolResultMessage("call-heartbeat", "heartbeat_respond", [
-      {
-        type: "tool_result",
-        name: "heartbeat_respond",
-        text: "Acknowledged",
-      },
+      { type: "tool_result", name: "heartbeat_respond", text: "Acknowledged" },
     ]);
 
-    await renderToolMessage(message, {
-      isToolMessageExpanded: () => false,
-    });
+    await renderToolMessage(message, { isToolMessageExpanded: () => false });
 
     const summary = requireElement(".chat-tool-msg-summary", HTMLButtonElement);
     expect(summary.textContent?.trim()).toBe("Heartbeat Respond");
@@ -358,16 +337,15 @@ describe("grouped chat rendering", () => {
   });
 
   it("cleans collapsed tool connector copy while preserving expanded raw input", async () => {
-    const show = toolFixture(
-      createAssistantMessage(
-        [createToolCall("call-string-tool", "presentation_create", "with Example Deck")],
-        { id: "assistant-string-tool", toolCallId: "call-string-tool" },
-      ),
+    const message = createAssistantMessage(
+      [createToolCall("call-string-tool", "presentation_create", "with Example Deck")],
+      { id: "assistant-string-tool", toolCallId: "call-string-tool" },
     );
+    const show = (expanded: boolean) =>
+      renderToolMessage(message, { isToolExpanded: () => expanded });
     await show(false);
 
-    // The cleaned string-arg preview is now the primary collapsed label.
-    expect(elementText(".chat-tool-msg-summary__label")?.trim()).toBe("Example Deck");
+    expect(elementText(".chat-tool-row__title")?.trim()).toBe("Presentation Create");
     expectAbsent(".chat-tool-msg-summary__names");
     expect(elementText(".chat-tool-msg-summary")).not.toContain("with Example Deck");
 
@@ -377,113 +355,291 @@ describe("grouped chat rendering", () => {
     expect(elementText(".chat-tool-card__block code")).toBe("with Example Deck");
   });
 
-  it("renders expanded tool output rows and their json content", async () => {
-    document.body.append(harness.view);
-    const output = {
-      status: "error",
-      exitCode: 1,
-      error: "Session mode is unavailable for this target.",
-      childSessionKey: "agent:test:subagent:abc123",
-    };
-    const call = createAssistantMessage(
-      [createToolCall("call-5", "sessions_spawn", { mode: "session", thread: true })],
-      { id: "assistant-5", toolCallId: "call-5" },
-    );
-    const result = createToolResultMessage(
-      "call-5",
-      "sessions_spawn",
-      JSON.stringify(output, null, 2),
-      {
-        id: "tool-5",
-        role: "tool",
-        timestamp: Date.now() + 1,
-      },
-    );
-    await renderToolGroups(
-      [createMessageGroup(call, "assistant"), createMessageGroup(result, "tool")],
-      {
-        isToolExpanded: () => true,
-        isToolMessageExpanded: () => true,
-      },
-    );
+  it.each([undefined, 0, 7])(
+    "keeps the standalone failure footer and neutral disclosure with exit code %s",
+    async (exitCode) => {
+      const output = '{\n  "status": "error"\n}';
+      const group = toolResultGroup("status-error", "sessions_spawn", output, {
+        details: { exitCode },
+      });
+      for (const expanded of [false, true]) {
+        await renderToolGroups([group], {
+          isToolMessageExpanded: () => expanded,
+          isToolExpanded: () => expanded,
+        });
+        const summary = requireElement(".chat-tool-msg-summary", HTMLDivElement);
+        expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(false);
+        expect(summary.textContent).toContain("Couldn't launch subagent");
+        expect(Boolean(element(".chat-tool-msg-body"))).toBe(expanded);
+      }
+      expect(elementText(".chat-tool-card__outcome")).toBe(
+        exitCode ? `Exit code ${exitCode}` : "failed",
+      );
+      expect(elementText(".chat-tool-msg-body pre code")).toBe(output);
+      expectAbsent(".chat-tool-msg-body details, .code-block-json-mode");
+    },
+  );
 
-    // The call's simple args render as key-value rows; the error keeps a block.
-    const kvRows = elements(".chat-tool-kv__row");
-    expect(
-      kvRows.map((row) => [
-        row.querySelector(".chat-tool-kv__key")?.textContent,
-        row.querySelector(".chat-tool-kv__value")?.textContent,
-      ]),
-    ).toEqual([
-      ["mode:", "session"],
-      ["thread:", "true"],
-    ]);
-    const blocks = elements(".chat-tool-card__block");
-    expect(
-      blocks.map((block) => block.querySelector(".chat-tool-card__block-label")?.textContent),
-    ).toEqual(["Tool error"]);
-    expect(JSON.parse(blocks[0]?.querySelector("code")?.textContent ?? "{}")).toEqual(output);
-    expect(
-      blocks[0]?.closest(".chat-tool-card")?.querySelector(":scope > .chat-tool-card__outcome")
-        ?.textContent,
-    ).toBe("Exit code 1");
-  });
+  it.each(["image only", "text then image", "image then text"])(
+    "keeps inspected images in tool details with %s",
+    async (order) => {
+      const images = ["one", "two", "three"].map((alt) => ({
+        type: "image",
+        data: "cG5n",
+        mimeType: "image/png",
+        alt,
+      }));
+      const imageCall = createToolCall("inspect", "view_image", {
+        path: "/tmp/avatar-previews.png",
+      });
+      const textCall = createToolCall("read", "read_file", { path: "brief.md" });
+      const call = createAssistantMessage(
+        order === "image only"
+          ? [imageCall]
+          : order === "text then image"
+            ? [textCall, imageCall]
+            : [imageCall, textCall],
+      );
+      const textResult = createToolResultMessage(
+        "read",
+        "read_file",
+        "Inspect the preview images.",
+      );
+      const result = createToolResultMessage("inspect", "view_image", [
+        { type: "text", text: "Loaded 3 images for inspection." },
+        ...images,
+      ]);
+      const delivered = createAssistantMessage(images);
+      const groups = buildItems({
+        messages: [call, ...(order === "image only" ? [] : [textResult]), result, delivered],
+      }).filter((item) => item.kind === "group");
+      for (const expanded of [false, true, false]) {
+        await renderToolGroups(groups, { isToolMessageExpanded: () => expanded });
+        if (order === "image only") {
+          expect(elementText(".chat-tool-msg-summary")?.trim()).toBe("Viewed 3 images");
+        }
+        expectCount(".chat-group.assistant .chat-message-image", 3);
+        expectCount(".chat-tool-msg-collapse .chat-message-image", expanded ? 3 : 0);
+        if (expanded) {
+          expect(
+            harness.view.textContent!.match(
+              order === "image only" ? /Viewed 3 images/g : /Viewed image/g,
+            ),
+          ).toHaveLength(1);
+        }
+        expectCount(".chat-message-image", expanded ? 6 : 3);
+      }
+    },
+  );
 
-  it("keeps status-only standalone tool-result summaries neutral until expanded", async () => {
-    const onToggleToolMessageExpanded = vi.fn();
-    const show = toolFixture(
+  it("groups adjacent successful image inspections without losing their original details", async () => {
+    let timestamp = 0;
+    const inspect = (id: string, count = 1, runId = "images", isError = false) => [
+      createAssistantMessage([createToolCall(id, "view_image", { path: `/tmp/${id}.png` })], {
+        timestamp: ++timestamp,
+        runId,
+      }),
       createToolResultMessage(
-        "call-status-error",
-        "sessions_spawn",
-        JSON.stringify({ status: "error" }, null, 2),
-        { id: "tool-status-error" },
+        id,
+        "view_image",
+        [
+          { type: "text", text: isError ? "Image unavailable" : "Inspection completed" },
+          ...Array.from({ length: isError ? 0 : count }, (_, index) => ({
+            type: "image",
+            data: "cG5n",
+            mimeType: "image/png",
+            alt: `${id}-${index}`,
+          })),
+        ],
+        { timestamp: ++timestamp, runId, isError },
       ),
-      true,
+    ];
+    const onOpenSidebar = vi.fn();
+    const onToggle = vi.fn();
+    const show = async (messages: TestMessage[], expanded = false) => {
+      renderActivityGroup(groupsOf(buildItems({ messages })), {
+        showReasoning: false,
+        isToolMessageExpanded: () => expanded,
+        onToggleToolMessageExpanded: onToggle,
+        onOpenSidebar,
+      });
+      await settleToolBridges(harness.view);
+    };
+    const first = inspect("first");
+    const second = inspect("second", 2);
+    await show([...first, ...second]);
+    expect(harness.view.textContent).toContain("Viewed 3 images");
+    expectCount(".chat-message-image", 0);
+    requireElement(".chat-tool-msg-summary", HTMLButtonElement).click();
+    expect(onToggle).toHaveBeenCalledOnce();
+    const disclosureId = onToggle.mock.calls[0]![0];
+    await show([...first, ...second], true);
+    expectCount(".chat-message-image", 3);
+    expect(harness.view.textContent).not.toContain("Inspection completed");
+    const detailButtons = harness.view.querySelectorAll<HTMLButtonElement>(
+      '[aria-label="Open tool details in side panel"]',
     );
+    expect(detailButtons).toHaveLength(2);
+    detailButtons[1]!.click();
+    expect(onOpenSidebar.mock.calls[0]![0]).toMatchObject({
+      kind: "tool-output",
+      card: { args: { path: "/tmp/second.png" } },
+    });
+    requireElement(".chat-tool-msg-summary", HTMLButtonElement).click();
+    expect(onToggle.mock.calls.at(-1)).toEqual([disclosureId, true]);
 
-    await show(false, { onToggleToolMessageExpanded });
+    // The first call remains the disclosure owner before a second result arrives.
+    await show(first);
+    requireElement(".chat-tool-msg-summary", HTMLButtonElement).click();
+    expect(onToggle.mock.calls.at(-1)).toEqual([disclosureId, false]);
 
-    let summary = requireElement(".chat-tool-msg-summary", HTMLButtonElement);
-    expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(false);
-    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Tool output");
-    expect(summary.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(
-      "sessions_spawn",
-    );
-    summary.click();
-    expect(onToggleToolMessageExpanded).toHaveBeenCalledOnce();
-
-    await show(true);
-
-    summary = requireElement(".chat-tool-msg-summary", HTMLButtonElement);
-    expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(false);
-    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Tool output");
-    // The failure stays recorded: the expanded body closes with the outcome.
-    expect(elementText(".chat-tool-card__outcome")).toBe("failed");
-    expect(elementText(".chat-tool-msg-body .chat-text pre code")).toBe(
-      '{\n  "status": "error"\n}',
-    );
-    expectAbsent(".chat-tool-msg-body details, .code-block-json-mode");
-    harness.view.remove();
-  });
-
-  it("renders an expanded orphan tool result without a nested disclosure", async () => {
-    document.body.append(harness.view);
-    await renderToolGroups(
+    const command = [
+      createAssistantMessage([createToolCall("command", "exec", { command: "true" })], {
+        timestamp: ++timestamp,
+        runId: "images",
+      }),
+      createToolResultMessage("command", "exec", "done", {
+        timestamp: ++timestamp,
+        runId: "images",
+        details: { exitCode: 0 },
+      }),
+    ];
+    for (const barrier of [
+      command,
       [
-        toolResultGroup("call-orphan", "read", "Orphan tool output", {
-          id: "orphan-tool-result",
+        createAssistantMessage("Checking another view.", {
+          timestamp: ++timestamp,
+          runId: "images",
         }),
       ],
-      { isToolMessageExpanded: () => true },
-    );
-
-    expectAbsent(".chat-tool-msg-body .chat-tool-msg-summary");
-    expectCount(".chat-tool-card__block code", 1);
-    expect(elementText(".chat-tool-card__block code")).toBe("Orphan tool output");
+      inspect("failed", 0, "images", true),
+      [
+        createAssistantMessage(
+          [createToolCall("pending", "view_image", { path: "/tmp/pending.png" })],
+          { timestamp: ++timestamp, runId: "images" },
+        ),
+      ],
+    ]) {
+      await show([...first, ...barrier, ...inspect("after")]);
+      expect(harness.view.textContent).not.toMatch(/Viewed \d+ images/);
+      expect(harness.view.textContent!.match(/Viewed image/g)).toHaveLength(2);
+    }
+    await show([...first, ...inspect("different-run", 1, "another-run")]);
+    expect(harness.view.textContent).not.toContain("Viewed 2 images");
   });
 
+  it.each([false, true])("names subagent lifecycle rows (tool search: %s)", async (dispatched) => {
+    // Tool search records each call twice: the dispatch envelope and the nested call
+    // that carries the activity. Rows present the nested call, never the envelope.
+    const runId = "run-1";
+    const text = (value: unknown) => [{ type: "text", text: JSON.stringify(value) }];
+    const messages = (
+      [
+        [
+          "spawn",
+          "sessions_spawn",
+          { label: "Worker01", task: "Review." },
+          { status: "accepted", runId: "child", childSessionKey: "agent:main:subagent:w" },
+        ],
+        ["roster", "subagents", { action: "list" }, { status: "ok", action: "list" }],
+      ] as const
+    ).flatMap(([id, name, args, output], index): TestMessage[] => {
+      const rows: TestMessage[] = [
+        createAssistantMessage(
+          [
+            dispatched
+              ? createToolCall(id, "dispatch_action", { id: name, args })
+              : createToolCall(id, name, args),
+          ],
+          { __openclaw: { id: `${id}-call`, runId } },
+        ),
+      ];
+      if (dispatched) {
+        rows.push(
+          Object.assign(
+            createNestedToolActivity({
+              runId,
+              scopeId: "scope",
+              afterEntryId: `${id}-call`,
+              startOrder: index,
+              parentToolCallId: id,
+              toolCallId: `tool_call:${id}:${name}:${index}`,
+              toolName: name,
+              input: args,
+              result: { content: text(output) },
+              isError: false,
+              startedAt: index,
+              timestamp: index,
+            }),
+            { __openclaw: { id: `${id}-nested`, runId } },
+          ),
+        );
+      }
+      rows.push(
+        createToolResultMessage(
+          id,
+          dispatched ? "dispatch_action" : name,
+          dispatched
+            ? text({ tool: { id: name }, result: { content: text(output) } })
+            : text(output),
+          { isError: false, __openclaw: { id: `${id}-result`, runId } },
+        ),
+      );
+      return rows;
+    });
+    const history = attachHistoryActivity(prepareChatHistoryFixture(messages));
+    const items = buildItems({ paneId: "dispatch", messages: history.messages });
+    renderActivityGroup(
+      items.filter((item) => item.kind === "group"),
+      { showReasoning: false, runActive: false },
+    );
+    await settleToolBridges(harness.view);
+    expect(
+      [
+        ...harness.view.querySelectorAll(".chat-tool-msg-summary, .chat-activity-group__summary"),
+      ].map((row) => row.textContent?.replace(/\s+/g, " ").trim()),
+    ).toEqual(["Launched Worker01", "Listed subagents"]);
+  });
+
+  it.each([false, true])(
+    "keeps a collection wait visible when an ID returned an error (persisted: %s)",
+    async (persisted) => {
+      // A capped result keeps only the compact error count recorded before the cap.
+      const worker = {
+        runId: "done",
+        sessionKey: "agent:main:subagent:worker",
+        label: "Worker",
+        status: "done",
+      };
+      const output = {
+        completed: [worker],
+        pending: [],
+        errors: [{ runId: "gone", error: "not_found" }],
+      };
+      const groups = buildItems({
+        messages: [
+          createAssistantMessage([
+            createToolCall("wait", "agents_wait", { ids: ["done", "gone"] }),
+          ]),
+          createToolResultMessage(
+            "wait",
+            "agents_wait",
+            persisted ? "[output truncated]" : JSON.stringify(output),
+            persisted ? { subagentCompletions: [worker], subagentCollectionErrors: 1 } : {},
+          ),
+        ],
+      }).filter((item) => item.kind === "group");
+      await renderToolGroups(groups, {});
+      expectCount("button.chat-tool-msg-summary", 1);
+      expect(harness.view.textContent).toContain("Worker finished");
+      await renderToolGroups(groups, expandedTools);
+      expect(elementText(".chat-tool-msg-body")).toContain(
+        persisted ? "[output truncated]" : "not_found",
+      );
+    },
+  );
+
   it("keeps text visible beside an orphan tool-result image", async () => {
-    document.body.append(harness.view);
     await renderToolGroups(
       [
         toolResultGroup("call-image", "image", [
@@ -502,14 +658,9 @@ describe("grouped chat rendering", () => {
   });
 
   it("keeps omitted media visible beside a standalone tool result", async () => {
-    document.body.append(harness.view);
     await renderToolMessage(
       createToolResultMessage("call-history-image", "read_file", [
-        {
-          type: "tool_result",
-          name: "read_file",
-          text: "Read completed",
-        },
+        { type: "tool_result", name: "read_file", text: "Read completed" },
         { type: "image", omitted: true, bytes: 2048 },
       ]),
       { isToolMessageExpanded: () => false },
@@ -531,7 +682,6 @@ describe("grouped chat rendering", () => {
         {},
       );
       onTestFinished(provider.dispose);
-      document.body.append(harness.view);
       const content = toolSummary
         ? [
             {
@@ -563,7 +713,6 @@ describe("grouped chat rendering", () => {
   );
 
   it("opens generic tool details instead of a canvas preview from tool rows", async () => {
-    document.body.append(harness.view);
     const onOpenSidebar = vi.fn();
     const canvas = createAssistantCanvasBlock({
       suffix: "sidebar",
@@ -573,8 +722,7 @@ describe("grouped chat rendering", () => {
       createToolResultMessage("call-artifact-sidebar", "canvas_render", canvas.rawText),
       "tool",
       {
-        isToolExpanded: () => true,
-        isToolMessageExpanded: () => true,
+        ...expandedTools,
         onOpenSidebar,
       },
     );

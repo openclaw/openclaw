@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { renderRateLimitRetryExhaustion } from "../agents/failover/user-copy.js";
 import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -15,6 +16,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import {
+  beginDiagnosticRetryWait,
   createDiagnosticEmbeddedRunOwner,
   markDiagnosticEmbeddedRunStarted,
 } from "./diagnostic-run-activity.js";
@@ -22,6 +24,7 @@ import { requestStuckSessionRecovery } from "./diagnostic-session-recovery-coord
 import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
 import { logSessionStateChange, startGatewayDiagnosticHeartbeat } from "./diagnostic.js";
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
+import { createDiagnosticMessageLifecycle } from "./message-lifecycle.js";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -35,6 +38,65 @@ afterEach(() => {
   resetDiagnosticStateForTest();
   resetDiagnosticEventsForTest();
   vi.useRealTimers();
+});
+
+it("keeps a long exec processing when a queued steer finishes dispatching", async () => {
+  const ref = { sessionKey: "agent:main:steering-exec", sessionId: "steering-exec" };
+  const message = () =>
+    createDiagnosticMessageLifecycle({
+      ...ref,
+      enabled: true,
+      channel: "test",
+      source: "dispatch",
+      trackSessionState: true,
+    });
+  const original = message();
+  original.markProcessing();
+  const operation = createReplyOperation({ ...ref, resetTriggered: false });
+  operation.setPhase("running");
+  const attempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
+  const finishTool = attempt.beginTool({
+    toolName: "exec",
+    toolCallId: "held-exec",
+    deadlineAtMs: 600_000,
+  });
+  const steer = message();
+  steer.markProcessing();
+  // Another input is still waiting; completing one dispatch must preserve the active turn.
+  message().markProcessing();
+  steer.markIdle("message_completed");
+  const events: DiagnosticEventPayload[] = [];
+  onDiagnosticEvent((event) => events.push(event));
+  vi.setSystemTime(216_000);
+  const clock = createGatewaySchedulerClock(216_000);
+  startGatewayDiagnosticHeartbeat(
+    createTestGatewayScheduler(clock.clock),
+    { diagnostics: { enabled: true } },
+    { sampleLiveness: () => null },
+  );
+  vi.setSystemTime(246_000);
+  await clock.advanceTo(246_000);
+  await vi.advanceTimersByTimeAsync(0);
+  await waitForDiagnosticEventsDrained();
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "session.long_running",
+      state: "processing",
+      queueDepth: 1,
+      reason: "tool_execution_wait",
+      activeWorkKind: "tool_call",
+      activeToolName: "exec",
+    }),
+  );
+  finishTool();
+  original.markIdle("message_completed");
+  operation.complete();
+  await waitForDiagnosticEventsDrained();
+  expect(events.findLast((event) => event.type === "session.state")).toMatchObject({
+    state: "idle",
+    reason: "reply_operation_ended",
+    queueDepth: 1,
+  });
 });
 
 it("reports a 54-second stall without requesting recovery from an observing controller", async () => {
@@ -83,13 +145,14 @@ it("reports a 54-second stall without requesting recovery from an observing cont
 });
 
 it.each([
-  { kind: "request", deadlineAtMs: 396_000 },
-  { kind: "retry", deadlineAtMs: 396_000 },
-  { kind: "backend", deadlineAtMs: 366_000 },
-  { kind: "tool", deadlineAtMs: 1_296_000 },
+  { kind: "request", deadlineAtMs: 396_000, rateLimited: false },
+  { kind: "retry", deadlineAtMs: 396_000, rateLimited: false },
+  { kind: "retry", deadlineAtMs: 396_000, rateLimited: true },
+  { kind: "backend", deadlineAtMs: 366_000, rateLimited: false },
+  { kind: "tool", deadlineAtMs: 1_296_000, rateLimited: false },
 ] as const)(
-  "uses the controller-owned $kind allowance through its exact boundary",
-  async ({ kind, deadlineAtMs }) => {
+  "uses the controller-owned $kind allowance through its exact boundary (rate-limited: $rateLimited)",
+  async ({ kind, deadlineAtMs, rateLimited }) => {
     const ref = {
       sessionKey: "agent:main:heartbeat-allowance",
       sessionId: "allowance-session",
@@ -123,6 +186,14 @@ it.each([
     } else if (kind === "tool") {
       // Explicit execution plus the existing 15-minute quiet-tool grace.
       attempt.beginTool({ toolName: "exec", toolCallId: "owned-command", deadlineAtMs: 396_000 });
+    } else if (rateLimited) {
+      beginDiagnosticRetryWait({
+        owner,
+        deadlineAtMs,
+        rateLimitStopMessage: renderRateLimitRetryExhaustion(9),
+        signal: operation.abortSignal,
+        assertCurrent() {},
+      });
     } else {
       // Backend traffic cannot rearm the six-minute semantic horizon.
       attempt.beginWait({
@@ -147,6 +218,14 @@ it.each([
     await waitForDiagnosticEventsDrained();
     expect(cancel).toHaveBeenCalledOnce();
     expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
+    if (rateLimited) {
+      expect(operation.staleExpiryReason).toBe("rate_limited");
+      expect(operation.abortSignal.reason).toMatchObject({
+        name: "AbortError",
+        code: "OPENCLAW_SESSION_WATCHDOG",
+        message: renderRateLimitRetryExhaustion(9),
+      });
+    }
     expect(events.filter((event) => event.type === "session.recovery.requested")).toEqual([
       expect.objectContaining({ allowActiveAbort: true, reason: "semantic_stall" }),
     ]);

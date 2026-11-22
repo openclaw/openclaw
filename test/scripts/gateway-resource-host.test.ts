@@ -3,13 +3,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import * as resource from "../../scripts/e2e/kitchen-sink-rpc-walk.mts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
 
 const runtime = {
   runner: {
-    command: process.execPath,
+    command: resolveTestNodeExecPath(),
     baseArgs: [fileURLToPath(new URL("./fixtures/gateway-resource-host.mjs", import.meta.url))],
   },
   buildInfo: { commit: "a".repeat(40), version: "fixture", buildId: "fixture-build" },
@@ -33,15 +34,15 @@ async function runCase(prepare: ResourceOptions["prepare"], run: ResourceOptions
 const unsupportedHost =
   process.platform !== "linux" || typeof process.threadCpuUsage !== "function";
 it.skipIf(unsupportedHost).each([
-  { workloadFails: false, exitCode: "0", stopError: "0" },
-  { workloadFails: true, exitCode: "0", stopError: "0" },
-  { workloadFails: false, exitCode: "1", stopError: "0" },
-  { workloadFails: false, exitCode: "0", stopError: "1" },
-  { workloadFails: true, exitCode: "1", stopError: "0" },
-])(
-  "joins the host and retains only failed state: $workloadFails/$exitCode/$stopError",
-  async ({ workloadFails, exitCode, stopError }) => {
-    const succeeds = !workloadFails && exitCode === "0" && stopError === "0";
+  [false, "0", "0", []],
+  [true, "0", "0", ["fixture assertion failed"]],
+  [false, "1", "0", ["did not exit cleanly"]],
+  [false, "0", "1", ["fixture service stop failed"]],
+  [true, "1", "0", ["fixture assertion failed", "did not exit cleanly"]],
+] as const)(
+  "joins the host and retains only failed state: %s/%s/%s",
+  async (workloadFails, exitCode, stopError, errors) => {
+    const succeeds = errors.length === 0;
     const receipt = await runCase(
       async ({ env }) => {
         expect(env.OPENCLAW_KITCHEN_SINK_PERSONALITY).toBeUndefined();
@@ -65,27 +66,22 @@ it.skipIf(unsupportedHost).each([
       },
     );
     expect(existsSync(roots[0]!)).toBe(!succeeds);
+    expect(receipt.status).toBe(succeeds ? "exercised" : "failed");
+    expect(receipt.shutdown).toMatchObject({ exited: true, exitCode: Number(exitCode) });
     if (succeeds) {
-      expect(receipt.status).toBe("exercised");
       expect(receipt.phases.map(({ name }) => name)).toEqual(["startup", "work"]);
       expect(receipt.phases[1]?.operations).toEqual({ attempted: 2, completed: 2, failed: 0 });
       expect(receipt.phases[1]?.before.pid).toBe(receipt.phases[1]?.after?.pid);
-      expect(receipt.shutdown).toMatchObject({ exited: true, exitCode: 0, signal: null });
+      expect(receipt.shutdown?.signal).toBeNull();
       expect(receipt.host).toMatchObject(runtime.buildInfo);
       return;
     }
-    expect(receipt.status).toBe("failed");
     expect(receipt.phases[1]?.operations.completed).toBe(1);
-    expect(receipt.shutdown).toMatchObject({ exited: true, exitCode: Number(exitCode) });
+    for (const error of errors) {
+      expect(receipt.error).toContain(error);
+    }
     if (workloadFails) {
-      expect(receipt.error).toContain("fixture assertion failed");
       expect(receipt.phases[2]?.operations).toEqual({ attempted: 1, completed: 0, failed: 1 });
-    }
-    if (exitCode === "1") {
-      expect(receipt.error).toContain("did not exit cleanly");
-    }
-    if (stopError === "1") {
-      expect(receipt.error).toContain("fixture service stop failed");
     }
   },
 );

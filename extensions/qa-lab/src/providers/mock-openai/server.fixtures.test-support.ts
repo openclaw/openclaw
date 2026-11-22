@@ -37,51 +37,31 @@ export function userInputs(...items: (string | Record<string, unknown>)[]) {
   return items.map((item) => (typeof item === "string" ? makeUserInput(item) : item));
 }
 
-function requestInput(input: unknown) {
-  // A bare string is shorthand for one user turn; raw wire inputs use the harness directly.
-  return typeof input === "string" ? [makeUserInput(input)] : input;
+function requestWith<T>(send: (server: MockServer, body: Options) => T, defaults: Options = {}) {
+  return (server: MockServer, input: unknown, options: Options = {}) =>
+    send(server, {
+      ...defaults,
+      ...options,
+      // A bare string is one user turn; structured wire inputs pass through unchanged.
+      input: typeof input === "string" ? [makeUserInput(input)] : input,
+    });
 }
 
-// Keep transport/model choices explicit while sharing the repeated request envelope.
-export function respond(server: MockServer, input: unknown, options: Options = {}) {
-  return expectNonStreamingResponsesJson(server, { ...options, input: requestInput(input) });
-}
+const openAi = { model: "gpt-5.6-luna" };
+export const respond = requestWith(expectNonStreamingResponsesJson);
+export const respondOpenAi = requestWith(expectOpenAiNonStreamingResponsesJson);
+export const readResponse = requestWith(expectResponses, { stream: false });
+export const responseOpenAi = requestWith(expectResponses, { stream: false, ...openAi });
+export const streamResponse = requestWith(expectResponses, { stream: true });
+export const streamOpenAi = requestWith(expectResponses, { stream: true, ...openAi });
+export const postPlain = requestWith(postResponses, { stream: false });
+export const postStream = requestWith(postResponses, { stream: true });
 
-export function respondOpenAi(server: MockServer, input: unknown, options: Options = {}) {
-  return expectOpenAiNonStreamingResponsesJson(server, { ...options, input: requestInput(input) });
+async function responseText(server: MockServer, body: Options) {
+  return (await expectResponses(server, body)).text();
 }
-
-export function readResponse(server: MockServer, input: unknown, options: Options = {}) {
-  return expectResponses(server, { stream: false, ...options, input: requestInput(input) });
-}
-
-export function responseOpenAi(server: MockServer, input: unknown, options: Options = {}) {
-  return readResponse(server, input, { model: "gpt-5.6-luna", ...options });
-}
-
-export function streamResponse(server: MockServer, input: unknown, options: Options = {}) {
-  return expectResponses(server, { stream: true, ...options, input: requestInput(input) });
-}
-
-export function streamOpenAi(server: MockServer, input: unknown, options: Options = {}) {
-  return streamResponse(server, input, { model: "gpt-5.6-luna", ...options });
-}
-
-export async function streamText(server: MockServer, input: unknown, options: Options = {}) {
-  return (await streamResponse(server, input, options)).text();
-}
-
-export function streamOpenAiText(server: MockServer, input: unknown, options: Options = {}) {
-  return streamText(server, input, { model: "gpt-5.6-luna", ...options });
-}
-
-export function postPlain(server: MockServer, input: unknown, options: Options = {}) {
-  return postResponses(server, { stream: false, ...options, input: requestInput(input) });
-}
-
-export function postStream(server: MockServer, input: unknown, options: Options = {}) {
-  return postResponses(server, { stream: true, ...options, input: requestInput(input) });
-}
+export const streamText = requestWith(responseText, { stream: true });
+export const streamOpenAiText = requestWith(responseText, { stream: true, ...openAi });
 
 export function functionCall(name: string, args: unknown, callId?: string) {
   return {
@@ -125,21 +105,10 @@ export function expectAnthropicText(payload: unknown, text: string) {
 }
 
 export function expectSlots(events: Record<string, unknown>[], ids: unknown[]) {
+  const types = ["response.output_item.added", "response.output_item.done"];
   expect(
     events
-      .filter(
-        (event) =>
-          event.type === "response.output_item.added" || event.type === "response.output_item.done",
-      )
-      .map((event) => [
-        event.type,
-        requireRecord(event.item, "output item").id,
-        event.output_index,
-      ]),
-  ).toEqual(
-    ids.flatMap((id, index) => [
-      ["response.output_item.added", id, index],
-      ["response.output_item.done", id, index],
-    ]),
-  );
+      .filter(({ type }) => types.some((expected) => type === expected))
+      .map(({ type, item, output_index: i }) => [type, requireRecord(item, "output item").id, i]),
+  ).toEqual(ids.flatMap((id, index) => types.map((type) => [type, id, index])));
 }

@@ -1,20 +1,21 @@
 // Shared Node fallback for host Docker and in-container E2E command timeouts.
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { isDirectRunUrl } from "./direct-run.mjs";
+
+export function parseTimeoutMs(value) {
+  const match = /^([0-9]+(?:\.[0-9]+)?)(ms|s|m|h)?$/u.exec(String(value ?? "").trim());
+  if (!match) {
+    throw new Error(`unsupported timeout value: ${value}`);
+  }
+  const amount = Number(match[1]);
+  const unit = match[2] ?? "s";
+  const multiplier = unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : 3_600_000;
+  return Math.max(1, Math.ceil(amount * multiplier));
+}
 
 export async function runWatchdog(kind, timeoutValue, [command, ...args]) {
   const docker = kind === "docker";
   const label = docker ? "Docker" : "OpenClaw E2E";
-
-  const parseTimeoutMs = (value) => {
-    const match = /^([0-9]+(?:\.[0-9]+)?)(ms|s|m|h)?$/u.exec(String(value ?? "").trim());
-    if (!match) {
-      throw new Error(`unsupported timeout value: ${value}`);
-    }
-    const amount = Number(match[1]);
-    const unit = match[2] ?? "s";
-    const multiplier = unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : 3_600_000;
-    return Math.max(1, Math.ceil(amount * multiplier));
-  };
 
   if (!command) {
     console.error("missing command for Node watchdog");
@@ -30,8 +31,12 @@ export async function runWatchdog(kind, timeoutValue, [command, ...args]) {
     process.exit(1);
   }
 
+  // The scheduler's retained CID requires the launcher to share its group;
+  // otherwise a killed wrapper could publish before this child writes the CID.
+  const detached =
+    process.platform !== "win32" && !(docker && process.env.DOCKER_E2E_CONTAINER_CIDFILE);
   const child = spawn(command, args, {
-    detached: process.platform !== "win32",
+    detached,
     stdio: "inherit",
   });
   let timedOut = false;
@@ -52,7 +57,7 @@ export async function runWatchdog(kind, timeoutValue, [command, ...args]) {
     if (!child.pid) {
       return;
     }
-    const killTarget = process.platform === "win32" ? child.pid : -child.pid;
+    const killTarget = detached ? -child.pid : child.pid;
     try {
       process.kill(killTarget, signal);
     } catch {
@@ -111,7 +116,22 @@ export async function runWatchdog(kind, timeoutValue, [command, ...args]) {
   });
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+function isDirectInvocation(directPath) {
+  if (isDirectRunUrl(directPath, import.meta.url)) {
+    return true;
+  }
+  if (!directPath) {
+    return false;
+  }
+  try {
+    // Node resolves the entry module through path aliases while argv retains the caller's spelling.
+    return isDirectRunUrl(realpathSync(directPath), import.meta.url);
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectInvocation(process.argv[1])) {
   const [kind, timeoutValue, ...args] = process.argv.slice(2);
   await runWatchdog(kind, timeoutValue, args);
 }

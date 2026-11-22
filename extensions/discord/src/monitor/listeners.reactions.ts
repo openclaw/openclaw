@@ -56,7 +56,6 @@ export class DiscordReactionListener {
   constructor(private params: DiscordReactionListenerParams) {}
 
   async handle(data: DiscordReactionEvent, client: Client) {
-    this.params.onEvent?.();
     await runDiscordReactionHandler({
       data,
       client,
@@ -71,7 +70,6 @@ export class DiscordReactionRemoveListener {
   constructor(private params: DiscordReactionListenerParams) {}
 
   async handle(data: DiscordReactionEvent, client: Client) {
-    this.params.onEvent?.();
     await runDiscordReactionHandler({
       data,
       client,
@@ -87,6 +85,7 @@ async function runDiscordReactionHandler(params: {
   action: "added" | "removed";
   handlerParams: DiscordReactionListenerParams;
 }): Promise<void> {
+  params.handlerParams.onEvent?.();
   const policy = await params.handlerParams.readPolicy?.();
   const handlerParams = policy
     ? {

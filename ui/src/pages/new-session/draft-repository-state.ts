@@ -10,12 +10,19 @@ import type {
   WorktreesBranchesResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { findSelectableAgent } from "../../lib/agents/display.ts";
+import { requestCheckoutSnapshot } from "../../lib/checkout-snapshot.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { DraftRepositoryState } from "./discovery.ts";
 import type { SubmittedWorktreePreference } from "./draft-preference-state.ts";
 import type { NewSessionPreference } from "./preferences.ts";
 import type { DraftRemoteProject } from "./project-chip.ts";
+
+registerNewSessionSetupEnglish();
 
 type DraftRepositorySnapshot = Readonly<{
   agentId: string;
@@ -26,7 +33,7 @@ type DraftRepositorySnapshot = Readonly<{
   folder: string;
   workspace: string;
   workspaceGit: boolean;
-  gateway: ApplicationContext["gateway"]["snapshot"] | undefined;
+  gateway: ApplicationContext["gateway"] | undefined;
 }>;
 
 type DraftRepositoryCallbacks = {
@@ -67,7 +74,7 @@ export class DraftRepositoryStateOwner {
   private worktreeValue = false;
   private readonly details: { baseRef?: string; worktreeName: string } = { worktreeName: "" };
   private repositoryValue: DraftRepositoryState = { kind: "idle" };
-  private requestToken = 0;
+  private readController = new AbortController();
   private checkoutScope: { project: ProjectRecord; agentId: string } | undefined;
   private checkoutOptions: ProjectsCheckoutOptionsResult | "loading" | "error" | undefined;
 
@@ -80,6 +87,38 @@ export class DraftRepositoryStateOwner {
 
   get repositoryRead() {
     return this.repositoryReadValue;
+  }
+
+  get refreshing(): boolean {
+    return (
+      (typeof this.checkoutOptions === "object" && this.checkoutOptions.refreshing === true) ||
+      this.repositoryValue.kind === "checking" ||
+      (this.repositoryValue.kind === "git" && this.repositoryValue.refreshing === true)
+    );
+  }
+
+  checkoutVisible(projectSelected: boolean): boolean {
+    if (this.repositoryValue.kind === "direct" && !projectSelected) {
+      return false;
+    }
+    return (
+      this.checkoutPending ||
+      projectSelected ||
+      this.repositoryValue.kind === "unavailable" ||
+      this.available() ||
+      ((this.read().remotePlacement || this.worktree) && !this.remoteRepository)
+    );
+  }
+
+  get checkoutPending(): boolean {
+    // Project eligibility owns the checkout choice; branch suggestions load independently.
+    const options = this.checkoutOptions;
+    return this.read().selectedProject && !this.read().remotePlacement
+      ? this.currentCheckoutUnavailable === "checking" ||
+          (typeof options === "object" &&
+            options.refreshing === true &&
+            this.checkoutSubmissionBlocked)
+      : this.repositoryValue.kind === "checking" && !this.worktree;
   }
 
   private selectionRevision = 0;
@@ -101,8 +140,11 @@ export class DraftRepositoryStateOwner {
 
   get currentCheckoutUnavailable(): "checking" | "unavailable" | "worktree" | undefined {
     const snapshot = this.read();
-    if (!snapshot.selectedProject || snapshot.remotePlacement) {
+    if (snapshot.remotePlacement) {
       return undefined;
+    }
+    if (!snapshot.selectedProject) {
+      return this.requiresWorktree ? "worktree" : undefined;
     }
     const options = this.checkoutOptions;
     if (!this.matchesProjectCheckout() || !options || options === "loading") {
@@ -110,6 +152,9 @@ export class DraftRepositoryStateOwner {
     }
     if (options === "error") {
       return "unavailable";
+    }
+    if (options.refreshing && !options.current && !options.worktree) {
+      return "checking";
     }
     return options.current ? undefined : options.worktree ? "worktree" : "unavailable";
   }
@@ -127,14 +172,33 @@ export class DraftRepositoryStateOwner {
     );
   }
 
+  get currentCheckoutUnavailableReason(): string | undefined {
+    const reason = this.currentCheckoutUnavailable;
+    return reason === "checking"
+      ? t("newSession.checkingPlace")
+      : reason === "worktree"
+        ? t("newSession.checkoutRequiresWorktree")
+        : reason === "unavailable"
+          ? t("newSession.checkoutCheckUnavailable")
+          : undefined;
+  }
+
   synchronizeProjectCheckout() {
     if (!this.matchesProjectCheckout()) {
       this.load();
     }
   }
 
+  private get requiresWorktree(): boolean {
+    return (
+      this.repositoryValue.kind === "git" &&
+      this.repositoryValue.requiresWorktree === true &&
+      this.matchesCurrentRepo()
+    );
+  }
+
   get worktree(): boolean {
-    return this.worktreeValue;
+    return this.worktreeValue || this.requiresWorktree;
   }
 
   get preferenceWorktree(): boolean {
@@ -219,7 +283,7 @@ export class DraftRepositoryStateOwner {
   }
 
   invalidate() {
-    this.requestToken += 1;
+    this.readController.abort();
     this.repositoryValue = { kind: "idle" };
     this.checkoutScope = undefined;
     this.checkoutOptions = undefined;
@@ -245,7 +309,7 @@ export class DraftRepositoryStateOwner {
 
   select(value: boolean): boolean {
     if (
-      this.worktreeValue === value ||
+      this.worktree === value ||
       this.read().remotePlacement ||
       (value ? !this.available() : Boolean(this.currentCheckoutUnavailable))
     ) {
@@ -285,7 +349,7 @@ export class DraftRepositoryStateOwner {
     const revision = this.selectionRevision;
     const snapshot = this.read();
     const agentId = normalizeAgentId(submission.agentId);
-    const agent = snapshot.agents.find((candidate) => normalizeAgentId(candidate.id) === agentId);
+    const agent = findSelectableAgent(snapshot.agents, agentId);
     const owner = { agentId, workspace: normalizeOptionalString(agent?.workspace) ?? "" };
     const currentAgent = owner.agentId === snapshot.agentId;
     const persist = this.callbacks.capturePreferenceConsumption(owner, {
@@ -358,7 +422,9 @@ export class DraftRepositoryStateOwner {
   }
 
   load() {
-    const requestId = ++this.requestToken;
+    this.readController.abort();
+    this.readController = new AbortController();
+    const signal = this.readController.signal;
     const snapshot = this.read();
     this.checkoutScope =
       snapshot.selectedProject && !snapshot.remotePlacement
@@ -367,77 +433,97 @@ export class DraftRepositoryStateOwner {
     this.checkoutOptions = this.checkoutScope ? "loading" : undefined;
     this.checkoutReadValue = undefined;
     this.repositoryReadValue = undefined;
-    if (this.checkoutScope && snapshot.gateway?.phase === "connected" && snapshot.gateway.client) {
-      const completed = snapshot.gateway.client.request<ProjectsCheckoutOptionsResult>(
+    if (
+      this.checkoutScope &&
+      snapshot.gateway?.snapshot.phase === "connected" &&
+      snapshot.gateway.snapshot.client
+    ) {
+      const completed = requestCheckoutSnapshot<ProjectsCheckoutOptionsResult>(
+        snapshot.gateway,
         "projects.checkoutOptions",
         { projectId: this.checkoutScope.project.id, agentId: this.checkoutScope.agentId },
+        {
+          signal,
+          onSnapshot: (options) => {
+            if (!this.matchesProjectCheckout()) {
+              return;
+            }
+            this.checkoutOptions = options;
+            this.reconcileCheckoutChoice();
+            this.callbacks.changed();
+          },
+        },
       );
       this.checkoutReadValue = { completed };
-      void completed
-        .then((options) => {
-          if (requestId !== this.requestToken || !this.matchesProjectCheckout()) {
-            return;
-          }
-          this.checkoutOptions = options;
-          this.reconcileCheckoutChoice();
+      void completed.catch(() => {
+        if (!signal.aborted) {
+          this.checkoutOptions = "error";
           this.callbacks.changed();
-        })
-        .catch(() => {
-          if (requestId === this.requestToken) {
-            this.checkoutOptions = "error";
-            this.callbacks.changed();
-          }
-        });
+        }
+      });
     }
     const discovery = initialRepositoryState(snapshot);
     if (discovery.kind !== "checking") {
       return this.adoptResolvedRepository(discovery);
     }
-    const client = snapshot.gateway?.client;
-    if (snapshot.gateway?.phase !== "connected" || !client) {
+    const client = snapshot.gateway?.snapshot.client;
+    if (snapshot.gateway?.snapshot.phase !== "connected" || !client) {
       return this.adoptResolvedRepository({ kind: "idle" });
     }
     const { repoRoot } = discovery;
-    this.repositoryValue = discovery;
-    const completed = client.request<WorktreesBranchesResult>("worktrees.branches", {
-      repoRoot,
-      includeRepositoryStatus: true,
-    });
-    this.repositoryReadValue = { completed };
-    void completed
-      .then((result) => {
-        if (requestId !== this.requestToken) {
-          return;
-        }
-        this.adoptResolvedRepository(
-          result?.repositoryStatus === "git"
-            ? {
-                kind: "git",
-                repoRoot,
-                branches: result.branches,
-                ...(result.defaultBranch ? { defaultBranch: result.defaultBranch } : {}),
-                ...(result.headBranch ? { headBranch: result.headBranch } : {}),
-                ...(result.branchesUnavailable ? { branchesUnavailable: true } : {}),
-              }
-            : { kind: result?.repositoryStatus === "not_git" ? "direct" : "unavailable", repoRoot },
-        );
-      })
-      .catch((error: unknown) => {
-        if (requestId !== this.requestToken) {
-          return;
-        }
-        const missing = readMissingScopeError(error);
-        this.adoptResolvedRepository(
-          missing ||
-            (error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN")
-            ? {
-                kind: "forbidden",
-                repoRoot,
-                ...(missing ? { missingScope: missing.missingScope } : {}),
-              }
-            : { kind: "unavailable", repoRoot },
-        );
+    if (!hasOperatorWriteAccess(snapshot.gateway.snapshot.hello?.auth ?? null)) {
+      return this.adoptResolvedRepository({
+        kind: "forbidden",
+        repoRoot,
+        missingScope: "operator.write",
       });
+    }
+    this.repositoryValue = discovery;
+    const completed = requestCheckoutSnapshot<WorktreesBranchesResult>(
+      snapshot.gateway,
+      "worktrees.branches",
+      {
+        repoRoot,
+        includeRepositoryStatus: true,
+      },
+      {
+        signal,
+        onSnapshot: (result) => {
+          if (result.refreshing && !result.repositoryStatus) {
+            this.callbacks.changed();
+            return;
+          }
+          const { repositoryStatus, ...branches } = result;
+          this.adoptResolvedRepository(
+            repositoryStatus === "git"
+              ? { kind: "git", repoRoot, ...branches }
+              : {
+                  kind: repositoryStatus === "not_git" ? "direct" : "unavailable",
+                  repoRoot,
+                },
+          );
+        },
+      },
+    );
+    this.repositoryReadValue = { completed };
+    void completed.catch((error: unknown) => {
+      if (signal.aborted) {
+        return;
+      }
+      const missing = readMissingScopeError(error);
+      this.adoptResolvedRepository(
+        missing ||
+          (error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN")
+          ? {
+              kind: "forbidden",
+              repoRoot,
+              ...(missing ? { missingScope: missing.missingScope } : {}),
+            }
+          : this.repositoryValue.kind === "git"
+            ? { ...this.repositoryValue, refreshing: false, branchesUnavailable: true }
+            : { kind: "unavailable", repoRoot },
+      );
+    });
   }
 
   synchronize() {
@@ -452,9 +538,14 @@ export class DraftRepositoryStateOwner {
       !this.matchesProjectCheckout() ||
       !options ||
       typeof options === "string" ||
+      options.refreshing ||
       this.read().remotePlacement
     ) {
       return;
+    }
+    if (this.preferredWorktreeRestore && !this.worktreeSelectedByUser) {
+      this.worktreeValue = true;
+      this.preferredWorktreeRestore = false;
     }
     const selectedAvailable = this.worktreeValue ? options.worktree : options.current;
     if (!selectedAvailable && (options.current || options.worktree)) {

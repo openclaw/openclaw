@@ -6,13 +6,16 @@ import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../../agents/a
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import type { ProviderAuthMethod, ProviderAuthResult } from "../../plugins/types.js";
 
-type AccountMatcher = ProviderAuthMethod["matchesPersonalAccount"];
+type ReloginMethod = Pick<
+  ProviderAuthMethod,
+  "matchesPersonalAccount" | "matchesSharedAccount" | "canReplaceGeneratedProfile"
+>;
 
 export async function snapshotReloginAuthProfiles(params: {
   agentDir: string;
-  matchesPersonalAccount?: AccountMatcher;
+  method: ReloginMethod;
 }): Promise<Readonly<Record<string, AuthProfileCredential>> | undefined> {
-  if (!params.matchesPersonalAccount) {
+  if (!(params.method.matchesSharedAccount ?? params.method.matchesPersonalAccount)) {
     return undefined;
   }
   // Main-agent OAuth writes are redirected to the shared owner. Read that owner
@@ -35,15 +38,9 @@ export function resolveReloginProfileIdentity(params: {
   profiles: ProviderAuthResult["profiles"];
   requestedProfileId?: string;
   existingProfiles?: Readonly<Record<string, AuthProfileCredential>>;
-  matchesPersonalAccount?: AccountMatcher;
+  method?: ReloginMethod;
   allowMissingReusedProfile?: boolean;
-}): {
-  profiles: ProviderAuthResult["profiles"];
-  validateCurrentCredential?: (
-    profileId: string,
-    credential: AuthProfileCredential | undefined,
-  ) => void;
-} {
+}) {
   const requestedProfileId = params.requestedProfileId?.trim();
   if (requestedProfileId) {
     if (params.profiles.length !== 1) {
@@ -61,9 +58,34 @@ export function resolveReloginProfileIdentity(params: {
     };
   }
 
-  const matcher = params.matchesPersonalAccount;
+  const canReplaceGeneratedProfile = params.method?.canReplaceGeneratedProfile;
+  const generated = {
+    profiles: params.profiles,
+    ...(canReplaceGeneratedProfile && {
+      validateCurrentCredential: (
+        profileId: string,
+        current: AuthProfileCredential | undefined,
+      ) => {
+        if (!current) {
+          return;
+        }
+        const profile = params.profiles.find((candidate) => candidate.profileId === profileId);
+        // The writer supplies the authoritative row, including other providers.
+        if (
+          !profile ||
+          current.provider !== profile.credential.provider ||
+          !canReplaceGeneratedProfile(profile.credential, current)
+        ) {
+          throw new Error(
+            "A different account is already saved under this sign-in's profile. Remove that account, then sign in again.",
+          );
+        }
+      },
+    }),
+  };
+  const matcher = params.method?.matchesSharedAccount ?? params.method?.matchesPersonalAccount;
   if (!matcher || !params.existingProfiles || params.profiles.length !== 1) {
-    return { profiles: params.profiles };
+    return generated;
   }
   const returnedProfile = expectDefined(params.profiles[0], "auth profile");
   const matchingProfileIds: string[] = [];
@@ -73,17 +95,17 @@ export function resolveReloginProfileIdentity(params: {
         matchingProfileIds.push(profileId);
       }
     } catch {
-      return { profiles: params.profiles };
+      return generated;
     }
   }
   if (matchingProfileIds.length !== 1) {
-    return { profiles: params.profiles };
+    return generated;
   }
 
   const reusedProfileId = expectDefined(matchingProfileIds[0], "matched auth profile id");
   return {
     profiles: [{ ...returnedProfile, profileId: reusedProfileId }],
-    validateCurrentCredential: (profileId, current) => {
+    validateCurrentCredential: (profileId: string, current: AuthProfileCredential | undefined) => {
       let currentMatches = false;
       if (current) {
         try {

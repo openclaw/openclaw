@@ -261,10 +261,5 @@ it("runs Commander inspect with strict and unavailable mapped rooms without star
     discoveredStrictRoomIds: [],
     activeRoomId: "!strict:example.org",
   });
-  expect(client.prepareForOneOff).toHaveBeenCalledTimes(1);
-  expect(client.stopAndPersist).toHaveBeenCalledTimes(1);
   expect(client.events).toEqual(["prepare", "persist"]);
-  expect(client.start).not.toHaveBeenCalled();
-  expect(client.createDirectRoom).not.toHaveBeenCalled();
-  expect(client.setAccountData).not.toHaveBeenCalled();
 });

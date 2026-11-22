@@ -16,7 +16,7 @@ import {
 import type { UpdatesCommandPresentation } from "./updates-types.ts";
 import { Updates } from "./updates.tsx";
 
-export type UpdatesPageProps = {
+export function UpdatesPage(props: {
   context: ApplicationContext;
   configObject: Record<string, unknown>;
   configBusy: boolean;
@@ -25,9 +25,7 @@ export type UpdatesPageProps = {
   onCheckStatus: () => Promise<boolean>;
   captureCommandPresentation: () => UpdatesCommandPresentation;
   nowMs?: number;
-};
-
-export function UpdatesPage(props: UpdatesPageProps) {
+}) {
   const gateway = createMemo(() => projectGateway(props.context.gateway));
   const overlays = createMemo(() => projectOverlays(props.context.overlays));
   const config = createMemo(() => projectApplicationConfig(props.context.config));
@@ -40,7 +38,8 @@ export function UpdatesPage(props: UpdatesPageProps) {
       captureCommandPresentation={props.captureCommandPresentation}
       nativeDeviceSettings={props.context.nativeDeviceSettings}
       configObject={props.configObject}
-      gatewayVersion={config().read().serverVersion ?? snapshot().hello?.server?.version ?? null}
+      gatewayVersion={snapshot().hello?.server?.version ?? config().read().serverVersion ?? null}
+      gatewayBuildId={snapshot().hello?.server?.buildId}
       controlUiCommit={CONTROL_UI_BUILD_INFO.commit}
       controlUiCommitAt={CONTROL_UI_BUILD_INFO.commitAt}
       controlUiBuiltAt={CONTROL_UI_BUILD_INFO.builtAt}
@@ -62,6 +61,9 @@ export function UpdatesPage(props: UpdatesPageProps) {
       }
       onAutomaticUpdatesChange={(enabled) =>
         props.context.runtimeConfig.patchForm(["update", "auto", "enabled"], enabled)
+      }
+      onAutomaticScheduleChange={(expression) =>
+        props.context.runtimeConfig.patchForm(["update", "auto", "schedule"], expression)
       }
       onUpdateNow={() => {
         const context = props.context;

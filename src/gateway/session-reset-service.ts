@@ -1,11 +1,11 @@
 // Gateway session reset/delete service.
 // Rotates transcripts and coordinates lifecycle cleanup across runtimes/hooks.
 import { randomUUID } from "node:crypto";
-import { type FastMode, normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
-  missingScopeErrorShape,
+  type missingScopeErrorShape,
   type PreservedSessionWorktree,
 } from "../../packages/gateway-protocol/src/index.js";
 import { tryPrepareFreshManagerRuntimeSession } from "../acp/control-plane/manager.runtime-resume-state.js";
@@ -24,7 +24,6 @@ import {
 } from "../auto-reply/reply/session-reset-cleanup.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
-  isRestartRecoveryTombstone,
   resolveSessionWorkStartError,
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
   SESSION_TOTAL_TOKENS_VERSION,
@@ -33,34 +32,26 @@ import {
   resetSessionEntryLifecycle,
 } from "../config/sessions.js";
 import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-session-binding.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import { preserveResetSessionPresentation } from "../config/sessions/reset-preserved-presentation.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
-import {
-  getSessionActorStorageBinding,
-  withSessionActorStorage,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
 import { preserveSessionLineage } from "../config/sessions/session-entry-lineage.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import {
   buildSessionCreationStamp,
   preserveCreationStamp,
-  type SessionCreatedActor,
-  type SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { createSessionResetBoundaryId } from "../config/sessions/session-reset-boundary-event.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { isIncognitoSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
-import { resolveMissingAgentHarnessSessionError } from "../sessions/agent-harness-session-key.js";
 import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_RESET_MESSAGE,
@@ -81,9 +72,7 @@ import {
   finalizeDetachedSessionWorktree,
   removeSessionWorktree,
 } from "../sessions/session-worktree-lifecycle.js";
-import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
-import { ADMIN_SCOPE } from "./operator-scopes.js";
-import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
+import { resolveCreatorSandbox } from "./operator-role-policy.js";
 import type * as SessionLifecycle from "./session-create-service.types.js";
 import { createResetBoundaryTranscriptSource } from "./session-end-transcript-reader.js";
 import {
@@ -91,6 +80,7 @@ import {
   resetSessionAgentHarnesses,
 } from "./session-lifecycle-cleanup.js";
 import {
+  emitGatewayBeforeResetPluginHook,
   emitGatewaySessionEndPluginHook,
   emitGatewaySessionStartPluginHook,
 } from "./session-lifecycle-plugin-hooks.js";
@@ -98,13 +88,18 @@ import {
   rollbackGatewaySessionPreparation,
   settleGatewaySessionLifecycleCommit,
 } from "./session-lifecycle-preparation.js";
-import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { invalidSessionRequest, unavailableSessionRequest } from "./session-request-error.js";
 import {
   buildPendingAcpMeta,
   closeAcpRuntimeForSession,
   closeChildAcpRuntimesForParent,
 } from "./session-reset-acp.js";
+import {
+  createSessionResetEntryChecks,
+  prepareSessionResetPermissionAuthorization,
+  resolveSessionResetAuthorizationError,
+} from "./session-reset-authorization.js";
 import { deleteIncognitoSessionForReset } from "./session-reset-incognito.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 import { ensureSessionRuntimeCleanup } from "./session-reset-runtime-cleanup.js";
@@ -112,115 +107,31 @@ import { resolveSessionResetTarget } from "./session-reset-target.js";
 import { readGatewayBeforeResetPluginHookMessages } from "./session-reset-transcript.js";
 import { buildResetWorkspaceFields } from "./session-reset-workspace.js";
 import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
-import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
-import type { SessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 import {
   readSessionWorkerPlacementAsync,
   resolveSessionWorkerPlacementMutationError,
   retireSessionWorkerPlacementBeforeMutation,
 } from "./worker-environments/session-placement-lifecycle.js";
 
-export { emitGatewaySessionEndPluginHook, emitGatewaySessionStartPluginHook };
+export {
+  emitGatewayBeforeResetPluginHook,
+  emitGatewaySessionEndPluginHook,
+  emitGatewaySessionStartPluginHook,
+};
 
 export {
   cleanupSessionBeforeMutation,
   emitSessionUnboundLifecycleEvent,
 } from "./session-lifecycle-cleanup.js";
 
-export async function emitGatewayBeforeResetPluginHook(params: {
-  cfg: OpenClawConfig;
-  key: string;
-  messages?: unknown[];
-  target: GatewaySessionStoreTarget;
-  storePath: string;
-  entry?: SessionEntry;
-  reason: "new" | "reset";
-}): Promise<void> {
-  const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("before_reset")) {
-    return;
-  }
-
-  const sessionKey = params.target.canonicalKey;
-  const sessionId = params.entry?.sessionId;
-  const agentId = params.target.agentId;
-  const sessionFile = sessionId
-    ? formatSqliteSessionFileMarker({ agentId, sessionId, storePath: params.storePath })
-    : undefined;
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
-  const messages =
-    params.messages ??
-    (await readGatewayBeforeResetPluginHookMessages({
-      agentId,
-      entry: params.entry,
-      sessionId,
-      sessionKey,
-      storePath: params.storePath,
-    }));
-
-  void hookRunner
-    .runBeforeReset(
-      {
-        sessionFile,
-        messages,
-        reason: params.reason,
-      },
-      {
-        agentId,
-        sessionKey,
-        sessionId,
-        workspaceDir,
-      },
-    )
-    .catch((err: unknown) => {
-      logVerbose(`before_reset hook failed: ${String(err)}`);
-    });
-}
-
-export async function performGatewaySessionReset(params: {
-  key: string;
-  agentId?: string;
-  spawnedCwd?: string;
-  sessionRoot?: string;
-  permissionMode?: SessionEntry["permissionMode"];
-  /** Existing-row changes stay admin-gated across reset preparation and commit. */
-  fastModeSelection?: { value: FastMode; allowExistingChange: boolean };
-  /** Prepares session-owned resources while the target lifecycle fence is held. */
-  prepareLifecycle?: SessionLifecycle.PrepareGatewaySessionLifecycle;
-  onLifecycleCleanupError?: (error: unknown) => void;
-  /** Bind session exec to host=node with this node id; caller scope-checks. */
-  execNode?: string;
-  /** Working directory interpreted only by execNode. */
-  execCwd?: string;
-  /** Clear a prior node binding when a new Gateway-host session replaces it. */
-  clearExecBinding?: boolean;
-  // A plain New Chat must return to the agent workspace instead of inheriting the previous
-  // turn's session worktree cwd; only worktree-requested resets carry a spawnedCwd forward.
-  clearSpawnedCwd?: boolean;
-  reason: "new" | "reset";
-  commandSource: string;
-  /** Trusted provenance for a reset that materializes a previously missing row. */
-  creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor };
-  /** Authenticated durable operator identity for missing-session materialization. */
-  requestingOperatorProfileId?: string;
-  /** Trusted host actor; system-owned resets must identify themselves explicitly. */
-  operatorRoleActor?: GatewayOperatorRoleActor;
-  /** Exact plugin namespace authorized by the scoped plugin runtime. */
-  authorizedPluginId?: string;
-  /** Arms local checkout attribution in the authoritative reset commit. */
-  armSessionDiffBaselineCapture?: boolean;
-  workerPlacementContext?: SessionWorkerPlacementContext;
-  assertCurrent?: () => void;
-  assertAuthorizedInstance?: () => void;
-  /** Optional caller-observed session ID that must still be current at lifecycle admission. */
-  expectedSessionId?: string;
-  onCommitted?: (commit: { key: string; sessionId: string }) => void;
-}): Promise<
+export async function performGatewaySessionReset(
+  params: SessionLifecycle.GatewaySessionResetParams,
+): Promise<
   | {
       ok: true;
       key: string;
       entry: SessionEntry;
-      resolved: { modelProvider: string; model: string };
+      resolved: { modelProvider?: string; model?: string };
       agentId: string;
       storePath: string;
     }
@@ -294,14 +205,12 @@ async function performPreparedGatewaySessionReset({
     agentId: resetTarget.target.agentId,
     storePath: resetTarget.storePath,
   });
-  const authorizeResetCreation = () =>
-    authorizeGatewaySessionCreation({
-      cfg: resetTarget.cfg,
-      agentId: resetTarget.target.agentId,
-      ...(params.operatorRoleActor
-        ? { actor: params.operatorRoleActor }
-        : { profileId: params.requestingOperatorProfileId }),
-    });
+  const {
+    authorizeResetCreation,
+    resolveResetOwnershipError,
+    resolveResetHarnessError,
+    resolveFastModeSelectionError,
+  } = createSessionResetEntryChecks(params, resetTarget);
   const reportLifecycleCleanupError = (error: unknown) => {
     if (params.onLifecycleCleanupError) {
       params.onLifecycleCleanupError(error);
@@ -313,6 +222,13 @@ async function performPreparedGatewaySessionReset({
     params.assertCurrent?.();
     params.assertAuthorizedInstance?.();
   };
+  const permissionAuthority = await prepareSessionResetPermissionAuthorization(
+    params,
+    resetTarget,
+    initialResetEntry,
+    assertReadAuthorized,
+  );
+  using _ = { [Symbol.dispose]: permissionAuthority.release };
   const loadResetSession = (assertReadCurrent?: () => void) =>
     withGatewaySessionEntryReadOnly(lookup, async (current) => {
       assertReadCurrent?.();
@@ -330,33 +246,13 @@ async function performPreparedGatewaySessionReset({
       : !entry
         ? authorizeResetCreation()
         : undefined;
-  const resolveResetOwnershipError = (
-    entry: SessionEntry | undefined,
-    key = resetTarget.target.canonicalKey,
-  ) =>
-    resolvePluginSessionOwnershipError({
-      action: "reset",
-      entry,
-      key,
-      pluginOwnerId: params.authorizedPluginId,
-    });
-  const resolveResetHarnessError = (entry: SessionEntry | undefined) => {
-    const message = resolveMissingAgentHarnessSessionError(resetTarget.target.canonicalKey, entry);
-    return message ? errorShape(ErrorCodes.INVALID_REQUEST, message) : undefined;
-  };
-  const resolveFastModeSelectionError = (entry: SessionEntry | undefined) => {
-    const selection = params.fastModeSelection;
-    return entry &&
-      selection &&
-      selection.value !== entry.fastMode &&
-      !selection.allowExistingChange
-      ? missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] })
-      : undefined;
-  };
   const resolveResetEntryAccessError = (entry: SessionEntry | undefined, canonicalKey: string) =>
-    resolveFastModeSelectionError(entry) ?? resolveResetOwnershipError(entry, canonicalKey);
+    resolveSessionResetAuthorizationError(entry, params, permissionAuthority) ??
+    resolveFastModeSelectionError(entry) ??
+    resolveResetOwnershipError(entry, canonicalKey);
   const initialEntryError =
     resolveResetCreationError(initialResetEntry) ??
+    resolveSessionResetAuthorizationError(initialResetEntry, params, permissionAuthority) ??
     resolveResetOwnershipError(initialResetEntry) ??
     resolveFastModeSelectionError(initialResetEntry) ??
     resolveResetHarnessError(initialResetEntry);
@@ -384,17 +280,6 @@ async function performPreparedGatewaySessionReset({
     // Reset drains pending preparation before replacing the session.
     const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry, {
       allowPendingWorkspace: true,
-      allowRestartTombstoneReplacement:
-        entry !== undefined &&
-        isRestartRecoveryTombstone(entry) &&
-        (entry.archivedAt === undefined ||
-          (entry.archiveReason === "restart-recovery" &&
-            canonicalKey ===
-              resolveCanonicalMainSessionKey({
-                agentId: resetTarget.target.agentId,
-                mainKey: resetTarget.cfg.session?.mainKey,
-                sessionScope: resetTarget.cfg.session?.scope,
-              }))),
     });
     if (archivedSessionError) {
       return errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError);
@@ -588,6 +473,17 @@ async function performPreparedGatewaySessionReset({
         await triggerInternalHook(hookEvent);
         params.assertCurrent?.();
         params.assertAuthorizedInstance?.();
+        let permissionEntry = entry;
+        const assertPermissionAuthorized = () => {
+          const error = permissionAuthority.validate(
+            permissionEntry,
+            buildResetWorkspaceFields(permissionEntry, params).permissionMode,
+          );
+          if (error) {
+            throw new SessionMutationAuthorizationChangedError(error);
+          }
+        };
+        assertPermissionAuthorized();
         // Destructive cleanup adopts only this existing generation. Finish its durable
         // transition after caller closure; missing-row creation still needs live authority.
         const assertCompletionAuthorized = hadExistingEntry
@@ -660,6 +556,7 @@ async function performPreparedGatewaySessionReset({
         let rejectedRevocation: unknown;
         const commitGuard = () => {
           assertCompletionAuthorized?.();
+          assertPermissionAuthorized();
           try {
             validateCleanupRevocation?.();
           } catch (error) {
@@ -789,6 +686,7 @@ async function performPreparedGatewaySessionReset({
         const postCommitActions: Array<() => void | Promise<void>> = [];
         const lifecycleRequest: Parameters<typeof resetSessionEntryLifecycle>[0] = {
           commitGuard,
+          creationOperation: params.creationOperation,
           archivePreviousTranscript: false,
           agentId: target.agentId,
           resetBoundary: entry
@@ -837,6 +735,8 @@ async function performPreparedGatewaySessionReset({
               resetSkipped = true;
               return currentEntry;
             }
+            permissionEntry = currentEntry;
+            assertPermissionAuthorized();
             // Revoke only the selected session, after no-op generation checks and before reset commits.
             validateCleanupRevocation = await prepareSubagentSessionCleanupRevocation(
               target.canonicalKey,
@@ -1097,8 +997,8 @@ async function performPreparedGatewaySessionReset({
         const next = lifecycle.nextEntry;
         const selectedModel = resolveSessionModelRef(cfg, next, target.agentId);
         const resolved = {
-          modelProvider: selectedModel.provider,
-          model: selectedModel.model,
+          modelProvider: selectedModel?.provider,
+          model: selectedModel?.model,
         };
         // Runtime model identity is a response projection, not reset persistence. Keep the
         // established RPC entry shape while the stored row retains selection intent only.

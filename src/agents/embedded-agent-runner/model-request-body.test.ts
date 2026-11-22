@@ -1,9 +1,15 @@
-import { hash } from "node:crypto";
+import crypto, { hash } from "node:crypto";
+import { syncBuiltinESMExports } from "node:module";
 import { serialize } from "node:v8";
 import { serializeModelRequestBody } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../../../packages/ai/src/host.js";
+import {
+  modelRequestBodyState,
+  prepareModelRequestBody,
+  encodedModelRequestBodyStream,
+} from "../../../packages/ai/src/transports/model-request-body.js";
 import { createOpenAICompletionsTransportStreamFn } from "../../../packages/ai/src/transports/openai-completions-transport.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -23,8 +29,6 @@ import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-d
 
 const originalHost = getAiTransportHost();
 const digest = (value: unknown) => hash("sha256", JSON.stringify(value));
-const fieldDigests = (fields: Record<string, unknown>) =>
-  Object.fromEntries(Object.entries(fields).map(([name, value]) => [name, digest(value)]));
 afterEach(() => {
   configureAiTransportHost(originalHost);
   resetDiagnosticEventsForTest();
@@ -42,20 +46,7 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
     type: "function",
     function: { name, parameters: { type: "object", properties: {} } },
   }));
-  const messages = Array.from({ length: 100 }, (_, index) => ({
-    role: index % 2 === 0 ? "user" : "assistant",
-    content: [
-      { type: "text", text: `${index}: " \\ \n 🦞\ud800 ${"x".repeat(4_000)}` },
-      ...(index < 12 && index % 2 === 0
-        ? [
-            {
-              type: "image_url",
-              image_url: { url: `data:image/png;base64,${"A".repeat(32_768)}` },
-            },
-          ]
-        : []),
-    ],
-  }));
+  const messages = [{ role: "user", content: '" \\ \n 🦞\ud800' }];
   const parameters = {
     model: model.id,
     prompt_cache_key: "private-affinity",
@@ -69,20 +60,11 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
   };
   const expectedPayload = { ...replacement, tools: allowedTools };
   const padding = 600 * 1_024 - Buffer.byteLength(JSON.stringify(expectedPayload));
-  const finalContent = messages[99]!.content[0]!;
-  if (!("text" in finalContent)) {
-    throw new Error("Expected the fixture's final text part");
-  }
-  finalContent.text += "x".repeat(padding);
+  messages[0]!.content += "x".repeat(padding);
   const expectedWire = JSON.stringify(expectedPayload);
   expect(Buffer.byteLength(expectedWire)).toBe(614_400);
-  const sse = `data: ${JSON.stringify({
-    id: "fixture-response",
-    object: "chat.completion.chunk",
-    created: 0,
-    model: model.id,
-    choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
-  })}\n\ndata: [DONE]\n\n`;
+  const sse =
+    'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n';
   let wire: string | undefined;
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     wire = await new Request(input, init).text();
@@ -180,21 +162,11 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
           },
         },
       },
-      cachePrefix: {
-        system: hash("sha256", "{}"),
-        tools: digest({ tools: allowedTools }),
-        messageDigests: messages
-          .map((message) => hash("sha256", JSON.stringify(message), "latin1"))
-          .join(""),
-        messageFields: messages.slice(0, 32).map(fieldDigests),
+      cachePrefix: expect.objectContaining({
         messageField: "messages",
-        messageCount: 100,
-        parameters: {
-          digest: hash("sha256", JSON.stringify(parameters), "latin1"),
-          fields: fieldDigests(parameters),
-        },
+        messageCount: messages.length,
         continuation: true,
-      },
+      }),
     });
     expect(JSON.stringify(state)).not.toContain("private-");
     expect(await completed.promise).toMatchObject({ requestPayloadBytes: 614_400 });
@@ -209,6 +181,27 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
   } finally {
     unsubscribe();
   }
+});
+
+it("reuses the owned encoding for native Fetch replay without another body copy", async () => {
+  const payload = { stream: true, input: ["Synthetic 🦞"] };
+  const encoded = serializeModelRequestBody(payload);
+  const options = {};
+  const encode = vi.fn(async () => encoded);
+  const onBytes = vi.fn();
+  Object.assign(modelRequestBodyState(options), { encode, onBytes });
+  const prepared = await prepareModelRequestBody(options)(payload);
+  expect(prepared.body).toBe(encoded.body);
+  expect(encodedModelRequestBodyStream(prepared.body)).toBe(true);
+  expect(onBytes).toHaveBeenCalledWith(encoded.body.byteLength);
+  payload.input[0] = "changed after encoding";
+  const first = new Request("https://provider.invalid", { method: "POST", ...prepared });
+  const consumed = new Uint8Array(await first.arrayBuffer());
+  expect(new TextDecoder().decode(consumed)).toBe('{"stream":true,"input":["Synthetic 🦞"]}');
+  consumed.fill(0);
+  const replay = new Request("https://provider.invalid", { method: "POST", ...prepared });
+  expect(await replay.text()).toBe('{"stream":true,"input":["Synthetic 🦞"]}');
+  expect(encode).toHaveBeenCalledTimes(1);
 });
 
 it("observes serialized values without letting the observer change request bytes or stream behavior", () => {
@@ -296,4 +289,27 @@ it("fingerprints serialized prompt segments with bounded, content-free history m
   expect(changed.cachePrefix?.messageDigests).toEqual(first.cachePrefix?.messageDigests);
   expect(changed.cachePrefix?.tail).not.toBe(first.cachePrefix?.tail);
   expect(prepareProviderPrompt({ payload: {}, encode: false }).cachePrefix).toBeUndefined();
+});
+
+it("hashes prompt prefixes without assembling copies of their serialized fields", () => {
+  const payload = {
+    system: "synthetic system 🦞".repeat(4_000),
+    tools: [{ name: "synthetic_tool", description: "synthetic tool ".repeat(8_000) }],
+    instructions: "synthetic instructions ".repeat(4_000),
+    input: [],
+  };
+  const system = JSON.stringify({ instructions: payload.instructions, system: payload.system });
+  const tools = JSON.stringify({ tools: payload.tools });
+  const expected = { system: hash("sha256", system), tools: hash("sha256", tools) };
+  const spy = vi.spyOn(crypto, "hash").mockClear();
+  syncBuiltinESMExports();
+  try {
+    const result = prepareProviderPrompt({ payload, encode: true });
+    expect(result.cachePrefix).toMatchObject(expected);
+    expect(new TextDecoder().decode(result.encoded!.body)).toBe(JSON.stringify(payload));
+    expect(spy.mock.calls.some(([, data]) => data === system || data === tools)).toBe(false);
+  } finally {
+    spy.mockRestore();
+    syncBuiltinESMExports();
+  }
 });

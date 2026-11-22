@@ -88,14 +88,6 @@ type FeishuDriveCommentPage<T> = FeishuOpenApiResponse<{
   page_token?: string;
 }>;
 
-type ResolvedCommentReplyContext = {
-  replyId?: string;
-  userId?: string;
-  createTime?: number;
-  isBotAuthored: boolean;
-  content: ParsedCommentContent;
-};
-
 type ResolvedWholeCommentTimelineEntry = {
   commentId: string;
   userId?: string;
@@ -529,7 +521,7 @@ export async function resolveDriveCommentEventTurn(params: ResolveDriveCommentEv
     };
     const normalizedBotOpenIds = new Set(normalizeTrimmedStringList(botOpenIds));
     const resolvedReplies = await Promise.all(
-      replies.map(async (reply): Promise<ResolvedCommentReplyContext> => {
+      replies.map(async (reply) => {
         const userId = normalizeString(reply.user_id);
         return {
           replyId: normalizeString(reply.reply_id),
@@ -858,7 +850,6 @@ export async function resolveDriveCommentEventTurn(params: ResolveDriveCommentEv
     messageId: `drive-comment:${eventId}`,
     commentId,
     replyId,
-    noticeType,
     fileToken,
     fileType,
     isWholeComment: context.isWholeComment,

@@ -284,7 +284,10 @@ export function createSessionRowPlacementProjection(
       isActive: () => boolean,
       lookup: (query: Lookup) => Row | undefined,
       queries: (config: OpenClawConfig) => readonly Lookup[],
-      prepareRows: (queries: readonly Lookup[]) => Promise<void> | undefined,
+      prepareRows: (
+        queries: readonly Lookup[],
+        rows: readonly (Row | undefined)[],
+      ) => Promise<void> | undefined,
       consume: (read: SessionRowReadView, queries: readonly Lookup[]) => T,
       prepareSelection?: () => Promise<void> | undefined,
     ): Promise<T> {
@@ -299,6 +302,7 @@ export function createSessionRowPlacementProjection(
       };
       const prepareFacts = () => prepareReadFacts() ?? prepareSelection?.();
       let preparedQueries: readonly Lookup[] = [];
+      let selectedRows: (Row | undefined)[] = [];
       let hasPrivateQueries = false;
       let selectedIds: readonly string[] = [];
       const privateRepositories = new Map<string, PreparedPrivateSessionRepository>();
@@ -312,10 +316,11 @@ export function createSessionRowPlacementProjection(
         }
         privateSelections = [];
         preparedQueries = queries(cfg);
+        selectedRows = [];
         hasPrivateQueries = false;
         const ids: string[] = [];
         for (const query of preparedQueries) {
-          const key = privateSessionRowReadKey(cfg, query);
+          const key = prepareSelection ? undefined : privateSessionRowReadKey(cfg, query);
           hasPrivateQueries ||= key !== undefined;
           const privateMemory = key
             ? captureSessionActorStorageOwner(
@@ -344,6 +349,7 @@ export function createSessionRowPlacementProjection(
                 },
               })
             : inOwnerContext(() => lookup(query));
+          selectedRows.push(row);
           if (key && row?.entry?.repositoryWorkspaceId) {
             privateSelections.push({ key, row, workspaceId: row.entry.repositoryWorkspaceId });
           }
@@ -362,7 +368,8 @@ export function createSessionRowPlacementProjection(
         }
       };
       const prepareSelectedRows = () => {
-        let pending = inOwnerContext(() => prepareRows(preparedQueries));
+        // These rows belong to this synchronous selection; every yield reselects them.
+        let pending = inOwnerContext(() => prepareRows(preparedQueries, selectedRows));
         if (pending) {
           return pending;
         }
@@ -412,7 +419,7 @@ export function createSessionRowPlacementProjection(
                 return readPreparedSessionRows(
                   projection,
                   isActive,
-                  () => preparedQueries,
+                  () => (hasPrivateQueries ? preparedQueries : []),
                   (read) => consume(read, preparedQueries),
                   privateRepositories,
                   privateRows,

@@ -9,6 +9,23 @@ function readBrief(call: CallRecord): CallBrief | undefined {
   return parsed.success ? parsed.data : undefined;
 }
 
+export function resolveCallTranscriptionLanguage(call: CallRecord): string | undefined {
+  const hint = readBrief(call)?.language;
+  if (!hint) {
+    return undefined;
+  }
+  try {
+    const language = new Intl.Locale(hint).language;
+    // Transcription expects ISO 639-1, not the brief's free-form voice instructions.
+    return /^[a-z]{2}$/.test(language) &&
+      new Intl.DisplayNames(["en"], { type: "language", fallback: "none" }).of(language)
+      ? language
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Carrier speech cannot translate arbitrary language descriptions; realtime speech can.
 const voicemailDefaults = [
   {

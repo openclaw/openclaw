@@ -15,6 +15,7 @@ import {
   resolveImmutableSqliteFileUri,
   resolveNodeSqliteLocation,
 } from "./node-sqlite.js";
+import { readSqliteDatabaseAdmissionIdentity } from "./sqlite-database-admission-record.js";
 import { resolveSqliteDatabaseFilePath } from "./sqlite-database-admission.js";
 
 const originalPrepare = Reflect.get(DatabaseSync.prototype, "prepare") as DatabaseSync["prepare"];
@@ -41,17 +42,6 @@ async function loadNodeSqliteWithVersion(
       vi.spyOn(statement, "get").mockImplementation(() => {
         executions.push("get");
         return row;
-      });
-      const iterate = statement.iterate.bind(statement);
-      vi.spyOn(statement, "iterate").mockImplementation(() => {
-        executions.push("iterate");
-        const rows = iterate();
-        const next = rows.next.bind(rows);
-        vi.spyOn(rows, "next").mockImplementation(() => {
-          const result = next();
-          return result.done ? result : { ...result, value: row };
-        });
-        return rows;
       });
       return statement;
     }
@@ -123,6 +113,40 @@ describe("node SQLite locations", () => {
       }
     },
   );
+  it.each([false, true])(
+    "defers an expected file identity until native open (replaced: %s)",
+    (replaced) => {
+      const pathname = path.join(dirs.make("sqlite-deferred-identity-"), "database.sqlite");
+      const seed = openNodeSqliteDatabase(pathname);
+      seed.exec("CREATE TABLE proof(value INTEGER); INSERT INTO proof VALUES(42)");
+      seed.close();
+      const expected = readSqliteDatabaseAdmissionIdentity(fs.statSync(pathname, { bigint: true }));
+      const database = openNodeSqliteDatabase(pathname, { open: false }, expected);
+      try {
+        expect(database.isOpen).toBe(false);
+        if (replaced) {
+          fs.renameSync(pathname, `${pathname}.retained`);
+          const successor = openNodeSqliteDatabase(pathname);
+          successor.exec("CREATE TABLE successor(value INTEGER); INSERT INTO successor VALUES(99)");
+          successor.close();
+          const bytes = fs.readFileSync(pathname);
+          expect(() => database.open()).toThrow(
+            "SQLite staging database changed before native open",
+          );
+          expect(database.isOpen).toBe(false);
+          expect(fs.readFileSync(pathname)).toEqual(bytes);
+        } else {
+          database.open();
+          expect(database.prepare("SELECT value FROM proof").get()).toEqual({ value: 42 });
+        }
+      } finally {
+        if (database.isOpen) {
+          database.close();
+        }
+      }
+    },
+  );
+
   it("preserves Windows long paths in non-creating writable URIs", () => {
     const pathname = String.raw`C:\deep state\openclaw.sqlite`;
     expect(resolveExistingSqliteFileUri(pathname, "win32")).toBe(
@@ -249,7 +273,7 @@ describe("node SQLite safety", () => {
   });
 
   it.each([0, 1])(
-    "detects and reuses the loaded library's extension capability with two executions (omitted=%s)",
+    "detects and reuses the loaded library's extension capability with one execution (omitted=%s)",
     async (omitted) => {
       const {
         captureSqliteNativeRuntimeAdmission,
@@ -263,14 +287,10 @@ describe("node SQLite safety", () => {
       expect(captureSqliteNativeRuntimeAdmission()).toMatchObject({
         version: "3.51.3",
         extensionLoadingSupported: omitted === 0,
-        iteratorBehavior: {
-          nextAfterDoneIsTerminal: expect.any(Boolean),
-          returnAfterDoneIsInert: expect.any(Boolean),
-        },
       });
       expect(supportsNodeSqliteExtensionLoading()).toBe(omitted === 0);
       expect(prepare).toHaveBeenCalledOnce();
-      expect(executions).toEqual(["iterate", "iterate"]);
+      expect(executions).toEqual(["get"]);
     },
   );
 
@@ -294,24 +314,21 @@ describe("node SQLite safety", () => {
   });
 
   it.each([
-    { version: "3.51.3", jsonb: true },
-    { version: "3.52.0", jsonb: true },
-    { version: "3.53.0", jsonb: true },
-    { version: "4.0.0", jsonb: true },
-    { version: "3.50.7", jsonb: true },
-    { version: "3.44.6", jsonb: false },
-    { version: "3.44.7", jsonb: false },
-  ])(
-    "accepts patched SQLite $version and reuses its JSONB capability",
-    async ({ version, jsonb }) => {
+    ["3.51.3", true],
+    ["3.52.0", true],
+    ["4.0.0", true],
+    ["3.50.7", true],
+    ["3.44.6", false],
+  ] as const)(
+    "accepts patched SQLite %s and reuses its JSONB capability",
+    async (version, jsonb) => {
       const { requireNodeSqlite, supportsNodeSqliteJsonb, prepare } =
         await loadNodeSqliteWithVersion(version);
       expect(() => requireNodeSqlite()).not.toThrow();
-      const queries = prepare.mock.calls.length;
-      expect(queries).toBe(1);
+      expect(prepare).toHaveBeenCalledOnce();
       expect(supportsNodeSqliteJsonb()).toBe(jsonb);
       expect(supportsNodeSqliteJsonb()).toBe(jsonb);
-      expect(prepare.mock.calls).toHaveLength(queries);
+      expect(prepare).toHaveBeenCalledOnce();
     },
   );
 
@@ -353,7 +370,7 @@ describe("node SQLite safety", () => {
       const native = mockBunSqliteNativeBoundary({ isBun: false });
       const parent = await loadNodeSqliteWithVersion("3.44.6", 1);
       parent.requireNodeSqlite();
-      const iteratorBehavior = parent.captureSqliteNativeRuntimeAdmission()?.iteratorBehavior;
+      const admission = parent.captureSqliteNativeRuntimeAdmission();
       parent.prepare.mockRestore();
       const receiptKey = "openclaw.sqliteNativeRuntimeAdmission";
       const receipt = native.environment.get(receiptKey);
@@ -407,9 +424,7 @@ describe("node SQLite safety", () => {
       expect(worker.supportsNodeSqliteExtensionLoading()).toBe(changed !== "unchanged");
       if (changed === "unchanged") {
         expect(worker.prepare).not.toHaveBeenCalled();
-        expect(worker.captureSqliteNativeRuntimeAdmission()?.iteratorBehavior).toEqual(
-          iteratorBehavior,
-        );
+        expect(worker.captureSqliteNativeRuntimeAdmission()).toEqual(admission);
       } else {
         expect(worker.prepare).toHaveBeenCalled();
       }

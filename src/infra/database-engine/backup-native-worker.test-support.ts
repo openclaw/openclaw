@@ -7,15 +7,15 @@ import type { WorkerTaskPoolOptions } from "../worker-task-pool.types.js";
 
 const workers = [
   {
-    source: /\/backup-database-discovery\.[jt]s$/,
+    source: /\/backup-database-discovery\.worker\.[jt]s$/,
     entrypoint: nativeProcessTestEntrypoints.backupDatabaseDiscovery,
   },
   {
-    source: /\/database-backup\.[jt]s$/,
+    source: /\/database-backup\.worker\.[jt]s$/,
     entrypoint: nativeProcessTestEntrypoints.databaseBackup,
   },
   {
-    source: /\/update-candidate-state\.postgres\.[jt]s$/,
+    source: /\/update-candidate-state\.postgres\.worker\.[jt]s$/,
     entrypoint: nativeProcessTestEntrypoints.updatePostgresState,
   },
 ];

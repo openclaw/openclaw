@@ -32,17 +32,18 @@ import {
 } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
-import {
-  normalizeAgentId,
-  normalizeMainKey,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import {
+  hasOpenClawAgentCanonicalValidationReceiptColumn,
+  loadOpenClawAgentCanonicalValidationReceipt,
+} from "../../state/openclaw-agent-canonical-validation-receipt.js";
 import { assertCanonicalSessionValidationSchema } from "../../state/openclaw-agent-canonical-validation-schema.js";
 import { CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import {
   findOpenClawAgentDatabaseIdentity,
   isOpenClawAgentDatabasePathCurrent,
+  isOpenClawAgentDatabasePathCurrentAsync,
 } from "../../state/openclaw-agent-db-identity.js";
 import {
   adoptOpenClawAgentDatabaseValidation,
@@ -58,12 +59,12 @@ import {
   projectSqliteSessionOwner,
 } from "./session-accessor.sqlite-owner-projection.js";
 import {
-  canonicalSessionKeyMigrationRequiredError,
-  validateCanonicalSessionRow,
+  assertCanonicalSessionKeyWrite,
+  validateCanonicalSessionRowEntry,
 } from "./session-canonical-row.js";
+import { parseCanonicalSqliteSessionEntry } from "./session-entry-json.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
-import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
 
 export { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-row.js";
@@ -81,6 +82,16 @@ const mainKeyReader = createSqliteQueryCache((db) =>
       .selectFrom("session_key_contract")
       .select("main_key")
       .where("id", "=", 1),
+  ),
+);
+const startupContractReader = createSqliteQueryCache((db) =>
+  prepareSqliteQueryTakeFirstSync<void, { main_key: string; canonical_ready: string | null }>(
+    db,
+    () =>
+      getNodeSqliteKysely<CanonicalSessionDatabase>(db)
+        .selectFrom("session_key_contract")
+        .select(["main_key", "canonical_ready"])
+        .where("id", "=", 1),
   ),
 );
 const mainKeyAdmission = {
@@ -231,7 +242,7 @@ function isReaderContinuationLive(receipt: CanonicalSessionReaderContinuation): 
   );
 }
 
-function matchesReaderContinuationDatabase(
+function matchesReaderContinuationIdentity(
   database: { agentId: string; db: EngineConnection; path?: string },
   receipt: CanonicalSessionReaderContinuation,
 ): boolean {
@@ -241,22 +252,36 @@ function matchesReaderContinuationDatabase(
     database.agentId === receipt.agentId &&
     identity?.identity === receipt.identity &&
     identity.birthtime === receipt.birthtime &&
-    isOpenClawAgentDatabasePathCurrent({
-      db: database.db,
-      path: database.path ?? identity.filename,
-    }) &&
     receipt.validation.agentId === receipt.agentId &&
     receipt.validation.identity === receipt.identity &&
     isReaderContinuationLive(receipt)
   );
 }
 
+function matchesReaderContinuationDatabase(
+  database: { agentId: string; db: EngineConnection; path?: string },
+  receipt: CanonicalSessionReaderContinuation,
+): boolean {
+  const identity = findOpenClawAgentDatabaseIdentity(database);
+  return (
+    identity !== undefined &&
+    matchesReaderContinuationIdentity(database, receipt) &&
+    isOpenClawAgentDatabasePathCurrent({
+      db: database.db,
+      path: database.path ?? identity.filename,
+    })
+  );
+}
+
 /** Borrow only existing committed admission; capture never opens or queries SQLite. */
-export function captureCanonicalSessionReaderContinuation(database: {
-  agentId: string;
-  db: EngineConnection;
-  path: string;
-}):
+function captureCanonicalSessionReaderAdmission(
+  database: {
+    agentId: string;
+    db: EngineConnection;
+    path: string;
+  },
+  pathCheck: "sync" | "async",
+):
   | { receipt: CanonicalSessionReaderContinuation; assertCurrent: () => void; release: () => void }
   | undefined {
   const cell = readerAdmissions.get(database.db);
@@ -290,7 +315,8 @@ export function captureCanonicalSessionReaderContinuation(database: {
     cell.proof === proof &&
     cell.committed &&
     getOpenClawAgentDatabaseValidation(database) === validation &&
-    matchesReaderContinuationDatabase(database, receipt);
+    matchesReaderContinuationIdentity(database, receipt) &&
+    (pathCheck === "async" || isOpenClawAgentDatabasePathCurrent(database));
   if (!isCurrent()) {
     return undefined;
   }
@@ -307,6 +333,41 @@ export function captureCanonicalSessionReaderContinuation(database: {
       cell.continuations.delete(receipt.live);
     },
   };
+}
+
+/** Synchronous native consumers keep the physical comparison at their immediate boundary. */
+export function captureCanonicalSessionReaderContinuation(
+  database: Parameters<typeof captureCanonicalSessionReaderAdmission>[0],
+) {
+  return captureCanonicalSessionReaderAdmission(database, "sync");
+}
+
+/** Capture admission before yielding; recheck the same logical owner after each physical lookup. */
+export async function prepareCanonicalSessionReaderContinuation(
+  database: Parameters<typeof captureCanonicalSessionReaderAdmission>[0],
+) {
+  const owner = captureCanonicalSessionReaderAdmission(database, "async");
+  if (!owner) {
+    return undefined;
+  }
+  const prepareCurrent = async () => {
+    owner.assertCurrent();
+    if (!(await isOpenClawAgentDatabasePathCurrentAsync(database))) {
+      throw new Error("Canonical session reader continuation is no longer current");
+    }
+    owner.assertCurrent();
+  };
+  try {
+    if (!(await isOpenClawAgentDatabasePathCurrentAsync(database))) {
+      owner.release();
+      return undefined;
+    }
+    owner.assertCurrent();
+    return { ...owner, prepareCurrent };
+  } catch (error) {
+    owner.release();
+    throw error;
+  }
 }
 
 /** Continue one retained reader without admitting unrelated reads on a pooled handle. */
@@ -360,41 +421,15 @@ export type ValidatedSessionMetadata = CanonicalSessionMetadata & {
   writeRevision: number | undefined;
 };
 
-function isCanonicalSessionKey(sessionKey: string): boolean {
-  const trimmed = sessionKey.trim();
-  if (!trimmed || sessionKey !== trimmed) {
-    return false;
-  }
-  if (normalizeStoreSessionKey(sessionKey) !== sessionKey) {
-    return false;
-  }
-  const parsed = parseAgentSessionKey(trimmed);
-  return (
-    trimmed === "global" ||
-    trimmed === "unknown" ||
-    (parsed !== null && trimmed.startsWith(`agent:${parsed.agentId}:`))
-  );
-}
-
-export function assertCanonicalSessionKeyWrite(sessionKey: string, expectedAgentId?: string): void {
-  const parsed = parseAgentSessionKey(sessionKey);
-  if (
-    !isCanonicalSessionKey(sessionKey) ||
-    (expectedAgentId && parsed && parsed.agentId !== normalizeAgentId(expectedAgentId))
-  ) {
-    throw canonicalSessionKeyMigrationRequiredError(
-      `refusing non-canonical session key write ${sessionKey}`,
-    );
-  }
-}
-
 export function readCanonicalSessionMainKey(database: { db: EngineConnection }): string {
   return normalizeMainKey(readStoredCanonicalSessionMainKey(database) ?? undefined);
 }
 
-export function readStoredCanonicalSessionMainKey(database: {
-  db: EngineConnection;
-}): string | null {
+/** Startup also loads canonical proof; historical readers keep the main-key projection. */
+export function readStoredCanonicalSessionMainKey(
+  database: { db: EngineConnection },
+  startupAgentId?: string,
+): string | null {
   const pending = readerAdmissions.get(database.db)?.pendingMainKey;
   if (database.db.isTransaction && pending !== undefined) {
     return pending.mainKey;
@@ -415,7 +450,20 @@ export function readStoredCanonicalSessionMainKey(database: {
   if (revision && policy?.revision === revision) {
     return policy.stored;
   }
-  const stored = mainKeyReader(database.db)()?.main_key ?? null;
+  let stored: string | null;
+  if (
+    startupAgentId !== undefined &&
+    hasOpenClawAgentCanonicalValidationReceiptColumn(database.db)
+  ) {
+    const contract = startupContractReader(database.db)();
+    loadOpenClawAgentCanonicalValidationReceipt(
+      { db: database.db, agentId: startupAgentId },
+      { canonicalReady: contract?.canonical_ready ?? null },
+    );
+    stored = contract?.main_key ?? null;
+  } else {
+    stored = mainKeyReader(database.db)()?.main_key ?? null;
+  }
   // Schema repair can seed a missing row; only existing policy survives unrelated DDL.
   if (stored !== null) {
     publishSqliteDatabaseAdmission(database.db, mainKeyAdmission, stored);
@@ -432,17 +480,6 @@ export function readStoredCanonicalSessionMainKey(database: {
         : undefined;
   }
   return stored;
-}
-
-export function assertCanonicalSessionEntryLineageWrite(entry: SessionEntry): void {
-  const sessionKeys = [
-    entry.parentSessionKey,
-    entry.spawnedBy,
-    entry.forkSource?.sessionKey,
-  ].filter((sessionKey): sessionKey is string => sessionKey !== undefined);
-  for (const sessionKey of sessionKeys) {
-    assertCanonicalSessionKeyWrite(sessionKey);
-  }
 }
 
 /** Query shape shared by complete inventories and bounded canonical validation. */
@@ -514,7 +551,15 @@ export function scanCanonicalSqliteSessionEntries(
   )) {
     // Retained windows have no entry, but their keys remain part of a listing snapshot.
     metadata?.keys.push(row.session_key);
-    const entry = validateCanonicalSessionRow(row);
+    const entry = validateCanonicalSessionRowEntry(
+      row,
+      row.entry_valid === 1
+        ? parseCanonicalSqliteSessionEntry({
+            entry_json: row.entry_json,
+            current_session_id: row.current_session_id,
+          })
+        : null,
+    );
     if (!entry) {
       continue;
     }

@@ -81,8 +81,6 @@ export async function loadBackground({
   let tabsUpdatedListener:
     | ((tabId: number, changeInfo: Partial<BrowserTabSnapshot>, tab?: BrowserTabSnapshot) => void)
     | undefined;
-  let nextStorageGet: Promise<void> | null = null;
-  let nextStorageRemove: Promise<void> | null = null;
   let nextStorageSet: Promise<void> | null = null;
   let nextSessionStorageSet: Promise<void> | null = null;
   let currentRetiredStorageFailureStage = retiredStorageFailureStage;
@@ -127,9 +125,6 @@ export async function loadBackground({
     if (keys.includes("copilotSessionRegistryV1")) {
       await retiredStatePreparation;
     }
-    const pending = nextStorageGet;
-    nextStorageGet = null;
-    await pending;
     return Object.fromEntries(
       keys
         .filter((key) => Object.hasOwn(storageValues, key))
@@ -149,9 +144,6 @@ export async function loadBackground({
     Object.assign(storageValues, values);
   });
   const storageRemove = vi.fn(async (keys: string[]) => {
-    const pending = nextStorageRemove;
-    nextStorageRemove = null;
-    await pending;
     if (
       rejectStorageRemove &&
       !keys.some((key) => key.startsWith("copilot") || key === RETIRED_CUSTODY_BLOCKED_KEY)
@@ -476,7 +468,6 @@ export async function loadBackground({
   return {
     alarmListener,
     clearAlarm,
-    createAlarm,
     debuggerAttach: chromeMock.debugger.attach,
     debuggerDetach: chromeMock.debugger.detach,
     debuggerDetachListener,
@@ -484,36 +475,15 @@ export async function loadBackground({
     debuggerGetTargets: chromeMock.debugger.getTargets,
     debuggerSendCommand,
     debuggerGetTargetInfo,
-    deferNextStorageGet: () => {
-      let release = () => {};
-      nextStorageGet = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      return release;
-    },
-    deferNextStorageRemove: () => {
-      let release = () => {};
-      nextStorageRemove = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      return release;
-    },
     deferNextSessionStorageSet: () => {
-      let release = () => {};
-      nextSessionStorageSet = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      return release;
+      const { promise, resolve } = Promise.withResolvers<void>();
+      nextSessionStorageSet = promise;
+      return resolve;
     },
     deferNextStorageSet: () => {
-      let release = () => {};
-      nextStorageSet = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      return release;
-    },
-    get gatewaySockets() {
-      return sockets.filter((socket) => !socket.protocols.includes("openclaw-extension-relay.v2"));
+      const { promise, resolve } = Promise.withResolvers<void>();
+      nextStorageSet = promise;
+      return resolve;
     },
     installedListener,
     messageListener,
@@ -583,7 +553,6 @@ export async function loadBackground({
         expect(socket.send.mock.calls.some(([raw]) => JSON.parse(raw).type === "hello")).toBe(true);
       });
     },
-    setBadgeText,
     sockets,
     storageRemove,
     storageGet,
@@ -607,7 +576,6 @@ export async function loadBackground({
     tabsGroup: chromeMock.tabs.group,
     tabsQuery: chromeMock.tabs.query,
     tabsRemove: chromeMock.tabs.remove,
-    tabsUngroup: chromeMock.tabs.ungroup,
     tabsUpdate: chromeMock.tabs.update,
     tabsUpdatedListener,
     tabsRemovedListener,

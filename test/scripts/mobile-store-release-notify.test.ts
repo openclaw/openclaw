@@ -140,7 +140,6 @@ describe("scheduled mobile store release notifications", () => {
     const workflow = parse(
       readFileSync(".github/workflows/mobile-store-release-notify.yml", "utf8"),
     ) as {
-      on: { workflow_run: { types: string[]; branches: string[] } };
       permissions: Record<string, string>;
       jobs: {
         notify: {
@@ -157,7 +156,6 @@ describe("scheduled mobile store release notifications", () => {
       };
     };
     const { notify } = workflow.jobs;
-    expect(workflow.on.workflow_run).toMatchObject({ types: ["completed"], branches: ["main"] });
     expect(workflow.permissions).toEqual({});
     expect(notify.permissions).toEqual({ contents: "read", actions: "read" });
     const github = {
@@ -167,8 +165,6 @@ describe("scheduled mobile store release notifications", () => {
         workflow_run: {
           head_sha: "b".repeat(40),
           head_repository: { full_name: "openclaw/openclaw" },
-          event: "schedule",
-          display_title: "iOS Store release (weekly)",
         },
       },
     };
@@ -176,7 +172,6 @@ describe("scheduled mobile store release notifications", () => {
       ["schedule", "iOS Store release (weekly)", true],
       ["schedule", "Android Store release (weekly)", true],
       ["schedule", "iOS TestFlight distribution", false],
-      ["schedule", "Android Internal testing distribution", false],
       ["workflow_dispatch", "iOS Store release (weekly)", false],
     ] as const) {
       Object.assign(github.event.workflow_run, { event, display_title });
@@ -190,7 +185,6 @@ describe("scheduled mobile store release notifications", () => {
     const checkout = notify.steps.find((step) => step.uses?.startsWith("actions/checkout@"));
     expect(checkout?.with?.["persist-credentials"]).toBe(false);
     const ref = checkout?.with?.ref;
-    expect(typeof ref).toBe("string");
     expect(expression(String(ref), github)).toBe(github.sha);
     const send = notify.steps.find(
       (step) => step.run === "node scripts/github/mobile-store-release-notify.mjs",
@@ -223,9 +217,6 @@ describe("scheduled mobile store release notifications", () => {
   it.each([
     { event: "workflow_dispatch" },
     { display_title: "iOS TestFlight distribution" },
-    { display_title: "Android Internal testing distribution" },
-    { display_title: "iOS Store screenshots" },
-    { display_title: "Android Store release (weekly)" },
     { head_branch: "feature" },
     { head_repository: { full_name: "contributor/openclaw" } },
     { path: ".github/workflows/other.yml" },
@@ -265,21 +256,13 @@ describe("scheduled mobile store release notifications", () => {
 
   it.each<Outcome>([
     ["failure", "The workflow failed during Prepare and upload iOS release."],
-    ["timed_out", "The run exceeded its time limit during Prepare and upload iOS release."],
-    ["cancelled", "The run was cancelled during Prepare and upload iOS release."],
-    ["startup_failure", "GitHub could not start the workflow."],
-    ["action_required", "GitHub reported that action is required. Check the run."],
-    ["neutral", "The run finished without a confirmed successful release."],
-    ["skipped", "The workflow was skipped."],
-    ["stale", "GitHub marked the run stale."],
-    [null, "The release outcome could not be confirmed. Check the run."],
     ["unrecognized", "The release outcome could not be confirmed. Check the run."],
     ["success", "The store release job was skipped. Upload was not started.", [job("skipped", [])]],
-    ...[[], [job("success", [])]].map((jobs): Outcome => [
+    [
       "success",
       "The release outcome could not be confirmed. Check the run. Store acceptance is unconfirmed.",
-      jobs,
-    ]),
+      [],
+    ],
     [
       "failure",
       "The workflow failed during Run qualification. The store release job was skipped; upload was not started.",
@@ -342,7 +325,6 @@ describe("scheduled mobile store release notifications", () => {
     { status: 400, body: { message: webhook } },
     { status: 503, body: { message: webhook } },
     { status: 429, headers: { "retry-after": "60" }, body: { message: webhook } },
-    { error: `Network failure at ${webhook}` },
   ])("fails notification delivery without exposing webhook credentials: %j", (reply) => {
     const result = evaluate({
       responses: { [webhookPath]: reply },

@@ -930,6 +930,8 @@ container, or service account.
 
     Embedding models are capped to their trained context regardless of `LLMMAN_CONTEXT_LENGTH`. See [Memory config](/reference/memory-config#remote-endpoint-config) for the remaining fields.
 
+    On a small host, set `LLMMAN_NUM_PARALLEL=1` in the daemon's environment: llmman 0.1.564 starts four slots for an embedding model by default, which took EmbeddingGemma from 501 MiB to 1.77 GiB at the same batch speed.
+
   </Accordion>
 
   <Accordion title="Ollama-compatible API">

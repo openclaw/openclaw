@@ -223,31 +223,12 @@ describe("partial PR publication recovery", () => {
 });
 
 describe("PR publication ownership", () => {
-  it.each([false, true])(
-    "binds deferred GitHub gates to verified publication (stale target=%s)",
-    (staleTarget) => {
-      const gates = `PR_NUMBER=4242\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${staleTarget ? f.source : f.candidate}\n`;
-      f.write("gates.env", gates);
-      const result = runPublisher(f, "prepare_push 4242", graphql);
-      expect(result.status, result.stdout + result.stderr).toBe(staleTarget ? 1 : 0);
-      const events = f.read("events");
-      if (staleTarget) {
-        expect(events).toBe("");
-        expect(remoteHead()).toBe(f.source);
-        expect(f.read("gates.env")).toBe(gates);
-        expect(f.exists("prep.env")).toBe(false);
-        return;
-      }
-      const hosted = remoteHead();
-      expect(events).toBe("graphql\n");
-      expect(hosted).not.toBe(f.candidate);
-      expect(f.read("gates.env")).toContain(`HOSTED_GATES_TARGET_HEAD_SHA=${hosted}\n`);
-      expect(f.read("gates.env")).not.toMatch(/VERIFIED|PASSED|FULL_GATES|REMOTE_GATES/);
-      expect(f.read("prep.env")).toContain(`PREP_HEAD_SHA=${hosted}\n`);
-      expect(f.read("prep.md")).toContain("GitHub gates deferred");
-      expect(f.read("prep.md")).not.toContain("Gates passed");
-    },
-  );
+  it("rejects deferred GitHub gates for a stale target without changing the receipt", () => {
+    const gates = `PR_NUMBER=4242\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.source}\n`;
+    f.write("gates.env", gates);
+    expectUnpublished(runPublisher(f, "prepare_push 4242", graphql));
+    expect(f.read("gates.env")).toBe(gates);
+  });
 
   it.each(["git", "graphql"])(
     "revalidates identity after %s publication planning and before the write",

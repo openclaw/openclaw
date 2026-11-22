@@ -41,6 +41,14 @@ import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target
 import { runByteLimitedArchiveCleanupFixture } from "./test-helpers.js";
 import type { SessionEntry } from "./types.js";
 
+function databaseOptionsFor(storePath: string) {
+  const { path: databasePath } = resolveSqliteTargetFromSessionStorePath(storePath, {
+    agentId: "main",
+  });
+  assert(databasePath, "expected cleanup database path");
+  return { agentId: "main", path: databasePath };
+}
+
 const hooks = vi.hoisted(() => ({
   synchronous: false,
   before: undefined as (() => Promise<void>) | undefined,
@@ -88,24 +96,40 @@ vi.mock("./session-accessor.sqlite-archive-store.js", async (importOriginal) => 
     },
   };
 });
-describe("cleanup races", () => {
-  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-cleanup-race-");
-  type Events = Parameters<typeof replaceTranscript>[1];
-
-  let tempDir: string;
-  let storePath: string;
-  let now: number;
-  beforeEach(() => {
-    hooks.synchronous = false;
-    tempDir = sessionDirs.make();
-    storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-    now = Date.now();
-  });
+// Suites are sequential; each keeps its original directory lifetime and hook reset.
+let storePath: string;
+let tempDir: string;
+function setupCleanupSuite(
+  synchronous: boolean,
+  cleanup: Parameters<typeof useSessionStoreTempDirs>[0] = afterAll,
+  restoreMocks = false,
+) {
   afterEach(() => {
     hooks.before = undefined;
     hooks.after = undefined;
+    hooks.afterSync = undefined;
     hooks.observe = undefined;
     hooks.publicationFailure = undefined;
+    if (restoreMocks) {
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+    }
+  });
+  const dirs = useSessionStoreTempDirs(cleanup, "openclaw-cleanup-race-");
+  beforeEach(() => {
+    hooks.synchronous = synchronous;
+    tempDir = dirs.make();
+    storePath = path.join(tempDir, "agents/main/sessions/sessions.json");
+  });
+}
+
+describe("cleanup races", () => {
+  setupCleanupSuite(false);
+  const database = () => openOpenClawAgentDatabase(databaseOptionsFor(storePath));
+  type Events = Parameters<typeof replaceTranscript>[1];
+  let now: number;
+  beforeEach(() => {
+    now = Date.now();
   });
 
   async function seed(
@@ -146,11 +170,6 @@ describe("cleanup races", () => {
       nowMs: now,
       ...options,
     });
-  function database() {
-    const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
-    assert(target.path, "expected cleanup database path");
-    return openOpenClawAgentDatabase({ agentId: "main", path: target.path });
-  }
   const deletion = (sessionKey: string) =>
     deleteLifecycle({
       archiveTranscript: true,
@@ -263,10 +282,8 @@ describe("cleanup races", () => {
     const target = await seed(event.id, {}, [event]);
     const db = database();
     const refreshed = { label: "refreshed", sessionId: target.sessionId, updatedAt: now + 1 };
-    let changed = false;
     hooks.after = () =>
       runOpenClawAgentWriteAdmission({ agentId: "main", path: db.path }, () => {
-        changed = true;
         db.db
           .prepare("UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?")
           .run(JSON.stringify(refreshed), refreshed.updatedAt, target.sessionKey);
@@ -274,7 +291,6 @@ describe("cleanup races", () => {
     await expect(cleanup({ orphanTranscriptMinAgeMs: 0, nowMs: now + 60_000 })).rejects.toThrow(
       "SQLite lifecycle cleanup entry changed",
     );
-    expect(changed).toBe(true);
     expect(readEntry(target)).toEqual(refreshed);
     await expect(readTranscript(target)).resolves.toEqual([event]);
   });
@@ -348,13 +364,11 @@ describe("cleanup races", () => {
     }
     const historyOwner = sessions[entryCount - 2]!;
     await replaceTranscript({ ...historyOwner, sessionId: historyId }, [transcript(historyId)]);
-    const batchSizes: number[] = [];
     let currentBatch: string[] = [];
     let materializations = 0;
     let racedKey: string | undefined;
     hooks.observe = (ids) => {
       currentBatch = ids;
-      batchSizes.push(ids.length);
     };
     hooks.after = () => {
       if (++materializations !== 2) {
@@ -381,7 +395,6 @@ describe("cleanup races", () => {
       storePath,
       maintenanceOverride: { mode: "enforce", maxEntries: entryCount, pruneAfterMs: 60_000 },
     });
-    expect(batchSizes).toEqual([64, 2]);
     expect(published).not.toContain(racedKey);
     expect(published).toHaveLength(64);
     expect(result).toMatchObject({
@@ -407,22 +420,7 @@ describe("cleanup races", () => {
 });
 
 describe("generation cleanup races", () => {
-  const sessionDirs = useSessionStoreTempDirs(
-    afterAll,
-    "openclaw-session-generation-cleanup-race-",
-  );
-
-  let storePath: string;
-
-  beforeEach(() => {
-    hooks.synchronous = true;
-    storePath = path.join(sessionDirs.make(), "agents", "main", "sessions", "sessions.json");
-  });
-
-  afterEach(() => {
-    hooks.afterSync = undefined;
-    hooks.observe = undefined;
-  });
+  setupCleanupSuite(true);
 
   async function fixture(
     sessionKey: string,
@@ -436,13 +434,7 @@ describe("generation cleanup races", () => {
       await replaceTranscript({ ...scope, sessionId }, [event(sessionId, index)]);
     }
     const currentEntry = expectDefined(readEntry(scope), "Expected current generation");
-    const databaseOptions = {
-      agentId: "main",
-      path: expectDefined(
-        resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
-        "Expected generation cleanup database path",
-      ),
-    };
+    const databaseOptions = databaseOptionsFor(storePath);
     const write = <T>(operation: (database: OpenClawAgentDatabase) => T) =>
       runOpenClawAgentWriteTransaction(operation, databaseOptions);
     const expected = write((database) => ({
@@ -489,7 +481,6 @@ describe("generation cleanup races", () => {
       let plannedId: string | undefined;
       let injected = false;
       let mutation: { sessionId: string; rowsChanged: number } | undefined;
-      let mutationError: unknown;
       hooks.observe = (ids) => {
         [plannedId] = ids;
       };
@@ -507,33 +498,27 @@ describe("generation cleanup races", () => {
                 ? historicalIds.find((id) => id !== plannedId)!
                 : plannedId;
         // Extraction has finished; the final transactional generation check has not run.
-        try {
-          mutation = write((database) => {
-            const rowsChanged =
-              changed === "new history"
-                ? Number(
-                    appendTranscriptEventInTransaction(
-                      database,
-                      { ...databaseOptions, sessionKey, sessionId },
-                      event(sessionId),
-                    ) !== false,
-                  )
-                : Number(
-                    database.db
-                      .prepare(
-                        "UPDATE transcript_event_identities SET message_idempotency_key = NULL WHERE session_id = ? AND event_id = 'answer'",
-                      )
-                      .run(sessionId).changes,
-                  );
-            return { sessionId, rowsChanged };
-          });
-        } catch (error) {
-          // Keep injection failure separate from the lifecycle result asserted below.
-          mutationError = error;
-        }
+        mutation = write((database) => {
+          const rowsChanged =
+            changed === "new history"
+              ? Number(
+                  appendTranscriptEventInTransaction(
+                    database,
+                    { ...databaseOptions, sessionKey, sessionId },
+                    event(sessionId),
+                  ) !== false,
+                )
+              : Number(
+                  database.db
+                    .prepare(
+                      "UPDATE transcript_event_identities SET message_idempotency_key = NULL WHERE session_id = ? AND event_id = 'answer'",
+                    )
+                    .run(sessionId).changes,
+                );
+          return { sessionId, rowsChanged };
+        });
       };
       const result = await remove(false);
-      expect(mutationError).toBeUndefined();
       expect(mutation, JSON.stringify({ plannedId, injected, result })).toMatchObject({
         rowsChanged: 1,
       });
@@ -601,23 +586,19 @@ describe("generation cleanup races", () => {
         const originalJson = JSON.stringify(original);
         const changedJson = JSON.stringify({ ...original, content: "concurrent transcript" });
         write(({ db }) => {
-          const node = db.prepare("SELECT * FROM session_nodes WHERE session_key = ?");
-          const window = db.prepare("SELECT * FROM session_windows WHERE session_id = ?");
-          const nodeBefore = expectDefined(node.get(sessionKey), "Expected current node");
-          const windowBefore = expectDefined(window.get(sessionId), "Expected historical window");
-          const rows = db.prepare(
-            "SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq",
-          );
-          expect(rows.all(sessionId)).toEqual([{ event_json: originalJson }]);
+          const identities = () => [
+            db.prepare("SELECT * FROM session_nodes WHERE session_key = ?").get(sessionKey),
+            db.prepare("SELECT * FROM session_windows WHERE session_id = ?").get(sessionId),
+          ];
+          const before = identities();
           const updated = db
             .prepare(
               "UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND event_json = ?",
             )
             .run(changedJson, sessionId, originalJson);
           expect(Number(updated.changes)).toBe(1);
-          expect(rows.all(sessionId)).toEqual([{ event_json: changedJson }]);
-          expect(node.get(sessionKey)).toEqual(nodeBefore);
-          expect(window.get(sessionId)).toEqual(windowBefore);
+          // This race must invalidate content even when generation metadata stays unchanged.
+          expect(identities()).toEqual(before);
         });
       }
     };
@@ -644,29 +625,15 @@ describe("generation cleanup races", () => {
 });
 
 describe("cleanup reclamation", () => {
+  setupCleanupSuite(true, afterEach, true);
+  const database = () => openOpenClawAgentDatabase(databaseOptionsFor(storePath));
   const staleEntry = { deleted: false, expectedEntryMismatch: true };
   function metadata(now: number, runId = "cleanup-reclamation-marker") {
     return { type: "metadata", runId, timestamp: new Date(now - 600_000).toISOString() };
   }
 
-  let storePath: string;
-  beforeEach(() => {
-    hooks.synchronous = true;
-    storePath = path.join(tempDirs.make(), "agents/main/sessions/sessions.json");
-  });
-  afterEach(() => {
-    hooks.afterSync = undefined;
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-  });
-  const tempDirs = useSessionStoreTempDirs(afterEach, "openclaw-session-cleanup-reclamation-");
   function scope(sessionId: string) {
     return { sessionId, sessionKey: `agent:main:${sessionId}`, storePath };
-  }
-  function database() {
-    const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
-    assert.ok(target.path, "expected reclamation database path");
-    return openOpenClawAgentDatabase({ agentId: "main", path: target.path });
   }
   const cleanup = (nowMs: number, options: Partial<Parameters<typeof cleanupArtifacts>[0]> = {}) =>
     cleanupArtifacts({

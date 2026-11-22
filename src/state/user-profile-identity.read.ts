@@ -8,7 +8,11 @@ import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
-import { selectProfileAccessEntries } from "./user-profile-github-identity.js";
+import {
+  selectProfileAccessEntries,
+  selectUserProfileGitHubIdentities,
+} from "./user-profile-github-identity.js";
+import { readOpenClawIdProfileLinksInDatabase } from "./user-profile-openclaw-id.read.js";
 import {
   matchUserProfileReference,
   resolveCatalogProfile,
@@ -123,6 +127,27 @@ export function readCatalogUserProfileAuthority(
   };
 }
 
+/** Exact verified email/account facts from the retained catalog, including secondary accounts. */
+export function readCatalogGitHubEmailIdentity(
+  catalog: Parameters<typeof readCatalogUserProfileAuthority>[0],
+  accountId: number,
+  email: string,
+) {
+  const alias = catalog.bindings.byEmail.get(email.trim().toLowerCase());
+  if (!alias) {
+    return undefined;
+  }
+  catalog.assertCurrent(alias.profileId);
+  const profile = resolveCatalogProfile(catalog.rows, alias.profileId);
+  if (!profile) {
+    return undefined;
+  }
+  catalog.assertCurrent(profile.id);
+  return profile.githubAccountIds?.includes(accountId)
+    ? { profileId: profile.id, updatedAt: profile.updated_at }
+    : undefined;
+}
+
 /** In-memory counterpart of the bounded SQL selector for the Gateway catalog. */
 export function projectHasMultipleSessionSharingIdentities(
   rows: ReadonlyMap<string, ProfileDisplayRow>,
@@ -156,9 +181,13 @@ export function selectUserProfileIdentityInDatabase(
   profileId: string,
 ): UserProfileIdentity | undefined {
   const profile = selectResolvedUserProfileMetadataById(db, profileId);
+  const openclawIdAccountIds = profile
+    ? readOpenClawIdProfileLinksInDatabase(db, [profile.id]).map((link) => link.accountId)
+    : [];
   return (
     profile && {
       profileId: profile.id,
+      ...(openclawIdAccountIds.length ? { openclawIdAccountIds } : {}),
       role: profile.role ?? null,
       aliases: new Set(
         executeSqliteQuerySync(
@@ -213,7 +242,17 @@ export function selectUserProfileDisplaysInDatabase(
     }
     return displays;
   }
-  const byId = new Map(rows.map((row) => [row.id, row]));
+  const namelessIds = rows.filter((row) => !row.display_name?.trim()).map((row) => row.id);
+  const githubNames = selectUserProfileGitHubIdentities(db, namelessIds);
+  const byId = new Map(
+    rows.map((row) => [
+      row.id,
+      {
+        ...row,
+        ...(githubNames.has(row.id) ? { githubIdentity: githubNames.get(row.id) } : {}),
+      },
+    ]),
+  );
   return new Map(
     ids.map((id) => {
       // Match native text binding before indexing the returned SQLite rows.

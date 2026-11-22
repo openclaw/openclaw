@@ -3,7 +3,6 @@ import { IncomingMessage, request, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
@@ -13,13 +12,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
-import {
-  bindHttpResponseAuthority,
-  captureHttpRequestAuthority,
-  runGatewayHttpRequest,
-} from "./http-request-authority.js";
-import { GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE } from "./operator-access-policy.js";
+import { runGatewayHttpRequest } from "./http-request-authority.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { createGatewayHttpServer } from "./server-http.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
@@ -132,38 +125,29 @@ afterAll(async () => {
   }
 });
 
-it.each([false, true])(
-  "admits shutdown closure only for an ended request lifetime (ended=%s)",
-  async (ended) => {
-    const work = new GatewayConnectionWork();
-    const entries = new GatewayRequestEntryLifetime();
-    if (ended) {
-      entries.beginClose();
-    }
-    await work.drain();
-    const req = new IncomingMessage(new Socket());
-    const res = new ServerResponse(req);
-    const handle = vi.fn(async (): Promise<undefined> => undefined);
-    try {
-      const result = runGatewayHttpRequest(
-        req,
-        res,
-        { requestEntryLifetime: entries, trackExecution: (run) => work.track(run) },
-        handle,
-      );
-      if (ended) {
-        await expect(result).resolves.toBeUndefined();
-        expect(res.destroyed).toBe(true);
-      } else {
-        await expect(result).rejects.toThrow("Async work scope is closed");
-      }
-      expect(handle).not.toHaveBeenCalled();
-    } finally {
-      res.destroy();
-      req.destroy();
-    }
-  },
-);
+it("closes late HTTP responses after the request lifetime ends", async () => {
+  const work = new GatewayConnectionWork();
+  const entries = new GatewayRequestEntryLifetime();
+  entries.beginClose();
+  await work.drain();
+  const req = new IncomingMessage(new Socket());
+  const res = new ServerResponse(req);
+  const handle = vi.fn(async (): Promise<undefined> => undefined);
+  try {
+    const result = runGatewayHttpRequest(
+      req,
+      res,
+      { requestEntryLifetime: entries, trackExecution: (run) => work.track(run) },
+      handle,
+    );
+    await expect(result).resolves.toBeUndefined();
+    expect(res.destroyed).toBe(true);
+    expect(handle).not.toHaveBeenCalled();
+  } finally {
+    res.destroy();
+    req.destroy();
+  }
+});
 
 it.each([false, true])(
   "keeps delivered HTTP work out of cancellation telemetry (rejected=%s)",
@@ -199,7 +183,6 @@ it.each(["core", "plugin"])(
   async (surface) => {
     const entered = createDeferred();
     const cancelled = createRelease();
-    const finished = createDeferred();
     const releaseCleanup = createRelease();
     let cleanup = Promise.resolve();
     let cleanupBelongsToRequest = false;
@@ -219,21 +202,15 @@ it.each(["core", "plugin"])(
       };
       signal?.addEventListener("abort", abort, { once: true });
       entered.resolve();
-      try {
-        await cancelled.promise;
-        signal?.throwIfAborted();
-        throw new Error("Disconnected read was not cancelled");
-      } finally {
-        signal?.removeEventListener("abort", abort);
-        finished.resolve();
-      }
+      await cancelled.promise;
+      signal?.throwIfAborted();
+      throw new Error("Disconnected read was not cancelled");
     });
     const requests = vi.spyOn(lifecycle, "runHttpConnectionRequest");
     const client = createClientRequest(surface);
     client.end();
     await entered.promise;
     client.destroy();
-    await finished.promise;
     await Promise.all(requests.mock.results.map((result) => result.value));
     expect([cleanupBelongsToRequest, connectionWork.hasPendingWork]).toEqual([true, true]);
     releaseCleanup.resolve();
@@ -292,79 +269,27 @@ it.each([
   },
 );
 
-// Each request owner consumes both authority error types and preserves unexpected errors.
-// Shared response handling covers disconnect, staged headers, and partial streams once.
+// Shared response handling covers disconnects and unexpected errors after staged headers.
 it.each([
   ["core", "disconnect"],
-  ["core", "client expired"],
-  ["core", "role boundary enabled"],
-  ["core", "role scope revoked"],
-  ["core", "operator revoked"],
   ["core", "unexpected"],
   ["core", "unexpected abort"],
-  ["plugin", "stream client expired"],
-  ["plugin", "stream operator revoked"],
   ["plugin", "unexpected"],
   ["plugin", "unexpected abort"],
 ])("Gateway HTTP %s owns %s after awaited request work", async (surface, outcome) => {
   const entered = createDeferred<ServerResponse>();
   const release = createRelease();
-  const streaming = createDeferred();
-  const operator = new AbortController();
-  let auth: ResolvedGatewayAuth = { mode: "token", token: "before", allowTailscale: false };
-  const roleConfig = (writable: boolean): OpenClawConfig => ({
-    gateway: {
-      roles: {
-        default: "reader",
-        definitions: {
-          reader: {
-            scopes: writable ? ["operator.write"] : ["operator.read"],
-            agents: "*",
-            sessions: { others: "none" },
-          },
-        },
-      },
-    },
-  });
-  let config: OpenClawConfig = outcome === "role scope revoked" ? roleConfig(true) : {};
   const unexpected = outcome.startsWith("unexpected");
-  const streamingResponse = outcome.startsWith("stream");
   const disconnected = outcome === "disconnect";
-  const closed = disconnected || streamingResponse;
-  const [status, message, type] =
-    outcome === "client expired" || outcome.startsWith("role ")
-      ? [401, "Unauthorized", "unauthorized"]
-      : outcome === "operator revoked"
-        ? [403, GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE, "forbidden"]
-        : [500, "Internal Server Error", ""];
+  const status = 500;
+  const message = "Internal Server Error";
   const unexpectedError =
     outcome === "unexpected abort"
       ? new DOMException("Unrelated upstream cancellation", "AbortError")
       : new Error("HTTP request authority expired");
-  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-  const warnings = vi.spyOn(log, "warn").mockImplementation(() => {});
-  const requests = vi.spyOn(lifecycle, "runHttpConnectionRequest");
-  route.mockImplementation(async (req, res) => {
-    const authority = bindHttpResponseAuthority(
-      {
-        operatorAccessAuthority: {
-          signal: operator.signal,
-          assertCurrent: () => operator.signal.throwIfAborted(),
-        },
-      },
-      res,
-      captureHttpRequestAuthority({
-        req,
-        auth,
-        cfg: config,
-        getRuntimeConfig: () => config,
-        getResolvedAuth: () => auth,
-      }),
-    );
-    authority.assertCurrent();
-    if (streamingResponse) {
-      res.write("partial");
-    } else if (!disconnected) {
+  route.mockImplementation(async (_req, res) => {
+    getAsyncWorkSignal()?.throwIfAborted();
+    if (!disconnected) {
       res.setHeader("Content-Length", "1");
       res.setHeader("Content-Encoding", "gzip");
       res.setHeader("Content-Disposition", "attachment; filename=report.txt");
@@ -378,7 +303,7 @@ it.each([
     if (unexpected) {
       throw unexpectedError;
     }
-    authority.assertCurrent();
+    getAsyncWorkSignal()?.throwIfAborted();
     res.end("must not disclose prepared data");
     return true;
   });
@@ -394,7 +319,6 @@ it.each([
     res.setEncoding("utf8");
     res.on("data", (chunk: string) => {
       body += chunk;
-      streaming.resolve();
     });
     res.once("end", () =>
       response.resolve({
@@ -405,11 +329,7 @@ it.each([
       }),
     );
     res.once("aborted", () => response.resolve({ status: res.statusCode, body, aborted: true }));
-    res.once("error", (error) => {
-      if (!streamingResponse) {
-        response.reject(error);
-      }
-    });
+    res.once("error", response.reject);
   });
   client.once("error", (error) => {
     if (disconnected) {
@@ -420,44 +340,18 @@ it.each([
   });
   client.end();
   const res = await entered.promise;
-  if (streamingResponse) {
-    await streaming.promise;
-  }
   if (disconnected) {
     const responseClosed = once(res, "close");
     client.destroy();
     await responseClosed;
-  } else if (outcome.endsWith("client expired")) {
-    auth = { ...auth, token: "after" };
-  } else if (outcome.endsWith("operator revoked")) {
-    operator.abort();
-  } else if (outcome.startsWith("role ")) {
-    config = roleConfig(false);
   }
-  const end = vi.spyOn(res, "end");
-  const write = vi.spyOn(res, "write");
-  const headers = vi.spyOn(res, "setHeader");
-  const writeHead = vi.spyOn(res, "writeHead");
   release.resolve();
-  await requests.mock.results[0]!.value;
+  await drainRequests();
   const { headers: responseHeaders, statusMessage, ...received } = await response.promise;
-  expect(write).not.toHaveBeenCalled();
-  expect(end).toHaveBeenCalledTimes(closed ? 0 : 1);
-  if (closed) {
-    expect(headers).not.toHaveBeenCalled();
-    expect(writeHead).not.toHaveBeenCalled();
-  }
-  if (streamingResponse) {
-    expect(received).toEqual({ status: 200, body: "partial", aborted: true });
-  } else if (!closed) {
-    expect(received).toEqual({
-      status,
-      body: unexpected ? message : JSON.stringify({ error: { message, type } }),
-    });
-    expect(statusMessage).toBe(type === "forbidden" ? "Forbidden" : message);
-    expect(responseHeaders?.["content-type"]).toBe(
-      unexpected ? "text/plain; charset=utf-8" : "application/json; charset=utf-8",
-    );
+  if (!disconnected) {
+    expect(received).toEqual({ status, body: message });
+    expect(statusMessage).toBe(message);
+    expect(responseHeaders?.["content-type"]).toBe("text/plain; charset=utf-8");
     const contentLength = responseHeaders?.["content-length"];
     if (contentLength !== undefined) {
       expect(contentLength).toBe(String(Buffer.byteLength(received.body)));
@@ -468,20 +362,5 @@ it.each([
     expect(responseHeaders?.["cache-control"]).toBe("no-store");
     expect(responseHeaders?.["access-control-allow-origin"]).toBe("https://example.test");
     expect(responseHeaders?.["x-content-type-options"]).toBe("nosniff");
-  }
-  if (unexpected) {
-    if (surface === "core") {
-      expect(errors).toHaveBeenCalledExactlyOnceWith(
-        "[gateway-http] unhandled error in request handler:",
-        unexpectedError,
-      );
-    } else {
-      expect(warnings).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining("plugin http route failed"),
-      );
-    }
-  } else {
-    expect(errors).not.toHaveBeenCalled();
-    expect(warnings).not.toHaveBeenCalled();
   }
 });

@@ -4,7 +4,9 @@ import {
   GUEST_FILESYSTEM_READ_NOT_FOUND_EXIT_CODE,
 } from "@openclaw/fs-safe/guest";
 import { parseDirectoryEntries, type DirectoryEntry } from "../../infra/directory-entries.js";
+import { FsSafeError } from "../../infra/fs-safe.js";
 import type {
+  SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxFsBridgeContext,
 } from "./backend-handle.types.js";
@@ -13,6 +15,8 @@ import {
   buildPinnedMutationArgs,
   PINNED_MUTATION_ACTION_LABELS,
   SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL,
+  SANDBOX_PINNED_READ_PYTHON_SHELL_LITERAL,
+  SANDBOX_PINNED_READ_TOO_LARGE_EXIT_CODE,
 } from "./fs-bridge-mutation-helper.js";
 import { createWritableRenameTargetResolver } from "./fs-bridge-rename-targets.js";
 import {
@@ -39,10 +43,19 @@ import {
   resolveRemotePinnedCanonicalFrame,
   type RemotePinnedTarget,
 } from "./remote-fs-bridge-pinned-frame.js";
-import type { ResolvedRemotePath, RemoteShellSandboxHandle } from "./remote-fs-bridge.types.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./workspace-mounts.js";
 
-export type { RemoteShellSandboxHandle } from "./remote-fs-bridge.types.js";
+type ResolvedRemotePath = SandboxResolvedPath & {
+  writable: boolean;
+  mountRootPath: string;
+};
+
+/** Minimal remote shell contract used by the SSH filesystem bridge. */
+export type RemoteShellSandboxHandle = {
+  remoteWorkspaceDir: string;
+  remoteAgentWorkspaceDir: string;
+  runRemoteShellScript(params: SandboxBackendCommandParams): Promise<SandboxBackendCommandResult>;
+};
 
 export function createRemoteShellSandboxFsBridge(params: {
   sandbox: SandboxFsBridgeContext;
@@ -130,6 +143,9 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       throw Object.assign(new Error(`Sandbox file not found: ${target.containerPath}`), {
         code: "ENOENT",
       });
+    }
+    if (result.code === SANDBOX_PINNED_READ_TOO_LARGE_EXIT_CODE) {
+      throw new FsSafeError("too-large", "Sandbox file exceeds the bounded read limit.");
     }
     if (result.code !== 0) {
       throw new Error(
@@ -713,12 +729,14 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     signal?: AbortSignal;
     allowFailure?: boolean;
   }): Promise<SandboxBackendCommandResult> {
+    const pythonScript =
+      params.args[0] === "read"
+        ? SANDBOX_PINNED_READ_PYTHON_SHELL_LITERAL
+        : SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL;
     return await this.runtime.runRemoteShellScript({
-      script: [
-        "set -eu",
-        `python_script=${SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL}`,
-        'python3 -c "$python_script" "$@"',
-      ].join("\n"),
+      script: ["set -eu", `python_script=${pythonScript}`, 'python3 -c "$python_script" "$@"'].join(
+        "\n",
+      ),
       ...params,
     });
   }

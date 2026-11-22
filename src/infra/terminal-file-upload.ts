@@ -28,6 +28,7 @@ import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { hasErrnoCode } from "./errno.js";
 import { createFileLockManager } from "./file-lock-manager.js";
+import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
@@ -103,21 +104,20 @@ function scheduleCleanup(root: string, state: CleanupState, at: number): void {
   if (state.timer && state.nextAt !== undefined && state.nextAt <= at) {
     return;
   }
-  if (state.timer) {
-    clearTimeout(state.timer);
-  }
+  clearTimeout(state.timer);
   state.nextAt = at;
   state.timer = runInDetachedAsyncContext(() =>
     setTimeout(
       () => {
         state.timer = undefined;
         state.nextAt = undefined;
-        void ensureTerminalUploadCleanup({ tempRoot: root, retentionMs: state.retentionMs });
+        void runWithMainThreadTask("terminal-upload:cleanup", () =>
+          ensureTerminalUploadCleanup({ tempRoot: root, retentionMs: state.retentionMs }),
+        );
       },
       Math.max(0, at - Date.now()),
     ),
-  );
-  state.timer.unref?.();
+  ).unref();
 }
 
 async function withUploadLock<T>(
@@ -325,9 +325,7 @@ async function scanUploads(
     if (Number.isFinite(nextAt)) {
       scheduleCleanup(root, state, nextAt);
     } else {
-      if (state.timer) {
-        clearTimeout(state.timer);
-      }
+      clearTimeout(state.timer);
       state.timer = undefined;
       state.nextAt = undefined;
       cleanupRoots.delete(root);

@@ -2,12 +2,6 @@ import type { DevicePairingPendingRequest } from "../infra/device-pairing.types.
 import { isTrustedProxyAddress } from "./net.js";
 import type { NodePairingAutoApproveClientIpSource } from "./node-pairing-auto-approve.types.js";
 
-type NodePairingAutoApproveReason =
-  | "not-paired"
-  | "role-upgrade"
-  | "scope-upgrade"
-  | "metadata-upgrade";
-
 /** Remote auto-approval may grant only the fresh, capability-free node request it proved. */
 export function isScopelessNodePairingRequest(
   request: Pick<DevicePairingPendingRequest, "role" | "roles" | "scopes" | "isRepair">,
@@ -38,7 +32,7 @@ export function resolveNodePairingClientIpSource(params: {
 export type FreshNodePairingEligibilityParams = {
   existingPairedDevice: boolean;
   role: string;
-  reason: NodePairingAutoApproveReason;
+  reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade";
   scopes: readonly string[];
   hasBrowserOriginHeader: boolean;
   isControlUi: boolean;

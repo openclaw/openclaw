@@ -9,16 +9,6 @@ type MessageLifecycleRef = {
   sessionKey?: string;
 };
 
-type MessageLifecycleOutcome = "completed" | "skipped" | "error";
-
-type MessageLifecycleProcessedOptions = MessageLifecycleRef & {
-  durationMs?: number;
-  reason?: string;
-  error?: string;
-  userPrompt?: string;
-  finalResponse?: string;
-};
-
 export function createDiagnosticMessageLifecycle(
   params: MessageLifecycleRef & {
     enabled: boolean;
@@ -38,6 +28,14 @@ export function createDiagnosticMessageLifecycle(
     sessionId: override?.sessionId ?? params.sessionId,
     sessionKey: override?.sessionKey ?? params.sessionKey,
   });
+  const resolveState = (ref: MessageLifecycleRef, inactive: "idle" | "waiting") =>
+    (
+      ref.sessionKey
+        ? isSessionRunActiveForKey(ref.sessionKey)
+        : ref.sessionId && isSessionRunActive(ref.sessionId)
+    )
+      ? "processing"
+      : inactive;
   // Processed events still matter without a session ref; queue-depth/state events do not.
   const canTrackSessionState = (ref: MessageLifecycleRef): boolean =>
     params.enabled && params.trackSessionState && Boolean(ref.sessionId || ref.sessionKey);
@@ -57,14 +55,7 @@ export function createDiagnosticMessageLifecycle(
       logSessionStateChange({
         sessionId: ref.sessionId,
         sessionKey: ref.sessionKey,
-        // Receiving input precedes admission; retained cleanup may still hold its turn.
-        state: (
-          ref.sessionKey
-            ? isSessionRunActiveForKey(ref.sessionKey)
-            : ref.sessionId && isSessionRunActive(ref.sessionId)
-        )
-          ? "processing"
-          : "waiting",
+        state: resolveState(ref, "waiting"),
         reason: params.processingReason,
       });
     },
@@ -77,14 +68,21 @@ export function createDiagnosticMessageLifecycle(
       logSessionStateChange({
         sessionId: ref.sessionId,
         sessionKey: ref.sessionKey,
-        state: "idle",
+        state: resolveState(ref, "idle"),
+        consumeQueuedTurn: true,
         reason,
       });
     },
 
     markProcessed(
-      outcome: MessageLifecycleOutcome,
-      options?: MessageLifecycleProcessedOptions,
+      outcome: "completed" | "skipped" | "error",
+      options?: MessageLifecycleRef & {
+        durationMs?: number;
+        reason?: string;
+        error?: string;
+        userPrompt?: string;
+        finalResponse?: string;
+      },
     ): void {
       if (!params.enabled) {
         return;

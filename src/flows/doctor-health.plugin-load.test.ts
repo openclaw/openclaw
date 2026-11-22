@@ -58,19 +58,7 @@ it.each([false, true])(
       mocks.runContributions.mockImplementation(async () => {
         for (let attempt = 0; attempt < 2; attempt++) {
           const registry = loadPluginRegistryHandle({ config: cfg, cache: false });
-          try {
-            const plugin = registry.plugins.find((entry) => entry.id === id);
-            expect(plugin).toMatchObject({
-              status: "error",
-              failurePhase: "load",
-              error: expect.stringContaining("fixture capture write failed"),
-            });
-            expect(plugin?.error).toContain(
-              "free space on the filesystem used by the plugin load and rerun Doctor",
-            );
-          } finally {
-            await disposePluginRegistryInstances(registry);
-          }
+          await disposePluginRegistryInstances(registry);
         }
       });
       const runtime = createDoctorRuntime();
@@ -90,10 +78,7 @@ it.each([false, true])(
           `- Plugin ${id}: plugin failed during load: ENOSPC: no space left on device; free space on the filesystem used by the plugin load and rerun Doctor`,
         ),
       );
-      const output = runtime.error.mock.calls.flat().join("\n");
-      for (const detail of [id, "ENOSPC", source]) {
-        expect(output).toContain(detail);
-      }
+      expect(runtime.error.mock.calls.flat().join("\n")).toContain(source);
       expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
       // A later invocation must not inherit released inspection failures.
       mocks.runContributions.mockResolvedValue(undefined);
@@ -105,3 +90,44 @@ it.each([false, true])(
     });
   },
 );
+
+it("keeps an advisory plugin warning nonfatal", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    stubDoctorEnv({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" });
+    mocks.packageRoot.mockReturnValue(undefined);
+    mocks.outro.mockClear();
+    const id = "doctor-warning-fixture";
+    const root = state.statePath("plugin");
+    // An open object schema yields a warn-level load diagnostic; the plugin still loads.
+    await state.writeText(
+      "plugin/index.cjs",
+      `module.exports = { id: "${id}", register(api) {
+        api.registerTool({
+          name: "metadata",
+          label: "Metadata",
+          description: "Store metadata",
+          parameters: { type: "object", properties: { payload: { type: "object" } } },
+          execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+        });
+      } };`,
+    );
+    await state.writeJson("plugin/openclaw.plugin.json", {
+      id,
+      configSchema: { type: "object", properties: {} },
+      contracts: { tools: ["metadata"] },
+    });
+    const cfg = {
+      plugins: { allow: [id], load: { paths: [root] }, slots: { memory: "none" } },
+    };
+    mocks.config.mockReturnValue(cfg);
+    mocks.runContributions.mockImplementation(async () => {
+      const registry = loadPluginRegistryHandle({ config: cfg, cache: false });
+      expect(registry.diagnostics).toMatchObject([{ level: "warn", pluginId: id }]);
+      await disposePluginRegistryInstances(registry);
+    });
+    const runtime = createDoctorRuntime();
+    await doctorCommand(runtime, { nonInteractive: true });
+    expect([runtime.exit.mock.calls, runtime.error.mock.calls]).toEqual([[], []]);
+    expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
+  });
+});

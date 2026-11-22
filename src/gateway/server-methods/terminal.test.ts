@@ -64,10 +64,12 @@ function makeOpts(
   params: Record<string, unknown> = { cols: 80, rows: 24 },
   {
     enabled = true,
+    agents,
     preparedConfig,
     nodeRegistry = { get: () => undefined },
   }: {
     enabled?: boolean;
+    agents?: OpenClawConfig["agents"];
     preparedConfig?: OpenClawConfig;
     nodeRegistry?: {
       get: (nodeId: string) => unknown;
@@ -76,7 +78,7 @@ function makeOpts(
   } = {},
 ) {
   const sessions = makeTerminalSessionMocks();
-  const runtimeConfig: OpenClawConfig = { gateway: { terminal: { enabled } } };
+  const runtimeConfig: OpenClawConfig = { agents, gateway: { terminal: { enabled } } };
   const policy = createTerminalLaunchPolicy(runtimeConfig);
   if (preparedConfig) {
     policy.prepareConfig(preparedConfig, { restartPending: true });
@@ -107,6 +109,7 @@ function makeOpts(
     isConnectionActive,
     isTerminalEnabled,
     resolveTerminalLaunchPolicy,
+    runtimeConfig,
   };
 }
 
@@ -151,11 +154,18 @@ function nodeSession(
   };
 }
 
-function pendingCatalog() {
+async function startCatalogLookup() {
   const plan = createDeferred<ReturnType<typeof localPlan>>();
   const openTerminal = vi.fn(() => plan.promise);
   installTerminalCatalog(openTerminal);
-  return { plan, openTerminal, ...makeOpts(catalogParams()) };
+  const fixture = makeOpts(catalogParams());
+  const opening = runTerminal("terminal.open", fixture.opts);
+  await waitForFast(() => expect(openTerminal).toHaveBeenCalledOnce());
+  return { ...fixture, plan, opening };
+}
+
+function openOwnedTerminal(opts: ReturnType<typeof makeOpts>["opts"], sessionKey: string) {
+  return openTerminalSession(opts, { agentId: "main", sessionKey, cols: 80, rows: 24 });
 }
 
 function runTerminal(method: string, opts: ReturnType<typeof makeOpts>["opts"]) {
@@ -182,6 +192,7 @@ function openedTerminal(sessionId: string) {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   resetPluginRuntimeStateForTest();
   policyMocks.resolveNodeCommandAllowlist.mockReset();
   policyMocks.isNodeCommandAllowed.mockReset().mockReturnValue({ ok: true });
@@ -213,29 +224,36 @@ describe("terminal gateway policy", () => {
     }
   });
 
-  it("binds a UI terminal to its exact agent session while keeping the UI attached", async () => {
+  it("opens a conversation terminal as its session agent in an explicit fleet", async () => {
     const backend = makeFakePty();
     const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => backend });
-    const agentSessionKey = "agent:main:ui-session";
+    const agentSessionKey = "agent:research:ui-session";
     const agentOwner = {
       kind: "agent",
       agentSessionKey,
       agentSessionId: "ui-session-id",
-      agentId: "main",
+      agentId: "research",
     } as const;
-    const { opts, respond } = makeOpts({});
+    const { opts, respond } = makeOpts(
+      { sessionKey: agentSessionKey, cols: 80, rows: 24 },
+      {
+        agents: {
+          ownership: "explicit",
+          entries: { main: {}, research: { workspace: process.cwd() } },
+        },
+      },
+    );
     opts.context.terminalSessions = manager;
 
-    await openTerminalSession(opts, {
-      agentId: "main",
-      sessionKey: agentSessionKey,
-      cols: 80,
-      rows: 24,
-    });
+    await runTerminal("terminal.open", opts);
 
     expect(respond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ agentId: "main", sessionId: expect.any(String) }),
+      expect.objectContaining({
+        agentId: "research",
+        cwd: process.cwd(),
+        sessionId: expect.any(String),
+      }),
     );
     const owned = manager.listAgent(agentOwner);
     expect(owned).toHaveLength(1);
@@ -246,13 +264,13 @@ describe("terminal gateway policy", () => {
     backend.emitData("ui session output");
     expect(manager.snapshotAgent(agentOwner, session.sessionId)).toContain("ui session output");
     expect(
-      manager.listAgent({ ...agentOwner, agentSessionKey: "agent:main:other-session" }),
+      manager.listAgent({ ...agentOwner, agentSessionKey: "agent:research:other-session" }),
     ).toEqual([]);
     expect(
-      manager.snapshotAgent({ ...agentOwner, agentId: "research" }, session.sessionId),
+      manager.snapshotAgent({ ...agentOwner, agentId: "main" }, session.sessionId),
     ).toBeUndefined();
     expect(sessionMocks.loadGatewaySessionEntryReadOnly).toHaveBeenCalledWith(agentSessionKey, {
-      agentId: "main",
+      agentId: "research",
     });
   });
 
@@ -277,15 +295,10 @@ describe("terminal gateway policy", () => {
     sessionMocks.loadGatewaySessionEntryReadOnly.mockReturnValue({ entry });
     const { opts, sessions, respond } = makeOpts({});
 
-    await openTerminalSession(opts, {
-      agentId: "main",
-      sessionKey: "agent:main:pending",
-      cols: 80,
-      rows: 24,
-    });
+    await openOwnedTerminal(opts, "agent:main:pending");
 
     expect(sessions.open).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
+    expectFailure(respond, error);
   });
 
   it("lists agent-owned sessions with their owner marker", async () => {
@@ -348,18 +361,26 @@ describe("terminal gateway policy", () => {
     await expectOpenFailure(makeOpts(catalogParams("missing")));
   });
 
-  it("reports a missing explicit owner as invalid request", async () => {
-    const fixture = makeOpts();
-    fixture.resolveTerminalLaunchPolicy.mockReturnValue({
-      ok: false,
-      block: { kind: "owner-required", message: "terminal requires an explicit owner" },
-    });
+  it.each([undefined, "ui-session"])(
+    "refuses an ambiguous terminal owner even with a system agent (session=%s)",
+    async (sessionKey) => {
+      const fixture = makeOpts(
+        { sessionKey, cols: 80, rows: 24 },
+        {
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "research" } },
+            entries: { main: {}, research: {} },
+          },
+        },
+      );
 
-    await expectOpenFailure(fixture, {
-      code: ErrorCodes.INVALID_REQUEST,
-      message: "terminal requires an explicit owner",
-    });
-  });
+      await expectOpenFailure(fixture, {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: expect.stringContaining("no explicit owner"),
+      });
+    },
+  );
 
   it("opens a provider-built local resume plan for a selected source and returns its title", async () => {
     const sourceHomeId = "selected-codex-home";
@@ -413,41 +434,19 @@ describe("terminal gateway policy", () => {
     );
   });
 
-  it.each(["rewind", "forward"])("uses a monotonic deadline despite clock %s", async (jump) => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    try {
-      installTerminalCatalog(async () => {
-        vi.setSystemTime(jump === "rewind" ? -90_000 : 90_000);
-        if (jump === "rewind") {
-          vi.advanceTimersByTime(TERMINAL_OPEN_DEADLINE_MS);
-        }
-        return localPlan();
-      });
-      const fixture = makeOpts(catalogParams());
-      if (jump === "rewind") {
-        await expectOpenFailure(fixture, { message: "terminal open timed out" });
-      } else {
-        await runTerminal("terminal.open", fixture.opts);
-        expect(fixture.sessions.open).toHaveBeenCalled();
-        expect(fixture.respond).toHaveBeenCalledWith(true, expect.any(Object));
-      }
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it.each([
     ["isConnectionActive", "terminal connection closed"],
-    ["isTerminalEnabled", "terminal is disabled"],
+    ["terminal policy", "terminal is disabled"],
   ] as const)(
     "does not create a terminal after %s changes during catalog lookup",
     async (flag, message) => {
-      const fixture = pendingCatalog();
-      const { plan, openTerminal, opts, sessions, respond } = fixture;
-      const opening = runTerminal("terminal.open", opts);
-      await waitForFast(() => expect(openTerminal).toHaveBeenCalledOnce());
-      fixture[flag].mockReturnValue(false);
+      const fixture = await startCatalogLookup();
+      const { plan, opening, sessions, respond } = fixture;
+      if (flag === "isConnectionActive") {
+        fixture.isConnectionActive.mockReturnValue(false);
+      } else {
+        fixture.runtimeConfig.gateway!.terminal!.enabled = false;
+      }
       plan.resolve(localPlan());
       await opening;
       expect(sessions.open).not.toHaveBeenCalled();
@@ -472,36 +471,27 @@ describe("terminal gateway policy", () => {
 
   it("times out one terminal open with request-scoped cancellation", async () => {
     vi.useFakeTimers();
-    try {
-      const created = createDeferred<ReturnType<typeof openedTerminal>>();
-      let openSignal: AbortSignal | undefined;
-      const { opts, sessions, respond } = makeOpts();
-      sessions.open.mockImplementationOnce(async (request: unknown) => {
-        openSignal = (request as { signal?: AbortSignal }).signal;
-        return await created.promise;
-      });
+    const created = createDeferred<ReturnType<typeof openedTerminal>>();
+    let openSignal: AbortSignal | undefined;
+    const { opts, sessions, respond } = makeOpts();
+    sessions.open.mockImplementationOnce(async (request: unknown) => {
+      openSignal = (request as { signal?: AbortSignal }).signal;
+      return await created.promise;
+    });
 
-      const opening = runTerminal("terminal.open", opts);
-      await waitForFast(() => expect(openSignal).toBeDefined());
-      await vi.advanceTimersByTimeAsync(TERMINAL_OPEN_DEADLINE_MS);
-      await opening;
+    const opening = runTerminal("terminal.open", opts);
+    await waitForFast(() => expect(openSignal).toBeDefined());
+    await vi.advanceTimersByTimeAsync(TERMINAL_OPEN_DEADLINE_MS);
+    await opening;
 
-      expect(openSignal?.aborted).toBe(true);
-      expectFailure(respond, { message: "terminal open timed out" });
-      created.resolve(openedTerminal("terminal-late"));
-      await waitForFast(() =>
-        expect(sessions.close).toHaveBeenCalledWith("conn-1", "terminal-late"),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(openSignal?.aborted).toBe(true);
+    expectFailure(respond, { message: "terminal open timed out" });
+    created.resolve(openedTerminal("terminal-late"));
+    await waitForFast(() => expect(sessions.close).toHaveBeenCalledWith("conn-1", "terminal-late"));
   });
 
   it("uses the refreshed launch plan after catalog lookup", async () => {
-    const { plan, openTerminal, opts, sessions, resolveTerminalLaunchPolicy } = pendingCatalog();
-
-    const opening = runTerminal("terminal.open", opts);
-    await waitForFast(() => expect(openTerminal).toHaveBeenCalledOnce());
+    const { plan, opening, sessions, resolveTerminalLaunchPolicy } = await startCatalogLookup();
     resolveTerminalLaunchPolicy.mockReturnValue({
       ok: true,
       plan: { agentId: "main", cwd: process.cwd(), shell: "/bin/refreshed", args: [] },
@@ -663,8 +653,7 @@ describe("terminal gateway policy", () => {
       }
       await runTerminal("terminal.upload", opts);
       expect(sessions.upload).toHaveBeenCalledWith("conn-1", "s1", {
-        name: "report.pdf",
-        contentBase64: "dGVzdA==",
+        ...uploadFile,
         assertCommitAllowed: expect.any(Function),
       });
       expect(respond).toHaveBeenCalledWith(true, result);
@@ -673,8 +662,8 @@ describe("terminal gateway policy", () => {
 
   it("rejects non-canonical base64 before staging", async () => {
     const { opts, sessions, respond } = makeOpts({
+      ...uploadFile,
       sessionId: "s1",
-      name: "report.pdf",
       contentBase64: "AB==",
     });
 

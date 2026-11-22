@@ -9,7 +9,12 @@ import {
 } from "../../scripts/control-ui-locale-artifacts.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "../../scripts/lib/control-ui-i18n-config.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { readWorkflow, runGit, type WorkflowStep } from "./ci-workflow.test-support.js";
+import {
+  acceptsWorkflowPaths,
+  readWorkflow,
+  runGit,
+  type WorkflowStep,
+} from "./ci-workflow.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const locales = CONTROL_UI_LOCALE_ENTRIES.map((entry) => entry.locale);
@@ -100,7 +105,6 @@ async function createFixture() {
   put(root, "scripts/control-ui-i18n.ts", "generator policy\n");
   put(root, "source/input.txt", [...original]);
   for (const locale of locales) {
-    put(root, "ui/src/i18n/.i18n/glossary." + locale + ".json", "[]\n");
     for (const assets of assetRoots) {
       put(root, assets + "/" + locale + ".tm.jsonl", "");
       put(root, assets + "/" + locale + ".meta.json", metadata(locale));
@@ -178,7 +182,7 @@ it("rejects a replacement history before importing matching artifact envelopes",
   expect(runGit(f.root, ["status", "--porcelain"])).toBe("");
 });
 
-it.each(["canonical", "metadata", "glossary", "policy", "ownership"])(
+it.each(["canonical", "metadata", "policy", "ownership"])(
   "discards worker memory when %s changes without overwriting canonical inputs",
   async (change) => {
     const f = await createFixture();
@@ -186,8 +190,6 @@ it.each(["canonical", "metadata", "glossary", "policy", "ownership"])(
       put(f.root, svMemory, workerMemory("sv").replace("Behåll", "Korrigerad"));
     } else if (change === "metadata") {
       put(f.root, svMetadata, metadata("sv", { fallbackKeys: ["keep"] }));
-    } else if (change === "glossary") {
-      put(f.root, "ui/src/i18n/.i18n/glossary.sv.json", [{ source: "Keep", target: "Korrigerad" }]);
     } else if (change === "policy") {
       put(f.root, "scripts/control-ui-i18n.ts", "new generator policy");
     } else {
@@ -240,6 +242,12 @@ it("refuses producer fallbacks and a checkout outside the bound source", async (
 
 it("uses only same-run transport and the unchanged terminal publisher", () => {
   expect(workflow.permissions).toEqual({ contents: "read" });
+  for (const sourcePath of [
+    "extensions/beam/src/http.ts",
+    "extensions/example/browser/styles.css",
+  ]) {
+    expect(acceptsWorkflowPaths(workflow.on.push.paths, [sourcePath]), sourcePath).toBe(true);
+  }
   const finalize: WorkflowStep[] = workflow.jobs.finalize.steps;
   expect(finalize.find((step) => step.uses?.startsWith("actions/checkout@"))?.with?.ref).toBe(
     "${{ github.event.repository.default_branch }}",

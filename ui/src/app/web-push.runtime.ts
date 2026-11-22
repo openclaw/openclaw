@@ -4,13 +4,14 @@ import type {
   WebPushNotificationPreferences,
 } from "../../../packages/gateway-protocol/src/schema/push.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { t } from "../lib/local-error-catalog.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import { openClawIdDocumentConfig } from "./openclaw-id-document.ts";
 import { readWebPushAccess, type WebPushAccess } from "./web-push-access.ts";
 
 const SW_READY_TIMEOUT = 10_000;
-const VAPID_MISMATCH_MESSAGE =
-  "This browser push subscription belongs to another Gateway. Open this Gateway's own Control UI, or configure every mutually trusted Gateway behind this PWA with the same VAPID keypair.";
+
 const WEB_PUSH_USER_PREFERENCES_KEY = "notifications.web.v1";
 
 type WebPushReconcileResult =
@@ -64,13 +65,13 @@ function webPushClient(gateway: ApplicationGateway, client: GatewayBrowserClient
       gateway.snapshot.client !== client ||
       gateway.snapshot.selfUser?.id !== profileId
     ) {
-      throw new Error("Gateway changed before the notification change could be saved.");
+      throw new Error(t("notificationErrors.gatewayChanged"));
     }
     return readWebPushAccess(gateway.snapshot);
   };
   const assertCanManage = () => {
     if (!access().canManage) {
-      throw new Error("Your Gateway access does not allow managing browser notifications.");
+      throw new Error(t("notificationErrors.manageDenied"));
     }
   };
   return {
@@ -80,7 +81,7 @@ function webPushClient(gateway: ApplicationGateway, client: GatewayBrowserClient
       const [method] = args;
       if (method === "push.web.preferences.get") {
         if (!access().canReadPreferences) {
-          throw new Error("Your Gateway access does not allow reading notification preferences.");
+          throw new Error(t("notificationErrors.readDenied"));
         }
       } else {
         assertCanManage();
@@ -88,22 +89,6 @@ function webPushClient(gateway: ApplicationGateway, client: GatewayBrowserClient
       return client.request(...args);
     },
   };
-}
-
-function requirePushManager(registration: ServiceWorkerRegistration): PushManager {
-  const manager = registration.pushManager;
-  if (!manager) {
-    throw new Error(
-      "Web Push is unavailable in this browser. On iPhone or iPad, add OpenClaw to the Home Screen and open the installed app.",
-    );
-  }
-  return manager;
-}
-
-function urlBase64ToUint8Array(base64String: string): Uint8Array {
-  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-  return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
 }
 
 export async function getExistingSubscription(): Promise<PushSubscription | null> {
@@ -120,35 +105,11 @@ async function resolveGatewayVapidPublicKey(
     {},
   );
   if (!vapidPublicKey) {
-    throw new Error("Failed to retrieve VAPID public key");
+    throw new Error(t("notificationErrors.vapidKey"));
   }
-  return urlBase64ToUint8Array(vapidPublicKey);
-}
-
-function subscriptionUsesVapidKey(
-  subscription: PushSubscription,
-  vapidPublicKey: Uint8Array,
-): boolean {
-  const applicationServerKey = subscription.options.applicationServerKey;
-  if (!applicationServerKey) {
-    return false;
-  }
-  const currentKey = new Uint8Array(applicationServerKey);
-  return (
-    currentKey.length === vapidPublicKey.length &&
-    currentKey.every((value, index) => value === vapidPublicKey[index])
-  );
-}
-
-function serializePushSubscription(subscription: PushSubscription) {
-  const json = subscription.toJSON();
-  if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) {
-    throw new Error("Invalid push subscription from browser");
-  }
-  return {
-    endpoint: json.endpoint,
-    keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
-  };
+  const padding = "=".repeat((4 - (vapidPublicKey.length % 4)) % 4);
+  const base64 = (vapidPublicKey + padding).replace(/-/g, "+").replace(/_/g, "/");
+  return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
 }
 
 async function registerPushSubscription(
@@ -156,15 +117,28 @@ async function registerPushSubscription(
   subscription: PushSubscription,
   vapidPublicKey: Uint8Array,
 ): Promise<WebPushReconcileResult> {
-  if (!subscriptionUsesVapidKey(subscription, vapidPublicKey)) {
+  const applicationServerKey = subscription.options.applicationServerKey;
+  const currentKey = applicationServerKey ? new Uint8Array(applicationServerKey) : null;
+  if (
+    !currentKey ||
+    currentKey.length !== vapidPublicKey.length ||
+    !currentKey.every((value, index) => value === vapidPublicKey[index])
+  ) {
     // Keep the browser subscription for its owning Gateway until the operator
     // explicitly resets it; only this Gateway's unusable row is removed here.
     await client
       .request("push.web.unsubscribe", { endpoint: subscription.endpoint })
       .catch(() => undefined);
-    return { state: "vapid-mismatch", error: VAPID_MISMATCH_MESSAGE };
+    return { state: "vapid-mismatch", error: t("notificationErrors.vapidMismatch") };
   }
-  await client.request("push.web.subscribe", serializePushSubscription(subscription));
+  const json = subscription.toJSON();
+  if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) {
+    throw new Error("Invalid push subscription from browser");
+  }
+  await client.request("push.web.subscribe", {
+    endpoint: json.endpoint,
+    keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
+  });
   return { state: "registered", subscription };
 }
 
@@ -187,7 +161,11 @@ async function reconcileWebPushCapability(
   canManage: boolean,
   publish: (patch: WebPushCapabilityPatch) => void,
 ): Promise<WebPushCapabilityPatch> {
-  const subscription = await getExistingSubscription();
+  // WebKit can suspend enabled ID pages on a passive PushManager read before permission.
+  const subscription =
+    openClawIdDocumentConfig() && Notification.permission !== "granted"
+      ? null
+      : await getExistingSubscription();
   if (subscription && !canManage) {
     publish({ subscription: "local" });
     return {
@@ -365,17 +343,20 @@ export async function subscribeToWebPush(
   assertCanManage();
   const permission = await Notification.requestPermission();
   if (permission !== "granted") {
-    throw new Error(`Notification permission ${permission}`);
+    throw new Error(t("notificationErrors.permission", { permission }));
   }
 
   const registration = await raceWithTimeout(
     () => navigator.serviceWorker.ready,
     SW_READY_TIMEOUT,
     () => {
-      throw new Error("Service worker not ready (timed out)");
+      throw new Error(t("notificationErrors.serviceWorkerTimeout"));
     },
   );
-  const pushManager = requirePushManager(registration);
+  const pushManager = registration.pushManager;
+  if (!pushManager) {
+    throw new Error(t("notificationErrors.unavailable"));
+  }
   const vapidPublicKey = await resolveGatewayVapidPublicKey(client);
   const existingSubscription = await pushManager.getSubscription();
   if (existingSubscription) {
@@ -417,14 +398,6 @@ export async function unsubscribeFromWebPush(
   await subscription.unsubscribe();
 }
 
-async function requireExistingSubscription(): Promise<PushSubscription> {
-  const subscription = await getExistingSubscription();
-  if (!subscription) {
-    throw new Error("Enable notifications before changing notification preferences.");
-  }
-  return subscription;
-}
-
 function getWebPushPreferences(
   client: WebPushClient,
   subscription: PushSubscription,
@@ -452,7 +425,10 @@ async function runWebPushCapabilityAction(
       return {};
     case "set": {
       client.assertCanManage();
-      const subscription = await requireExistingSubscription();
+      const subscription = await getExistingSubscription();
+      if (!subscription) {
+        throw new Error(t("notificationErrors.enableFirst"));
+      }
       await client.request("push.web.preferences.set", {
         endpoint: subscription.endpoint,
         scope: action.scope,

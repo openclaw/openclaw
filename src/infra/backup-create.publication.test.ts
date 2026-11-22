@@ -19,6 +19,11 @@ import {
 } from "./backup-scratch.js";
 import * as directoryDurability from "./directory-durability.js";
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+
 it("reclaims an interrupted archive's scratch on the next backup run", async () => {
   await withBackupFixture({ prefix: "backup-scratch-next-run-" }, async (state) => {
     await isolateBackupScratch(state);
@@ -41,7 +46,6 @@ it("reclaims an interrupted archive's scratch on the next backup run", async () 
       );
     } finally {
       await finishBackupScratch(live);
-      vi.unstubAllEnvs();
     }
   });
 });
@@ -57,34 +61,27 @@ it("records failed scratch cleanup without failing the published backup", async 
       }
       return remove(target);
     });
-    try {
-      const log = vi.fn();
-      const result = await createBackupArchive({
-        output: state.path("backup.tar.gz"),
-        onlyConfig: true,
-        log,
-      });
-      const [scratch] = await fs.readdir(scratchRoot);
-      expect(scratch).toMatch(/^openclaw-backup-/u);
-      const warning = expect.stringContaining(path.join(scratchRoot, scratch!));
-      expect(result.warnings).toEqual(expect.arrayContaining([warning]));
-      expect(log).toHaveBeenCalledWith(warning);
-      await expect(fs.stat(result.archivePath)).resolves.toMatchObject({
-        size: expect.any(Number),
-      });
-      await expect(fs.stat(path.join(scratchRoot, scratch!, "owner.sqlite"))).rejects.toMatchObject(
-        {
-          code: "ENOENT",
-        },
-      );
-      removal.mockRestore();
-      const repaired = await maintainBackupScratch({ roots: [scratchRoot], repair: true });
-      expect(repaired.reclaimed).toEqual([path.join(scratchRoot, scratch!)]);
-      await expect(fs.readdir(scratchRoot)).resolves.toEqual([]);
-    } finally {
-      removal.mockRestore();
-      vi.unstubAllEnvs();
-    }
+    const log = vi.fn();
+    const result = await createBackupArchive({
+      output: state.path("backup.tar.gz"),
+      onlyConfig: true,
+      log,
+    });
+    const [scratch] = await fs.readdir(scratchRoot);
+    expect(scratch).toMatch(/^openclaw-backup-/u);
+    const warning = expect.stringContaining(path.join(scratchRoot, scratch!));
+    expect(result.warnings).toEqual(expect.arrayContaining([warning]));
+    expect(log).toHaveBeenCalledWith(warning);
+    await expect(fs.stat(result.archivePath)).resolves.toMatchObject({
+      size: expect.any(Number),
+    });
+    await expect(fs.stat(path.join(scratchRoot, scratch!, "owner.sqlite"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    removal.mockRestore();
+    const repaired = await maintainBackupScratch({ roots: [scratchRoot], repair: true });
+    expect(repaired.reclaimed).toEqual([path.join(scratchRoot, scratch!)]);
+    await expect(fs.readdir(scratchRoot)).resolves.toEqual([]);
   });
 });
 
@@ -92,31 +89,25 @@ it.each(["EPERM", "EXDEV"])("fails closed without hard-link support (%s)", async
   const publicationSpy = vi
     .spyOn(directoryDurability, "publishFileExclusive")
     .mockRejectedValue(Object.assign(new Error("hard links unsupported"), { code }));
-  try {
-    await withBackupFixture({ prefix: "openclaw-backup-no-hardlinks-" }, async (state) => {
-      const outputDir = state.path("backups");
-      await fs.mkdir(outputDir, { recursive: true });
+  await withBackupFixture({ prefix: "openclaw-backup-no-hardlinks-" }, async (state) => {
+    const outputDir = state.path("backups");
+    await fs.mkdir(outputDir, { recursive: true });
 
-      await expect(
-        createBackupArchive({
-          output: outputDir,
-          includeWorkspace: false,
-          nowMs: Date.UTC(2026, 4, 9, 12, 0, 0),
-        }),
-      ).rejects.toThrow(/requires hard-link support/iu);
-      expect(publicationSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ strategy: "link-required" }),
-      );
-      await expect(fs.readdir(outputDir)).resolves.toEqual([]);
-    });
-  } finally {
-    publicationSpy.mockRestore();
-  }
+    await expect(
+      createBackupArchive({
+        output: outputDir,
+        includeWorkspace: false,
+        nowMs: Date.UTC(2026, 4, 9, 12, 0, 0),
+      }),
+    ).rejects.toThrow(/requires hard-link support/iu);
+    expect(publicationSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ strategy: "link-required" }),
+    );
+    await expect(fs.readdir(outputDir)).resolves.toEqual([]);
+  });
 });
 
 describe("backup traversal", () => {
-  afterEach(() => vi.restoreAllMocks());
-
   it.each(["lstat", "open"] as const)(
     "records a file vanishing before %s and restores survivors",
     async (operation) => {
@@ -136,7 +127,6 @@ describe("backup traversal", () => {
           }
         };
         if (operation === "lstat") {
-          // Keep the same race reproducible on both filesystem APIs used by the writers.
           const callbackLstat = fsSync.lstat;
           vi.spyOn(fsSync, "lstat").mockImplementation((...args) => {
             remove(args[0]);
@@ -181,7 +171,7 @@ describe("backup traversal", () => {
     },
   );
 
-  it("reports transient files in a second workspace and preserves its dangling absolute link", async () => {
+  it("backs up a second workspace and preserves its dangling absolute link", async () => {
     await withBackupFixture({ layout: "split" }, async (state) => {
       const second = state.path("second-workspace");
       await fs.mkdir(second);
@@ -190,10 +180,7 @@ describe("backup traversal", () => {
           entries: { main: { workspace: state.workspaceDir }, second: { workspace: second } },
         },
       });
-      const transient = ["pending.tmp", "queue.json.tmp.123.456"];
-      for (const name of [...transient, "keep.txt"]) {
-        await fs.writeFile(path.join(second, name), name);
-      }
+      await fs.writeFile(path.join(second, "keep.txt"), "keep.txt");
       const dangling = state.path("missing-target");
       const sourceLink = path.join(second, "dangling-link");
       await fs.symlink(dangling, sourceLink, process.platform === "win32" ? "junction" : "file");
@@ -201,15 +188,6 @@ describe("backup traversal", () => {
       const result = await createVerifiedBackup(state, { includeWorkspace: true, json: true });
       const entries = await listArchiveEntryDetails(result.archivePath);
       expect(entries.some((entry) => entry.path.endsWith("/second-workspace/keep.txt"))).toBe(true);
-      for (const name of transient) {
-        expect(entries.some((entry) => entry.path.endsWith(`/second-workspace/${name}`))).toBe(
-          false,
-        );
-        expect(result.skipped).toContainEqual(
-          expect.objectContaining({ sourcePath: path.join(second, name), reason: "volatile" }),
-        );
-      }
-      expect(result.skippedVolatileCount).toBe(2);
       const link = entries.find((entry) => entry.path.endsWith("/second-workspace/dangling-link"));
       expect(link).toMatchObject({ type: "SymbolicLink", linkpath });
       expect(result.externalSymbolicLinks).toContainEqual({

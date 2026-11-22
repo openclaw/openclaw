@@ -2,7 +2,6 @@ import { applyToolAvailabilityDescriptions } from "../../agents/agent-tools.defe
 import { resolveEffectiveToolPolicy } from "../../agents/agent-tools.policy.js";
 import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
 import { resolveConversationQuestionInputMode } from "../../agents/conversation-capability-profile.js";
-import { filterRequesterYieldTools } from "../../agents/openclaw-tools.requester-yield.js";
 import { resolveRequesterToolPolicies } from "../../agents/requester-tool-policy.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
@@ -57,7 +56,6 @@ export async function resolveSkillDispatchTools(params: {
   cfg: OpenClawConfig;
   agentId: string;
   agentDir?: string;
-  authProfileStoreSource?: boolean;
   sessionEntry?: SessionEntry;
   sessionKey: string;
   workspaceDir: string;
@@ -85,7 +83,7 @@ export async function resolveSkillDispatchTools(params: {
     providerProfile,
     profileAlsoAllow,
     providerProfileAlsoAllow,
-    gatewayConfigReadAllowed,
+    gatewayManagementActionsAllowed,
   } = resolveEffectiveToolPolicy({
     config: params.cfg,
     sessionKey: params.sessionKey,
@@ -163,8 +161,13 @@ export async function resolveSkillDispatchTools(params: {
         },
       }
     : undefined;
+  let messageToolAvailable = true;
   const tools = await createOpenClawToolsAsync({
-    gatewayConfigReadAllowed,
+    retainUnavailableMessageTool: true,
+    onMessageToolAvailability: (available) => {
+      messageToolAvailable = available;
+    },
+    gatewayManagementActionsAllowed,
     agentSessionKey: params.sessionKey,
     agentChannel: channel,
     questionInputMode: resolveConversationQuestionInputMode({
@@ -179,7 +182,6 @@ export async function resolveSkillDispatchTools(params: {
     agentGroupSpace: params.sessionEntry?.space,
     agentMemberRoleIds: params.message.memberRoleIds,
     agentDir: params.agentDir,
-    authProfileStoreSource: params.authProfileStoreSource,
     workspaceDir: params.workspaceDir,
     config: params.cfg,
     sessionConfigSource: "runtime",
@@ -240,6 +242,8 @@ export async function resolveSkillDispatchTools(params: {
     getPluginToolMeta,
   );
   return applyToolAvailabilityDescriptions(
-    filterRequesterYieldTools(policyFiltered, params.sessionKey),
+    messageToolAvailable
+      ? policyFiltered
+      : policyFiltered.filter((tool) => tool.name !== "message"),
   );
 }

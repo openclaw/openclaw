@@ -1,10 +1,14 @@
 // Tests how an admitted interactive run continues a turn the stale watchdog dropped.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
+import { wrapToolWithBeforeToolCallHook } from "../../agents/agent-tools.before-tool-call.js";
 import {
-  createAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
-} from "../../agents/admitted-run-context.js";
+  createCatalogCodeModeHarness,
+  pluginToolWithExecute,
+  resetCodeModeTestState,
+} from "../../agents/code-mode.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -14,7 +18,9 @@ import { createChatSendLateFollowupDisposition } from "../../gateway/server-meth
 import { createChatSendLateReplyFinalizer } from "../../gateway/server-methods/chat-send-source-finalization.js";
 import { createGatewayRequestContext } from "../../gateway/server-request-context.js";
 import { makeContextParams } from "../../gateway/server-request-context.test-support.js";
+import { GatewayOperatorAccessUnavailableError } from "../../infra/operator-authority-error.js";
 import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
+import { SESSION_WATCHDOG_QUIET_TOOL_MS } from "../../sessions/session-controller.watchdog-state.js";
 import { resetSessionControllerStateForTest } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
@@ -42,7 +48,12 @@ import {
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
-import { createMockTypingController } from "./test-helpers.js";
+import {
+  isReplyOperationStalledBeforeOutput,
+  resolveStalledTurnNoticeText,
+  STALLED_TURN_GUIDANCE,
+} from "./stalled-turn-recovery.js";
+import { createReplyParams } from "./test-helpers.js";
 
 afterEach(() => clearRuntimeConfigSnapshot());
 
@@ -151,38 +162,30 @@ async function createStalledRun(
   const operation = admitted.operation;
   operation.setPhase("running");
   const runState: ReplyOperationRunState = {};
-  const run = runReplyAgent({
-    commandBody: "what is good at the hotel restaurant?",
-    followupRun,
-    queueKey,
-    sessionKey: queueKey,
-    storePath: transcriptTarget.storePath,
-    sessionEntry,
-    sessionStore: { [queueKey]: sessionEntry },
-    resolvedQueue: settings,
-    shouldSteer: false,
-    shouldFollowup: false,
-    isActive: false,
-    replyOperation: operation,
-    opts: {
-      [REPLY_OPERATION_RUN_STATE]: runState,
-    },
-    typing: createMockTypingController(),
-    sessionCtx: {
-      Provider: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "12345",
-      ChatType: "direct",
-      MessageSid: "msg-stalled",
-    } as unknown as TemplateContext,
-    defaultModel: "anthropic/claude",
-    resolvedVerboseLevel: "off",
-    isNewSession: false,
-    blockStreamingEnabled: false,
-    resolvedBlockStreamingBreak: "message_end",
-    shouldInjectGroupIntro: false,
-    typingMode: "instant",
-  });
+  const run = runReplyAgent(
+    createReplyParams(followupRun, {
+      commandBody: "what is good at the hotel restaurant?",
+      queueKey,
+      sessionKey: queueKey,
+      storePath: transcriptTarget.storePath,
+      sessionEntry,
+      sessionStore: { [queueKey]: sessionEntry },
+      resolvedQueue: settings,
+      replyOperation: operation,
+      opts: {
+        [REPLY_OPERATION_RUN_STATE]: runState,
+      },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "12345",
+        ChatType: "direct",
+        MessageSid: "msg-stalled",
+      } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude",
+      typingMode: "instant",
+    }),
+  );
   return { operation, run, runState, recorder, transcriptTarget };
 }
 
@@ -270,8 +273,90 @@ describe("runReplyAgent stalled turn continuation", () => {
     closeOpenClawAgentDatabasesForTest();
   });
 
-  it("queues exactly one transcript-only recovery run when nothing else is queued", async () => {
-    const stalled = await createStalledRun();
+  it("settles a real Code Mode bridge that never replies at the quiet-tool bound and drains newer input", async () => {
+    // Leave worker and SQLite timers real; only advance the controller's wall clock.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const bridgeStarted = createDeferred();
+    const toolSettled = createDeferred<unknown>();
+    const bridge = pluginToolWithExecute("never_reply", "Never replies", async () => {
+      bridgeStarted.resolve();
+      return await new Promise<never>(() => {});
+    });
+    executeAgentTurnMock.mockImplementationOnce(
+      async ({ replyOperation }: { replyOperation: ReplyOperation }) => {
+        const harness = createCatalogCodeModeHarness([bridge], {
+          codeMode: { executor: "node" },
+          abortSignal: replyOperation.abortSignal,
+        });
+        const watchdogAttempt = replyOperation.watchdog.attachAttempt({
+          assertCurrent: () => replyOperation.abortSignal.throwIfAborted(),
+        });
+        const tool = wrapToolWithBeforeToolCallHook(harness.tools[0]!, {
+          ...harness.ctx,
+          watchdogAttempt,
+        });
+        try {
+          const result = await tool.execute(
+            "never-reply-call",
+            {
+              code: "return await never_reply({});",
+              awaitResults: true,
+            },
+            replyOperation.abortSignal,
+          );
+          toolSettled.resolve(result);
+          return { runId: "stalled-run", outcome: { kind: "aborted", reason: "user" } };
+        } finally {
+          watchdogAttempt.close();
+        }
+      },
+    );
+    try {
+      const stalled = await createStalledRun();
+      await awaitGateBeforeSettlement(
+        bridgeStarted.promise,
+        stalled.run,
+        "Code Mode settled before the bridge started",
+      );
+      const startedAt = Date.now();
+      const queued = createQueuedRequest(stalled, { senderId: "traveler", to: "12345" });
+      expect(enqueueFollowupRun(queueKey, queued, settings, "message-id", drainedRuns, false)).toBe(
+        true,
+      );
+      vi.setSystemTime(startedAt + SESSION_WATCHDOG_QUIET_TOOL_MS - 1);
+      await stalled.operation.watchdog.tick();
+      expect(stalled.operation.result).toBeNull();
+      expect(drainedRuns).not.toHaveBeenCalled();
+
+      vi.setSystemTime(startedAt + SESSION_WATCHDOG_QUIET_TOOL_MS);
+      await stalled.operation.watchdog.tick();
+      expect(stalled.operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+      expect(await toolSettled.promise).toMatchObject({
+        details: { status: "failed", code: "aborted" },
+      });
+      expect(isReplyOperationStalledBeforeOutput(stalled.operation)).toBe(true);
+      expect(stalled.runState.continueStalledTurn?.()).toBe(true);
+      await settleStalledOwner(stalled);
+      await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledExactlyOnceWith(queued));
+      expect(getFollowupQueueDepth(queueKey)).toBe(0);
+    } finally {
+      await resetCodeModeTestState();
+      vi.useRealTimers();
+    }
+  });
+
+  it("queues one transcript-only recovery without transferring personal authoring authority", async () => {
+    const stalled = await createStalledRun({
+      skillLibraryAuthoring: {
+        target: "personal",
+        defaultTarget: "workspace",
+        multipleProfiles: true,
+        bind: () => {
+          throw new Error("Personal authoring cannot move to a replacement run.");
+        },
+        invoke: vi.fn(),
+      },
+    });
     await stallBeforeOutput(stalled);
 
     expect(stalled.runState.continueStalledTurn?.()).toBe(true);
@@ -282,8 +367,48 @@ describe("runReplyAgent stalled turn continuation", () => {
     await settleStalledOwner(stalled);
     await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledOnce());
     const recovery = drainedRuns.mock.calls[0]?.[0];
-    expect(recovery?.prompt).toContain("previous turn stopped making progress");
+    expect(recovery?.prompt).toContain(STALLED_TURN_GUIDANCE);
     await expectTranscriptOnlyRecovery(stalled, recovery);
+    expect(recovery?.disableTools).toBeUndefined();
+    const authoring = recovery?.run.skillLibraryAuthoring;
+    expect(authoring?.defaultTarget).toBe("personal");
+    expect(() => authoring?.bind({} as never)).not.toThrow();
+    await expect(authoring?.invoke({ action: "list" })).rejects.toMatchObject({
+      code: "AUTHORITY_EXPIRED",
+    });
+  });
+
+  it("leaves rate-limited turns with a notice and drains newer input without stall guidance", async () => {
+    const stalled = await createStalledRun();
+    const attempt = stalled.operation.watchdog.attachAttempt({ assertCurrent() {} });
+    attempt.beginWait({
+      kind: "retry",
+      deadlineAtMs: Date.now() + 60_000,
+      rateLimitStopMessage: "Rate-limit recovery stopped after 9 automatic retries.",
+      isCurrent: () => true,
+    });
+    await stallBeforeOutput(stalled);
+
+    expect(stalled.runState.continueStalledTurn?.()).toBe(false);
+    expect(getFollowupQueueDepth(queueKey)).toBe(0);
+    expect(drainedRuns).not.toHaveBeenCalled();
+    expect(isReplyOperationStalledBeforeOutput(stalled.operation)).toBe(true);
+    expect(resolveStalledTurnNoticeText(stalled.operation)).toBe(
+      "⚠️ This turn was stopped while the model provider was rate-limiting requests. Please try again in a few minutes.",
+    );
+
+    const queued = createQueuedRequest(stalled, { senderId: "traveler", to: "12345" });
+    expect(enqueueFollowupRun(queueKey, queued, settings, "message-id", drainedRuns, false)).toBe(
+      true,
+    );
+    expect(stalled.runState.continueStalledTurn?.()).toBe(false);
+    expect(getFollowupQueueDepth(queueKey)).toBe(1);
+    expect(queued.stalledTurnRecovery).toBeUndefined();
+    expect(queued.currentInboundContext).toBeUndefined();
+
+    await settleStalledOwner(stalled);
+    await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledExactlyOnceWith(queued));
+    expect(getFollowupQueueDepth(queueKey)).toBe(0);
   });
 
   it.each(["followup", "collect"] as const)(
@@ -307,7 +432,7 @@ describe("runReplyAgent stalled turn continuation", () => {
       expect(stalled.runState.continueStalledTurn?.()).toBe(true);
       expect(queued.currentInboundContext?.fragments).toContainEqual({
         kind: "runtime-instruction",
-        text: expect.stringContaining("previous turn stopped making progress"),
+        text: expect.stringContaining(STALLED_TURN_GUIDANCE),
       });
       await settleStalledOwner(stalled);
       await settled.promise;
@@ -431,27 +556,36 @@ describe("runReplyAgent stalled turn continuation", () => {
     expect(await readTranscriptMessages(stalled.transcriptTarget)).toEqual([]);
   });
 
-  it("falls back to the notice once the stalled turn's authority is revoked", async () => {
-    let revoked = false;
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "operator",
-      scopes: ["operator.write"],
-      assertCurrent: () => {
-        if (revoked) {
-          throw new Error("operator authority revoked");
-        }
-      },
-    });
-    const stalled = await createStalledRun({ operatorAuthority });
-    await stallBeforeOutput(stalled);
-    revoked = true;
+  it.each(["recorded revocation", "unrecorded refusal"] as const)(
+    "leaves the notice with dispatch after an authority %s",
+    async (cause) => {
+      const revocation = new AbortController();
+      let refused = false;
+      const operatorAuthority = createTestOperatorAuthority({
+        profileId: "operator",
+        scopes: ["operator.write"],
+        signal: revocation.signal,
+        assertCurrent: () => {
+          if (refused) {
+            throw new GatewayOperatorAccessUnavailableError();
+          }
+        },
+      });
+      const stalled = await createStalledRun({ operatorAuthority });
+      await stallBeforeOutput(stalled);
+      refused = true;
+      if (cause === "recorded revocation") {
+        revocation.abort(new Error("operator authority revoked"));
+      }
 
-    expect(stalled.runState.continueStalledTurn?.()).toBe(false);
-    expect(getFollowupQueueDepth(queueKey)).toBe(0);
+      expect(stalled.runState.continueStalledTurn?.()).toBe(false);
+      expect(operatorAuthority.signal?.aborted).toBe(cause === "recorded revocation");
+      expect(getFollowupQueueDepth(queueKey)).toBe(0);
 
-    await settleStalledOwner(stalled);
-    expect(drainedRuns).not.toHaveBeenCalled();
-  });
+      await settleStalledOwner(stalled);
+      expect(drainedRuns).not.toHaveBeenCalled();
+    },
+  );
 
   it("sends the Web UI notice, not a second recovery, when the recovery also stalls", async () => {
     mocks.executeFollowups = true;
@@ -504,34 +638,6 @@ describe("runReplyAgent stalled turn continuation", () => {
           "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
       }),
     ]);
-  });
-
-  it("never lets a workspace-target recovery author skills while keeping its other tools", async () => {
-    const stalled = await createStalledRun({
-      skillLibraryAuthoring: {
-        target: "personal",
-        defaultTarget: "workspace",
-        multipleProfiles: true,
-        bind: () => {
-          throw new Error("Personal authoring cannot move to a replacement run.");
-        },
-        invoke: vi.fn(),
-      },
-    });
-    await stallBeforeOutput(stalled);
-
-    expect(stalled.runState.continueStalledTurn?.()).toBe(true);
-    await settleStalledOwner(stalled);
-    await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledOnce());
-    const recovery = drainedRuns.mock.calls[0]?.[0];
-    expect(recovery?.disableTools).toBeUndefined();
-    const authoring = recovery?.run.skillLibraryAuthoring;
-    // Personal-only means the Workshop cannot fall back to the workspace tool.
-    expect(authoring?.defaultTarget).toBe("personal");
-    expect(() => authoring?.bind({} as never)).not.toThrow();
-    await expect(authoring?.invoke({ action: "list" })).rejects.toMatchObject({
-      code: "AUTHORITY_EXPIRED",
-    });
   });
 
   it("leaves the notice with a group-thread participant whose source declares no reply owner", async () => {

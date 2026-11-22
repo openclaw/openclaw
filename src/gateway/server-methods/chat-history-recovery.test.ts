@@ -12,7 +12,7 @@ import { resolveEmbeddedAgentRunRecoverySnapshot } from "./chat-history-recovery
 import { registerActiveRpcSourceForTest } from "./rpc-source-fixtures.test-support.js";
 import type { GatewayContextResolver } from "./types.js";
 
-it.each(["native", "rpc"] as const)(
+it.each(["native", "quiet-native", "rpc"] as const)(
   "%s history adopts its logical store through prepared physical scope and keeps Gateway isolation",
   async (kind) => {
     const localGateway: GatewayContextResolver = () => undefined;
@@ -32,7 +32,10 @@ it.each(["native", "rpc"] as const)(
       const source = await withPluginRuntimeGatewayContextResolver(gateway, () =>
         registerActiveRpcSourceForTest(
           runId,
-          { controlUiVisible: kind !== "native" },
+          {
+            controlUiVisible: kind === "rpc",
+            ...(kind === "quiet-native" ? { projectSessionActive: false } : {}),
+          },
           {
             sessionKey,
             sessionId,
@@ -42,7 +45,7 @@ it.each(["native", "rpc"] as const)(
         ),
       );
       chatRunState.getOrCreate(runId).buffer = `${name} partial`;
-      if (kind === "native") {
+      if (kind !== "rpc") {
         const handle: EmbeddedAgentQueueHandle = {
           runId,
           startedAtMs: 1_700_000_000_000,
@@ -79,12 +82,16 @@ it.each(["native", "rpc"] as const)(
         defaultAgentId: "main",
       };
       const resolve =
-        kind === "native" ? resolveEmbeddedAgentRunRecoverySnapshot : resolveInFlightRunSnapshot;
-      expect(resolve(params)).toMatchObject({
-        runId: `${kind}-local`,
-        text: "local partial",
-        ...(kind === "native" ? { sessionAbortable: true } : {}),
-      });
+        kind !== "rpc" ? resolveEmbeddedAgentRunRecoverySnapshot : resolveInFlightRunSnapshot;
+      if (kind === "quiet-native") {
+        expect(resolve(params)).toBeUndefined();
+      } else {
+        expect(resolve(params)).toMatchObject({
+          runId: `${kind}-local`,
+          text: "local partial",
+          ...(kind === "native" ? { sessionAbortable: true } : {}),
+        });
+      }
       expect(resolve({ ...params, physicalPaths: undefined })).toBeUndefined();
       expect(resolve({ ...params, resolveGatewayContext: undefined })).toBeUndefined();
       expect(

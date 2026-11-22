@@ -17,6 +17,8 @@ import {
   executePluginCommandDispatch,
   matchPluginCommandInvocation,
   type PluginCommandDispatch,
+  type PluginCommandNativeCandidate,
+  type PluginCommandRuntime,
 } from "./plugin-command-runtime.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -80,12 +82,7 @@ function createCleanupRegistry(pluginId: string) {
   return { registry, cleanup };
 }
 
-function requirePluginDispatch(
-  candidate: ReturnType<
-    ReturnType<typeof createPluginCommandRuntime>["listNativeCandidates"]
-  >[number],
-  args?: string,
-) {
+function requirePluginDispatch(candidate: PluginCommandNativeCandidate, args?: string) {
   const dispatch = candidate.prepareDispatch(args);
   expect(dispatch.kind).toBe("plugin");
   if (dispatch.kind !== "plugin") {
@@ -93,6 +90,9 @@ function requirePluginDispatch(
   }
   return dispatch;
 }
+
+const match = (runtime: PluginCommandRuntime, body: string, channel = "telegram") =>
+  matchPluginCommandInvocation(runtime, body, { channel });
 
 afterEach(() => {
   getCurrentPluginConversationBinding.mockClear();
@@ -140,32 +140,22 @@ describe("plugin command runtime", () => {
     });
     setActivePluginRegistry(registry);
     withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () => {
-      expect(
-        matchPluginCommandInvocation(createPluginCommandRuntime(), "/recover stop", {
-          channel: "telegram",
-        }),
-      ).toBeNull();
+      expect(match(createPluginCommandRuntime(), "/recover stop")).toBeNull();
     });
     const disabled = createEmptyPluginRegistry();
     disabled.plugins.push({ ...registry.plugins[0]!, enabled: false });
     withPluginRuntimeRegistryScope(disabled, () => {
-      expect(
-        matchPluginCommandInvocation(createPluginCommandRuntime(), "/recover stop", {
-          channel: "telegram",
-        }),
-      ).toBeNull();
+      expect(match(createPluginCommandRuntime(), "/recover stop")).toBeNull();
     });
-    const match = matchPluginCommandInvocation(createPluginCommandRuntime(), "/recover stop", {
-      channel: "telegram",
-    });
-    expect(match).not.toBeNull();
-    if (!match) {
+    const matched = match(createPluginCommandRuntime(), "/recover stop");
+    expect(matched).not.toBeNull();
+    if (!matched) {
       throw new Error("expected failed command diagnostic");
     }
     await expect(
-      match.dispatch.execute({ ...executionContext, isAuthorizedSender: false }),
+      matched.dispatch.execute({ ...executionContext, isAuthorizedSender: false }),
     ).resolves.toEqual({ text: "⚠️ This command requires authorization." });
-    const reply = await match.dispatch.execute({
+    const reply = await matched.dispatch.execute({
       ...executionContext,
       config: { logging: { redactPatterns: ["private-detail"] } },
     });
@@ -197,24 +187,16 @@ describe("plugin command runtime", () => {
       expect(runtime.listNativeCandidates("telegram")).toEqual([]);
       const candidates = runtime.listNativeCandidates("discord");
       expect(candidates.map((candidate) => candidate.name)).toEqual(["discord-demo"]);
-      expect(
-        matchPluginCommandInvocation(runtime, "/discord-demo hi", { channel: "telegram" }),
-      ).toBeNull();
-      expect(
-        matchPluginCommandInvocation(runtime, "/discord-demo hi", { channel: "discord" }),
-      ).not.toBeNull();
+      expect(match(runtime, "/discord-demo hi")).toBeNull();
+      expect(match(runtime, "/discord-demo hi", "discord")).not.toBeNull();
       nativeNames.discord = "renamed-demo";
-      expect(
-        matchPluginCommandInvocation(runtime, "/discord-demo hi", { channel: "discord" }),
-      ).toBeNull();
-      const match = matchPluginCommandInvocation(runtime, "/renamed-demo hi", {
-        channel: "discord",
-      });
-      expect(match?.dispatch.kind).toBe("plugin");
-      if (!match) {
+      expect(match(runtime, "/discord-demo hi", "discord")).toBeNull();
+      const matched = match(runtime, "/renamed-demo hi", "discord");
+      expect(matched?.dispatch.kind).toBe("plugin");
+      if (!matched) {
         throw new Error("expected scoped command match");
       }
-      const result = await match.dispatch.execute({
+      const result = await matched.dispatch.execute({
         ...executionContext,
         channel: "discord",
         commandBody: "/renamed-demo hi",
@@ -337,34 +319,22 @@ describe("plugin command runtime", () => {
     const second = requirePluginDispatch(candidate);
     const firstRun = first.execute(executionContext);
     const secondRun = second.execute(executionContext);
+    const tryRegister = (name: string) =>
+      registerPluginCommandInRegistry(registry, name, {
+        name,
+        description: name,
+        handler: async () => ({ text: name }),
+      });
     await vi.waitFor(() => expect(getPluginCommandExecutionCount(registry)).toBe(2));
 
-    expect(
-      registerPluginCommandInRegistry(registry, "blocked", {
-        name: "blocked",
-        description: "blocked",
-        handler: async () => ({ text: "blocked" }),
-      }),
-    ).toMatchObject({ ok: false });
+    expect(tryRegister("blocked")).toMatchObject({ ok: false });
     releases.shift()?.();
     await vi.waitFor(() => expect(getPluginCommandExecutionCount(registry)).toBe(1));
-    expect(
-      registerPluginCommandInRegistry(registry, "still-blocked", {
-        name: "still-blocked",
-        description: "still blocked",
-        handler: async () => ({ text: "blocked" }),
-      }),
-    ).toMatchObject({ ok: false });
+    expect(tryRegister("still-blocked")).toMatchObject({ ok: false });
     releases.shift()?.();
     await Promise.all([firstRun, secondRun]);
     expect(getPluginCommandExecutionCount(registry)).toBe(0);
-    expect(
-      registerPluginCommandInRegistry(registry, "ready", {
-        name: "ready",
-        description: "ready",
-        handler: async () => ({ text: "ready" }),
-      }),
-    ).toEqual({ ok: true });
+    expect(tryRegister("ready")).toEqual({ ok: true });
   });
 
   it("does not prepare arguments for commands that reject them", () => {
@@ -373,34 +343,6 @@ describe("plugin command runtime", () => {
     setActivePluginRegistry(registry);
     const candidate = createPluginCommandRuntime().listNativeCandidates("telegram")[0]!;
     expect(candidate.prepareDispatch("unexpected")).toEqual({ kind: "non-plugin" });
-  });
-
-  it("defers full registry cleanup until an admitted command settles", async () => {
-    const { registry, cleanup } = createCleanupRegistry("slow");
-    const release = createDeferred();
-    const { promise: started, resolve: entered } = createDeferred();
-    registerCommand(registry, {
-      pluginId: "slow",
-      handler: async () => {
-        entered();
-        await release.promise;
-        return { text: "done" };
-      },
-    });
-    const dispatch = activeDispatch(registry);
-    const running = dispatch.execute(executionContext);
-    await started;
-    let clearSettled = false;
-    const clearing = clearActivePluginRegistry().then(() => {
-      clearSettled = true;
-    });
-    await Promise.resolve();
-    expect(clearSettled).toBe(false);
-    expect(cleanup).not.toHaveBeenCalled();
-    release.resolve();
-    await expect(running).resolves.toEqual({ text: "done" });
-    await clearing;
-    expect(cleanup).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])(

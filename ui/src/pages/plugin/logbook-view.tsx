@@ -13,14 +13,16 @@ import {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { i18n } from "../../i18n/index.ts";
 import { registerLogbookEnglish } from "../../i18n/locales/en-logbook.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatTimeMs } from "../../lib/format.ts";
-import { projectI18n, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../styles/logbook.css";
+import { projectI18n, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { createLogbookActions, type LogbookActions } from "./logbook-actions.ts";
 import { createLogbook, localDayKey, shiftDay, type LogbookModel } from "./logbook-state.ts";
 import type { LogbookCardPayload, LogbookStatusPayload, LogbookUiState } from "./logbook-types.ts";
@@ -57,26 +59,30 @@ function ActionButton(props: JSX.ButtonHTMLAttributes<HTMLButtonElement>) {
   return <button class="btn btn--small" type="button" {...props} />;
 }
 
-function StatusChips(props: { status: LogbookStatusPayload }) {
+function StatusChips(props: { status: LogbookStatusPayload; capturePending: boolean }) {
   return (
     <div class="logbook__chips">
       <StatusChip
         kind={
-          props.status.captureEnabled &&
-          !props.status.capturePaused &&
-          !props.status.lastCaptureError
-            ? "ok"
-            : "warn"
+          props.capturePending
+            ? undefined
+            : props.status.captureEnabled &&
+                !props.status.capturePaused &&
+                !props.status.lastCaptureError
+              ? "ok"
+              : "warn"
         }
       >
         <span class="logbook__chip-dot" />
-        {props.status.capturePaused
-          ? t("logbook.status.paused")
-          : props.status.captureEnabled
-            ? t("logbook.status.capturing", {
-                seconds: String(props.status.captureIntervalSeconds),
-              })
-            : t("logbook.status.disabled")}
+        {props.capturePending
+          ? t(props.status.capturePaused ? "logbook.status.pausing" : "logbook.status.resuming")
+          : props.status.capturePaused
+            ? t("logbook.status.paused")
+            : props.status.captureEnabled
+              ? t("logbook.status.capturing", {
+                  seconds: String(props.status.captureIntervalSeconds),
+                })
+              : t("logbook.status.disabled")}
       </StatusChip>
       <Show when={props.status.nodeName || props.status.nodeId}>
         <StatusChip title={t("logbook.status.nodeHelp")}>
@@ -299,7 +305,7 @@ function Ask(props: { model: LogbookModel; actions: LogbookActions }) {
         }}
       >
         <input
-          class="logbook-ask__input"
+          class="input logbook-ask__input"
           type="text"
           value={question()}
           placeholder={t("logbook.ask.placeholder")}
@@ -339,7 +345,7 @@ export function Logbook(props: LogbookProps) {
   const timelineRead = createMemo(() => completion());
   const load = (options?: Parameters<LogbookModel["load"]>[0]) => {
     const admitted = model.load(options);
-    void setCompletion(admitted);
+    void setCompletion(model.timelineRead);
     return admitted;
   };
   const readTimeline = () => {
@@ -373,7 +379,14 @@ export function Logbook(props: LogbookProps) {
             </ActionButton>
           </Show>
         </div>
-        <Show when={actions.status()}>{(status) => <StatusChips status={status()} />}</Show>
+        <Show when={actions.status()}>
+          {(status) => (
+            <StatusChips
+              status={status()}
+              capturePending={status().capturePaused !== state().status?.capturePaused}
+            />
+          )}
+        </Show>
         <div class="logbook__actions">
           <Show when={actions.status()}>
             {(status) => (
@@ -381,6 +394,7 @@ export function Logbook(props: LogbookProps) {
                 disabled={
                   actions.actionPending() || state().actionPending || !status().captureEnabled
                 }
+                title={t("logbook.actions.captureHint")}
                 onClick={() => void actions.setCapturePaused(!actions.status()?.capturePaused)}
               >
                 {t(status().capturePaused ? "logbook.actions.resume" : "logbook.actions.pause")}
@@ -393,21 +407,23 @@ export function Logbook(props: LogbookProps) {
           >
             {t("logbook.actions.analyzeNow")}
           </ActionButton>
-          <ActionButton onClick={() => void load()} disabled={state().loading}>
-            <Icon name="refresh" />
-          </ActionButton>
+          <RefreshButton
+            label={t("common.refresh")}
+            busy={state().loading}
+            onClick={() => void load()}
+          />
         </div>
       </header>
       <Show when={state().error}>
-        <div class="callout danger" role="alert">
+        <InlineAlert tone="danger" role="alert">
           {state().error}
-        </div>
+        </InlineAlert>
       </Show>
       <div class="logbook__layout">
         <div class="logbook__timeline">
           <Errored
             fallback={(error, reset) => (
-              <div class="callout danger" role="alert">
+              <InlineAlert tone="danger" role="alert">
                 {formatUiError(error())}
                 <ActionButton
                   onClick={() => {
@@ -417,7 +433,7 @@ export function Logbook(props: LogbookProps) {
                 >
                   {t("common.retry")}
                 </ActionButton>
-              </div>
+              </InlineAlert>
             )}
           >
             <Loading on={day()} fallback={<div class="card-sub">{t("common.loading")}</div>}>

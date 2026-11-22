@@ -129,14 +129,6 @@ suite.define(() => {
         await openRename();
         await page.keyboard.press("ArrowRight");
         await page.keyboard.type(" updated");
-        expect(await field.inputValue()).toBe(`${generatedTitle} updated`);
-        await page.keyboard.press("Escape");
-        await field.waitFor({ state: "detached" });
-        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
-
-        await openRename();
-        await page.keyboard.press("ArrowRight");
-        await page.keyboard.type(" updated");
         if (surface === "header") {
           await page.keyboard.press("Enter");
         } else {

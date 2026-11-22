@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import * as processExec from "../process/exec.js";
 import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { statusCommand } from "./status.command.js";
 import { createStatusScanCoreBootstrap } from "./status.scan.bootstrap-shared.js";
@@ -13,10 +13,6 @@ import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const gitFixture = vi.hoisted(() => ({ root: "" }));
 
-vi.mock("../process/exec.js", async (original) => ({
-  ...(await original<typeof import("../process/exec.js")>()),
-  runCommandWithTimeout: vi.fn(),
-}));
 vi.mock("../infra/openclaw-root.js", async (original) => ({
   ...(await original<typeof import("../infra/openclaw-root.js")>()),
   resolveOpenClawPackageRoot: async () => gitFixture.root,
@@ -69,35 +65,35 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   gitFixture.root = path.join(stateDir, "repo");
   fs.mkdirSync(path.join(gitFixture.root, ".git"), { recursive: true });
-  vi.mocked(runCommandWithTimeout)
-    .mockReset()
-    .mockImplementation(async (argv) => ({
-      ...successfulGit,
-      stdout:
-        (
-          [
-            ["--show-toplevel", gitFixture.root],
-            ["--abbrev-ref", "main"],
-            ["--count", "0\t0"],
-            ["--format=%ct", "1700000000"],
-            ["--porcelain", ""],
-            ["--is-shallow-repository", "false"],
-          ] as const
-        ).find(([flag]) => argv.includes(flag))?.[1] ?? "abc123",
-    }));
+  // Concurrent lazy imports must share this runner spy, not a manual mock factory.
+  vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv) => ({
+    ...successfulGit,
+    stdout:
+      (
+        [
+          ["--show-toplevel", gitFixture.root],
+          ["--abbrev-ref", "main"],
+          ["--count", "0\t0"],
+          ["--format=%ct", "1700000000"],
+          ["--porcelain", ""],
+          ["--is-shallow-repository", "false"],
+        ] as const
+      ).find(([flag]) => argv.includes(flag))?.[1] ?? "abc123",
+  }));
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllEnvs();
 });
 
 function delayGitProbe(probe: string, delayMs: number | null, failure?: string) {
   const started = createDeferred();
-  const run = vi.mocked(runCommandWithTimeout).getMockImplementation();
+  const run = vi.mocked(processExec.runCommandWithTimeout).getMockImplementation();
   if (!run) {
     throw new Error("Git runner was not initialized");
   }
-  vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
+  vi.mocked(processExec.runCommandWithTimeout).mockImplementation(async (argv, options) => {
     if (!argv.includes(probe)) {
       return run(argv, options);
     }

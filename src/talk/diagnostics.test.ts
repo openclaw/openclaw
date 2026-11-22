@@ -1,5 +1,6 @@
 // Talk diagnostics tests cover realtime voice diagnostic event output.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { nextEventLoopTurn } from "../../test/helpers/promise.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -43,9 +44,7 @@ describe("talk diagnostics", () => {
     });
 
     recordTalkObservabilityEvent(talkEvent);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextEventLoopTurn();
 
     expect(diagnostics).toHaveLength(1);
     const [diagnostic] = diagnostics;

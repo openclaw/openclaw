@@ -209,8 +209,8 @@ if (mode === "assert-bun-version") {
   const major = Number(match[1]);
   const minor = Number(match[2]);
   const patch = Number(match[3]);
-  if (major < 1 || (major === 1 && (minor < 4 || (minor === 4 && patch < 3)))) {
-    throw new Error(`Bun 1.4.3 or newer is required; found ${version}`);
+  if (major < 1 || (major === 1 && (minor < 4 || (minor === 4 && patch < 4)))) {
+    throw new Error(`Bun 1.4.4 or newer is required; found ${version}`);
   }
   process.exit(0);
 }

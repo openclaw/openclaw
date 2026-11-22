@@ -1,12 +1,12 @@
 import { expect } from "playwright/test";
 import { it } from "vitest";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Packaged Memory search" });
 suite.define(() => {
@@ -63,7 +63,7 @@ suite.define(() => {
             "agents.workspace.get",
           ],
           methodResponses: {
-            "config.get": configSnapshot(config, "memory-search-config"),
+            "config.get": sourceConfigSnapshot(config, "memory-search-config"),
             "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
             "plugins.controlUi.list": { plugins: [], diagnostics: [], revision: "empty" },
             "memory.search": response,

@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import type * as OperatorRunAuthority from "../operator-run-authority.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import {
   createMemoryOperatorClient as operatorClient,
@@ -20,8 +21,13 @@ vi.mock("../../plugins/memory-runtime.js", () => ({
   getActiveMemorySearchManagerCore: mocks.legacy,
   resolveActiveMemoryBackendConfig: mocks.resolveBackend,
 }));
-vi.mock("../operator-run-authority.js", () => ({
-  captureGatewayOperatorRunAuthority: mocks.capture,
+// mock-isolation: a single-user Gateway; shared-Gateway policy is covered by the authority test.
+vi.mock("../../state/user-profile-list.js", () => ({
+  hasMultipleResidentSessionSharingIdentities: () => false,
+}));
+vi.mock("../operator-run-authority.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof OperatorRunAuthority>()),
+  prepareGatewayOperatorRunAuthority: mocks.capture,
 }));
 
 import { memorySearchHandlers } from "./memory-search.js";

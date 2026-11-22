@@ -25,7 +25,7 @@ before changing property transport, content custody, connection, or context.
 ## Bindings and types
 
 - Never destructure props: read `props.foo` where reactivity is needed. Use `merge` for defaults (`undefined` overrides) and `omit` for a remainder.
-- `prop:` is the only surviving JSX namespace. Use `prop:value={value}` for explicit native or custom-element property assignment. `on:x`, `attr:x`, `bool:x`, `classList`, and `use:` compile to literal attributes or no-ops; lint rejects them.
+- Use `prop:value={value}` for explicit native or custom-element property assignment; a bare `prop:active` means `true`. Removed `on:x`, `oncapture:`, `attr:x`, `bool:x`, `classList`, and `use:` forms are compile errors on native elements in rc.18. Spreads still need the lint guard. XML namespaces remain supported.
 - Native events use camelCase (`onClick`); dashed custom events keep their dash (`onSession-change`). Use a ref factory when native listener options are needed.
 - Custom tags with properties need typings: augment `@solidjs/web`'s `JSX.IntrinsicElements` in a `.d.ts` (see `ui/src/types/solid-elements.d.ts`). Keep that file a module with a side-effect `import "@solidjs/web";`. Lint forbids `export {}`, and without a module marker `declare module` silently becomes an ambient declaration instead of an augmentation. Inside the augmented `namespace JSX`, refer to `HTMLAttributes` unqualified.
 - Native ARIA attributes are typed enumerations: `aria-pressed={on() ? "true" : "false"}`.

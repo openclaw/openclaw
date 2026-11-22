@@ -1,4 +1,5 @@
 import { deserialize, serialize } from "node:v8";
+import { getPostgresPool } from "../postgres-sync/pool.js";
 import type { SqliteWorkerStoreOptions } from "../sqlite-worker-broker.types.js";
 import {
   SqliteWorkerError,
@@ -84,6 +85,10 @@ export async function openEngineWorkerStore<Operations extends SqliteWorkerOpera
   options: EngineStoreOptions,
   input: DatabaseEngineInput,
 ): Promise<SqliteWorkerStore<Operations>> {
+  // Explicit family input can precede the process's configured engine selection.
+  if (input) {
+    getPostgresPool();
+  }
   const captured = {
     ...options,
     moduleUrl: new URL(options.moduleUrl),

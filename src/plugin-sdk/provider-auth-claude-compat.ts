@@ -10,6 +10,8 @@ import { loadJsonFileThroughSymlink } from "../infra/json-file.js";
 
 const CLAUDE_CLI_CREDENTIALS_FILE = ".credentials.json";
 const CLAUDE_CLI_USER_SETTINGS_FILE = "settings.json";
+const CLAUDE_MANAGED_SETTINGS_FILE = "managed-settings.json";
+const CLAUDE_MANAGED_SETTINGS_DROP_IN_DIR = "managed-settings.d";
 const CLAUDE_CLI_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const CLAUDE_CLI_KEYCHAIN_TIMEOUT_MS = 2_000;
 const CLAUDE_CLI_KEYCHAIN_ACCOUNT_FALLBACK = "claude-code-user";
@@ -219,9 +221,6 @@ type ClaudeNativeLoginOptions = {
 /** Anthropic's account lookup for a Claude OAuth access token, the one Claude CLI itself uses. */
 const CLAUDE_OAUTH_PROFILE_URL = "https://api.anthropic.com/api/oauth/profile";
 const CLAUDE_OAUTH_PROFILE_TIMEOUT_MS = 3_000;
-// Claude CLI refreshes a token within 5 minutes of expiry when it starts, before it accepts
-// a prompt. Add slack so a token that is refresh-due by send time is already treated so here.
-const CLAUDE_NATIVE_LOGIN_REFRESH_MARGIN_MS = 10 * 60_000;
 const CLAUDE_NATIVE_LOGIN_ATTESTATION_LIMIT = 64;
 // Fingerprints are keyed per process, so they name a token only inside this process and
 // are never persisted. A token belongs to one account for its whole life, so an entry can
@@ -234,45 +233,26 @@ function fingerprintClaudeNativeLoginToken(token: string): string {
 }
 
 /**
- * Owner of the login a local `claude` process would use, as Anthropic attested it for the
- * exact access token it reads (Keychain, then the credentials file), or undefined when no
- * attestation in this process covers that token. Synchronous and local: never makes a
- * network call, so a rotated or replaced token has no owner until
- * {@link attestClaudeNativeLoginOwner} runs again. Never returns token material and never
- * uses the interactive Keychain path.
- */
-export function readClaudeNativeLoginOwner(
-  options: ClaudeNativeLoginOptions = {},
-): string | undefined {
-  const token = readClaudeNativeLoginCredential(options);
-  return token
-    ? claudeNativeLoginAttestations.get(fingerprintClaudeNativeLoginToken(token.value))
-    : undefined;
-}
-
-/**
  * Attest the owner of the login a local `claude` process would use: the account uuid
  * Anthropic's OAuth profile endpoint returns for the access token itself. The token goes
  * only to that endpoint, with a short timeout, and is never logged, stored or refreshed
  * here. Any failure, an expired token, or a response without an account uuid yields no
- * owner. `refreshDueAt` is when Claude CLI starts rotating the token, which it does before
- * it accepts a prompt, so a check at send time can see a token attested only after the run.
+ * owner.
  */
 export async function attestClaudeNativeLoginOwner(
   options: ClaudeNativeLoginOptions & {
     /** Test seam; production always calls the global fetch on the Anthropic endpoint. */
     fetchFn?: typeof fetch;
   } = {},
-): Promise<{ owner?: string; refreshDueAt?: number }> {
+): Promise<{ owner?: string }> {
   const token = readClaudeNativeLoginCredential(options);
   if (!token) {
     return {};
   }
-  const refreshDueAt = token.expires - CLAUDE_NATIVE_LOGIN_REFRESH_MARGIN_MS;
   const fingerprint = fingerprintClaudeNativeLoginToken(token.value);
   const attested = claudeNativeLoginAttestations.get(fingerprint);
   if (attested || token.expires <= Date.now()) {
-    return { ...(attested ? { owner: attested } : {}), refreshDueAt };
+    return attested ? { owner: attested } : {};
   }
   let owner: string | undefined;
   try {
@@ -305,7 +285,7 @@ export async function attestClaudeNativeLoginOwner(
       }
     }
   }
-  return { ...(owner ? { owner } : {}), refreshDueAt };
+  return owner ? { owner } : {};
 }
 
 /** The access token a local `claude` process would authenticate with, or undefined. */
@@ -326,7 +306,8 @@ function readClaudeNativeLoginCredential(
     path.dirname(resolveClaudeCliCredentialsPath(homeDir, env)) !==
       resolveClaudeCliConfigDir(homeDir, env) ||
     readClaudeApiKeyHelper(homeDir, env) ||
-    userSettingsSelectNonNativeAuth(homeDir, env)
+    userSettingsSelectNonNativeAuth(homeDir, env) ||
+    managedSettingsSelectNonNativeAuth(options.platform ?? process.platform)
   ) {
     return undefined;
   }
@@ -381,16 +362,65 @@ function withClaudeAccountEmail(
 
 /**
  * Claude's user settings `env` block outranks the spawned environment, so it can select an
- * API key, token or cloud provider too. The bundled backend loads user settings only.
+ * API key, token or cloud provider too. The bundled backend loads no other settings source
+ * except admin-managed settings, which Claude always loads.
  */
 function userSettingsSelectNonNativeAuth(homeDir?: string, env: NodeJS.ProcessEnv = process.env) {
-  const settings = asNonArrayRecord(
+  return settingsEnvSelectsNonNativeAuth(
     loadJsonFileThroughSymlink(resolveClaudeCliPath(homeDir, CLAUDE_CLI_USER_SETTINGS_FILE, env)),
   );
-  const settingsEnv = asNonArrayRecord(settings.env);
+}
+
+function settingsEnvSelectsNonNativeAuth(settings: unknown): boolean {
+  const settingsEnv = asNonArrayRecord(asNonArrayRecord(settings).env);
   return CLAUDE_NON_NATIVE_AUTH_ENV_KEYS.some((key) => {
     const value = settingsEnv[key];
     return typeof value === "string" && value.trim() !== "";
+  });
+}
+
+function resolveClaudeManagedSettingsDir(platform: NodeJS.Platform): string {
+  return platform === "darwin"
+    ? "/Library/Application Support/ClaudeCode"
+    : platform === "win32"
+      ? "C:\\Program Files\\ClaudeCode"
+      : "/etc/claude-code";
+}
+
+/**
+ * Claude loads admin-managed settings whatever `--setting-sources` says: the managed file,
+ * then each non-hidden `*.json` drop-in. Any of them can set an API key helper or an `env`
+ * auth key. A later file can only blank such a key, so checking each file alone may refuse
+ * too often but never misses one. MDM and server-managed policy are not readable here.
+ */
+function managedSettingsSelectNonNativeAuth(platform: NodeJS.Platform): boolean {
+  const dir = resolveClaudeManagedSettingsDir(platform);
+  const dropInDir = path.join(dir, CLAUDE_MANAGED_SETTINGS_DROP_IN_DIR);
+  let dropIns: string[] = [];
+  try {
+    dropIns = fs
+      .readdirSync(dropInDir)
+      .filter((name) => name.endsWith(".json") && !name.startsWith("."));
+  } catch {
+    // A missing or unreadable drop-in directory contributes nothing, for Claude too.
+  }
+  return [
+    path.join(dir, CLAUDE_MANAGED_SETTINGS_FILE),
+    ...dropIns.map((name) => path.join(dropInDir, name)),
+  ].some((file) => {
+    let settings: Record<string, unknown>;
+    try {
+      settings = asNonArrayRecord(loadJsonFileThroughSymlink(file));
+    } catch {
+      // A file this process cannot resolve or read (EACCES) is unreadable for the Claude child
+      // running as the same user too, so it contributes nothing, like a missing file.
+      return false;
+    }
+    const helper = settings.apiKeyHelper;
+    return (
+      (typeof helper === "string" && helper.trim() !== "") ||
+      settingsEnvSelectsNonNativeAuth(settings)
+    );
   });
 }
 

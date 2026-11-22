@@ -14,6 +14,7 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
+import type { RegistryRegistrationFixture } from "./subagent-registry.requester-completion.fixture.test-support.js";
 import {
   releaseSubagentRun,
   resetSubagentRegistryForTests,
@@ -46,7 +47,10 @@ export async function retainedOperatorFixture(
 ) {
   const fixture = operatorFixture(profileName, false, context, resolveGatewayContext);
   const source = expectDefined(
-    await operatorCapture.captureGatewayOperatorRunAuthority(fixture),
+    await operatorCapture.prepareGatewayOperatorRunAuthority({
+      ...fixture,
+      sourceAuthority: fixture.sourceAuthority,
+    }),
     "operator registration source",
   );
   fixture.client.internal = { operatorRunAuthority: source.authority };
@@ -56,16 +60,10 @@ export async function retainedOperatorFixture(
 export function registerCompletedFollowupAuthorityTests({
   registration,
   updateRun,
-}: {
-  registration: (
-    runId: string,
-    overrides?: Partial<Parameters<typeof registerSubagentRun>[0]>,
-  ) => Parameters<typeof registerSubagentRun>[0];
-  updateRun: (runId: string, update: (draft: SubagentRunRecord) => void) => Promise<void>;
-}) {
+}: RegistryRegistrationFixture) {
   it.each(["original", "successor"] as const)(
-    "keeps completed-result and followup custody independent when the %s source is revoked",
-    (revokedOwner) =>
+    "keeps completed-result and followup custody independent when the %s result is released",
+    (releasedOwner) =>
       withOpenClawTestState({ scenario: "minimal" }, async () => {
         setRuntimeConfigSnapshot({});
         const context = createContext();
@@ -141,22 +139,16 @@ export function registerCompletedFollowupAuthorityTests({
           // Suppressing old session effects must not retire its pending result's custody.
           expect(completionSource(retained)).toBe(original.authority.source);
           expect(completionSource(successor)).toBe(followup.authority.source);
-          const revokeOriginal = revokedOwner === "original";
-          (revokeOriginal ? original.revoked : followup.revoked).abort(
-            new Error("operator revoked"),
-          );
-          expect(() => completionSource(revokeOriginal ? retained : successor)).toThrow(
-            /authority/,
-          );
-          expect(completionSource(revokeOriginal ? successor : retained)).toBe(
-            revokeOriginal ? followup.authority.source : original.authority.source,
+          const releaseOriginal = releasedOwner === "original";
+          await releaseSubagentRun(releaseOriginal ? retained.runId : successor.runId);
+          expect(completionSource(releaseOriginal ? retained : successor)).toBeUndefined();
+          expect(completionSource(releaseOriginal ? successor : retained)).toBe(
+            releaseOriginal ? followup.authority.source : original.authority.source,
           );
           await releaseSubagentRun(entry.runId);
           await releaseSubagentRun(successor.runId);
           expect(original.authority.assertCurrent).toThrow();
-          expect(() => subagentRuns.runWithCompletionAuthority(entry, () => "stale")).toThrow(
-            /authority/,
-          );
+          expect(subagentRuns.runWithCompletionAuthority(entry, () => "baseline")).toBe("baseline");
         } finally {
           original.release();
           followup?.release();

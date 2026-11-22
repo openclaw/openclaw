@@ -5,11 +5,13 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import {
   createUpdateRun,
   getUpdateRun,
+  readOwedUpdateSteps,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
@@ -31,6 +33,7 @@ import {
   registerManagedInstallEnvironmentTest,
   recordVerifiedGatewayRun,
   successfulPluginUpdate,
+  runFinalizationFailureWithNativeExecutor,
   taskRecovery,
   validConfigSnapshot,
 } from "./update-command-post-update.test-support.js";
@@ -126,6 +129,8 @@ vi.mock("./update-command-result.js", async (importOriginal) => ({
   writeControlPlaneUpdateRestartSentinelBestEffort: mocks.writeSentinel,
 }));
 
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
+import { createCliTtyMock } from "../test-runtime-capture.js";
 import { registerMaintenanceContentionTests } from "./update-command-maintenance-contention.test-support.js";
 import * as postCoreModule from "./update-command-post-core.js";
 import { registerBoundaryFinalizationControls } from "./update-command-post-update-boundary.test-support.js";
@@ -134,7 +139,7 @@ import * as rollbackModule from "./update-command-rollback.js";
 import { registerStaleSessionReceiptUpdateTest } from "./update-command-stale-session-receipt.test-support.js";
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
-const stdinIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+const ttyMock = createCliTtyMock([process.stdin]);
 
 type OrderedMock = { mock: { invocationCallOrder: number[] } };
 function expectBefore(first: OrderedMock, second: OrderedMock, firstIndex = 0, secondIndex = 0) {
@@ -155,16 +160,15 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  if (stdinIsTTYDescriptor) {
-    Object.defineProperty(process.stdin, "isTTY", stdinIsTTYDescriptor);
-  } else {
-    Reflect.deleteProperty(process.stdin, "isTTY");
-  }
+  ttyMock.restore();
 });
 
 describe("successful update finalization ordering", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    const control = tempDirs.make("post-update-native-control-");
+    await fs.chmod(control, 0o700);
+    vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
     // These roots are package fixtures; separate process tests cover Git discovery.
     vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
     mocks.readServiceState.mockReset();
@@ -192,6 +196,13 @@ describe("successful update finalization ordering", () => {
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
   });
+
+  // A failed completion refresh stays owed, so those cases keep it out of the shared ledger.
+  const ownLedger = () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("post-update-owed-") };
+    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    return { restartEnvironment: process.env, run };
+  };
 
   registerForegroundFinalizationTests({ tempDirs, mocks });
   registerMaintenanceContentionTests(() => tempDirs.make("update-maintenance-contention-"), mocks);
@@ -291,7 +302,8 @@ describe("successful update finalization ordering", () => {
         },
       );
       const recovery = taskRecovery((phase) => events.push(phase));
-      mocks.restartService.mockImplementationOnce(async () => {
+      mocks.restartService.mockImplementationOnce(async ({ onGatewayStartAttempted }) => {
+        onGatewayStartAttempted?.();
         events.push("start");
         return "ok";
       });
@@ -322,8 +334,8 @@ describe("successful update finalization ordering", () => {
       } finally {
         identity.restore();
       }
-      expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("activation-attempt"));
-      expect(events.indexOf("activation-attempt")).toBeLessThan(events.indexOf("restore"));
+      expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("restore"));
+      expect(events.indexOf("restore")).toBeLessThan(events.indexOf("activation-attempt"));
       expect(events.indexOf("activation-attempt")).toBeLessThan(events.indexOf("start"));
       expect(mocks.restartService).toHaveBeenCalledOnce();
       expect(mocks.stopService).not.toHaveBeenCalled();
@@ -331,12 +343,12 @@ describe("successful update finalization ordering", () => {
   );
 
   it("restarts after completion status inspection fails", async () => {
-    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+    ttyMock.set(true);
     mocks.checkCompletionStatus.mockRejectedValueOnce(
       Object.assign(new Error("EACCES: completion profile read denied"), { code: "EACCES" }),
     );
 
-    await expect.soft(finishSuccessfulPackageSwitch()).resolves.toBeUndefined();
+    await expect.soft(finishSuccessfulPackageSwitch(ownLedger())).resolves.toBeUndefined();
 
     const output = vi.mocked(defaultRuntime.log).mock.calls.flat().map(String).join("\n");
     expect.soft(output).toContain("Shell completion refresh failed");
@@ -348,6 +360,33 @@ describe("successful update finalization ordering", () => {
 
   registerVerifiedActivationFailureTests({ tempDirs, mocks });
 
+  it("converges plugins for a switched Git release only after it verified", async () => {
+    const { createGitReleaseDirs, publishGitRelease } = await import("../../infra/git-release.js");
+    const { gitReleaseSlot } = await import("../../infra/git-release-paths.js");
+    const prefix = path.join(
+      await fs.realpath(tempDirs.make("git-release-finalize-")),
+      "git-install",
+    );
+    const releaseRoot = (await createGitReleaseDirs(prefix)).releaseRoot;
+    await fs.mkdir(releaseRoot, { recursive: true });
+    await publishGitRelease({ prefix, releaseRoot, trial: false });
+
+    await finishSuccessfulPackageSwitch(
+      {
+        packageRoot: gitReleaseSlot(prefix),
+        updateMode: "git",
+        sealed: true,
+        restartEnvironment: process.env,
+      },
+      { gitRelease: true },
+    );
+
+    // A failed trial switches core back; plugins replaced before that would require the new core.
+    expect(mocks.restartService).toHaveBeenCalled();
+    expect(mocks.updatePlugins).toHaveBeenCalled();
+    expectBefore(mocks.restartService, mocks.updatePlugins);
+  });
+
   it("restarts when completion cache refresh reports failure", async () => {
     const root = tempDirs.make("openclaw-completion-failure-");
     await fs.writeFile(
@@ -355,10 +394,7 @@ describe("successful update finalization ordering", () => {
       'process.stderr.write("injected completion cache failure"); process.exit(1);',
     );
 
-    await finishSuccessfulPackageSwitch({
-      packageRoot: root,
-      restartEnvironment: process.env,
-    });
+    await finishSuccessfulPackageSwitch({ ...ownLedger(), packageRoot: root });
 
     const logCalls = vi.mocked(defaultRuntime.log).mock.calls;
     const warningIndex = logCalls.findIndex((call) =>
@@ -371,7 +407,7 @@ describe("successful update finalization ordering", () => {
 
   it("restarts when shell completion cache generation returns false", async () => {
     vi.stubEnv("OPENCLAW_PROFILE", undefined);
-    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+    ttyMock.set(true);
     mocks.checkCompletionStatus.mockResolvedValueOnce({
       shell: "zsh",
       profileInstalled: true,
@@ -380,9 +416,11 @@ describe("successful update finalization ordering", () => {
       usesSlowPattern: true,
     });
     mocks.ensureCompletionCache.mockResolvedValueOnce(false);
+    const ledger = ownLedger();
 
-    await finishSuccessfulPackageSwitch();
+    await finishSuccessfulPackageSwitch(ledger);
 
+    expect(readOwedUpdateSteps(ledger.run)).toMatchObject([{ id: "shell-completion" }]);
     const output = vi.mocked(defaultRuntime.log).mock.calls.flat().map(String).join("\n");
     expect(output).toContain("completion cache generation failed");
     expect(output).toContain("Resolve the reported error before retrying");
@@ -398,22 +436,34 @@ describe("successful update finalization ordering", () => {
       throw restoreError;
     });
 
-    await expectUpdateFailure(
-      finishSuccessfulPackageSwitch({
-        restartEnvironment: process.env,
-        json: true,
-        windowsTaskAutoStartRecovery: {
-          ...taskRecovery(),
-          restore,
-        },
-      }),
-      "windows-task-autostart-restore-failed",
-      { cause: restoreError, detail: expect.stringContaining(restoreError.message) },
-    );
+    const root = tempDirs.make("post-update-task-recovery-");
+    const env = { ...process.env };
+    const run: NonNullable<FinishUpdateParams["opts"]["run"]> = {
+      runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
+      env,
+    };
+    const ownerFailure = await runFinalizationFailureWithNativeExecutor(root, run, async () => {
+      await expectUpdateFailure(
+        finishSuccessfulPackageSwitch({
+          packageRoot: root,
+          run,
+          restartEnvironment: process.env,
+          json: true,
+          windowsTaskAutoStartRecovery: {
+            ...taskRecovery(),
+            restore,
+          },
+        }),
+        "windows-task-autostart-restore-failed",
+        { cause: restoreError, detail: expect.stringContaining(restoreError.message) },
+      );
 
-    expect(restore).toHaveBeenCalledOnce();
-    expect(mocks.restartService).not.toHaveBeenCalled();
-    expectReportedFailure("windows-task-autostart-restore-failed");
+      expect(restore).toHaveBeenCalledOnce();
+      expect(mocks.restartService).not.toHaveBeenCalled();
+      expectReportedFailure("windows-task-autostart-restore-failed");
+      return restoreError;
+    });
+    expect(ownerFailure).toBe(restoreError);
   });
 
   it.each([
@@ -423,12 +473,12 @@ describe("successful update finalization ordering", () => {
       verified: false,
     },
     {
-      name: "recovers and retains the package before reporting failed wrapper retirement",
+      name: "keeps the package and warns when wrapper retirement fails without a verified restart",
       denied: true,
       verified: false,
     },
     {
-      name: "keeps a verified target successful when wrapper retirement fails",
+      name: "keeps a verified target and warns when wrapper retirement fails",
       denied: true,
       verified: true,
     },
@@ -447,19 +497,9 @@ describe("successful update finalization ordering", () => {
     if (denied) {
       unlink.mockRejectedValueOnce(new Error("unlink denied"));
     }
-    const rollback = vi
-      .spyOn(rollbackModule, "rollbackFailedUpdate")
-      .mockImplementationOnce(async ({ result }) => ({ result, rolledBack: false }));
-    const retained = {
-      name: "package backup retained",
-      command: "openclaw update",
-      cwd: previousRoot,
-      durationMs: 0,
-      exitCode: 0,
-      stderrTail: "Retained previous package for recovery.",
-    };
+    const rollback = vi.spyOn(rollbackModule, "rollbackFailedUpdate");
     const complete = vi.fn<NonNullable<FinishUpdateParams["packageTransaction"]>["complete"]>(
-      async ({ activationVerified }) => (activationVerified ? undefined : retained),
+      async () => undefined,
     );
     if (verified) {
       mocks.restartService.mockImplementationOnce(async ({ onVerified }) => {
@@ -467,7 +507,7 @@ describe("successful update finalization ordering", () => {
         return "ok";
       });
     }
-    const finishing = finishSuccessfulPackageSwitch(
+    await finishSuccessfulPackageSwitch(
       {
         previousRoot,
         packageRoot: path.join(home, "package"),
@@ -478,46 +518,42 @@ describe("successful update finalization ordering", () => {
         packageTransaction: { backupRoot: previousRoot, rollback: vi.fn(), complete },
       },
     );
-    if (denied && !verified) {
-      await expectUpdateFailure(finishing, "wrapper-retirement-failed", {
-        detail: expect.stringContaining("unlink denied"),
-      });
-      expect(rollback).toHaveBeenCalledOnce();
-      expect(complete).toHaveBeenCalledExactlyOnceWith(
-        { activationVerified: false },
-        expect.any(Function),
-      );
-      expect(mocks.printResult).toHaveBeenCalledOnce();
-      expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({
-        status: "error",
-        steps: expect.arrayContaining([retained]),
-      });
-      expect(mocks.writeSentinel).toHaveBeenCalledOnce();
-      expectFailureReport(mocks.printResult, "wrapper-retirement-failed");
-      expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
-        expect.objectContaining({ reason: "wrapper-retirement-failed" }),
-      );
-    } else {
-      await finishing;
-      expect(rollback).not.toHaveBeenCalled();
-      if (verified) {
-        expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({
-          status: "ok",
-          steps: expect.arrayContaining([
+    // A wrapper that stays is never a reason to restore the previous package.
+    expect(rollback).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledExactlyOnceWith(
+      { activationVerified: true },
+      expect.any(Function),
+    );
+    expect(mocks.markSentinelFailure).not.toHaveBeenCalled();
+    const reported = mocks.printResult.mock.lastCall?.[0];
+    expect(reported).toMatchObject({ status: "ok" });
+    expect(
+      reported?.steps.filter((step: { name: string }) => step.name === "git-wrapper-retirement"),
+    ).toEqual(
+      denied
+        ? [
             expect.objectContaining({
+              exitCode: 0,
               advisory: {
                 kind: "recoverable-maintenance",
-                message: expect.stringContaining("unlink denied"),
+                message: `Could not finish removing the previous Git checkout's openclaw wrapper: Could not retire ${wrapper}: Error: unlink denied. The package install is kept. If \`openclaw\` still starts the old checkout, remove its wrapper from PATH.`,
               },
             }),
-          ]),
-        });
-        expect(mocks.markSentinelFailure).not.toHaveBeenCalled();
-      }
-      expect(mocks.writeSentinel).toHaveBeenCalledTimes(2);
-      expectBefore(unlink, mocks.writeSentinel, 0, 1);
-      expectBefore(mocks.writeSentinel, mocks.printResult, 1);
-    }
+          ]
+        : [],
+    );
+    // The final notification carries the kept result, warning included.
+    expect(mocks.writeSentinel.mock.lastCall?.[0].result).toEqual(reported);
+    // Only a retirement that succeeded removed the wrapper.
+    await expect(
+      fs.stat(wrapper).then(
+        () => true,
+        () => false,
+      ),
+    ).resolves.toBe(denied);
+    expect(mocks.writeSentinel).toHaveBeenCalledTimes(2);
+    expectBefore(unlink, mocks.writeSentinel, 0, 1);
+    expectBefore(mocks.writeSentinel, mocks.printResult, 1);
   });
 
   registerManagedInstallEnvironmentTest({ tempDirs, mocks });
@@ -544,10 +580,7 @@ describe("successful update finalization ordering", () => {
         const changed = outcome !== "unchanged";
         const restartFailed = outcome === "rolled-back" || outcome === "unverified";
         const packageRoot = tempDirs.make("update-downtime-installed-runtime-");
-        await fs.writeFile(
-          path.join(packageRoot, "package.json"),
-          JSON.stringify({ version: "2026.4.24" }),
-        );
+        await writeFixtureJson(path.join(packageRoot, "package.json"), { version: "2026.4.24" });
         const serviceEnv = {
           ...process.env,
           HOME: identity.home,
@@ -558,7 +591,6 @@ describe("successful update finalization ordering", () => {
           env: serviceEnv,
         };
         const clock = { origin: Date.now(), elapsed: 1_000 };
-        vi.spyOn(Date, "now").mockImplementation(() => clock.origin + clock.elapsed);
         const events: string[] = [];
         const windowsEvents: string[] = [];
         const oldRecovery = taskRecovery((phase) => {
@@ -577,7 +609,7 @@ describe("successful update finalization ordering", () => {
             return "restart-health-failed";
           }
           recordVerifiedGatewayRun(run);
-          params.onVerified?.(Date.now());
+          params.onVerified?.(clock.origin + clock.elapsed);
           return "ok";
         });
         const plugins = { ...successfulPluginUpdate, changed };
@@ -604,10 +636,9 @@ describe("successful update finalization ordering", () => {
             expect(getUpdateRun(run.runId, { env: serviceEnv })?.confirmedAtMs).toBeNull();
             clock.elapsed = 12_000;
             if (outcome === "rolled-back") {
-              await fs.writeFile(
-                path.join(packageRoot, "package.json"),
-                JSON.stringify({ version: "2026.4.23" }),
-              );
+              await writeFixtureJson(path.join(packageRoot, "package.json"), {
+                version: "2026.4.23",
+              });
               mockVerifiedGatewayRun(run);
             }
             return {
@@ -629,7 +660,7 @@ describe("successful update finalization ordering", () => {
                       },
               },
               rolledBack: outcome === "rolled-back",
-              ...(outcome === "rolled-back" ? { verifiedAtMs: Date.now() } : {}),
+              ...(outcome === "rolled-back" ? { verifiedAtMs: clock.origin + clock.elapsed } : {}),
             };
           },
         );
@@ -941,7 +972,9 @@ process.exitCode = 1;
       );
 
       expect(events).toEqual(["restart"]);
-      const steps = mocks.printResult.mock.lastCall?.[0].steps;
+      const steps = mocks.printResult.mock.lastCall?.[0].steps.filter(
+        (step: { name: string }) => !step.name.endsWith("-timing"),
+      );
       if (!runs) {
         await expect(fs.stat(lintLog)).rejects.toThrow();
         expect(steps).toEqual(initialSteps);

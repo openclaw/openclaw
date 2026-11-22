@@ -3,6 +3,7 @@ import { afterEach, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeConfigFile } from "../config/config.js";
 import {
+  browserProxyAuth,
   connectReq,
   CONTROL_UI_CLIENT,
   installGatewayTestHooks,
@@ -17,14 +18,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 test("protects Web Push ownership through authenticated browser RPCs and profile handoff", async () => {
   const origin = "https://control.example.com";
-  const auth = {
-    mode: "trusted-proxy" as const,
-    trustedProxy: {
-      userHeader: "x-forwarded-user",
-      requiredHeaders: ["x-forwarded-proto"],
-      allowLoopback: true,
-    },
-  };
+  const auth = browserProxyAuth();
   testState.gatewayAuth = auth;
   testState.gatewayControlUi = { allowedOrigins: [origin] };
   await writeConfigFile({

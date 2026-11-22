@@ -10,6 +10,7 @@ import {
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
   createTelegramApi,
+  telegramProofChannel,
   telegramGatewayOptions,
   telegramRequestHandler,
   settleTelegramCleanup,
@@ -59,16 +60,12 @@ test.each(["allowlist", "open"] as const)(
           const mock = await startQaMockOpenAiServer();
           const gatewayOwner = createQaGatewayChild();
           let gateway: QaGatewayChild | undefined;
-          const modelRequests = async () => {
-            const response = await fetch(`${mock.baseUrl}/debug/requests`);
+          const debugRequests = async <T>(endpoint: string) => {
+            const response = await fetch(`${mock.baseUrl}/debug/${endpoint}`);
             expect(response.ok).toBe(true);
-            return (await response.json()) as MockOpenAiRequestSnapshot[];
+            return (await response.json()) as T[];
           };
-          const inflightRequests = async () => {
-            const response = await fetch(`${mock.baseUrl}/debug/inflight-requests`);
-            expect(response.ok).toBe(true);
-            return (await response.json()) as unknown[];
-          };
+          const modelRequests = () => debugRequests<MockOpenAiRequestSnapshot>("requests");
           const telegramSessions = async () => {
             const result = (await gateway?.call("sessions.list", {})) as {
               sessions: Array<{ key: string; channel?: string; lastRunId?: string }>;
@@ -90,22 +87,16 @@ test.each(["allowlist", "open"] as const)(
                 },
                 providerMode: "mock-openai",
                 providerBaseUrl: `${mock.baseUrl}/v1`,
-                telegram: {
-                  enabled: true,
-                  defaultAccount: "proof",
-                  groupPolicy,
-                  groupAllowFrom: [String(ALLOWED_SENDER)],
-                  groups: { "*": { requireMention: false } },
-                  accounts: {
-                    proof: {
-                      enabled: true,
-                      botToken: BOT_TOKEN,
-                      apiRoot,
-                      commands: { native: false },
-                      streaming: { mode: "off" },
-                    },
+                telegram: telegramProofChannel(
+                  apiRoot,
+                  BOT_TOKEN,
+                  { commands: { native: false }, streaming: { mode: "off" } },
+                  {
+                    groupPolicy,
+                    groupAllowFrom: [String(ALLOWED_SENDER)],
+                    groups: { "*": { requireMention: false } },
                   },
-                },
+                ),
                 messages: { groupChat: { visibleReplies: "automatic" } },
                 mutateConfig: (cfg) => {
                   cfg.logging = { level: "debug", file: path.join(workspace, "gateway.log") };
@@ -125,7 +116,7 @@ test.each(["allowlist", "open"] as const)(
               sendInbound(FORBIDDEN_SENDER, REJECTED_MARKER);
               await expect.poll(() => gateway?.logs(), { timeout: 30_000 }).toContain(REJECTION);
               expect(await modelRequests()).toEqual([]);
-              expect(await inflightRequests()).toEqual([]);
+              expect(await debugRequests("inflight-requests")).toEqual([]);
               expect(await telegramSessions()).toEqual([]);
               expect(deliveries()).toEqual([]);
             }

@@ -11,8 +11,8 @@ import { resolveSessionTranscriptReadTargetCore } from "../config/sessions/sessi
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.types.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
-import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
+import { SessionTranscriptColdError } from "../config/sessions/session-transcript-cold-error.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { resolveSessionTitleSource } from "../sessions/session-title-source.js";
@@ -176,7 +176,7 @@ export function readSessionTitleFieldsFromTranscript(
         : key
           ? memory.owner?.readStorage(key, command, memory.authority)
           : undefined;
-    return result?.fields ?? { ...EMPTY_SESSION_TITLE_FIELDS };
+    return result?.fields ?? EMPTY_SESSION_TITLE_FIELDS;
   }
   const target =
     read?.target ?? resolveSessionTranscriptReadTargetCore(input, resolveSessionStorePathForScope);
@@ -185,7 +185,7 @@ export function readSessionTitleFieldsFromTranscript(
     const cacheKey = `${target.agentId ?? ""}\0${target.sessionId}\0${target.storePath ?? ""}`;
     const watermark = readSessionTranscriptWatermark(scope);
     if (watermark.maxSeq === null) {
-      return { ...EMPTY_SESSION_TITLE_FIELDS };
+      return EMPTY_SESSION_TITLE_FIELDS;
     }
     const variant = opts?.includeInterSession === true ? "includeInterSession" : "default";
     // Command metadata belongs to this naming attempt, not the stable list cache.
@@ -259,13 +259,13 @@ export function readSessionTitleFieldsFromTranscript(
         lastMessagePreview: fields.lastMessagePreview,
       });
     }
-    return { ...fields };
+    return fields;
   } catch (error) {
     if (!(error instanceof SessionTranscriptColdError)) {
       throw error;
     }
     // Optional titles must not restore cold payloads. Do not cache nulls under the preserved
     // watermark: restoration and projection reconciliation can make these fields available again.
-    return { ...EMPTY_SESSION_TITLE_FIELDS };
+    return EMPTY_SESSION_TITLE_FIELDS;
   }
 }

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { fnv1aUtf16 } from "../shared/fnv1a.js";
@@ -57,8 +57,8 @@ export function getWideAreaZonePath(domain: string): string {
 }
 
 /** Durably replace the CoreDNS zone only after its complete sibling write succeeds. */
-export function replaceWideAreaZoneFile(zonePath: string, content: string): void {
-  replaceFileAtomicSync({
+export async function replaceWideAreaZoneFile(zonePath: string, content: string): Promise<void> {
+  await replaceFileAtomic({
     filePath: zonePath,
     content,
     dirMode: 0o700,
@@ -208,6 +208,6 @@ export async function writeWideAreaGatewayZone(
     serial = distance > 0 && distance < 0x80000000 ? base : (existingSerial + 1) >>> 0;
   }
   const next = renderWideAreaGatewayZoneText({ ...normalizedOpts, serial });
-  replaceWideAreaZoneFile(zonePath, next);
+  await replaceWideAreaZoneFile(zonePath, next);
   return { zonePath, changed: true };
 }

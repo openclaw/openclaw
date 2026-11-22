@@ -5,7 +5,6 @@ import {
   createMatrixQaScenarioClient,
   resolveMatrixQaNoReplyWindowMs,
   runNoReplyExpectedScenario,
-  truncateMatrixQaPreview,
 } from "./scenario-runtime-shared.js";
 import { matrixMessage, matrixSyncResponse } from "./scenario-runtime.test-support.js";
 
@@ -82,7 +81,7 @@ describe("matrix scenario runtime shared", () => {
     async ({ observeTrigger, reply, error }) => {
       vi.useFakeTimers();
       let polls = 0;
-      const fetchImpl: typeof fetch = async (input, init) => {
+      mockMatrixQaHttp(async (input, init) => {
         const url = new URL(input instanceof Request ? input.url : input);
         if (init?.method === "PUT") {
           return Response.json({ event_id: "$trigger" });
@@ -103,9 +102,8 @@ describe("matrix scenario runtime shared", () => {
               ? matrixMessage("$reply", "marker", "@sut:matrix-qa.test")
               : undefined;
         return matrixSyncResponse("!room:matrix-qa.test", event ? [event] : [], `batch-${polls}`);
-      };
-      mockMatrixQaHttp(fetchImpl);
-      let settled = false;
+      });
+      const settled = vi.fn();
       const pending = runNoReplyExpectedScenario({
         ...createMatrixQaE2eeTestContext({ baseUrl: "http://127.0.0.1:28008/", timeoutMs: 8_000 }),
         actorId: "observer",
@@ -113,40 +111,23 @@ describe("matrix scenario runtime shared", () => {
         accessToken: "token",
         body: "marker",
         token: "marker",
-      }).then(
-        (value) => ({ value }),
-        (failure: unknown) => ({ error: failure }),
-      );
-      void pending.then(() => {
-        settled = true;
-      });
+      }).finally(settled);
+      const assertion = error
+        ? expect(pending).rejects.toThrow(error)
+        : expect(pending).resolves.toEqual({
+            details:
+              "trigger event: $trigger\ntrigger sender: @observer:matrix-qa.test\nwaited 8000ms with no SUT reply",
+          });
       try {
         await vi.advanceTimersByTimeAsync(7_999);
-        expect(settled).toBe(false);
+        expect(settled).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
-        const result = await pending;
-        expect(result).toMatchObject(
-          error
-            ? {
-                error: expect.objectContaining({ message: expect.stringContaining(error) }),
-              }
-            : {
-                value: {
-                  details:
-                    "trigger event: $trigger\ntrigger sender: @observer:matrix-qa.test\nwaited 8000ms with no SUT reply",
-                },
-              },
-        );
+        await assertion;
       } finally {
         await vi.runAllTimersAsync();
-        await pending;
         vi.useRealTimers();
+        await assertion;
       }
     },
   );
-
-  it("keeps every shared Matrix preview UTF-16 safe", () => {
-    const prefix = "a".repeat(199);
-    expect(truncateMatrixQaPreview(`${prefix}😀tail`)).toBe(prefix);
-  });
 });

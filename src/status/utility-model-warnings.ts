@@ -9,6 +9,7 @@ import {
   isCliRuntimeModelBackendForProvider,
   resolveCliRuntimeProfileAlias,
 } from "../agents/cli-backends.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
@@ -22,6 +23,7 @@ import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resolvePluginSetupCliBackend } from "../plugins/setup-registry.js";
+import type { CliBackendPlugin } from "../plugins/types.js";
 
 /** Known descriptor mismatches only; model quality and live availability remain runtime facts. */
 export function collectUtilityModelWarnings(
@@ -38,13 +40,19 @@ export function collectUtilityModelWarnings(
   }
   const warnings = new Map<string, ConfigValidationIssue>();
   let metadata: ReturnType<typeof loadMetadata> | undefined;
+  // This synchronous validation owns one config and inventory; discard both hits
+  // and misses afterward so the next config generation resolves fresh owners.
+  const backends = new Map<string, CliBackendPlugin | undefined>();
   const resolveBackend = (id: string) => {
     const normalized = normalizeProviderId(id);
-    return (
-      resolveRuntimeCliBackends().find(
-        (backend) => normalizeProviderId(backend.id) === normalized,
-      ) ?? resolvePluginSetupCliBackend({ backend: normalized, config })?.backend
-    );
+    if (backends.has(normalized)) {
+      return backends.get(normalized);
+    }
+    const backend =
+      resolveRuntimeCliBackends().find((entry) => normalizeProviderId(entry.id) === normalized) ??
+      resolvePluginSetupCliBackend({ backend: normalized, config })?.backend;
+    backends.set(normalized, backend);
+    return backend;
   };
   withAgentRosterFactsBatch(config, () => {
     for (const agentId of listAgentIds(config)) {
@@ -59,11 +67,9 @@ export function collectUtilityModelWarnings(
       }
       metadata ??= loadMetadata();
       const manifestPlugins = metadata.owners ? { owners: metadata.owners } : metadata.plugins;
-      const defaultProvider = resolveDefaultModelForAgent({
-        cfg: config,
-        agentId,
-        manifestPlugins,
-      }).provider;
+      const defaultProvider =
+        resolveDefaultModelForAgent({ cfg: config, agentId, manifestPlugins })?.provider ??
+        DEFAULT_PROVIDER;
       const aliasIndex = buildModelAliasIndex({
         cfg: config,
         agentId,

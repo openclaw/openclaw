@@ -4,7 +4,6 @@ import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
 } from "../../auto-reply/reply/session-event-handoff.js";
-import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -21,7 +20,6 @@ import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import type { RunExit } from "../../process/supervisor/types.js";
 import { truncateUtf8Suffix } from "../../utils/utf8-truncate.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
 import { transformCliResultText } from "../cli-output-results.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
@@ -38,6 +36,7 @@ import { attachCliReplyBackend } from "./execution-target.js";
 import {
   createCliExitFailoverError,
   createCliFailoverError,
+  createCliStreamRefusalError,
   resolveCliResumeAtError,
 } from "./exit-error.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
@@ -58,7 +57,6 @@ type ExecuteCliProcessOptions = {
 
 export async function executeCliProcess(params: {
   context: PreparedCliRunContext;
-  assertCurrent: SessionSourceAssertion;
   backend: CliBackendConfig;
   events: CliEventHandlers;
   toolTracking: CliToolTracking;
@@ -101,9 +99,37 @@ export async function executeCliProcess(params: {
     runId: runParams.runId,
     classifyErrorCode: context.backendResolved.classifyErrorCode,
   };
+  // The runner may keep a refused first turn's native session, so the refusal
+  // carries the executed prompt for its reseed receipt as a returned turn does.
+  const refuseStream = (
+    errorText: string,
+    output: CliOutput | null | undefined,
+    options?: Parameters<typeof createCliStreamRefusalError>[3],
+  ) =>
+    createCliStreamRefusalError(
+      errorText,
+      failoverContext,
+      output && { ...output, finalPromptText: params.prompt },
+      options,
+    );
+  // buildCliArgs emits this option only for an actual checkpointed resume.
+  const resumeAtArg =
+    params.useResume && runParams.cliSessionResumeAt ? params.backend.resumeAtArg : undefined;
+  const resumeCheckpointId = params.useResume ? runParams.cliSessionResumeAt : undefined;
   const createOutputFailoverError = (output: CliOutput): FailoverError | undefined => {
     if (!output.errorText) {
       return undefined;
+    }
+    // The CLI can report a rejected resume checkpoint as a structured result
+    // error instead of a process exit failure; classify it before the generic
+    // provider-reason mapping so recovery sees the invalidated session.
+    const resumeAtError = resolveCliResumeAtError(
+      output.errorText,
+      { resumeCheckpointId },
+      failoverContext,
+    );
+    if (resumeAtError) {
+      return resumeAtError;
     }
     const message = formatCliOutputError(output, {
       runId: outputErrorContext.runId,
@@ -133,9 +159,6 @@ export async function executeCliProcess(params: {
       rawError: output.errorText,
     });
   };
-  // buildCliArgs emits this option only for an actual checkpointed resume.
-  const resumeAtArg =
-    params.useResume && runParams.cliSessionResumeAt ? params.backend.resumeAtArg : undefined;
   const hasJsonlOutput = params.outputMode === "jsonl";
   const eventDelivery =
     runParams.sourceReplyDeliveryMode === "message_tool_only" ||
@@ -165,12 +188,10 @@ export async function executeCliProcess(params: {
     try {
       eventTarget = await captureSessionEventTargetForHost(eventAgentId, eventSessionKey, {
         producerPolicy: context.sessionEventSourcePolicy,
-        assertCaptureCurrent: params.assertCurrent,
       });
     } catch (error) {
       cliBackendLog.warn(`CLI watchdog follow-up unavailable: ${formatErrorMessage(error)}`);
     }
-    params.assertCurrent();
   }
 
   const streamingParser = hasJsonlOutput
@@ -271,9 +292,7 @@ export async function executeCliProcess(params: {
   const pluginTimeout: { error?: FailoverError } = {};
   let terminalInterruption: CliTerminalInterruption | undefined;
   let result: RunExit;
-  runParams.assertCurrent?.();
   params.diagnostics?.observeRequestPayload(params.stdin ?? params.argsPrompt ?? "");
-  params.assertCurrent();
   runParams.diagnosticOwner?.watchdogAttempt?.setExecutionDeadline(
     Date.now() + runParams.timeoutMs + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
   );
@@ -281,11 +300,12 @@ export async function executeCliProcess(params: {
     ? beginDiagnosticBackendActivity({
         owner: runParams.diagnosticOwner,
         noOutputTimeoutMs: params.noOutputTimeoutMs,
-        assertCurrent: params.assertCurrent,
+        assertCurrent: () => runParams.abortSignal?.throwIfAborted(),
       })
     : undefined;
   try {
     if (params.nodePlacement) {
+      await context.preparedBackend.prepareCredentialUse?.();
       const nodeRun = await executeNodeClaudeRun({
         context,
         nodePlacement: params.nodePlacement,
@@ -322,7 +342,7 @@ export async function executeCliProcess(params: {
           consumeStdout(chunk);
           const errorText = streamingParser?.getErrorText();
           if (errorText) {
-            throw createCliFailoverError(errorText, "format", failoverContext);
+            throw refuseStream(errorText, streamingParser?.getOutput());
           }
         },
         onOutstandingWorkChange: backendActivity?.setOutstandingWork,
@@ -339,7 +359,7 @@ export async function executeCliProcess(params: {
           streamingParser?.finish();
           const partialOutput = streamingParser?.getOutput();
           if (partialOutput?.partialOutputRejected && partialOutput.errorText) {
-            throw createCliFailoverError(partialOutput.errorText, "format", failoverContext, {
+            throw refuseStream(partialOutput.errorText, partialOutput, {
               code: CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE,
             });
           }
@@ -358,6 +378,7 @@ export async function executeCliProcess(params: {
           beginCapture: params.toolTracking.beginGatewayCapture,
           registerTurnInterrupt: params.toolTracking.registerTurnInterrupt,
           waitForTurnInterrupt: params.toolTracking.waitForTurnInterrupt,
+          onInputSubmitted: params.toolTracking.onInputSubmitted,
         },
         ...(params.useManagedClaudeLiveSession
           ? {
@@ -369,11 +390,10 @@ export async function executeCliProcess(params: {
             }
           : {}),
       }).catch((error: unknown) => {
-        runParams.assertCurrent?.();
         if (runParams.abortSignal?.aborted || params.events.hasObservedCliActivity()) {
           throw error;
         }
-        throw resolveCliResumeAtError(error, resumeAtArg, failoverContext) ?? error;
+        throw resolveCliResumeAtError(error, { resumeAtArg }, failoverContext) ?? error;
       });
     } else {
       const supervisor = getProcessSupervisor();
@@ -389,7 +409,6 @@ export async function executeCliProcess(params: {
       // the caller's run id before awaiting the child or replacement fence.
       let processCancelled = false;
       const assertProcessCurrent = () => {
-        params.assertCurrent();
         if (processCancelled) {
           throw new Error("CLI process authority is no longer active");
         }
@@ -404,35 +423,30 @@ export async function executeCliProcess(params: {
           params.initialGatewayCaptureKey,
           assertProcessCurrent,
         );
-        const managedRun = await runWithAgentToolSourceExecutionScope(params.assertCurrent, () =>
-          withChildProcessOperation("agent.cli", () =>
-            supervisor.spawn({
-              assertCurrent: params.assertCurrent,
-              prepareSpawn: params.argsPrompt
-                ? context.cliHistoryWriter?.assertReadable
-                : undefined,
-              prepareInput: params.stdin ? context.cliHistoryWriter?.assertReadable : undefined,
-              runId: runParams.runId,
-              scopeKey,
-              replaceExistingScope: Boolean(params.useResume && scopeKey),
-              mode: "child",
-              argv: [params.executionCommand, ...params.executionLeadingArgv],
-              resolveArgs: params.resolveExecutionArgs,
-              argv0: params.executionArgv0,
-              timeoutMs: runParams.timeoutMs,
-              noOutputTimeoutMs: params.noOutputTimeoutMs,
-              onCancel: () => {
-                processCancelled = true;
-              },
-              cwd: context.cwd ?? context.workspaceDir,
-              env: params.env,
-              input: params.stdin ?? "",
-              secretInput: context.preparedBackend.secretInput,
-              captureOutput: false,
-              onStdout: consumeStdout,
-              onStderr: consumeStderr,
-            }),
-          ),
+        const managedRun = await withChildProcessOperation("agent.cli", () =>
+          supervisor.spawn({
+            prepareTargetSpawn: context.preparedBackend.prepareCredentialUse,
+            prepareInput: params.stdin ? context.preparedBackend.prepareCredentialUse : undefined,
+            runId: runParams.runId,
+            scopeKey,
+            replaceExistingScope: Boolean(params.useResume && scopeKey),
+            mode: "child",
+            argv: [params.executionCommand, ...params.executionLeadingArgv],
+            resolveArgs: params.resolveExecutionArgs,
+            argv0: params.executionArgv0,
+            timeoutMs: runParams.timeoutMs,
+            noOutputTimeoutMs: params.noOutputTimeoutMs,
+            onCancel: () => {
+              processCancelled = true;
+            },
+            cwd: context.cwd ?? context.workspaceDir,
+            env: params.env,
+            input: params.stdin ?? "",
+            secretInput: runParams.nativeAuthOnly ? undefined : context.preparedBackend.secretInput,
+            captureOutput: false,
+            onStdout: consumeStdout,
+            onStderr: consumeStderr,
+          }),
         );
         managedRunPid = managedRun.pid;
         stopForParserRefusal = () => {
@@ -468,7 +482,7 @@ export async function executeCliProcess(params: {
   streamingParser?.finish();
   const streamingParserErrorText = streamingParser?.getErrorText();
   if (streamingParserErrorText) {
-    throw createCliFailoverError(streamingParserErrorText, "format", failoverContext);
+    throw refuseStream(streamingParserErrorText, streamingParser?.getOutput());
   }
   // The node re-injects the terminal result after truncation. If even that is
   // missing, the turn outcome is unknowable and cannot pass as a clean exit.
@@ -620,6 +634,9 @@ export async function executeCliProcess(params: {
       candidates: [stderr, readStdout(), stderrDiagnostic, stdoutDiagnostic],
       retryEmptyFailure,
       resumeAtArg: retryEmptyFailure ? resumeAtArg : undefined,
+      // The checkpoint guard names the exact uuid this run sent, so it stays
+      // safe after observed CLI activity (a rejection result record counts).
+      resumeCheckpointId,
     });
   }
 

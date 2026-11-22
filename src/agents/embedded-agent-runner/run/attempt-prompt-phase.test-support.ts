@@ -1,8 +1,10 @@
 import { vi } from "vitest";
+import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import type { SubsystemLogger } from "../../../logging/subsystem.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { createFixedRequestTokenEstimator } from "../../sessions/context-token-pressure.js";
 import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import type { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-build.js";
 import type {
@@ -227,6 +229,7 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
     },
     diagnostics: { diagnosticTrace: {}, runTrace: {} },
     prepared: {
+      bundleTools: {},
       sessionRuntime: {
         agentSession: {
           activeSession,
@@ -258,9 +261,7 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
           takePendingMidTurnPrecheckRequest: () => undefined,
         },
         preparedUserTurnMessage: {
-          role: "user",
-          content: "hello",
-          timestamp: 100,
+          ...makeUserMessage("hello", 100),
           __openclaw: { senderName: "Alice" },
         },
         sessionManager,
@@ -302,6 +303,7 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
     preparedStreamRuntime: {
       cache: {},
       history: {
+        estimateFixedRequest: createFixedRequestTokenEstimator(),
         contextEnginePromptAuthority: "assembled",
       },
       promptActiveSession: vi.fn(),

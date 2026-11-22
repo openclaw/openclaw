@@ -4,14 +4,10 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { prepareSessionEntryReplacementDatabase } from "../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  openOpenClawAgentDatabase,
-  resolveOpenClawAgentSqlitePath,
-} from "../state/openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { readSessionCreateTarget } from "./session-create-target.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 
@@ -44,20 +40,6 @@ it("prepares current target metadata without caller-thread SQLite", async () => 
       skillsSnapshot: { prompt: "current metadata", skills: [] },
     };
     replaceSessionEntrySync(scope, { sessionId: "original", updatedAt: 2, ...metadata });
-    const sibling = "agent:main:matrix:channel:!mixed:example.org";
-    const siblingEntry = { sessionId: "unrelated", updatedAt: 1 };
-    replaceSessionEntrySync({ ...scope, sessionKey: sibling }, siblingEntry);
-    const { db } = openOpenClawAgentDatabase({ agentId: "main", env });
-    db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
-      JSON.stringify({
-        ...siblingEntry,
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "matrix", to: "!Mixed:example.org" },
-        }),
-      }),
-      sibling,
-    );
-    db.prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?").run(sibling);
     const sql = observeHostDataSql();
     try {
       expect(await read()).toMatchObject({

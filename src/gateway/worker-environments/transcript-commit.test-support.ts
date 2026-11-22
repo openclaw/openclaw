@@ -7,6 +7,7 @@ import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import type { WorkerTranscriptCommitStore } from "./transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
 
@@ -14,24 +15,18 @@ export function createTranscriptCommitIdentity(
   sessionId: string,
   ownerEpoch: number,
 ): WorkerConnectionIdentity {
-  return {
-    environmentId: "environment-a",
+  const turnClaim: NonNullable<WorkerConnectionIdentity["turnClaim"]> = {
+    sessionId,
+    claimId: "claim-worker-transcript",
+    runId: "run-worker-transcript",
+    placementGeneration: 4,
+    owner: { kind: "worker", environmentId: "environment-a", ownerEpoch },
+  };
+  return createWorkerConnectionIdentity(turnClaim, {
     credentialHash: ["credential", "hash", "a"].join("-"),
     bundleHash: "b".repeat(64),
-    sessionId,
-    runId: "run-worker-transcript",
-    turnClaim: {
-      sessionId,
-      claimId: "claim-worker-transcript",
-      runId: "run-worker-transcript",
-      placementGeneration: 4,
-      owner: { kind: "worker", environmentId: "environment-a", ownerEpoch },
-    },
-    ownerEpoch,
-    rpcSetVersion: 1,
     protocolFeatures: ["worker-transcript-commit-v1"],
-    credentialExpiresAtMs: 10_000,
-  };
+  });
 }
 
 export function createInterruptedCommitter(

@@ -1,7 +1,7 @@
-export {
-  collectNestedErrorCandidates,
-  extractErrorCodeOrErrno,
-} from "@openclaw/normalization-core/error-coercion";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+
+export { collectNestedErrorCandidates };
+export { extractErrorCodeOrErrno } from "@openclaw/normalization-core/error-coercion";
 
 /** Await owned work and cleanup, retaining both failures without changing their identity. */
 export async function settleWithCleanup<T>(
@@ -59,16 +59,39 @@ export function throwCollectedErrors(errors: readonly unknown[], message: string
 
 /** Retained errors must not keep callers alive through V8's lazy stack frames. */
 export function materializeErrorStack(failure: unknown): void {
-  let error = failure;
-  const seen = new Set<Error>();
-  while (error instanceof Error && !seen.has(error)) {
-    seen.add(error);
-    try {
-      error.stack = String(error.stack);
-    } catch {
-      // The setter releases private frames even when a custom formatter throws.
-      error.stack = "Stack trace unavailable: custom formatter failed";
+  try {
+    for (const error of collectNestedErrorCandidates(failure)) {
+      try {
+        if (!(error instanceof Error)) {
+          continue;
+        }
+        try {
+          error.stack = String(error.stack);
+        } catch {
+          // The setter releases private frames even when a custom formatter throws.
+          error.stack = "Stack trace unavailable: custom formatter failed";
+        }
+      } catch {
+        // An immutable error must not hide sibling causes.
+      }
     }
-    error = error.cause;
+  } catch {
+    // Opaque diagnostic graphs must not replace the original failure.
   }
+}
+
+/** Run every operation in iteration order; callers retain their own settlement and error envelope. */
+export function collectSynchronousErrors<T>(
+  items: Iterable<T>,
+  run: (item: T) => unknown,
+): unknown[] {
+  const errors: unknown[] = [];
+  for (const item of items) {
+    try {
+      run(item);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  return errors;
 }

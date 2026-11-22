@@ -74,7 +74,7 @@ export function createSettingsStatus<T>(
   onSettled(() => {
     let connection = connectionKey();
     // Every connection receipt retires requests before a same-turn reconnect can settle them.
-    const stopGateway = gatewayProjection.subscribe(() => {
+    const stopGateway = context.gateway.subscribe(() => {
       const next = connectionKey();
       if (connection.some((value, index) => value !== next[index])) {
         const identityChanged =
@@ -132,9 +132,6 @@ export function createSettingsStatus<T>(
     }
     readStatus(key);
   }
-  function refresh() {
-    readStatus(requestKey());
-  }
   function readStatus(key: ReturnType<typeof requestKey>) {
     if (disposed) {
       return;
@@ -185,7 +182,9 @@ export function createSettingsStatus<T>(
     read,
     scopeKey,
     requestKey: issued,
-    refresh,
+    refresh: () => {
+      readStatus(requestKey());
+    },
     capture,
     gatewayProjection,
     configProjection,

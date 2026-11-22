@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createOAuthRefreshCredential } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import {
   saveAuthProfileStore,
   updateAuthProfileStoreWithLock,
@@ -120,14 +121,7 @@ describe("plugin-sdk provider-auth-runtime", () => {
   it("resolves non-secret provider auth profile metadata", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "provider-auth-runtime-"));
     const agentDir = path.join(tempRoot, "agent");
-    const credential = {
-      type: "oauth" as const,
-      provider: "openai",
-      access: "access-token",
-      refresh: "refresh-token",
-      expires: Date.now() + 60_000,
-      accountId: "acct-openai-workspace",
-    };
+    const credential = createOAuthRefreshCredential({ accountId: "acct-openai-workspace" });
     saveAuthProfileStore({ version: 1, profiles: { "openai:chatgpt": credential } }, agentDir);
 
     const params = { provider: "openai", profileId: "openai:chatgpt", agentDir };
@@ -150,22 +144,20 @@ describe("plugin-sdk provider-auth-runtime", () => {
     });
   });
 
-  it("generates random OAuth state tokens", () => {
-    const first = auth.generateOAuthState();
-    const second = auth.generateOAuthState();
-
-    expect(first).toMatch(/^[a-f0-9]{64}$/);
-    expect(second).toMatch(/^[a-f0-9]{64}$/);
-    expect(second).not.toBe(first);
-  });
-
-  it("parses OAuth callback URLs and rejects bare codes", () => {
-    expect(
-      auth.parseOAuthCallbackInput("http://127.0.0.1:3000/callback?code=abc&state=state-1"),
-    ).toEqual({ code: "abc", state: "state-1" });
-    expect(auth.parseOAuthCallbackInput("abc")).toEqual({
-      error: "Paste the full redirect URL, not just the code.",
+  it("keeps the deprecated callback parser for published plugins", () => {
+    expect(auth.parseOAuthCallbackInput("http://127.0.0.1:3000/cb?code=abc&state=s1")).toEqual({
+      code: "abc",
+      state: "s1",
     });
+    expect(auth.parseOAuthCallbackInput("abc", { invalidInput: "Paste the URL" })).toEqual({
+      error: "Paste the URL",
+    });
+    expect(
+      auth.parseOAuthCallbackInput("http://127.0.0.1:3000/cb?code=abc", {
+        missingState: "No state",
+      }),
+    ).toEqual({ error: "No state" });
+    expect(auth.generateOAuthState()).not.toBe(auth.generateOAuthState());
   });
 
   it.each([

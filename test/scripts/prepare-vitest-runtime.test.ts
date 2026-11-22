@@ -4,7 +4,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as buildAll from "../../scripts/build-all.mts";
 import { acquireDistArtifactOwnership } from "../../scripts/lib/dist-artifact-lock.mts";
 import * as artifactOwnership from "../../scripts/lib/dist-artifact-ownership.mts";
-import { prepareVitestRuntime } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import {
+  prepareVitestRuntime,
+  runE2eGlobalSetup,
+} from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { prepareTestRuntime } from "../../scripts/prepare-vitest-runtime.mts";
 import * as sourceRunner from "../../scripts/run-node.mts";
 import * as postbuild from "../../scripts/runtime-postbuild.mts";
@@ -43,31 +46,37 @@ function mockCompiler(overrides: Parameters<typeof buildAll.runBuildAllSteps>[1]
     }),
   );
 }
-function mockPreparation(runtime: boolean) {
-  vi.spyOn(sourceRunner, "resolveRunNodePreparation").mockReturnValue({
-    build: false,
+function mockPreparation(runtime: boolean, build = false) {
+  return vi.spyOn(sourceRunner, "resolveRunNodePreparation").mockReturnValue({
+    build,
     runtime,
     immutable: false,
   });
 }
+function serviceState(
+  running = false,
+): Awaited<ReturnType<typeof gatewayService.readGatewayServiceState>> {
+  return {
+    installed: running,
+    loadState: { status: running ? "loaded" : "not-loaded" },
+    running,
+    env: {},
+    command: running ? { programArguments: [process.execPath, entryPath(), "gateway"] } : null,
+    runtime: { status: running ? "running" : "stopped", missingUnit: !running },
+  };
+}
+
+const prepareAi = () => prepareTestRuntime(root, env, undefined, { withAiPackage: true });
 
 beforeEach(async () => {
   root = tempDirs.make("test-runtime-preparation-");
   env = { HOME: root, OPENCLAW_STATE_DIR: path.join(root, "state"), OPENCLAW_RUNNER_LOG: "0" };
-  // Keep artifact ownership inside the fixture even when TMPDIR is in another checkout.
   await writeRuntime(root);
   await fs.writeFile(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
   vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockImplementation(
     async (bindingEnv, options) => (options?.includeInvoking ? [{ env: bindingEnv }] : []),
   );
-  vi.spyOn(gatewayService, "readGatewayServiceState").mockResolvedValue({
-    installed: false,
-    loadState: { status: "not-loaded" },
-    running: false,
-    env: {},
-    command: null,
-    runtime: { status: "stopped", missingUnit: true },
-  });
+  vi.spyOn(gatewayService, "readGatewayServiceState").mockResolvedValue(serviceState());
   vi.spyOn(gatewayBindings, "readManagedGatewayBindingState").mockImplementation((binding) =>
     gatewayService.readGatewayServiceState(gatewayService.resolveGatewayService(), {
       env: binding.env,
@@ -76,14 +85,10 @@ beforeEach(async () => {
   vi.spyOn(systemdFiles, "readSystemdServiceCommandLocation").mockRejectedValue(
     new Error("native service metadata unavailable"),
   );
-  // Old automatic CLI preparation must reach the modeled EACCES, not a host service lock.
   vi.spyOn(serviceOperation, "withGatewayServiceOperationLock").mockImplementation(
     async (_env, callback) => callback(() => {}),
   );
   commands.prepare.mockReset().mockImplementation(async ({ args, env: commandEnv }) => {
-    if (args[0] === "scripts/run-node.mjs") {
-      return sourceRunner.runNodeMain({ cwd: root, args: args.slice(1), env: commandEnv });
-    }
     if (args[0] !== "scripts/prepare-vitest-runtime.mjs") {
       throw new Error(`Unexpected prerequisite command: ${args.join(" ")}`);
     }
@@ -92,27 +97,107 @@ beforeEach(async () => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+it.each(["0", "1"])(
+  "admits E2E readers after one equivalent AI writer: caller DTS=%s",
+  async (dts) => {
+    env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = dts;
+    mockPreparation(true, true);
+    const writers: string[] = [];
+    mockCompiler({
+      steps: undefined,
+      runStep: async ({ args, options }) => {
+        if (args.includes("scripts/tsdown-build.mts")) {
+          expect(options.env?.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("0");
+          writers.push("typed runtime");
+          await fs.writeFile(entryPath(), "typed runtime\n");
+        }
+        return { status: 0 };
+      },
+    });
+    const standalone = async (commandEnv: NodeJS.ProcessEnv, signal?: AbortSignal) => {
+      expect(commandEnv).toBe(env);
+      const claim = await acquireDistArtifactOwnership(root, false, signal);
+      try {
+        writers.push("standalone");
+        await fs.writeFile(entryPath(), `standalone DTS=${dts}\n`);
+      } finally {
+        await claim.release();
+      }
+      return 0;
+    };
+    commands.prepare.mockImplementation(({ env: commandEnv, signal }) =>
+      standalone(commandEnv, signal),
+    );
+    await runE2eGlobalSetup(async (args, commandEnv) => {
+      if (args[0] === "scripts/prepare-vitest-runtime.mjs") {
+        return prepareTestRuntime(root, commandEnv, undefined, {
+          withAiPackage: args.includes("--with-ai-package"),
+        });
+      }
+      return standalone(commandEnv);
+    }, env);
+    expect(writers).toEqual(dts === "1" ? ["typed runtime", "standalone"] : ["typed runtime"]);
+    expect(await readEntry()).toBe(dts === "1" ? "standalone DTS=1\n" : "typed runtime\n");
+  },
+);
+
+it.each(["warm", "postbuild", "locked recheck"])(
+  "retains the original-environment AI writer after %s preparation",
+  async (preparation) => {
+    env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = "1";
+    const resolvePreparation = mockPreparation(preparation === "postbuild");
+    if (preparation === "locked recheck") {
+      resolvePreparation.mockReturnValueOnce({ build: true, runtime: true, immutable: false });
+    }
+    vi.spyOn(postbuild, "runRuntimePostBuild").mockImplementation(() => {});
+    const build = vi.spyOn(buildAll, "runBuildAllSteps");
+    commands.prepare.mockImplementation(async ({ env: commandEnv, signal }) => {
+      expect(commandEnv).toBe(env);
+      const claim = await acquireDistArtifactOwnership(root, false, signal);
+      await claim.release();
+      return 0;
+    });
+    expect(await prepareAi()).toBe(0);
+    expect(commands.prepare).toHaveBeenCalledOnce();
+    expect(build).not.toHaveBeenCalled();
+  },
+);
+
+it("propagates the joined standalone AI writer's failure", async () => {
+  mockPreparation(false);
+  commands.prepare.mockResolvedValue(23);
+  expect(await prepareAi()).toBe(23);
+});
+
+it("does not start another writer after a failed compiler generation", async () => {
+  mockPreparation(true, true);
+  mockCompiler({ steps: undefined, runStep: async () => ({ status: 7 }) });
+  expect(await prepareAi()).toBe(7);
+  expect(commands.prepare).not.toHaveBeenCalled();
+});
+
 it.each([
-  "unavailable service",
-  "incomplete inventory",
-  "live overlapping service",
+  { service: "unavailable service" },
+  { service: "incomplete inventory" },
+  { service: "live overlapping service" },
   ...(process.platform === "linux"
     ? [
-        "disjoint service",
-        "shared dist",
-        "shared dist-runtime",
-        "shared package dist",
-        "not-loaded service",
-        "unreadable dist",
+        { service: "disjoint service", other: true, admitted: true },
+        { service: "shared dist", other: true, shared: "dist" },
+        { service: "shared dist-runtime", other: true, shared: "dist-runtime" },
+        { service: "shared package dist", other: true, shared: "packages/sdk/dist" },
+        { service: "not-loaded service", admitted: true },
+        { service: "unreadable dist", other: true },
       ]
     : []),
-])("prepares private-QA artifacts only with verified separation: %s", async (service) => {
+])("prepares private-QA artifacts only with verified separation: $service", async (scenario) => {
+  const { service } = scenario;
   vi.mocked(gatewayService.readGatewayServiceState).mockRejectedValue(
     Object.assign(new Error("EACCES: permission denied, open protected-service.env"), {
       code: "EACCES",
     }),
   );
-  const admitted = service === "disjoint service" || service === "not-loaded service";
+  const admitted = "admitted" in scenario && scenario.admitted;
   if (service === "incomplete inventory") {
     vi.mocked(gatewayBindings.discoverManagedGatewayBindings).mockRestore();
     vi.spyOn(serviceInventory, "listManagedOpenClawGatewayServices").mockResolvedValue({
@@ -120,32 +205,21 @@ it.each([
       errors: [{ source: "fixture", message: "Unreadable service directory" }],
     });
   }
-  if (
-    [
-      "disjoint service",
-      "shared dist",
-      "shared dist-runtime",
-      "shared package dist",
-      "unreadable dist",
-    ].includes(service)
-  ) {
+  if ("other" in scenario) {
     const other = tempDirs.make("serving-runtime-");
     await writeRuntime(other);
-    if (service === "shared dist") {
-      await fs.rm(path.join(root, "dist"), { recursive: true });
-      await fs.symlink(path.join(other, "dist"), path.join(root, "dist"));
-    }
-    if (service === "shared dist-runtime" || service === "shared package dist") {
-      const output = service === "shared dist-runtime" ? "dist-runtime" : "packages/sdk/dist";
+    if ("shared" in scenario && scenario.shared) {
+      const output = scenario.shared;
+      if (output === "dist") {
+        await fs.rm(path.join(root, output), { recursive: true });
+      }
       await fs.mkdir(path.join(other, output), { recursive: true });
       await fs.mkdir(path.dirname(path.join(root, output)), { recursive: true });
       await fs.symlink(path.join(other, output), path.join(root, output));
     }
     vi.mocked(systemdFiles.readSystemdServiceCommandLocation).mockResolvedValue({
       kind: "command",
-      command: {
-        programArguments: [process.execPath, entryPath(other), "gateway"],
-      },
+      command: { programArguments: [process.execPath, entryPath(other), "gateway"] },
     });
     if (service === "unreadable dist") {
       const realpath = fs.realpath;
@@ -161,34 +235,19 @@ it.each([
       kind: "not-loaded",
     });
   } else if (service === "live overlapping service") {
-    vi.mocked(gatewayService.readGatewayServiceState).mockResolvedValue({
-      installed: true,
-      loadState: { status: "loaded" },
-      running: true,
-      env: {},
-      command: {
-        programArguments: [process.execPath, entryPath(), "gateway"],
-      },
-      runtime: { status: "running" },
-    });
+    vi.mocked(gatewayService.readGatewayServiceState).mockResolvedValue(serviceState(true));
   }
-  const compiler = vi.fn(async () => {
+  const compiler = vi.fn(async ({ options }: { options: { env?: NodeJS.ProcessEnv } }) => {
+    expect(options.env?.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
     await fs.writeFile(entryPath(), "rebuilt\n");
     return { status: 0 };
   });
-  const build = mockCompiler({ runStep: compiler });
+  mockCompiler({ runStep: compiler });
   const status = await prepareVitestRuntime(
     [{ includePatterns: ["extensions/qa-lab/src/suite-process-lifecycle.test.ts"] }],
     env,
   );
   expect(status).toBe(admitted ? 0 : 1);
-  expect(build).toHaveBeenCalledWith(
-    "qaRuntime",
-    expect.objectContaining({
-      cwd: root,
-      env: expect.objectContaining({ OPENCLAW_BUILD_PRIVATE_QA: "1" }),
-    }),
-  );
   expect(compiler).toHaveBeenCalledTimes(admitted ? 1 : 0);
   expect(await readEntry()).toBe(admitted ? "rebuilt\n" : "original\n");
   if (admitted) {
@@ -264,7 +323,7 @@ it("joins a canceled compiler before releasing checkout ownership", async () => 
       return { status: 0 };
     },
   });
-  const attempt = prepareTestRuntime(root, env, controller.signal);
+  const attempt = prepareTestRuntime(root, env, controller.signal, { withAiPackage: true });
   try {
     await Promise.race([started.promise, attempt]);
     controller.abort();
@@ -276,6 +335,7 @@ it("joins a canceled compiler before releasing checkout ownership", async () => 
     await expect(attempt).rejects.toMatchObject({ name: "AbortError" });
   }
   expect(finalize).not.toHaveBeenCalled();
+  expect(commands.prepare).not.toHaveBeenCalled();
   const next = await acquireDistArtifactOwnership(root);
   await next.release();
 });

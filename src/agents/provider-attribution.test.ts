@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { makeEmptyPluginMetadataOwners } from "../plugins/current-plugin-metadata.test-support.js";
+import { makeEmptyPluginMetadataOwners } from "../plugins/plugin-metadata-empty.test-support.js";
 
 const providerEndpointPlugins = vi.hoisted(() => [
   {
@@ -278,6 +278,32 @@ describe("provider attribution", () => {
         { provider, api: "openai-completions", baseUrl: otherUrl },
         { attributionProvider: undefined, attributionHeaders: undefined },
       );
+    },
+  );
+
+  it.each([
+    ["2026.11.5", "2026.11.5"],
+    ["2026.11.5-beta.1", "2026.11.5"],
+    ["2026.11.5-1+build.abc", "2026.11.5"],
+    ["unknown", "99.0.0"],
+    ["0.0.0-dev", "99.0.0"],
+  ])(
+    "sends ChatGPT the numeric OpenClaw release %s as %s and keeps the build in User-Agent",
+    (runtime, sent) => {
+      const policy = resolveProviderRequestPolicy(
+        {
+          provider: "openai",
+          api: "openai-chatgpt-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          transport: "stream",
+          capability: "llm",
+        },
+        { OPENCLAW_VERSION: runtime },
+      );
+      expect(policy.attributionHeaders).toMatchObject({
+        version: sent,
+        "User-Agent": `openclaw/${runtime}`,
+      });
     },
   );
 

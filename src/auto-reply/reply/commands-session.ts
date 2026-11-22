@@ -10,6 +10,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { formatFastModeCurrentStatus, resolveFastModeState } from "../../agents/fast-mode.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import {
   setChannelConversationBindingIdleTimeoutBySessionKeyAsync,
   setChannelConversationBindingMaxAgeBySessionKeyAsync,
@@ -256,6 +257,9 @@ export const handleFastCommand: CommandHandler = defineAuthorizedTextCommand(
   async (params, rawArgs) => {
     const rawMode = normalizeLowercaseStringOrEmpty(rawArgs);
     if (!rawMode || rawMode === "status") {
+      if (!params.model) {
+        return sessionCommandReply(NO_MODEL_CONFIGURED_MESSAGE);
+      }
       const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
       const state = resolveFastModeState({
         cfg: params.cfg,
@@ -354,12 +358,16 @@ export const handleSessionCommand: CommandHandler = defineAuthorizedTextCommand(
         );
       }
       if (action === SESSION_ACTION_UNBIND) {
-        await sessionBindingService.unbind({
+        const removed = await sessionBindingService.unbind({
           bindingId: activeBinding.bindingId,
           scope: activeBinding.conversation,
           reason: "manual",
         });
-        return sessionCommandReply("✅ Conversation unbound.");
+        return sessionCommandReply(
+          removed.length > 0
+            ? "✅ Conversation unbound."
+            : "⚠️ No binding was removed; this conversation may still be bound.",
+        );
       }
     }
 

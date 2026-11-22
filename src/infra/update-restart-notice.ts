@@ -34,7 +34,7 @@ export function resolveUpdateRestartNoticeMeta(
   };
 }
 
-/** Notices resume requested work; a standalone CLI run is reported by its ledger. */
+/** Passive notices report routed updates; standalone CLI runs use their ledger. */
 export function shouldPublishUpdateRestartNotice(
   run: Pick<UpdateRunRecord, "trigger" | "origin"> | undefined,
   meta: UpdateRestartSentinelMeta,
@@ -48,7 +48,6 @@ export function shouldPublishUpdateRestartNotice(
     !meta.sessionKey?.trim() &&
     !meta.deliveryContext &&
     meta.threadId == null &&
-    !meta.note?.trim() &&
-    !meta.continuationMessage?.trim()
+    !meta.note?.trim()
   );
 }

@@ -1,3 +1,4 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -13,6 +14,7 @@ import { sleepWithAbort } from "../../infra/backoff.js";
 import { updatePairedNodeBins } from "../../infra/device-pairing-node-facts.js";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import { isOsRequirementSatisfied } from "../../shared/requirements.js";
 import type { SkillEligibilityContext, SkillEntry } from "../types.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
@@ -65,29 +67,20 @@ function extractErrorMessage(err: unknown): string | undefined {
   if (!err) {
     return undefined;
   }
-  if (err instanceof Error) {
+  if (err instanceof Error || (typeof err !== "object" && typeof err !== "function")) {
+    return coerceErrorMessage(err);
+  }
+  if (typeof err !== "object") {
+    return undefined;
+  }
+  if ("message" in err && typeof err.message === "string") {
     return err.message;
   }
-  if (typeof err === "object" && "message" in err && typeof err.message === "string") {
-    return err.message;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return undefined;
   }
-  if (
-    typeof err === "string" ||
-    typeof err === "number" ||
-    typeof err === "boolean" ||
-    typeof err === "bigint" ||
-    typeof err === "symbol"
-  ) {
-    return String(err);
-  }
-  if (typeof err === "object") {
-    try {
-      return JSON.stringify(err);
-    } catch {
-      return undefined;
-    }
-  }
-  return undefined;
 }
 
 function isMacPlatform(platform?: string, deviceFamily?: string): boolean {
@@ -492,7 +485,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
   if (
     cachedProbe?.pairingGeneration === probeOwner.pairingGeneration &&
     cachedProbe.signature === probeSignature &&
-    Date.now() < cachedProbe.nextProbeAfterMs
+    monotonicNow() < cachedProbe.nextProbeAfterMs
   ) {
     const node = remoteNodes.get(params.nodeId);
     if (
@@ -513,7 +506,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
     phase?: "preflight" | "probe",
   ) => {
     const nodeId = params.nodeId;
-    const nowMs = Date.now();
+    const nowMs = monotonicNow();
     if (!isCurrentRemoteNodeOwner(nodeId, probeOwner)) {
       return;
     }
@@ -609,7 +602,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
     remoteNodeProbeStates.set(params.nodeId, {
       signature: probeSignature,
       pairingGeneration: probeOwner.pairingGeneration,
-      nextProbeAfterMs: Date.now() + REMOTE_BIN_PROBE_SUCCESS_TTL_MS,
+      nextProbeAfterMs: monotonicNow() + REMOTE_BIN_PROBE_SUCCESS_TTL_MS,
       failedProbeCount: 0,
       bins: nextBins,
     });

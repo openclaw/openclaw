@@ -3,6 +3,7 @@ import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { capturePluginRegistration as captureRegistration } from "../plugins/captured-registration.js";
 import type { ProviderCatalogContext } from "../plugins/types.js";
 import { createWebSearchTestProvider } from "../test-utils/web-provider-runtime.test-helpers.js";
+import { buildCatalogModel } from "./provider-catalog.test-support.js";
 import {
   defineSingleProviderPluginEntry,
   type SingleProviderPluginOptions,
@@ -11,15 +12,7 @@ import {
 const demoPlugin = { id: "demo", name: "Demo Provider", description: "Demo provider plugin" };
 
 function createModel(id: string, name: string): ModelDefinitionConfig {
-  return {
-    id,
-    name,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 8_192,
-  };
+  return buildCatalogModel(id, { name });
 }
 
 const demoProvider = { label: "Demo", docsPath: "/providers/demo", catalog: {} };

@@ -1,15 +1,14 @@
 import { expect, it } from "vitest";
-import { cronJobsListResponse } from "../lib/cron/cron.test-support.ts";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
   pauseVirtualClock,
   reconnectMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import { expectText } from "./activity-assertions.test-support.ts";
+import { cronJobsListResponse } from "../test-helpers/cron.ts";
 import { captureUiProof } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Agent identity save reconnect" });
 
@@ -53,7 +52,37 @@ suite.define(() => {
           details: { reason: "gateway-restarting" },
         },
       });
-      await gateway.emitGatewayEvent("config.changed", { hash: "synthetic-restart" });
+      const unaffected = [
+        "models.list",
+        "session.members.listEvidence",
+        "sessions.processes.list",
+        "sessions.describe",
+        "agents.list",
+        "agent.identity.get",
+      ];
+      const beforeProfiles = await Promise.all(
+        unaffected.map(async (method) => (await gateway.getRequests(method)).length),
+      );
+      for (const changedPaths of [
+        ["browser.profiles.temporary"],
+        ["browser.profiles"],
+        ["ui.prefs.sidebarEntries"],
+        ["logging.level"],
+        ["browser.headless"],
+      ]) {
+        await gateway.emitGatewayEvent("config.changed", { changedPaths });
+        await page.clock.runFor(1_000);
+      }
+      expect(
+        await Promise.all(
+          unaffected.map(async (method) => (await gateway.getRequests(method)).length),
+        ),
+      ).toEqual(beforeProfiles);
+
+      await gateway.emitGatewayEvent("config.changed", {
+        hash: "synthetic-restart",
+        changedPaths: ["agents.entries.main.identity"],
+      });
       await page.clock.runFor(1_000);
       const beforeDrain = await counts();
       await gateway.emitGatewayEvent("shutdown", { restartExpectedMs: 1_500 });
@@ -65,7 +94,7 @@ suite.define(() => {
       });
       await page.clock.resume();
       await reconnectMockGateway(page, gateway);
-      await expectText(page.locator(".agent-chat__welcome-identity h2")).toBe("Cedar");
+      await page.getByPlaceholder("Message Cedar", { exact: true }).waitFor();
       expect({ idle, afterDrain }).toEqual({ idle: connected, afterDrain: beforeDrain });
     });
   });
@@ -78,10 +107,16 @@ suite.define(() => {
         async ({ page }) => {
           const config = { agents: { entries: { main: {} } } };
           const gateway = await installMockGateway(page, {
-            featureMethods: [...defaultControlUiFeatureMethods, "agents.update"],
+            featureMethods: [
+              ...defaultControlUiFeatureMethods,
+              "agents.list",
+              "agents.update",
+              "config.get",
+              "agent.identity.get",
+            ],
             methodResponses: {
               "agents.update": { ok: true },
-              "config.get": configSnapshot(config, "identity-fixture"),
+              "config.get": sourceConfigSnapshot(config, "identity-fixture"),
             },
           });
           await page.goto(`${suite.server.baseUrl}chat#token=test-token`);

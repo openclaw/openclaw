@@ -41,7 +41,7 @@ async function cleanupRecovery(store: TestStore, cfg = {}) {
   closeOpenClawAgentDatabasesForTest();
   return retireSessionSqliteRecovery({
     env: store.env,
-    preview: inspectSessionSqliteRecovery({ cfg, env: store.env }),
+    preview: await inspectSessionSqliteRecovery({ cfg, env: store.env }),
     readConfig: async () => cfg,
     confirm: async () => true,
   });
@@ -168,11 +168,11 @@ it.each([false, true])(
     fs.writeFileSync(store.storePath, JSON.stringify(legacyStore), { mode: 0o600 });
 
     const original = fs.readFileSync(store.transcriptPath);
-    const snapshot = readers.readOnlySqliteValidationSnapshot;
+    const snapshot = readers.readSessionImportValidationSnapshot;
     using spy = vi
-      .spyOn(readers, "readOnlySqliteValidationSnapshot")
-      .mockImplementation((target) => {
-        const result = snapshot(target);
+      .spyOn(readers, "readSessionImportValidationSnapshot")
+      .mockImplementation((target, env) => {
+        const result = snapshot(target, env);
         if (failed && result.ok && result.snapshot.sessionIdsBySessionKey.has("agent:main:alias")) {
           const keys = new Map(result.snapshot.sessionIdsBySessionKey);
           keys.delete("agent:main:alias");
@@ -356,7 +356,7 @@ it("protects historical v2 restore metadata and its retained transcript dependen
       dependencies: [canonicalTestPath(store.transcriptPath)],
     });
   }
-  const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
+  const preview = await inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
   expect(preview.artifacts.find((item) => item.path === index.archivePath)?.outcome).toBe(
     "protected",
   );

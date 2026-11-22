@@ -173,6 +173,7 @@ export class TerminalSessionManager {
       backend = request.createBackend
         ? await request.createBackend()
         : await spawn({
+            executionIntent: "gateway-internal",
             file: request.shell,
             args: request.args,
             cwd: request.cwd,
@@ -600,8 +601,7 @@ export class TerminalSessionManager {
     session.reaper = setTimeout(() => {
       // Silent: nobody owns the stream, so there is no socket to notify.
       this.finalize(session, "disconnected", {}, { silent: true });
-    }, remainingMs);
-    session.reaper.unref?.();
+    }, remainingMs).unref();
   }
 
   private enforceDetachedCap(): void {

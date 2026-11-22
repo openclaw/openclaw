@@ -1,6 +1,6 @@
 /** Resolves agent runtime metadata from model/provider policy and ACP session overlays. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
+import { isDefaultAgentRuntimeId, OPENCLAW_AGENT_RUNTIME_ID } from "./agent-runtime-id.js";
 import { resolveAvailableAgentHarnessPolicy } from "./harness/availability.js";
 import type { AgentRuntimePolicyScope } from "./model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
@@ -13,19 +13,6 @@ type AgentRuntimeMetadata = {
   id: string;
   source: "implicit" | "model" | "provider" | "session" | "session-key";
 };
-
-/** Persisted ACP ownership is authoritative even for ordinary session keys. */
-function applyAcpRuntimeOverlay(
-  meta: AgentRuntimeMetadata,
-  acpRuntime: boolean | undefined,
-  acpBackend?: string,
-): AgentRuntimeMetadata {
-  if (acpRuntime === true) {
-    const id = acpBackend && acpBackend.length > 0 ? acpBackend : "acpx";
-    return { id, source: "session-key" };
-  }
-  return meta;
-}
 
 type ModelAgentRuntimeMetadataParams = {
   cfg: OpenClawConfig;
@@ -40,26 +27,33 @@ type ModelAgentRuntimeMetadataParams = {
   agentHarnessRuntimeOverride?: string;
 } & (
   | { agentId: string; agentScope?: never }
-  | Extract<AgentRuntimePolicyScope, { agentScope: unknown }>
+  | {
+      agentId?: never;
+      agentScope: Extract<AgentRuntimePolicyScope["agentScope"], { kind: "prepared" }>;
+    }
 );
 
 /** Resolves the runtime id/source that should be reported for a model-backed agent session. */
 export function resolveModelAgentRuntimeMetadata(
   params: ModelAgentRuntimeMetadataParams,
 ): AgentRuntimeMetadata {
+  // Persisted ACP ownership is authoritative; configured policy cannot change it.
+  if (params.acpRuntime === true) {
+    return { id: params.acpBackend || "acpx", source: "session-key" };
+  }
   const persistedRuntimeId = resolvePersistedSessionRuntimeId(params.sessionEntry);
   if (persistedRuntimeId && !isDefaultAgentRuntimeId(persistedRuntimeId)) {
-    return applyAcpRuntimeOverlay(
-      { id: persistedRuntimeId, source: "session" },
-      params.acpRuntime,
-      params.acpBackend,
-    );
+    return { id: persistedRuntimeId, source: "session" };
   }
   const agentId = params.agentScope ? params.agentScope.agentId : params.agentId;
   const resolved =
     params.provider && params.model
       ? { provider: params.provider, model: params.model }
       : resolveDefaultModelForAgent({ cfg: params.cfg, agentId });
+  if (!resolved) {
+    // No model selects no plugin harness; the built-in runtime owns the missing-model error.
+    return { id: OPENCLAW_AGENT_RUNTIME_ID, source: "implicit" };
+  }
   const policy = resolveAvailableAgentHarnessPolicy({
     ...params,
     mode: "projection",
@@ -69,24 +63,26 @@ export function resolveModelAgentRuntimeMetadata(
     sessionKey: params.sessionKey,
     agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
   });
-  const meta: AgentRuntimeMetadata = {
+  return {
     id: policy.runtime,
     source: policy.runtimeSource ?? "implicit",
   };
-  return applyAcpRuntimeOverlay(meta, params.acpRuntime, params.acpBackend);
 }
 
 /** Resolves the runtime selected for the next turn, excluding historical producer metadata. */
 export function resolveCurrentSessionAgentRuntimeMetadata(
   params: ModelAgentRuntimeMetadataParams,
 ): AgentRuntimeMetadata {
+  if (params.acpRuntime) {
+    return resolveModelAgentRuntimeMetadata(params);
+  }
   const { sessionEntry, ...configuredParams } = params;
   const sessionRuntime = resolveSessionRuntimeOverrideForProvider({
     provider: params.provider,
     entry: sessionEntry,
     cfg: params.cfg,
   });
-  if (params.acpRuntime || !sessionRuntime) {
+  if (!sessionRuntime) {
     return resolveModelAgentRuntimeMetadata(configuredParams);
   }
   const runtime = resolveModelAgentRuntimeMetadata({

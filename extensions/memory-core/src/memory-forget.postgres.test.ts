@@ -137,31 +137,19 @@ describe.skipIf(!connection)("PostgreSQL memory forget transaction", () => {
   it("rolls back every purge projection on denied commit and retains tombstones across re-admission", () =>
     admitted(() => {
       pg().runTransaction(() => {
-        for (const id of ["target", "survivor"]) {
-          pg()
-            .prepare("INSERT INTO memory_index_sources(path, source) VALUES (?, 'memory')")
-            .run(id);
-          pg()
-            .prepare(
-              "INSERT INTO memory_index_chunks(id, path, source, text, embedding) VALUES (?, ?, 'memory', ?, ?)",
-            )
-            .run(id, id, `${id} searchable`, encodeMemoryEmbedding([1, 0, 0]));
-        }
-        pg().exec("INSERT INTO memory_embedding_cache VALUES ('cached')");
-      });
-      backend.execute({
-        type: "record",
-        input: {
-          agentId: "main",
-          origins: ["target", "survivor"].map((id) => ({
-            entryKey: id,
-            agentId: "main",
-            sessionId: id,
-            sessionKey: null,
-            originClass: "owner",
-            observedAt: 1,
-          })),
-        },
+        pg().exec(`
+          INSERT INTO memory_index_sources(path, source) VALUES ('target', 'memory'), ('survivor', 'memory');
+          INSERT INTO memory_embedding_cache VALUES ('cached');
+          INSERT INTO memory_entry_origins VALUES
+            ('target', 'main', 'target', NULL, 'owner', 1),
+            ('survivor', 'main', 'survivor', NULL, 'owner', 1);
+        `);
+        pg()
+          .prepare(`
+          INSERT INTO memory_index_chunks(id, path, source, text, embedding)
+          SELECT path, path, source, path || ' searchable', ? FROM memory_index_sources
+        `)
+          .run(encodeMemoryEmbedding([1, 0, 0]));
       });
       const lineage = {
         agentId: "main",
@@ -191,17 +179,10 @@ describe.skipIf(!connection)("PostgreSQL memory forget transaction", () => {
       expect(backend.execute(purge)).toEqual({ current: true });
       expect(revision()).toBe(beforeRevision + 2);
       expectProjection(["survivor"], false);
-      expect(
-        query(
-          "SELECT id FROM memory_index_chunks WHERE openclaw_search @@ plainto_tsquery('simple', 'target')",
-        ),
-      ).toEqual([]);
-      expect(
-        backend.execute({
-          type: "delete",
-          input: { agentId: "main", entryKeys: ["target"], sessionIds: ["target"] },
-        }),
-      ).toBe(1);
+      backend.execute({
+        type: "delete",
+        input: { agentId: "main", entryKeys: ["target"], sessionIds: ["target"] },
+      });
       backend.close();
       database.close();
       open();

@@ -180,7 +180,7 @@ const faceTimePlugin: OpenClawPluginDefinition = definePluginEntry({
         });
         return {
           ok: true,
-          guidance: "Quit and reopen FaceTime and Phone before re-enabling this plugin.",
+          guidance: "Quit and reopen FaceTime before re-enabling this plugin.",
         };
       } finally {
         uninstalling = false;

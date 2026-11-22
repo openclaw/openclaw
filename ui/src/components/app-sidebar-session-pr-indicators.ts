@@ -1,5 +1,6 @@
 import { createEffect, createMemo, onCleanup } from "solid-js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import { operatorScopeSatisfied } from "../../../src/shared/operator-scope-compat.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
@@ -7,7 +8,6 @@ import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import {
   summarizeSessionPullRequests,
-  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "../lib/session-pull-requests.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
@@ -21,17 +21,15 @@ type IndicatorEntry = {
   branchKnown: boolean;
 };
 
-type SessionPullRequestIndicatorsOptions = {
+/** Passive row projections; the shared store owns snapshots and checkout subscriptions. */
+export function createSessionPullRequestIndicators(options: {
   getConnected: () => boolean;
   getPresented: () => boolean;
   getRows: () => readonly SidebarRecentSession[];
   getSelectedAgentId: () => string;
   getGateway: () => ApplicationGateway | undefined;
   getSessions: () => SessionCapability | undefined;
-};
-
-/** Passive row projections; the shared store owns snapshots and checkout subscriptions. */
-export function createSessionPullRequestIndicators(options: SessionPullRequestIndicatorsOptions) {
+}) {
   // Any admitted reader projects the shared store; the store itself issues passive sidebar reads only
   // for broad readers, so a session-only reader sees snapshots its own conversation read delivered.
   const readable = () => {

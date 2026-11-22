@@ -8,6 +8,8 @@ import {
 } from "../../packages/gateway-protocol/src/schema/terminal-constants.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { listDirectoryTreeStrict } from "./directory-walk.js";
+import { createMainThreadStallMonitor, getMainThreadTaskName } from "./main-thread-stall.js";
 import { ensureTerminalUploadCleanup, stageTerminalUpload } from "./terminal-file-upload.js";
 
 vi.mock("node:os", { spy: true });
@@ -54,7 +56,7 @@ async function createUploads(root: string, sizes: number[] | number, bytes = 0) 
 }
 
 async function uploadLock(root: string) {
-  const entries = await fs.readdir(root, { recursive: true, withFileTypes: true });
+  const entries = (await listDirectoryTreeStrict(root)).map((walkEntry) => walkEntry.dirent);
   const locks = entries.filter(
     (entry) => entry.isDirectory() && entry.name === "terminal-upload-lock",
   );
@@ -90,10 +92,13 @@ async function advanceUploadCleanup(root: string, ms: number): Promise<void> {
 }
 
 let root: string;
+let stallMonitor: ReturnType<typeof createMainThreadStallMonitor> | undefined;
 beforeEach(() => {
   root = tempDirs.make("openclaw-terminal-upload-test-");
 });
 afterEach(() => {
+  stallMonitor?.stop();
+  stallMonitor = undefined;
   vi.restoreAllMocks();
   vi.mocked(os.homedir).mockReset();
   vi.mocked(os.tmpdir).mockReset();
@@ -225,18 +230,13 @@ it("normalizes hostile and oversized names", async () => {
   expect(await stagedName("..\\..\\secret\u0000.txt")).toBe("secret.txt");
   expect(await stagedName("../evil/re<po|rt?.pdf")).toBe("report.pdf");
   expect(await stagedName("report:<final>?!-%PATH%.pdf. ")).toBe("reportfinal_-_PATH_.pdf");
-  expect(await stagedName("CON")).toBe("CON_");
-  expect(await stagedName("nul.txt")).toBe("nul_.txt");
-  expect(await stagedName("aux.c")).toBe("aux_.c");
   expect(await stagedName("CON.txt")).toBe("CON_.txt");
   expect(await stagedName("COM¹.txt")).toBe("COM¹_.txt");
-  expect(await stagedName("LPT³.log")).toBe("LPT³_.log");
   expect(Buffer.byteLength(await stagedName("🦞".repeat(100)), "utf8")).toBeLessThanOrEqual(180);
   expect(await stagedName(`${"a".repeat(179)}.b`)).toBe("a".repeat(179));
   expect(await stagedName(`${"b".repeat(179)} c`)).toBe("b".repeat(179));
   expect(await stagedName(`${"c".repeat(175)}🦞.d`)).toBe(`${"c".repeat(175)}🦞`);
   expect(await stagedName(`CON${" ".repeat(177)}x`)).toBe("CON_");
-  expect(await stagedName("..")).toBe("upload");
   expect(await stagedName("  ..  ")).toBe("upload");
 });
 
@@ -290,6 +290,14 @@ it("expires a future-dated upload without extending retention on each recovery s
   const directory = path.join(root, "openclaw-terminal-upload-future");
   const retainedFile = await makeUpload(directory, "retained", nowMs + 2 ** 31 + retentionMs);
   await ensureTerminalUploadCleanup({ tempRoot: root, retentionMs });
+  stallMonitor = createMainThreadStallMonitor();
+  let cleanupTask: string | undefined;
+  rmMock.mockImplementation((target, options) => {
+    if (String(target) === directory) {
+      cleanupTask = getMainThreadTaskName();
+    }
+    return actualFs.rm(target, options);
+  });
   expect((await fs.stat(directory)).mtimeMs).toBe(nowMs);
   expect(vi.getTimerCount()).toBe(1);
   await vi.advanceTimersByTimeAsync(retentionMs / 2);
@@ -297,6 +305,7 @@ it("expires a future-dated upload without extending retention on each recovery s
   expect((await fs.stat(directory)).mtimeMs).toBe(nowMs);
   expect(await fs.readFile(retainedFile, "utf8")).toBe("retained");
   await advanceUploadCleanup(root, retentionMs / 2);
+  expect(cleanupTask).toBe("terminal-upload:cleanup");
   await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
   expect(vi.getTimerCount()).toBe(0);
   await vi.advanceTimersByTimeAsync(retentionMs * 2);

@@ -127,8 +127,8 @@ const FeishuDriveSchema = Type.Union([
 type FeishuExplorerRootFolderMetaResponse = {
   code: number;
   msg?: string;
-  data?: {
-    token?: string;
+  data: {
+    token: string;
   };
 };
 
@@ -302,28 +302,22 @@ async function getRootFileInfo(client: Lark.Client, fileToken: string) {
 }
 
 async function createFolder(client: Lark.Client, name: string, folderToken?: string) {
-  // Feishu supports using folder_token="0" as the root folder.
-  // We *try* to resolve the real root token (explorer API), but fall back to "0"
-  // because some tenants/apps return 400 for that explorer endpoint.
-  let effectiveToken = folderToken && folderToken !== "0" ? folderToken : "0";
-  if (effectiveToken === "0") {
-    try {
-      const domain = client.domain ?? "https://open.feishu.cn";
-      const root = await client.httpInstance.get<FeishuExplorerRootFolderMetaResponse>(
-        `${domain}/open-apis/drive/explorer/v2/root_folder/meta`,
-      );
-      if (root.code === 0 && root.data?.token) {
-        effectiveToken = root.data.token;
-      }
-    } catch {
-      // ignore and keep "0"
-    }
-  }
+  // Feishu rejects folder_token "0", so root creation needs the real root token.
+  const parentToken =
+    folderToken && folderToken !== "0"
+      ? folderToken
+      : assertDriveApiSuccess(
+          await requestDriveApi<FeishuExplorerRootFolderMetaResponse>({
+            client,
+            method: "GET",
+            url: "/open-apis/drive/explorer/v2/root_folder/meta",
+          }),
+        ).data.token;
 
   const res = await client.drive.file.createFolder({
     data: {
       name,
-      folder_token: effectiveToken,
+      folder_token: parentToken,
     },
   });
   assertFeishuApiSuccess(res);
@@ -343,7 +337,8 @@ async function addComment(
     block_id?: string;
   },
 ): Promise<{ success: true } & Record<string, unknown>> {
-  if (params.block_id?.trim() && params.file_type !== "docx") {
+  const blockId = params.block_id?.trim();
+  if (blockId && params.file_type !== "docx") {
     throw new Error("block_id is only supported for docx comments");
   }
   const response = assertDriveApiSuccess(
@@ -355,7 +350,7 @@ async function addComment(
         data: {
           file_type: params.file_type,
           reply_elements: [{ type: "text", text: params.content }],
-          ...(params.block_id?.trim() ? { anchor: { block_id: params.block_id.trim() } } : {}),
+          ...(blockId ? { anchor: { block_id: blockId } } : {}),
         },
       }),
     ),
@@ -468,7 +463,6 @@ export async function deliverCommentThreadText(
         throw new FeishuReplyCommentError({
           message: response.msg ?? "Feishu Drive reply comment failed",
           feishuCode: response.code,
-          feishuMsg: response.msg,
           feishuLogId: response.log_id,
         });
       } catch (error) {

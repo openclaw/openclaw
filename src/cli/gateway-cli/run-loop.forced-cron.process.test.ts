@@ -27,13 +27,8 @@ it.skipIf(process.platform === "win32").for([
     const { closed, waitForOutput } = observed;
     await waitForOutput("process proof: ready:1");
     expect(child.kill(signal)).toBe(true);
-    if (mode === "timeout") {
-      await waitForOutput("process proof: cron-cancelled:restart");
-      await waitForOutput("process proof: close-entered");
-    } else {
-      await waitForOutput("draining active work before");
-      expect(observed.output).not.toContain("process proof: close-entered");
-    }
+    await waitForOutput("process proof: cron-cancelled:restart");
+    await waitForOutput("process proof: close-entered");
     child.send("inspect");
     await waitForOutput("process proof: held:starts=1:connectionPending=false:cronPending=1");
     expect(fs.existsSync(path.join(root, "cleanup.txt"))).toBe(false);

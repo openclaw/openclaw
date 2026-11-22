@@ -1,3 +1,4 @@
+import type { SessionCatalog } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { sortCronJobs } from "../../../src/cron/service/list-page-sort.ts";
 import type {
   CronCompactJob,
@@ -7,6 +8,7 @@ import type {
 } from "../api/types.ts";
 import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
 import { prepareTeamScaleSessionOwnership } from "./control-ui-sidebar-list-fixture.ts";
+import { createTeamScaleChildActivity } from "./control-ui-team-scale-child-activity.ts";
 import { compactCronJobFixture } from "./cron.ts";
 
 export const TEAM_SCALE_COUNTS = {
@@ -28,6 +30,18 @@ export const TEAM_SCALE_COUNTS = {
   presenceEvents: 12,
 } as const;
 
+export function createTeamScaleCounts(options: {
+  transcriptMessages?: number;
+  largeSnapshot?: boolean;
+}) {
+  return {
+    ...TEAM_SCALE_COUNTS,
+    transcriptMessages:
+      options.transcriptMessages ??
+      (options.largeSnapshot ? 1_100 : TEAM_SCALE_COUNTS.transcriptMessages),
+  };
+}
+
 type TeamScaleSession = GatewaySessionRow & { updatedAt: number; sessionId: string };
 
 export function createTeamScaleSessionInventory({
@@ -35,14 +49,27 @@ export function createTeamScaleSessionInventory({
   people,
   counts,
   offRosterSession = false,
+  directSelectedSession = false,
+  archivedSession = false,
   sidebarPersistentChildren = false,
+  detailsSubagentActivity,
 }: {
   now: number;
   offRosterSession?: boolean;
+  directSelectedSession?: boolean;
+  archivedSession?: boolean;
   sidebarPersistentChildren?: boolean;
+  detailsSubagentActivity?: number;
   people: ControlUiMockPresenceUser[];
   counts: Record<
-    "sessions" | "owners" | "pinned" | "childSessions" | "cronSessions" | "systemSessions",
+    | "sessions"
+    | "firstPage"
+    | "owners"
+    | "pinned"
+    | "childSessions"
+    | "cronSessions"
+    | "systemSessions"
+    | "catalogSessionsPerHost",
     number
   >;
 }) {
@@ -50,11 +77,13 @@ export function createTeamScaleSessionInventory({
     const pinned = index >= counts.sessions - counts.pinned;
     const owner = people[index % counts.owners]!;
     const running = index < 24;
+    const uuidPrefix =
+      offRosterSession && index === counts.sessions - counts.pinned ? "f00dcafe" : "00000000";
     const row: TeamScaleSession = {
       key:
         index === 0
           ? "agent:main:main"
-          : `agent:main:${pinned ? "dashboard" : "chat"}:00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+          : `agent:main:${pinned && !(directSelectedSession && index === counts.sessions - counts.pinned) ? "dashboard" : "chat"}:${uuidPrefix}-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
       ...(index === 0 ? { isMain: true } : {}),
       sessionId: `team-session-${index + 1}`,
       childOwnerSessionKeys: [],
@@ -92,6 +121,11 @@ export function createTeamScaleSessionInventory({
   });
   prepareTeamScaleSessionOwnership(sessions, people.slice(0, counts.owners));
   const pinnedRows = sessions.slice(-counts.pinned);
+  Object.assign(pinnedRows[0]!, {
+    sharingRole: "admin",
+    visibility: "shared",
+    ...(archivedSession ? { archived: true, parentSessionKey: pinnedRows[1]!.key } : {}),
+  });
   const selectedSessionKey = pinnedRows[0]!.key;
   if (offRosterSession) {
     pinnedRows[0]!.pinned = false;
@@ -100,7 +134,10 @@ export function createTeamScaleSessionInventory({
   const pinnedKeys = pinnedRows.filter((row) => row.pinned).map((row) => row.key);
   const persistentParent = sidebarPersistentChildren ? sessions[5]! : undefined;
   if (persistentParent) {
-    persistentParent.owner = sessions[0]!.owner;
+    // Keep child details outside the owned root page so expansion needs its own read.
+    for (const row of sessions.slice(0, counts.firstPage + 1)) {
+      row.owner = sessions[0]!.owner;
+    }
     persistentParent.participants = [
       { identity: { type: "profile", id: people[0]!.id }, label: people[0]!.name },
     ];
@@ -148,7 +185,7 @@ export function createTeamScaleSessionInventory({
         ? { spawnedBy: parent, parentSessionKey: parent, childOwnerSessionKeys: [parent] }
         : {}),
       ...(!child && !cron ? { createdActor: { type: "system", id: "gateway" } } : {}),
-      ...(persistent ? { owner: sessions[1]!.owner, participants: [] } : {}),
+      ...(persistent ? { owner: persistentParent.owner, participants: [] } : {}),
     });
   }
   for (const parent of [
@@ -163,7 +200,29 @@ export function createTeamScaleSessionInventory({
         .map((session) => session.key);
     }
   }
-  return {
+  const catalogs: SessionCatalog[] = ["codex", "claude"].map((id, catalogIndex) => ({
+    id,
+    label: id === "codex" ? "Codex" : "Claude Code",
+    capabilities: { continueSession: true, archive: true },
+    hosts: Array.from({ length: 3 }, (_host, hostIndex) => ({
+      hostId: `node:fixture-${catalogIndex * 3 + hostIndex + 1}`,
+      label: `Fixture workstation ${catalogIndex * 3 + hostIndex + 1}`,
+      kind: "node",
+      connected: true,
+      sessions: Array.from({ length: counts.catalogSessionsPerHost }, (_session, index) => ({
+        threadId: `fixture-thread-${catalogIndex}-${hostIndex}-${index}`,
+        name: `Synthetic code review ${hostIndex + 1}.${index + 1}`,
+        cwd: `/workspace/project-${(index % 5) + 1}`,
+        updatedAt: now - index * 1_000,
+        status: "stored",
+        archived: false,
+        canContinue: true,
+        canArchive: true,
+      })),
+    })),
+  }));
+  const inventory = {
+    catalogs,
     sessions,
     pinnedRows,
     pinnedKeys,
@@ -172,6 +231,8 @@ export function createTeamScaleSessionInventory({
       ? { parentKey: persistentParent.key, childKeys: persistentParent.childSessions! }
       : undefined,
   };
+  sessions.push(...createTeamScaleChildActivity(pinnedRows[0]!, now, detailsSubagentActivity));
+  return inventory;
 }
 
 export function createTeamScaleCronInventory(

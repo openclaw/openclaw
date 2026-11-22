@@ -27,8 +27,11 @@ const probe = (options: CodexPluginConfig["appServer"], env: NodeJS.ProcessEnv =
 describe("Codex native login discovery", () => {
   beforeEach(() => void run.mockReset().mockResolvedValue(loginResult()));
 
-  it("projects API key login as a native-only fact", async () => {
-    run.mockResolvedValue(loginResult("Logged in using an API key - sk-synthetic***11111"));
+  it.each([
+    "Logged in using an API key - sk-synthetic***11111",
+    "API key configured - sk-synthetic***11111\nAuthentication is checked when you send a request.",
+  ])("projects API key status as a native-only fact: %s", async (stderr) => {
+    run.mockResolvedValue(loginResult(stderr));
     expect(await probeCodexNativeAuth({ config, env: {} })).toMatchObject({
       source: "Codex native login",
       mode: "api-key",

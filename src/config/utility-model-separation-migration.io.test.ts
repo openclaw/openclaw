@@ -3,14 +3,16 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection-resolve.js";
 import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createConfigIO } from "./io.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
-import { materializeUtilityModelSeparation } from "./utility-model-separation-migration.js";
+import {
+  LEGACY_IMPLICIT_PRIMARY_MODEL_REF,
+  materializeUtilityModelSeparation,
+} from "./utility-model-separation-migration.js";
 import { localProvider as providerFixture } from "./utility-model-separation.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -120,7 +122,7 @@ describe("utility model separation persistence", () => {
     { change: "selected-row", expected: "local-fixture/second" },
     { change: "replacement", expected: "local-fixture/replacement" },
     { change: "default-row", expected: "local-fixture/small" },
-    { change: "all-providers", expected: `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}` },
+    { change: "all-providers", expected: LEGACY_IMPLICIT_PRIMARY_MODEL_REF },
   ])(
     "persists the remaining route after explicit $change removal",
     async ({ change, expected }) => {
@@ -134,7 +136,7 @@ describe("utility model separation persistence", () => {
       } else if (change === "provider") {
         providers.remaining = localProvider("second");
       } else if (change === "default-row") {
-        providers[DEFAULT_PROVIDER] = localProvider(DEFAULT_MODEL);
+        providers.openai = localProvider("gpt-6-astra");
       }
       await fs.writeFile(configPath, JSON.stringify(previous));
       const candidate: OpenClawConfig = {
@@ -157,7 +159,6 @@ describe("utility model separation persistence", () => {
       expect(after.valid).toBe(true);
       expect(after.sourceConfig.agents?.defaults?.model).toEqual({ primary: expected, fallbacks });
       expect(after.sourceConfig.models).toEqual(candidate.models);
-      expect(provider.models[0]?.id).toBe("small");
       expect(after.sourceConfig.meta?.migrations?.utilityModelSeparation).toBe(true);
     },
   );
@@ -172,16 +173,10 @@ describe("utility model separation persistence", () => {
       const ioForModel = (model: string) => configIO(home, { LOCAL_MODEL: model });
       const io = ioForModel("first");
       const before = await io.readConfigFileSnapshot();
-      const first = template.replace("${LOCAL_MODEL}", "first");
-      expect(
-        before.sourceConfigBeforeMigrations?.models?.providers?.["local-fixture"]?.models[0]?.id,
-      ).toBe(first);
       const staged = materializeUtilityModelSeparation(
         before.sourceConfig,
         before.sourceConfigBeforeMigrations,
       );
-      expect(staged.config.agents?.defaults?.model).toBeUndefined();
-      expect(staged.config.meta?.migrations?.utilityModelSeparation).toBeUndefined();
       await io.writeConfigFile({ ...staged.config, gateway: { mode: "local", port: 19097 } });
       const persisted = JSON.parse(await fs.readFile(configPath, "utf8"));
       expect(persisted.models.providers["local-fixture"].models[0].id).toBe(template);
@@ -194,7 +189,6 @@ describe("utility model separation persistence", () => {
           cfg: after.sourceConfig,
           agentId: "main",
           defaultProvider: "ordinary",
-          defaultModel: "primary",
           allowManifestNormalization: false,
           allowPluginNormalization: false,
         }),

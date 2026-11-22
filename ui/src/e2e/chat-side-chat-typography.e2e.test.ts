@@ -70,24 +70,40 @@ suite.define(() => {
       );
       const sideInput = await typography(side.getByRole("textbox"));
       if (width === 390) {
-        // The collapsed mobile composer has a compact 22px row; Side chat
-        // retains its multiline editor. Both consume the same text scale.
-        expect(mainInput).toMatchObject({ size: "20px", lineHeight: "22px", weight: "500" });
-        expect(sideInput).toEqual({ ...mainInput, lineHeight: "30px", weight: "400" });
+        // The compact row and multiline Side chat share type and text scaling,
+        // while each layout owns its line height.
+        expect(mainInput.size).toBe("17.5px");
+        expect(sideInput).toMatchObject({
+          family: mainInput.family,
+          size: mainInput.size,
+          weight: mainInput.weight,
+          smoothing: mainInput.smoothing,
+        });
+        for (const input of [mainInput, sideInput]) {
+          expect(Number.parseFloat(input.lineHeight)).toBeGreaterThanOrEqual(
+            Number.parseFloat(input.size),
+          );
+        }
       } else {
         expect(sideInput).toEqual(mainInput);
       }
       await side.getByRole("button", { name: "Copy code", exact: true }).click();
       await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(answerCode);
-      const wrap = side.locator(".code-block-wrap");
+      const assistant = side.locator(".chat-group.assistant");
+      const wrap = assistant.locator(".code-block-wrap");
       await expect.poll(() => wrap.isVisible()).toBe(true);
       await wrap.click();
       expect(await wrap.getAttribute("aria-pressed")).toBe("true");
-      const code = side.locator(".code-block-viewport code");
+      const code = assistant.locator(".code-block-viewport code");
       expect(await code.evaluate((node) => getComputedStyle(node).whiteSpace)).toBe("pre-wrap");
       for (const surface of [main, side]) {
         const user = surface.locator(".chat-group.user");
-        expect(await user.locator(".code-block-wrapper").count()).toBe(0);
+        expect(
+          await user
+            .locator(".code-block-copy, .code-block-expand, .code-block-json-modes")
+            .count(),
+        ).toBe(0);
+        expect(await user.locator(".code-block-wrap").isVisible()).toBe(false);
         expect(await user.locator("pre code").textContent()).toContain("eight");
       }
       const overflow = await side

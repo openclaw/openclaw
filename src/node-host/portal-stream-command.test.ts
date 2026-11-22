@@ -5,7 +5,7 @@ import { mockIpv4OnlyLocalhostLookup } from "../../test/helpers/loopback-dns.js"
 import { NODE_WORKER_PORTAL_STREAM_COMMAND } from "../infra/node-commands.js";
 import * as logger from "../logger.js";
 import { invokeNodeWorkerSupervisorCommand } from "./node-worker-supervisor-commands.js";
-import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
+import { createPortalSupervisor } from "./node-worker-supervisor.test-support.js";
 import {
   listen,
   portOf,
@@ -15,17 +15,7 @@ import {
 } from "./stream-command.test-support.js";
 
 const { cleanups, closeServer, gateway } = useStreamFixture();
-const unexpectedSupervisorCommand = async (): Promise<never> => {
-  throw new Error("Portal stream must not call another supervisor command");
-};
-const portalSupervisor: NodeWorkerSupervisorControl = {
-  launch: unexpectedSupervisorCommand,
-  status: unexpectedSupervisorCommand,
-  retainWorkspaces: unexpectedSupervisorCommand,
-  cancel: unexpectedSupervisorCommand,
-  observeProcesses: unexpectedSupervisorCommand,
-  stopEnvironment: unexpectedSupervisorCommand,
-};
+const portalSupervisor = createPortalSupervisor();
 function invokePortal(
   port: number,
   options: Partial<

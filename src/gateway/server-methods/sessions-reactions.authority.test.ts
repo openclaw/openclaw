@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import {
   addSessionMember,
   removeSessionMember,
@@ -12,7 +12,6 @@ import {
   bindSessionRowProjection,
   getSessionRowProjection,
 } from "../session-row-projection-access.js";
-import { createSessionRowProjection } from "../session-row-projection.js";
 import * as sharingPreparation from "../session-sharing-preparation.js";
 import * as transcriptReaders from "../session-transcript-readers.js";
 import {
@@ -40,23 +39,17 @@ it("lists and commits member reactions without caller-thread SQL", () =>
     await seedSession({ visibility: "read-only" });
     addSessionMember(transcriptScope, { identityId: "alice", addedBy: "owner" });
     const messageId = await appendMessage();
-    const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
-    try {
-      await projection.ensureMaterialized();
-      const requestContext = context(roleConfig("view"));
-      bindSessionRowProjection(requestContext, () => projection);
-      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-      const exec = vi.spyOn(DatabaseSync.prototype, "exec");
-      expect((await setReaction(messageId, {}, client("alice"), requestContext))[0]).toBe(true);
-      expect((await listReactions(client("alice"), requestContext))[1]).toMatchObject({
-        sessionId,
-        reactions: { [messageId]: [{ emoji: "👍", count: 1 }] },
-      });
-      expect(prepare).not.toHaveBeenCalled();
-      expect(exec).not.toHaveBeenCalled();
-    } finally {
-      projection.dispose();
-    }
+    const requestContext = context(roleConfig("view"));
+    await listReactions(client("alice"), requestContext);
+    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+    const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+    expect((await setReaction(messageId, {}, client("alice"), requestContext))[0]).toBe(true);
+    expect((await listReactions(client("alice"), requestContext))[1]).toMatchObject({
+      sessionId,
+      reactions: { [messageId]: [{ emoji: "👍", count: 1 }] },
+    });
+    expect(prepare).not.toHaveBeenCalled();
+    expect(exec).not.toHaveBeenCalled();
   }));
 
 it("awaits membership preparation and rejects failed or revoked preparations", () =>
@@ -132,7 +125,7 @@ it("rechecks current membership, policy, source, and caller after message prepar
         reactor.internal = {
           syntheticClient: true,
           operatorRoleActor: { kind: "operator", profileId: "alice" },
-          operatorRunAuthority: createAdmittedRunOperatorAuthority({
+          operatorRunAuthority: createTestOperatorAuthority({
             profileId: "alice",
             scopes: ["operator.read", "operator.write"],
             assertCurrent: () => {

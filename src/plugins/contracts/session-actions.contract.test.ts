@@ -3,6 +3,7 @@ import {
   createPluginRegistryFixture,
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ADMIN_SCOPE,
@@ -19,6 +20,9 @@ import { handleGatewayRequest } from "../../gateway/server-methods.js";
 import { pluginHostHookHandlers } from "../../gateway/server-methods/plugin-host-hooks.js";
 import type { GatewayClient, RespondFn } from "../../gateway/server-methods/types.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
+import { createFeatureClient, defineFeatureContract } from "../../plugin-sdk/feature-contract.js";
+import { defineFeaturePlugin } from "../../plugin-sdk/feature-plugin.js";
+import * as profiles from "../../state/user-profile-list.js";
 import type { PluginSessionActionContext, PluginSessionActionRegistration } from "../host-hooks.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
@@ -97,6 +101,16 @@ function requireHookError(response: HookResponse): { code?: unknown; message?: u
   return error;
 }
 
+function actionClient(scopes: string[]) {
+  return {
+    connId: "test-client",
+    scopes,
+    allowsAgent: expect.any(Function),
+    isSharedGateway: expect.any(Function),
+    assertCurrent: expect.any(Function),
+  };
+}
+
 function expectObservedEvent(
   observed: unknown[],
   index: number,
@@ -169,7 +183,13 @@ function eventEmitter(api: Pick<OpenClawPluginApi, "agent"> | undefined, runId: 
 }
 
 describe("plugin session actions", () => {
+  // The Gateway installs the profile catalog before admitting requests; this
+  // harness supplies its shared-Gateway fact as a Gateway with several people.
+  beforeEach(() => {
+    vi.spyOn(profiles, "hasMultipleResidentSessionSharingIdentities").mockReturnValue(true);
+  });
   afterEach(() => {
+    vi.restoreAllMocks();
     setActivePluginRegistry(createEmptyPluginRegistry());
     resetAgentEventsForTest();
   });
@@ -410,6 +430,54 @@ describe("plugin session actions", () => {
       });
     }
   });
+  it("delivers feature handler failures through the Gateway to feature clients", async () => {
+    const contract = defineFeatureContract({
+      pluginId: "feature-error-fixture",
+      operations: {
+        inspect: {
+          kind: "query",
+          description: "Inspect fixture",
+          input: Type.Object({}),
+          output: Type.String(),
+        },
+      },
+      events: {},
+    });
+    const entry = defineFeaturePlugin({
+      contract,
+      name: "Feature error fixture",
+      description: "Fixture failure",
+      setup: () => ({
+        inspect() {
+          throw new Error("Fixture operation needs attention");
+        },
+      }),
+    });
+    const { registry } = registerActionFixture({ id: contract.pluginId, register: entry.register });
+    setActivePluginRegistry(registry.registry);
+    const client = createFeatureClient(contract, {
+      pluginId: contract.pluginId,
+      signal: new AbortController().signal,
+      connection: { connected: true },
+      async request<T>(_method: string, body = {}): Promise<T> {
+        const response = await callPluginSessionActionForTest({ body, scopes: [READ_SCOPE] }, true);
+        expect(response).toEqual({
+          ok: true,
+          payload: {
+            ok: false,
+            error: "Fixture operation needs attention",
+            code: "OPERATION_FAILED",
+          },
+          error: undefined,
+        });
+        return response.payload as T;
+      },
+      onEvent: () => () => {},
+      subscribe: () => () => {},
+    });
+    await expect(client.invoke("inspect", {})).rejects.toThrow("Fixture operation needs attention");
+  });
+
   describe("authorizes session actions through the gateway by action-declared scopes", () => {
     const pluginId = "scope-action-fixture";
     const actionScopes = {
@@ -512,7 +580,7 @@ describe("plugin session actions", () => {
         expect(handler).toHaveBeenCalledWith({
           pluginId,
           actionId,
-          client: { connId: "test-client", scopes },
+          client: actionClient(scopes),
         });
       }
     });
@@ -539,7 +607,7 @@ describe("plugin session actions", () => {
         actionId: "approve",
         sessionKey: MAIN_SESSION_KEY,
         agentId: "main",
-        client: { connId: "test-client", scopes: [APPROVALS_SCOPE] },
+        client: actionClient([APPROVALS_SCOPE]),
       });
       const blankPluginId = await callPluginSessionActionForTest(
         {

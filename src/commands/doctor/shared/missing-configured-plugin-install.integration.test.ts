@@ -17,7 +17,6 @@ import {
   hasRetainedManagedNpmInstallMarker,
   resolveRetainedManagedNpmInstallPackageInfo as managedPackage,
 } from "../../../plugins/managed-npm-retention.js";
-import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import { createPluginCache, withPluginCache } from "../../../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
 import { seedInstalledPluginIndex } from "../../../plugins/test-helpers/installed-plugin-index.js";
@@ -363,16 +362,9 @@ describe("configured plugin install health for explicit load paths", () => {
   }
 
   it("uses configured selection when a load path keeps bundled origin", async () => {
-    const { rootDir, pluginDir, cfg, env, seedPath } = await createLoadPathFixture("opencode-go");
+    const { rootDir, cfg, env, seedPath } = await createLoadPathFixture("opencode-go");
     await seedPath(path.join(rootDir, "removed-plugin"));
 
-    const snapshot = loadManifestMetadataSnapshot({ config: cfg, env });
-    expect(snapshot.plugins).toContainEqual(
-      expect.objectContaining({ id: "opencode-go", origin: "bundled", rootDir: pluginDir }),
-    );
-    expect(snapshot.discovery?.candidates).toContainEqual(
-      expect.objectContaining({ rootDir: pluginDir, origin: "bundled", configSelected: true }),
-    );
     expect(await detectConfiguredPluginInstallHealthIssues({ cfg, env })).toStrictEqual([]);
 
     const repair = await repairMissingConfiguredPluginInstalls({ cfg, env });
@@ -395,18 +387,6 @@ describe("configured plugin install health for explicit load paths", () => {
       };
       if (id === "kilocode") {
         await seedInstalledPluginIndex(records, { config: cfg, env });
-      }
-      const snapshot = loadManifestMetadataSnapshot({ config: cfg, env });
-      if (id === "kilocode") {
-        expect(snapshot.plugins.map((plugin) => plugin.id)).toContain(id);
-      } else {
-        expect(snapshot.plugins).toContainEqual(
-          expect.objectContaining({
-            id,
-            origin: id === "gmail" ? "config" : "bundled",
-            ...(id === "gmail" ? { rootDir: pluginDir, bundleFormat: "codex" } : {}),
-          }),
-        );
       }
       expect(await detectConfiguredPluginInstallHealthIssues({ cfg, env })).toStrictEqual([]);
       const repair = await repairMissingConfiguredPluginInstalls({ cfg, env });

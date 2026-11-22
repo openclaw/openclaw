@@ -42,10 +42,8 @@ const LIVE_TEST_PNG_URL = new URL(
   import.meta.url,
 );
 
-type LiveCacheRegressionResult = {
-  regressions: string[];
+type LiveCacheRegressionResult = BaselineFindings & {
   summary: Record<string, Record<string, unknown>>;
-  warnings: string[];
 };
 type CacheTurn = {
   apiKey: string;
@@ -90,20 +88,13 @@ function makeUserTurn(content: Extract<Message, { role: "user" }>["content"]): M
   return { role: "user", content, timestamp: Date.now() };
 }
 
-function extractFirstToolCall(message: AssistantMessage) {
-  return message.content.find((block) => block.type === "toolCall");
-}
-
 function normalizeCacheUsage(usage: AssistantMessage["usage"] | undefined): CacheUsage {
-  const value = usage as Record<string, unknown> | null | undefined;
-  const readUsageNumber = (key: keyof CacheUsage): number | undefined =>
-    typeof value?.[key] === "number" ? value[key] : undefined;
-  return {
-    input: readUsageNumber("input"),
-    output: readUsageNumber("output"),
-    cacheRead: readUsageNumber("cacheRead"),
-    cacheWrite: readUsageNumber("cacheWrite"),
-  };
+  const normalized: CacheUsage = {};
+  for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+    const value = usage?.[key];
+    normalized[key] = typeof value === "number" ? value : undefined;
+  }
+  return normalized;
 }
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -136,34 +127,33 @@ function completeCacheTurn(params: CacheTurn, label: string) {
 async function runToolOnlyTurn(
   params: Omit<CacheTurn, "messages" | "tools" | "maxTokens"> & { tool: Tool },
 ) {
-  const complete = (prompt: string, label: string) =>
-    completeCacheTurn(
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const prompt =
+      attempt === 0
+        ? `Call the tool \`${params.tool.name}\` with {}. IMPORTANT: respond ONLY with the tool call and no other text.`
+        : `Return only a tool call for \`${params.tool.name}\` with {}. No text.`;
+    const response = await completeCacheTurn(
       {
         ...params,
         messages: [makeUserTurn(prompt)],
         tools: [params.tool],
         maxTokens: 128,
       },
-      `${params.providerTag} ${params.tool.name} tool-only ${label}`,
+      `${params.providerTag} ${params.tool.name} tool-only ${attempt === 0 ? "turn" : `retry ${attempt}`}`,
     );
-  let prompt = `Call the tool \`${params.tool.name}\` with {}. IMPORTANT: respond ONLY with the tool call and no other text.`;
-  let response = await complete(prompt, "turn");
-
-  let toolCall = extractFirstToolCall(response);
-  let text = extractEmbeddedAssistantText(response);
-  for (let attempt = 0; attempt < 2 && (!toolCall || text.length > 0); attempt += 1) {
-    prompt = `Return only a tool call for \`${params.tool.name}\` with {}. No text.`;
-    response = await complete(prompt, `retry ${attempt + 1}`);
-    toolCall = extractFirstToolCall(response);
-    text = extractEmbeddedAssistantText(response);
+    const toolCall = response.content.find((block) => block.type === "toolCall");
+    const text = extractEmbeddedAssistantText(response);
+    if (attempt < 2 && (!toolCall || text.length > 0)) {
+      continue;
+    }
+    assert(toolCall, `expected tool call for ${params.tool.name}`);
+    assert(
+      text.length === 0,
+      `expected tool-only response for ${params.tool.name}, got ${JSON.stringify(text)}`,
+    );
+    return { prompt, response, toolCall };
   }
-
-  assert(toolCall, `expected tool call for ${params.tool.name}`);
-  assert(
-    text.length === 0,
-    `expected tool-only response for ${params.tool.name}, got ${JSON.stringify(text)}`,
-  );
-  return { prompt, response, toolCall };
+  throw new Error(`expected tool call for ${params.tool.name}`);
 }
 
 async function completeCacheProbe(
@@ -294,11 +284,8 @@ function formatUsage(usage: CacheUsage | undefined) {
 async function runRepeatedLaneWithBaselineRetry(
   params: CacheLaneContext,
 ): Promise<{ result: LaneResult; findings: BaselineFindings; attempts: number }> {
-  let result: LaneResult | undefined;
-  let findings: BaselineFindings = { regressions: [], warnings: [] };
-  let attempts = 0;
   for (let attempt = 1; attempt <= 1 + LIVE_CACHE_LANE_RETRIES; attempt += 1) {
-    attempts = attempt;
+    let result: LaneResult;
     try {
       result = await runRepeatedLane({
         ...params,
@@ -316,13 +303,13 @@ async function runRepeatedLaneWithBaselineRetry(
       }
       throw error;
     }
-    findings = evaluateAgainstBaseline({
+    const findings = evaluateAgainstBaseline({
       lane: params.lane,
       provider: params.providerTag,
       result,
     });
     if (!shouldRetryBaselineFindings(findings, attempt)) {
-      break;
+      return { result, findings, attempts: attempt };
     }
     logLiveCache(
       `${params.providerTag} ${params.lane} baseline miss; retrying lane once: ${JSON.stringify(
@@ -331,16 +318,33 @@ async function runRepeatedLaneWithBaselineRetry(
     );
   }
 
-  assert(result, `expected ${params.providerTag} ${params.lane} cache lane result`);
-  return { result, findings, attempts };
-}
-
-function isAnthropicEmptyCacheProbe(error: unknown): boolean {
-  return error instanceof CacheProbeTextMismatchError && error.text.trim().length === 0;
+  throw new Error(`expected ${params.providerTag} ${params.lane} cache lane result`);
 }
 
 function shouldSkipAnthropicCacheProviderDrift(error: unknown): boolean {
   return Boolean(shouldSkipLiveProviderDrift({ error, allowAuth: true, allowBilling: true }));
+}
+
+function recordAnthropicDrift(
+  error: unknown,
+  lane: CacheLane | "disabled",
+  warnings: string[],
+): boolean {
+  const empty = error instanceof CacheProbeTextMismatchError && error.text.trim().length === 0;
+  const toolDrift = lane !== "disabled" && isAnthropicToolProbeDrift(error);
+  if (!shouldSkipAnthropicCacheProviderDrift(error) && !empty && !toolDrift) {
+    return false;
+  }
+  const reason =
+    empty && lane !== "disabled"
+      ? "empty response"
+      : toolDrift
+        ? "tool probe drift"
+        : "account drift";
+  const warning = `anthropic ${lane} skipped: ${reason}`;
+  warnings.push(warning);
+  logLiveCache(warning);
+  return true;
 }
 
 async function runAnthropicCacheLane(
@@ -371,19 +375,7 @@ async function runAnthropicCacheLane(
     }
   }
 
-  if (
-    shouldSkipAnthropicCacheProviderDrift(lastError) ||
-    isAnthropicEmptyCacheProbe(lastError) ||
-    isAnthropicToolProbeDrift(lastError)
-  ) {
-    const reason = isAnthropicEmptyCacheProbe(lastError)
-      ? "empty response"
-      : isAnthropicToolProbeDrift(lastError)
-        ? "tool probe drift"
-        : "account drift";
-    const warning = `anthropic ${params.lane} skipped: ${reason}`;
-    params.warnings.push(warning);
-    logLiveCache(warning);
+  if (recordAnthropicDrift(lastError, params.lane, params.warnings)) {
     return undefined;
   }
   throw lastError;
@@ -409,10 +401,7 @@ async function runAnthropicDisabledCacheLane(params: {
       }),
     };
   } catch (error) {
-    if (shouldSkipAnthropicCacheProviderDrift(error) || isAnthropicEmptyCacheProbe(error)) {
-      const warning = "anthropic disabled skipped: account drift";
-      params.warnings.push(warning);
-      logLiveCache(warning);
+    if (recordAnthropicDrift(error, "disabled", params.warnings)) {
       return undefined;
     }
     throw error;

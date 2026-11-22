@@ -1,8 +1,8 @@
 import type { AgentEvent } from "openclaw/plugin-sdk/agent-core";
 import { vi } from "vitest";
+import { createToolHandlerMocks } from "./agent-tool-handler-state.test-helpers.js";
 import { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.completion.js";
 import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
-import { EmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
 import { prepareToolResult } from "./embedded-agent-tool-results.js";
 
 export type ToolExecutionEndEvent = Omit<
@@ -59,19 +59,8 @@ export function createTestContext() {
       onExecutionPhase,
       onToolResult: undefined,
     },
-    flushBlockReplyBuffer: vi.fn(),
+    ...createToolHandlerMocks(warn),
     hookRunner: undefined,
-    log: {
-      debug: vi.fn(),
-      info: vi.fn(),
-      warn,
-    },
-    state: new EmbeddedAgentSubscribeState({}),
-    shouldEmitToolResult: () => false,
-    shouldEmitToolOutput: () => false,
-    emitToolSummary: vi.fn(),
-    emitToolOutput: vi.fn(),
-    trimMessagingToolSent: vi.fn(),
   };
 
   return { ctx, warn, onBlockReplyFlush, onAgentEvent, onExecutionPhase };

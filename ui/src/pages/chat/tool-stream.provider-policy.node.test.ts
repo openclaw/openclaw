@@ -22,14 +22,19 @@ const pendingSend = (
 ): ChatQueueItem => ({ id, text, createdAt, sendRunId, sendState: "sending", sessionKey: "main" });
 
 function queuedHost(chatQueue: ChatQueueItem[] = [], chatSending?: boolean) {
-  return { ...createHost(), chatMessages: [], chatQueue, ...(chatSending ? { chatSending } : {}) };
+  return {
+    ...createHost(),
+    settings: {},
+    chatMessages: [],
+    chatQueue,
+    ...(chatSending ? { chatSending } : {}),
+  };
 }
 
 const policy = {
   phase: "provider_policy",
   category: "cyber",
   provider: "openai",
-  model: "original-model",
   fallbackModel: "alternate-model",
 };
 const policyEvent = (state: string, seq: number, runId = "run-1", sessionKey = "main") =>

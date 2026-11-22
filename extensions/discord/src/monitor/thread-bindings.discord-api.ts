@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   asNonArrayRecord,
@@ -55,17 +56,11 @@ export function normalizeDiscordBindingChannelId(raw?: string | null): string | 
 }
 
 export function summarizeDiscordError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
   if (
-    typeof err === "string" ||
-    typeof err === "number" ||
-    typeof err === "boolean" ||
-    typeof err === "bigint" ||
-    typeof err === "symbol"
+    err instanceof Error ||
+    (err != null && typeof err !== "object" && typeof err !== "function")
   ) {
-    return String(err);
+    return coerceErrorMessage(err);
   }
   return "error";
 }

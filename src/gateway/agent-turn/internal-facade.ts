@@ -94,6 +94,8 @@ export function createInternalAgentTurnFacade(
         client: options.client,
         context,
         methodRegistry,
+        controllerInput: dispatchOptions.controllerInput,
+        assertPreparationCurrent: dispatchOptions.assertAdmissionCurrent,
       });
       // Turn admission owns its own authority; this pre-dispatch check transfers no custody.
       authorization.sessionMutationAuthorization?.release?.();
@@ -168,7 +170,7 @@ export function createInternalAgentTurnFacade(
           const snapshot = watchdog?.snapshot();
           const decision = snapshot?.current ? watchdog?.decide() : undefined;
           const deadlineAtMs = decision
-            ? decision.action === "observe" || decision.action === "warn"
+            ? decision.action === "observe"
               ? Math.min(
                   snapshot?.executionDeadlineAtMs ?? Infinity,
                   decision.deadlineAtMs ?? Infinity,
@@ -276,7 +278,9 @@ export function createInternalAgentTurnFacade(
       };
       const operation = context.trackExecution(async () => {
         preparationOwnedByExecution = true;
+        let releaseExecutionSource: (() => void) | undefined;
         try {
+          releaseExecutionSource = dispatchOptions.executionSource?.retain?.();
           return await runWithGatewayRequestEnvelope(
             method,
             options.client,
@@ -340,6 +344,7 @@ export function createInternalAgentTurnFacade(
                 privateCompletion: dispatchOptions.privateCompletion,
                 replyExpectation: dispatchOptions.replyExpectation,
                 settleWakeReplay: dispatchOptions.settleWakeReplay,
+                subagentCompletions: dispatchOptions.subagentCompletions,
               });
             },
             {
@@ -350,6 +355,7 @@ export function createInternalAgentTurnFacade(
             },
           );
         } finally {
+          releaseExecutionSource?.();
           entry?.release();
         }
       });

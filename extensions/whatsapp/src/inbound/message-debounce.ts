@@ -37,38 +37,8 @@ export function createWhatsAppInboundMessageDebouncer(options: {
     const admission = msg.admission;
     return `${admission.accountId}:${admission.conversation.id}`;
   };
-  const resolveSenderKey = (msg: WhatsAppQueuedInboundMessage): string => {
-    const admission = msg.admission;
-    const sender = msg.platform.sender;
-    return admission.conversation.kind === "group"
-      ? (getPrimaryIdentityId(sender ?? null) ??
-          msg.platform.senderJid ??
-          msg.platform.senderE164 ??
-          msg.platform.senderName ??
-          admission.sender.id)
-      : admission.conversation.id;
-  };
   const shouldDebounce = (msg: AdmittedWebInboundCallbackMessage): boolean =>
     options.shouldDebounce?.(msg) ?? true;
-  const trackKey = (key: string, senderKey: string) => {
-    pendingKeys.set(key, { count: (pendingKeys.get(key)?.count ?? 0) + 1, senderKey });
-  };
-  const releaseKey = (entry: WhatsAppQueuedInboundMessage) => {
-    if (!entry.debounceKey || entry.debounceKeyTracked !== true) {
-      return;
-    }
-    const pending = pendingKeys.get(entry.debounceKey);
-    if (pending && pending.count > 1) {
-      pending.count -= 1;
-    } else {
-      pendingKeys.delete(entry.debounceKey);
-    }
-  };
-  const orderEntries = (entries: WhatsAppQueuedInboundMessage[]) =>
-    entries.toSorted((a, b) => {
-      const timestampDiff = (a.event.timestamp ?? 0) - (b.event.timestamp ?? 0);
-      return timestampDiff !== 0 ? timestampDiff : (a.receiveOrder ?? 0) - (b.receiveOrder ?? 0);
-    });
 
   const debouncer = createInboundDebouncer<WhatsAppQueuedInboundMessage & { debounceMs: number }>({
     debounceMs: options.resolveDebounceMs(),
@@ -77,9 +47,20 @@ export function createWhatsAppInboundMessageDebouncer(options: {
     shouldDebounce,
     onFlush: (entries, createFlush) => {
       for (const entry of entries) {
-        releaseKey(entry);
+        if (!entry.debounceKey || entry.debounceKeyTracked !== true) {
+          continue;
+        }
+        const pending = pendingKeys.get(entry.debounceKey);
+        if (pending && pending.count > 1) {
+          pending.count -= 1;
+        } else {
+          pendingKeys.delete(entry.debounceKey);
+        }
       }
-      const orderedEntries = orderEntries(entries);
+      const orderedEntries = entries.toSorted((a, b) => {
+        const timestampDiff = (a.event.timestamp ?? 0) - (b.event.timestamp ?? 0);
+        return timestampDiff !== 0 ? timestampDiff : (a.receiveOrder ?? 0) - (b.receiveOrder ?? 0);
+      });
       const { lifecycle, settle, abandon } = fanInChannelIngressLifecycles(
         orderedEntries.map((entry) => entry.turnAdoptionLifecycle),
       );
@@ -151,7 +132,16 @@ export function createWhatsAppInboundMessageDebouncer(options: {
     const message = { ...input, debounceMs: options.resolveDebounceMs() };
     const key = buildKey(message);
     message.debounceKey = key;
-    const senderKey = resolveSenderKey(message);
+    const admission = message.admission;
+    const sender = message.platform.sender;
+    const senderKey =
+      admission.conversation.kind === "group"
+        ? (getPrimaryIdentityId(sender ?? null) ??
+          message.platform.senderJid ??
+          message.platform.senderE164 ??
+          message.platform.senderName ??
+          admission.sender.id)
+        : admission.conversation.id;
     const pending = pendingKeys.get(key);
     // One conversation lane orders dispatch; sender changes end the current
     // batch so payloads and attribution never combine across participants.
@@ -160,7 +150,7 @@ export function createWhatsAppInboundMessageDebouncer(options: {
     }
     if (message.debounceMs > 0 && shouldDebounce(message)) {
       message.debounceKeyTracked = true;
-      trackKey(key, senderKey);
+      pendingKeys.set(key, { count: (pendingKeys.get(key)?.count ?? 0) + 1, senderKey });
       options.onPendingWorkChanged();
       notifyWork();
     }

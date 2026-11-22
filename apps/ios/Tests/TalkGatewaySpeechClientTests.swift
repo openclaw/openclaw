@@ -9,7 +9,7 @@ extension TalkBufferedAudioPlaying {
 }
 
 @MainActor
-private final class RecordingGatewaySpeechSynthesizer: TalkGatewaySpeechSynthesizing {
+final class RecordingGatewaySpeechSynthesizer: TalkGatewaySpeechSynthesizing {
     let audio: TalkGatewaySpeechAudio
     private(set) var requests: [TalkGatewaySpeechRequest] = []
 
@@ -47,7 +47,7 @@ private final class SuspendedGatewaySpeechSynthesizer: TalkGatewaySpeechSynthesi
 }
 
 @MainActor
-private final class RecordingBufferedAudioPlayer: TalkBufferedAudioPlaying {
+final class RecordingBufferedAudioPlayer: TalkBufferedAudioPlaying {
     private(set) var payloads: [Data] = []
 
     func play(data: Data) async -> StreamingPlaybackResult {
@@ -234,6 +234,45 @@ struct TalkGatewaySpeechClientTests {
         #expect(synthesizer.requests[0].modelId == nil)
     }
 
+    @Test(arguments: [false, true])
+    func `repeated start and microphone mute preserve an active continuous speech turn`(muted: Bool) async {
+        let synthesizer = RecordingGatewaySpeechSynthesizer(audio: TalkGatewaySpeechAudio(
+            data: Data([1, 2, 3]), provider: "xiaomi", outputFormat: "mp3"))
+        let audioPlayer = InterruptibleBufferedAudioPlayer()
+        let manager = TalkModeManager(
+            allowSimulatorCapture: true,
+            gatewaySpeechSynthesizer: synthesizer)
+        manager.bufferedPlayer = audioPlayer
+        manager.updateGatewayConnected(true)
+        manager.isEnabled = true
+        manager._test_applyLoadedTalkConfig(Self.parseSpeechProvider("xiaomi", interruptOnSpeech: true))
+        manager._test_setContinuousTranscriptProcessingActive(true)
+        defer {
+            manager._test_setContinuousTranscriptProcessingActive(false)
+            manager.stop()
+        }
+
+        let playback = Task { await manager._test_playAssistant(text: "Continue speaking") }
+        while !audioPlayer.isPlaying {
+            await Task.yield()
+        }
+
+        await manager.setMicrophoneMuted(muted)
+        await manager.start()
+
+        #expect(manager._test_hasRecognitionRequest() == !muted)
+        #expect(manager.canKeepContinuousTalkActiveInBackground)
+        #expect(manager.phase == .speaking)
+        #expect(manager.isSpeaking)
+        #expect(!manager.isListening)
+        #expect(audioPlayer.isPlaying)
+        await manager.setMicrophoneMuted(false)
+        #expect(manager._test_hasRecognitionRequest())
+        #expect(audioPlayer.isPlaying)
+        manager.stop()
+        await playback.value
+    }
+
     @Test func `stopped talk does not play completed gateway synthesis`() async {
         let parsed = Self.parseSpeechProvider("xiaomi")
         let synthesizer = SuspendedGatewaySpeechSynthesizer()
@@ -288,31 +327,6 @@ struct TalkGatewaySpeechClientTests {
         #expect(parsed.route == .gatewayTalkSpeak)
     }
 
-    @Test func `system voice keeps BCP 47 locale separate from provider language`() {
-        let manager = TalkModeManager(allowSimulatorCapture: true)
-        manager._test_applyLoadedTalkConfig(
-            Self.parseSpeechProvider("elevenlabs", speechLocale: "tr_TR"))
-
-        let configured = manager._test_resolvedSpeechLanguages(
-            directiveLanguage: nil)
-        let directive = manager._test_resolvedSpeechLanguages(
-            directiveLanguage: "de_DE")
-        let providerCompatible = manager._test_resolvedSpeechLanguages(
-            directiveLanguage: "tr")
-        let unavailableDirective = manager._test_resolvedSpeechLanguages(
-            directiveLanguage: "zz-ZZ",
-            isSystemVoiceAvailable: { $0 == "tr-TR" })
-
-        #expect(configured.provider == nil)
-        #expect(configured.systemVoice == "tr-TR")
-        #expect(directive.provider == nil)
-        #expect(directive.systemVoice == "de-DE")
-        #expect(providerCompatible.provider == "tr")
-        #expect(providerCompatible.systemVoice == "tr")
-        #expect(unavailableDirective.provider == nil)
-        #expect(unavailableDirective.systemVoice == "tr-TR")
-    }
-
     @Test func `explicit realtime config keeps realtime relay`() {
         let parsed = TalkModeGatewayConfigParser.parse(
             config: [
@@ -351,11 +365,10 @@ struct TalkGatewaySpeechClientTests {
     private static func parseSpeechProvider(
         _ provider: String,
         model: String? = "speech-model",
-        interruptOnSpeech: Bool = false,
-        speechLocale: String? = nil) -> TalkModeGatewayConfigState
+        interruptOnSpeech: Bool = false) -> TalkModeGatewayConfigState
     {
         let providerConfig: [String: String] = model.map { ["model": $0] } ?? [:]
-        var talkConfig: [String: Any] = [
+        let talkConfig: [String: Any] = [
             "provider": provider,
             "providers": [provider: providerConfig],
             "resolved": [
@@ -364,7 +377,6 @@ struct TalkGatewaySpeechClientTests {
             ],
             "interruptOnSpeech": interruptOnSpeech,
         ]
-        talkConfig["speechLocale"] = speechLocale
         return TalkModeGatewayConfigParser.parse(
             config: [
                 "talk": talkConfig,

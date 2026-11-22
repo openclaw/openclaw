@@ -1,23 +1,22 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import {
+  buildSubagentPrivateCompletionInstruction,
   SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION,
-  SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION,
 } from "../completion/subagent-completion-instructions.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { isSubagentObligationRetired } from "../registry/subagent-requester-settle-identity.js";
-import {
-  buildSubagentRestartRecoveryRoster,
-  SUBAGENT_RESTART_RECOVERY_INSTRUCTION,
-} from "../subagent-restart-recovery-prompt.js";
+import { getSubagentTerminalReplySummary } from "../registry/subagent-run-payload-facts.js";
 import { needsRequesterSettleFindings } from "./subagent-announce.requester-settle-state.js";
 
 const REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS = 1_024;
 const ROUTE_NOTICE_TRUNCATION = "\n[model-route changes truncated]";
+const PENDING_ROSTER_MAX = 5;
 
 export function buildRequesterSettleWakeMessage(params: {
   findings?: string;
@@ -28,8 +27,10 @@ export function buildRequesterSettleWakeMessage(params: {
   /** The bounded descendant-delivery wait expired before every result arrived. */
   descendantsUnsettled?: boolean;
   children: readonly SubagentRunRecord[];
-  recoveryChildren: readonly SubagentRunRecord[];
+  /** Members of the same yielded batch that are still working and report later. */
+  pendingMembers?: readonly SubagentRunRecord[];
   completionChannel?: string;
+  requesterOrigin: DeliveryContext | undefined;
   retainedMessage?: string;
   retryMissingResult: boolean;
 }): string {
@@ -62,7 +63,7 @@ export function buildRequesterSettleWakeMessage(params: {
   const routeNotices = [
     ...new Set(
       params.children.flatMap((entry) => {
-        const reply = entry.completion?.terminalReply;
+        const reply = getSubagentTerminalReplySummary(entry);
         return needsRequesterSettleFindings(entry) &&
           reply?.disposition === "visible" &&
           reply.modelRouteChange
@@ -77,20 +78,32 @@ export function buildRequesterSettleWakeMessage(params: {
     routeNotices.length > REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS
       ? `${truncateUtf16Safe(routeNotices, REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS - ROUTE_NOTICE_TRUNCATION.length)}${ROUTE_NOTICE_TRUNCATION}`
       : routeNotices;
-  const recoveryRoster = buildSubagentRestartRecoveryRoster(params.recoveryChildren);
   const completionChannel = normalizeMessageChannel(params.completionChannel);
+  const pending = params.pendingMembers ?? [];
+  // Name pending siblings by short identifiers only; their task text stays out of the prompt.
+  const pendingNames = pending
+    .slice(0, PENDING_ROSTER_MAX)
+    .map((member) =>
+      truncateUtf16Safe(member.label?.trim() || member.taskName?.trim() || member.runId, 80),
+    )
+    .concat(
+      pending.length > PENDING_ROSTER_MAX ? [`${pending.length - PENDING_ROSTER_MAX} more`] : [],
+    );
   return [
-    params.descendantsUnsettled
-      ? "[Subagent Context] Every subagent in this batch has ended, but a descendant result below it was still undelivered when waiting stopped; a child that later receives it may report again in a separate completion."
-      : describeSettledBatch(params.children),
-    "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive for it. Other batches may still be running.",
+    ...(pending.length
+      ? [
+          `[Subagent Context] These results are ready, but ${pending.length} other subagent(s) from this batch are still working: ${pendingNames.join("; ")}. Each remaining result arrives later as its own completion. If the request needs those results before you answer, call sessions_yield to wait for them; otherwise act on the ready results now without reporting the batch as finished.`,
+        ]
+      : [
+          params.descendantsUnsettled
+            ? "[Subagent Context] Every subagent in this batch has ended, but a descendant result below it was still undelivered when waiting stopped; a child that later receives it may report again in a separate completion."
+            : describeSettledBatch(params.children),
+          "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive for it. Other batches may still be running.",
+        ]),
     // Private completion guidance already includes the shared outcome policy.
     ...(params.parentOnly ? [] : [`[Subagent Context] ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}`]),
-    ...(recoveryRoster
-      ? [`[Subagent Context] ${SUBAGENT_RESTART_RECOVERY_INSTRUCTION}`, recoveryRoster]
-      : []),
     params.parentOnly
-      ? `[Subagent Context] ${SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION}`
+      ? `[Subagent Context] ${buildSubagentPrivateCompletionInstruction(params.requesterOrigin)}`
       : params.yieldedFinalDeliverable
         ? "[Subagent Context] Child results are internal input. Answer the original conversation under its normal reply rules: if replies there must go through the message tool, send your answer with it. Continue any unfinished work, and avoid repeating an update already delivered."
         : params.requireVisibleReply

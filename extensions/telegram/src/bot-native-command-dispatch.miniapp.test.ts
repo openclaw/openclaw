@@ -2,7 +2,7 @@ import type { BotCommand } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import {
   apiCalls,
   commandMessage,
@@ -16,13 +16,6 @@ import { registerTelegramMiniAppCommand } from "./miniapp/command.js";
 import { createTelegramMiniAppLaunchTickets } from "./miniapp/launch-ticket.js";
 import { getTelegramRuntime } from "./runtime.js";
 
-vi.mock("./miniapp/url.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./miniapp/url.js")>()),
-  resolveTelegramMiniAppUrls: async () => ({
-    pageUrl: "https://gateway.example/__openclaw_tg_miniapp/",
-  }),
-}));
-
 function sentMessage() {
   const sends = apiCalls.mock.calls.filter(([method]) => method === "sendMessage");
   expect(sends).toHaveLength(1);
@@ -31,6 +24,7 @@ function sentMessage() {
 
 it("registers and dispatches session /dashboard separately from owner-only /controlui", async () => {
   const cfg: OpenClawConfig = {
+    gateway: { publicOrigin: "https://gateway.example" },
     commands: { native: true, text: true },
     channels: { telegram: { dmPolicy: "open", allowFrom: ["*"], streaming: { mode: "off" } } },
   };
@@ -55,7 +49,7 @@ it("registers and dispatches session /dashboard separately from owner-only /cont
     .find(({ language_code }) => !language_code)?.commands;
   expect(menu?.filter(({ command }) => command === "dashboard")).toHaveLength(1);
   expect(menu?.filter(({ command }) => command === "controlui")).toEqual([
-    { command: "controlui", description: "Open the OpenClaw Control UI" },
+    { command: "controlui", description: "Open OpenClaw" },
   ]);
 
   apiCalls.mockClear();
@@ -73,9 +67,9 @@ it("registers and dispatches session /dashboard separately from owner-only /cont
   const granted = sentMessage();
   expect(granted).toEqual(
     expect.objectContaining({
-      text: "Open OpenClaw Control UI.",
+      text: "Open OpenClaw.",
       reply_markup: {
-        inline_keyboard: [[{ text: "Open Control UI", web_app: { url: expect.any(String) } }]],
+        inline_keyboard: [[{ text: "Open OpenClaw", web_app: { url: expect.any(String) } }]],
       },
     }),
   );

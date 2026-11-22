@@ -20,6 +20,7 @@ public enum RealtimeTalkRecovery {
 
 public struct RealtimeTalkAudioFrame: Sendable {
     public let data: Data
+    /// Monotonic system uptime at the end of this PCM16 buffer, in milliseconds.
     public let timestampMs: Double
     public let rms: Float
 
@@ -79,15 +80,20 @@ public struct RealtimeTalkRelayTransport: Sendable {
     public let subscribeServerEvents: @Sendable (Int) async -> AsyncStream<EventFrame>
     public let request: @Sendable (String, [String: AnyCodable]?, Double) async throws -> Data
     public let isCurrent: @Sendable () async -> Bool
+    /// Whether the socket that owns the relay advertises `talk-session-close-disposition`.
+    /// Older Gateways reject unknown close fields, so they keep the legacy aborting close.
+    public let supportsCloseDisposition: @Sendable () async -> Bool
 
     public init(
         subscribeServerEvents: @escaping @Sendable (Int) async -> AsyncStream<EventFrame>,
         request: @escaping @Sendable (String, [String: AnyCodable]?, Double) async throws -> Data,
-        isCurrent: @escaping @Sendable () async -> Bool = { true })
+        isCurrent: @escaping @Sendable () async -> Bool = { true },
+        supportsCloseDisposition: @escaping @Sendable () async -> Bool = { false })
     {
         self.subscribeServerEvents = subscribeServerEvents
         self.request = request
         self.isCurrent = isCurrent
+        self.supportsCloseDisposition = supportsCloseDisposition
     }
 }
 
@@ -292,6 +298,8 @@ public final class RealtimeTalkRelaySession {
     private var pendingInputAudioBytes = 0
     private var isInputAudioBehind = false
     private var isInputPaused = false
+    private var isMicrophoneMuted = false
+    private var microphoneChangedAtMs: Double?
     private var audioCaptureGeneration: UInt64 = 0
     private var isClosed = false
     private var lifecycleGeneration: UInt64 = 0
@@ -369,7 +377,9 @@ public final class RealtimeTalkRelaySession {
         let eventStream = await transport.subscribeServerEvents(200)
         switch await lifecycleStatus(lifecycleGeneration) {
         case .current: break
-        case .cancelledLocally: return
+        case .cancelledLocally:
+            try? await self.stopAndWait()
+            return
         case .routeLost: throw Self.gatewayRouteLostError()
         }
         self.startEventPump(stream: eventStream, lifecycleGeneration: lifecycleGeneration)
@@ -384,6 +394,7 @@ public final class RealtimeTalkRelaySession {
                 if statusAfterCreate == .routeLost {
                     throw Self.gatewayRouteLostError()
                 }
+                try? await self.stopAndWait()
                 return
             }
             if let startupIssue {
@@ -404,7 +415,9 @@ public final class RealtimeTalkRelaySession {
             let supportsBargeIn = await resolveSupportsBargeIn(result, lifecycleGeneration: lifecycleGeneration)
             switch await lifecycleStatus(lifecycleGeneration) {
             case .current: break
-            case .cancelledLocally: return
+            case .cancelledLocally:
+                try? await self.stopAndWait()
+                return
             case .routeLost: throw Self.gatewayRouteLostError()
             }
             self.supportsBargeIn = supportsBargeIn
@@ -418,14 +431,19 @@ public final class RealtimeTalkRelaySession {
             self.output.withLock { $0.startupRoutingReady = true }
             switch await lifecycleStatus(lifecycleGeneration) {
             case .current: break
-            case .cancelledLocally: return
+            case .cancelledLocally:
+                try? await self.stopAndWait()
+                return
             case .routeLost: throw Self.gatewayRouteLostError()
             }
             switch await waitForStartupResult(
                 timeoutSeconds: Self.startupReadyTimeoutSeconds,
                 lifecycleGeneration: lifecycleGeneration)
             {
-            case .ready, .cancelled:
+            case .ready:
+                return
+            case .cancelled:
+                try? await self.stopAndWait()
                 return
             case let .failed(issue):
                 throw Self.startupFailureError(issue)
@@ -433,15 +451,9 @@ public final class RealtimeTalkRelaySession {
         } catch {
             // A lost route must still surface: swallowing here would discard both the original
             // failure and the route loss, leaving the runtime with nothing to fall back from.
-            if await lifecycleStatus(lifecycleGeneration) == .cancelledLocally {
-                return
-            }
-            let createdRelaySessionId = self.relaySessionId
-            self.close(sendClose: false)
-            if let createdRelaySessionId {
-                try? await self.beginServerClose(relaySessionId: createdRelaySessionId).value
-            }
-            throw error
+            let cancelledLocally = await lifecycleStatus(lifecycleGeneration) == .cancelledLocally
+            try? await self.stopAndWait()
+            if !cancelledLocally { throw error }
         }
     }
 
@@ -455,7 +467,12 @@ public final class RealtimeTalkRelaySession {
         try await self.serverClose?.task.value
     }
 
-    private func close(sendClose: Bool) {
+    /// Failure teardown keeps accepted agent work when the owning Gateway supports detach.
+    public func stopAfterFailure() {
+        self.close(sendClose: true, detachAcceptedWork: true)
+    }
+
+    private func close(sendClose: Bool, detachAcceptedWork: Bool = false) {
         guard !self.isClosed else { return }
         self.isClosed = true
         self.outputCancellationGeneration &+= 1
@@ -486,7 +503,7 @@ public final class RealtimeTalkRelaySession {
         Task { await audioSender?.close() }
         self.drainOutputEffects()
         if sendClose, let relaySessionId {
-            self.beginServerClose(relaySessionId: relaySessionId)
+            self.beginServerClose(relaySessionId: relaySessionId, detachAcceptedWork: detachAcceptedWork)
         }
         relaySessionId = nil
     }
@@ -507,18 +524,36 @@ public final class RealtimeTalkRelaySession {
     }
 
     @discardableResult
-    private func beginServerClose(relaySessionId: String) -> Task<Void, Error> {
+    private func beginServerClose(
+        relaySessionId: String,
+        detachAcceptedWork: Bool = false) -> Task<Void, Error>
+    {
         if let serverClose, serverClose.sessionId == relaySessionId {
             return serverClose.task
         }
         let task = Task { [transport] in
-            let payload = ["sessionId": AnyCodable(relaySessionId)]
+            var payload = ["sessionId": AnyCodable(relaySessionId)]
+            if detachAcceptedWork, await transport.supportsCloseDisposition() {
+                payload["disposition"] = AnyCodable("detach")
+            }
             let response = try await transport.request("talk.session.close", payload, 8000)
             let result = try JSONDecoder().decode(TalkSessionOkResult.self, from: response)
             guard result.ok else { throw URLError(.badServerResponse) }
         }
         self.serverClose = (relaySessionId, task)
         return task
+    }
+
+    /// Input-only mute keeps the capture engine running: it may also render reply audio.
+    public func setMicrophoneMuted(_ muted: Bool) {
+        guard self.isMicrophoneMuted != muted else { return }
+        self.isMicrophoneMuted = muted
+        self.microphoneChangedAtMs = ProcessInfo.processInfo.systemUptime * 1000
+        // Cancel appends still queued for the sender/socket; already-sent audio belongs to the call.
+        for task in self.audioSendTasks.values {
+            task.cancel()
+        }
+        self.onInputLevel(0)
     }
 
     public func setInputPaused(_ paused: Bool) throws {
@@ -1169,7 +1204,7 @@ extension RealtimeTalkRelaySession {
                 self.onStatus(issue.message)
                 // A failed current cancellation leaves remote output ownership unknown.
                 // Keep the fence until terminal teardown makes late audio impossible.
-                self.close(sendClose: true)
+                self.stopAfterFailure()
                 self.onTermination(.outputCancellationFailed)
             }
         }
@@ -1187,7 +1222,7 @@ extension RealtimeTalkRelaySession {
             phase: "output-playback")
         self.onIssue(issue)
         self.onStatus(message)
-        self.close(sendClose: true)
+        self.stopAfterFailure()
         self.onTermination(.outputPlaybackOverflow)
     }
 
@@ -1243,13 +1278,13 @@ extension RealtimeTalkRelaySession {
         self.logger.error("talk realtime microphone failed: \(Self.safeLogMessage(message), privacy: .public)")
         self.onIssue(issue)
         self.onStatus(message)
-        self.close(sendClose: true)
+        self.stopAfterFailure()
         self.onTermination(.audioInputFailed(message: message))
     }
 
     @discardableResult
     private func enqueueMicrophoneFrame(
-        _ encoded: Data,
+        _ data: Data,
         timestampMs: Double,
         rms: Float,
         lifecycleGeneration: UInt64,
@@ -1260,13 +1295,21 @@ extension RealtimeTalkRelaySession {
               !self.isInputPaused, self.output.withLock({ $0.suppressedOutputIdentity }) == nil,
               let audioSender
         else { return nil }
-        self.onInputLevel(TalkAudioLevel.normalized(rms: Double(rms)))
-        // Continuous providers own interruptions and need input throughout playback.
-        if self.output.withLock({ $0.isOutputPlaying }), self.supportsBargeIn == true {
+        // Capture callbacks can wait for MainActor across both toggles. Also silence the buffer
+        // spanning a toggle, so unmute never replays samples recorded while muted. Capture stamps
+        // the end of each PCM16 buffer with monotonic system uptime on iOS and macOS.
+        let frameStartMs = timestampMs - Double(data.count) / (self.inputSampleRateHz * 2) * 1000
+        let silence = self.isMicrophoneMuted ||
+            self.microphoneChangedAtMs.map { frameStartMs <= $0 } == true
+        let encoded = silence ? Data(count: data.count) : data
+        let inputRms: Float = silence ? 0 : rms
+        self.onInputLevel(TalkAudioLevel.normalized(rms: Double(inputRms)))
+        // Silence lets provider VAD finish pre-mute words, without triggering local barge-in.
+        if !silence, self.output.withLock({ $0.isOutputPlaying }), self.supportsBargeIn == true {
             if self.audioCapture.suppressesInputDuringOutput {
                 return nil
             }
-            self.handleInputLevelDuringOutput(rms, timestampMs: timestampMs)
+            self.handleInputLevelDuringOutput(inputRms, timestampMs: timestampMs)
         }
 
         // Drop frames past the budget without ending the call, but tell the user once to repeat

@@ -14,6 +14,7 @@ import type {
   SessionDiscussionState,
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
@@ -207,14 +208,9 @@ function DiscussionPanel(props: DiscussionProps, host: SolidBridgeElement<Discus
     });
     return null;
   }
-  const empty = (
-    description: string,
-    openUrl?: string | null,
-    presentation?: DiscussionProps["presentation"],
-  ) => (
+  const empty = (description: string, openUrl?: string | null) => (
     <PanelEmptyState
-      // Only the desktop cannot-embed state opts into the approved geometry.
-      presentation={presentation === "desktop" ? "desktop" : undefined}
+      presentation={props.presentation}
       icon={<Icon name="messageSquare" />}
       heading={t("chat.sidePanel.discussion")}
       description={description}
@@ -238,8 +234,6 @@ function DiscussionPanel(props: DiscussionProps, host: SolidBridgeElement<Discus
             ? "chat.sessionDiscussion.unavailable"
             : "chat.sessionDiscussion.requiresWriteAccess",
         ),
-        undefined,
-        props.canOpen ? props.presentation : undefined,
       );
     }
     const embedUrl = resolveDiscussionEmbedUrl(current.embedUrl);
@@ -260,11 +254,7 @@ function DiscussionPanel(props: DiscussionProps, host: SolidBridgeElement<Discus
             }
           />
         ) : (
-          empty(
-            t("chat.sessionDiscussion.unavailable"),
-            resolveDiscussionUrl(current.openUrl),
-            props.presentation,
-          )
+          empty(t("chat.sessionDiscussion.unavailable"), resolveDiscussionUrl(current.openUrl))
         )}
       </div>
     );
@@ -277,7 +267,7 @@ function DiscussionPanel(props: DiscussionProps, host: SolidBridgeElement<Discus
       <Errored
         fallback={(error) => (
           <div class="session-discussion__empty">
-            <div class="callout danger">{formatUiError(error())}</div>
+            <InlineAlert tone="danger">{formatUiError(error())}</InlineAlert>
           </div>
         )}
       >

@@ -36,6 +36,7 @@ export type ChatDetailsGoalProps = {
   connected: boolean;
   /** Native composer write availability, including admission and pending-operation guards. */
   canAct: boolean;
+  resumeBusy?: boolean;
   recovery?: ChatGoalRecovery;
   onGoalAction?: (goalId: string, action: ChatGoalAction) => void;
   onGoalSubmit?: (draft: ChatGoalDraft, submissionAction?: Event) => Promise<boolean>;
@@ -279,7 +280,12 @@ export function ChatDetailsGoal(props: ChatDetailsGoalProps) {
         <Show
           when={props.goal}
           fallback={
-            <PanelEmptyState icon={<GoalIcon />} heading={t("chat.goals.empty")} description="" />
+            <PanelEmptyState
+              presentation="mobile"
+              icon={<GoalIcon />}
+              heading={t("chat.goals.empty")}
+              description=""
+            />
           }
         >
           <ChatGoalBody goal={props.goal!} resumeRecovery={resumeRecovery()} />
@@ -312,6 +318,7 @@ export function ChatDetailsGoal(props: ChatDetailsGoalProps) {
               <ChatGoalActions
                 goal={props.goal!}
                 canAct={canAct()}
+                resumeBusy={props.resumeBusy}
                 connected={props.connected && props.presented}
                 resumeRecovery={resumeRecovery()}
                 onGoalAction={props.onGoalAction}

@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { omitNullRequestHeaders } from "../../packages/llm-core/src/utils/request-headers.js";
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
@@ -103,7 +104,8 @@ export type BuildLiveModelProviderConfigParams<T extends ModelDefinitionConfig> 
     cacheKeyParts?: readonly unknown[];
     /**
      * Provider-owned projection for catalogs that publish richer metadata than model ids.
-     * Defaults to the shared chat classifier, which keeps unfamiliar listed chat models.
+     * Defaults to shared capability projection; declared non-chat rows retain
+     * inference.chat=false for pins.
      */
     projectRows?: LiveModelRowProjection<T>;
     /** Retry a rejected authenticated catalog request against the provider's public catalog. */
@@ -136,6 +138,12 @@ export type OpenAICompatibleModelDiscoveryOptions = {
    * would build an invalid request. Manifest-published ids bypass it.
    */
   acceptUnknownModel?: (params: { id: string; record: Record<string, unknown> }) => boolean;
+  /**
+   * Provider prior for discovered ids the manifest does not publish whose rows carry no
+   * capability evidence. `"unlikely"` keeps them out of default pickers; typed and configured
+   * refs still run. Rows that declare chat or non-chat support are unaffected.
+   */
+  unknownModelChatEvidence?: "unlikely";
 };
 
 export type BuildOpenAICompatibleProviderCatalogParams = {
@@ -159,7 +167,7 @@ function matchesProviderCatalogScope(
 }
 
 // The id selector decides which rows are models and what they are called; the
-// shared classifier then drops non-chat rows and enriches catalogued ids.
+// shared classifier then records chat support and enriches catalogued ids.
 function projectSelectedLiveModelRows(
   readModelId: (row: unknown) => string | undefined,
 ): LiveModelRowProjection {
@@ -287,13 +295,15 @@ export function createUpstreamProviderCatalog(params: {
   // Discovery identifies the client the same way inference does; the attribution
   // owner decides which providers and endpoints receive those headers.
   const buildRequestHeaders = (ctx: LiveModelCatalogHeaderContext): HeadersInit => ({
-    ...resolveProviderRequestHeaders({
-      provider: params.providerId,
-      api: params.providerConfig.api,
-      baseUrl: params.providerConfig.baseUrl,
-      capability: "llm",
-      transport: "http",
-    }),
+    ...omitNullRequestHeaders(
+      resolveProviderRequestHeaders({
+        provider: params.providerId,
+        api: params.providerConfig.api,
+        baseUrl: params.providerConfig.baseUrl,
+        capability: "llm",
+        transport: "http",
+      }),
+    ),
     ...buildDefaultLiveModelCatalogHeaders(ctx),
   });
   const buildStaticProvider = (apiKey?: string): ModelProviderConfig => ({
@@ -418,6 +428,7 @@ function prepareOpenAICompatibleLiveModelDiscovery(
     ...(params.apiKey ? { apiKey: params.apiKey } : {}),
   };
   const acceptUnknownModel = params.modelDiscovery?.acceptUnknownModel;
+  const unknownModelChatEvidence = params.modelDiscovery?.unknownModelChatEvidence;
   const endpoint = params.modelDiscovery?.endpointUrl
     ? resolveFixedLiveModelDiscoveryEndpoint(fallback.baseUrl, params.modelDiscovery.endpointUrl)
     : resolveLiveModelDiscoveryEndpoint(
@@ -454,7 +465,12 @@ function prepareOpenAICompatibleLiveModelDiscovery(
     projectRows:
       params.modelDiscovery?.projectRows ??
       ((rows, fallbackProvider) =>
-        buildOpenAICompatibleLiveModels(rows, fallbackProvider, acceptUnknownModel)),
+        buildOpenAICompatibleLiveModels(
+          rows,
+          fallbackProvider,
+          acceptUnknownModel,
+          unknownModelChatEvidence,
+        )),
   } satisfies BuildLiveModelProviderConfigParams<ModelDefinitionConfig>;
   return { kind: "live" as const, request, profileId: auth.profileId };
 }

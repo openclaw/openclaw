@@ -23,7 +23,6 @@ import {
 } from "./accounts.js";
 import { DiscordChannelConfigSchema } from "./config-schema.js";
 import { normalizeCompatibilityConfig } from "./doctor-contract.js";
-import { DISCORD_LEGACY_CONFIG_RULES } from "./doctor-shared.js";
 import { selectDiscordLivePolicyConfig } from "./live-policy-config.js";
 import {
   collectRuntimeConfigAssignments,
@@ -54,7 +53,7 @@ const discordDoctor: ChannelDoctorAdapter = {
   groupModel: "route",
   groupAllowFromFallbackToAllowFrom: false,
   warnOnEmptyGroupSenderAllowlist: false,
-  legacyConfigRules: DISCORD_LEGACY_CONFIG_RULES,
+  legacyConfigRules: [],
   normalizeCompatibilityConfig,
   collectPreviewWarnings: async (params) =>
     (await loadDiscordDoctorModule()).discordDoctor.collectPreviewWarnings?.(params) ?? [],

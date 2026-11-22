@@ -1,41 +1,8 @@
 import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { asNonNegativeFiniteNumber as numericValue } from "openclaw/plugin-sdk/number-runtime";
-import type { DiagnosticEventPayload, OpenClawPluginServiceContext } from "../api.js";
+import type { DiagnosticEventPayload } from "../api.js";
 import { seconds } from "./prometheus-format.js";
 import type { PrometheusMetricStore } from "./prometheus-metric-store.js";
-
-type InternalDiagnostics = NonNullable<OpenClawPluginServiceContext["internalDiagnostics"]>;
-type GatewayWorkMetricsListener = Parameters<
-  NonNullable<InternalDiagnostics["onGatewayWorkMetrics"]>
->[0];
-
-export function createGatewayWorkMetricsRecorder(
-  store: PrometheusMetricStore,
-): GatewayWorkMetricsListener {
-  return (snapshot) => {
-    if (!snapshot) {
-      store.clearGauges("openclaw_sessions_active");
-      store.clearGauges("openclaw_gateway_active_work");
-      return;
-    }
-    for (const state of ["running", "queued"] as const) {
-      store.gauge(
-        "openclaw_sessions_active",
-        "Current active sessions in the Gateway session roster by run state.",
-        { state },
-        snapshot.sessions[state],
-      );
-    }
-    for (const kind of ["agentRuns", "chatRuns", "queuedTurns"] as const) {
-      store.gauge(
-        "openclaw_gateway_active_work",
-        "Current Gateway work by owner; categories may overlap.",
-        { kind },
-        snapshot.work[kind],
-      );
-    }
-  };
-}
 
 export function recordSessionDiagnosticEvent(
   store: PrometheusMetricStore,

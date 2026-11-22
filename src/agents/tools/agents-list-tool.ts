@@ -4,9 +4,12 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveModelAgentRuntimeMetadata } from "../agent-runtime-metadata.js";
 import { listAgentEntries, listAgentIds } from "../agent-scope-config.js";
-import { resolveAgentConfig, resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveSessionAgentIds } from "../agent-scope.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
-import { resolveSubagentAllowedTargetIds } from "../subagents/spawn/subagent-target-policy.js";
+import {
+  resolveSubagentAllowedTargetIds,
+  resolveSubagentSpawnTargetConfig,
+} from "../subagents/spawn/subagent-target-policy.js";
 import { describeAgentsListTool } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
@@ -67,9 +70,7 @@ export function createAgentsListTool(opts?: {
         agentId: opts?.requesterAgentIdOverride,
       }).sessionAgentId;
 
-      const allowAgents =
-        resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
-        cfg?.agents?.defaults?.subagents?.allowAgents;
+      const { allowAgents } = resolveSubagentSpawnTargetConfig(cfg, requesterAgentId);
 
       const configuredAgents = listAgentEntries(cfg);
       const configuredIds = listAgentIds(cfg);
@@ -96,20 +97,22 @@ export function createAgentsListTool(opts?: {
         const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
         // Publish the resolved identity (aliases are routing-only) so the model
         // field matches the agentRuntime derived from the same resolvedModel.
-        const model = `${resolvedModel.provider}/${resolvedModel.model}`;
-        const agentRuntime = resolveModelAgentRuntimeMetadata({
-          cfg,
-          agentId: id,
-          provider: resolvedModel.provider,
-          model: resolvedModel.model,
-        });
-        return {
+        const entry: AgentListEntry = {
           id,
           name: configuredNameMap.get(id),
           configured: configuredIds.includes(id),
-          model,
-          agentRuntime,
         };
+        // An agent without a configured model lists no model or runtime.
+        if (resolvedModel) {
+          entry.model = `${resolvedModel.provider}/${resolvedModel.model}`;
+          entry.agentRuntime = resolveModelAgentRuntimeMetadata({
+            cfg,
+            agentId: id,
+            provider: resolvedModel.provider,
+            model: resolvedModel.model,
+          });
+        }
+        return entry;
       });
 
       return jsonResult({

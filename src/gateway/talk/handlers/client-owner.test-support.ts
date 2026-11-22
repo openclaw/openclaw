@@ -1,12 +1,14 @@
 import { vi } from "vitest";
 import type { createTalkClientGatewayControlOwner } from "../client-gateway-control.js";
-import type { GatewayControlOwner } from "../client-gateway-control.types.js";
 
 // Handler-only fixtures record provider adoption and run the adopted cleanup.
 // Real owner teardown/revocation is exercised by client.test and the registered suite.
 export function createBrowserConsultOwnerFixture(
   params: Parameters<typeof createTalkClientGatewayControlOwner>[0],
-  observe: Pick<GatewayControlOwner, "activate" | "adoptProvider" | "close" | "control">,
+  observe: Pick<
+    ReturnType<typeof createTalkClientGatewayControlOwner>,
+    "activate" | "adoptProvider" | "close" | "control"
+  >,
 ) {
   let closeProvider: (() => Promise<void>) | undefined;
   const runAgentConsult = Object.assign(

@@ -13,19 +13,17 @@ export type ConfigFormMode = "form" | "raw";
 
 export type ConfigDiffPath = string[];
 export type ConfigDiffEntry = { path: ConfigDiffPath; from: unknown; to: unknown };
-type RawDiffCache = {
-  original: string;
-  current: string;
-  diff: ConfigDiffEntry[];
-};
-
 export type ConfigViewState = {
   rawRevealed: boolean;
   rawDiffOpen: boolean;
   envRevealed: boolean;
   validityDismissed: boolean;
   revealedSensitivePaths: Set<string>;
-  rawDiffCache?: RawDiffCache;
+  rawDiffCache?: {
+    original: string;
+    current: string;
+    diff: ConfigDiffEntry[];
+  };
   lastConfigContextKey: string | null;
   lastFormModeForScroll: ConfigFormMode | null;
 };

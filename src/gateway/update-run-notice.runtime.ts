@@ -3,7 +3,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { withTranscriptWriteSequence } from "../config/sessions/session-accessor.js";
 import { projectAssistantTranscriptText } from "../config/sessions/transcript-assistant-delivery-read.js";
-import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context-store.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -82,6 +82,9 @@ export async function createUpdateRunNotifier(
   // Update delivery belongs to the host and can outlive the requesting attempt.
   return (run: UpdateRunRecord, kind: UpdateRunNoticeKind) =>
     runWithoutOwnedSessionTranscriptWrites(async () => {
+      if (run.origin.noticeSurface === "app") {
+        return { delivered: false, owned: false };
+      }
       // Pre-park and later activation share one durable notice, never a fifth milestone.
       const milestone = kind === "parking" ? "activating" : kind;
       const noticeStep =

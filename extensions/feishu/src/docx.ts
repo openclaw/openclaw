@@ -1,5 +1,7 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import {
   filterStringEntries,
   normalizeOptionalString,
@@ -267,6 +269,7 @@ async function editDoc(
   maxBytes: number,
   imageReadTimeoutMs: number,
   logger?: Logger,
+  mediaAccess?: OutboundMediaAccess,
 ) {
   const docToken = params.doc_token;
   const target =
@@ -339,6 +342,7 @@ async function editDoc(
         const upload = await resolveDocxUploadInput({
           url,
           maxBytes,
+          mediaAccess,
           remoteReadTimeoutMs: imageReadTimeoutMs,
         });
         await uploadImageToDocx(client, blockId, upload, docToken);
@@ -357,56 +361,6 @@ async function editDoc(
     blocks_added: blocks.length,
     images_processed: imagesProcessed,
     ...(params.action !== "write" ? { block_ids: inserted.map((b) => b.block_id) } : {}),
-  };
-}
-
-async function uploadImageBlock(
-  client: Lark.Client,
-  {
-    doc_token: docToken,
-    parent_block_id: parentBlockId,
-    index,
-  }: Extract<FeishuDocParams, { action: "upload_image" }>,
-  upload: DocxUpload,
-) {
-  // Per Feishu FAQ: image token cannot be set at block creation time.
-  const insertRes = await client.docx.documentBlockChildren.create({
-    path: { document_id: docToken, block_id: parentBlockId ?? docToken },
-    params: { document_revision_id: -1 },
-    data: { children: [{ block_type: 27, image: {} }], index: index ?? -1 },
-  });
-  if (insertRes.code !== 0) {
-    throw new Error(`Failed to create image block: ${insertRes.msg}`);
-  }
-  const imageBlockId = insertRes.data?.children?.find((b) => b.block_type === 27)?.block_id;
-  if (!imageBlockId) {
-    throw new Error("Failed to create image block");
-  }
-
-  const fileToken = await uploadImageToDocx(client, imageBlockId, upload, docToken);
-
-  return {
-    success: true,
-    block_id: imageBlockId,
-    file_token: fileToken,
-    file_name: upload.fileName,
-    size: upload.buffer.length,
-  };
-}
-
-async function uploadFileBlock(
-  client: Lark.Client,
-  { doc_token: docToken }: Extract<FeishuDocParams, { action: "upload_file" }>,
-  upload: DocxUpload,
-) {
-  const fileToken = await uploadDocxMedia(client, "file", docToken, upload);
-
-  return {
-    success: true,
-    file_token: fileToken,
-    file_name: upload.fileName,
-    size: upload.buffer.length,
-    note: "File uploaded to drive. Use the file_token to reference it. Direct file block creation is not supported by the Feishu API.",
   };
 }
 
@@ -731,6 +685,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
     createExecute(ctx, cfg) {
       const defaultAccountId = ctx.agentAccountId;
       const mediaLocalRoots = resolveDocToolLocalRoots(ctx);
+      const mediaAccess = resolveOutboundMediaAccessForConfig(cfg);
       const trustedRequesterOpenId =
         ctx.messageChannel === "feishu"
           ? normalizeOptionalString(ctx.requesterSenderId)
@@ -759,7 +714,9 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
           case "write":
           case "append":
           case "insert":
-            return json(await editDoc(client, p, mediaMaxBytes, imageReadTimeoutMs, api.logger));
+            return json(
+              await editDoc(client, p, mediaMaxBytes, imageReadTimeoutMs, api.logger, mediaAccess),
+            );
           case "create":
             return json(await createDoc(client, p, trustedRequesterOpenId));
           case "list_blocks": {
@@ -812,16 +769,46 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
               filePath: p.file_path,
               maxBytes: mediaMaxBytes,
               localRoots: mediaLocalRoots,
+              mediaAccess,
               fileName: p.filename,
               ...(p.action === "upload_image"
                 ? { image: p.image, remoteReadTimeoutMs: imageReadTimeoutMs }
                 : {}),
             });
-            return json(
-              await (p.action === "upload_image"
-                ? uploadImageBlock(client, p, upload)
-                : uploadFileBlock(client, p, upload)),
-            );
+            const docToken = p.doc_token;
+            if (p.action === "upload_image") {
+              // Per Feishu FAQ: image token cannot be set at block creation time.
+              const insertRes = await client.docx.documentBlockChildren.create({
+                path: { document_id: docToken, block_id: p.parent_block_id ?? docToken },
+                params: { document_revision_id: -1 },
+                data: { children: [{ block_type: 27, image: {} }], index: p.index ?? -1 },
+              });
+              if (insertRes.code !== 0) {
+                throw new Error(`Failed to create image block: ${insertRes.msg}`);
+              }
+              const imageBlockId = insertRes.data?.children?.find(
+                (b) => b.block_type === 27,
+              )?.block_id;
+              if (!imageBlockId) {
+                throw new Error("Failed to create image block");
+              }
+              const fileToken = await uploadImageToDocx(client, imageBlockId, upload, docToken);
+              return json({
+                success: true,
+                block_id: imageBlockId,
+                file_token: fileToken,
+                file_name: upload.fileName,
+                size: upload.buffer.length,
+              });
+            }
+            const fileToken = await uploadDocxMedia(client, "file", docToken, upload);
+            return json({
+              success: true,
+              file_token: fileToken,
+              file_name: upload.fileName,
+              size: upload.buffer.length,
+              note: "File uploaded to drive. Use the file_token to reference it. Direct file block creation is not supported by the Feishu API.",
+            });
           }
           case "color_text":
             return json(await updateColorText(client, p.doc_token, p.block_id, p.content));

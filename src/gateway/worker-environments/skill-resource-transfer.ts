@@ -7,6 +7,7 @@ import {
 import { createSyntheticSourceInfo } from "../../skills/loading/skill-contract.js";
 import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-limits.js";
 import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
+import { prepareSkillReadIndex } from "../../skills/runtime/skill-read-index.js";
 import { clearSkillFileHost } from "../../skills/skill-file-host.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES } from "../../worker/node-workspace-protocol.js";
@@ -200,7 +201,7 @@ export async function transferSkillResources(params: {
         .map((skill) => skill.sourcePath)
         .filter((sourcePath): sourcePath is string => sourcePath !== undefined),
     );
-    const resolvedSkills = structuredClone(params.snapshot.resolvedSkills ?? []).filter(
+    const resolvedSkills = (params.snapshot.resolvedSkills ?? []).filter(
       (skill) => skill.filePath.startsWith("node://") || deliveredSourcePaths.has(skill.filePath),
     );
     const skippedSkillNames = new Set(
@@ -215,7 +216,7 @@ export async function transferSkillResources(params: {
       ...resolvedSkills.map((skill) => skill.name),
       ...delivery.skills.map((skill) => skill.name),
     ]);
-    const skills = structuredClone(params.snapshot.skills).filter(
+    const skills = params.snapshot.skills.filter(
       (skill) => !skippedSkillNames.has(skill.name) || retainedSkillNames.has(skill.name),
     );
     const deliveredSkills: NonNullable<SkillSnapshot["resolvedSkills"]> = [];
@@ -253,7 +254,10 @@ export async function transferSkillResources(params: {
           }
         } while (offset < file.bytes.length);
       }
-      const selected = resolvedSkills.find((candidate) => candidate.filePath === skill.sourcePath);
+      const selectedIndex = resolvedSkills.findIndex(
+        (candidate) => candidate.filePath === skill.sourcePath,
+      );
+      const selected = resolvedSkills[selectedIndex];
       const sourceBase =
         selected?.baseDir ?? (skill.sourcePath ? path.dirname(skill.sourcePath) : undefined);
       if (!sourceBase) {
@@ -285,27 +289,27 @@ export async function transferSkillResources(params: {
       delete delivered.locationNote;
       deliveredSkills.push(delivered);
       if (selected) {
-        Object.assign(selected, delivered);
-        delete selected.fileHost;
-        delete selected.locationNote;
+        resolvedSkills[selectedIndex] = delivered;
       }
     }
     await flush();
     check();
+    const snapshot = {
+      ...params.snapshot,
+      skills,
+      resolvedSkills,
+      discoverySkills: [
+        ...deliveredSkills.filter((skill) => !skill.disableModelInvocation),
+        ...(params.snapshot.discoverySkills ?? resolvedSkills).filter(
+          (skill) => skill.filePath.startsWith("node://") && !skill.disableModelInvocation,
+        ),
+      ],
+      prompt: formatSkillsForPromptBounded({ skills: resolvedSkills, preserveOrder: true }),
+    };
+    prepareSkillReadIndex(snapshot);
     return {
       source: params.snapshot,
-      snapshot: {
-        ...params.snapshot,
-        skills,
-        resolvedSkills,
-        discoverySkills: [
-          ...deliveredSkills.filter((skill) => !skill.disableModelInvocation),
-          ...(params.snapshot.discoverySkills ?? resolvedSkills).filter(
-            (skill) => skill.filePath.startsWith("node://") && !skill.disableModelInvocation,
-          ),
-        ],
-        prompt: formatSkillsForPromptBounded({ skills: resolvedSkills, preserveOrder: true }),
-      },
+      snapshot,
       mounts,
       assertCurrent: check,
       cleanup,

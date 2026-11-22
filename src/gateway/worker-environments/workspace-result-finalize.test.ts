@@ -14,6 +14,7 @@ import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspac
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import type { NodeWorkerWorkspaceRetainEntry } from "../../worker/node-workspace-retain-protocol.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
@@ -226,14 +227,7 @@ it("reports cleanup failure and reclaims the inputs before the next turn without
     runWorkspaceCommand: async (command) => {
       if (JSON.parse(command.input!).op === "cleanup" && failCleanup) {
         failCleanup = false;
-        return {
-          code: 1,
-          stdout: "",
-          stderr: "cleanup denied",
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        return createCommandResult({ code: 1, stderr: "cleanup denied" });
       }
       return await runCommandWithTimeout([...command.argv], {
         cwd: remote,

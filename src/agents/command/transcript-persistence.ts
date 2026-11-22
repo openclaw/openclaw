@@ -10,11 +10,13 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { StopReason } from "../../llm/types.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
+import type {
+  PersistedUserTurnMessage,
+  UserTurnInput,
+} from "../../sessions/user-turn-input.types.js";
 import {
   buildPersistedUserTurnMessage,
   preparePersistedUserTurnMessageForTranscriptWrite,
-  type PersistedUserTurnMessage,
-  type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import {
@@ -161,6 +163,7 @@ async function persistTextTurnTranscript(
           // SAFETY: This append creates the assistant row above; the preparer cannot receive another row.
           const assistant = message as Parameters<PrepareAssistantTranscriptMessage>[0];
           return projectAgentHarnessTranscriptMessageForDisplay({
+            runId: params.runId,
             hidden: params.privateCompletion === true || persistAssistantUsage,
             inputProvenance,
             message: prepareAssistantTranscriptMessage

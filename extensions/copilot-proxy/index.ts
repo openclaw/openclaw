@@ -1,14 +1,9 @@
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  definePluginEntry,
-  type ProviderAuthContext,
-  type ProviderAuthResult,
-} from "./runtime-api.js";
+import { definePluginEntry } from "./runtime-api.js";
 
 const DEFAULT_BASE_URL = "http://localhost:3000/v1";
 const DEFAULT_API_KEY = "n/a";
 const DEFAULT_CONTEXT_WINDOW = 128_000;
-const DEFAULT_MAX_TOKENS = 8192;
 const DEFAULT_MODEL_IDS = [
   "gpt-5-mini",
   "claude-opus-4.6",
@@ -35,19 +30,6 @@ function parseModelIds(input: string): string[] {
   return normalizeUniqueStringEntries(input.split(/[\n,]/));
 }
 
-function buildModelDefinition(modelId: string) {
-  return {
-    id: modelId,
-    name: modelId,
-    api: "openai-completions" as const,
-    reasoning: false,
-    input: ["text", "image"] as Array<"text" | "image">,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
-  };
-}
-
 export default definePluginEntry({
   id: "copilot-proxy",
   name: "Copilot Proxy",
@@ -63,7 +45,7 @@ export default definePluginEntry({
           label: "Local proxy",
           hint: "Configure base URL + models for the Copilot Proxy server",
           kind: "custom",
-          run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
+          run: async (ctx) => {
             const baseUrlInput = await ctx.prompter.text({
               message: "Copilot Proxy base URL",
               // Prefilling the default makes typed input append to it; blank input keeps it.
@@ -82,6 +64,8 @@ export default definePluginEntry({
             const modelIds = parseModelIds(modelInput);
             const defaultModelId = modelIds[0] ?? DEFAULT_MODEL_IDS[0];
             const defaultModelRef = `copilot-proxy/${defaultModelId}`;
+            const { resolveDefaultModelMaxTokens } =
+              await import("openclaw/plugin-sdk/provider-model-shared");
 
             return {
               profiles: [
@@ -102,7 +86,16 @@ export default definePluginEntry({
                       apiKey: DEFAULT_API_KEY,
                       api: "openai-completions",
                       authHeader: false,
-                      models: modelIds.map((modelId) => buildModelDefinition(modelId)),
+                      models: modelIds.map((modelId) => ({
+                        id: modelId,
+                        name: modelId,
+                        api: "openai-completions",
+                        reasoning: false,
+                        input: ["text", "image"],
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                        contextWindow: DEFAULT_CONTEXT_WINDOW,
+                        maxTokens: resolveDefaultModelMaxTokens(DEFAULT_CONTEXT_WINDOW),
+                      })),
                     },
                   },
                 },

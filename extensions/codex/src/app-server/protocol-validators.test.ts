@@ -57,9 +57,10 @@ function completedTurn(value: ReturnType<typeof turn>) {
 
 describe("passive native turn items", () => {
   const prompt = "Summarize the conversation.";
+  const submittedInput = [{ type: "text" as const, text: prompt, text_elements: [] }];
   const managedHooks = { allowManagedHookPrompts: true };
   const validate = (items: CodexThreadItem[], options = managedHooks) =>
-    assertCodexPassiveTurnItems(items, prompt, "completion", options);
+    assertCodexPassiveTurnItems(items, submittedInput, "completion", options);
 
   it("accepts typed managed-hook fragments without allowing another user prompt", () => {
     const items = [
@@ -75,9 +76,34 @@ describe("passive native turn items", () => {
       passiveItem("agentMessage", { text: "Revised answer." }),
     ];
     expect(() => validate(items)).not.toThrow();
-    expect(() => assertCodexPassiveTurnItems(items, prompt, "completion")).toThrow(
+    expect(() => assertCodexPassiveTurnItems(items, submittedInput, "completion")).toThrow(
       "unexpected native item: hookPrompt",
     );
+  });
+
+  it("accepts an exact schema-fallback echo with an attested managed-hook continuation", () => {
+    const fallbackInput = [
+      ...submittedInput,
+      {
+        type: "text" as const,
+        text: "Return JSON matching the supplied schema.",
+        text_elements: [],
+      },
+    ];
+    const items = [
+      passiveItem("userMessage", { content: fallbackInput }),
+      passiveItem("hookPrompt", {
+        fragments: [{ text: "Revise the answer.", hookRunId: "managed-stop-1" }],
+      }),
+      passiveItem("agentMessage", { text: "Revised answer." }),
+    ];
+
+    expect(() =>
+      assertCodexPassiveTurnItems(items, fallbackInput, "completion", managedHooks),
+    ).not.toThrow();
+    expect(() =>
+      assertCodexPassiveTurnItems(items, fallbackInput.toReversed(), "completion", managedHooks),
+    ).toThrow("unexpected native item: userMessage");
   });
 
   it("rejects malformed managed-hook fragments", () => {
@@ -101,7 +127,12 @@ describe("passive native turn items", () => {
     "does not admit %s with managed hooks enabled",
     (type) => {
       expect(() =>
-        assertCodexPassiveTurnItems([passiveItem(type)], prompt, "completion", managedHooks),
+        assertCodexPassiveTurnItems(
+          [passiveItem(type)],
+          submittedInput,
+          "completion",
+          managedHooks,
+        ),
       ).toThrow(`unexpected native item: ${type}`);
     },
   );
@@ -157,6 +188,40 @@ describe("assertCodexModelListResponse", () => {
 });
 
 describe("prepareCodexServerNotification", () => {
+  it.each(["modelNotFound", "policyCapacityUnavailable", "inferenceHookDenied"])(
+    "retains failed turns and error notifications for %s",
+    (codexErrorInfo) => {
+      const error = { message: "The requested model could not run.", codexErrorInfo };
+      const failedTurn = { id: "turn-1", status: "failed", items: [], error };
+      const notification = prepareCodexServerNotification({
+        method: "turn/completed",
+        params: { threadId: "thread-1", turn: failedTurn },
+      });
+      expect(notification.completedTurn).toEqual(failedTurn);
+      const params = { threadId: "thread-1", turnId: "turn-1", willRetry: false, error };
+      expect(readCodexErrorNotification(params)).toEqual(params);
+    },
+  );
+
+  it.each<{ url: string } | { fileId: string }>([
+    { url: "https://example.com/audio.wav" },
+    { fileId: "file-audio-1" },
+  ])("retains terminal snapshots containing audio input %j", (source) => {
+    const snapshot = {
+      id: "turn-1",
+      status: "failed",
+      error: { message: "Model unavailable", codexErrorInfo: "modelNotFound" },
+      items: [{ id: "input-1", type: "userMessage", content: [{ type: "audio", ...source }] }],
+    };
+    expect(
+      prepareCodexServerNotification({
+        method: "turn/completed",
+        params: { threadId: "thread-1", turn: snapshot },
+      }).completedTurn,
+    ).toEqual(snapshot);
+    expect(assertCodexTurnStartResponse({ turn: snapshot })).toEqual({ turn: snapshot });
+  });
+
   it("does not merge defaults from unrelated thread item union branches", () => {
     const snapshot = prepareCodexServerNotification({
       method: "turn/completed",
@@ -200,6 +265,13 @@ describe("generated response resources", () => {
       error: { message: "Synthetic error" },
     };
     expect(readCodexErrorNotification(params)).toMatchObject(params);
+    for (const codexErrorInfo of [
+      { httpConnectionFailed: { httpStatusCode: 429 } },
+      { futureNativeError: { detail: "Synthetic future variant" } },
+    ]) {
+      const notification = { ...params, error: { ...params.error, codexErrorInfo } };
+      expect(readCodexErrorNotification(notification)).toMatchObject(notification);
+    }
     expect(
       readCodexErrorNotification({
         ...params,
@@ -209,6 +281,23 @@ describe("generated response resources", () => {
         },
       }),
     ).toBeUndefined();
+    expect(
+      readCodexErrorNotification({
+        ...params,
+        error: { ...params.error, codexErrorInfo: { activeTurnNotSteerable: { turnKind: 12 } } },
+      }),
+    ).toBeUndefined();
+    expect(() =>
+      assertCodexTurnStartResponse({
+        turn: {
+          ...turn(),
+          error: {
+            ...params.error,
+            codexErrorInfo: { httpConnectionFailed: { httpStatusCode: -1 } },
+          },
+        },
+      }),
+    ).toThrow("Invalid Codex app-server");
   });
 
   it("validates turn-start item contents inside the shared resource", () => {
@@ -216,6 +305,23 @@ describe("generated response resources", () => {
     expect(assertCodexTurnStartResponse(response)).toMatchObject(response);
     expect(() =>
       assertCodexTurnStartResponse({ turn: { ...turn(12), status: "inProgress" } }),
+    ).toThrow("Invalid Codex app-server");
+  });
+
+  it("preserves closed question records in native turn responses", () => {
+    const question = { title: "Continue?", options: ["Yes", "No"] };
+    const item = {
+      id: "item-1",
+      type: "agentMessage",
+      text: "Choose an option.",
+      questions: [question],
+    };
+    const response = { turn: { id: "turn-1", status: "inProgress", items: [item] } };
+    expect(assertCodexTurnStartResponse(response)).toBe(response);
+    expect(() =>
+      assertCodexTurnStartResponse({
+        turn: { ...response.turn, items: [{ ...item, questions: [{ ...question, extra: true }] }] },
+      }),
     ).toThrow("Invalid Codex app-server");
   });
 });

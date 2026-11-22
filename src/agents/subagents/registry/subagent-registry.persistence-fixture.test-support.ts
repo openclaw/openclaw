@@ -5,8 +5,9 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { callGateway } from "../../../gateway/call.js";
-import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import type { GatewayLifecycleRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
+import { throwCollectedErrors } from "../../../infra/error-graph-internal.js";
 import { isPathInside } from "../../../infra/path-guards.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { listOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.test-support.js";
@@ -29,9 +30,10 @@ vi.mock("../announce/subagent-announce.js", async (importOriginal) => ({
 
 export { announceSpy };
 
-export function createSubagentPersistenceRuntime(call: typeof callGateway): GatewayRecoveryRuntime {
+export function createSubagentPersistenceRuntime(
+  call: typeof callGateway,
+): GatewayLifecycleRuntime {
   return {
-    prepareRestartRecovery: () => undefined,
     dispatchSessionMethod: (method, params, options) =>
       call({
         method,
@@ -42,8 +44,7 @@ export function createSubagentPersistenceRuntime(call: typeof callGateway): Gate
       }),
     dispatchAgent: (params, timeoutMs) => call({ method: "agent", params, timeoutMs }),
     waitForAgent: (params, timeoutMs) => call({ method: "agent.wait", params, timeoutMs }),
-    sendRecoveryNotice: vi.fn(),
-    resumeChatInput: vi.fn(),
+    sendNotice: vi.fn(),
   };
 }
 
@@ -55,9 +56,9 @@ export function activateSubagentPersistenceRegistry(
   registry: Pick<typeof import("./subagent-registry.test-helpers.js"), "activateSubagentRegistry">,
   call: typeof callGateway,
 ) {
-  const recoveryRuntime = createSubagentPersistenceRuntime(call);
+  const lifecycleRuntime = createSubagentPersistenceRuntime(call);
   const gateway = {
-    recoveryRuntime,
+    lifecycleRuntime,
     resolveGatewayContext: () => gateway as never,
   };
   return registry.activateSubagentRegistry(gateway.resolveGatewayContext);
@@ -135,11 +136,7 @@ export function useSubagentPersistenceFixture() {
         failures.push(error);
       }
     }
-    if (failures.length) {
-      throw failures.length === 1
-        ? failures[0]
-        : new AggregateError(failures, "Subagent persistence cleanup failed");
-    }
+    throwCollectedErrors(failures, "Subagent persistence cleanup failed");
   });
 
   return {

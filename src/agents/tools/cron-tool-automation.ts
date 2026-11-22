@@ -72,20 +72,11 @@ export function createCronAutomationActions(opts?: CronToolOptions) {
             );
           }
           const outcome = params.outcome;
-          if (
-            outcome !== "no_change" &&
-            outcome !== "progress" &&
-            outcome !== "done" &&
-            outcome !== "blocked" &&
-            outcome !== "needs_attention"
-          ) {
-            throw new Error(
-              "record_result requires no_change, progress, done, blocked, or needs_attention",
-            );
-          }
-          const summary = readToolStringParam(params, "summary", { required: true });
-          recordResult({ outcome, summary });
-          return jsonResult({ ok: true, outcome, summary });
+          const result = recordResult({
+            outcome,
+            ...(params.summary !== undefined ? { summary: params.summary } : {}),
+          });
+          return jsonResult({ ok: true, ...result });
         }
         case "next_check": {
           const jobId = selfJobId;

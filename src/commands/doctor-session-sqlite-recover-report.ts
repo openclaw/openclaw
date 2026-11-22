@@ -21,8 +21,11 @@ import {
   resolveTargetSqliteOptions,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
-import { classifySqliteFtsIntegrityFindings } from "../infra/sqlite-index-schema.js";
-import { assertSqliteIntegrity, SqliteIntegrityError } from "../infra/sqlite-integrity.js";
+import {
+  assertSqliteIntegrity,
+  classifySqliteFtsIntegrityFindings,
+  SqliteIntegrityError,
+} from "../infra/sqlite-integrity.js";
 import {
   inspectSqliteRecoveryFiles,
   moveSqliteFilesAside,

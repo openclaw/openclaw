@@ -18,7 +18,6 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllEnvs();
-  vi.restoreAllMocks();
 });
 
 async function report(overrides: Parameters<typeof createStatusCommandReportDataParams>[0] = {}) {
@@ -54,24 +53,35 @@ it("awaits backup freshness before assembling the overview", async () => {
   expect(await pending).toContain("last attempt failed just now (archive)");
 });
 
-it("keeps pending startup guidance distinct from reachability failure", async () => {
-  const params = createStatusCommandReportDataParams();
-  const lines = await buildStatusCommandReportLines({
-    ...params,
-    surface: {
-      ...params.surface,
-      gatewayReachable: false,
-      gatewayProbe: { startupPhase: "plugins", error: null },
-    },
-    health: undefined,
-    lastHeartbeat: null,
-  });
-  expect(stripAnsi(lines.join("\n"))).toContain(
-    "not checked (gateway still starting; phase plugins)",
-  );
-  expect(lines.at(-1)).toBe("  Retry after startup: openclaw status --deep");
-  expect(lines.join("\n")).not.toContain("Fix reachability first");
-});
+it.each([
+  [true, "not checked (gateway still starting; phase plugins)"],
+  [false, "skipped (use --deep)"],
+])(
+  "keeps pending startup guidance distinct from reachability failure (deep=%s)",
+  async (deep, checks) => {
+    const params = createStatusCommandReportDataParams();
+    const output = await report({
+      opts: { deep },
+      surface: {
+        ...params.surface,
+        gatewayReachable: false,
+        gatewayProbe: { startupPhase: "plugins", error: null },
+      },
+      health: undefined,
+      lastHeartbeat: null,
+    });
+    const rows = output.split("\n");
+    expect(rows.find((row) => row.includes("│ Checks "))).toContain(checks);
+    const heartbeat = rows.find((row) => row.includes("│ Last heartbeat "));
+    if (deep) {
+      expect(heartbeat).toContain("not checked (gateway still starting; phase plugins)");
+    } else {
+      expect(heartbeat).toBeUndefined();
+    }
+    expect(rows.at(-1)).toBe("  Retry after startup: openclaw status --deep");
+    expect(output).not.toContain("Fix reachability first");
+  },
+);
 
 it("shows skipped audit text when fast status omits the security audit", async () => {
   expect(await report({ securityAudit: undefined })).toContain(
@@ -82,20 +92,17 @@ it("shows skipped audit text when fast status omits the security audit", async (
 it.each([false, true])(
   "reports auxiliary health warnings only when degraded=%s",
   async (degraded) => {
+    const quarantined = [
+      {
+        engineId: "synthetic-context",
+        operation: "ingest",
+        reason: "provider failed",
+        failedAt: 1,
+      },
+    ];
     const output = await report({
       health: createStatusHealth({
-        contextEngines: {
-          quarantined: degraded
-            ? [
-                {
-                  engineId: "synthetic-context",
-                  operation: "ingest",
-                  reason: "provider failed",
-                  failedAt: 1,
-                },
-              ]
-            : [],
-        },
+        contextEngines: { quarantined: degraded ? quarantined : [] },
         configReload: { hotReloadStatus: degraded ? "disabled" : "active" },
       }),
       tableWidth: 240,

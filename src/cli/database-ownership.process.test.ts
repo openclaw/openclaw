@@ -57,10 +57,13 @@ it.each(["gateway", "agent-embedded"] as const)(
       await database.walMaintenance.stop();
       const before = snapshot(database.path);
       for (const [direct, error] of [
-        [false, expect.stringMatching(/stop.*external supervisor/iu)],
+        [false, { message: expect.stringMatching(/stop.*external supervisor/iu) }],
         [true, { message: expect.stringMatching(/OpenClaw state database is busy/iu) }],
       ] as const) {
-        expect(await claim(direct, 1)).toMatchObject({ error });
+        expect(await claim(direct, 1)).toMatchObject({
+          ok: false,
+          error: { type: "cli_error", ...error },
+        });
         expect(snapshot(database.path)).toEqual(before);
       }
       expect(inspectOpenClawStateOwnershipAtPath(database.path)).toBeNull();
@@ -120,3 +123,34 @@ it.each([false, true])(
     }
   },
 );
+
+it("inspects SQLite during config recovery and refuses unresolved PostgreSQL config", async () => {
+  const { ownership } = await claim();
+  fs.writeFileSync(env.OPENCLAW_CONFIG_PATH!, "{broken\n");
+
+  const result = await runStateOwnerCli(env, ["database", "ownership", "status", "--json"]);
+  expect(result.code, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout)).toEqual({
+    databasePath: resolveOpenClawStateSqlitePath(env),
+    status: "external",
+    ownership,
+  });
+
+  fs.writeFileSync(
+    env.OPENCLAW_CONFIG_PATH!,
+    JSON.stringify({
+      database: {
+        engine: "postgres",
+        postgres: {
+          connection: { source: "env", provider: "default", id: "OPENCLAW_TEST_MISSING_DSN" },
+        },
+      },
+    }),
+  );
+  const postgres = await runStateOwnerCli(env, ["database", "ownership", "status", "--json"]);
+  expect(postgres.code, postgres.stdout + postgres.stderr).toBe(1);
+  expect(JSON.parse(postgres.stdout)).toMatchObject({
+    ok: false,
+    error: { message: expect.stringContaining("database.postgres.connection") },
+  });
+});

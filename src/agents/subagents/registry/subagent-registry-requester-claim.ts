@@ -5,13 +5,11 @@ import {
   retireAcceptedSessionSpawnCompletionForRun,
 } from "../../accepted-session-spawn.js";
 import type { OperationalRunInstanceRef } from "../../admitted-run-context.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "../../tools/gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { getSubagentRunsForRequesterSession, subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
-import { settleRequesterAfterSessionSpawns } from "./subagent-registry.js";
+import { resumeSubagentRun, settleRequesterAfterSessionSpawns } from "./subagent-registry.js";
+import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
 /** An inline terminal result consumes the same durable obligation as a late completion. */
 export async function acknowledgeSubagentResultForRequesterTurn(params: {
@@ -20,7 +18,6 @@ export async function acknowledgeSubagentResultForRequesterTurn(params: {
   requesterAgentId: string;
   requesterTurnRunId: string;
 }): Promise<void> {
-  const assertCurrent = captureGatewayToolCallerAssertion();
   const instance = getGatewayToolCallerIdentity()?.operationalRunInstance;
   const accepted = await mutateSubagentRuns(
     [params.runId],
@@ -44,14 +41,25 @@ export async function acknowledgeSubagentResultForRequesterTurn(params: {
         delivery: { status: "delivered" as const, announcedAt: Date.now() },
       };
       return {
-        value: { runId: entry.taskRunId ?? entry.runId, childSessionKey: entry.childSessionKey },
+        value: {
+          receipt: {
+            runId: entry.taskRunId ?? entry.runId,
+            childSessionKey: entry.childSessionKey,
+          },
+          ended: hasSubagentRunEnded(entry),
+        },
         postimages: new Map([[entry.runId, next]]),
       };
     },
-    { runs: subagentRuns, assertCurrent },
+    { runs: subagentRuns },
   );
   if (instance) {
-    retireAcceptedSessionSpawnCompletionForRun(instance, accepted);
+    retireAcceptedSessionSpawnCompletionForRun(instance, accepted.receipt);
+  }
+  // A run that ended under the live inline claim deferred its cleanup to this owner;
+  // later endings reach cleanup through their own lifecycle once the claim is released.
+  if (accepted.ended) {
+    resumeSubagentRun(params.runId);
   }
 }
 
@@ -70,8 +78,8 @@ export async function reconcileRequesterTurnClaimForRun(params: {
         entry.requesterTurnRunId === requesterTurnRunId &&
         entry.expectsCompletionMessage === true,
     );
-  const entries = ownedEntries();
-  const acceptedEntry = entries.find((entry) => entry.runId === params.runId);
+  const owned = ownedEntries();
+  const acceptedEntry = owned.find((entry) => entry.runId === params.runId);
   if (!acceptedEntry) {
     return false;
   }
@@ -86,19 +94,17 @@ export async function reconcileRequesterTurnClaimForRun(params: {
   if (getActiveAgentRunDelegatedAuthority(params.requesterRunInstance)) {
     return true;
   }
+  const entries = subagentRuns.selectCompletionAuthorityBatch(owned, acceptedEntry);
   return subagentRuns.runWithCompletionBatchAuthority(entries, async () => {
     const custody = await captureOperatorToolGatewayContinuationContext();
-    if (!custody) {
-      throw new Error("Committed requester claim has no retained completion custody");
-    }
     try {
-      const current = ownedEntries();
+      const current = subagentRuns.selectCompletionAuthorityBatch(ownedEntries(), acceptedEntry);
       if (!current.includes(acceptedEntry)) {
         return false;
       }
       // The transfer owns row retirement; retain source custody independently of those rows.
-      return await subagentRuns.runWithCompletionBatchAuthority(current, () =>
-        custody.run(() =>
+      return await subagentRuns.runWithCompletionBatchAuthority(current, () => {
+        const settle = () =>
           settleRequesterAfterSessionSpawns({
             ...params,
             requesterTurnRunId,
@@ -108,12 +114,12 @@ export async function reconcileRequesterTurnClaimForRun(params: {
               childSessionKey: entry.childSessionKey,
               expectsCompletionMessage: true,
             })),
-            assertCurrent: custody.assertCurrent,
-          }),
-        ),
-      );
+            assertCurrent: () => custody?.assertCurrent(),
+          });
+        return custody ? custody.runWithRequester(settle, params.requesterAgentId) : settle();
+      });
     } finally {
-      custody.release();
+      custody?.release();
     }
   });
 }

@@ -5,6 +5,7 @@ export async function runGatewayHealthJsonRoute(
   args: {
     rpc: Parameters<typeof import("../gateway-rpc.js").callGatewayFromCliWithTransport>[1];
     localPortOverride?: number;
+    signal?: AbortSignal;
   },
   runtime: RuntimeEnv,
 ): Promise<void> {
@@ -27,22 +28,23 @@ export async function runGatewayHealthJsonRoute(
   }
   try {
     const { callGatewayFromCliWithTransport } = await import("../gateway-rpc.js");
-    writeRuntimeJson(
-      runtime,
-      await callGatewayFromCliWithTransport("health", rpc, undefined, {
-        defaultTimeoutMs: 10_000,
-        sharedStateMode: "read-only",
-      }),
-    );
+    const result = await callGatewayFromCliWithTransport("health", rpc, undefined, {
+      defaultTimeoutMs: 10_000,
+      sharedStateMode: "read-only",
+      signal: args.signal,
+    });
+    if (!args.signal?.aborted) {
+      writeRuntimeJson(runtime, result);
+    }
   } catch (error) {
-    const [
-      { emitReachableGatewayAuthDiagnostic, readNonObservingHealthConfig },
-      {
-        formatGatewayAuthErrorJson,
-        formatGatewayClientRequestErrorJson,
-        formatGatewayTransportErrorJson,
-      },
-    ] = await Promise.all([import("../../commands/health.js"), import("../../gateway/call.js")]);
+    if (args.signal?.aborted) {
+      return;
+    }
+    const {
+      emitReachableGatewayAuthDiagnostic,
+      emitGatewayHealthErrorJson,
+      readNonObservingHealthConfig,
+    } = await import("../../commands/health.js");
     const handled = await emitReachableGatewayAuthDiagnostic({
       error,
       config: rpc.config ?? (await readNonObservingHealthConfig()),
@@ -52,17 +54,12 @@ export async function runGatewayHealthJsonRoute(
       password: rpc.password,
       localPortOverride: rpc.localPortOverride,
       json: true,
+      signal: args.signal,
     });
     if (handled) {
       return;
     }
-    const payload =
-      formatGatewayAuthErrorJson(error) ??
-      formatGatewayClientRequestErrorJson(error) ??
-      formatGatewayTransportErrorJson(error);
-    if (payload) {
-      writeRuntimeJson(runtime, payload);
-      runtime.exit(1);
+    if (emitGatewayHealthErrorJson(error, runtime)) {
       return;
     }
     throw error;

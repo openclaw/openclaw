@@ -48,6 +48,61 @@ async function streamFinalAnswer(
 }
 
 describe("CodexAppServerEventProjector assistant projection", () => {
+  it("bounds candidate snapshots while preserving streamed text and selection transitions", async () => {
+    const { projector, onAgentEvent } = await fixture.observe();
+    const chunk = "Synthetic answer.   ";
+    const answer = chunk.repeat(2_000);
+    await fixture.start(projector, finalItem("draft", ""));
+    // Whitespace must not open a candidate or rescan a growing blank prefix.
+    await fixture.delta(projector, "  ", "draft");
+    for (let index = 0; index < 2_000; index++) {
+      await fixture.delta(projector, chunk, "draft");
+    }
+    await fixture.complete(projector, finalItem("draft", `  ${answer}`));
+    const tool = createNativeCommandItem({ id: "late-tool", command: "echo done" });
+    await fixture.start(projector, tool);
+    await fixture.complete(projector, tool);
+    await streamFinalAnswer(projector, "final", "Selected answer.");
+    await fixture.finish(projector, [finalItem("final", "Selected answer.")]);
+
+    const candidates = fixture.events(onAgentEvent, "item", "answer_candidate");
+    expect(candidates.map((event) => event.data)).toEqual([
+      candidate("draft", "candidate", chunk.trim()),
+      candidate("draft", "candidate", answer.trim()),
+      candidate("draft", "superseded", answer.trim()),
+      candidate("final", "candidate", "Selected answer."),
+      candidate("final", "selected", "Selected answer."),
+    ]);
+    expect(
+      fixture
+        .events(onAgentEvent, "assistant")
+        .filter((event) => event.data.itemId === "draft")
+        .map((event) => event.data.delta)
+        .join(""),
+    ).toBe(`  ${answer}`);
+    expect(fixture.result(projector).preparedTerminalReply).toEqual(
+      terminalReply("Selected answer."),
+    );
+  });
+
+  it("reopens a superseded candidate even when its next delta is whitespace", async () => {
+    const { projector, onAgentEvent } = await fixture.observe();
+    for (const id of ["first", "second"]) {
+      await fixture.start(projector, finalItem(id, ""));
+      await fixture.delta(projector, id, id);
+    }
+    await fixture.delta(projector, " ", "first");
+    expect(
+      fixture.events(onAgentEvent, "item", "answer_candidate").map((event) => event.data),
+    ).toEqual([
+      candidate("first", "candidate", "first"),
+      candidate("first", "superseded", "first"),
+      candidate("second", "candidate", "second"),
+      candidate("second", "superseded", "second"),
+      candidate("first", "candidate", "first"),
+    ]);
+  });
+
   it.each(["failed"])("retains streamed partial evidence after a %s turn", async (status) => {
     const projector = await createProjector();
     await fixture.start(projector, finalItem("partial", ""));
@@ -134,6 +189,25 @@ describe("CodexAppServerEventProjector assistant projection", () => {
       text: "CODEX-STEER-48AB12A2581A45AB",
       delta: "AB",
     });
+  });
+
+  it.each([
+    [["X", "\n\n", "```text", "\n", "a b", "\n", "```", " ", "done", "\n"]],
+    [["\n", "Hello"]],
+    [[" ", "\n", "Hello", " ", "world"]],
+  ])("streams whitespace-only deltas as append-only assistant text: %j", async (deltas) => {
+    const { projector, onAgentEvent } = await fixture.observe();
+    const answer = deltas.join("");
+    await fixture.start(projector, finalItem("answer", ""));
+    for (const value of deltas) {
+      await fixture.delta(projector, value, "answer");
+    }
+    await fixture.complete(projector, finalItem("answer", answer));
+
+    const assistantEvents = fixture.events(onAgentEvent, "assistant");
+    expect(assistantEvents.map((event) => event.data.delta).join("")).toBe(answer);
+    expect(assistantEvents.some((event) => event.data.replace)).toBe(false);
+    expect(assistantEvents.at(-1)?.data.text).toBe(answer);
   });
 
   it.each(
@@ -342,6 +416,45 @@ describe("CodexAppServerEventProjector assistant projection", () => {
       expect(JSON.stringify(result.messagesSnapshot)).not.toContain("answer_candidate");
     }
   });
+
+  it.each([false, true])(
+    "retains stable partial answers before the final answer (native handoff: %s)",
+    async (handoff) => {
+      const { projector, onAgentEvent, onPartialReply } = await fixture.observePartial();
+      const partial = fixture.message("partial", "The first result is ready.", "partial_answer");
+      const final = finalItem("final", "The second result is ready.");
+      await fixture.start(projector, { ...partial, text: "" });
+      await fixture.delta(projector, partial.text, partial.id);
+      await fixture.complete(projector, partial);
+      if (handoff) {
+        const work = { type: "sleep", id: "work", durationMs: 1 };
+        await fixture.start(projector, work);
+        await fixture.complete(projector, work);
+      }
+      await streamFinalAnswer(projector, final.id, final.text);
+      await fixture.finish(projector, [final]);
+
+      const result = fixture.result(projector);
+      const answer = `${partial.text}\n\n${final.text}`;
+      expect(result.assistantTexts).toEqual([partial.text, final.text]);
+      expect(result.preparedTerminalReply).toEqual(terminalReply(answer));
+      expect(result.lastAssistant?.content).toEqual(fixture.text(answer));
+      expect(result.messagesSnapshot).toContainEqual(
+        expect.objectContaining({ role: "assistant", content: fixture.text(answer) }),
+      );
+      expect(fixture.events(onAgentEvent, "assistant")).toEqual([
+        assistantEvent(partial.id, partial.text),
+        assistantEvent(final.id, final.text),
+      ]);
+      expect(
+        fixture.events(onAgentEvent, "item", "answer_candidate").map((event) => event.data.itemId),
+      ).toEqual([final.id, final.id]);
+      expect(onPartialReply.mock.calls.map(([reply]) => reply.text)).toEqual([
+        partial.text,
+        final.text,
+      ]);
+    },
+  );
 
   it("keeps an earlier final answer when a later coda arrives with no tool work between them", async () => {
     const { projector, onAgentEvent } = await fixture.observe();

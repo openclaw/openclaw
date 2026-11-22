@@ -17,6 +17,7 @@ import { captureGatewayServiceDefinitionBackup } from "./service-definition-back
 import { native } from "./service-definition-backup.mocks.test-support.js";
 import { GatewayServiceDefinitionBackupReceiptSchema } from "./service-stage.js";
 import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-types.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import { stageSystemdService } from "./systemd-install.js";
 import { resolveSystemdUnitPath } from "./systemd-service-files.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
@@ -30,18 +31,8 @@ beforeEach(() => {
   native.command.mockReset();
   native.task.mockReset();
   native.transport.mockReset().mockResolvedValue(undefined);
-  native.launchctl.mockReset().mockResolvedValue({
-    code: 113,
-    stdout: "",
-    stderr: "Could not find service",
-    termination: "exit",
-  });
-  native.identity.mockReset().mockResolvedValue({
-    code: 0,
-    stdout: "S-1-5-21-1-2-3-1001\n",
-    stderr: "",
-    termination: "exit",
-  });
+  native.launchctl.mockReset().mockResolvedValue(nativeExit("", "Could not find service", 113));
+  native.identity.mockReset().mockResolvedValue(nativeExit("S-1-5-21-1-2-3-1001\n"));
 });
 
 async function fixture(
@@ -49,6 +40,7 @@ async function fixture(
   ancillary = false,
   originalDefinition?: Buffer,
   originalMode = 0o600,
+  exportTask: (xml: string) => string = (xml) => xml,
 ) {
   const root = await fs.realpath(dirs.make("service-definition-backup-"));
   const env: GatewayServiceEnv = {
@@ -128,7 +120,7 @@ async function fixture(
   const originalTask = task;
   native.task.mockImplementation(async (args: string[]) => {
     if (args[0] === "/Query") {
-      return { code: 0, stderr: "", stdout: args.includes("/XML") ? task : "" };
+      return { code: 0, stderr: "", stdout: args.includes("/XML") ? exportTask(task) : "" };
     }
     if (args[0] === "/Create") {
       task = (await fs.readFile(args[args.indexOf("/XML") + 1]!)).subarray(2).toString("utf16le");

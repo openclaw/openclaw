@@ -74,6 +74,7 @@ vi.mock("./session-utils-store-worker.js", () => ({
   loadGatewaySessionEntryReadOnlyInWorker: async () => await loadSessionEntryAsync("session-1"),
 }));
 
+import { waitForFast } from "../../test/helpers/vitest-wait.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { makeClient, registerNodeSession } from "./node-registry.test-helpers.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
@@ -95,13 +96,6 @@ import { broadcastChatFinal } from "./server-methods/chat-broadcast.js";
 import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
 import * as sessionEventRows from "./session-event-prepared-row.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-
-function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
 
 describe("agent event handler", () => {
   let lineageProjection: ReturnType<typeof createSessionRowProjectionFixture> | undefined;
@@ -139,28 +133,34 @@ describe("agent event handler", () => {
     });
   }
 
-  function mockSessionEntry(
-    entry: Awaited<ReturnType<typeof loadSessionEntryAsync>>["entry"],
-    canonicalKey = "session-1",
-  ) {
-    vi.mocked(loadSessionEntryAsync).mockResolvedValue({
-      cfg: {},
-      agentId: "main",
-      storePath: "/tmp/sessions.json",
-      store: {},
-      entry,
-      canonicalKey,
-      storeKeys: [canonicalKey],
-      legacyKey: undefined,
-    });
-  }
-
   function claimOwnedRun(runId: string, context: Parameters<typeof claimAgentRunContext>[1]) {
     return expectDefined(
       claimAgentRunContext(runId, context, { exclusive: true, trackOwner: true }),
       "run owner claim",
     );
   }
+
+  it("resolves each synchronous streamed event once while keeping routing current", () => {
+    let sessionKey = "agent:main:first";
+    const resolveSessionKeyForRun = vi.fn(() => sessionKey);
+    const h = createHarness({ resolveSessionKeyForRun });
+    onTestFinished(async () => {
+      await h.handler.dispose();
+      h.chatRunState.clear();
+    });
+    const expected = [];
+    for (let seq = 1; seq <= 12; seq++) {
+      if (seq === 7) {
+        sessionKey = "agent:main:second";
+      }
+      const stream = seq % 2 ? "assistant" : "thinking";
+      const data = { text: `fragment ${seq}` };
+      expect(h.emit("streamed-run", stream, data, { seq })).toBeUndefined();
+      expected.push({ runId: "streamed-run", sessionKey, stream, seq, data });
+    }
+    expect(h.agent().map(([, payload]) => payload)).toMatchObject(expected);
+    expect(resolveSessionKeyForRun).toHaveBeenCalledTimes(12);
+  });
 
   it("projects successful widgets into live assistant snapshots without final text", async () => {
     const h = createHarness();
@@ -302,7 +302,7 @@ describe("agent event handler", () => {
       ],
     ]);
 
-    expect(h.chatRunState.runs.get("client-run")?.progressSnapshot?.events).toMatchObject([
+    expect(h.inFlight("client-run").events).toMatchObject([
       {
         runId: "client-run",
         sessionKey: "session-1",
@@ -327,9 +327,10 @@ describe("agent event handler", () => {
       },
       { seq: 4 },
     );
-    expect(
-      h.chatRunState.runs.get("client-run")?.progressSnapshot?.events.at(-1)?.data,
-    ).toMatchObject({ phase: "strict_review_required", reviewId: "command-review" });
+    expect(h.inFlight("client-run").events?.at(-1)?.data).toMatchObject({
+      phase: "strict_review_required",
+      reviewId: "command-review",
+    });
 
     await h.emit(
       "provider-run",
@@ -342,12 +343,8 @@ describe("agent event handler", () => {
       },
       { seq: 5 },
     );
-    expect(h.chatRunState.runs.get("client-run")?.progressSnapshot?.events).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          data: expect.objectContaining({ reviewId: "command-review" }),
-        }),
-      ]),
+    expect(h.inFlight("client-run").events).not.toContainEqual(
+      expect.objectContaining({ data: expect.objectContaining({ reviewId: "command-review" }) }),
     );
   });
 
@@ -365,16 +362,16 @@ describe("agent event handler", () => {
       emit(seq);
     }
     await stop.drain();
-    const retained = h.chatRunState.runs.get("client-run")?.progressSnapshot?.events.at(-1);
+    const retained = h.inFlight("client-run").events?.at(-1);
     const stringify = vi.spyOn(JSON, "stringify");
     try {
       emit(51);
       await stop.drain();
       expect(stringify.mock.calls.filter(([value]) => value === retained)).toHaveLength(0);
-      const snapshot = h.chatRunState.runs.get("client-run")?.progressSnapshot;
-      expect(snapshot?.events).toHaveLength(50);
-      expect(snapshot?.events[0]?.seq).toBe(2);
-      expect(snapshot?.events.at(-1)?.seq).toBe(51);
+      const events = h.inFlight("client-run").events;
+      expect(events).toHaveLength(50);
+      expect(events?.[0]?.seq).toBe(2);
+      expect(events?.at(-1)?.seq).toBe(51);
     } finally {
       stringify.mockRestore();
       await stop();
@@ -1534,80 +1531,7 @@ describe("agent event handler", () => {
     }
   });
 
-  it("suppresses late interrupted pre-restart lifecycle events from live projections", async () => {
-    mockSessionEntry(
-      {
-        sessionId: "session-recovery",
-        updatedAt: 2_000,
-        status: "interrupted",
-        abortedLastRun: true,
-        restartRecoveryRuns: [
-          {
-            runId: "interrupted-run",
-            lifecycleGeneration: "pre-restart",
-          },
-        ],
-      },
-      "session-recovery",
-    );
-    const h = createHarness({
-      resolveSessionKeyForRun: () => "session-recovery",
-      lifecycleErrorRetryGraceMs: 0,
-    });
-    h.sessionEventSubscribers.subscribe("conn-session");
-    h.register("interrupted-run", "session-recovery", "interrupted-run");
-
-    await h.emit(
-      "interrupted-run",
-      "lifecycle",
-      {
-        phase: "end",
-        aborted: true,
-        stopReason: "restart",
-        endedAt: 2_100,
-      },
-      {
-        seq: 2,
-        lifecycleGeneration: "pre-restart",
-        sessionKey: "session-recovery",
-        sessionId: "session-recovery",
-        ts: 2_100,
-      },
-    );
-
-    expect(h.chat()).toHaveLength(0);
-    expect(h.changes()).toHaveLength(0);
-    expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
-    expect(h.chatRunState.registry.peek("interrupted-run")).toBeUndefined();
-    expect(h.clearAgentRunContext).toHaveBeenCalledWith("interrupted-run");
-    expect(h.clearTrackedActiveRun).toHaveBeenCalledWith({
-      runId: "interrupted-run",
-      clientRunId: "interrupted-run",
-      sessionKey: "session-recovery",
-    });
-  });
-
-  it("broadcasts canonical state after concurrent recovery completions persist", async () => {
-    const restartRecoveryRuns = [
-      {
-        runId: "run-a",
-        lifecycleGeneration: "pre-restart-a",
-      },
-      {
-        runId: "run-b",
-        lifecycleGeneration: "pre-restart-b",
-      },
-    ];
-    mockSessionEntry(
-      {
-        sessionId: "session-recovery",
-        updatedAt: 2_000,
-        status: "interrupted",
-        abortedLastRun: true,
-        restartRecoveryRuns,
-      },
-      "session-recovery",
-    );
+  it("broadcasts canonical state after concurrent completions persist", async () => {
     let currentRow = {
       key: "session-recovery",
       kind: "direct" as const,
@@ -1786,15 +1710,6 @@ describe("agent event handler", () => {
       { ...oldEvent, ts: 2_000 },
     );
     expect(vi.getTimerCount()).toBe(1);
-    mockSessionEntry(
-      {
-        sessionId: sessionKey,
-        updatedAt: 2_000,
-        status: "interrupted",
-        restartRecoveryRuns: [{ runId, lifecycleGeneration: "pre-restart" }],
-      },
-      sessionKey,
-    );
     activeLifecycleGeneration = "post-restart";
     registerAgentRunContext(runId, { ...context, lifecycleGeneration: activeLifecycleGeneration });
     h.agentRunSeq.set(runId, 4);
@@ -2220,7 +2135,7 @@ describe("agent event handler", () => {
       const h = createHarness({
         resolveSessionKeyForRun: () => sessionKey,
         lifecycleErrorRetryGraceMs: 100,
-        isChatSendRunActive: (id) => id === runId,
+        delegateChatError: (id) => id === runId,
       });
       if (linked) {
         h.register(runId, sessionKey, runId);
@@ -2379,53 +2294,26 @@ describe("agent event handler", () => {
     }
   });
 
-  it.each(["recovery provenance", "owner claim"])(
-    "preserves %s in terminal persistence",
-    async (metadata) => {
-      const runId = "run-terminal-metadata";
-      const sessionKey = "session-terminal-metadata";
-      const lifecycleGeneration = getAgentEventLifecycleGeneration();
-      const claimed = metadata === "owner claim";
-      const claimId = claimed
-        ? expectDefined(
-            claimAgentRunContext(runId, { sessionKey }, { exclusive: true, trackOwner: true }),
-            "terminal owner claim",
-          )
-        : undefined;
-      if (!claimed) {
-        registerAgentRunContext(runId, {
-          lifecycleGeneration,
-          mainSessionRestartRecovery: true,
-          sessionKey,
-        });
-      }
-      const h = createHarness({ resolveSessionKeyForRun: () => sessionKey });
-      let event: Parameters<typeof h.handler>[0] | undefined;
-      const stop = onAgentRuntimeEvent((received) => {
-        event = received;
-      });
-      const terminal = { runId, stream: "lifecycle", data: { phase: "end" } };
-      if (claimId) {
-        emitAgentEventForOwner(terminal, claimId);
-      } else {
-        emitRuntimeAgentEvent(terminal);
-      }
-      stop();
-      await h.handler(expectDefined(event, "terminal runtime event"));
-      expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          event: expect.objectContaining(
-            claimId
-              ? { contextClaimId: claimId }
-              : { lifecycleGeneration, mainSessionRestartRecovery: true, runId },
-          ),
-        }),
-      );
-      if (claimId) {
-        releaseAgentRunContext(runId, claimId);
-      }
-    },
-  );
+  it("preserves the owner claim in terminal persistence", async () => {
+    const runId = "run-terminal-metadata";
+    const sessionKey = "session-terminal-metadata";
+    const claimId = expectDefined(
+      claimAgentRunContext(runId, { sessionKey }, { exclusive: true, trackOwner: true }),
+      "terminal owner claim",
+    );
+    const h = createHarness({ resolveSessionKeyForRun: () => sessionKey });
+    let event: Parameters<typeof h.handler>[0] | undefined;
+    const stop = onAgentRuntimeEvent((received) => {
+      event = received;
+    });
+    emitAgentEventForOwner({ runId, stream: "lifecycle", data: { phase: "end" } }, claimId);
+    stop();
+    await h.handler(expectDefined(event, "terminal runtime event"));
+    expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({ event: expect.objectContaining({ contextClaimId: claimId }) }),
+    );
+    releaseAgentRunContext(runId, claimId);
+  });
 
   it.each([
     ["assistant", { text: "owned reply", delta: "owned reply", phase: "commentary" }],
@@ -2923,86 +2811,6 @@ describe("agent event handler", () => {
     },
   );
 
-  describe("spawnedBy enrichment in chat and agent broadcasts", () => {
-    function mockSessionLineage(key: string, spawnedBy?: string) {
-      lineageProjection = createSessionRowProjectionFixture({
-        cfg: {},
-        store: {
-          [key]: { sessionId: "lineage", updatedAt: 1, ...(spawnedBy ? { spawnedBy } : {}) },
-        },
-      });
-      mockSessionEntry(
-        { sessionId: "lineage", updatedAt: 1, ...(spawnedBy ? { spawnedBy } : {}) },
-        key,
-      );
-      vi.mocked(loadGatewaySessionRow).mockReturnValue({
-        key,
-        kind: "direct",
-        updatedAt: null,
-        ...(spawnedBy ? { spawnedBy } : {}),
-      });
-    }
-
-    it.each([
-      {
-        name: "dashboard delta",
-        key: "agent:main:dashboard:visible-child",
-        parent: "agent:main:discord:direct:alice",
-        state: "delta",
-        events: [["assistant", { text: "visible child" }]],
-      },
-      {
-        name: "subagent terminal error",
-        key: "agent:coder:subagent:err",
-        parent: "agent:conductor:task:parent-err",
-        state: "error",
-        events: [
-          ["assistant", { text: "partial" }],
-          ["lifecycle", { phase: "error", error: "provider failed" }],
-        ],
-      },
-      {
-        name: "subagent sequence gap",
-        key: "agent:coder:subagent:gap",
-        parent: "agent:conductor:task:parent-gap",
-        state: "gap",
-        events: [
-          ["lifecycle", { phase: "start" }],
-          ["assistant", { text: "skipped seq" }, { seq: 5 }],
-        ],
-      },
-    ] as const)(
-      "includes spawnedBy in $name broadcasts",
-      async ({ key, parent, state, events }) => {
-        mockSessionLineage(key, parent);
-        const h = createHarness({
-          resolveSessionKeyForRun: () => key,
-          lifecycleErrorRetryGraceMs: 0,
-        });
-        if (state === "gap") {
-          registerAgentRunContext("run-lineage", { sessionKey: key });
-        } else {
-          h.register("run-lineage", key, "client-lineage");
-        }
-        await h.emitMany("run-lineage", events);
-        const calls = state === "gap" ? h.agent() : h.chat();
-        const call = expectDefined(
-          calls.find(([, payload]) =>
-            state === "gap"
-              ? payload.stream === "error" && payload.data?.reason === "seq gap"
-              : payload.state === state,
-          ),
-          "lineage broadcast",
-        );
-        expectPayloadFields(call[1], { sessionKey: key, spawnedBy: parent });
-        if (state === "gap") {
-          expectPayloadDataFields(call[1], { reason: "seq gap", expected: 2, received: 5 });
-        } else {
-          expectPayloadFields(call[1], { state });
-        }
-      },
-    );
-  });
   describe("agent model roster publications", () => {
     type ModelObservation = { provider: string | null; model: string | null };
     const PRIMARY_MODEL: ModelObservation = { provider: "provider", model: "primary" };

@@ -72,11 +72,13 @@ export type SidebarProjectionHost = {
   knownSessionGroups(): string[];
   knownSectionOrder(): string[];
   visibleSessionCatalogs(): SessionDataOwner["sessionCatalogs"];
+  catalogSessionRows(): ReadonlyMap<string, SidebarRecentSession>;
 };
 
 export function sidebarNavigationInputs(
   host: SidebarProjectionHost,
   result: SessionsListResult | null,
+  navigation?: SidebarSessionNavigationState,
 ) {
   const data = host.sessionData;
   const context = host.sessionDataContext;
@@ -88,13 +90,13 @@ export function sidebarNavigationInputs(
     data.sessionsAgentId,
     data.sessionResultsByAgent,
     data.activeSessionLineageRoot,
-    data.activeSessionLineageSelectedRow,
+    navigation ? navigation.activeRowKey : data.activeSessionLineageSelectedRow,
     data.childSessionRowsByParent,
     data.loadingChildSessionKeys,
-    host.getRouteSessionKey(),
+    navigation ? navigation.routeSessionKey : host.getRouteSessionKey(),
     pending?.creation,
     pending?.creation.admitted,
-    context?.gateway.snapshot.sessionKey,
+    navigation ? navigation.selectedAgentId : context?.gateway.snapshot.sessionKey,
     isSessionRouteId(host.activeRouteId),
     context?.agentSelection.state.selectedId,
     context?.gateway.snapshot.assistantAgentId,
@@ -123,10 +125,12 @@ export function memoizedSidebarSections(
 ): SidebarVisibleSections {
   const context = host.sessionDataContext;
   const roster = host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null;
+  const catalogRows = host.catalogSessionRows();
   return memo.read(
     () => [
       rows,
       catalogs,
+      catalogRows,
       roster,
       host.collapsedSessionSections,
       host.effectiveSessionsGrouping(),
@@ -159,6 +163,8 @@ export function memoizedSidebarSections(
       }
       return host.sessionProjection.project({
         rows,
+        selectedSessionKey: isSessionRouteId(host.activeRouteId) ? host.getRouteSessionKey() : null,
+        referencedRows: [...catalogRows.values()],
         sections,
         pinnedKeys,
         grouping,
@@ -268,12 +274,12 @@ export function sidebarRowsInputs(
   navigationState: SidebarSessionNavigationState,
 ) {
   const data = host.sessionData;
-  // List only inputs not already keyed by the upstream stage value.
+  // Resolved selection and source facts matter here; a fresh navigation closure
+  // after Gateway selection acknowledgement does not change the row projection.
   return [
-    navigationState,
+    ...sidebarNavigationInputs(host, data.sessionsResult, navigationState),
     host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null,
     host.expandedAgentId(),
-    data.sessionsResult,
     data.loadedChildSessionKeys,
     data.childSessionErrorsByParent,
     data.sessionCatalogs,
@@ -282,6 +288,10 @@ export function sidebarRowsInputs(
     host.sessionOwnerFilterId,
     host.sessionInvolvingMeFilterActive,
     host.sessionDataContext?.gateway.snapshot.selfUser,
+    // Off-window selection is prepended, or appended in roster mode.
+    // Held rows are already covered by the source identities above.
+    navigationState.visibleSessionRows[0],
+    navigationState.visibleSessionRows.at(-1),
   ];
 }
 

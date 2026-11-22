@@ -31,6 +31,7 @@ import {
 } from "./session-transcript-rewrite-effects.js";
 import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
 import {
+  clearSessionTranscriptActiveFacts,
   createTranscriptPayloadUpdater,
   prepareTranscriptPayload,
   transcriptEventJsonSql,
@@ -123,6 +124,9 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
         if (result.numAffectedRows !== 1n) {
           throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
         }
+        if (!options.legacyTextStorage) {
+          clearSessionTranscriptActiveFacts(database.db, resolved.sessionId, row.seq);
+        }
       }
       rewriteSessionActorContextStats(database, resolved, rewrites, projectionUnchanged);
       // Correlation and identical prompt captures preserve admitted input; other
@@ -151,7 +155,9 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
         }
       }
       if (options.touchMutation !== false) {
-        touchTranscriptMutationInTransaction(database, resolved.sessionId);
+        touchTranscriptMutationInTransaction(database, resolved.sessionId, {
+          projectionReady: projectionUnchanged || rebuildSynchronously,
+        });
       }
       return generation;
     });
@@ -203,6 +209,7 @@ export function updateSqliteTranscriptEventJsonInTransaction(
       database,
       sessionId,
       readTranscriptMutationStateInTransaction(database, sessionId).updatedAt,
+      rebuildSynchronously,
     );
   });
 }

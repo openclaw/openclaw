@@ -1,5 +1,7 @@
 import { expressionBuilder, sql } from "kysely";
+import { jsonPathValue, jsonValid } from "../infra/database-engine/json-values.js";
 import { iterateSqliteQuerySync } from "../infra/kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -14,15 +16,27 @@ import {
 } from "./client-voice-session-store.js";
 
 function voiceSessionField(
+  db: EngineConnection,
   field: "status" | "agentId" | "sessionKey" | "origin" | "voiceSessionId",
 ) {
   // The sole writer uses JSON.stringify, so stored fields have unique object keys.
   // Literal JSON paths preserve the canonical partial-index expressions.
   const eb = expressionBuilder<DB, "cache_entries">();
+  const value = eb.ref("value_json");
+  if (isPostgresSqlConnection(db)) {
+    // Use the expression emitted by the agent schema generator so PostgreSQL
+    // can match both the open predicate and the indexed lookup keys.
+    const member = /* kysely-allow-raw: Fixed voice-session field from the canonical index. */ sql`(${value}::json -> ${sql.lit(field)})`;
+    return /* kysely-allow-raw: Match the generated PostgreSQL string extraction. */ sql<
+      string | null
+    >`CASE WHEN ${value} IS JSON THEN
+        CASE WHEN json_typeof(${member}) = 'string' THEN ${member} #>> '{}' END
+      END`;
+  }
   return eb
     .case()
-    .when(eb.fn<0 | 1>("json_valid", ["value_json"]))
-    .then(eb.fn<string>("json_extract", ["value_json", sql.lit(`$.${field}`)]))
+    .when(jsonValid(db, value))
+    .then(jsonPathValue(db, value, sql.lit(`$.${field}`)))
     .end();
 }
 
@@ -32,19 +46,23 @@ function lookupOpenVoiceSessions(
   input: VoiceSessionLookup,
 ): VoiceSessionMatch[] {
   let query = voiceSessionRowsQuery(database).where(
-    voiceSessionField("status"),
+    voiceSessionField(database.db, "status"),
     "=",
     sql.lit("open"),
   );
   if (input.kind === "legacy") {
     query = query
-      .where(voiceSessionField("agentId"), "=", input.agentId)
-      .where(voiceSessionField("sessionKey"), "=", input.sessionKey)
-      .where(voiceSessionField("origin"), "=", "client");
+      .where(voiceSessionField(database.db, "agentId"), "=", input.agentId)
+      .where(voiceSessionField(database.db, "sessionKey"), "=", input.sessionKey)
+      .where(voiceSessionField(database.db, "origin"), "=", "client");
   } else {
     query = query.where("updated_at", "<=", input.updatedBefore);
     if (input.excludeVoiceSessionId !== undefined) {
-      query = query.where(voiceSessionField("voiceSessionId"), "!=", input.excludeVoiceSessionId);
+      query = query.where(
+        voiceSessionField(database.db, "voiceSessionId"),
+        "!=",
+        input.excludeVoiceSessionId,
+      );
     }
   }
   const matches: VoiceSessionMatch[] = [];

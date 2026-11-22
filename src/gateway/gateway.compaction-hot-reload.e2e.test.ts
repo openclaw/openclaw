@@ -14,17 +14,13 @@ import { setTestEnvValue } from "../test-utils/env.js";
 import { sendChatAndWait } from "./gateway-chat-fixture.test-support.js";
 import {
   createGatewayConfigPath,
+  nextGatewayId as nextId,
   resetGatewayTestState,
   setupGatewayTempHome,
 } from "./gateway.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { createTrackedProvider } from "./test-helpers.tracked-provider.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
-
-let sequence = 0;
-
-const nextId = (prefix: string): string =>
-  `${prefix}-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}-${sequence++}`;
 
 describe("gateway compaction hot reload", () => {
   beforeEach(resetGatewayTestState);
@@ -120,6 +116,7 @@ describe("gateway compaction hot reload", () => {
         });
         const gatewayClient = gateway.client;
         const sessionKey = "agent:dev:main";
+        const chat = (message: string) => sendChatAndWait(gatewayClient, sessionKey, message);
         const sessionId = nextId("existing-compaction-session");
         const scope = {
           agentId: "dev",
@@ -169,11 +166,7 @@ describe("gateway compaction hot reload", () => {
         }
         expect(loadTranscriptEventsSync(scope).length).toBeGreaterThan(10);
 
-        await sendChatAndWait(
-          gatewayClient,
-          sessionKey,
-          "Warm the existing prepared model runtime.",
-        );
+        await chat("Warm the existing prepared model runtime.");
         expect(providerRequests).toContain(primaryModel.modelId);
         expect(providerRequestToolNames.at(-1)).toContain("exec");
         expect(loadSessionEntry(scope)?.compactionCount ?? 0).toBe(0);
@@ -183,11 +176,7 @@ describe("gateway compaction hot reload", () => {
         await expect
           .poll(() => getRuntimeConfig().tools?.deny, { timeout: 5_000, interval: 50 })
           .toEqual(["exec"]);
-        await sendChatAndWait(
-          gatewayClient,
-          sessionKey,
-          "Apply the hot-reloaded tool deny policy to the existing runtime.",
-        );
+        await chat("Apply the hot-reloaded tool deny policy to the existing runtime.");
         expect(providerRequestToolNames.at(-1)).not.toContain("exec");
 
         const reloadedConfig = { ...structuredClone(initialConfig), tools: reloadedTools };
@@ -204,11 +193,7 @@ describe("gateway compaction hot reload", () => {
           .toMatchObject({ model: newCompactionModel.modelRef, maxActiveTranscriptBytes: "10b" });
 
         const requestsBeforeCompaction = providerRequests.length;
-        await sendChatAndWait(
-          gatewayClient,
-          sessionKey,
-          "Compact the existing conversation before answering.",
-        );
+        await chat("Compact the existing conversation before answering.");
 
         const newRequests = providerRequests.slice(requestsBeforeCompaction);
         expect(newRequests).toContain(newCompactionModel.modelId);

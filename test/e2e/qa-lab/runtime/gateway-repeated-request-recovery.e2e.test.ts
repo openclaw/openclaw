@@ -13,17 +13,7 @@ import {
   type GatewayChatHistory,
 } from "./gateway-recovery.test-support.js";
 
-type StabilityEvent = {
-  ts?: unknown;
-  type?: unknown;
-  action?: unknown;
-  reason?: unknown;
-  outcome?: unknown;
-  ageMs?: unknown;
-  failureKind?: unknown;
-  queueDepth?: unknown;
-  source?: unknown;
-};
+type StabilityEvent = Partial<Record<"ts" | "type" | "reason" | "ageMs" | "failureKind", unknown>>;
 
 type StabilitySnapshot = {
   lastSeq?: unknown;
@@ -32,16 +22,15 @@ type StabilitySnapshot = {
 
 type MockRequestSnapshot = Partial<
   Record<"cursor" | "prompt" | "allInputText" | "model" | "outcome" | "errorCode", unknown>
->;
+> & {
+  body?: { input?: Array<{ role?: string; content?: unknown }> };
+};
 
-type ClassifiedMockRequest = {
-  cursor: unknown;
-  model: unknown;
-  continuation: boolean;
+type ClassifiedMockRequest = Record<"cursor" | "model" | "outcome" | "errorCode", unknown> & {
+  recoveryUserPromptCount: number;
+  userInputCount: number;
   prompt: "recovery" | "queued" | "other" | "missing";
   stallGuidance: boolean;
-  outcome: unknown;
-  errorCode: unknown;
 };
 
 const RECOVERY_PROMPT =
@@ -158,71 +147,32 @@ async function readClassifiedMockRequests(mockBaseUrl: string): Promise<Classifi
   return fetch(`${mockBaseUrl}/debug/requests`)
     .then((response) => response.json() as Promise<MockRequestSnapshot[]>)
     .then((records) =>
-      records.map(({ cursor, prompt, allInputText, model, outcome, errorCode }) => ({
-        cursor,
-        model,
-        continuation:
-          typeof prompt === "string" &&
-          !prompt.includes(RECOVERY_PROMPT) &&
-          !prompt.includes(QUEUED_PROMPT) &&
-          typeof allInputText === "string" &&
-          allInputText.includes(RECOVERY_PROMPT),
-        prompt:
-          typeof prompt === "string"
-            ? prompt.includes(QUEUED_PROMPT)
-              ? "queued"
-              : typeof allInputText === "string" && allInputText.includes(RECOVERY_PROMPT)
-                ? "recovery"
-                : "other"
-            : "missing",
-        stallGuidance:
-          typeof allInputText === "string" && allInputText.includes(STALL_GUIDANCE_NEEDLE),
-        outcome,
-        errorCode,
-      })),
+      records.map(({ cursor, prompt, allInputText, model, outcome, errorCode, body }) => {
+        const userInputs = (body?.input ?? []).filter((item) => item.role === "user");
+        return {
+          cursor,
+          model,
+          recoveryUserPromptCount: userInputs.reduce(
+            (count, item) =>
+              count + (JSON.stringify(item.content) ?? "").split(RECOVERY_PROMPT).length - 1,
+            0,
+          ),
+          userInputCount: userInputs.length,
+          prompt:
+            typeof prompt === "string"
+              ? prompt.includes(QUEUED_PROMPT)
+                ? "queued"
+                : prompt.includes(RECOVERY_PROMPT)
+                  ? "recovery"
+                  : "other"
+              : "missing",
+          stallGuidance:
+            typeof allInputText === "string" && allInputText.includes(STALL_GUIDANCE_NEEDLE),
+          outcome,
+          errorCode,
+        };
+      }),
     );
-}
-
-async function readFailureEvidence(params: {
-  gateway: Gateway;
-  mockBaseUrl: string | undefined;
-  sinceSeq: number;
-}): Promise<string> {
-  const events = (await readStability(params.gateway, params.sinceSeq)).events ?? [];
-  const stability = events
-    .filter(
-      (event) =>
-        typeof event.type === "string" &&
-        (event.type.startsWith("session.") ||
-          event.type === "message.queued" ||
-          event.type === "model.call.started" ||
-          event.type === "model.call.error"),
-    )
-    .map(({ type, action, reason, outcome, ageMs, failureKind, queueDepth, source }) => ({
-      type,
-      action,
-      reason,
-      outcome,
-      ageMs,
-      failureKind,
-      queueDepth,
-      source,
-    }));
-  const requests = params.mockBaseUrl
-    ? await readClassifiedMockRequests(params.mockBaseUrl).catch((error: unknown) => [
-        { requestEvidenceError: String(error) },
-      ])
-    : [];
-  const gatewayLogs = params.gateway
-    .logs()
-    .split("\n")
-    .filter((line) =>
-      /followup queue|reply run stale takeover|stuck session recovery|queue: active session|empty response|settled.*final|retrying|stranded|continuation/iu.test(
-        line,
-      ),
-    )
-    .slice(-100);
-  return JSON.stringify({ stability, requests, gatewayLogs });
 }
 
 it(
@@ -318,15 +268,7 @@ it(
       endedAt: expect.any(Number),
     });
 
-    const history = await waitForQueuedReply(gateway, sessionKey).catch(async (error: unknown) => {
-      const evidence = await readFailureEvidence({
-        gateway,
-        mockBaseUrl: harness?.mock?.baseUrl,
-        sinceSeq: baselineSeq,
-      });
-      throw new Error(`${String(error)}; evidence=${evidence}`, { cause: error });
-    });
-    expect(historyContainsQueuedReply(history)).toBe(true);
+    await waitForQueuedReply(gateway, sessionKey);
     // agent.wait returns pending immediately while the queue owns this run,
     // even after its reply is visible. Observe settlement within the same budget.
     const queuedDeadline = Date.now() + 30_000;
@@ -346,35 +288,33 @@ it(
         (message) => message.role === "assistant" && messageText(message) === QUEUED_REPLY_MARKER,
       ),
     ).toHaveLength(1);
+    expect(
+      (finalHistory.messages ?? []).filter(
+        (message) => message.role === "user" && messageText(message).includes(RECOVERY_PROMPT),
+      ),
+    ).toHaveLength(1);
     const mockBaseUrl = harness?.mock?.baseUrl;
     if (!mockBaseUrl) {
       throw new Error("mock provider request evidence unavailable");
     }
     const requests = await readClassifiedMockRequests(mockBaseUrl);
     const recoveryRequests = requests.filter((request) => request.prompt === "recovery");
-    // After the fourth request times out, the existing transient-retry owner makes
-    // one same-model transcript continuation. Its no-details failure exhausts the
+    // After the fourth request times out, the transient-retry owner resends the
+    // persisted authored user turn. Its no-details failure exhausts the
     // already-used empty-error budget. This is not diagnostic liveness recovery.
     // Mock outcomes record intent before delay; the diagnostic above proves the timeout.
-    expect(
-      recoveryRequests,
-      await readFailureEvidence({ gateway, mockBaseUrl, sinceSeq: baselineSeq }),
-    ).toEqual([
-      ...Array.from({ length: 4 }, () =>
+    expect(recoveryRequests).toEqual(
+      Array.from({ length: 5 }, () =>
         expect.objectContaining({
           model: "gpt-5.6-luna",
-          continuation: false,
+          prompt: "recovery",
+          recoveryUserPromptCount: 1,
           outcome: "error",
           errorCode: "response_failed_no_details",
         }),
       ),
-      expect.objectContaining({
-        model: "gpt-5.6-luna",
-        continuation: true,
-        outcome: "error",
-        errorCode: "response_failed_no_details",
-      }),
-    ]);
+    );
+    expect(new Set(recoveryRequests.map((request) => request.userInputCount)).size).toBe(1);
     // A provider failure is not a stuck-run abort and must not inject recovery guidance.
     expect(requests.filter((request) => request.prompt === "queued")).toEqual([
       expect.objectContaining({ outcome: "success", stallGuidance: false }),

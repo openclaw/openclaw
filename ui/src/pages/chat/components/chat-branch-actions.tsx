@@ -19,6 +19,7 @@ import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { createGitHubPublicationAccountMenuItems } from "./chat-github-publication-menu.tsx";
 import {
   githubPublicationAccountChoices,
+  githubPublicationState,
   GitHubPublicationAction,
   GitHubPublicationDetails,
 } from "./chat-github-publication.tsx";
@@ -54,6 +55,15 @@ export function ChatBranchActions(props: {
           personalGitHubPublicationSelection(publication.options))),
     );
   });
+
+  const publicationState = createMemo(() =>
+    props.publication ? githubPublicationState(props.publication) : undefined,
+  );
+  const creating = () => publicationState() === "requested" || publicationState() === "publishing";
+  const warning = () =>
+    publicationState() === "failed" ||
+    publicationState() === "unavailable" ||
+    publicationState() === "unknown";
 
   const accountChoices = createMemo(() =>
     props.publication ? githubPublicationAccountChoices(props.publication) : undefined,
@@ -170,28 +180,27 @@ export function ChatBranchActions(props: {
                 menu?.focusFirst();
               }}
             >
-              <Show when={publication().activity !== null}>
+              <Show when={creating() || publication().activity !== null}>
                 <span class="btn__spinner" aria-hidden="true" />
               </Show>
-              <Show
-                when={
-                  publication().activity === null &&
-                  (publication().locked || publication().result?.status === "failed")
-                }
-              >
+              <Show when={publication().activity === null && warning()}>
                 <Icon name="alertTriangle" class="chat-pr__publication-warning" />
               </Show>
-              {publication().activity !== null
-                ? t(
-                    publication().activity === "read"
-                      ? "common.loading"
-                      : "chat.pullRequests.creating",
-                  )
-                : publication().locked || publication().result?.status === "failed"
-                  ? t("common.retry")
-                  : publication().result
-                    ? t("chat.sidePanel.review")
-                    : t("chat.pullRequests.createPr")}
+              {creating()
+                ? t("chat.pullRequests.creating")
+                : publication().activity !== null
+                  ? t(
+                      publication().activity === "read"
+                        ? "common.loading"
+                        : "chat.pullRequests.creating",
+                    )
+                  : publicationState() === "unknown"
+                    ? t("githubPublication.check")
+                    : warning()
+                      ? t("common.retry")
+                      : publication().result
+                        ? t("chat.sidePanel.review")
+                        : t("chat.pullRequests.createPr")}
             </button>
           </Show>
         )}

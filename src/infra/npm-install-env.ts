@@ -17,6 +17,7 @@ export type NpmProjectInstallEnvOptions = NpmConfigScope & {
 const NPM_CONFIG_SCRIPT_SHELL_KEYS = ["NPM_CONFIG_SCRIPT_SHELL", "npm_config_script_shell"];
 
 const NPM_CONFIG_KEYS_TO_RESET = new Set([
+  "npm_config_allow_scripts",
   "npm_config_cache",
   "npm_config_dry_run",
   "npm_config_global",
@@ -38,8 +39,6 @@ const NPM_FRESHNESS_BYPASS_KEYS = [
   "NPM_CONFIG_MIN-RELEASE-AGE",
   "npm_config_min-release-age",
 ] as const;
-
-type NpmFreshnessBypassMode = "before" | "min-release-age";
 
 export type NpmConfigScope = {
   npmConfigCwd?: string;
@@ -278,7 +277,7 @@ export function findExplicitNpmConfigKeys(
 function resolveNpmFreshnessBypassMode(
   env: NodeJS.ProcessEnv,
   scope: NpmConfigScope,
-): NpmFreshnessBypassMode {
+): "before" | "min-release-age" {
   if (process.platform === "win32") {
     return "before";
   }

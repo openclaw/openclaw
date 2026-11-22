@@ -101,19 +101,6 @@ describe("writer occupancy log report", () => {
 
   it("keeps native transaction phases separate and allowlists nested numeric fields", async () => {
     const append = "session.actor.appendTranscriptEvent";
-    const phases = (
-      hostAdmissionWaitMs: number,
-      databaseAdmissionWaitMs: number,
-      prepareMs: number,
-      sqlMs: number,
-    ) => ({
-      beginMs: 0,
-      commitMs: 0,
-      hostAdmissionWaitMs,
-      databaseAdmissionWaitMs,
-      prepareMs,
-      sqlMs,
-    });
     const nativeWarning = (
       values: Record<string, unknown>,
       elapsedMs = 3_415,
@@ -126,22 +113,26 @@ describe("writer occupancy log report", () => {
         time: "2026-10-13T14:55:38.478Z",
       });
     const native = [
-      nativeWarning({ ...phases(2_015, 700, 3, 700), privateData: "private-value" }),
-      nativeWarning(phases(4, 6, 1, 1_030), 1_040),
+      nativeWarning({
+        hostAdmissionWaitMs: 2_015,
+        databaseAdmissionWaitMs: 700,
+        sqlMs: 700,
+        privateData: "private-value",
+      }),
+      nativeWarning({ hostAdmissionWaitMs: 4, databaseAdmissionWaitMs: 6, sqlMs: 1_030 }, 1_040),
       nativeWarning({ sqlMs: 5 }, 5, "private-operation"),
       nativeWarning({ databaseAdmissionWaitMs: 0 }, 0, "session.actor.patch"),
       nativeWarning({ sqlMs: "private-value" }, undefined, "session.actor.patch"),
-      nativeWarning({ databaseAdmissionWaitMs: "private-value" }),
     ];
     const report = await attributeWriterOccupancy(native);
-    expect(report).toMatchObject({ observedReservations: 0, operations: [], ignoredLines: 2 });
+    expect(report).toMatchObject({ observedReservations: 0, operations: [], ignoredLines: 1 });
     expect(report.nativeTransactions).toEqual([
       {
         operation: append,
         count: 2,
         elapsedMs: 4_455,
         maxElapsedMs: 3_415,
-        phases: phases(2_019, 706, 4, 1_730),
+        phases: { hostAdmissionWaitMs: 2_019, databaseAdmissionWaitMs: 706, sqlMs: 1_730 },
       },
       { operation: "other", count: 1, elapsedMs: 5, maxElapsedMs: 5, phases: { sqlMs: 5 } },
       {

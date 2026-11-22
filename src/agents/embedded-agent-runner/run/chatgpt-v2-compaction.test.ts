@@ -140,6 +140,23 @@ const highUsageCompletion = {
     usage: { ...terminal.response.usage, input_tokens: 465_668, total_tokens: 465_674 },
   },
 };
+function respondWithToolTurn(reportHighUsage = false) {
+  let normal = 0;
+  let compacted = 0;
+  respond = (body) => {
+    if (body.input.at(-1)?.type === "compaction_trigger") {
+      return compactEvents(++compacted);
+    }
+    if (++normal !== 1) {
+      return textEvents();
+    }
+    const events = toolEvents();
+    if (reportHighUsage && !compacted) {
+      events[events.length - 1] = highUsageCompletion;
+    }
+    return events;
+  };
+}
 function requestAt(index: number) {
   const request = requests[index];
   if (!request) {
@@ -259,6 +276,8 @@ async function fixture(
     session,
     contextTokenBudget,
     reserveTokens: 2_000,
+    // The fixture's foreground batch has settled; soft fallbacks may stop here.
+    isToolBoundarySafe: () => true,
     timeoutMs: 30_000,
     authProfileId: "fixture-profile",
     assertActive: () => {},
@@ -314,14 +333,7 @@ const realUserText = (body: Body) =>
 describe("ChatGPT V2 at the embedded normal request boundary", () => {
   it("compacts preflight and settled tool turns through the live stack without reexecuting tools", async () => {
     const f = await fixture();
-    let normal = 0;
-    let compacted = 0;
-    respond = (body) =>
-      body.input.at(-1)?.type === "compaction_trigger"
-        ? compactEvents(++compacted)
-        : ++normal === 1
-          ? toolEvents()
-          : textEvents();
+    respondWithToolTurn();
     await f.submit();
     expect(f.onFallback).not.toHaveBeenCalled();
     expect(f.execute).toHaveBeenCalledOnce();
@@ -392,22 +404,7 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
       content: [{ type: "text", text: "large tool output. ".repeat(16_000) }],
       details: {},
     });
-    let normal = 0;
-    let compacted = false;
-    respond = (body) => {
-      if (body.input.at(-1)?.type === "compaction_trigger") {
-        compacted = true;
-        return compactEvents(1);
-      }
-      if (++normal !== 1) {
-        return textEvents();
-      }
-      const events = toolEvents();
-      if (!compacted) {
-        events[events.length - 1] = highUsageCompletion;
-      }
-      return events;
-    };
+    respondWithToolTurn(true);
     await f.submit();
     expect(f.onFallback).not.toHaveBeenCalled();
     expect(f.execute).toHaveBeenCalledOnce();
@@ -489,6 +486,33 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
       "message",
       "function_call_output",
     ]);
+    expect(f.onFallback).not.toHaveBeenCalled();
+  });
+
+  it("sends a fitting request over the client threshold while its tool batch is open", async () => {
+    const f = await fixture(SessionManager.inMemory(), false);
+    const boundary = createChatGPTV2CompactionBoundary({
+      ...f.boundaryParams,
+      contextTokenBudget: 500_000,
+      reserveTokens: 20_000,
+      isToolBoundarySafe: () => false,
+    });
+    let normal = 0;
+    respond = () => (++normal === 1 ? toolEvents() : textEvents());
+    f.execute.mockImplementation(async () => {
+      // 485k is past the 480k client threshold but inside the 500k window.
+      await expect(
+        boundary(
+          f.session.agent.streamFn,
+          { ...model, contextWindow: 500_000 },
+          { messages: [] },
+          { sessionId: f.session.sessionId },
+          { requestIndex: 1, messageCount: 0, contextTokens: 485_000 },
+        ),
+      ).resolves.toBeUndefined();
+      return { content: [{ type: "text", text: "settled" }], details: {} };
+    });
+    await f.submit();
     expect(f.onFallback).not.toHaveBeenCalled();
   });
 

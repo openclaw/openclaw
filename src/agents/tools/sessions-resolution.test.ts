@@ -18,6 +18,20 @@ beforeEach(() => {
   callGatewayMock.mockReset();
 });
 
+it.each(["main", "ops"])(
+  "binds bare-key ownership lookup to the selected agent (%s)",
+  async (agentId) => {
+    callGatewayMock.mockResolvedValue({ key: "shared", agentId });
+    const result = await resolution.lookupRequesterSessionOwnership({
+      requesterSessionKey: "agent:main:dashboard:parent",
+      requesterAgentId: "main",
+      targetSessionKey: "shared",
+      targetAgentId: "ops",
+    });
+    expect(result).toEqual({ ok: true, value: agentId === "ops" });
+  },
+);
+
 function expectResolvedSessionReference(
   result: Awaited<ReturnType<typeof resolution.resolveSessionReference>>,
   key: string,
@@ -254,11 +268,12 @@ describe("resolveSessionReference", () => {
       missing: true,
       requesterOwned: false,
     });
+    // The key's own agent is implied; the probe must not repeat it (#164847).
     expect(callGatewayMock).toHaveBeenCalledWith({
       method: "sessions.resolve",
       params: {
         key: "agent:main:main",
-        agentId: "main",
+        agentId: undefined,
         spawnedBy: undefined,
         allowMissing: true,
       },

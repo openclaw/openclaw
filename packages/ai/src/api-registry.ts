@@ -32,11 +32,6 @@ export interface RegisteredApiProvider {
   streamSimple: ApiStreamSimpleFunction;
 }
 
-type RegisteredApiProviderEntry = {
-  provider: RegisteredApiProvider;
-  sourceId?: string;
-};
-
 function wrapStream<TApi extends Api, TOptions extends StreamOptions>(
   api: TApi,
   stream: StreamFunction<TApi, TOptions>,
@@ -51,7 +46,7 @@ function wrapStream<TApi extends Api, TOptions extends StreamOptions>(
 
 /** Creates an isolated provider registry for one runtime or tenant. */
 export function createApiRegistry() {
-  const providers = new Map<string, RegisteredApiProviderEntry>();
+  const providers = new Map<string, { provider: RegisteredApiProvider; sourceId?: string }>();
 
   function registerApiProvider<TApi extends Api, TOptions extends StreamOptions>(
     provider: ApiProvider<TApi, TOptions>,

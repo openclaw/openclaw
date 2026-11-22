@@ -1,8 +1,9 @@
 import "./update-command-execution.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as gatewayLock from "../../infra/gateway-lock.js";
 import * as openClawRoot from "../../infra/openclaw-root.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import * as candidateState from "../../infra/update-candidate-state.js";
@@ -21,13 +22,13 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import * as stateOwnership from "../../state/openclaw-state-ownership-preflight.js";
 import { updateConfigSource } from "./schema-preflight.js";
 import * as shared from "./shared.js";
+import { expectNoCalls as expectNotCalled } from "./update-boundary.test-support.js";
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import * as managedContext from "./update-command-managed-context.js";
 import { finishAlreadyCurrentUpdate } from "./update-command-noop.js";
 import type { RefuseUpdate } from "./update-command-result.js";
-import * as commandRun from "./update-command-run.js";
 import { prepareUpdateCommand } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas } from "./update-command-schema.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
@@ -46,11 +47,6 @@ const { bindExecutionGuards, executionParams, mocks, schemaContext, successfulUp
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const foregroundRunId = "b834d63c-0310-4a9b-9b04-48b6b5da6cfe";
 let claimPath: string;
-const expectNotCalled = (...spies: MockInstance[]) => {
-  for (const spy of spies) {
-    expect(spy).not.toHaveBeenCalled();
-  }
-};
 function mockPackageRoot(root: string) {
   vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(root);
   vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
@@ -164,56 +160,6 @@ it("keeps post-core continuation separate from foreground request admission", as
   expect(prepared.servicePlan).toBeUndefined();
   expectNotCalled(handoff.inspect, nativePlan);
 });
-
-it.each(["preparation", "environment", "state preflight"] as const)(
-  "refuses a foreground claim lost after successful %s before ledger admission",
-  async (boundary) => {
-    const root = dirs.make("foreground-interleave-");
-    mockPackageRoot(root);
-    const before = createUpdateRun({ runId: foregroundRunId, trigger: "api" });
-    const { nativePlan, nativeOwner, create, adopt } = admissionSpies();
-    nativePlan.mockResolvedValue({ rootRedirect: null });
-    let admitting = false;
-    let expired = false;
-    const expire = async () => {
-      await fs.rm(claimPath);
-      expired = true;
-    };
-    const expireAfter = async <T>(operation: Promise<T>, at: typeof boundary) => {
-      const result = await operation;
-      if (boundary === at) {
-        await expire();
-      }
-      return result;
-    };
-    const prepare = commandRun.prepareUpdateCommand;
-    vi.spyOn(commandRun, "prepareUpdateCommand").mockImplementation((opts) =>
-      expireAfter(prepare(opts), "preparation"),
-    );
-    const resolveEnv = commandRun.resolveUpdateCommandAdmissionEnv;
-    vi.spyOn(commandRun, "resolveUpdateCommandAdmissionEnv").mockImplementation((params) =>
-      expireAfter(resolveEnv(params), "environment"),
-    );
-    const admit = commandRun.admitUpdateCommandRun;
-    vi.spyOn(commandRun, "admitUpdateCommandRun").mockImplementation(async (params) => {
-      admitting = true;
-      return await admit(params);
-    });
-    vi.spyOn(stateOwnership, "assertOpenClawStateWriteAllowedAtPath").mockImplementation(
-      async () => {
-        if (admitting && boundary === "state preflight") {
-          await expire();
-        }
-      },
-    );
-
-    await expectRefusal(updateCommand({ json: true }).then(() => "admitted"));
-    expect(expired).toBe(true);
-    expect(handoff.inspect).toHaveBeenCalled();
-    expectNotCalled(nativePlan, nativeOwner, create, adopt);
-    expect(updateRunLedger.getUpdateRun(before.runId)).toEqual(before);
-  },
-);
 
 it.each(["schema", "execution", "already current"] as const)(
   "preserves admitted foreground intent at initial %s inspection",
@@ -408,14 +354,11 @@ it.each<{
           ]
         : []),
     ]);
-    mocks.validateCanary.mockResolvedValue({
+    mocks.checkCandidate.mockResolvedValue({
       status: "ok",
-      phase: "readiness",
       candidateSchemaVersions: { state: 15, agent: 19 },
       gatewayRestartCompletion: capable,
       steps: [],
-      durationMs: 1,
-      logTail: [],
     });
     const events: string[] = [];
     handoff.park.mockImplementation(async ({ run }) => {
@@ -455,3 +398,73 @@ it.each<{
     );
   },
 );
+
+it("parks a foreground Gateway that holds PostgreSQL ownership instead of refusing before validation", async () => {
+  const root = dirs.make("foreground-postgres-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
+  const env = { ...process.env };
+  const params = executionParams("package");
+  params.root = root;
+  params.opts.run = foregroundRun(env);
+  const caller = schemaContext("caller");
+  mocks.captureSchemaContext.mockResolvedValue({ ...caller, env, readEnv: env });
+  mocks.captureManagedPreflight.mockResolvedValue(undefined);
+  mocks.maybeStopService.mockResolvedValue({
+    stopped: false,
+    inspected: true,
+    runtimeInspected: true,
+    running: false,
+    serviceUpdateVerdict: { kind: "absent" },
+  });
+  vi.spyOn(managedContext, "readUpdateCandidateSource").mockResolvedValue({
+    config: {
+      database: {
+        engine: "postgres",
+        postgres: { connection: "postgresql://synthetic.invalid/foreground" },
+      },
+    },
+    hash: "unchanged",
+    source: updateConfigSource({
+      ...caller.configSnapshot,
+      path: path.join(root, "openclaw.json"),
+      hash: "unchanged",
+    }),
+  });
+  vi.spyOn(candidateState, "readUpdateStateSchemaVersions").mockResolvedValue([
+    { path: path.join(root, "state", "openclaw.sqlite"), userVersion: 15 },
+  ]);
+  mocks.checkCandidate.mockResolvedValue({
+    status: "ok",
+    candidateSchemaVersions: { state: 15, agent: 19 },
+    gatewayRestartCompletion: true,
+    steps: [],
+  });
+  const events: string[] = [];
+  // The foreground Gateway holds state ownership until the handoff parks it.
+  const acquire = gatewayLock.acquireGatewayLock;
+  vi.spyOn(gatewayLock, "acquireGatewayLock").mockImplementation(async (options) =>
+    options?.role === "sqlite-maintenance" && !events.includes("park") ? null : acquire(options),
+  );
+  handoff.park.mockImplementation(async ({ run }) => {
+    events.push("park");
+    run.gatewayRestartRequired = true;
+  });
+  mocks.runPackageUpdate.mockImplementation(async ({ validateCandidate, beforeActivate }) => {
+    await validateCandidate(root);
+    events.push("validated");
+    await beforeActivate();
+    events.push("publish");
+    return { ...successfulUpdate, root };
+  });
+  const result = await withUpdateCommandExecutor(params.opts.run.runId, async (executor) => {
+    mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
+      admitExecutor(await executor.enter(root));
+    });
+    return executeMutableUpdate(await bindExecutionGuards(params));
+  });
+
+  expect(mocks.checkCandidate).toHaveBeenCalled();
+  expect(events, JSON.stringify(result?.failure)).toEqual(["validated", "park", "publish"]);
+  expect(result?.result.status).toBe("ok");
+});

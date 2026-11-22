@@ -18,6 +18,7 @@ import {
   trapLightboxTabFocus,
 } from "./image-lightbox-gallery.ts";
 import { panImageWithKeyboard } from "./image-lightbox-keyboard.ts";
+import { createImageLightboxTransition } from "./image-lightbox-transition.ts";
 import {
   LightboxAction,
   LightboxChrome,
@@ -76,6 +77,7 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
   let displayedIndex = 0;
   let displayedSource = "";
   let slideAnimation: Animation | undefined;
+  const crossfade = createImageLightboxTransition();
   let backdropPointer: { pointerId: number; clientX: number; clientY: number } | undefined;
   let activeSwipe:
     | { pointerId: number; x: number; y: number; offset: number; horizontal: boolean }
@@ -300,11 +302,8 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
   function animateSlide(offset: number) {
     slideAnimation?.cancel();
     const currentSlide = slide();
-    if (!currentSlide) {
-      return;
-    }
-    currentSlide.style.removeProperty("transform");
-    if (offset && !motionQuery?.matches && host.isConnected && !disposed) {
+    currentSlide?.style.removeProperty("transform");
+    if (currentSlide && offset && !motionQuery?.matches && host.isConnected && !disposed) {
       slideAnimation = currentSlide.animate(
         [{ transform: `translateX(${offset}px)` }, { transform: "translateX(0)" }],
         { duration: SLIDE_DURATION_MS, easing: "ease-out" },
@@ -317,18 +316,25 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
       animateSlide(offset);
       return;
     }
+    const frame = crossfade.capture(image(), motionQuery?.matches);
     video()?.pause();
     const changed = await gallery.move(delta);
-    if (!host.isConnected || disposed) {
+    await (host.isConnected && !disposed ? host.updateComplete : undefined);
+    if (!host.isConnected || disposed || !crossfade.isCurrent(frame)) {
       return;
     }
-    await host.updateComplete;
+    if (changed && props.mediaKind !== "video") {
+      crossfade.show(frame, slide(), motionQuery?.matches);
+      animateSlide(0);
+      return;
+    }
     animateSlide(changed ? delta * direction() * (stage()?.clientWidth ?? 0) : offset);
   }
 
   const handleMotionPreferenceChange = (event: MediaQueryListEvent) => {
     panzoom?.setOptions({ duration: event.matches ? 0 : 200 });
     if (event.matches) {
+      crossfade.clear();
       slideAnimation?.cancel();
     }
   };
@@ -460,6 +466,7 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
       ] = inputs;
       const sourceChanged = previous?.inputs !== inputs;
       if (sourceChanged) {
+        crossfade.clear();
         cancelSwipe();
         destroyPanzoom();
         setScale(1);
@@ -505,9 +512,9 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
       : undefined;
     return () => {
       disposed = true;
+      crossfade.clear();
       cancelSwipe();
       touchPointers.clear();
-      slideAnimation?.cancel();
       stopMotionChange?.();
       destroyPanzoom();
       originalUrlRequest += 1;

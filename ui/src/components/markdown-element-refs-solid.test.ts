@@ -1,49 +1,41 @@
-/* @vitest-environment jsdom */
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
+/* @vitest-environment jsdom */
+import type { SessionWorkspaceStatResult } from "../api/types.ts";
 import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../lib/presentation.ts";
+import { mockDocumentVisibility, restoreMocksAndGlobals } from "../test-helpers/mock-cleanup.ts";
 import { renderSolidRef } from "../test-helpers/render-solid-ref.ts";
-import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { linkReaderPrefetchRef, markdownBlocksRef } from "./markdown-element-refs-solid.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
+import { markdownBlocksRef } from "./markdown-element-refs-solid.ts";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(restoreMocksAndGlobals);
 
 it("parks native thread work on hide and releases replaced roots and unmounted owners", async () => {
-  const observed = new Set<Element>();
+  const observers: Set<Element>[] = [];
   vi.stubGlobal(
     "ResizeObserver",
     class {
       private readonly targets = new Set<Element>();
-      observe(target: Element) {
-        this.targets.add(target);
-        observed.add(target);
+      constructor() {
+        observers.push(this.targets);
       }
-      unobserve(target: Element) {
-        this.targets.delete(target);
-        observed.delete(target);
-      }
-      disconnect() {
-        for (const target of this.targets) {
-          observed.delete(target);
-        }
-        this.targets.clear();
-      }
+      observe = (target: Element) => this.targets.add(target);
+      unobserve = (target: Element) => this.targets.delete(target);
+      disconnect = () => this.targets.clear();
     },
   );
-  const idleScans = new Map<number, IdleRequestCallback>();
-  const expectWork = (active: boolean, target = code) => {
-    expect(observed.has(target)).toBe(active);
-    if (!active) {
-      expect(observed.size).toBe(0);
-    }
-    expect(idleScans.size).toBe(active ? 1 : 0);
+  const notify = (owner: EventTarget, active: boolean) => {
+    owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    expectWork(active);
   };
-  let idleId = 0;
-  vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => {
-    idleScans.set(++idleId, callback);
-    return idleId;
-  });
-  vi.stubGlobal("cancelIdleCallback", (id: number) => idleScans.delete(id));
+  const expectWork = (active: boolean, target = code) => {
+    const observed = observers.flatMap((targets) => [...targets]);
+    if (active) {
+      expect(observed).toContain(target);
+    } else {
+      expect(observed).toHaveLength(0);
+    }
+  };
 
   const root = document.createElement("div");
   root.className = "chat-thread";
@@ -61,25 +53,21 @@ it("parks native thread work on hide and releases replaced roots and unmounted o
     () => {
       const [presented, setPresented] = createSignal<PresentationValue>(binding);
       updatePresentation = (value) => setPresented(() => value);
-      const refs = [
-        markdownBlocksRef(presented),
-        linkReaderPrefetchRef(() => ["session", presented(), true]),
-      ];
-      replaceRoot = (element) => refs.forEach((ref) => ref(element));
-      return refs;
+      replaceRoot = markdownBlocksRef(presented);
+      return replaceRoot;
     },
     { targetElement: root },
   );
+  const present = async (value: PresentationValue) => {
+    updatePresentation(value);
+    await waitForSolid(() => expectWork(true));
+  };
 
   try {
     await waitForSolid(() => expectWork(true));
-    const viewport = root.querySelector(".code-block-viewport")!;
-    expect(root.querySelector("button")!.getAttribute("aria-controls")).toBe(viewport.id);
-    expect(viewport.id).not.toBe("");
 
     visible = false;
-    presentationOwner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-    expectWork(false);
+    notify(presentationOwner, false);
     expect(root.querySelector("code")).toBe(code);
 
     visible = true;
@@ -87,22 +75,16 @@ it("parks native thread work on hide and releases replaced roots and unmounted o
     await Promise.resolve();
     expectWork(false);
 
-    updatePresentation({ ...binding });
-    await waitForSolid(() => expectWork(true));
+    await present({ ...binding });
     const nextOwner = new EventTarget();
     let nextVisible = true;
-    updatePresentation({ owner: nextOwner, isPresented: () => nextVisible });
-    await waitForSolid(() => expect(observed.has(code)).toBe(true));
+    await present({ owner: nextOwner, isPresented: () => nextVisible });
     visible = false;
-    presentationOwner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-    expectWork(true);
+    notify(presentationOwner, true);
     nextVisible = false;
-    nextOwner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-    expectWork(false);
-    updatePresentation(true);
-    await waitForSolid(() => expect(observed.has(code)).toBe(true));
-    nextOwner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-    expectWork(true);
+    notify(nextOwner, false);
+    await present(true);
+    notify(nextOwner, true);
 
     const nextRoot = document.createElement("div");
     nextRoot.className = root.className;
@@ -110,7 +92,7 @@ it("parks native thread work on hide and releases replaced roots and unmounted o
     root.replaceWith(nextRoot);
     replaceRoot(nextRoot);
     await waitForSolid(() => {
-      expect(observed.has(code)).toBe(false);
+      expect(observers.some((targets) => targets.has(code))).toBe(false);
       expectWork(true, nextRoot.querySelector("code")!);
     });
     view.unmount();
@@ -118,4 +100,229 @@ it("parks native thread work on hide and releases replaced roots and unmounted o
   } finally {
     view.unmount();
   }
+});
+
+it.each(["visible", "hidden"] as const)(
+  "releases syntax workers on tab hide and resumes only presented Markdown (initially %s)",
+  async (initial) => {
+    const show = mockDocumentVisibility(initial);
+    const workers: TestWorker[] = [];
+    class TestWorker extends EventTarget {
+      postMessage = vi.fn();
+      terminate = vi.fn();
+      constructor() {
+        super();
+        workers.push(this);
+      }
+    }
+    vi.stubGlobal("Worker", TestWorker);
+    const root = document.createElement("section");
+    root.className = "chat-text";
+    root.innerHTML =
+      '<div class="code-block-wrapper"><pre class="code-block-viewport"><code data-code-highlight="typescript"></code></pre></div>';
+    const code = root.querySelector("code")!;
+    const source = "const answer = 42;\n".repeat(400);
+    code.textContent = source;
+    let present!: (value: boolean) => void;
+    const view = renderSolidRef(
+      () => {
+        const [presented, setPresented] = createSignal(true);
+        present = setPresented;
+        return markdownBlocksRef(presented);
+      },
+      { targetElement: root },
+    );
+    try {
+      if (initial === "visible") {
+        await waitForSolid(() => expect(workers).toHaveLength(1));
+      } else {
+        await waitForSolid(() => expect(root.isConnected).toBe(true));
+        expect(workers).toHaveLength(0);
+      }
+      show("hidden");
+      flush();
+      for (const worker of workers) {
+        expect(worker.terminate).toHaveBeenCalledOnce();
+      }
+      const previous = workers.length;
+      show("visible");
+      await waitForSolid(() => expect(workers).toHaveLength(previous + 1));
+      expect(workers.at(-1)!.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ source }),
+        { transfer: [] },
+      );
+      expect(root.querySelector("code")).toBe(code);
+      expect(code.textContent).toBe(source);
+
+      present(false);
+      flush();
+      expect(workers.at(-1)!.terminate).toHaveBeenCalledOnce();
+      show("hidden");
+      show("visible");
+      flush();
+      expect(workers).toHaveLength(previous + 1);
+      view.unmount();
+      show("hidden");
+      show("visible");
+      flush();
+      expect(workers).toHaveLength(previous + 1);
+    } finally {
+      view.unmount();
+    }
+  },
+);
+
+it("rechecks retained file links when read permissions change, ignoring old answers", async () => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  mockDocumentVisibility();
+  const { checkFileLinkAvailability } =
+    await import("../pages/chat/components/chat-file-link-availability.ts");
+  type Workspace =
+    import("../pages/chat/components/chat-session-workspace-types.ts").SessionWorkspaceState;
+  type Host =
+    import("../pages/chat/components/chat-session-workspace-types.ts").SessionWorkspaceHost;
+  let workspace = { sessionKey: "agent:main:main", agentId: "main" } as Workspace;
+  let finishOld!: (value: {
+    sessionKey: string;
+    files: { path: string; status: "missing" }[];
+  }) => void;
+  const statFiles = vi.fn(async (): Promise<SessionWorkspaceStatResult> => ({
+    sessionKey: workspace.sessionKey,
+    files: [{ path: "/tmp/report.md", status: "missing" as const }],
+  }));
+  const state = { sessions: { statFiles } } as unknown as Host;
+  const root = document.createElement("div");
+  root.innerHTML =
+    '<a class="markdown-file-link" href="#" data-file-path="/tmp/report.md"><code>report.md</code></a>';
+  let change!: (scope: string) => void;
+  let show!: (presented: boolean) => void;
+  const view = renderSolidRef(
+    () => {
+      const [scope, setScope] = createSignal("workspace");
+      const [shown, setShown] = createSignal(true);
+      show = setShown;
+      change = setScope;
+      return markdownBlocksRef(
+        shown,
+        (links) => {
+          void checkFileLinkAvailability(state, workspace, links, scope());
+        },
+        scope,
+      );
+    },
+    { targetElement: root },
+  );
+  try {
+    await waitForSolid(() => expect(root.querySelector("a")).toBeNull());
+    statFiles.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishOld = resolve;
+        }),
+    );
+    change("guarded");
+    await waitForSolid(() => expect(statFiles).toHaveBeenCalledTimes(2));
+    statFiles.mockImplementation(async () => ({
+      sessionKey: workspace.sessionKey,
+      files: [{ path: "/tmp/report.md", status: "file" }],
+    }));
+    change("full");
+    await waitForSolid(() => expect(statFiles).toHaveBeenCalledTimes(3));
+    finishOld({
+      sessionKey: workspace.sessionKey,
+      files: [{ path: "/tmp/report.md", status: "missing" }],
+    });
+    await Promise.resolve();
+    expect(root.querySelector("a")?.textContent).toBe("report.md");
+    expect(root.querySelector("a")?.getAttribute("href")).toBe("#");
+
+    const { refreshSessionWorkspace, sessionWorkspaceFileLinkProps } =
+      await import("../pages/chat/components/chat-session-workspace.ts");
+    const { sessionWorkspaceForHost } =
+      await import("../pages/chat/components/chat-session-workspace-state.ts");
+    state.sessionKey = workspace.sessionKey;
+    state.sessionWorkspaceState = workspace;
+    const readScope = () =>
+      sessionWorkspaceFileLinkProps(state, { permissionMode: "full" }, undefined)
+        .workspaceFileLinkScope;
+    statFiles.mockImplementation(async () => ({
+      sessionKey: workspace.sessionKey,
+      files: [{ path: "/tmp/report.md", status: "missing" }],
+    }));
+    change(readScope());
+    await waitForSolid(() => expect(root.querySelector("a")).toBeNull());
+    // Hidden run completion retires the workspace without changing its permission/revision scope.
+    const { retireSessionWorkspaceCheckout } =
+      await import("../pages/chat/components/chat-session-workspace-state.ts");
+    show(false);
+    flush();
+    retireSessionWorkspaceCheckout(state);
+    workspace = state.sessionWorkspaceState!;
+    statFiles.mockImplementation(async () => ({
+      sessionKey: workspace.sessionKey,
+      files: [{ path: "/tmp/report.md", status: "file" }],
+    }));
+    change(readScope());
+    show(true);
+    await waitForSolid(() => expect(root.querySelector("a")?.textContent).toBe("report.md"));
+    statFiles.mockImplementation(async () => ({
+      sessionKey: workspace.sessionKey,
+      files: [{ path: "/tmp/report.md", status: "missing" }],
+    }));
+    change("refresh-negative");
+    await waitForSolid(() => expect(root.querySelector("a")).toBeNull());
+    // A completed run creates the missing file and uses the ordinary workspace refresh.
+    statFiles.mockImplementation(async () => ({
+      sessionKey: workspace.sessionKey,
+      files: [{ path: "/tmp/report.md", status: "file" }],
+    }));
+    const publish = vi.fn(() => change(readScope()));
+    const stop = sessionWorkspaceForHost(state).subscribe(publish);
+    try {
+      refreshSessionWorkspace(state, false);
+      expect(publish).toHaveBeenCalledOnce();
+      await waitForSolid(() => expect(root.querySelector("a")?.textContent).toBe("report.md"));
+    } finally {
+      stop();
+    }
+  } finally {
+    view.unmount();
+  }
+});
+
+it("rechecks only file links when their availability scope changes", async () => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  const { MarkdownCodeHighlights } = await import("./markdown-code-highlight.ts");
+  const sync = vi.spyOn(MarkdownCodeHighlights.prototype, "sync").mockImplementation(() => {});
+  const root = document.createElement("div");
+  root.innerHTML = `<div class="code-block-wrapper"><div class="code-block-viewport"><code data-code-highlight>x</code></div></div><a data-file-path="a">a</a>`;
+  const checked = vi.fn();
+  let change!: (scope: string) => void;
+  const view = renderSolidRef(
+    () => {
+      const [scope, setScope] = createSignal("workspace");
+      change = setScope;
+      return markdownBlocksRef(() => true, checked, scope);
+    },
+    { targetElement: root },
+  );
+  await waitForSolid(() => expect(sync).toHaveBeenCalledOnce());
+  change("full");
+  await waitForSolid(() => expect(checked).toHaveBeenCalledTimes(2));
+  expect(sync).toHaveBeenCalledOnce();
+  view.unmount();
 });

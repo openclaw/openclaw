@@ -10,7 +10,7 @@ const SLACK_DEFINITIVE_AUTH_ERROR_RE =
   /account_inactive|token_revoked|token_expired|not_authed|org_login_required|team_access_not_granted|user_removed_from_team|team_disabled|missing_scope|cannot_find_service|invalid_token/i;
 
 /** Consecutive isolated invalid_auth failures before the channel turns terminal. */
-export const SLACK_ISOLATED_INVALID_AUTH_TERMINAL_LIMIT = 3;
+const SLACK_ISOLATED_INVALID_AUTH_TERMINAL_LIMIT = 3;
 
 export const SLACK_SOCKET_RECONNECT_POLICY = {
   initialMs: 2_000,
@@ -146,7 +146,7 @@ export function nextSlackAuthFailureState(
 }
 
 /** Isolated invalid_auth: auth-shaped, but not a definitive credential verdict. */
-export function isIsolatedInvalidAuthSlackError(error: unknown): boolean {
+function isIsolatedInvalidAuthSlackError(error: unknown): boolean {
   const text = formatSlackError(error, "");
   return /invalid_auth/i.test(text) && !SLACK_DEFINITIVE_AUTH_ERROR_RE.test(text);
 }

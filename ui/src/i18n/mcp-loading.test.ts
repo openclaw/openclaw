@@ -37,8 +37,9 @@ it.each(["form", "validation"] as const)(
       expect(buildAddMcpServerPatch({ docs: {} }, "docs", {})).toEqual({
         error: "An MCP server named “docs” already exists.",
       });
+      expect(manager.t("mcpServers.removeConfirmTitle")).toBe("mcpServers.removeConfirmTitle");
     }
-    expect(manager.t("mcpPage.operatorCommands")).toBe("MCP operator commands");
+    expect(manager.t("mcpPage.operatorCommands")).toBe("Command line");
     expect(manager.t("common.cancel")).toBe("Abbrechen");
   },
 );

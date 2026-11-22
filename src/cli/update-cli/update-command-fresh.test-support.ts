@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
@@ -43,15 +42,6 @@ export function expectFreshStatePreserved(fixture: { root: string; databasePath:
   expect(fs.readdirSync(fixture.root)).toEqual(["package.json"]);
 }
 
-export function denyFreshLeaseRelease(message: string) {
-  using db = new DatabaseSync(
-    path.join(tempRoot.resolvePreferredOpenClawTmpDir(), "managed-update-handoffs.sqlite"),
-  );
-  db.exec(
-    `CREATE TRIGGER deny_refusal_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, '${message}'); END`,
-  );
-}
-
 export function installFreshUpdateFixture() {
   const dirs = createTempDirTracker();
   const fixture: { root: string; databasePath: string; managedServiceNodeRunner?: string } = {
@@ -68,12 +58,11 @@ export function installFreshUpdateFixture() {
       version: "2026.9.3",
     });
     vi.stubEnv("HOME", home);
-    vi.stubEnv("OPENCLAW_PROFILE", undefined);
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, "profile"));
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(home, "profile", "openclaw.json"));
-    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
-    vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", undefined);
-    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", undefined);
+    for (const key of ["PROFILE", "UPDATE_RUN_ID", "UPDATE_RUN_HANDOFF", "UPDATE_POST_CORE"]) {
+      vi.stubEnv(`OPENCLAW_${key}`, undefined);
+    }
     fixture.databasePath = resolveOpenClawStateSqlitePath(process.env);
     const executorRoot = path.join(home, "executor");
     fs.mkdirSync(executorRoot);

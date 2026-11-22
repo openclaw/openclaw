@@ -1,14 +1,7 @@
-import assert from "node:assert/strict";
-import { get } from "node:http";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { expect, test, vi } from "vitest";
 import { writeConfigFile } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import {
-  onTrustedInternalDiagnosticEvent,
-  waitForDiagnosticEventsDrained,
-} from "../infra/diagnostic-events.js";
 import {
   accessOrigin,
   githubCfg,
@@ -20,6 +13,8 @@ import {
   CONTROL_UI_CLIENT,
   installGatewayTestHooks,
   openWs,
+  rpcReq,
+  TEST_OPERATOR_CLIENT,
   testState,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
@@ -56,12 +51,8 @@ test("reuses verified Access identity across a document reload and WebSocket hel
     async ({ port }) => {
       vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
       vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
-      // Optional remote benchmark latency; normal regression runs use no timers.
-      const latency = Number(process.env.OPENCLAW_IDENTITY_NETWORK_BENCH_MS ?? 0);
+      const fetchDocument = globalThis.fetch;
       const transport = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
-        if (latency > 0) {
-          await delay(latency);
-        }
         if (url === `${accessOrigin}/cdn-cgi/access/get-identity`) {
           return identityResponse(oidcIdentity());
         }
@@ -77,62 +68,24 @@ test("reuses verified Access identity across a document reload and WebSocket hel
           JSON.stringify({ iss: accessOrigin, exp: Math.floor(Date.now() / 1_000) + 600 }),
         ).toString("base64url")}.signature`,
       };
-      const phases: number[] = [];
-      const unsubscribe = onTrustedInternalDiagnosticEvent(
-        (event) => {
-          if (
-            event.type === "diagnostic.phase.completed" &&
-            event.name === "control-ui.document.auth_grants"
-          ) {
-            assert(typeof event.durationMs === "number", "Document phase duration is required");
-            phases.push(event.durationMs);
-          }
-        },
-        { includeTrusted: ["diagnostic.phase.completed"] },
-      );
-      const document = (route = "/") =>
-        new Promise<string>((resolve, reject) => {
-          get(
-            {
-              hostname: "127.0.0.1",
-              port,
-              path: route,
-              headers,
-            },
-            (res) => {
-              let body = "";
-              res.setEncoding("utf8");
-              res.on("data", (chunk: string) => {
-                body += chunk;
-              });
-              res.on("end", () =>
-                res.statusCode === 200
-                  ? resolve(body)
-                  : reject(new Error(`HTTP ${res.statusCode} ${route}: ${body.slice(0, 512)}`)),
-              );
-              res.on("error", reject);
-            },
-          ).on("error", reject);
+      const document = async (route = "/") => {
+        const response = await fetchDocument(`http://127.0.0.1:${port}${route}`, {
+          headers,
+          redirect: "manual",
         });
+        expect(response.status).toBe(200);
+        return response.text();
+      };
       try {
         expect(await document()).toContain("openclaw-test-control-ui");
-        const coldCalls = transport.mock.calls.length;
+        expect(transport).toHaveBeenCalledTimes(2);
         expect(await document()).toContain("openclaw-test-control-ui");
-        const documentCalls = transport.mock.calls.length - coldCalls;
-        const entryStarted = performance.now();
+        expect(transport).toHaveBeenCalledTimes(2);
         expect(
           await document(`/__openclaw__/session-entry?path=${encodeURIComponent(deepLink)}`),
         ).toContain("openclaw-test-control-ui");
-        const entryMs = performance.now() - entryStarted;
-        const entryCalls = transport.mock.calls.length - coldCalls - documentCalls;
+        expect(transport).toHaveBeenCalledTimes(2);
         const socket = await openWs(port, headers);
-        const send = socket.send.bind(socket);
-        let started = 0;
-        // Measure the connect frame, excluding the fixture's device pre-pairing.
-        const sendSpy = vi.spyOn(socket, "send").mockImplementation((...args) => {
-          started = performance.now();
-          send(...args);
-        });
         try {
           const hello = await connectReq(socket, {
             skipDefaultAuth: true,
@@ -141,38 +94,71 @@ test("reuses verified Access identity across a document reload and WebSocket hel
             scopes: ["operator.read"],
             browserOrigin: origin,
           });
-          const helloMs = performance.now() - started;
-          expect(started).toBeGreaterThan(0);
           expect(hello.ok, JSON.stringify(hello.error)).toBe(true);
-          await waitForDiagnosticEventsDrained();
-          expect(phases).toHaveLength(3);
-          const wsCalls = transport.mock.calls.length - coldCalls - documentCalls - entryCalls;
-          console.info(
-            "IDENTITY_NETWORK_SAMPLE",
-            JSON.stringify({
-              phases,
-              entryMs,
-              helloMs,
-              coldCalls,
-              documentCalls,
-              entryCalls,
-              wsCalls,
-            }),
-          );
-          expect(coldCalls).toBe(2);
-          expect(documentCalls).toBe(0);
-          expect(entryCalls).toBe(0);
-          expect(wsCalls).toBe(0);
+          expect(transport).toHaveBeenCalledTimes(2);
         } finally {
-          sendSpy.mockRestore();
           socket.close();
         }
       } finally {
-        unsubscribe();
         transport.mockRestore();
         vi.unstubAllEnvs();
       }
     },
     { port: 19673, serverOptions: { controlUiEnabled: true } },
+  );
+});
+
+test("keeps a session-only Access guest connected when no named role is configured", async () => {
+  const auth = {
+    ...githubCfg.gateway!.auth!,
+    trustedProxy: { ...githubCfg.gateway!.auth!.trustedProxy!, allowLoopback: true },
+  };
+  testState.gatewayAuth = auth;
+  await writeConfigFile({ gateway: { auth, trustedProxies: ["127.0.0.1"] } });
+  await withGatewayServer(
+    async ({ port }) => {
+      vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
+      vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
+      const transport = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+        if (url === `${accessOrigin}/cdn-cgi/access/get-identity`) {
+          return identityResponse(oidcIdentity());
+        }
+        expect(url).toBe("https://api.github.com/user/101");
+        return identityResponse({ id: 101, login: "ada" });
+      });
+      const socket = await openWs(port, {
+        "x-forwarded-for": "203.0.113.51",
+        "x-forwarded-proto": "https",
+        "cf-access-authenticated-user-email": "ada@example.test",
+        "cf-access-jwt-assertion": `header.${Buffer.from(
+          JSON.stringify({ iss: accessOrigin, exp: Math.floor(Date.now() / 1_000) + 600 }),
+        ).toString("base64url")}.signature`,
+      });
+      const closes: number[] = [];
+      socket.on("close", (code) => closes.push(code));
+      try {
+        const hello = await connectReq(socket, {
+          skipDefaultAuth: true,
+          prePairDevice: true,
+          client: TEST_OPERATOR_CLIENT,
+          scopes: ["operator.sessions.write"],
+        });
+        expect(hello.ok, JSON.stringify(hello.error)).toBe(true);
+        await vi.waitFor(() => expect(transport).toHaveBeenCalledTimes(2), { timeout: 10_000 });
+        await new Promise((resolve) => {
+          setTimeout(resolve, 500);
+        });
+        expect(closes).toEqual([]);
+        // Hello already names the guest's own profile, so attaching it changes nothing.
+        const helloAuth = (hello.payload as { auth?: { profileActivityViewerId?: unknown } }).auth;
+        expect(helloAuth?.profileActivityViewerId).toEqual(expect.any(String));
+        expect((await rpcReq(socket, "sessions.list", {})).ok).toBe(true);
+      } finally {
+        socket.close();
+        transport.mockRestore();
+        vi.unstubAllEnvs();
+      }
+    },
+    { port: 19674 },
   );
 });

@@ -4,10 +4,7 @@ import { waitForRenderedModalDialog, installDialogPolyfill } from "../test-helpe
 import { withPromiseModalHost } from "./promise-modal-host.ts";
 
 const view = vi.hoisted(() => {
-  let resolve!: () => void;
-  const ready = new Promise<void>((done) => {
-    resolve = done;
-  });
+  const { promise: ready, resolve } = Promise.withResolvers<void>();
   return { ready, resolve, started: vi.fn() };
 });
 

@@ -1,24 +1,18 @@
 import { createHash } from "node:crypto";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
-import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { formatSkillsForPromptCore } from "../skills/loading/skill-contract.js";
+import { createFixtureSkillEntry } from "../skills/test-support/test-helpers.js";
 import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-function makeTool(name: string): AnyAgentTool {
-  return {
-    name,
-    label: name,
-    description: name,
-    parameters: Type.Object({ value: Type.String() }),
-    execute: async () => ({ content: [], details: {} }),
-  };
-}
+const makeTool = (name: string) => fakeTool(name, name);
 
 const makeReport = (overrides: Partial<Parameters<typeof buildSystemPromptReport>[0]> = {}) =>
   buildSystemPromptReport({
@@ -63,6 +57,33 @@ function expectSkills(systemPrompt: string, rendered: string, skillsPrompt = cat
 }
 
 describe("buildSystemPromptReport", () => {
+  it("resolves catalog provenance with linear work and preserves first visible matches", () => {
+    const tools = Array.from({ length: 400 }, (_, index) => makeTool(`tool_${index}`));
+    let nameReads = 0;
+    const catalogEntries = tools.map((tool, index) =>
+      catalogEntry(tool, {
+        sourceName: `plugin_${index % 40}`,
+        directVisible: true,
+      }),
+    );
+    for (const [index, entry] of catalogEntries.entries()) {
+      Object.defineProperty(entry, "name", {
+        get: () => {
+          nameReads++;
+          return tools[index]!.name;
+        },
+      });
+    }
+    catalogEntries.unshift(catalogEntry(tools[0]!, { sourceName: "hidden" }));
+    catalogEntries.push(catalogEntry(tools[0]!, { sourceName: "later", directVisible: true }));
+    const report = makeReport({ tools, catalogEntries });
+    expect(report.tools.entries.map(({ name, sourceName }) => ({ name, sourceName }))).toEqual(
+      tools.map((tool, index) => ({ name: tool.name, sourceName: `plugin_${index % 40}` })),
+    );
+    expect(report.tools.deferred?.entries[0]?.sourceName).toBe("hidden");
+    expect(nameReads).toBeLessThanOrEqual(3 * catalogEntries.length);
+  });
+
   it("separates catalog availability from consumed schemas using owner provenance", () => {
     const visible = makeTool("visible");
     const deferred = makeTool("deferred");
@@ -142,17 +163,27 @@ describe("buildSystemPromptReport", () => {
     });
   });
 
-  it("reports unnamed complete skill blocks in order", () => {
-    const skillsPrompt = "<skill></skill><skill><name> </name></skill>";
-    const report = makeReport({
-      systemPrompt: `## Skills\n${skillsPrompt.trim()}`,
-      skillsPrompt,
-    });
-    expect(report.skills.promptChars).toBe(skillsPrompt.trim().length);
-    expect(report.skills.entries).toEqual([
-      { name: "(unknown)", blockChars: "<skill></skill>".length },
-      { name: "(unknown)", blockChars: "<skill><name> </name></skill>".length },
-    ]);
+  it.each([
+    [
+      ["<skill></skill>", "<skill><name> </name></skill>"],
+      ["(unknown)", "(unknown)"],
+    ],
+    ...["long-synthetic-skill-name", "技能🦞-long-skill-name", "lone-\ud800-surrogate-name"].map(
+      (name) => [[`<skill><name>  ${name}\n</name></skill>`], [name]] as const,
+    ),
+    [
+      [
+        "<skill><name><invalid/></name><NAME> valid-skill-name-after-markup </NAME><name>later</name></skill>",
+      ],
+      ["valid-skill-name-after-markup"],
+    ],
+  ] as const)("reports complete skill blocks in order: %s", (blocks, names) => {
+    const skillsPrompt = blocks.join("");
+    const report = makeReport({ systemPrompt: `## Skills\n${skillsPrompt}`, skillsPrompt }).skills;
+    expect(report.promptChars).toBe(skillsPrompt.length);
+    expect(report.entries).toEqual(
+      names.map((name, index) => ({ name, blockChars: blocks[index]!.length })),
+    );
   });
 
   it("keeps reporting when a tool schema cannot be stringified", () => {
@@ -178,7 +209,8 @@ describe("buildSystemPromptReport", () => {
 describe("rendered skills diagnostics", () => {
   it.each<[Partial<Parameters<typeof buildAgentSystemPrompt>[0]>, boolean, boolean?]>([
     [{ toolNames: ["skills_read"] }, true],
-    [{ codeModeActive: true, toolNames: ["exec"] }, true],
+    [{ codeModeActive: true, toolNames: ["exec"] }, false],
+    [{ codeModeActive: true, toolNames: ["exec"], capabilityToolNames: ["skills_read"] }, true],
     [{ promptSurface: "cli_backend" }, true],
     [{ promptMode: "minimal", toolNames: ["read"] }, true],
     [{ promptMode: "none", toolNames: ["read"] }, false],
@@ -207,5 +239,35 @@ describe("rendered skills diagnostics", () => {
     });
     expect(systemPrompt.includes(catalog)).toBe(included || workspaceCopy);
     expectSkills(systemPrompt, included ? catalog : "", skillsPrompt);
+  });
+
+  it("keeps exact skill identities in the compact skills_read catalog and its report", () => {
+    const names = ["release  notes", "team:deploy", "deploy (prod)", "deploy (stage)", 'say "hi"'];
+    const skills = names.map((name) => createFixtureSkillEntry(name).skill);
+    // A description quoting catalog XML must not be mistaken for catalog structure.
+    skills[1] = {
+      ...skills[1]!,
+      description: "Explain <skill><name>example</name></skill> elements",
+    };
+    const stored = formatSkillsForPromptCore(skills);
+    let rendered = "";
+    const systemPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/workspace",
+      toolNames: ["skills_read"],
+      skillsPrompt: stored,
+      onRenderedSkillsPrompt: (prompt) => (rendered = prompt),
+    });
+    expect(systemPrompt).toContain('- "release  notes": release notes description');
+    expect(systemPrompt).toContain('- "deploy (prod)": deploy (prod) description');
+    expect(systemPrompt).toContain(
+      '- "team:deploy": Explain <skill><name>example</name></skill> elements',
+    );
+    expect(systemPrompt).not.toContain("<location>");
+    // Embedded runs report the rendered catalog; /context and CLI backends pass the stored one.
+    for (const skillsPrompt of [rendered, stored]) {
+      const report = makeReport({ systemPrompt, skillsPrompt }).skills;
+      expect(report.entries.map(({ name }) => name)).toEqual(names);
+      expect(report.promptChars).toBe(rendered.length);
+    }
   });
 });

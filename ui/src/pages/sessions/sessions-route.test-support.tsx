@@ -33,7 +33,6 @@ export async function mountSessionsRoute(request: GatewayRequestHandler) {
         },
       ),
   };
-  context.runtimeConfig.ensureLoaded = async () => {};
   const provider = createSolidApplicationContextProvider(context);
   const mounted = mountSolid(() => <RouterOutlet router={router} retryContext={context} />, {
     wrapper: provider.wrapper,

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { vi } from "vitest";
+import { cleanupTempDirs } from "../../test/helpers/temp-dir.js";
 import { registerMcpCli } from "./mcp-cli.js";
 
 type CreateSessionMcpRuntime =
@@ -35,6 +36,7 @@ const mocks = vi.hoisted(() => {
 
 export const mockLog = mocks.runtime.log;
 export const mockError = mocks.runtime.error;
+export const mcpCliMocks = mocks;
 export const serveOpenClawChannelMcp = mocks.serveOpenClawChannelMcp;
 export const clearMcpOAuthCredentials = mocks.clearMcpOAuthCredentials;
 export const completeMcpOAuthAuthorization = mocks.completeMcpOAuthAuthorization;
@@ -73,18 +75,20 @@ const tempDirs: string[] = [];
 let sharedProgram: Command;
 let previousExitCode: typeof process.exitCode;
 
-export async function createWorkspace(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-mcp-"));
+export async function createWorkspace(prefix = "openclaw-cli-mcp-"): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   tempDirs.push(dir);
   return dir;
 }
 
+export function createMcpProgram(): Command {
+  const program = new Command().exitOverride();
+  registerMcpCli(program);
+  return program;
+}
+
 export async function runMcpCommand(args: string[]) {
-  if (!sharedProgram) {
-    sharedProgram = new Command();
-    sharedProgram.exitOverride();
-    registerMcpCli(sharedProgram);
-  }
+  sharedProgram ??= createMcpProgram();
   await sharedProgram.parseAsync(args, { from: "user" });
 }
 
@@ -119,9 +123,7 @@ export function resetMcpCliTestState(): void {
 export async function cleanupMcpCliTestState(): Promise<void> {
   try {
     vi.restoreAllMocks();
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
+    cleanupTempDirs(tempDirs);
   } finally {
     process.exitCode = previousExitCode;
   }

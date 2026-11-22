@@ -18,7 +18,7 @@ import {
 import { readSessionStoreSummaryReadOnly } from "../config/sessions/session-accessor.sqlite-summary.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { spyOnSessionStoreSummaries } from "../config/sessions/session-store-summary.test-support.js";
-import type { SessionAcpMeta } from "../config/sessions/types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDefaultProactiveJob } from "../cron/default-proactive-job.js";
 import { saveProactiveJobsForTest } from "../cron/proactive-job.test-support.js";
@@ -39,6 +39,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { formatStatusSummary } from "../tui/tui-status-summary.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 describe("getStatusSummary read-only session access", () => {
   const previousRegistry = getActivePluginRegistry();
@@ -343,16 +344,13 @@ describe("getStatusSummary read-only session access", () => {
             anthropic: {
               baseUrl: "https://api.anthropic.com",
               models: [
-                {
-                  id: "claude-opus-5",
+                createTestModelDefinition("claude-opus-5", {
                   name: "Claude Opus 5",
                   reasoning: true,
-                  input: ["text" as const],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   contextWindow: 1_000_000,
                   contextTokens: 272_000,
                   maxTokens: 8_192,
-                },
+                }),
               ],
             },
           },
@@ -371,7 +369,7 @@ describe("getStatusSummary read-only session access", () => {
           contextTokensSource: "resolved",
           totalTokens: 121_000,
           totalTokensFresh: true,
-          totalTokensVersion: 1,
+          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         },
       );
       await closeOpenClawAgentDatabasesAsync(state.root);

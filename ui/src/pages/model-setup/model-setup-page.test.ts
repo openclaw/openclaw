@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SystemAgentSetupDetectResult, ModelAuthStatusResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
+import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   configuredDetection,
@@ -18,7 +19,6 @@ import {
   authOption,
   mountDetection,
   createFirstRunContext,
-  configSnapshot,
   candidate,
   callsFor,
   mockRequests,
@@ -155,11 +155,11 @@ describe("ModelSetupPage catalog icons", () => {
 
     await waitForFast(() => {
       expect(page.textContent).toContain(
-        "llama.cpp did not expose a usable local model. Review the setup result, then retry.",
+        "Couldn’t find a usable local model from llama.cpp. Review the setup result, then try again.",
       );
     });
     expect(page.textContent).not.toContain("llama-cpp/persisted-before-verification");
-    expect(page.textContent).not.toContain("Connection verified");
+    expect(page.textContent).not.toContain("Model verified");
     expect(request).not.toHaveBeenCalledWith(
       "openclaw.setup.activate.start",
       expect.anything(),
@@ -176,7 +176,7 @@ describe("ModelSetupPage catalog icons", () => {
     mockRequests(request, {
       "config.get": () => {
         order.push("config.get");
-        return configSnapshot(config, hash);
+        return sourceConfigSnapshot(config, hash);
       },
       "config.set": (params) => {
         order.push("config.set");
@@ -214,7 +214,7 @@ describe("ModelSetupPage catalog icons", () => {
     const { context, client, request, runtimeConfig, snapshot } = createContext();
     const configSet = createDeferred<{ hash: string }>();
     mockRequests(request, {
-      "config.get": () => configSnapshot(),
+      "config.get": () => sourceConfigSnapshot(),
       "config.set": () => configSet.promise,
     });
     await runtimeConfig.ensureLoaded();
@@ -228,7 +228,7 @@ describe("ModelSetupPage catalog icons", () => {
     snapshot.hello.auth.scopes = ["operator.read"];
     configSet.resolve({ hash: "hash-2" });
 
-    await waitForText(page, "Model setup request failed.");
+    await waitForText(page, "Couldn’t set up the model. Try again.");
     expect(request).not.toHaveBeenCalledWith(
       "openclaw.setup.auth.start",
       expect.anything(),
@@ -245,7 +245,7 @@ describe("ModelSetupPage catalog icons", () => {
     request.mockImplementation(async (method: string) => {
       if (method === "config.get") {
         order.push("config.get");
-        return configSnapshot();
+        return sourceConfigSnapshot();
       }
       order.push(method);
       if (method === "openclaw.setup.auth.start") {
@@ -286,7 +286,7 @@ describe("ModelSetupPage catalog icons", () => {
     await Promise.resolve();
     expect(order).not.toContain("competing-mutation");
 
-    pageButton(page, "openclaw-modal-dialog .btn")?.click();
+    pageButton(page, "openclaw-modal-dialog .oc-dialog__close")?.click();
     await page.updateComplete;
     await waitForText(page, "finishing");
     expect(page.querySelector(".wizard-step__progress")).not.toBeNull();
@@ -378,6 +378,7 @@ describe("ModelSetupPage catalog icons", () => {
             return { ok: false as const, reason: "error" as const, error: String(error) };
           }
         }),
+        subscribe: () => () => {},
       } as unknown as ApplicationContext["runtimeConfig"],
     } as ApplicationContext;
     const { page } = await mountSettings(context, client, {
@@ -412,7 +413,7 @@ describe("ModelSetupPage catalog icons", () => {
     });
     authButton(page, "provider-auth")?.click();
     await waitForFast(() => {
-      expect(page.textContent).toContain("Connection verified");
+      expect(page.textContent).toContain("Model verified");
       const warning = page.querySelector(".model-setup-success__warning")?.textContent;
       for (const expected of ["Gateway restart required.", refreshError]) {
         expect(warning).toContain(expected);
@@ -435,7 +436,8 @@ describe("Model setup account connections", () => {
         apiKeySupported: false,
         quickApiKeySetup: false,
         loginOptions: [
-          { ...authOption("radius/radius", "Radius account"), kind: "oauth", brandId: "radius" },
+          // Qualified choice ids never name the brand; the badge must use brandId.
+          { ...authOption("radius/radius", "Radius account"), kind: "oauth", brandId: "meta" },
         ],
       },
     ],
@@ -443,7 +445,7 @@ describe("Model setup account connections", () => {
 
   const setup = {
     ...detection,
-    authOptions: [{ ...authOption("setup-only", "Setup-only account"), brandId: "setup-only" }],
+    authOptions: [{ ...authOption("setup-only", "Setup-only account"), brandId: "meta" }],
   };
   let fixture: ReturnType<typeof createContext>;
   beforeEach(() => {
@@ -452,7 +454,7 @@ describe("Model setup account connections", () => {
   function configureRequests(handlers: Parameters<typeof mockRequests>[1]) {
     mockRequests(fixture.request, {
       "models.authStatus": () => authStatus,
-      "config.get": () => configSnapshot({}, "unchanged"),
+      "config.get": () => sourceConfigSnapshot({}, "unchanged"),
       "openclaw.setup.detect": () => setup,
       ...handlers,
     });
@@ -465,9 +467,10 @@ describe("Model setup account connections", () => {
   const modalTitle = (page: ParentNode) => page.querySelector("h2")?.textContent?.trim();
   const waitForSignIn = (page: ParentNode, operation: "connect" | "setup") =>
     waitForFast(() =>
-      expect(page.querySelector('.wizard-sign-in [role="status"]')?.textContent).toBe(
-        "Waiting for " + labelFor(operation) + "…",
-      ),
+      expect(
+        page.querySelector(":is(.wizard-sign-in, .wizard-sign-in--paste) [role=status]")
+          ?.textContent,
+      ).toBe("Waiting for " + labelFor(operation) + "…"),
     );
 
   async function startSignIn(page: TestModelSetupPage, operation: "connect" | "setup") {
@@ -479,7 +482,7 @@ describe("Model setup account connections", () => {
     await waitForFast(() =>
       expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain("Radius account"),
     );
-    pageButton(page, '[data-models-login-provider="radius"]')!.click();
+    pageButton(page, '[data-models-login-provider="meta"]')!.click();
     await page.updateComplete;
     [...page.querySelectorAll<HTMLButtonElement>("[data-models-login-choice] button")]
       .find((button) => button.textContent?.includes("Radius account"))!
@@ -581,28 +584,36 @@ describe("Model setup account connections", () => {
       await startSignIn(page, operation);
       await waitForSignIn(page, operation);
       const modal = page.querySelector("openclaw-modal-dialog")!;
-      expect(modal.querySelector(".wizard-sign-in__lead")?.textContent).toContain(
-        labelFor(operation) + " is open in a new tab.",
-      );
+      expect(
+        modal
+          .querySelector(".wizard-sign-in__badge [data-provider-icon]")
+          ?.getAttribute("data-provider-icon"),
+      ).toBe("meta");
       if (failed) {
+        expect(modal.querySelector(".wizard-sign-in__lead")?.textContent).toContain(
+          labelFor(operation) + " is open in a new tab.",
+        );
         expect(modal.textContent).not.toContain(guidance);
         expect(modal.textContent).not.toContain(url);
       } else {
+        // The pasted-address field is visible at once; the callback below never touches it.
+        expect(modalTitle(modal)).toBe(labelFor(operation));
+        expect(modal.querySelector('input[name="wizard-text"]')).not.toBeNull();
         expect(verificationRuns).toBe(0);
       }
       finish.resolve();
       if (failed) {
-        const expectedError = [diagnostic, guidance, authorization].join("\n\n");
+        // A failed sign-in shows only its error, never the earlier sign-in notes.
         await waitForFast(() =>
           expect(modal.querySelector(".model-setup-wizard__error-text")?.textContent).toBe(
-            expectedError,
+            diagnostic,
           ),
         );
         expect(modalTitle(modal)).toBe(labelFor(operation));
         expect(modal.querySelector(".wizard-sign-in")).toBeNull();
         const alert = modal.querySelector("[role=alert]")!;
-        expect(alert.textContent).toContain(guidance);
-        expect(alert.textContent).toContain(url);
+        expect(alert.textContent).not.toContain(guidance);
+        expect(alert.textContent).not.toContain(authorization);
         expect(alert.querySelector<HTMLButtonElement>('button[aria-label="Copy"]')).not.toBeNull();
         expect(modal.querySelector("details")).toBeNull();
         expect(reads).toBe(4);
@@ -611,14 +622,14 @@ describe("Model setup account connections", () => {
         await waitForFast(
           () =>
             expect(page.textContent).toContain(
-              operation === "connect" ? "Provider credentials saved." : "Connection verified",
+              operation === "connect" ? "Provider credentials saved." : "Model verified",
             ),
           { timeout: 3000 },
         );
         expect(verificationRuns).toBe(operation === "connect" ? 0 : 1);
         expect(page.textContent).not.toContain("Approve this account in your browser.");
         expect(page.textContent).not.toContain(url);
-        expect(setupButton.textContent?.trim()).toBe("Set up & verify");
+        expect(setupButton.textContent?.trim()).toBe("Setup-only account");
         if (operation === "connect") {
           expect(request).toHaveBeenCalledWith(
             "models.authLogin",

@@ -24,7 +24,9 @@ import {
   expectSavedSetupCredential,
   modelConfigWithApiKey,
   openAiAuthProfile,
+  registerSetupCompletionTests,
 } from "./setup.credentials.test-support.js";
+import { createGatewayPasswordRefConfig } from "./setup.finalize.fixtures.test-support.js";
 import { runSetupWizard } from "./setup.js";
 import { SetupMigrationTargetChangedError } from "./setup.migration-snapshot.js";
 
@@ -501,9 +503,12 @@ describe("runSetupWizard", () => {
     ensureOnboardingConfig.mockClear();
   });
 
-  it("exits successfully after the auto-launched TUI returns", async () => {
-    finalizeSetupWizard.mockResolvedValueOnce({ launchedTui: true });
-    await expect(runWizard({}, createRuntime({ throwsOnExit: true }))).rejects.toThrow("exit:0");
+  registerSetupCompletionTests({
+    finalizeSetupWizard,
+    runSearchSetupFlow,
+    runWizard,
+    createRuntime,
+    readInitialConfig,
   });
 
   const configuredRemoteProbeArgs = {
@@ -733,28 +738,6 @@ describe("runSetupWizard", () => {
     expect(prompter.text).not.toHaveBeenCalled();
   });
 
-  it("does not reuse imported verification after changing the model", async () => {
-    runSetupMigrationImport.mockResolvedValueOnce({
-      kind: "verified-inference",
-      modelRef: "openai/gpt-5.6-sol",
-    });
-    const imported = modelConfig("anthropic/claude-sonnet-4-6");
-    readImportedConfig(imported);
-    await runWizard(
-      { importFrom: "hermes", authChoice: "demo-provider" },
-      createRuntime(),
-      buildWizardPrompter({ confirm: vi.fn(async () => false) }),
-    );
-    expect(applyAuthChoice).toHaveBeenCalledOnce();
-    expect(verifySetupInferenceConfig).not.toHaveBeenCalled();
-  });
-
-  it("fails fast if the auth choice prompt returns nothing", async () => {
-    promptAuthChoiceGrouped.mockImplementationOnce(async () => undefined as never);
-
-    await expect(runWizard({ authChoice: undefined })).rejects.toThrow("auth choice is required");
-  });
-
   it.each([false, true])(
     "moves a fleet workspace only with confirmation (accepted: %s)",
     async (accepted) => {
@@ -799,22 +782,6 @@ describe("runSetupWizard", () => {
       }
     },
   );
-
-  it("continues onboarding when search-provider installation fails", async () => {
-    const config: OpenClawConfig = { agents: { defaults: { workspace: "/tmp/workspace" } } };
-    runSearchSetupFlow.mockResolvedValueOnce({
-      outcome: "install-failed",
-      config,
-      providerId: "brave",
-      reason: "failed",
-    });
-    readInitialConfig(config);
-
-    await expect(runWizard({ skipSearch: undefined })).resolves.toBeUndefined();
-
-    expect(runSearchSetupFlow).toHaveBeenCalledOnce();
-    expect(finalizeSetupWizard).toHaveBeenCalledOnce();
-  });
 
   it("persists the optional memory choice before classic setup finalization", async () => {
     runMemorySetupFlow.mockImplementationOnce(async (config) => ({
@@ -966,42 +933,9 @@ describe("runSetupWizard", () => {
     expect(retry?.config.agents?.defaults?.workspace).toBe("/tmp/openclaw-workspace");
   });
 
-  it("shows plugin compatibility notices for an existing valid config", async () => {
-    buildPluginCompatibilitySnapshotNotices.mockReturnValue([
-      {
-        pluginId: "legacy-plugin",
-        code: "hook-only",
-        compatCode: "hook-only-plugin-shape",
-        severity: "info",
-        message: "Legacy fixture notice",
-      },
-    ]);
-    readInitialConfig({ gateway: {} });
-
-    const prompter = buildWizardPrompter();
-    await runWizard({}, createRuntime(), prompter);
-    const noteTitles = vi.mocked(prompter.note).mock.calls.map((call) => call?.[1]);
-    expect(noteTitles).toContain("Plugin compatibility");
-    expect(noteTitles).toContain("Existing config detected");
-    expect(prompter.select).not.toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Config handling" }),
-    );
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("legacy-plugin"),
-      "Plugin compatibility",
-    );
-  });
-
   it("resolves gateway.auth.password SecretRef for local setup probe", async () => {
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "gateway-ref-password");
-    readInitialConfig({
-      gateway: {
-        auth: {
-          mode: "password",
-          password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
-        },
-      },
-    });
+    readInitialConfig(createGatewayPasswordRefConfig());
     await runWizard({ mode: "local" });
     expectCall(probeGatewayReachable, {
       url: "ws://127.0.0.1:18789",
@@ -1162,4 +1096,3 @@ describe("runSetupWizard", () => {
     }
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

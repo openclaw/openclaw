@@ -41,6 +41,7 @@ type PrepareOptions = Parameters<typeof prepareDockerE2eEnvironment>[0];
 type ScriptExecution = Extract<RunOptions["scenarios"][number]["execution"], { kind: "script" }>;
 const packageInfo = { name: "openclaw", version: "2026.8.1", sha256: "b".repeat(64) };
 const registryInfo = { candidateVersion: "2026.8.1", manifestSha256: "c".repeat(64) };
+const commandResult = (exitCode = 0, stdout = "", stderr = "") => ({ exitCode, stdout, stderr });
 
 function candidateManifest(repoRoot?: string, registry = false, packageName = "candidate.tgz") {
   return {
@@ -139,10 +140,7 @@ it("prepares the exact Docker lane union in a sanitized bound environment", asyn
     expect(command.env).not.toHaveProperty("OPENCLAW_DOCKER_ALL_BUILD");
     expect(command.env).not.toHaveProperty("OPENCLAW_CURRENT_PACKAGE_TGZ");
     expect(command.env).not.toHaveProperty("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR");
-    return await writeDockerCandidateManifest(
-      command,
-      candidateManifest(repoRoot, true, "openclaw.tgz"),
-    );
+    return writeDockerCandidateManifest(command, candidateManifest(repoRoot, true, "openclaw.tgz"));
   });
   const env = await prepare(repoRoot, {
     env: {
@@ -177,7 +175,7 @@ it("prepares the exact Docker lane union in a sanitized bound environment", asyn
   });
 });
 
-it("retains immutable prepared Docker receipts without claiming installed or runtime proof", async () => {
+it("keeps prepared Docker receipts immutable and rejects launch/environment mismatches", async () => {
   const repoRoot = await makeTempRepo("qa-docker-prepared-evidence-");
   const scenario = makeDockerE2eScenario("one", "gateway-network");
   const captured: QaPreparedDockerEvidence[] = [];
@@ -204,17 +202,6 @@ it("retains immutable prepared Docker receipts without claiming installed or run
   expect(captured[1]?.receipt.artifact.path).not.toBe(first.receipt.artifact.path);
   expect(await fs.readFile(firstPath)).toEqual(original);
   expect(createHash("sha256").update(original).digest("hex")).toBe(first.receipt.artifact.sha256);
-  const result = await runPrepared({
-    runCommand: async () => ({ exitCode: 0, stdout: "completed", stderr: "" }),
-  });
-  expect(result.results[0]).toMatchObject({ scenario: { id: "one" }, status: "pass" });
-  expect(result.evidence.entries[0]?.result.status).toBe("pass");
-  if (result.evidence.schemaVersion !== 3) {
-    throw new Error("expected occurrence evidence");
-  }
-  const receipts = result.evidence.occurrences.flatMap((occurrence) => occurrence.receipts);
-  expect(receipts).toContainEqual(first.receipt);
-  expect(receipts.every((receipt) => receipt.phase === "prepared")).toBe(true);
   expect(first.receipt.identity).toEqual({
     source: { ref: "a".repeat(40), integrity: null },
     runtime: { id: null, version: null },
@@ -229,7 +216,7 @@ it("retains immutable prepared Docker receipts without claiming installed or run
     proofClass: null,
   });
   for (const mismatch of ["package", "source"] as const) {
-    const runCommand = vi.fn(async () => ({ exitCode: 0, stdout: "", stderr: "" }));
+    const runCommand = vi.fn(async () => commandResult());
     const owner = createQaEvidenceInvocation({
       scenarios: [scenario],
       channel: null,
@@ -284,7 +271,7 @@ describe("qa test file scenario runner", () => {
         const exitCode = commands.length === 1 ? 1 : 0;
         const names = command.env.OPENCLAW_DOCKER_ALL_LANES!.split(",");
         await writeSummary(command, Object.fromEntries(names.map((name) => [name, exitCode])));
-        return { exitCode, stdout: `actual batch ${commands.length}`, stderr: "" };
+        return commandResult(exitCode, `actual batch ${commands.length}`);
       },
     });
     expect(prepareCommand).toHaveBeenCalledTimes(1);
@@ -329,7 +316,7 @@ describe("qa test file scenario runner", () => {
         expect(command.env.OPENCLAW_CURRENT_PACKAGE_TGZ).toBe(undefined);
         expect(command.env.OPENCLAW_DOCKER_E2E_REPO_ROOT).toBe(repoRoot);
         await writeSummary(command);
-        return { exitCode: 0, stdout: "", stderr: "" };
+        return commandResult();
       },
     });
   });
@@ -387,7 +374,7 @@ describe("qa test file scenario runner", () => {
               status: "pass",
             });
           }
-          return { exitCode: 0, stdout: `${scenarioId} passed\n`, stderr: "" };
+          return commandResult(0, `${scenarioId} passed\n`);
         } finally {
           activeCommands -= 1;
         }
@@ -441,7 +428,7 @@ describe("qa test file scenario runner", () => {
           gateway: 0,
           "gateway-network": 1,
         });
-        return { exitCode: 1, stdout: "", stderr: "scheduler failed\n" };
+        return commandResult(1, "", "scheduler failed\n");
       },
     });
 

@@ -27,7 +27,7 @@ import {
   captureDiscordRequestAuthority,
   withDiscordRequestAuthority,
 } from "../internal/request-authority.js";
-import { DISCORD_TEXT_CHUNK_LIMIT } from "../outbound-adapter.js";
+import { DISCORD_TEXT_CHUNK_LIMIT } from "../outbound-payload.js";
 
 type DraftReplyReference = {
   peek: () => string | undefined;
@@ -477,6 +477,7 @@ export function createDiscordDraftPreviewController(params: {
     flush,
     async cleanup({ failed = false }: { failed?: boolean } = {}) {
       try {
+        progressNarratorLifecycle?.stopTurn();
         progressDraft.cancel();
         await lifecycle.cleanup({ failed });
         await draftStream?.cleanupPendingMessages();

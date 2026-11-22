@@ -10,12 +10,6 @@ import {
   publishRuntimeToolInputSchema,
 } from "./tool-schema-json-projection.js";
 
-type AnthropicToolDescriptor = {
-  readonly name: string;
-  readonly description: string;
-  readonly parameters: unknown;
-};
-
 type AnthropicProjectedTool = {
   readonly originalName: string;
   readonly wireName: string;
@@ -188,7 +182,11 @@ export function prepareAnthropicInputSchema(
 
 /** Snapshots direct/custom tool descriptors before Anthropic payload construction. */
 export function projectAnthropicTools(
-  tools: readonly AnthropicToolDescriptor[],
+  tools: readonly {
+    readonly name: string;
+    readonly description: string;
+    readonly parameters: unknown;
+  }[],
   toWireName: (name: string) => string,
 ): AnthropicToolProjection {
   const projectedTools: AnthropicProjectedTool[] = [];

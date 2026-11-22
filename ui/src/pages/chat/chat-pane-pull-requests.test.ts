@@ -4,6 +4,7 @@ import { setImmediate as nextFrame } from "node:timers/promises";
 import { createEffect, createMemo, flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import {
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   type ControlUiSessionPullRequest,
   type ControlUiSessionPullRequests,
@@ -11,15 +12,16 @@ import {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import {
-  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-  sessionPullRequestsForGateway,
-} from "../../lib/session-pull-requests.ts";
+import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createInitializationContext,
+} from "./chat-application-context.test-support.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import {
   account,
@@ -31,13 +33,8 @@ import {
 } from "./chat-github-publication.test-support.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createInitializationContext,
-  createRenderTestChatPane,
-  createTestChatPane,
-} from "./chat-pane.test-support.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { createRenderTestChatPane, createTestChatPane } from "./chat-pane.test-support.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 
 const repository = { owner: "openclaw", repo: "openclaw" };

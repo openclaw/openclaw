@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createCanvasDocument } from "../../canvas/documents.js";
+import { createCanvasDocument, resolveCanvasDocumentsDir } from "../../canvas/documents.js";
 import { createShowWidgetTool } from "../../canvas/widget-tool.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -24,6 +24,7 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { runSessionColdStorageMaintenance } from "../../config/sessions/session-cold-storage.js";
+import * as transcriptMatch from "../../config/sessions/session-transcript-match.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { withSessionHistoryWorkerDatabase } from "../../config/sessions/session-transcript-worker-runtime.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -89,6 +90,11 @@ it("reads retained widget receipts and waits only for current live presentations
         sessionId: "widget-parent",
         storePath: resolveDefaultSessionStorePath("main"),
       };
+      const sessionScope = (sessionId: string, sessionKey = `agent:main:${sessionId}`) => ({
+        ...scope,
+        sessionKey,
+        sessionId,
+      });
       const append = (eventId: string, message: unknown, target = scope) =>
         appendTranscriptMessage(target, { eventId, message });
       const entry = {
@@ -102,11 +108,7 @@ it("reads retained widget receipts and waits only for current live presentations
         },
       };
       await upsertSessionEntryCore(scope, entry);
-      const makeTool = (sessionId: string) =>
-        createShowWidgetTool({
-          sessionId,
-          agentId: "main",
-        });
+      const makeTool = (sessionId: string) => createShowWidgetTool({ sessionId, agentId: "main" });
       const tool = makeTool(scope.sessionId);
       const show = (name: string, html: string, source = tool) =>
         source.execute(`${name}-widget-call`, { title: name, widget_code: `<p>${html}</p>` });
@@ -122,9 +124,10 @@ it("reads retained widget receipts and waits only for current live presentations
       context.resolveGatewayContext = () => context;
       const view = (params: Record<string, unknown>, client = guest) =>
         request(context, client, params);
-      const forbidden = async (params: Record<string, unknown>) => {
+      const forbidden = async (params: Record<string, unknown>) =>
         expect((await view(params))[2]).toMatchObject({ code: "FORBIDDEN" });
-      };
+      const expectHtml = async (params: Record<string, unknown>, text: string) =>
+        expect((await view(params))[1]).toMatchObject({ html: expect.stringContaining(text) });
       const bound = { docId, sessionKey: scope.sessionKey };
       const first = await view(bound);
       expect(first[0]).toBe(true);
@@ -132,6 +135,21 @@ it("reads retained widget receipts and waits only for current live presentations
         html: expect.stringContaining("Saved before guest viewing"),
         sandboxUrl: expect.stringMatching(/^\/mcp-app-sandbox\?csp=/),
       });
+      const pruned = await show("pruned", "A widget whose retained file has expired");
+      await append("pruned-widget-result", receipt(pruned, "pruned-widget-call", 2));
+      await fs.rm(path.join(resolveCanvasDocumentsDir(), String(widgetId(pruned))), {
+        recursive: true,
+      });
+      const match = vi.spyOn(transcriptMatch, "findTranscriptEvent");
+      try {
+        expect((await view({ ...bound, docId: widgetId(pruned) }))[2]).toMatchObject({
+          code: "UNAVAILABLE",
+          message: "Canvas widget unavailable; reload the chat or ask the agent to recreate it.",
+        });
+        expect(match).not.toHaveBeenCalled();
+      } finally {
+        match.mockRestore();
+      }
       const forked = await forkSessionFromParentTranscript({
         agentId: "main",
         parentEntry: entry,
@@ -139,15 +157,10 @@ it("reads retained widget receipts and waits only for current live presentations
         sessionKey: "agent:main:widget-child",
         storePath: scope.storePath,
       });
-      expect(forked.status).toBe("created");
       if (forked.status !== "created") {
         throw new Error("Missing fork");
       }
-      const child = {
-        ...scope,
-        sessionKey: "agent:main:widget-child",
-        sessionId: forked.transcript.sessionId,
-      };
+      const child = sessionScope(forked.transcript.sessionId, "agent:main:widget-child");
       await upsertSessionEntryCore(child, { ...entry, sessionId: child.sessionId });
       const inherited = await view({ ...bound, sessionKey: child.sessionKey });
       expect(inherited).toEqual([true, first[1]]);
@@ -205,18 +218,15 @@ it("reads retained widget receipts and waits only for current live presentations
           reader.readColdMetadata({ sessionId: scope.sessionId, env: state.env });
         expect((await readCold()).archive).toBeDefined();
         expect((await view(bound))[1]).toEqual(first[1]);
-        expect((await readCold()).archive).toBeUndefined();
+        // Read-only probes stream the verified archive without restoring it (#185955).
+        expect((await readCold()).archive).toBeDefined();
       });
 
-      const unbound = await createCanvasDocument(
-        { html: "<p>Unbound document</p>", cspSandbox: "scripts" },
-        { stateDir: state.stateDir },
-      );
-      const other = {
-        ...scope,
-        sessionKey: "agent:main:private-widget",
-        sessionId: "private-widget",
-      };
+      const unbound = await createCanvasDocument({
+        html: "<p>Unbound document</p>",
+        cspSandbox: "scripts",
+      });
+      const other = sessionScope("private-widget");
       await upsertSessionEntryCore(other, {
         ...entry,
         sessionId: other.sessionId,
@@ -227,16 +237,19 @@ it("reads retained widget receipts and waits only for current live presentations
         view: { id: unbound.id },
         presentation: { target: "assistant_message" },
       };
+      const widgetReceipt = (extra: Record<string, unknown>) => ({
+        role: "toolResult",
+        toolName: "show_widget",
+        content: [],
+        timestamp: 1,
+        ...extra,
+      });
       await append(
         messageId,
-        {
-          role: "toolResult",
-          toolName: "show_widget",
+        widgetReceipt({
           toolCallId: "private-call",
           details: unrelatedPresentation,
-          content: [],
-          timestamp: 1,
-        },
+        }),
         other,
       );
       await append(
@@ -260,12 +273,10 @@ it("reads retained widget receipts and waits only for current live presentations
           details: { ...unrelatedPresentation, presentation: { target: "node_panel" } },
         },
       ].entries()) {
-        await append(`invalid-widget-${index}`, {
-          role: "toolResult",
-          content: [],
-          timestamp: 4 + index,
-          ...invalid,
-        });
+        await append(
+          `invalid-widget-${index}`,
+          widgetReceipt({ timestamp: 4 + index, ...invalid }),
+        );
         await forbidden({ ...bound, docId: unbound.id });
       }
       const nestedActivity = (toolResult: unknown) =>
@@ -327,20 +338,14 @@ it("reads retained widget receipts and waits only for current live presentations
         await forbidden(liveRequest);
         // Code Mode and tool-search persist this existing canonical receipt format.
         await append("live-widget-result", nestedActivity(liveResult));
-        expect((await view(liveRequest))[1]).toMatchObject({
-          html: expect.stringContaining("Committed live widget"),
-        });
+        await expectHtml(liveRequest, "Committed live widget");
       } finally {
         releaseAgentRunContext(runId, claim);
         context.chatRunState.registry.remove(runId, clientRunId, scope.sessionKey);
         context.chatRunState.clearRun(clientRunId);
       }
 
-      const legacyScope = {
-        ...scope,
-        sessionKey: "agent:main:legacy-widget",
-        sessionId: "legacy-widget",
-      };
+      const legacyScope = sessionScope("legacy-widget");
       await upsertSessionEntryCore(legacyScope, { ...entry, sessionId: legacyScope.sessionId });
       const legacyResult = await show(
         "legacy",
@@ -388,9 +393,7 @@ it("reads retained widget receipts and waits only for current live presentations
         }),
       });
       const legacyRequest = { docId: legacyId, sessionKey: legacyScope.sessionKey };
-      expect((await view(legacyRequest))[1]).toMatchObject({
-        html: expect.stringContaining("Retained reset archive widget"),
-      });
+      await expectHtml(legacyRequest, "Retained reset archive widget");
       // Ordinary history stops selecting this archive once native displayed history exists.
       await append("native-reply", textMessage("user", "New native history", 3), legacyScope);
       await forbidden(legacyRequest);

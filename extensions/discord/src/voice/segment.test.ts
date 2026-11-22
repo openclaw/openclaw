@@ -6,6 +6,22 @@ import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 defineDiscordVoiceTests((h) => {
   const { expect, it, vi } = h;
+
+  it.each([
+    ["other prefixes", "speaker-2: hello there", "speaker-2: hello there"],
+    [
+      "reply tags and speaker prefixes",
+      "[[reply_to_current]] speaker-1: hello there",
+      "hello there",
+    ],
+    ["decorative emoji", "😀 hello there 🎉", "hello there"],
+    ["punctuation after emoji", "✅ done!", "done!"],
+  ])("prepares speech with %s", async (_name, replyText, text) => {
+    const { synthesizeVoiceReplyAudio } = await import("./tts.js");
+    await synthesizeVoiceReplyAudio({ cfg: {}, replyText, speakerLabel: "speaker-1" });
+    expect(h.lastTtsArgs().text).toBe(text);
+  });
+
   function streamReply({ empty = false, open = false } = {}) {
     const release = vi.fn(async () => undefined);
     return {
@@ -36,7 +52,7 @@ defineDiscordVoiceTests((h) => {
     const client = h.createClientWithMember("333", "Guest", "4321");
     const manager = new h.managerModule.DiscordVoiceManager({
       scheduler: createTestPluginServiceScheduler(),
-      cfg,
+      readConfig: () => cfg,
       discordConfig,
       client: client as never,
       accountId: "default",
@@ -92,7 +108,7 @@ defineDiscordVoiceTests((h) => {
             throw new DOMException("Control was cancelled", "AbortError");
           }
           if (result === "guarded") {
-            params.getToolAuthorityOverlay?.();
+            await params.getToolAuthorityOverlayAsync?.();
             controlEffect();
           }
           return {

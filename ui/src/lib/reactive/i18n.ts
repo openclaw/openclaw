@@ -3,12 +3,6 @@ import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import { i18n } from "../../i18n/lib/translate.ts";
 import { projectSource } from "./projection.ts";
 
-type TranslationSource = {
-  getLocale(): Locale;
-  t(key: string, params?: Record<string, string>): string;
-  subscribe(listener: () => void): () => void;
-};
-
 const englishListeners = createChangeListeners({ snapshot: true });
 const registeredEnglish = new WeakSet<() => unknown>();
 
@@ -23,7 +17,11 @@ export function registerEnglishCatalog(register: () => void): void {
 }
 
 /** A revision also invalidates when a catalog changes without a locale change. */
-export function projectI18n(source: TranslationSource) {
+export function projectI18n(source: {
+  getLocale(): Locale;
+  t(key: string, params?: Record<string, string>): string;
+  subscribe(listener: () => void): () => void;
+}) {
   const projection = projectSource(source, {
     read: (current) => current,
     subscribe: (current, notify) => {

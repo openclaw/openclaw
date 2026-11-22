@@ -108,6 +108,8 @@ export type GuardedFetchOptions = {
 
 export type GuardedFetchResult = {
   response: Response;
+  /** The request's existing caller/deadline signal, active until release. */
+  signal?: AbortSignal;
   finalUrl: string;
   release: () => Promise<void>;
   refreshTimeout?: () => void;
@@ -647,6 +649,7 @@ async function fetchWithSsrFGuardInternal(
           ? AbortSignal.any([signal, requestController.signal])
           : requestController.signal,
       };
+      let captureBody = currentInit?.body ?? null;
       if (init.body instanceof Blob) {
         // Node 24.16–24.19 Blob streams pin the request's async context. Fresh per-hop
         // bytes also avoid Fetch's unused body tee while preserving immutable replay.
@@ -661,7 +664,9 @@ async function fetchWithSsrFGuardInternal(
         init.headers = headers;
         // This is the caller's immutable Blob, not an unbounded network Response.
         // nosemgrep: security.opengrep.ghsa-p536-vvpp-9mc8.openclaw.web-fetch-or-media-unbounded-response-read
-        init.body = new Uint8Array(await body.arrayBuffer());
+        const bytes = new Uint8Array(await body.arrayBuffer());
+        init.body = bytes;
+        captureBody = captureAdmission.capture ? Buffer.from(bytes) : captureBody;
       }
 
       // Explicit caller stubs and test-installed fetch mocks should win.
@@ -674,7 +679,7 @@ async function fetchWithSsrFGuardInternal(
         method: currentInit?.method ?? "GET",
         signal: process.versions.bun ? (init.signal ?? undefined) : undefined,
         requestHeaders: currentInit?.headers as Headers | Record<string, string> | undefined,
-        requestBody: currentInit?.body ?? null,
+        requestBody: captureBody,
         transport: "http" as const,
         flowId: params.capture === false ? undefined : params.capture?.flowId,
         meta: {
@@ -775,15 +780,14 @@ async function fetchWithSsrFGuardInternal(
         continue;
       }
 
-      // oxlint-disable-next-line no-warning-comments -- removal awaits an upstream Bun runtime fix.
-      // TODO: Remove this wrapper once Bun propagates post-header aborts through
-      // installed Undici response and clone body streams.
-      const returnedResponse =
-        process.versions.bun && !(response instanceof Response)
-          ? responseWithAbortSignal(response, init.signal ?? undefined)
-          : response;
       return {
-        response: returnedResponse,
+        // oxlint-disable-next-line no-warning-comments -- removal awaits an upstream Bun runtime fix.
+        // TODO: Remove once Bun propagates post-header aborts through Undici body streams.
+        response:
+          process.versions.bun && !(response instanceof Response)
+            ? responseWithAbortSignal(response, init.signal ?? undefined)
+            : response,
+        signal,
         finalUrl: currentUrl,
         release: async () => finishRequest(releaseDispatcher),
         refreshTimeout: refresh,

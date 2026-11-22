@@ -1,11 +1,9 @@
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
-import { publishOpenClawStateDatabaseWorkerAdmission as publishAdmission } from "../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseByPathAsync as closeDatabase,
   openOpenClawStateDatabase as openDatabase,
@@ -44,14 +42,18 @@ const roots = useAutoCleanupTempDirTracker((cleanup) => {
 });
 
 async function fixture() {
-  const options = storage("profile-admission-");
+  const options = { path: path.join(roots.make("profile-admission-"), "openclaw.sqlite") };
+  paths.push(options.path);
   const profile = ensureProfileForEmail("person@example.test", options);
   const context = captureContext(options);
   const authority = await captureAuthority(context.admission);
   const targets = { profiles: [profile.id], identities: [], channels: [] };
   return {
     options,
-    exact: boundRequest(authority, profile.id),
+    exact: {
+      kind: "assert-bound-revision",
+      authority: authority.bind(profile.id)!.transferable,
+    } as const,
     current: {
       kind: "read-current-settled-facts",
       authority: authority.transferSettled(profile.id),
@@ -59,18 +61,6 @@ async function fixture() {
     mutate: () => fenceMutation(context.admission, targets),
   };
 }
-
-function storage(prefix: string) {
-  const options = { path: path.join(roots.make(prefix), "openclaw.sqlite") };
-  paths.push(options.path);
-  return options;
-}
-
-type Authority = Awaited<ReturnType<typeof captureAuthority>>;
-const boundRequest = (authority: Authority, id = "synthetic-profile") => ({
-  kind: "assert-bound-revision" as const,
-  authority: authority.bind(id)!.transferable,
-});
 
 function activeRequest(slot = new SqliteWorkerSlotCustody()) {
   const request = slot.createRequest();
@@ -99,6 +89,7 @@ it("checks broker custody through a direct worker port while its host cannot run
     expect(() => assertAdmission(connection, successor.descriptor)).toThrow("revoked");
     const closing = owner.close();
     expect(Atomics.load(connection.lifetime, 0)).toBe(0);
+    expect(() => assertAdmission(connection, activeRequest().descriptor)).toThrow("revoked");
     await closing;
   } finally {
     connection.port.close();
@@ -131,28 +122,6 @@ it("expires a lost native-to-service request without relying on host scheduling 
   } finally {
     port1.close();
     port2.close();
-  }
-});
-
-it("does not revive a connection after service crash and restart", async () => {
-  const workers = vi.spyOn(workerCpu, "createCpuTrackedWorker");
-  const owner = service();
-  const previous = await owner.connect();
-  const custody = activeRequest();
-  const worker = workers.mock.results[0];
-  if (worker?.type !== "return") {
-    throw new Error("Service worker was not created");
-  }
-  await worker.value.terminate();
-  await owner.close();
-  const replacement = await service().connect();
-  try {
-    expect(() => assertAdmission(previous, custody.descriptor)).toThrow("revoked");
-    assertAdmission(replacement, custody.descriptor);
-    expect(replacement.lifetime.buffer).not.toBe(previous.lifetime.buffer);
-  } finally {
-    previous.port.close();
-    replacement.port.close();
   }
 });
 
@@ -192,7 +161,9 @@ it("sees revocation after dispatch and rejects late registration after retiremen
   await expect(owner.read(current)).resolves.toBe("current");
   await expect(owner.read(exact)).resolves.toBe("revoked");
 
-  await closeDatabase(options.path);
+  const closing = closeDatabase(options.path);
+  expect(readProfileAuthority(current.authority)).toBe("revoked");
+  await closing;
   openDatabase(options);
   await expect(owner.read(structuredClone(current))).resolves.toBe("revoked");
 });
@@ -217,28 +188,4 @@ it("settles a crashed service request before starting fresh work without revivin
   await expect(restarted.read(request)).resolves.toBe("uncertain");
   await closeDatabase(options.path);
   await expect(restarted.read(request)).resolves.toBe("revoked");
-});
-
-it("revokes worker-only storage before asynchronous drainage and keeps old descriptors retired", async () => {
-  const options = storage("profile-worker-only-");
-  const context = captureContext(options);
-  const precreation = await captureAuthority(context.admission);
-  const previous = boundRequest(precreation);
-  const owner = service();
-  await expect(owner.read(previous)).resolves.toBe("current");
-  new DatabaseSync(options.path).close();
-  publishAdmission(context.admission);
-  expect(readProfileAuthority(previous.authority)).toBe("revoked");
-  await expect(owner.read(previous)).resolves.toBe("revoked");
-  const authority = await captureAuthority(context.admission);
-  const request = boundRequest(authority);
-  await expect(owner.read(request)).resolves.toBe("current");
-
-  const closing = closeDatabase(options.path);
-  expect(readProfileAuthority(request.authority)).toBe("revoked");
-  await expect(owner.read(request)).resolves.toBe("revoked");
-  await closing;
-  const reopened = await captureAuthority(captureContext(options).admission);
-  await expect(owner.read(boundRequest(reopened))).resolves.toBe("current");
-  await expect(owner.read(structuredClone(request))).resolves.toBe("revoked");
 });

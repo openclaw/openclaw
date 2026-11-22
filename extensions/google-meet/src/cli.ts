@@ -2,12 +2,13 @@ import type { Command } from "commander";
 import type { MeetingSetupCheck } from "openclaw/plugin-sdk/meeting-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { generateHexPkceVerifierChallenge } from "openclaw/plugin-sdk/provider-auth";
-import { generateOAuthState } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { generateOAuthState } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import {
   addGoogleMeetArtifactOptions,
   addGoogleMeetOAuthOptions,
   callGoogleMeetRuntime,
   resolveCliMeetingInput as resolveMeetingInput,
+  readGoogleMeetRuntime,
   resolveCliParams,
   type GoogleMeetCliCommandContext,
 } from "./cli-command-context.js";
@@ -92,6 +93,13 @@ async function buildOAuthDoctorReport(
   const accessToken = options.accessToken?.trim() || config.oauth.accessToken;
   const expiresAt = parseOptionalNumber(options.expiresAt) ?? config.oauth.expiresAt;
   const checks: MeetingSetupCheck[] = [];
+  const recordFailure = (id: MeetingSetupCheck["id"], error: unknown) => {
+    checks.push({
+      id,
+      ok: false,
+      message: sanitizeOAuthErrorMessage(error),
+    });
+  };
 
   const hasRefreshConfig = Boolean(clientId && refreshToken);
   const hasAccessConfig = Boolean(accessToken);
@@ -134,11 +142,7 @@ async function buildOAuthDoctorReport(
         : "Cached access token is still valid",
     });
   } catch (error) {
-    checks.push({
-      id: "oauth-token",
-      ok: false,
-      message: sanitizeOAuthErrorMessage(error),
-    });
+    recordFailure("oauth-token", error);
     return { ok: false, configured: true, checks };
   }
 
@@ -161,11 +165,7 @@ async function buildOAuthDoctorReport(
       });
       report.meetingUri = space.meetingUri;
     } catch (error) {
-      checks.push({
-        id: "meet-spaces-get",
-        ok: false,
-        message: sanitizeOAuthErrorMessage(error),
-      });
+      recordFailure("meet-spaces-get", error);
     }
   }
 
@@ -180,11 +180,7 @@ async function buildOAuthDoctorReport(
       report.createdSpace = created.space.name;
       report.meetingUri = created.meetingUri;
     } catch (error) {
-      checks.push({
-        id: "meet-spaces-create",
-        ok: false,
-        message: sanitizeOAuthErrorMessage(error),
-      });
+      recordFailure("meet-spaces-create", error);
     }
   }
 
@@ -503,11 +499,15 @@ export function registerGoogleMeetCli(params: {
     .argument("[session-id]", "Meet session ID")
     .option("--json", "Print JSON output", false)
     .action(async (sessionId?: string) => {
-      writeStdoutJson(
-        await callGoogleMeetRuntime(context, "googlemeet.status", { sessionId }, (rt) =>
-          rt.status(sessionId),
-        ),
+      const status = await readGoogleMeetRuntime(
+        context,
+        "googlemeet.status",
+        { sessionId },
+        (rt) => rt.status(sessionId),
       );
+      if (status) {
+        writeStdoutJson(status);
+      }
     });
 
   root
@@ -521,12 +521,15 @@ export function registerGoogleMeetCli(params: {
       if (options.since !== undefined && sinceIndex === undefined) {
         throw new Error("--since must be a non-negative safe integer");
       }
-      const result = await callGoogleMeetRuntime(
+      const result = await readGoogleMeetRuntime(
         context,
         "googlemeet.transcript",
         { sessionId, ...(sinceIndex === undefined ? {} : { sinceIndex }) },
         (rt) => rt.transcript(sessionId, sinceIndex === undefined ? {} : { sinceIndex }),
       );
+      if (!result) {
+        return;
+      }
       if (!result.found) {
         throw new Error("session not found");
       }
@@ -574,12 +577,15 @@ export function registerGoogleMeetCli(params: {
         writeOAuthDoctorReport(report);
         return;
       }
-      const status = await callGoogleMeetRuntime(
+      const status = await readGoogleMeetRuntime(
         context,
         "googlemeet.status",
         { sessionId },
         (rt) => rt.status(sessionId),
       );
+      if (!status) {
+        return;
+      }
       if (options.json) {
         writeStdoutJson(status);
         return;

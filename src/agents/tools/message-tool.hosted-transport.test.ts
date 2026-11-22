@@ -5,7 +5,6 @@ import { WebSocketServer } from "ws";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import * as commandSecretGateway from "../../cli/command-secret-gateway.js";
-import * as commandSecretTargets from "../../cli/command-secret-targets.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as cron from "../../cron/active-jobs.js";
@@ -29,7 +28,9 @@ import * as callers from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
 import {
   messageGatewayContext as gatewayContext,
+  registerMessageChannel,
   resolvedMessageSecrets as resolvedSecrets,
+  stubMessageSecrets,
 } from "./message-tool-execution.test-support.js";
 
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
@@ -39,12 +40,7 @@ beforeEach(async () => {
     env: { OPENCLAW_GATEWAY_URL: undefined, OPENCLAW_GATEWAY_TOKEN: undefined },
   });
   registry = plugins.captureActivePluginRegistrySnapshot();
-  vi.spyOn(commandSecretTargets, "getScopedChannelsCommandSecretTargets").mockReturnValue({
-    targetIds: new Set<string>(),
-  });
-  vi.spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway").mockImplementation(
-    async ({ config }) => resolvedSecrets(config),
-  );
+  stubMessageSecrets();
 });
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -123,9 +119,7 @@ it("dispatches a hosted message action without connecting to either Gateway endp
     const plugin = gatewayPlugin("react", () => {
       throw new Error("The action must cross the Gateway transport");
     });
-    plugins.setActivePluginRegistry(
-      fixtures.createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]),
-    );
+    registerMessageChannel(plugin);
     const config = hostedConfig({
       gateway: {
         mode: "remote",
@@ -188,12 +182,6 @@ it("dispatches a hosted message action without connecting to either Gateway endp
     }
     expect(dispatched.mock.calls[2]?.[0].params).toEqual(dispatched.mock.calls[1]?.[0].params);
     expect(assertDashboardReadCurrent).not.toHaveBeenCalled();
-    runs.releaseAgentRunDelegatedAuthority(authority);
-    for (const selectedTool of tools) {
-      await expect(execute(selectedTool)).rejects.toThrow(
-        /agent (?:runtime identity requires active delegated run|tool caller) authority/,
-      );
-    }
     expect(dispatched).toHaveBeenCalledTimes(3);
     expect(local.connections).not.toHaveBeenCalled();
     expect(remote.connections).not.toHaveBeenCalled();
@@ -214,7 +202,7 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
   const run = { agentId: "ops", runId, sessionId };
   const policy = { version: 1, mode: "trusted" } as const;
   // Only runtime config changes here; canonical job revocation has its own owner tests.
-  const marker = cron.markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
+  const marker = cron.markCronJobActive(jobId);
   const entered = createDeferred<OpenClawConfig>();
   const release = createDeferred();
   let promptAdmission: ReturnType<typeof prepareCronRunAdmission> | undefined;
@@ -248,7 +236,10 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
     promptAdmission = withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
       prepareCronRunAdmission({
         scheduledExecution: TEST_SCHEDULED_EXECUTION,
-        deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
+        deliveryAttemptFence: {
+          beforeAttempt: async () => {},
+          assertCurrent: () => source.signal.throwIfAborted(),
+        },
         cfg: configA,
         ...run,
         sessionKey,

@@ -12,7 +12,7 @@ import {
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createXaiMediaUnderstandingProviderMetadata } from "./capability-provider-metadata.js";
+import { createXaiMediaUnderstandingProviderMetadata } from "./capability-provider-metadata-factory.js";
 import { XAI_BASE_URL } from "./model-definitions.js";
 
 function resolveXaiSttBaseUrl(value?: string): string {

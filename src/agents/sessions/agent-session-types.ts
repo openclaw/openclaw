@@ -32,6 +32,7 @@ type AgentSessionCompactionOutcome =
       tokensAfter: number;
       willRetry: boolean;
       qualityDegraded?: true;
+      summaryRefused?: true;
     }
   | { status: "skipped"; reason: string }
   | { status: "failed"; reason: string }
@@ -95,8 +96,6 @@ export interface AgentSessionConfig {
     model: Model & { compactionThinkingDefault?: ThinkLevel },
     inheritedLevel: ThinkingLevel,
   ) => ThinkingLevel;
-  /** Whether disposing this object ends the durable provider session. Defaults to true. */
-  cleanupProviderSessionResourcesOnDispose?: boolean;
 }
 
 export interface ExtensionBindings {

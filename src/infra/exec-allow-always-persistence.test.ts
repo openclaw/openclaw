@@ -22,7 +22,7 @@ async function decideCommand(
   options: Pick<Parameters<typeof planShellAuthorization>[0], "cwd" | "env"> = {},
 ) {
   const plan = await planShellAuthorization({ command, ...options });
-  return resolveAllowAlwaysPersistenceDecision({
+  return await resolveAllowAlwaysPersistenceDecision({
     segments: plannedSegments(plan),
     commandText: command,
     platform: process.platform,
@@ -31,18 +31,11 @@ async function decideCommand(
   });
 }
 
-function expectOneShot(
-  decision: ReturnType<typeof resolveAllowAlwaysPersistenceDecision>,
+function expectOneShotApproval(
+  decision: Awaited<ReturnType<typeof resolveAllowAlwaysPersistenceDecision>>,
   reason = "no-reusable-pattern",
 ) {
   expect(decision).toEqual({ kind: "one-shot", reasons: expect.arrayContaining([reason]) });
-}
-
-function expectOneShotApproval(
-  decision: ReturnType<typeof resolveAllowAlwaysPersistenceDecision>,
-  reason = "no-reusable-pattern",
-) {
-  expectOneShot(decision, reason);
   expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence: decision })).toEqual([
     "allow-once",
     "deny",
@@ -60,25 +53,16 @@ function createPersistenceFixture(binaries: string[]) {
 
 describe("resolveAllowAlwaysPersistenceDecision", () => {
   it.each([
-    { binaries: ["pnpm", "tsx"], command: "pnpm -C ./package exec -- tsx ./run.ts" },
-    { binaries: ["pnpm", "tsx"], command: "pnpm dlx --allow-build=tsx tsx ./run.ts" },
-    {
-      binaries: ["pnpm", "npm", "sh", "echo"],
-      command: "pnpm exec -- npm x sh -c 'echo warmup-ok'",
-    },
-    { binaries: ["yarn", "sh", "echo"], command: "yarn sh -c 'echo warmup-ok'" },
-    {
-      binaries: ["env", "nice", "pnpm", "sh", "echo"],
-      command: "nice pnpm exec sh -c 'echo warmup-ok'",
-    },
-    {
-      binaries: ["env", "pnpm"],
-      command: `env -- pnpm exec --shell-mode "sh -c 'echo warmup-ok'"`,
-    },
-    { binaries: ["npx"], command: `npx --call "sh -c 'echo warmup-ok'"` },
-  ])("keeps $command one-shot", async ({ binaries, command }) => {
+    [["pnpm", "tsx"], "pnpm -C ./package exec -- tsx ./run.ts"],
+    [["pnpm", "tsx"], "pnpm dlx --allow-build=tsx tsx ./run.ts"],
+    [["pnpm", "npm", "sh", "echo"], "pnpm exec -- npm x sh -c 'echo warmup-ok'"],
+    [["yarn", "sh", "echo"], "yarn sh -c 'echo warmup-ok'"],
+    [["env", "nice", "pnpm", "sh", "echo"], "nice pnpm exec sh -c 'echo warmup-ok'"],
+    [["env", "pnpm"], `env -- pnpm exec --shell-mode "sh -c 'echo warmup-ok'"`],
+    [["npx"], `npx --call "sh -c 'echo warmup-ok'"`],
+  ] satisfies [string[], string][])("keeps %j / %s one-shot", async (binaries, command) => {
     const { decide } = createPersistenceFixture(binaries);
-    expectOneShot(await decide(command));
+    expectOneShotApproval(await decide(command));
   });
 
   it.each([
@@ -126,12 +110,12 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     const plan = await planShellAuthorization({ command, cwd: dir, env });
 
     expect(plan.ok).toBe(false);
-    const decision = resolveAllowAlwaysPersistenceDecision({
+    const decision = await resolveAllowAlwaysPersistenceDecision({
       segments: [
         {
           raw: "git status",
           argv: ["git", "status"],
-          resolution: resolveCommandResolutionFromArgv(["git", "status"], dir, env),
+          resolution: await resolveCommandResolutionFromArgv(["git", "status"], dir, env),
         },
       ],
       commandText: command,
@@ -141,7 +125,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
       authorizationPlan: plan,
     });
 
-    expectOneShot(decision, "unplanned");
+    expectOneShotApproval(decision, "unplanned");
   });
 
   it("keeps pipeline shell execution one-shot when a segment cannot be persisted", async () => {
@@ -149,13 +133,12 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     const plan = await planShellAuthorization({ command });
 
     expect(plan.ok).toBe(true);
-    const decision = resolveAllowAlwaysPersistenceDecision({
+    const decision = await resolveAllowAlwaysPersistenceDecision({
       segments: plannedSegments(plan),
       commandText: command,
       platform: process.platform,
       authorizationPlan: plan,
     });
-
     expectOneShotApproval(decision);
   });
 });

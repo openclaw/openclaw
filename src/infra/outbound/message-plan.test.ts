@@ -4,28 +4,6 @@ import { planOutboundMediaMessageUnits, planOutboundTextMessageUnits } from "./m
 import { createReplyToDeliveryPolicy } from "./reply-policy.js";
 
 type TextPlan = Parameters<typeof planOutboundTextMessageUnits>[0];
-const expectedUnit = (text: string, overrides: TextPlan["overrides"], index = 0, count = 1) => ({
-  text,
-  overrides: { ...overrides, deliveryPartIndex: index, deliveryPartCount: count },
-});
-const planCase = (
-  name: string,
-  text: string,
-  textLimit: number,
-  expected: readonly string[],
-  options: Partial<TextPlan> = {},
-) => ({
-  name,
-  expected,
-  params: {
-    text,
-    textLimit,
-    chunker: chunkMarkdownText,
-    chunkerMode: "markdown" as const,
-    chunkMode: "length" as const,
-    ...options,
-  },
-});
 const replyPlan = (replyToMode: "first" | "batched" = "first") => {
   const policy = createReplyToDeliveryPolicy({ replyToId: "reply-1", replyToMode });
   const reply = policy.resolveCurrentReplyTo({});
@@ -35,77 +13,43 @@ const replyPlan = (replyToMode: "first" | "batched" = "first") => {
   };
 };
 const fencedChunks = ["```txt\naa\nbb\n```", "```txt\ncc\n```"];
+const fence = "```txt\naa\nbb\ncc\n```";
+const unicodeCode = '```json\n{"text":"a\u2028b\u2029c"}\n```\nCopy `a\u2028b\u2029c` exactly.';
+type PlanCase = { text: string; expected: string[]; options: Partial<TextPlan> };
 
-it.each([
-  planCase("plain text", "aa bb cc dd", 6, ["aa bb", "cc dd"], {
-    chunker: chunkText,
-    chunkerMode: "text",
-  }),
-  planCase("unfenced Markdown", "aa bb\ncc dd\nee ff gg hh", 6, [
-    "aa bb",
-    "cc dd",
-    "ee ff",
-    "gg hh",
-  ]),
-  planCase("Markdown paragraphs", "first\n\nsecond", 6, ["first", "second"], {
-    chunkMode: "newline",
-  }),
-  ...(["\u2028", "\u2029"] as const).flatMap((separator) =>
-    (
-      [
-        ["fenced JSON", `\`\`\`json\n{"separator":"first${separator}second"}\n\`\`\``],
-        ["inline code", `Copy \`first${separator}second\` exactly.`],
-      ] as const
-    ).flatMap(([codeName, text]) =>
-      (["length", "newline"] as const).map((chunkMode) =>
-        planCase(
-          `${separator.charCodeAt(0).toString(16)} in ${codeName} in ${chunkMode} mode`,
-          text,
-          4000,
-          [text],
-          {
-            chunkMode,
-          },
-        ),
-      ),
-    ),
-  ),
-  ...[0, -1].map((limit) =>
-    planCase(
-      `Markdown paragraphs with disabled limit ${limit}`,
-      "```txt\ncontent\n```\n\nafter",
-      limit,
-      ["```txt\ncontent\n```\n\nafter"],
-      { chunkMode: "newline" },
-    ),
-  ),
-  planCase("fenced Markdown", "```txt\naa\nbb\ncc\n```", 16, fencedChunks),
-  planCase(
-    "long fenced paragraphs with a text-mode chunker",
-    "intro\n\n```txt\naa\nbb\ncc\n```",
-    16,
-    ["intro", ...fencedChunks],
-    { chunkerMode: "text", chunkMode: "newline" },
-  ),
-  ...([undefined, "newline"] as const).map((chunkMode) =>
-    planCase(
-      `${chunkMode ?? "default"} empty chunker fallback`,
-      "visible reply",
-      64,
-      ["visible reply"],
-      { chunkMode, chunkerMode: undefined, chunker: () => [] },
-    ),
-  ),
-])("plans $name with one implicit reply", ({ params, expected }) => {
-  expect(planOutboundTextMessageUnits({ ...params, ...replyPlan() })).toEqual(
-    expected.map((text, index) =>
-      expectedUnit(
-        text,
-        { replyToId: index === 0 ? "reply-1" : undefined, replyToIdSource: "implicit" },
-        index,
-        expected.length,
-      ),
-    ),
+it.each`
+  name                       | text                           | expected                                | options
+  ${"plain text"}            | ${"aa bb cc dd"}               | ${["aa bb", "cc dd"]}                   | ${{ chunker: chunkText, chunkerMode: "text" }}
+  ${"unfenced Markdown"}     | ${"aa bb\ncc dd\nee ff gg hh"} | ${["aa bb", "cc dd", "ee ff", "gg hh"]} | ${{}}
+  ${"Markdown paragraphs"}   | ${"first\n\nsecond"}           | ${["first", "second"]}                  | ${{ chunkMode: "newline" }}
+  ${"Unicode length"}        | ${unicodeCode}                 | ${[unicodeCode]}                        | ${{ textLimit: 4000 }}
+  ${"Unicode newline"}       | ${unicodeCode}                 | ${[unicodeCode]}                        | ${{ textLimit: 4000, chunkMode: "newline" }}
+  ${"disabled limit"}        | ${`${fence}\n\nafter`}         | ${[`${fence}\n\nafter`]}                | ${{ textLimit: 0, chunkMode: "newline" }}
+  ${"fenced Markdown"}       | ${fence}                       | ${fencedChunks}                         | ${{ textLimit: 16 }}
+  ${"text-mode paragraphs"}  | ${`intro\n\n${fence}`}         | ${["intro", ...fencedChunks]}           | ${{ textLimit: 16, chunkerMode: "text", chunkMode: "newline" }}
+  ${"empty chunker length"}  | ${"reply"}                     | ${["reply"]}                            | ${{ chunkerMode: undefined, chunker: () => [] }}
+  ${"empty chunker newline"} | ${"reply"}                     | ${["reply"]}                            | ${{ chunkMode: "newline", chunkerMode: undefined, chunker: () => [] }}
+`("plans $name with one implicit reply", ({ text, expected, options }: PlanCase) => {
+  expect(
+    planOutboundTextMessageUnits({
+      text,
+      textLimit: 6,
+      chunker: chunkMarkdownText,
+      chunkerMode: "markdown",
+      chunkMode: "length",
+      ...options,
+      ...replyPlan(),
+    }),
+  ).toEqual(
+    expected.map((chunk, index) => ({
+      text: chunk,
+      overrides: {
+        replyToId: index === 0 ? "reply-1" : undefined,
+        replyToIdSource: "implicit",
+        deliveryPartIndex: index,
+        deliveryPartCount: expected.length,
+      },
+    })),
   );
 });
 
@@ -154,5 +98,14 @@ it("adds formatting overrides only to chunked text units", () => {
     chunkedTextFormatting: { parseMode: "HTML" },
     overrides: {},
   });
-  expect(units).toEqual([expectedUnit("<b>bold</b>", { formatting: { parseMode: "HTML" } })]);
+  expect(units).toEqual([
+    {
+      text: "<b>bold</b>",
+      overrides: {
+        formatting: { parseMode: "HTML" },
+        deliveryPartIndex: 0,
+        deliveryPartCount: 1,
+      },
+    },
+  ]);
 });

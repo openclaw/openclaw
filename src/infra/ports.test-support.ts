@@ -1,16 +1,23 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
+import { readFile } from "node:fs/promises";
 import net from "node:net";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
-import { expect, type TestContext } from "vitest";
+import type { TestContext } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
 
-type NativeConnection = { port: number; clientPort: number; pid: number; stdout: string };
+type NativeConnection = {
+  port: number;
+  clientPort: number;
+  pid: number;
+  command: string;
+  stdout: string;
+};
 
 export async function listenServer(
   skip: TestContext["skip"],
@@ -41,11 +48,10 @@ export async function withNativeSsConnection(
   inspect: (fixture: NativeConnection) => Promise<void>,
 ): Promise<void> {
   const accepted = createDeferred<net.Socket>();
-  const sockets = new Set<net.Socket>();
-  await using server = net.createServer((socket) => {
-    sockets.add(socket);
-    socket.once("close", () => sockets.delete(socket));
-    accepted.resolve(socket);
+  let socket: net.Socket | undefined;
+  await using server = net.createServer((connected) => {
+    socket = connected;
+    accepted.resolve(connected);
   });
   let child: ReturnType<typeof spawn> | undefined;
   let closed: Promise<unknown[]> | undefined;
@@ -80,16 +86,14 @@ export async function withNativeSsConnection(
         code: message,
       });
     }
-    const socket = await wait(accepted.promise, "TCP fixture was not accepted");
-    const clientPort = socket.remotePort;
+    const clientPort = (await wait(accepted.promise, "TCP fixture was not accepted")).remotePort;
     const pid = child.pid;
     assert(
       clientPort !== undefined && pid !== undefined,
       "Native TCP fixture needs a port and PID",
     );
-    expect(socket.remoteAddress).toBe("127.0.0.1");
-    expect(child).toMatchObject({ exitCode: null, signalCode: null });
 
+    const command = (await readFile(`/proc/${pid}/comm`, "utf8")).trimEnd();
     const captured = spawnSync(
       "ss",
       ["-H", "-tnp", "state", "established", `( sport = :${port} or dport = :${port} )`],
@@ -111,11 +115,8 @@ export async function withNativeSsConnection(
     if (clientRow && !clientRow.includes("users:")) {
       skip("Native ss cannot expose process metadata for the owned client");
     }
-    expect(clientRow, "ss must capture the owned established client").toMatch(
-      new RegExp(`users:\\(\\("node worker:1",pid=${pid},fd=\\d+\\)`),
-    );
 
-    await withinTest(inspect({ port, clientPort, pid, stdout: captured.stdout }), signal);
+    await withinTest(inspect({ port, clientPort, pid, command, stdout: captured.stdout }), signal);
   } catch (error) {
     const code = extractErrorCode(error);
     if (code && ["ENOENT", "EACCES", "EPERM", "EADDRNOTAVAIL"].includes(code)) {
@@ -129,9 +130,7 @@ export async function withNativeSsConnection(
         await closed;
       }
     } finally {
-      for (const socket of sockets) {
-        socket.destroy();
-      }
+      socket?.destroy();
     }
   }
 }

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { collectGarbageForTest } from "../test-helpers/garbage-collection.ts";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { observeScrollState } from "./scroll-state-observer.ts";
 
 type Publish = Parameters<typeof observeScrollState>[1];
@@ -99,11 +100,7 @@ it("releases retired publishers while fonts load and remeasures active views", a
   const previous = Object.getOwnPropertyDescriptor(document, "fonts");
   Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
   onTestFinished(() => {
-    if (previous) {
-      Object.defineProperty(document, "fonts", previous);
-    } else {
-      Reflect.deleteProperty(document, "fonts");
-    }
+    restorePropertyDescriptor(document, "fonts", previous);
   });
   function retire() {
     const payload: { lastState?: Parameters<Publish>[0] } = {};

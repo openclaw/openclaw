@@ -1,5 +1,6 @@
 import path from "node:path";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureOutputDirectory } from "./output-directories.js";
 
 export async function writeExternalFileWithinOutputRoot(params: {
@@ -7,7 +8,7 @@ export async function writeExternalFileWithinOutputRoot(params: {
   path: string;
   write: (filePath: string) => Promise<void>;
 }): Promise<string> {
-  const outputPath = params.path.trim();
+  const outputPath = readNonBlankString(params.path);
   if (!outputPath) {
     throw new Error("output path is required");
   }

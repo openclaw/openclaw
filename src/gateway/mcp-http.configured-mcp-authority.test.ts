@@ -1,8 +1,14 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
-import fs from "node:fs/promises";
 import http from "node:http";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from "vitest";
+import {
+  listenLoopback,
+  closeHttpServer,
+  readRequestText,
+  respondJson,
+} from "../../test/helpers/gateway-integration-fixtures.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
@@ -21,9 +27,10 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
+import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
+import { activateWorkshopPluginForTest } from "../skills/test-support/workshop-plugin.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
@@ -108,11 +115,7 @@ async function startProbeServer() {
         response.writeHead(request.method === "DELETE" ? 200 : 405).end();
         return;
       }
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
-      const message = JSON.parse(Buffer.concat(chunks).toString()) as ProbeMessage;
+      const message = JSON.parse(await readRequestText(request)) as ProbeMessage;
       if (message.method === undefined) {
         // Response to a server-initiated request.
         pendingPings.get(String(message.id))?.();
@@ -129,29 +132,18 @@ async function startProbeServer() {
       } else if (message.method === "tools/list") {
         const hook = state.onToolsList;
         state.onToolsList = undefined;
-        // Runs while OpenClaw awaits the catalog refresh, after the loopback
-        // handler already admitted the call.
         await hook?.();
       }
-      response.setHeader("content-type", "application/json");
-      response.end(
-        JSON.stringify({ jsonrpc: "2.0", id: message.id, result: probeResult(message) }),
-      );
+      respondJson(response, { jsonrpc: "2.0", id: message.id, result: probeResult(message) });
     })().catch(() => response.writeHead(500).end());
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("MCP probe server did not acquire a loopback port");
-  }
+  const port = Number(new URL(await listenLoopback(server)).port);
   return {
-    port: address.port,
+    port,
     counts,
     state,
     /**
-     * Server-initiated tools/list_changed: OpenClaw refreshes before the next call.
+     * Server-initiated tools/list_changed: the next call starts background refresh.
      * A ping follows on each stream; a client handles stream messages in order,
      * so every ping reply proves that client consumed the notification.
      */
@@ -175,10 +167,7 @@ async function startProbeServer() {
       );
     },
     close: async () => {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeHttpServer(server);
     },
   };
 }
@@ -187,6 +176,7 @@ let state: OpenClawTestState;
 let config: OpenClawConfig;
 let probe: Awaited<ReturnType<typeof startProbeServer>>;
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
+let resetWorkshopPlugin: (() => void) | undefined;
 const contexts: PreparedCliRunContext[] = [];
 const admissions: PreparedAgentRunAdmission[] = [];
 
@@ -194,7 +184,7 @@ beforeAll(async () => {
   state = await createOpenClawTestState({
     prefix: "openclaw-mcp-configured-authority-",
     layout: "state-only",
-    env: { OPENCLAW_TEST_FAST: "0", OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+    env: { OPENCLAW_TEST_FAST: "0", OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0" },
   });
   probe = await startProbeServer();
   config = {
@@ -208,7 +198,7 @@ beforeAll(async () => {
         main: { workspace: state.workspaceDir },
         // Same workspace, but every session runs sandboxed.
         sbx: { workspace: state.workspaceDir, sandbox: { mode: "all" } },
-        // Sandboxed, with Workshop admitted by the sandbox tool policy.
+        // Sandboxed, with Workshop named in the sandbox tool policy.
         sbxw: {
           workspace: state.workspaceDir,
           sandbox: { mode: "all" },
@@ -216,10 +206,10 @@ beforeAll(async () => {
         },
       },
     },
-    plugins: { enabled: false },
+    plugins: { enabled: true, allow: ["skill-workshop"] },
     skills: { load: { watch: false } },
     tools: {
-      allow: ["read", "probe__*", "skill_workshop"],
+      allow: ["read", "probe__*", "skill_workshop", "skill_library"],
       codeMode: false,
       toolSearch: false,
     },
@@ -232,7 +222,6 @@ beforeAll(async () => {
   await state.writeConfig(config);
   setRuntimeConfigSnapshot(config);
   openOpenClawStateDatabase();
-  setActivePluginRegistry(createEmptyPluginRegistry());
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupCliBackend: () => undefined,
     resolveRuntimeCliBackends: () => [
@@ -250,6 +239,15 @@ beforeAll(async () => {
   scheduler = createTestGatewayScheduler();
   await setSessionMcpRuntimeScheduler(scheduler);
   await ensureMcpLoopbackServer();
+});
+
+beforeEach(async () => {
+  resetWorkshopPlugin = (await activateWorkshopPluginForTest(config)).reset;
+});
+
+afterEach(async () => {
+  resetWorkshopPlugin?.();
+  await closeSkillsWatchers(true);
 });
 
 afterAll(async () => {
@@ -285,7 +283,7 @@ async function prepareTurn(
     spawnedBy,
     spawnDepth: 1,
     inheritedToolPolicyVersion: 1 as const,
-    inheritedToolAllow: ["read", "probe__*", "skill_workshop"],
+    inheritedToolAllow: ["read", "probe__*", "skill_workshop", "skill_library"],
   });
   const entry = {
     sessionId,
@@ -389,25 +387,19 @@ const OPERATIONS = [
   },
 ];
 
-async function workshopDefinition(turn: Awaited<ReturnType<typeof prepareTurn>>) {
+async function workshopDefinition(
+  turn: Awaited<ReturnType<typeof prepareTurn>>,
+  name = "skill_workshop",
+) {
   const listed = await turn.rpc("tools/list");
   expect(listed.status).toBe(200);
-  return expectDefined(listed.body.result?.tools, "MCP catalog").find(
-    (tool) => tool.name === "skill_workshop",
-  );
+  return expectDefined(listed.body.result?.tools, "MCP catalog").find((tool) => tool.name === name);
 }
 
-it("serves complete configured-server instructions and bridged calls", async ({ signal }) => {
+it("serves complete configured-server instructions", async ({ signal }) => {
   const turn = await prepareTurn("allowed", false, signal);
   const initialized = await turn.rpc("initialize", {});
-  expect(PROBE_INSTRUCTIONS.length).toBeGreaterThan(1_200);
   expect(initialized.body.result?.instructions).toBe("## probe\n" + PROBE_INSTRUCTIONS);
-  for (const operation of OPERATIONS) {
-    expect(await turn.call(operation.tool, operation.args)).toEqual({
-      isError: false,
-      text: expect.stringContaining(operation.text),
-    });
-  }
 });
 
 it.for(
@@ -416,7 +408,7 @@ it.for(
     { ...operation, change: "reassigned completion lineage", completion: true },
   ]),
 )(
-  "refuses $tool before server I/O after a $change during a catalog refresh",
+  "calls known $tool during refresh and refuses the next call after a $change",
   async (operation, { signal }) => {
     const turn = await prepareTurn(
       operation.tool + (operation.completion ? "-lineage" : "-revoked"),
@@ -427,22 +419,40 @@ it.for(
       isError: false,
       text: expect.stringContaining(operation.text),
     });
-    // The next call now waits on a catalog refresh from the server.
+    const refreshStarted = createDeferred();
+    const releaseRefresh = createDeferred();
+    const changed = createDeferred();
     await probe.notifyToolsChanged();
     const before = { ...probe.counts };
-    probe.state.onToolsList = operation.completion ? turn.reassign : turn.revoke;
-    expect(await turn.call(operation.tool, operation.args)).toEqual({
-      isError: true,
-      text: expect.stringContaining("Tool call authorization expired"),
-    });
-    // The refresh ran; the refused request never reached the server.
-    expect(probe.counts["tools/list"]).toBe((before["tools/list"] ?? 0) + 1);
-    expect(probe.counts[operation.method]).toBe(before[operation.method]);
+    probe.state.onToolsList = async () => {
+      refreshStarted.resolve();
+      await releaseRefresh.promise;
+      await (operation.completion ? turn.reassign() : turn.revoke());
+      changed.resolve();
+    };
+    try {
+      expect(await turn.call(operation.tool, operation.args)).toEqual({
+        isError: false,
+        text: expect.stringContaining(operation.text),
+      });
+      await withinTest(refreshStarted.promise, signal);
+      releaseRefresh.resolve();
+      await withinTest(changed.promise, signal);
+      const denied = await turn.rpc("tools/call", {
+        name: operation.tool,
+        arguments: operation.args,
+      });
+      expect(denied.status).toBe(operation.completion ? 500 : 401);
+      expect(probe.counts["tools/list"]).toBe((before["tools/list"] ?? 0) + 1);
+      expect(probe.counts[operation.method]).toBe((before[operation.method] ?? 0) + 1);
+    } finally {
+      releaseRefresh.resolve();
+    }
   },
 );
 
 it.for(["personal", "workspace"] as const)(
-  "keeps a %s-default Workshop definition on a completion turn without its authority",
+  "keeps %s-default skill definitions on a completion turn without its authority",
   async (defaultTarget, { signal }) => {
     const personalCalls: unknown[] = [];
     const human: SkillLibraryAuthoringCapability = {
@@ -457,15 +467,20 @@ it.for(["personal", "workspace"] as const)(
     };
     const name = "workshop-" + defaultTarget;
     const humanTurn = await prepareTurn(name, false, signal, human);
-    const humanDefinition = await workshopDefinition(humanTurn);
+    const humanDefinitions = {
+      library: await workshopDefinition(humanTurn, "skill_library"),
+      workshop: await workshopDefinition(humanTurn),
+    };
     const completionTurn = await prepareTurn(name, true, signal);
-    expect(humanDefinition).toBeDefined();
-    // Same definition on the completion turn keeps Claude's cached prefix.
-    expect(await workshopDefinition(completionTurn)).toEqual(humanDefinition);
+    expect(humanDefinitions.library).toBeDefined();
+    expect(humanDefinitions.workshop !== undefined).toBe(defaultTarget === "workspace");
+    // Same definitions on the completion turn keep Claude's cached prefix.
+    expect({
+      library: await workshopDefinition(completionTurn, "skill_library"),
+      workshop: await workshopDefinition(completionTurn),
+    }).toEqual(humanDefinitions);
     // Personal-library calls need a fresh human message; the live grant is not reached.
-    expect(
-      await completionTurn.call("skill_workshop", { action: "list", target: "personal" }),
-    ).toEqual({
+    expect(await completionTurn.call("skill_library", { action: "list" })).toEqual({
       isError: true,
       text: expect.stringContaining("needs a fresh message from the person"),
     });
@@ -478,11 +493,11 @@ it.for(["personal", "workspace"] as const)(
 );
 
 it.for([
-  { agentId: "sbx", policy: "default sandbox tool policy", listed: false },
-  { agentId: "sbxw", policy: "sandbox policy admitting skill_workshop", listed: true },
+  { agentId: "sbx", policy: "default sandbox tool policy" },
+  { agentId: "sbxw", policy: "sandbox policy allowing skill_workshop" },
 ])(
   "refuses a sandboxed completion's workspace Workshop write under the $policy",
-  async ({ agentId, listed }, { signal }) => {
+  async ({ agentId }, { signal }) => {
     const human: SkillLibraryAuthoringCapability = {
       target: "personal",
       defaultTarget: "workspace",
@@ -498,21 +513,22 @@ it.for([
       content: "---\nname: sandbox-probe\ndescription: Probe\n---\n\n1. Run it.\n",
     };
     const snapshot = async () =>
-      (await fs.readdir(state.workspaceDir, { recursive: true })).map(String).toSorted();
+      (await listDirectoryTreeStrict(state.workspaceDir))
+        .map((walkEntry) => walkEntry.relativePath)
+        .map(String)
+        .toSorted();
     const before = await snapshot();
     const name = "workshop-" + agentId;
     const humanDefinition = await workshopDefinition(
       await prepareTurn(name, false, signal, human, agentId),
     );
     const completionTurn = await prepareTurn(name, true, signal, undefined, agentId);
-    // Human and completion turns list the same Workshop surface.
+    // The plugin withholds Workshop in sandboxed runs even when tool policy allows it.
     expect(await workshopDefinition(completionTurn)).toEqual(humanDefinition);
-    expect(humanDefinition !== undefined).toBe(listed);
+    expect(humanDefinition).toBeUndefined();
     expect(await completionTurn.call("skill_workshop", create)).toEqual({
       isError: true,
-      text: listed
-        ? expect.stringContaining("Workshop is unavailable in a sandboxed run")
-        : "Tool not available: skill_workshop",
+      text: "Tool not available: skill_workshop",
     });
     expect(await snapshot()).toEqual(before);
   },

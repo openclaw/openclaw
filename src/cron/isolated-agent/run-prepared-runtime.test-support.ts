@@ -55,6 +55,7 @@ export function createCronPreparedModelRuntimeFixture(
       pluginMetadataSnapshot: metadata,
       pluginRegistry: registry,
     },
+    run: <T>(run: () => T): T => run(),
     [Symbol.asyncDispose]: vi.fn(async () => {}),
   };
 }

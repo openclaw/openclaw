@@ -2,6 +2,7 @@ import { runAgentHarnessGatewayQuestion } from "openclaw/plugin-sdk/agent-harnes
 import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAsyncGate as pause } from "../../../test-support/async-gate.test-support.js";
 import { registerCodexSteeringConfirmationCases } from "./attempt-steering.confirmation.test-support.js";
 import {
   CodexSteeringAcceptedUnconfirmedError,
@@ -49,19 +50,6 @@ function tracked(queue: Queue, text: string, debounceMs = 0) {
   const accepted = vi.fn();
   return { accepted, pending: queue.queue(text, { debounceMs, onQueueAccepted: accepted }) };
 }
-function pause() {
-  const entered = createDeferred<void>();
-  const resume = createDeferred<void>();
-  return {
-    entered: entered.promise,
-    resume: resume.resolve,
-    wait: async () => {
-      entered.resolve();
-      await resume.promise;
-    },
-  };
-}
-
 const prepareMessage: QueueParams["prepareMessage"] = async (text, options) => ({
   input: buildCodexUserInput(text, options.images),
   message: {
@@ -144,7 +132,7 @@ describe("Codex app-server steering queue", () => {
         await gate.entered;
         callerCurrent = false;
         expect(harness.writes).toEqual([]);
-        gate.resume();
+        gate.release();
         await vi.advanceTimersByTimeAsync(0);
         expect(await revoked).toMatchObject({ message: "caller policy changed" });
         expect(rejectedAcceptance).toHaveBeenCalledExactlyOnceWith(false);
@@ -163,7 +151,7 @@ describe("Codex app-server steering queue", () => {
         expect(survivorAcceptance).toHaveBeenCalledExactlyOnceWith(true);
         expect(queue.getAcceptedMessages()).toHaveLength(1);
       } finally {
-        gate.resume();
+        gate.release();
         queue.cancel();
         await Promise.allSettled([revoked, survivor]);
         harness.client.close();
@@ -196,11 +184,11 @@ describe("Codex app-server steering queue", () => {
       await rejected;
       expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(false);
       expect(queue.getAcceptedMessages()).toEqual([]);
-      gate.resume();
+      gate.release();
       await released.promise;
       expect(harness.writes).toEqual([]);
     } finally {
-      gate.resume();
+      gate.release();
       queue.cancel();
       harness.client.close();
     }
@@ -244,7 +232,7 @@ describe("Codex app-server steering queue", () => {
         } else if (outcome === "sealed") {
           queue.sealAdmission();
         }
-        gate.resume();
+        gate.release();
         await vi.advanceTimersByTimeAsync(0);
         if (outcome === "committed") {
           expect(harness.writes).toHaveLength(1);
@@ -259,7 +247,7 @@ describe("Codex app-server steering queue", () => {
         expect(beforeSubmit).toHaveBeenCalledOnce();
         expect(onQueueSettled).toHaveBeenCalledOnce();
       } finally {
-        gate.resume();
+        gate.release();
         queue.cancel();
         harness.client.close();
         await settled;
@@ -295,7 +283,7 @@ describe("Codex app-server steering queue", () => {
       await gate.entered;
       expect(harness.writes).toEqual([]);
       sourceCurrent = false;
-      gate.resume();
+      gate.release();
       await vi.advanceTimersByTimeAsync(0);
       confirm(queue, harness.writes[0]!, "independent");
       await second;
@@ -307,7 +295,7 @@ describe("Codex app-server steering queue", () => {
       await later;
       expect(controller.signal.aborted).toBe(false);
     } finally {
-      gate.resume();
+      gate.release();
       queue.cancel();
       harness.client.close();
     }

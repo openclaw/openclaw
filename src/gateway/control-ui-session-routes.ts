@@ -16,7 +16,6 @@ import { createControlUiPublicSessionRequestGate } from "./control-ui-public-ses
 import { buildPublicSessionMediaBaseUrl } from "./control-ui-public-session-attachments.js";
 import type { PublicSessionCardRenderer } from "./control-ui-public-session-card.js";
 import { isSecurePublicSessionIngress } from "./control-ui-public-session-ingress.js";
-import { PUBLIC_SESSION_CONTENT_SECURITY_POLICY } from "./control-ui-public-session-render.js";
 import { controlUiSessionEntryPath } from "./control-ui-session-entry-path.js";
 import { resolveControlUiShareOrigin } from "./control-ui-share.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
@@ -27,6 +26,10 @@ import { getControlUiModule } from "./server-http-modules.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
+
+let publicSessionModule:
+  | Promise<typeof import("./control-ui-public-session.runtime.js")>
+  | undefined;
 
 function isControlUiPublicSessionPath(pathname: string, basePath: string): boolean {
   return (
@@ -85,7 +88,8 @@ export function createControlUiSessionRoutes(options: {
     ): Promise<true> {
       const { req, res, config } = params;
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-      const projection = getSessionRowProjection(options.getGatewayRequestContext?.());
+      const context = options.getGatewayRequestContext?.();
+      const projection = getSessionRowProjection(context);
       const serveApp = async (path: string, isCurrent?: () => boolean) => {
         // Select only the SPA document and preloads, never another HTTP handler.
         // Authenticated handoffs additionally recheck their live authority.
@@ -119,6 +123,8 @@ export function createControlUiSessionRoutes(options: {
       }
       if (isControlUiPublicSessionPath(pathname, basePath)) {
         const requestGate = publicGate();
+        const { PUBLIC_SESSION_CONTENT_SECURITY_POLICY, servePublicSessionRepresentation } =
+          await (publicSessionModule ??= import("./control-ui-public-session.runtime.js"));
         const card = {
           pullRequests: options.getGatewayRequestContext?.()?.controlUiSessionPullRequests,
           render: async (cardInput: Parameters<PublicSessionCardRenderer["render"]>[0]) => {
@@ -233,8 +239,6 @@ export function createControlUiSessionRoutes(options: {
               token: publicShare.token,
             });
           }
-          const { servePublicSessionRepresentation } =
-            await import("./control-ui-public-session-response.js");
           const latestUrl = buildControlUiPublicSessionSharePath({
             basePath,
             token: publicShare.token,
@@ -266,7 +270,9 @@ export function createControlUiSessionRoutes(options: {
         }
       }
       if (pathname !== controlUiSessionEntryPath(basePath)) {
-        return (await import("./control-ui-public-chat.js")).serveControlUiPublicChat({
+        return (
+          await (publicSessionModule ??= import("./control-ui-public-session.runtime.js"))
+        ).serveControlUiPublicChat({
           ...params,
           basePath,
           projection,
@@ -278,6 +284,7 @@ export function createControlUiSessionRoutes(options: {
         ...params,
         basePath,
         projection,
+        agentDatabaseStartup: context?.agentDatabaseStartup,
         serveApp,
       });
     },

@@ -5,7 +5,7 @@ import {
   type StoredChatOutboxScope,
 } from "../../lib/chat/outbox-store-scope.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import { visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
@@ -80,7 +80,7 @@ export async function withChatSubmitHandoff(
       : undefined;
   try {
     let current = queued;
-    if (options.yieldToInput) {
+    if (options.yieldToInput && !options.pendingSettings) {
       // The shared outbox retains foreground custody while the browser accepts
       // input, including when terminal history settles before this task resumes.
       await yieldChatSubmitToInput();

@@ -9,7 +9,6 @@ import {
   stagedInputDirectory,
 } from "../../media/staged-inputs.js";
 import { extractOriginalFilename, type SavedMedia } from "../../media/store.js";
-import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import {
   formatGeneratedAttachmentLines,
   sanitizeGeneratedMediaDisplayText,
@@ -68,9 +67,7 @@ export async function buildMediaGenerateToolExecutionResult(params: {
   const { result, attachments, mediaUrls } = params;
   const sandboxPaths: string[] = [];
   const stagingMessages: string[] = [];
-  const assertSourceCurrent = captureAgentToolSourceExecutionGuard();
   const assertCurrent = () => {
-    assertSourceCurrent();
     if (params.taskHandle && !isMediaGenerationOperationCurrent(params.taskHandle.runId)) {
       throw new Error("Media generation task is no longer active");
     }
@@ -226,12 +223,10 @@ export function buildMediaGenerationDurationDetails(
   };
 }
 
-export function buildMediaGenerationGeometryDetails(
-  kind: "image" | "video",
+export function buildVideoGenerationGeometryDetails(
   result: {
     normalization?: MediaGenerationNormalizationMetadataInput;
     metadata?: Record<string, unknown>;
-    appliedResolution?: string;
   },
   requested: { size?: string; aspectRatio?: string; resolution?: string },
   ignoredOverrides?: ReadonlySet<string>,
@@ -252,14 +247,7 @@ export function buildMediaGenerationGeometryDetails(
       typeof result.metadata?.requestedSize === "string" &&
       result.metadata.requestedSize === requested.size &&
       Boolean(normalizedAspectRatio));
-  const appliedResolution =
-    kind === "image" ? (result.appliedResolution ?? normalizedResolution) : normalizedResolution;
-  const resolutionDetails =
-    appliedResolution || (!ignoredOverrides?.has("resolution") && requested.resolution)
-      ? { resolution: appliedResolution ?? requested.resolution }
-      : {};
   return {
-    ...(kind === "image" ? resolutionDetails : {}),
     ...(normalizedSize ||
     (!ignoredOverrides?.has("size") && requested.size && !sizeTranslatedToAspectRatio)
       ? { size: normalizedSize ?? requested.size }
@@ -267,6 +255,8 @@ export function buildMediaGenerationGeometryDetails(
     ...(normalizedAspectRatio || (!ignoredOverrides?.has("aspectRatio") && requested.aspectRatio)
       ? { aspectRatio: normalizedAspectRatio ?? requested.aspectRatio }
       : {}),
-    ...(kind === "video" ? resolutionDetails : {}),
+    ...(normalizedResolution || (!ignoredOverrides?.has("resolution") && requested.resolution)
+      ? { resolution: normalizedResolution ?? requested.resolution }
+      : {}),
   };
 }

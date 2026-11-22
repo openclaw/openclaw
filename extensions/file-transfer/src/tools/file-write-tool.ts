@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { asBoolean, asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { inspectStrictBase64, normalizeBase64ForCompare } from "../shared/base64.js";
 import { humanSize } from "../shared/params.js";
 import {
@@ -102,15 +103,10 @@ export function createFileWriteTool(): AnyAgentTool {
       });
 
       const overwriteNote = typed.overwritten ? " (overwrote existing file)" : "";
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Wrote ${typed.path} (${humanSize(typed.size)}, sha256:${typed.sha256.slice(0, 12)})${overwriteNote}`,
-          },
-        ],
-        details: { ...typed, source: sourceBytes.source },
-      };
+      return textResult(
+        `Wrote ${typed.path} (${humanSize(typed.size)}, sha256:${typed.sha256.slice(0, 12)})${overwriteNote}`,
+        { ...typed, source: sourceBytes.source },
+      );
     },
   };
 }

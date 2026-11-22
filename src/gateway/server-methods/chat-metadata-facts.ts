@@ -1,22 +1,27 @@
 import { withAgentRosterFactsBatch } from "../../agents/agent-scope-config.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { getPreparedRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles.js";
-import { getRuntimeAuthProfileStoreMetadataRevision } from "../../agents/auth-profiles/runtime-snapshots.js";
+import {
+  getRuntimeAuthProfileStoreCatalogRevision,
+  getRuntimeAuthProfileStoreMetadataRevision,
+} from "../../agents/auth-profiles/runtime-snapshots.js";
 import {
   withPreparedModelRuntimeReadBatch,
   getPublishedPreparedModelCatalogOwnerSnapshot,
 } from "../../agents/prepared-model-catalog.js";
 import { getPreparedModelFullCatalogAuth } from "../../agents/prepared-model-runtime-auth.js";
+import { PreparedModelRuntimeOwnerNotPublishedError } from "../../agents/prepared-model-runtime.errors.js";
 import { resolveRuntimeModelConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { getSkillsSnapshotVersion } from "../../skills/runtime/refresh-state.js";
-import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import { readAgentDatabaseReadAdmissionRefusal } from "../../state/agent-database-admission.js";
 import type { ChatMetadataProjectionFacts } from "./chat-metadata-session-projection.js";
 
 type PreparedAgentFacts = ChatMetadataProjectionFacts & {
   authStoreRevision: string;
+  authCatalogRevision: string;
   catalogRefreshFailed: boolean;
   skillsVersion: number;
 };
@@ -27,6 +32,8 @@ export type PreparedGenerationFacts = {
   pluginRegistryVersion: number;
   agents: PreparedAgentFacts[];
 };
+
+export class ChatMetadataStartingError extends PreparedModelRuntimeOwnerNotPublishedError {}
 
 export class ChatMetadataSnapshotUnavailableError extends Error {
   constructor(message = "prepared chat metadata snapshot is unavailable") {
@@ -45,10 +52,16 @@ export function assertPreparedAgentCurrent(agent: ChatMetadataProjectionFacts) {
 }
 
 export function authStoresCurrent(facts: PreparedGenerationFacts) {
+  // Shared ownership cannot change within this synchronous scan; resolve it again next read.
+  let sharedRevision: number | undefined;
   return facts.agents.every(
     ({ owner, authStoreRevision }) =>
       authStoreRevision ===
-      `${getRuntimeAuthProfileStoreMetadataRevision(owner.agentDir)}:${getRuntimeAuthProfileStoreMetadataRevision(owner.inheritedAuthDir)}`,
+      `${getRuntimeAuthProfileStoreMetadataRevision(owner.agentDir)}:${
+        owner.inheritedAuthDir
+          ? getRuntimeAuthProfileStoreMetadataRevision(owner.inheritedAuthDir)
+          : (sharedRevision ??= getRuntimeAuthProfileStoreMetadataRevision())
+      }`,
   );
 }
 
@@ -56,7 +69,7 @@ export function captureGenerationFacts(config: OpenClawConfig): PreparedGenerati
   const agents = withPreparedModelRuntimeReadBatch(() =>
     withAgentRosterFactsBatch(config, () =>
       listAgentIds(config)
-        .filter((agentId) => !readAgentDatabaseAdmissionRefusal(agentId))
+        .filter((agentId) => !readAgentDatabaseReadAdmissionRefusal(agentId))
         .flatMap((rawAgentId): PreparedAgentFacts[] => {
           const agentId = normalizeAgentId(rawAgentId);
           // Metadata follows the published lifecycle owner while its replacement gate owns turnover;
@@ -89,6 +102,7 @@ export function captureGenerationFacts(config: OpenClawConfig): PreparedGenerati
                 },
               authModes: fullCatalogAuth?.authModes ?? owner.authModes,
               authStoreRevision: `${getRuntimeAuthProfileStoreMetadataRevision(owner.agentDir)}:${getRuntimeAuthProfileStoreMetadataRevision(owner.inheritedAuthDir)}`,
+              authCatalogRevision: `${getRuntimeAuthProfileStoreCatalogRevision(owner.agentDir)}:${getRuntimeAuthProfileStoreCatalogRevision(owner.inheritedAuthDir)}`,
               modelCatalog: catalog,
               // Failure is visible metadata; in-flight discovery does not invalidate usable rows.
               catalogRefreshFailed: catalog.refreshFailed === true,
@@ -106,10 +120,36 @@ export function captureGenerationFacts(config: OpenClawConfig): PreparedGenerati
   };
 }
 
+type FactsScope = "metadata" | "catalog" | "catalog-notification" | "auth" | "commands";
+
+export function agentFactsMatch(
+  left: PreparedAgentFacts | undefined,
+  right: PreparedAgentFacts | undefined,
+  scope: FactsScope,
+): boolean {
+  return Boolean(
+    left &&
+    right &&
+    left.agentId === right.agentId &&
+    (scope === "commands"
+      ? left.skillsVersion === right.skillsVersion &&
+        left.owner.workspaceDir === right.owner.workspaceDir
+      : // Config stamping replaces the reader object without replacing its generation.
+        left.owner.isCurrent === right.owner.isCurrent &&
+        (scope === "catalog-notification"
+          ? left.authCatalogRevision === right.authCatalogRevision
+          : left.authStoreRevision === right.authStoreRevision) &&
+        // Full catalogs carry their own paired auth generation.
+        left.modelCatalog === right.modelCatalog &&
+        (scope === "auth" || left.catalogRefreshFailed === right.catalogRefreshFailed) &&
+        (scope !== "metadata" || left.skillsVersion === right.skillsVersion)),
+  );
+}
+
 export function generationFactsMatch(
   left: PreparedGenerationFacts,
   right: PreparedGenerationFacts,
-  scope: "metadata" | "catalog" | "auth" | "commands" = "metadata",
+  scope: FactsScope = "metadata",
 ): boolean {
   if (
     left.configKey !== right.configKey ||
@@ -118,20 +158,5 @@ export function generationFactsMatch(
   ) {
     return false;
   }
-  return left.agents.every((agent, index) => {
-    const candidate = right.agents[index];
-    return (
-      candidate?.agentId === agent.agentId &&
-      (scope === "commands"
-        ? candidate.skillsVersion === agent.skillsVersion &&
-          candidate.owner.workspaceDir === agent.owner.workspaceDir
-        : // Config stamping replaces the reader object without replacing its generation.
-          candidate.owner.isCurrent === agent.owner.isCurrent &&
-          candidate.authStoreRevision === agent.authStoreRevision &&
-          // Full catalogs carry their own paired auth generation.
-          candidate.modelCatalog === agent.modelCatalog &&
-          (scope === "auth" || candidate.catalogRefreshFailed === agent.catalogRefreshFailed) &&
-          (scope !== "metadata" || candidate.skillsVersion === agent.skillsVersion))
-    );
-  });
+  return left.agents.every((agent, index) => agentFactsMatch(agent, right.agents[index], scope));
 }

@@ -14,7 +14,8 @@ import type {
   SessionActorReducer,
 } from "./session-actor-contract.js";
 import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
+import { timedMessageEvent } from "./transcript-message.test-support.js";
 
 // mock-isolation: Actor ownership proof must not schedule unrelated background maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -42,10 +43,9 @@ type Completion = Extract<Mutation, { type: "session.actor.completeTurn" }>;
 function completion(
   f: Fixture,
   commandId: string,
-  input: Pick<
-    Completion["input"],
-    "reducers" | "activitySummary" | "pendingFinalDelivery" | "restartClaimCleanup"
-  > & { phaseId?: string },
+  input: Pick<Completion["input"], "reducers" | "activitySummary" | "pendingFinalDelivery"> & {
+    phaseId?: string;
+  },
 ): Completion {
   const before = f.read();
   return {
@@ -59,7 +59,7 @@ function completion(
         sessionId: f.scope.sessionId,
         lifecycleRevision: before.entry!.lifecycleRevision ?? null,
         writerRunId: before.entry!.activeWriterRunId,
-        expectedState: buildRestartRecoveryExpectedState(before.entry!),
+        expectedState: buildSessionTranscriptTurnExpectedState(before.entry!),
       },
       ...input,
     },
@@ -87,15 +87,12 @@ function recap(
   };
 }
 
-it("commits final custody, recap, usage, and claim cleanup together across rollback and restart", async () => {
+it("commits final custody, recap, usage, together across rollback and restart", async () => {
   await withActor(async (f) => {
     f.writeEntry({
       ...f.nativeEntry()!,
       lifecycleRevision: "completion-lifecycle",
       activeWriterRunId: "writer",
-      restartRecoveryDeliveryRunId: "recovery",
-      restartRecoveryDeliverySourceRunId: "source",
-      restartRecoveryRuns: [{ runId: "writer", lifecycleGeneration: "generation" }],
     });
     f.read();
     f.patchEntry({
@@ -119,18 +116,6 @@ it("commits final custody, recap, usage, and claim cleanup together across rollb
     const command = completion(f, "complete-with-cleanup", {
       activitySummary,
       pendingFinalDelivery: pending,
-      restartClaimCleanup: {
-        kind: "restart-claim-clear",
-        expected: {
-          sessionId: f.scope.sessionId,
-          lifecycleRevision: before.entry!.lifecycleRevision,
-        },
-        sessionId: f.scope.sessionId,
-        recoveryRunId: "recovery",
-        recoverySourceRunId: "source",
-        executionRunId: "writer",
-        executionGeneration: "generation",
-      },
       reducers: [{ kind: "group-intro", needsSystemIntro: false }, usageReducer],
     });
     await f.prepare(command);
@@ -166,14 +151,10 @@ it("commits final custody, recap, usage, and claim cleanup together across rollb
       pendingFinalDelivery: pending,
       label: "entry owner committed",
       groupActivationNeedsSystemIntro: false,
-      restartRecoveryTerminalRunIds: ["source"],
       activitySummary,
       inputTokens: 12,
       outputTokens: 4,
     });
-    expect(after?.restartRecoveryDeliveryRunId).toBeUndefined();
-    expect(after?.restartRecoveryDeliverySourceRunId).toBeUndefined();
-    expect(after?.restartRecoveryRuns).toBeUndefined();
   });
 });
 
@@ -190,25 +171,19 @@ it("retains stale recap text but skips another session's recap without losing co
           id: f.scope.sessionId,
           timestamp: "2026-01-01T00:00:00Z",
         },
-        {
-          type: "message",
-          id: "recapped-message",
-          parentId: null,
-          timestamp: "2026-01-01T00:00:01Z",
-          message: { role: "user", content: "Summarize this input" },
-        },
+        timedMessageEvent("recapped-message", null, "2026-01-01T00:00:01Z", {
+          role: "user",
+          content: "Summarize this input",
+        }),
       ]);
     });
     const activitySummary = recap(f, "The original input", "recapped-message");
     runSqliteImmediateTransactionSync(f.database.db, () =>
       appendTranscriptEventsInTransaction(f.database, f.scope, [
-        {
-          type: "message",
-          id: "newer-message",
-          parentId: "recapped-message",
-          timestamp: "2026-01-01T00:00:02Z",
-          message: { role: "assistant", content: "New content after the recap started" },
-        },
+        timedMessageEvent("newer-message", "recapped-message", "2026-01-01T00:00:02Z", {
+          role: "assistant",
+          content: "New content after the recap started",
+        }),
       ]),
     );
     const candidates = [

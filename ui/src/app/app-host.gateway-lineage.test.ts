@@ -1,5 +1,5 @@
 import { parseControlUiFocusLocation } from "@openclaw/session-url-contract";
-import { createComponent, flush } from "solid-js";
+import { flush } from "solid-js";
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayHelloOk } from "../api/gateway.ts";
@@ -13,27 +13,26 @@ import {
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import {
-  composerContextWrapper,
   createComposerContainer,
   createComposerProps,
+  disposeComposer,
+  renderComposerInto,
   resetComposerFixture,
 } from "../pages/chat/chat-composer.test-support.ts";
 import { admitQueuedMessageForSession } from "../pages/chat/chat-outbox-admission.test-support.ts";
 import { chatOutboxOwner } from "../pages/chat/chat-outbox-owner.ts";
 import { createTestChatPane } from "../pages/chat/chat-pane.test-support.ts";
 import { handleSendChat } from "../pages/chat/chat-send-submit.ts";
-import { createComposerQuestions } from "../pages/chat/components/chat-composer-questions.ts";
-import { ChatComposer } from "../pages/chat/components/chat-composer.tsx";
 import {
   activeQueuedMessageEdit,
   beginQueuedMessageEdit,
   cancelQueuedMessageEdit,
   updateQueuedMessageEdit,
 } from "../pages/chat/queued-message-edit.ts";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { mountOpenClawApp } from "./app-root.tsx";
 import { resolveControlUiDocumentMode } from "./approval-deep-link.ts";
+import { makeBootRoster } from "./bootstrap.test-support.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGateway } from "./context.ts";
 import {
@@ -211,12 +210,7 @@ describe("Control UI Gateway target lineage", () => {
       vi.stubGlobal("cancelAnimationFrame", () => undefined);
       const { gateway, clients, hello: admit, close, recover } = createGatewayHarness();
       const sessionKey = "agent:main:main";
-      const agentsList = {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [{ id: "main" }],
-      } satisfies AgentsListResult;
+      const agentsList = makeBootRoster() satisfies AgentsListResult;
       const hello: GatewayHelloOk = {
         ...HELLO,
         auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
@@ -253,7 +247,6 @@ describe("Control UI Gateway target lineage", () => {
         void drawShell();
       });
       const composer = createComposerContainer();
-      let unmountComposer: (() => void) | undefined;
       try {
         expect(
           admitQueuedMessageForSession(state, captureChatOutboxAdmission(state, sessionKey), {
@@ -300,17 +293,7 @@ describe("Control UI Gateway target lineage", () => {
             onCancel: () => cancelQueuedMessageEdit(state),
           },
         });
-        unmountComposer = mountSolid(
-          () =>
-            createComponent(ChatComposer, {
-              ...props,
-              questions: createComposerQuestions(props.paneId, () => props),
-            }),
-          {
-            container: composer,
-            wrapper: composerContextWrapper(composer),
-          },
-        ).unmount;
+        renderComposerInto(composer, props);
         flush();
         await vi.dynamicImportSettled();
         flush();
@@ -349,7 +332,7 @@ describe("Control UI Gateway target lineage", () => {
         releaseShell();
         releasePane();
         releaseOutbox();
-        unmountComposer?.();
+        disposeComposer(composer);
         pane.disconnectedCallback();
         sessions.dispose();
         gateway.stop();
@@ -358,7 +341,7 @@ describe("Control UI Gateway target lineage", () => {
     },
   );
 
-  it("returns to the login gate when a newly selected Gateway's first attempt fails", async () => {
+  it("shows the shell while a newly selected Gateway's first attempt retries", async () => {
     const { gateway, hello, close } = createGatewayHarness();
     gateway.start();
     hello();
@@ -366,14 +349,16 @@ describe("Control UI Gateway target lineage", () => {
     close(1, "remote refused");
 
     const { container } = await createGatewaySurface(gateway);
-    expect(container.innerHTML).toContain("<openclaw-login-gate");
-    expect(container.innerHTML).not.toContain("<openclaw-app-shell");
+    await vi.waitFor(() => {
+      expect(container.innerHTML).toContain("<openclaw-app-shell");
+      expect(container.innerHTML).not.toContain("<openclaw-login-gate");
+    });
   });
 
   it("re-scopes credentials when the login draft changes Gateway", async () => {
     const { gateway, clients, close } = createGatewayHarness();
     gateway.connect({ token: "old-token", password: "old-password" });
-    close();
+    close(0, "login required", false);
     const { container } = await createGatewaySurface(gateway);
     const login = container.querySelector<LoginGateElement>("openclaw-login-gate")!;
 
@@ -387,10 +372,10 @@ describe("Control UI Gateway target lineage", () => {
     ]);
   });
 
-  it("shows startup progress after a manual connection attempt", async () => {
+  it("shows the shell during startup after a manual connection attempt", async () => {
     const { gateway, hello, close, starting } = createGatewayHarness();
     gateway.start();
-    close(0, "manual connection required");
+    close(0, "manual connection required", false);
     const { container, draw } = await createGatewaySurface(gateway);
     const login = container.querySelector<LoginGateElement>("openclaw-login-gate")!;
 
@@ -398,8 +383,10 @@ describe("Control UI Gateway target lineage", () => {
     starting(1);
     await draw();
 
-    expect(container.innerHTML).toContain("Gateway starting…");
-    expect(container.innerHTML).not.toContain("<openclaw-login-gate");
+    await vi.waitFor(() => {
+      expect(container.innerHTML).toContain("<openclaw-app-shell");
+      expect(container.innerHTML).not.toContain("<openclaw-login-gate");
+    });
 
     hello(1);
     await draw();

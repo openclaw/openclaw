@@ -1,18 +1,8 @@
 import { expect, it } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import {
-  getAcpSessionManager,
-  testing as managerTesting,
-} from "../../acp/control-plane/manager.js";
-import { disposeAcpSessionManagerInstance } from "../../acp/control-plane/manager.lifecycle.js";
-import { ensureConfiguredAcpBindingSession } from "../../acp/persistent-bindings.lifecycle.js";
-import {
-  registerAcpRuntimeBackend,
-  unregisterAcpRuntimeBackend,
-} from "../../acp/runtime/registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
-import { configureNativeAcp, createNativeAcpRuntime } from "./native-acp-owner.test-support.js";
+import { configureNativeAcp, installNativeAcpRuntime } from "./native-acp-owner.test-support.js";
 import { withTelegramNativeOwners } from "./telegram-native-owner.test-support.js";
 
 const denied = "You are not authorized to use this command.";
@@ -104,9 +94,7 @@ it("rejects stale native plugin owner authority after demotion", () =>
       await pending;
       expect(effects).toBe(0);
       expect(driver.deliveries()).toEqual([
-        expect.objectContaining({
-          replies: [expect.objectContaining({ text: failed })],
-        }),
+        expect.objectContaining({ replies: [expect.objectContaining({ text: failed })] }),
       ]);
     } finally {
       finish.resolve();
@@ -114,7 +102,8 @@ it("rejects stale native plugin owner authority after demotion", () =>
     }
   }));
 
-it.each([false, true])("checks live owner authority during login (revoke=%s)", (revoke) =>
+// Authority is checked once when /login starts; a started sign-in may finish (root AGENTS.md).
+it("lets a started login finish after the owner is demoted", () =>
   withTelegramNativeOwners(async ({ cfg, admins, driver }) => {
     cfg.agents = { defaults: { model: "openai/gpt-5.5" } };
     const finish = createDeferredCore();
@@ -130,7 +119,7 @@ it.each([false, true])("checks live owner authority during login (revoke=%s)", (
         writes += 1;
         return {
           providerId: "openai",
-          methodId: "device-code",
+          methodId: "oauth",
           authRefresh: "refreshed",
           profiles: [],
         };
@@ -138,22 +127,19 @@ it.each([false, true])("checks live owner authority during login (revoke=%s)", (
       onResult: () => notified.resolve(),
     });
     try {
-      await driver.invoke({ command: "login", match: "openai/openai-device-code" });
+      await driver.invoke({ command: "login", match: "openai/openai" });
       expect(calls).toBe(1);
-      if (revoke) {
-        setUserProfileRole(admins[0]!.profile.id, "member");
-      }
+      setUserProfileRole(admins[0]!.profile.id, "member");
       finish.resolve();
       await notified.promise;
-      expect(writes).toBe(revoke ? 0 : 1);
+      expect(writes).toBe(1);
     } finally {
       finish.resolve();
       if (calls > 0) {
         await notified.promise;
       }
     }
-  }),
-);
+  }));
 
 const unavailable = "Configured ACP binding is unavailable right now. Please try again.";
 
@@ -162,8 +148,8 @@ it.each(["current", "capability lookup", "accepted control"])(
   (phase) =>
     withTelegramNativeOwners(async ({ cfg, state, admins, invokeTopic, handler, driver }) => {
       cfg.channels!.telegram!.groups = { "-10012345": { groupPolicy: "open" } };
-      const { backendId, binding, spec } = configureNativeAcp(cfg, state, "telegram");
-      const { runtime, effects, preparing, finish, pause } = createNativeAcpRuntime(
+      const { backendId, target, spec, seed } = configureNativeAcp(cfg, state, "telegram");
+      const { manager, close, effects, preparing, finish, pause } = installNativeAcpRuntime(
         backendId,
         phase === "capability lookup"
           ? "capability"
@@ -171,19 +157,10 @@ it.each(["current", "capability lookup", "accepted control"])(
             ? "control"
             : undefined,
       );
-      managerTesting.resetAcpSessionManagerForTests();
-      registerAcpRuntimeBackend({ id: backendId, runtime });
-      const manager = getAcpSessionManager();
       let pending: Promise<void> | undefined;
       try {
-        expect(
-          await ensureConfiguredAcpBindingSession({
-            cfg,
-            spec: { ...spec, model: "fixture/previous", thinking: "off" },
-          }),
-        ).toMatchObject({ ok: true });
+        await seed({ model: "fixture/previous", thinking: "off" });
         effects.length = 0;
-        const target = { cfg, agentId: "main", sessionKey: binding.statefulTarget.sessionKey };
         const before = manager.resolveSession(target);
         pause();
         pending = invokeTopic();
@@ -218,9 +195,7 @@ it.each(["current", "capability lookup", "accepted control"])(
         try {
           await pending;
         } finally {
-          await disposeAcpSessionManagerInstance(manager, "test complete");
-          unregisterAcpRuntimeBackend(backendId);
-          managerTesting.resetAcpSessionManagerForTests();
+          await close();
         }
       }
     }),

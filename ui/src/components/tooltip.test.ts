@@ -62,6 +62,17 @@ function interactiveTooltipContent(tooltip: TooltipElement) {
   return tooltip.shadowRoot?.querySelector(".tooltip-rich-content");
 }
 
+// Fake timers cannot advance CSS animations; motion contracts live in tooltip.browser.test.ts.
+beforeEach(() => {
+  document.documentElement.style.setProperty("--openclaw-tooltip-popup-show-duration", "0ms");
+  document.documentElement.style.setProperty("--openclaw-tooltip-popup-hide-duration", "0ms");
+});
+
+afterEach(() => {
+  document.documentElement.style.removeProperty("--openclaw-tooltip-popup-show-duration");
+  document.documentElement.style.removeProperty("--openclaw-tooltip-popup-hide-duration");
+});
+
 describe("openclaw-tooltip", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -499,10 +510,11 @@ describe("openclaw-tooltip", () => {
 
   it("refreshes the rich description when assigned descendants change", async () => {
     const { tooltip, trigger, card } = createRichTooltip("");
+    const sibling = createTooltip("Unrelated details");
     const detail = document.createElement("span");
     detail.textContent = "Initial detail";
     card.append(detail);
-    document.body.append(tooltip);
+    document.body.append(tooltip, sibling.tooltip);
     await commitTooltip(tooltip);
 
     const descriptionId = trigger.getAttribute("aria-describedby") ?? "";
@@ -511,6 +523,8 @@ describe("openclaw-tooltip", () => {
     tooltip.remove();
     document.body.append(tooltip);
     await commitTooltip(tooltip);
+    // Retiring a sibling must not discard queued content records when shared observation rebuilds.
+    sibling.tooltip.remove();
     detail.textContent = "Updated detail";
     await Promise.resolve();
     expect(document.getElementById(descriptionId)?.textContent).toBe("Updated detail");

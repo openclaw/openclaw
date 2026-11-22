@@ -59,6 +59,7 @@ async function withConnectedShell(shell: PaletteShell, run: () => void | Promise
     await run();
   } finally {
     shell.disconnect();
+    vi.useRealTimers();
   }
 }
 function mountOverlay<T extends object>(
@@ -131,8 +132,7 @@ describe("shell lazy events", () => {
   it("keeps composition custody until the mounted palette accepts the final input", async () => {
     vi.useFakeTimers();
     const shell = shellFixture();
-    try {
-      shell.connect();
+    await withConnectedShell(shell, async () => {
       shell.openPalette();
       const state = shell.commandPaletteLoading;
       const input = captureInput(state, "composing");
@@ -157,17 +157,13 @@ describe("shell lazy events", () => {
         }),
       );
       expect(readLazyShellAction()).toBeNull();
-    } finally {
-      shell.disconnect();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("retires a composing palette on disconnect while the shell owner remains reusable", async () => {
     vi.useFakeTimers();
     const shell = shellFixture();
-    try {
-      shell.connect();
+    await withConnectedShell(shell, async () => {
       shell.openPalette();
       const state = shell.commandPaletteLoading;
       captureInput(state, "retired prompt");
@@ -200,10 +196,7 @@ describe("shell lazy events", () => {
       expect(take()).toBeUndefined();
       await vi.advanceTimersByTimeAsync(20);
       expect(retired).not.toHaveBeenCalled();
-    } finally {
-      shell.disconnect();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it.each(["connection", "account", "reconnect"] as const)(

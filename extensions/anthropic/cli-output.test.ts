@@ -11,11 +11,10 @@ const rawToolError = {
   kind: "result",
   errorText: expect.stringContaining("raw tool protocol appeared as assistant text"),
 };
+const parseFrame = (event: Record<string, unknown>) =>
+  backend.parseJsonlEvent?.(JSON.stringify(event), context);
 function parseResult(...lines: string[]) {
-  return backend.parseJsonlEvent?.(
-    JSON.stringify({ type: "result", subtype: "success", result: lines.join("\n") }),
-    context,
-  );
+  return parseFrame({ type: "result", subtype: "success", result: lines.join("\n") });
 }
 
 it("classifies the native Claude refresh-lock diagnostic as contention", () => {
@@ -33,25 +32,34 @@ it.each([
   expect(backend.classifyErrorCode?.(message)).toBeUndefined();
 });
 
-const status = { type: "system", subtype: "status" };
+const statusEvent = (fields: Record<string, unknown>) => ({
+  type: "system",
+  subtype: "status",
+  ...fields,
+});
 const end = { kind: "compaction", phase: "end" };
 const lifecycleCases = [
+  [statusEvent({ status: "compacting" }), { kind: "compaction", phase: "start" }],
+  [statusEvent({ status: null, compact_result: "failed" }), { ...end, completed: false }],
+  [statusEvent({ status: null, compact_result: "success" }), null],
   [
-    { ...status, status: "compacting" },
-    { kind: "compaction", phase: "start" },
+    {
+      type: "system",
+      subtype: "compact_boundary",
+      compact_metadata: { trigger: "manual", pre_tokens: 33_905, post_tokens: 6_173 },
+    },
+    { ...end, completed: true, trigger: "manual", tokensBefore: 33_905, tokensAfter: 6_173 },
   ],
   [
-    { ...status, status: null, compact_result: "success" },
+    {
+      type: "system",
+      subtype: "compact_boundary",
+      compact_metadata: { trigger: "other", pre_tokens: "1", post_tokens: -1 },
+    },
     { ...end, completed: true },
   ],
-  [
-    { ...status, status: null, compact_result: "failed" },
-    { ...end, completed: false },
-  ],
-  [{ compact_result: "success" }, { ...end, completed: true }],
-  [{ type: "system", subtype: "compact_boundary" }, null],
 ];
-it("projects native compaction lifecycle without inferring from the boundary", () => {
+it("ends a native compaction at its boundary with the reported sizes", () => {
   for (const [event, expected] of lifecycleCases) {
     expect(backend.parseJsonlLifecycleEvent?.(JSON.stringify(event), context)).toEqual(expected);
   }
@@ -109,10 +117,5 @@ it.each([
 
 it("ignores malformed and non-terminal JSONL frames", () => {
   expect(backend.parseJsonlEvent?.("not json <invoke <parameter", context)).toBeNull();
-  expect(
-    backend.parseJsonlEvent?.(
-      JSON.stringify({ type: "assistant", result: MOCK_RAW_TOOL_OUTPUT }),
-      context,
-    ),
-  ).toBeNull();
+  expect(parseFrame({ type: "assistant", result: MOCK_RAW_TOOL_OUTPUT })).toBeNull();
 });

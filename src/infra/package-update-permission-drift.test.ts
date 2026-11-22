@@ -10,27 +10,21 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 // Frozen pre-fix retained-tree encoding: full modes, post-order, no ctime/nlink.
-function originalReceipt(root: string) {
+function originalReceipt(root: string, postorder: string[]) {
   const digest = createHash("sha256");
-  const visit = (relative: string) => {
-    const file = path.join(root, relative);
+  for (const file of postorder) {
     const stat = fs.lstatSync(file, { bigint: true });
     const retained = [stat.dev + ":" + stat.ino, stat.mode, stat.uid, stat.gid].map(String);
     if (!stat.isDirectory()) {
       retained.push(String(stat.size), String(stat.mtimeNs));
+      retained.push(
+        ...(stat.isSymbolicLink()
+          ? ["symlink", fs.readlinkSync(file)]
+          : ["file", createHash("sha256").update(fs.readFileSync(file)).digest("hex")]),
+      );
     }
-    if (stat.isDirectory()) {
-      for (const child of fs.readdirSync(file).toSorted()) {
-        visit(relative ? `${relative}/${child}` : child);
-      }
-    } else if (stat.isSymbolicLink()) {
-      retained.push("symlink", fs.readlinkSync(file));
-    } else {
-      retained.push("file", createHash("sha256").update(fs.readFileSync(file)).digest("hex"));
-    }
-    digest.update(JSON.stringify([relative, retained]));
-  };
-  visit("");
+    digest.update(JSON.stringify([path.relative(root, file), retained]));
+  }
   const stat = fs.statSync(root, { bigint: true });
   return { digest: digest.digest("hex"), identity: `${stat.dev}:${stat.ino}`, version: "1.0.0" };
 }
@@ -41,21 +35,20 @@ function fixture(publicModes = false, shared = false) {
   const manifest = path.join(root, "package.json");
   const payload = path.join(directory, "index.js");
   const alias = path.join(directory, "shared.js");
+  const entry = path.join(root, "entry");
   fs.mkdirSync(directory);
   fs.writeFileSync(manifest, '{"name":"openclaw","version":"1.0.0"}\n');
   fs.writeFileSync(payload, "export {};\n");
   const files = [root, directory, manifest, payload];
-  for (const file of files) {
-    fs.chmodSync(
-      file,
-      fs.statSync(file).isDirectory() ? (publicModes ? 0o755 : 0o700) : publicModes ? 0o644 : 0o600,
-    );
+  for (const [index, file] of files.entries()) {
+    fs.chmodSync(file, index < 2 ? (publicModes ? 0o755 : 0o700) : publicModes ? 0o644 : 0o600);
   }
-  fs.symlinkSync("dist/index.js", path.join(root, "entry"));
+  fs.symlinkSync("dist/index.js", entry);
   if (shared) {
     fs.linkSync(payload, alias);
   }
-  const previous = originalReceipt(root);
+  const postorder = [payload, ...(shared ? [alias] : []), directory, entry, manifest, root];
+  const previous = originalReceipt(root, postorder);
   const warning = vi.fn();
   const matches = (expected = previous) =>
     createPackagePublicationTreeMatcher(
@@ -67,50 +60,56 @@ function fixture(publicModes = false, shared = false) {
 }
 
 describe.skipIf(process.platform === "win32")("publication permission drift", () => {
-  it.each([false, true])("repairs pre-fix permissions once (shared inode=%s)", async (shared) => {
-    const f = fixture(false, shared);
-    for (const file of shared ? [f.payload] : f.files) {
-      fs.chmodSync(file, shared ? 0o644 : fs.statSync(file).mode | 0o050);
-    }
-    const chmod = vi.spyOn(fs, "fchmodSync");
-    await expect(f.matches()).resolves.toBe(true);
-    expect(f.modes()).toEqual([0o700, 0o700, 0o600, 0o600]);
-    if (shared) {
-      expect(chmod).toHaveBeenCalledTimes(1);
-      expect(fs.statSync(f.alias).mode & 0o777).toBe(0o600);
-      expect(fs.readFileSync(f.alias, "utf8")).toBe("export {};\n");
-    } else {
-      expect(f.warning).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/4.*ACL/));
-      // A fresh matcher must still accept the original serialized receipt.
-      await expect(f.matches({ ...f.previous })).resolves.toBe(true);
-      expect(f.warning).toHaveBeenCalledTimes(1);
-    }
-  });
-
-  it.each(["bytes", "owner-mode", "inode", "target"])(
-    "does not repair a tree with changed %s",
-    async (changed) => {
-      const f = fixture();
-      fs.chmodSync(f.manifest, 0o650);
-      if (changed === "bytes") {
-        fs.writeFileSync(f.payload, "export {x};\n");
+  it.each([false, true])(
+    "clears write drift once without removing read access (shared inode=%s)",
+    async (shared) => {
+      const f = fixture(false, shared);
+      for (const file of shared ? [f.payload] : f.files) {
+        fs.chmodSync(file, shared ? 0o666 : fs.statSync(file).mode | 0o070);
       }
-      if (changed === "owner-mode") {
-        fs.chmodSync(f.payload, 0o400);
+      const chmod = vi.spyOn(fs, "fchmodSync");
+      await expect(f.matches()).resolves.toBe(true);
+      expect(f.modes()).toEqual(
+        shared ? [0o700, 0o700, 0o600, 0o644] : [0o750, 0o750, 0o650, 0o650],
+      );
+      if (shared) {
+        expect(chmod).toHaveBeenCalledTimes(1);
+        expect(fs.statSync(f.alias).mode & 0o777).toBe(0o644);
+        expect(fs.readFileSync(f.alias, "utf8")).toBe("export {};\n");
+      } else {
+        expect(f.warning).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/4.*ACL/));
+        // A fresh matcher must still accept the original serialized receipt.
+        await expect(f.matches({ ...f.previous })).resolves.toBe(true);
+        expect(f.warning).toHaveBeenCalledTimes(1);
       }
-      if (changed === "inode") {
-        fs.renameSync(f.payload, path.join(dirs.make("original-inode-"), "index.js"));
-        fs.writeFileSync(f.payload, "export {};\n", { mode: 0o600 });
-      }
-      if (changed === "target") {
-        fs.unlinkSync(path.join(f.root, "entry"));
-        fs.symlinkSync("package.json", path.join(f.root, "entry"));
-      }
-      await expect(f.matches()).rejects.toThrow("Package publication object changed");
-      expect(fs.statSync(f.manifest).mode & 0o777).toBe(0o650);
-      expect(f.warning).not.toHaveBeenCalled();
     },
   );
+
+  it.each<[string, (f: ReturnType<typeof fixture>) => void]>([
+    ["bytes", (f) => fs.writeFileSync(f.payload, "export {x};\n")],
+    ["owner-mode", (f) => fs.chmodSync(f.payload, 0o400)],
+    [
+      "inode",
+      (f) => {
+        fs.renameSync(f.payload, path.join(dirs.make("original-inode-"), "index.js"));
+        fs.writeFileSync(f.payload, "export {};\n", { mode: 0o600 });
+      },
+    ],
+    [
+      "target",
+      (f) => {
+        fs.unlinkSync(path.join(f.root, "entry"));
+        fs.symlinkSync("package.json", path.join(f.root, "entry"));
+      },
+    ],
+  ])("does not repair a tree with changed %s", async (_changed, mutate) => {
+    const f = fixture();
+    fs.chmodSync(f.manifest, 0o650);
+    mutate(f);
+    await expect(f.matches()).rejects.toThrow("Package publication object changed");
+    expect(fs.statSync(f.manifest).mode & 0o777).toBe(0o650);
+    expect(f.warning).not.toHaveBeenCalled();
+  });
 
   it("keeps old public-mode receipts valid across recovery attempts", async () => {
     const f = fixture(true);
@@ -122,19 +121,21 @@ describe.skipIf(process.platform === "win32")("publication permission drift", ()
 
   it.skipIf(process.platform !== "linux")("repairs a recursive named-user POSIX ACL", async () => {
     const f = fixture();
-    execFileSync("setfacl", ["-R", "-m", "u:65534:rX", f.root]);
-    expect(fs.statSync(f.payload).mode & 0o077).not.toBe(0);
+    execFileSync("setfacl", ["-R", "-m", "u:65534:rwX", f.root]);
+    expect(fs.statSync(f.payload).mode & 0o022).not.toBe(0);
     await expect(f.matches()).resolves.toBe(true);
     for (const file of f.files) {
-      expect(fs.statSync(file).mode & 0o077).toBe(0);
-      expect(execFileSync("getfacl", ["-cp", file], { encoding: "utf8" })).toContain("mask::---");
+      expect(fs.statSync(file).mode & 0o022).toBe(0);
+      expect(execFileSync("getfacl", ["-cp", file], { encoding: "utf8" })).toContain(
+        fs.statSync(file).isDirectory() ? "mask::r-x" : "mask::r--",
+      );
     }
     expect(f.warning).toHaveBeenCalledTimes(1);
   });
 
   it("warns and continues when verified permissions cannot be tightened", async () => {
     const f = fixture();
-    fs.chmodSync(f.manifest, 0o640);
+    fs.chmodSync(f.manifest, 0o660);
     vi.spyOn(fs, "fchmodSync").mockImplementation(() => {
       throw Object.assign(new Error("read-only filesystem"), { code: "EROFS" });
     });

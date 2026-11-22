@@ -3,7 +3,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../../i18n/index.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { PaneHeaderPresence } from "../chat-pane-header-view.tsx";
-import { ChatDetailsPeople, ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
+import { ChatDetailsPeople } from "./chat-details-people-list.tsx";
+import { ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
 import "../../../styles.css";
 
 beforeEach(async () => {

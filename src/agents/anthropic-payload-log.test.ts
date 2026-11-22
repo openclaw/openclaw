@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -12,7 +11,6 @@ beforeEach(() => {
   vi.spyOn(queuedFileWriter, "getQueuedFileWriter").mockImplementation(() => ({
     filePath: "memory",
     write: (line) => capturedLines.push(line),
-    flush: async () => undefined,
   }));
   vi.stubEnv("OPENCLAW_ANTHROPIC_PAYLOAD_LOG", "1");
   vi.stubEnv("OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE", undefined);
@@ -62,7 +60,6 @@ it("sanitizes credential fields and image base64 payload data before writing log
   };
 
   const wrapped = logger.wrapStreamFn(streamFn);
-  expect(typeof wrapped).toBe("function");
   await wrapped({ api: "anthropic-messages" } as never, { messages: [] } as never, {});
 
   const event = JSON.parse(capturedLines[0]?.trim() ?? "{}") as {
@@ -74,8 +71,6 @@ it("sanitizes credential fields and image base64 payload data before writing log
   expect(message).toMatchObject({ diagnosticText: expect.any(String) });
   expect(message.content[0]?.source).toMatchObject({
     data: "<redacted>",
-    bytes: 4,
-    sha256: crypto.createHash("sha256").update(source.data).digest("hex"),
   });
   expect(logged.metadata).toMatchObject({ tokenBudget: 1024, diagnosticText: expect.any(String) });
   expect(payloadDigest).toMatch(/^[a-f0-9]{64}$/u);

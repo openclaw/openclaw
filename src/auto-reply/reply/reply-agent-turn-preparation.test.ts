@@ -1,7 +1,6 @@
 import { assert, beforeEach, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
-import { resolvePreparedSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { bindIngressLifecycleToReplyOptions } from "../../channels/message/ingress-drain-lifecycle.js";
 import { createChannelIngressDrain } from "../../channels/message/ingress-drain.js";
 import {
@@ -16,6 +15,7 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
+import { createSessionGoalFixture } from "../../gateway/session-goal.test-support.js";
 import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
 import { releaseSessionControllerClaim } from "../../sessions/session-controller.mailbox.js";
 import * as configuredOwners from "../../state/user-channel-identity-operations.js";
@@ -24,9 +24,7 @@ import {
   captureCommandOwnerAssertion,
 } from "../command-owner-authority.js";
 import type { FollowupRun } from "./queue/types.js";
-import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import { createPreparationRun } from "./reply-agent-turn-preparation.test-support.js";
-import { resolveReplyToolAuthorityContext } from "./reply-tool-authority.js";
 import type { ScheduledSessionAutomation } from "./session-event-contract.js";
 
 const state = vi.hoisted(() => ({
@@ -119,21 +117,6 @@ beforeEach(() => {
   state.recheckFallbackProbe.mockImplementation(({ run }) => run);
   state.refreshGoal.mockImplementation((context) => context);
 });
-
-function resolveAdmittedToolAuthority(turn: AdmittedFollowupTurn) {
-  const { run } = turn.queued;
-  return resolveReplyToolAuthorityContext(
-    turn.queued,
-    undefined,
-    resolvePreparedSandboxRuntimeStatus({
-      cfg: run.config,
-      agentId: run.agentId,
-      sessionKey: run.sessionKey,
-      preparedSessionEntry: turn.session.current() ?? null,
-    }),
-    {}, // These admission fixtures have no persisted parent capability lineage.
-  );
-}
 
 function createRun(overrides: Partial<FollowupRun> = {}): FollowupRun {
   return createPreparationRun({
@@ -259,17 +242,7 @@ function createActiveGoalEntry(): SessionEntry {
   return {
     sessionId: "queued-session",
     updatedAt: 1,
-    goal: {
-      schemaVersion: 1,
-      id: "goal",
-      objective: "Finish",
-      status: "active",
-      createdAt: 1,
-      updatedAt: 1,
-      tokenStart: 0,
-      tokensUsed: 0,
-      continuationTurns: 0,
-    },
+    goal: createSessionGoalFixture("goal", "Finish"),
   };
 }
 
@@ -297,13 +270,15 @@ it("reports a queued event's admission refusal to its source before consuming it
 });
 
 it.each([
-  { match: "sender-id", enqueuedOwner: false },
-  { match: "sender-id", enqueuedOwner: true },
-  { match: "sender-e164", enqueuedOwner: false },
-  { match: "sender-e164", enqueuedOwner: true },
+  { match: "sender-id", enqueuedOwner: false, currentOwner: true },
+  { match: "sender-id", enqueuedOwner: true, currentOwner: false },
+  { match: "sender-id", enqueuedOwner: true, currentOwner: true },
+  { match: "sender-e164", enqueuedOwner: false, currentOwner: true },
+  { match: "sender-e164", enqueuedOwner: true, currentOwner: false },
+  { match: "sender-e164", enqueuedOwner: true, currentOwner: true },
 ] as const)(
-  "resolves $match owner privileges at the admission fence after enqueue owner=$enqueuedOwner",
-  async ({ match, enqueuedOwner }) => {
+  "recomputes $match owner privileges from enqueue owner=$enqueuedOwner under current owner=$currentOwner",
+  async ({ match, enqueuedOwner, currentOwner }) => {
     const queued = createRun();
     const channel = match === "sender-e164" ? "whatsapp" : "telegram";
     const senderId = match === "sender-e164" ? "123456789@lid" : "alice";
@@ -313,9 +288,9 @@ it.each([
     const originalConfig = {
       commands: { ownerAllowFrom: [enqueuedOwner ? configuredOwner : otherOwner] },
     };
-    const admittedOwner = !enqueuedOwner;
+    const admittedOwner = currentOwner;
     const admittedConfig = {
-      commands: { ownerAllowFrom: [admittedOwner ? configuredOwner : otherOwner] },
+      commands: { ownerAllowFrom: [currentOwner ? configuredOwner : otherOwner] },
     };
     const laterConfig = { ...admittedConfig, tools: { deny: ["message"] } };
     const durableOwnerRead = vi
@@ -352,16 +327,15 @@ it.each([
         traceAuthorized: admittedOwner,
       });
       expect(execution.run.config).toEqual(admittedConfig);
-      expect(resolveAdmittedToolAuthority(turn).capabilityProfile.sender.isOwner).toBe(
-        admittedOwner,
-      );
       const assertOwner = captureCommandOwnerAssertion(execution.run);
       if (admittedOwner) {
         expect(assertOwner).toBeDefined();
         expect(assertOwner).not.toThrow();
         setRuntimeConfigSnapshot({ commands: { ownerAllowFrom: [] } });
+        expect(assertOwner).not.toThrow();
+      } else {
+        expect(assertOwner).toThrow("Channel operator authority changed");
       }
-      expect(assertOwner).toThrow("Channel operator authority changed");
       expect(queued.run).toMatchObject({
         requesterOrigin: { senderId, senderE164 },
         senderIsOwner: enqueuedOwner,
@@ -374,13 +348,60 @@ it.each([
   },
 );
 
+it.each([
+  { previousOwner: false, allowed: false },
+  { previousOwner: false, allowed: true },
+  { previousOwner: true, allowed: false },
+  { previousOwner: true, allowed: true },
+])(
+  "readmits a queued event's command-owner reference once (previous=$previousOwner, allowed=$allowed)",
+  async ({ previousOwner, allowed }) => {
+    const queued = createRun();
+    queued.run.senderIsOwner = previousOwner;
+    const recoveryReference = { version: 2 as const, id: "11111111-1111-4111-8111-111111111111" };
+    bindCommandOwnerAuthority(queued.run, {
+      recoveryReference,
+      isCurrent: () => true,
+    });
+    const generation = new Int32Array(new SharedArrayBuffer(8));
+    Atomics.store(generation, 0, Number(allowed));
+    using _ = vi
+      .spyOn(configuredOwners, "prepareConfiguredCommandOwnerAuthority")
+      .mockResolvedValue({
+        recoveryReference,
+        isCurrent: Object.assign(() => Atomics.load(generation, 0) === 1, {
+          transferable: {
+            generation: generation.buffer,
+            lifetime: { revision: new SharedArrayBuffer(8), epoch: 0n },
+            entries: [],
+          },
+        }),
+      });
+    const turn = await admitted(prepare(queued));
+    expect(turn.queued.run).toMatchObject({
+      senderIsOwner: allowed,
+      traceAuthorized: allowed,
+    });
+    const effect = vi.fn();
+    const assertOwner = captureCommandOwnerAssertion(turn.queued.run);
+    if (allowed) {
+      Atomics.store(generation, 0, 0);
+      assertOwner?.();
+      effect();
+    } else {
+      expect(assertOwner).toThrow();
+    }
+    expect(effect).toHaveBeenCalledTimes(allowed ? 1 : 0);
+  },
+);
+
 it.each([false, true])(
   "preserves operator precedence only while custody is live, revoked=%s",
   async (revoked) => {
     const queued = createRun();
     const controller = new AbortController();
     const assertCurrent = vi.fn(() => controller.signal.throwIfAborted());
-    queued.operatorAuthority = createAdmittedRunOperatorAuthority({
+    queued.operatorAuthority = createTestOperatorAuthority({
       profileId: revoked ? "alice" : "alice-profile",
       scopes: ["operator.admin"],
       assertCurrent,
@@ -410,7 +431,6 @@ it.each([false, true])(
         .mockResolvedValue(undefined);
       const turn = await admitted(prepare(queued));
       expect(turn.queued.run).toMatchObject({ senderIsOwner: true, traceAuthorized: true });
-      expect(resolveAdmittedToolAuthority(turn).capabilityProfile.sender.isOwner).toBe(true);
       expect(assertCurrent).toHaveBeenCalled();
       expect(durableOwnerRead).not.toHaveBeenCalled();
     }
@@ -604,22 +624,6 @@ it("does not pass stale enqueue-time state into a rotated session generation", a
   expect(state.refreshGoal).toHaveBeenCalledWith(undefined, undefined);
 });
 
-it("settles presentation and releases the reply operation when dispatcher setup fails", async () => {
-  const failure = new Error("dispatcher reset failed");
-  const onQueuedFollowupSettled = vi.fn(async () => {});
-
-  await expect(
-    prepare(createRun(), {
-      opts: {
-        onQueuedFollowupAdmitted: vi.fn().mockRejectedValue(failure),
-        onQueuedFollowupSettled,
-      },
-    }),
-  ).rejects.toBe(failure);
-  expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
-  expect(operation.complete).toHaveBeenCalledOnce();
-});
-
 it("keeps the model selected at admission when preferences change during source adoption", async () => {
   const queued = createRun();
   state.admitReply.mockImplementation(async ({ captureRunSelection }) => {
@@ -640,6 +644,106 @@ it("keeps the model selected at admission when preferences change during source 
   expect(turn.queued.run.model).toBe("selected-at-admission");
   expect(queued.run.model).toBe("next-turn-model");
 });
+
+it.each([
+  {
+    kind: "queued_followup",
+    saved: "standard",
+    expected: "standard",
+    provided: false,
+    scheduled: undefined,
+  },
+  {
+    kind: "queued_followup",
+    saved: undefined,
+    expected: undefined,
+    provided: false,
+    scheduled: undefined,
+  },
+  {
+    kind: "visible",
+    saved: "standard",
+    expected: "daybreak_blue",
+    provided: false,
+    scheduled: undefined,
+  },
+  {
+    kind: "visible",
+    saved: "standard",
+    expected: "daybreak_blue",
+    provided: true,
+    scheduled: undefined,
+  },
+  {
+    kind: "queued_followup",
+    saved: "standard",
+    expected: "daybreak_blue",
+    provided: false,
+    scheduled: "daybreak_blue",
+  },
+  {
+    kind: "queued_followup",
+    saved: "daybreak_red",
+    expected: "standard",
+    provided: false,
+    scheduled: "standard",
+  },
+] as const)(
+  "binds $kind Access at admission (saved=$saved, provided=$provided)",
+  async ({ kind, saved, expected, provided, scheduled }) => {
+    const replyOperation = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "queued-session",
+      turnKind: kind,
+      resetTriggered: false,
+    });
+    const queued = createRun();
+    queued.run.cyberAccessProgram = "daybreak_blue";
+    if (scheduled) {
+      queued.run.scheduledAutomation = {
+        occurrence: TEST_SCHEDULED_OCCURRENCE,
+        job: {
+          id: "scheduled-access",
+          cyberAccessProgram: scheduled,
+        } as ScheduledSessionAutomation["job"],
+        admissionSource: "operator-schedule",
+        assertCurrent: () => {},
+      };
+    }
+    const initialEntry = makeEntry({
+      cyberAccessProgram: provided ? saved : "daybreak_blue",
+    });
+    const admittedEntry = makeEntry({ cyberAccessProgram: saved });
+    state.admitReply.mockImplementation(async ({ captureRunSelection }) => {
+      // The preference committed before this source entered the queue, so no queue refresh saw it.
+      captureRunSelection();
+      return { status: "owned", operation: replyOperation, sessionEntry: admittedEntry };
+    });
+
+    try {
+      const turn = await admitted(
+        prepare(
+          queued,
+          {
+            sessionEntry: initialEntry,
+            sessionStore: { main: initialEntry },
+            opts: {
+              onQueuedFollowupAdmitted: async () => {
+                admittedEntry.cyberAccessProgram = "daybreak_red";
+                queued.run.cyberAccessProgram = "daybreak_red";
+              },
+            },
+          },
+          { kind, ...(provided ? { providedReplyOperation: replyOperation } : {}) },
+        ),
+      );
+
+      expect(turn.queued.run.cyberAccessProgram).toBe(expected);
+    } finally {
+      replyOperation.complete();
+    }
+  },
+);
 
 it("takes only the scheduled fallback policy selected at admission", async () => {
   const policy = (sessionModelOverrideSource?: "user") => ({

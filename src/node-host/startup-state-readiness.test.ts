@@ -3,8 +3,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { seedMacNodeWorkerProofState } from "../../scripts/lib/mac-node-worker-proof-state.mjs";
-import { ClientCredentialMigrationRequiredError } from "../infra/client-credential-readiness.js";
-import { readDeviceAuthTokenForTest } from "../infra/device-auth-store.test-support.js";
+import {
+  ClientCredentialMigrationRequiredError,
+  readClientCredentialReceipt,
+  writeClientCredentialReceipt,
+} from "../infra/client-credential-readiness.js";
+import { loadDeviceAuthToken as readDeviceAuthTokenForTest } from "../infra/device-auth-store.js";
 import { generateStoredDeviceIdentity } from "../infra/device-identity-store.js";
 import * as identityStore from "../infra/device-identity.js";
 import {
@@ -12,6 +16,8 @@ import {
   resetExecApprovalsMigrationGateForTest,
 } from "../infra/exec-approvals-migration-gate.js";
 import { readExecApprovalsConfigRow as approvals } from "../infra/exec-approvals-sqlite.js";
+import { loadExecApprovalsReadOnly } from "../infra/exec-approvals-store.js";
+import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { withExistingOpenClawStateSchema } from "../state/openclaw-state-db-schema-policy.js";
@@ -142,15 +148,17 @@ describe("node-host state readiness", () => {
       const { sourcePath, raw } = writeSource(relativePath, contents);
       const start = device ? runNodeHostWorker : run;
       if (!auth && !device && !approvalsFile) {
-        await expect(start()).rejects.toThrow(
-          relativePath === "exec-approvals.json.doctor-importing"
-            ? ExecApprovalsMigrationRequiredError
-            : ClientCredentialMigrationRequiredError,
-        );
+        if (relativePath === "exec-approvals.json.doctor-importing") {
+          await expectAdmission(start);
+          expect(() => loadExecApprovalsReadOnly()).toThrow(ExecApprovalsMigrationRequiredError);
+          expect(readStartupMigrationWarning()).toContain("legacy-exec-approvals-invalid");
+        } else {
+          await expect(start()).rejects.toThrow(ClientCredentialMigrationRequiredError);
+          expectUnprepared();
+        }
         expect(fs.readFileSync(sourcePath)).toEqual(Buffer.from(raw));
         expect(fs.existsSync(databasePath())).toBe(false);
         expect(fs.existsSync(path.join(stateDir, "client", "credentials.sqlite"))).toBe(false);
-        expectUnprepared();
         return;
       }
       await expectAdmission(start);
@@ -162,9 +170,9 @@ describe("node-host state readiness", () => {
       const { db } = stateDb.openOpenClawStateDatabase({ env });
       expect(fixture.prepare).toHaveBeenCalledOnce();
       if (auth) {
-        expect(readDeviceAuthTokenForTest({ deviceId: "device-1", role: "node", env })?.token).toBe(
-          "test-legacy-token",
-        );
+        expect(
+          (await readDeviceAuthTokenForTest({ deviceId: "device-1", role: "node", env }))?.token,
+        ).toBe("test-legacy-token");
       } else if (device) {
         expect(contents).toMatchObject({ deviceId: identity()?.deviceId });
       } else {
@@ -197,6 +205,49 @@ describe("node-host state readiness", () => {
       expect(fixture.prepare).toHaveBeenCalledOnce();
     },
   );
+
+  async function admitManagedNode() {
+    stateDb.openOpenClawStateDatabase({ env });
+    await stateDb.closeOpenClawStateDatabaseAsync();
+    await expect(withExistingOpenClawStateSchema({ path: databasePath() }, run)).rejects.toBe(
+      fixture.admitted,
+    );
+    await stateDb.closeOpenClawStateDatabaseAsync();
+  }
+
+  it("names the owner's Doctor repair when a managed node finds stale credential state", async () => {
+    await admitManagedNode();
+    // A restored state database keeps its bytes but not the receipt's recorded file identity.
+    fs.copyFileSync(databasePath(), `${databasePath()}.restored`);
+    fs.renameSync(`${databasePath()}.restored`, databasePath());
+    vi.clearAllMocks();
+    const starting = withExistingOpenClawStateSchema({ path: databasePath() }, run);
+    await expect(starting).rejects.toThrow(ClientCredentialMigrationRequiredError);
+    await expect(starting).rejects.toThrow(/run openclaw doctor --fix with that installation/u);
+    expectUnprepared();
+  });
+
+  it("lets a managed node defer an optional credential metadata upgrade", async () => {
+    await admitManagedNode();
+    const credentials = new DatabaseSync(path.join(stateDir, "client", "credentials.sqlite"));
+    try {
+      const stored = readClientCredentialReceipt(credentials)!;
+      expect(stored.receipt.sharedFile).not.toBeNull();
+      writeClientCredentialReceipt(credentials, { ...stored.receipt, source: null }, "complete");
+    } finally {
+      credentials.close();
+    }
+    vi.clearAllMocks();
+    fixture.prepare.mockRejectedValue(fixture.admitted);
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(withExistingOpenClawStateSchema({ path: databasePath() }, run)).rejects.toBe(
+      fixture.admitted,
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("Client credential metadata upgrade deferred"),
+    );
+    warn.mockRestore();
+  });
 
   it("automatically migrates native identity and policy before startup", async () => {
     const nativeIdentity = makeIdentity();

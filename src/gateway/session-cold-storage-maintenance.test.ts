@@ -87,8 +87,30 @@ function expectProgress(respond: ReturnType<typeof vi.fn>, progress: Record<stri
 it("picks up enabled and changed age settings without recreating the scheduler", async () => {
   config = {};
   await clock.advanceBy(60_000);
+  expect(sweep).toHaveBeenLastCalledWith(expect.objectContaining({ config }));
+  sweep.mockClear();
+  config = { session: { maintenance: { coldStorage: { enabled: false } } } };
+  await clock.advanceBy(60_000);
   expect(sweep).not.toHaveBeenCalled();
   expect(() => requestGatewaySessionColdStorageMaintenance(getRuntimeConfig)).toThrow("disabled");
+
+  config = {
+    cron: { enabled: false },
+    session: { maintenance: { resetArchiveRetention: "1h", coldStorage: { enabled: false } } },
+  };
+  await clock.advanceBy(60_000);
+  expect(sweep).toHaveBeenCalledTimes(1);
+  config = {
+    session: {
+      maintenance: { mode: "warn", resetArchiveRetention: "1h", coldStorage: { enabled: false } },
+    },
+  };
+  await clock.advanceBy(60_000);
+  config = {
+    session: { maintenance: { resetArchiveRetention: false, coldStorage: { enabled: false } } },
+  };
+  await clock.advanceBy(60_000);
+  expect(sweep).toHaveBeenCalledTimes(1);
 
   config = { session: { maintenance: { coldStorage: { enabled: true, afterDays: 30 } } } };
   await clock.advanceBy(60_000);
@@ -104,7 +126,7 @@ it("picks up enabled and changed age settings without recreating the scheduler",
   expect(sweep).toHaveBeenLastCalledWith(expect.objectContaining({ config }));
   config = { session: { maintenance: { coldStorage: { enabled: false } } } };
   await clock.advanceBy(60_000);
-  expect(sweep).toHaveBeenCalledTimes(2);
+  expect(sweep).toHaveBeenCalledTimes(3);
 });
 
 it.each([

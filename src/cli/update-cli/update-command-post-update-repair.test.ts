@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
@@ -11,6 +10,7 @@ import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as stateSchemas from "../../infra/update-candidate-state.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
+import { materializeUpdateCandidateStateWorker } from "../../infra/update-candidate-state.test-support.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import {
   createUpdateRun,
@@ -363,12 +363,7 @@ describe("post-activation failure settlement without inference", () => {
           await fs.mkdir(path.join(root, "dist"), { recursive: true });
           await fs.writeFile(path.join(root, "dist", "entry.js"), "// fixture entrypoint\n");
         }
-        const worker = "dist/infra/update-candidate-state.worker.js";
-        await fs.mkdir(path.dirname(path.join(candidateRoot, worker)), { recursive: true });
-        await fs.writeFile(
-          path.join(candidateRoot, worker),
-          `import ${JSON.stringify(pathToFileURL(path.resolve(worker)).href)};\n`,
-        );
+        await materializeUpdateCandidateStateWorker(candidateRoot);
         params.result.root = candidateRoot;
         params.root = previousRoot;
         const originalService: GatewayServiceState = {
@@ -997,7 +992,7 @@ describe("post-activation failure settlement without inference", () => {
       if (receipt === "unsettled") {
         expect(mocks.rollback).not.toHaveBeenCalled();
         expect(report?.origin.nextAction).toContain("41001, 41002");
-        expect(report?.origin.nextAction).toContain("Keep the Gateway stopped");
+        expect(report?.origin.nextAction).toContain("Once the recorded processes have stopped");
         expect(
           report?.steps.findLast((step) => step.step === "doctor process settlement"),
         ).toMatchObject({

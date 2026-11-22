@@ -170,10 +170,27 @@ describe("OpenClawStdioClientTransport", () => {
     expect(closed).toHaveBeenCalledOnce();
   });
 
-  it("does not infer plugin data directory ownership from server environment", async () => {
-    const mkdir = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
-    await startedFixture({ env: { PLUGIN_ROOT: "/plugin", PLUGIN_DATA: "/user-owned-file" } });
-    expect(mkdir).not.toHaveBeenCalled();
+  it("gracefully closes an admitted startup without aborting its cleanup owner", async () => {
+    const fixture = createFixture();
+    const admitted = createDeferred<AbortSignal>();
+    const starting = createDeferred<OwnedStdioProcess>();
+    spawnMock.mockImplementationOnce(({ abortSignal }: { abortSignal: AbortSignal }) => {
+      admitted.resolve(abortSignal);
+      return starting.promise;
+    });
+    const started = fixture.transport.start();
+    const signal = await admitted.promise;
+    const closing = fixture.transport.close();
+    try {
+      expect(signal.aborted).toBe(false);
+      expect(closeMock).not.toHaveBeenCalled();
+    } finally {
+      starting.resolve(fixture.child);
+      await started;
+      fixture.cleanup();
+      await closing;
+    }
+    expect(closeMock).toHaveBeenCalledExactlyOnceWith(fixture.child, { force: false });
   });
 
   it("forceClose retires startup while its owned data directory is being prepared", async () => {

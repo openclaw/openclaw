@@ -11,17 +11,6 @@ import { inheritOptionFromParent, listExplicitOptionFlagsExcept } from "../comma
 import { parseGatewayPortOption } from "../gateway-port-option.js";
 import { formatDocsHelp } from "../help-format.js";
 
-function resolveInstallDaemonFlag(command: Command): boolean | undefined {
-  // Explicit --skip-daemon wins over either install-daemon flag.
-  if (command.getOptionValueSource("skipDaemon") === "cli") {
-    return false;
-  }
-  if (command.getOptionValueSource("installDaemon") === "cli") {
-    return Boolean(command.getOptionValue("installDaemon"));
-  }
-  return undefined;
-}
-
 const MODERN_ONBOARD_OPTION_KEYS = new Set([
   "modern",
   "workspace",
@@ -99,7 +88,7 @@ export function registerOnboardAuthOptions(command: Command): Command {
     .option("--token-expires-in <duration>", "Optional token expiry duration (e.g. 365d, 12h)")
     .option(
       "--secret-input-mode <mode>",
-      "Credential persistence mode: plaintext|ref (default: plaintext)",
+      "Credential input mode: plaintext (direct entry) or ref (external reference); supported channel credentials entered directly are saved in the secret store (default: plaintext)",
     )
     .option("--cloudflare-ai-gateway-account-id <id>", "Cloudflare Account ID")
     .option("--cloudflare-ai-gateway-gateway-id <id>", "Cloudflare AI Gateway ID");
@@ -159,7 +148,7 @@ export function registerOnboardRuntimeOptions(
     .option("--install-daemon", "Install gateway service")
     .option("--no-install-daemon", "Skip gateway service install")
     .option("--skip-daemon", "Skip gateway service install")
-    .option("--daemon-runtime <runtime>", "Daemon runtime: node|bun (default: node)")
+    .option("--daemon-runtime <runtime>", "Daemon runtime: node|bun|standalone (default: node)")
     .option("--skip-channels", "Skip channel setup")
     .option("--skip-skills", "Skip skills setup")
     .option("--skip-bootstrap", "Skip creating default agent workspace files")
@@ -232,7 +221,13 @@ export async function runOnboardCommand(
     tailscale: opts.tailscale as OnboardOptions["tailscale"],
     reset: Boolean(opts.reset),
     resetScope: opts.resetScope as OnboardOptions["resetScope"],
-    installDaemon: resolveInstallDaemonFlag(command),
+    // Explicit --skip-daemon wins over either install-daemon flag.
+    installDaemon:
+      command.getOptionValueSource("skipDaemon") === "cli"
+        ? false
+        : command.getOptionValueSource("installDaemon") === "cli"
+          ? Boolean(command.getOptionValue("installDaemon"))
+          : undefined,
     daemonRuntime: opts.daemonRuntime as OnboardOptions["daemonRuntime"],
     skipChannels: Boolean(opts.skipChannels),
     skipSkills: Boolean(opts.skipSkills),

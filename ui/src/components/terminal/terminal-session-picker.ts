@@ -3,7 +3,7 @@ import { listen } from "../../lib/reactive/listener.ts";
 import type { TerminalGatewayClient, TerminalSessionInfo } from "./terminal-connection.ts";
 import type { TerminalSessionListOptions } from "./terminal-panel-session-types.ts";
 
-type PickerDependencies = {
+export function createTerminalSessionPicker(deps: {
   client: () => TerminalGatewayClient | null;
   available: () => boolean;
   hosted: () => boolean;
@@ -16,9 +16,7 @@ type PickerDependencies = {
   list: (options?: TerminalSessionListOptions) => Promise<TerminalSessionInfo[] | null>;
   showError: (error: unknown) => void;
   attach: (sessionId: string, agentOwned: boolean) => Promise<void>;
-};
-
-export function createTerminalSessionPicker(deps: PickerDependencies) {
+}) {
   const [open, setOpen] = createSignal(false);
   let acceptedSessions: TerminalSessionInfo[] = [];
   const [request, setRequest] = createSignal<{

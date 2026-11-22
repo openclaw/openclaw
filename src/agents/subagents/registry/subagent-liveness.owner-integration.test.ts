@@ -49,7 +49,6 @@ import {
   isSubagentSessionRunActive,
   listActiveSubagentSessionKeys,
 } from "./subagent-registry-read.js";
-import { preserveSubagentRunForRestart } from "./subagent-registry-run-pause.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import {
   countActiveRunsForSession,
@@ -193,6 +192,16 @@ it("retains quiet admitted execution in listing, admission count, and requester 
     expect(isSubagentRunLive(entry)).toBe(true);
     expect(isSubagentRunLive(updated)).toBe(true);
     expect(isSubagentRunLive({ ...updated })).toBe(false);
+    const displayed = buildSubagentSessionListReadIndex().getDisplaySubagentRun(
+      entry.childSessionKey,
+    );
+    expect(displayed).not.toBe(updated);
+    const serialize = vi.spyOn(JSON, "stringify");
+    const live = Array.from({ length: 100 }, () => isSubagentRunLive(displayed));
+    const serializations = serialize.mock.calls.length;
+    serialize.mockRestore();
+    expect(live.every(Boolean)).toBe(true);
+    expect(serializations).toBe(0);
     expect(sweepStaleRunContexts()).toBe(0);
     await testing.sweepOnceForTests();
     expect(entry.execution.endedAt).toBeUndefined();
@@ -358,6 +367,9 @@ it("retains an exact queued collector reservation without calling it executor-li
   });
   const hold = holdQueuedSwarmRun(entry.runId);
   try {
+    await testing.sweepOnceForTests();
+    expect(subagentRuns.get(entry.runId)).toMatchObject({ execution: { status: "queued" } });
+    expect(subagentRuns.get(entry.runId)?.collectorCompletion).toBeUndefined();
     expect(hold?.withdraw()).toBe(true);
     expect(captured.countActiveDescendantRuns(parent)).toBe(0);
     expect(captured.countPendingDescendantRuns(parent)).toBe(0);
@@ -632,37 +644,6 @@ it("retains durable suspended completion debt without reporting a live executor 
     childSessionKey: entry.childSessionKey,
     requesterSessionKey: parent,
     execution: entry.execution,
-  });
-});
-
-it("keeps a restart-preserved native record distinct from an executor", async () => {
-  const now = vi.spyOn(Date, "now").mockReturnValue(start);
-  const entry = await register("interrupted-task");
-  expect(
-    (
-      await preserveSubagentRunForRestart({
-        entry,
-        terminal: {
-          reason: "cancelled",
-          status: "error",
-          stopReason: "restart",
-          endedAt: start + 1,
-        },
-        runs: subagentRuns,
-      })
-    ).preserved,
-  ).toBe(true);
-  const interrupted = subagentRuns.get(entry.runId)!;
-  now.mockReturnValue(olderThanCutoff);
-  expect(interrupted.execution.status).toBe("interrupted");
-  expect(interrupted.execution.endedAt).toBeUndefined();
-  expect(isSubagentRunLive(interrupted)).toBe(false);
-  expect(isSubagentSessionRunActive(entry.childSessionKey)).toBe(false);
-  subagentRuns.clear();
-  expect(loadSubagentRegistryFromSqlite().get(entry.runId)).toMatchObject({
-    childSessionKey: entry.childSessionKey,
-    requesterSessionKey: parent,
-    execution: interrupted.execution,
   });
 });
 

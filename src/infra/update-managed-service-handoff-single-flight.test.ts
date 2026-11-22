@@ -1,12 +1,12 @@
 import type { ChildProcess } from "node:child_process";
 // Process-local handoff sharing complements the durable cross-process lease.
-import { EventEmitter, once } from "node:events";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { SQLInputValue } from "node:sqlite";
-import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { nextEventLoopTurn } from "../../test/helpers/promise.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -14,6 +14,7 @@ import {
   createManagedHandoffTempDirTracker,
   readManagedHandoffArtifacts,
 } from "./update-managed-service-handoff-artifacts.test-support.js";
+import { createManagedServiceChildMock } from "./update-managed-service-handoff-command.test-support.js";
 import type {
   ManagedServiceUpdateHandoffParams,
   ManagedServiceUpdateHandoffResult,
@@ -45,14 +46,7 @@ function createReadyChild(
   paramsPath: string,
   failure?: MockManagedUpdateHandoffLeaseFailure,
 ) {
-  const child = Object.assign(new EventEmitter(), {
-    pid,
-    exitCode: null,
-    signalCode: null,
-    stdin: new PassThrough(),
-    stdout: new PassThrough(),
-    unref: vi.fn(),
-  });
+  const child = createManagedServiceChildMock({ pid });
   process.nextTick(() => {
     signalMockManagedUpdateHandoffReady({
       child,
@@ -325,7 +319,7 @@ describe("managed service update handoff single-flight", () => {
     const child = mockedChild();
     expect(forceKillChildProcessTreeMock).toHaveBeenCalledExactlyOnceWith(child);
     expect(child.unref).not.toHaveBeenCalled();
-    expect(claim(identity)).toBe(false);
+    expect(await claim(identity)).toBe(false);
   });
 
   it("rejects an unwritable dueling install before spawning or reserving ownership", async () => {
@@ -366,7 +360,7 @@ describe("managed service update handoff single-flight", () => {
     });
     expect(spawnMock).not.toHaveBeenCalled();
     expect(
-      claim({
+      await claim({
         kind: "managed-update-handoff",
         handoffId: "system-handoff",
         installRoot: root,
@@ -463,7 +457,7 @@ describe("managed service update handoff single-flight", () => {
     const processIdentity = await import("../shared/pid-alive.js");
     try {
       const started = requireOwner(await start());
-      expect(claim(started)).toBe(true);
+      expect(await claim(started)).toBe(true);
       await expect(transfer(started)).resolves.toBe(true);
       if (failure === "dead") {
         vi.spyOn(processIdentity, "isPidAlive").mockReturnValue(false);
@@ -477,7 +471,7 @@ describe("managed service update handoff single-flight", () => {
           "getFileLockProcessStartTime",
         ).mockReturnValue(failure === "reused" ? helperStartIdentity + 1 : null);
       }
-      expect(claim(started)).toBe(false);
+      expect(await claim(started)).toBe(false);
       vi.restoreAllMocks();
       await expect(cancel(started)).resolves.toBe("restored-in-process");
     } finally {
@@ -664,9 +658,7 @@ describe("managed service update handoff single-flight", () => {
         cancellationSettled = true;
         return result;
       });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
 
       expect(cancellationSettled).toBe(false);
       expect(helper.exitCode).toBeNull();
@@ -751,8 +743,8 @@ describe("managed service update handoff single-flight", () => {
     const started = requireOwner(await start());
     const identity = started;
     if (claimBeforeExit) {
-      expect(claim(identity)).toBe(true);
-      expect(claim(identity)).toBe(true);
+      expect(await claim(identity)).toBe(true);
+      expect(await claim(identity)).toBe(true);
     }
     await expect(cancel({ ...identity, handoffId: "joined" })).resolves.toBe(false);
     const child = realChild();
@@ -782,7 +774,7 @@ describe("managed service update handoff single-flight", () => {
         child.stdin?.write("cancel\n");
       }
       await exited;
-      expect(claim(identity)).toBe(false);
+      expect(await claim(identity)).toBe(false);
       expect(joinedAfterExit).toBeDefined();
       cancellation = cancel(identity);
     } else {
@@ -826,3 +818,10 @@ describe("managed service update handoff single-flight", () => {
     }
   });
 });
+
+vi.mock("./update-managed-service-handoff-worker.js", async (original) => ({
+  ...(await original<typeof import("./update-managed-service-handoff-worker.js")>()),
+  prepareManagedHandoffParentStore: (
+    await import("./update-managed-service-handoff-worker.test-support.js")
+  ).prepareManagedHandoffParentStoreForTest,
+}));

@@ -3,7 +3,7 @@ import { loadFacadeModuleAtLocationSync } from "../../plugin-sdk/facade-loader.j
 import { shouldRejectHardlinkedPluginFiles } from "../hardlink-policy.js";
 import { getPluginInstance } from "../plugin-instance-scope.js";
 import { resolvePluginMetadataSnapshot } from "../plugin-metadata-snapshot.js";
-import { resolvePluginRootPublicSurfacePath } from "../public-surface-runtime.js";
+import { resolvePluginRootPublicSurfaceLocation } from "../public-surface-runtime.js";
 import { getPluginRegistryForContext } from "./gateway-request-scope.js";
 
 /** Package-root embedding API; runtime instances and cold callers share the public-surface loader. */
@@ -19,16 +19,14 @@ export async function monitorWebChannel(...args: unknown[]): Promise<unknown> {
       return [];
     }
     const resolve = (artifactBasename: string) =>
-      resolvePluginRootPublicSurfacePath({
+      resolvePluginRootPublicSurfaceLocation({
         pluginRoot,
         pluginId: record.id,
         entrySource: record.source,
         artifactBasename,
       });
-    const modulePath = resolve("runtime-api.js");
-    return modulePath && resolve("light-runtime-api.js")
-      ? [{ record, modulePath, pluginRoot }]
-      : [];
+    const location = resolve("runtime-api.js");
+    return location && resolve("light-runtime-api.js") ? [{ record, location }] : [];
   });
   if (matches.length !== 1) {
     throw new Error(
@@ -37,7 +35,7 @@ export async function monitorWebChannel(...args: unknown[]): Promise<unknown> {
         : "web channel plugin runtime is unavailable: missing plugin that provides light-runtime-api and runtime-api",
     );
   }
-  const { record, modulePath, pluginRoot } = matches[0]!;
+  const { record, location } = matches[0]!;
   const owner = registry?.plugins.find((entry) => entry === record);
   const instance = owner ? getPluginInstance(owner) : undefined;
   if (owner && !instance) {
@@ -46,12 +44,12 @@ export async function monitorWebChannel(...args: unknown[]): Promise<unknown> {
   const loaded = loadFacadeModuleAtLocationSync<{
     monitorWebChannel: (...args: unknown[]) => Promise<unknown>;
   }>({
-    location: { modulePath, boundaryRoot: pluginRoot, pluginId: record.id },
+    location: { ...location, pluginId: record.id, origin: record.origin },
     boundary: {
       boundaryLabel: "plugin root",
       rejectHardlinks: shouldRejectHardlinkedPluginFiles({
         origin: record.origin,
-        rootDir: pluginRoot,
+        rootDir: location.boundaryRoot,
       }),
     },
   });

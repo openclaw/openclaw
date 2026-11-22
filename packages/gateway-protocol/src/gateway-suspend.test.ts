@@ -1,4 +1,3 @@
-import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   validateGatewaySuspendStatusParams,
@@ -9,13 +8,15 @@ import {
   validateGatewaySuspendHandoffParams,
   GatewaySuspendHandoffResultSchema as HandoffResult,
 } from "./index.js";
+import { schemaValidation, validation } from "./schema/protocol-validation.test-support.js";
 
-const drainingResult = {
+const drainingResult = (kind: string) => ({
   status: "draining",
   expiresAtMs: 2_000,
   retryAfterMs: 250,
   activeCount: 1,
-};
+  blockers: [{ kind, count: 1, message: "1 blocker" }],
+});
 
 describe("gateway suspension protocol", () => {
   it("opts into status metadata without extending resume parameters", () => {
@@ -28,25 +29,23 @@ describe("gateway suspension protocol", () => {
   it("requires an exact handoff target and rejects unrelated interruption policy", () => {
     const target = { pid: 1, processInstanceId: "gateway-process" };
     const params = { suspensionId: "held-lease", target };
-    expect(validateGatewaySuspendHandoffParams(params)).toBe(true);
-    expect(validateGatewaySuspendHandoffParams({ ...params, commit: true })).toBe(true);
-    for (const rejected of [
+    const handoff = validation(validateGatewaySuspendHandoffParams);
+    handoff.accepts(params, { ...params, commit: true });
+    handoff.rejects(
       { ...params, target: undefined },
       { ...params, force: true },
       { ...params, waitMs: 0 },
       { ...params, commit: false },
-      { ...params, commit: "true" },
       { ...params, target: { ...target, processInstanceId: " " } },
       { ...params, target: { ...target, pid: 0 } },
       { ...params, target: { ...target, port: 18789 } },
-      { ...params, target: { ...target, successor: "other" } },
-    ]) {
-      expect(validateGatewaySuspendHandoffParams(rejected)).toBe(false);
-    }
+    );
     const receipt = { suspensionId: "held-lease", expiresAtMs: 2_000 };
-    expect(Value.Check(HandoffResult, { ...receipt, status: "armed" })).toBe(true);
-    expect(Value.Check(HandoffResult, { ...receipt, status: "committed" })).toBe(true);
-    expect(Value.Check(HandoffResult, { ...receipt, status: "scheduled" })).toBe(false);
+    schemaValidation(HandoffResult).accepts(
+      { ...receipt, status: "armed" },
+      { ...receipt, status: "committed" },
+    );
+    schemaValidation(HandoffResult).rejects({ ...receipt, status: "scheduled" });
   });
   it("keeps prepare params closed and bounded", () => {
     expect(validateGatewaySuspendPrepareParams({ requestId: "host-request" })).toBe(true);
@@ -86,28 +85,24 @@ describe("gateway suspension protocol", () => {
 
   it("accepts legacy terminal blockers in closed draining and busy prepare results", () => {
     const draining = {
-      ...drainingResult,
+      ...drainingResult("terminal-session"),
       suspensionId: "suspension-1",
-      blockers: [{ kind: "terminal-session", count: 1, message: "1 open terminal session" }],
     };
 
-    expect(validateGatewaySuspendPrepareResult(draining)).toBe(true);
-    expect(validateGatewaySuspendPrepareResult({ ...draining, unexpected: true })).toBe(false);
     const { suspensionId: _id, expiresAtMs: _expiry, ...busy } = draining;
-    expect(
-      validateGatewaySuspendPrepareResult({ ...busy, status: "busy", reason: "active-work" }),
-    ).toBe(true);
+    validation(validateGatewaySuspendPrepareResult).accepts(draining, {
+      ...busy,
+      status: "busy",
+      reason: "active-work",
+    });
+    validation(validateGatewaySuspendPrepareResult).rejects({ ...draining, unexpected: true });
   });
 
   it("accepts running status and closed draining status results", () => {
-    const draining = {
-      ...drainingResult,
-      blockers: [{ kind: "terminal-persistence", count: 1, message: "1 pending terminal write" }],
-    };
+    const draining = drainingResult("terminal-persistence");
 
-    expect(validateGatewaySuspendStatusResult(draining)).toBe(true);
-    expect(validateGatewaySuspendStatusResult({ ...draining, suspensionId: "id" })).toBe(false);
-    expect(validateGatewaySuspendStatusResult({ status: "running" })).toBe(true);
+    validation(validateGatewaySuspendStatusResult).accepts(draining, { status: "running" });
+    validation(validateGatewaySuspendStatusResult).rejects({ ...draining, suspensionId: "id" });
   });
 
   it.each([

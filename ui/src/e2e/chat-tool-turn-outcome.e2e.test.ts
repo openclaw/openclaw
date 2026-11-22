@@ -8,6 +8,7 @@ import {
   takeControlUiElementScreenshot,
   takeControlUiViewportScreenshot,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { openAiAuthor } from "./chat-flow.test-support.ts";
 
 let artifactDir: string | undefined;
 beforeEach(() => {
@@ -76,6 +77,7 @@ function completedResult(id: string, name: string, title: string, text: string, 
       {
         itemId: `tool:${id}`,
         toolCallId: id,
+        name,
         kind: "tool",
         phase: "end",
         status: "completed",
@@ -234,7 +236,7 @@ suite.define(() => {
     },
   );
 
-  it("keeps an earlier autonomous failure visible after a later turn recovers", async () => {
+  it("keeps an earlier autonomous failure on its row after a later turn recovers", async () => {
     const sessionKey = "agent:main:dashboard:tool-turn-outcome";
     const { context, page } = await openChat(
       [
@@ -247,7 +249,7 @@ suite.define(() => {
           timestamp: 2,
         },
         failedTool(3),
-        narration("Recovered on the next autonomous turn.", 4),
+        { ...narration("Recovered on the next autonomous turn.", 4), ...openAiAuthor },
       ],
       {},
       sessionKey,
@@ -255,9 +257,8 @@ suite.define(() => {
     await page.getByText("Recovered on the next autonomous turn.", { exact: true }).waitFor();
     const workSummaries = page.locator(".chat-work-group > .chat-activity-group__summary");
     await workSummaries.first().waitFor();
-    expect(await workSummaries.first().getByText("1 failed", { exact: true }).isVisible()).toBe(
-      true,
-    );
+    // The recovery reply owns the outcome; the failed call keeps its status on its own row.
+    expect(await workSummaries.first().textContent()).not.toContain("failed");
     expect(await page.getByText("Command could not finish", { exact: false }).count()).toBe(0);
     for (let index = 0; index < (await workSummaries.count()); index += 1) {
       const summary = workSummaries.nth(index);
@@ -296,7 +297,7 @@ suite.define(() => {
     });
     const activity = page.locator(".chat-group--activity .chat-activity-group__summary");
     await activity.waitFor();
-    expect(await activity.textContent()).toContain("2 other operations");
+    expect((await activity.textContent())?.trim()).toBe("Read and changed files");
     const activityGeometry = await activity.evaluate((node) => {
       const container = node.closest<HTMLElement>(".chat-activity-group");
       const label = node.querySelector<HTMLElement>(".chat-activity-group__label");
@@ -410,7 +411,7 @@ suite.define(() => {
     await expect
       .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
       .toBe("dark");
-    expect(await summary.textContent()).toContain("2 other operations");
+    expect((await summary.textContent())?.trim()).toBe("Changed files, ran commands");
     expect(await patchRow.locator(".chat-tool-row__verb").textContent()).toBe("Changed");
     await context.close();
   });
@@ -463,6 +464,73 @@ suite.define(() => {
     await context.close();
   });
 
+  it("shimmers a running purpose and headline only until each call settles", async () => {
+    const { context, page, gateway } = await openChat([
+      narration("Ready for the purpose wave proof.", Date.now()),
+    ]);
+    await page.getByText("Ready for the purpose wave proof.").waitFor();
+    const runId = await sendRun(page, gateway, "find the notes");
+    const emit = agentEvents(gateway, runId);
+    let seq = 0;
+    // Same order as the runner: the item opens a call, and the tool result closes it first.
+    const progress = async (id: string, title: string, status: "running" | "completed") => {
+      const running = status === "running";
+      const item = {
+        itemId: `tool:${id}`,
+        toolCallId: id,
+        kind: "tool",
+        name: "exec",
+        title,
+        commandBearing: true,
+        phase: running ? "start" : "end",
+        status,
+      };
+      if (running) {
+        await emit(++seq, "item", item);
+        await emit(++seq, "tool", {
+          toolCallId: id,
+          name: "exec",
+          phase: "start",
+          args: { code: "return null;", title },
+        });
+        return;
+      }
+      await emit(++seq, "tool", {
+        toolCallId: id,
+        name: "exec",
+        phase: "result",
+        result: { text: "done" },
+      });
+      await emit(++seq, "item", item);
+    };
+    const shimmering = () =>
+      page.evaluate(() =>
+        document
+          .getAnimations()
+          .filter((animation) => (animation as CSSAnimation).animationName === "text-shimmer")
+          .map((animation) => ((animation.effect as KeyframeEffect).target as Element).textContent),
+      );
+
+    await progress("first", "Search sessions for release notes", "running");
+    await expect.poll(shimmering).toEqual(["Search sessions for release notes"]);
+
+    await progress("first", "Search sessions for release notes", "completed");
+    await expect.poll(shimmering).toEqual([]);
+
+    await progress("second", "Read the matching notes", "running");
+    await page.locator(".chat-activity-group__label--running").waitFor();
+    await expect
+      .poll(() => page.locator(".chat-activity-group__label--running").textContent())
+      .toBe("Read the matching notes");
+    await expect.poll(shimmering).toEqual(["Read the matching notes"]);
+    await page.locator(".chat-activity-group__summary").click();
+    await expect.poll(shimmering).toEqual(["Read the matching notes"]);
+
+    await progress("second", "Read the matching notes", "completed");
+    await expect.poll(shimmering).toEqual([]);
+    await context.close();
+  });
+
   it("stops the active tool wave on failure and keeps diagnostics behind disclosure", async () => {
     const { context, page, gateway } = await openChat([
       narration("Ready for the running tool wave proof.", Date.now()),
@@ -502,6 +570,7 @@ suite.define(() => {
     });
     await page.locator(".chat-thread-inner").getByText("Working on it.").waitFor();
 
+    await page.locator('.chat-activity-group__summary[aria-expanded="false"]').click();
     const runningRow = page.locator(".chat-tool-row--running");
     await runningRow.waitFor();
     // Visual-regression guard for the active-task text wave: the running
@@ -511,12 +580,14 @@ suite.define(() => {
       return {
         animationName: style.animationName,
         backgroundClip: style.getPropertyValue("-webkit-background-clip") || style.backgroundClip,
-        color: style.color,
+        fill: style.webkitTextFillColor,
+        image: style.backgroundImage,
       };
     });
     expect(wave.animationName).toBe("text-shimmer");
     expect(wave.backgroundClip).toBe("text");
-    expect(wave.color).toBe("rgba(0, 0, 0, 0)");
+    expect(wave.fill).toBe("rgba(0, 0, 0, 0)");
+    expect(wave.image).toContain("linear-gradient");
     await captureToolActivityProof(page, "tool-row-running-text-wave");
 
     await emit(3, "tool", {

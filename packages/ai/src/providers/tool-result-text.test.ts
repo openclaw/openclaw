@@ -9,19 +9,13 @@ const textBlock = (text: string) => ({ type: "text", text });
 const withStructured = { includeStructured: true };
 
 it.each([
-  [{ text: "   \n\t", isError: false }, "(no tool output)"],
-  [{ text: "", mediaPlaceholder: "(see attached image)", isError: false }, "(see attached image)"],
-  [{ text: "  failed  ", isError: true }, "[tool error]   failed  "],
-  [
-    { text: "line   ", omittedMediaPlaceholder: "[tool image omitted]", isError: false },
-    "line   \n[tool image omitted]",
-  ],
-] satisfies [Parameters<typeof formatToolResultText>[0], string][])(
-  "formats blank and nonblank tool output: %j",
-  (input, expected) => {
-    expect(formatToolResultText(input)).toBe(expected);
-  },
-);
+  ["   \n\t", {}, "(no tool output)"],
+  ["", { mediaPlaceholder: "(see attached image)" }, "(see attached image)"],
+  ["  failed  ", { isError: true }, "[tool error]   failed  "],
+  ["line   ", { omittedMediaPlaceholder: "[tool image omitted]" }, "line   \n[tool image omitted]"],
+] as const)("formats tool output %j", (text, options, expected) => {
+  expect(formatToolResultText({ text, isError: false, ...options })).toBe(expected);
+});
 
 it("keeps structured fallback and inclusion after block sanitation", () => {
   const structured = { type: "json", value: "😀漢" };
@@ -60,8 +54,7 @@ it("bounds and redacts aggregate structured additions without truncating explici
   expect(structured).toContain("[omitted bytes]");
   expect(structured).toContain("[omitted encrypted_content]");
   expect(structured).toContain("[inline data URI:");
-  expect(structured).not.toContain("opaque-ciphertext");
-  expect(structured).not.toContain("AAECAwQFBgc=");
+  expect(structured).not.toMatch(/opaque-ciphertext|AAECAwQFBgc=/);
   expect(() => encodeURIComponent(result)).not.toThrow();
 });
 

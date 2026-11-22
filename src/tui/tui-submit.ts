@@ -113,26 +113,21 @@ export function createEditorSubmitHandler(params: {
   };
 }
 
-export function shouldEnableWindowsGitBashPasteFallback(params?: {
-  platform?: string;
-  env?: NodeJS.ProcessEnv;
-}): boolean {
-  const platform = params?.platform ?? process.platform;
-  const env = params?.env ?? process.env;
-  const termProgram = normalizeLowercaseStringOrEmpty(env.TERM_PROGRAM);
+export function shouldEnableWindowsGitBashPasteFallback(): boolean {
+  const termProgram = normalizeLowercaseStringOrEmpty(process.env.TERM_PROGRAM);
 
   // Some macOS terminals emit multiline paste as rapid single-line submits.
   // Enable burst coalescing so pasted blocks stay as one user message.
-  if (platform === "darwin") {
+  if (process.platform === "darwin") {
     return termProgram.includes("iterm") || termProgram.includes("apple_terminal");
   }
 
-  if (platform !== "win32") {
+  if (process.platform !== "win32") {
     return false;
   }
 
-  const msystem = (env.MSYSTEM ?? "").toUpperCase();
-  const shell = env.SHELL ?? "";
+  const msystem = (process.env.MSYSTEM ?? "").toUpperCase();
+  const shell = process.env.SHELL ?? "";
   if (msystem.startsWith("MINGW") || msystem.startsWith("MSYS")) {
     return true;
   }

@@ -4,9 +4,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as deferredMigrations from "../infra/deferred-plugin-migrations.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { acquireStartupMigrationLeaseWithWait } from "../infra/startup-migration-checkpoint.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
+import * as stateReadOwner from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -19,6 +21,7 @@ import {
   readConfigHealthStateFromStore,
 } from "./io.health-state.js";
 import * as healthOwner from "./io.health-state.js";
+import { createRecoveryConfigEnv } from "./io.observe-recovery.test-support.js";
 import { observeConfigSnapshotSync } from "./io.observe.js";
 import { normalizeConfigIoDeps } from "./io.read-helpers.js";
 import type { ConfigIoFactoryOptions } from "./io.types.js";
@@ -33,8 +36,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 function manifest(root: string) {
-  return fs
-    .readdirSync(root, { recursive: true, encoding: "utf8" })
+  return listDirectoryTreeStrictSync(root)
+    .map((walkEntry) => walkEntry.relativePath)
     .toSorted()
     .filter((entry) => fs.statSync(path.join(root, entry)).isFile())
     .map((entry) => [
@@ -79,14 +82,7 @@ function fixture(
   });
   fs.writeFileSync(configPath, original);
   fs.writeFileSync(`${configPath}.bak`, backup);
-  const env = {
-    HOME: root,
-    USERPROFILE: root,
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_STATE_DIR: root,
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    VITEST: "true",
-  };
+  const env = createRecoveryConfigEnv(root, configPath, root);
   const databasePath = openOpenClawStateDatabase({ env }).path;
   closeOpenClawStateDatabaseForTest();
   const io = createConfigIO({
@@ -114,6 +110,31 @@ async function recovery(io: ReturnType<typeof createConfigIO>) {
 }
 
 describe("prepared config recovery", () => {
+  it("prepares a plugin-bearing backup without synchronous shared-state reads", async () => {
+    const { root, configPath, original, io } = fixture();
+    const backup = JSON.stringify({
+      gateway: { mode: "local", port: 18720 },
+      plugins: { enabled: false },
+    });
+    fs.writeFileSync(`${configPath}.bak`, backup);
+    const current = await withArtifactPreservingStateReads(() => io.readConfigFileSnapshot());
+    clearPluginMetadataLifecycleCaches();
+    const read = vi
+      .spyOn(stateReadOwner, "withExistingOpenClawStateDatabaseReadOnly")
+      .mockImplementation(() => {
+        throw new Error(
+          "synchronous shared-state reads are unavailable on the Gateway main thread",
+        );
+      });
+    try {
+      const plan = await io.prepareConfigRecovery(current);
+      expect(plan?.snapshot.config.plugins).toMatchObject({ enabled: false });
+      expectUnchanged(root, configPath, original, backup);
+    } finally {
+      read.mockRestore();
+    }
+  });
+
   it.each(["sync", "async"] as const)(
     "prepares a canonical backup when migration metadata is unavailable (%s)",
     async (mode) => {

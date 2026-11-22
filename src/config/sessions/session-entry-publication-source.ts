@@ -74,9 +74,10 @@ export function sealSessionEntryPublicationSource(source: SessionEntryPublicatio
   }
   source.writeToken =
     selected && readSqliteNativeMutationRevision(selected.database) === selected.mutationRevision
-      ? selected.database.isTransaction
-        ? readSqliteDatabasePendingWriteToken(selected.database)
-        : readSqliteDatabaseWriteTokenForPath(source.canonicalPath ?? source.filename)
+      ? (readSqliteDatabasePendingWriteToken(selected.database) ??
+        (!selected.database.isTransaction
+          ? readSqliteDatabaseWriteTokenForPath(source.canonicalPath ?? source.filename)
+          : undefined))
       : undefined;
 }
 

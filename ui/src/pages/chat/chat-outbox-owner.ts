@@ -1,5 +1,5 @@
 import { readOfflineStorageScope } from "../../app/boot-record.ts";
-import { chatQueueOrderKey, compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
+import { compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   chatOutboxAttentionOwners,
@@ -21,24 +21,32 @@ import {
   storedChatOutboxScopeKey,
 } from "../../lib/chat/outbox-store-scope.ts";
 import {
-  applyStoredChatOutboxScope,
   subscribeStoredChatOutboxChanges,
   type captureChatOutboxAdmission,
-  type ChatComposerScope as Composer,
+  type ChatComposerScope,
 } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 import { ChatOutboxAdmissions } from "./chat-outbox-admissions.ts";
-import { ChatOutboxHistory } from "./chat-outbox-history.ts";
 import {
   projectChatOutboxItem,
   isActiveLocal,
   hasActiveChatOutboxProjection,
-  projectChatOutboxAttention,
+  hasWaitingModelProjection,
   reconcileChatOutboxProjection,
+  retainedOutboxAttachmentIds,
+  locateLocalOutboxItem,
+  positionChatOutboxItem,
+  type ChatOutboxLiveProjection,
+  type ChatOutboxHost as Host,
   type ChatOutboxHostProjection as HostProjection,
 } from "./chat-outbox-owner.projection.ts";
 import { publishChatOutboxQueue, replaceChatOutboxQueue } from "./chat-outbox-queue.ts";
+import {
+  protectChatOutboxFromReload,
+  type ChatOutboxReloadBinding,
+  type CapturedChatOutboxInput,
+} from "./chat-outbox-reload-recovery.ts";
 import {
   type StoredChatQueueReplacement,
   admitStoredChatComposerQueueItemResult,
@@ -49,13 +57,10 @@ import {
   failOutboxPayload,
   prepareOutboxPayload,
 } from "./outbox-payloads.ts";
-type Host = Composer & { chatQueue: ChatQueueItem[]; sessionKey: string };
-type LiveProjection = {
-  item: ChatQueueItem;
-  owner: Host;
-  expectedDurableVersion?: ChatQueueItem;
-  submissionIsCurrent?: () => boolean;
-};
+
+type Composer = ChatComposerScope & { outboxRecovery?: ChatOutboxReloadBinding };
+type LiveProjection = ChatOutboxLiveProjection<Host>;
+type VolatileInput = { scope: Scope; item: ChatQueueItem; owner: Host };
 const LIVE_VERSION_KEYS = ["sendRunId", "sendAttempts", "sendState", "sendError"] as const;
 // One gateway owner merges durable, live, and pane-local rows for every subscribed pane.
 class ChatOutboxGatewayOwner {
@@ -64,11 +69,28 @@ class ChatOutboxGatewayOwner {
   private readonly hosts = new Map<Host, HostProjection>();
   private readonly panes = new Set<Host>();
   private readonly live = new Map<string, Map<string, LiveProjection>>();
+  private readonly volatile = new Map<string, VolatileInput>();
   private readonly hydrating = new Set<string>();
-  readonly history = new ChatOutboxHistory();
   private unsubscribe: (() => void) | null = null;
+  // Custody outlives panes and account switches; recovery uses the live application binding.
+  readonly reloadRecovery = protectChatOutboxFromReload({
+    ownerKey: () => this.ownerGatewayKey,
+    inputs: this.volatile,
+    discard: (captured) =>
+      this.remove(captured.entry.owner, captured.item.id, { discard: true, captured }),
+    retainedAttachmentIds: () => {
+      const ids = new Set<string>();
+      for (const owner of owners.values()) {
+        for (const id of retainedOutboxAttachmentIds(owner.hosts, owner.live, owner.volatile)) {
+          ids.add(id);
+        }
+      }
+      return ids;
+    },
+  });
   constructor(readonly ownerGatewayKey: string) {}
   private publishAttention(): void {
+    this.reloadRecovery.changed();
     this.attentionRevision += 1;
     notifyChatOutboxAttentionChanges(this.ownerGatewayKey);
   }
@@ -85,11 +107,15 @@ class ChatOutboxGatewayOwner {
     host.chatQueue = host.chatQueue.filter((item) => outboxPayloadMatchesOwner(host, item));
     const scope = resolveUiConversationIdentity(host, host.sessionKey);
     const durableSeen = new Set(read(host, scope)?.queue.map((item) => item.id));
-    const created: HostProjection = { byScope: new Map(), durableSeen, retryable: new Set() };
-    if (host.chatQueue.length) {
+    const created: HostProjection = { byScope: new Map(), durableSeen };
+    // Bootstrap caller-owned input once. Later host queues are projections and
+    // cannot reacquire custody after the canonical item was retired.
+    if (!previous && host.chatQueue.length) {
       created.byScope.set(storedChatOutboxScopeKey(scope), {
         scope,
-        queue: host.chatQueue.filter((item) => outboxPayloadMatchesOwner(host, item)),
+        queue: host.chatQueue.filter(
+          (item) => !this.volatile.has(item.id) && outboxPayloadMatchesOwner(host, item),
+        ),
       });
     }
     this.hosts.set(host, created);
@@ -97,34 +123,18 @@ class ChatOutboxGatewayOwner {
   }
   private retireHost(host: Host): void {
     this.admissions.cancelRequests(host);
-    this.history.forget(host);
-    const state = this.hosts.get(host);
-    if (state) {
-      const retained = new Set<string>();
-      for (const [key, local] of state.byScope) {
-        // Retryable memory custody has no reload-safe source. Keep its bytes with
-        // this opaque owner, never its retired operation or a durable overlay.
-        local.queue = local.queue
-          .filter(
-            (item) =>
-              state.retryable.has(item.id) &&
-              !state.durableSeen.has(item.id) &&
-              !item.pendingRunId &&
-              !item.localCommandName,
-          )
-          .map((item) => {
-            retained.add(item.id);
-            return item.sendState === "failed" || item.sendState === "unconfirmed"
-              ? item
-              : Object.assign({}, item, { sendState: "held" as const });
-          });
-        if (!local.queue.length) {
-          state.byScope.delete(key);
-        }
-      }
-      state.retryable = retained;
-      if (!state.byScope.size) {
-        this.hosts.delete(host);
+    this.hosts.delete(host);
+    // Custody belongs to this account, not its retired pane or transport. Bound
+    // attempts can replay with their original key; interrupted preparation cannot.
+    for (const entry of this.volatile.values()) {
+      if (entry.owner === host && !["failed", "held"].includes(entry.item.sendState ?? "")) {
+        entry.item = {
+          ...entry.item,
+          sendState:
+            entry.item.sendRunId && entry.item.sessionId && entry.item.sendState !== "waiting-model"
+              ? "waiting-reconnect"
+              : "held",
+        };
       }
     }
     for (const [key, entries] of this.live) {
@@ -143,12 +153,12 @@ class ChatOutboxGatewayOwner {
   }
   locate(host: Host, id: string) {
     const outbox = this.durable(host, id);
-    const captured = outbox ?? this.local(this.state(host), id)?.scope;
+    const captured =
+      outbox ?? this.volatile.get(id)?.scope ?? locateLocalOutboxItem(this.state(host), id)?.scope;
     if (!captured) {
       return undefined;
     }
-    const { sessionKey, agentId } = captured;
-    const scope = { sessionKey, agentId };
+    const scope = { sessionKey: captured.sessionKey, agentId: captured.agentId };
     const item = this.snapshot(host, scope, outbox?.queue ?? []).find((row) => row.id === id);
     return item ? { item, scope, durable: outbox?.queue.find((row) => row.id === id) } : undefined;
   }
@@ -178,10 +188,10 @@ class ChatOutboxGatewayOwner {
     this.admissions.release(id);
     // Admission supersedes every retained copy, even an offscreen pane now using
     // another account. Subsequent canonical removal must not resurrect its bytes.
-    for (const [pane, projection] of this.hosts) {
-      if (projection.retryable.delete(id)) {
+    if (this.volatile.delete(id)) {
+      for (const [pane, projection] of this.hosts) {
         projection.durableSeen.add(id);
-        const custody = this.local(projection, id);
+        const custody = locateLocalOutboxItem(projection, id);
         custody?.queue.splice(custody.index, 1);
         if (hostOwners.get(pane) !== this) {
           this.prune(pane);
@@ -208,6 +218,11 @@ class ChatOutboxGatewayOwner {
     });
     const durableIds = new Set(durable.map((item) => item.id));
     visible.push(...local.filter((item) => !durableIds.has(item.id) && isActiveLocal(state, item)));
+    for (const entry of this.volatile.values()) {
+      if (storedChatOutboxScopeKey(entry.scope) === key && !durableIds.has(entry.item.id)) {
+        visible.push(entry.item);
+      }
+    }
     this.prune(host);
     return visible
       .filter((item) => outboxPayloadMatchesOwner(host, item))
@@ -250,20 +265,11 @@ class ChatOutboxGatewayOwner {
           }
           if (result.status === "ready") {
             if (result.update.attachmentPayload?.key !== key) {
-              // Reconnect can park this attempt while its private Blob copy awaits.
-              // Preserve that newer state, but never adopt over a changed submission.
-              const parked =
-                item.sendState === "waiting-reconnect" &&
-                current.sendState === "unconfirmed" &&
-                sameQueuedDeliveryVersion(current, {
-                  ...applyStoredChatOutboxScope(item, outbox),
-                  sendState: "unconfirmed",
-                });
               if (
                 !updateStoredChatComposerQueueItems(
                   host,
                   outbox.sessionKey,
-                  [{ expected: parked ? current : item, next: { ...current, ...result.update } }],
+                  [{ expected: item, next: { ...current, ...result.update } }],
                   outbox.agentId,
                 )
               ) {
@@ -276,8 +282,6 @@ class ChatOutboxGatewayOwner {
               ...(result.update.attachmentPayload?.key !== key
                 ? {
                     attachmentPayload: result.update.attachmentPayload,
-                    sendState: result.update.sendState,
-                    sendError: result.update.sendError,
                   }
                 : {}),
             });
@@ -296,7 +300,8 @@ class ChatOutboxGatewayOwner {
     this.publishAttention();
   }
   publish(origin?: Host, reconcile = false): void {
-    if (origin) {
+    // Recovery may retire custody whose original pane now belongs to another account.
+    if (origin && outboxOwnerKey(origin) === this.ownerGatewayKey) {
       this.syncHost(origin);
     }
     for (const pane of this.panes) {
@@ -341,7 +346,6 @@ class ChatOutboxGatewayOwner {
   }
   private detach(host: Host): void {
     this.admissions.cancelRequests(host);
-    this.history.forget(host);
     this.panes.delete(host);
     if (!this.panes.size) {
       this.unsubscribe?.();
@@ -366,7 +370,6 @@ class ChatOutboxGatewayOwner {
   private reconcile(host: Host, state: HostProjection): void {
     const outboxes = listOutboxes(host);
     const durableIds = new Set(outboxes.flatMap((outbox) => outbox.queue.map((item) => item.id)));
-    this.history.reconcile(host, outboxes);
     reconcileChatOutboxProjection(state, durableIds, (id) => this.observeDurable(id));
   }
   retirePendingRun(host: Host, runId: string): ChatQueueItem[] {
@@ -378,7 +381,7 @@ class ChatOutboxGatewayOwner {
       local.queue = local.queue.filter((item) => item.pendingRunId !== runId);
     }
     for (const item of removed) {
-      state.retryable.delete(item.id);
+      this.volatile.delete(item.id);
     }
     this.syncHost(host);
     return removed;
@@ -394,29 +397,25 @@ class ChatOutboxGatewayOwner {
     const key = storedChatOutboxScopeKey(scope);
     const retained = [
       ...(read(host, scope)?.queue ?? []),
+      ...[...this.volatile.values()]
+        .filter((entry) => storedChatOutboxScopeKey(entry.scope) === key)
+        .map((entry) => entry.item),
       ...[...this.hosts.values()].flatMap(
         (projection) =>
           projection.byScope.get(key)?.queue.filter((entry) => isActiveLocal(projection, entry)) ??
           [],
       ),
     ];
-    const existing = retained.find((entry) => entry.id === item.id);
-    const tail = Math.max(...retained.map(chatQueueOrderKey));
-    // Position belongs to admission, not to clocks, storage timing, or later state updates.
-    const orderKey = existing
-      ? existing.orderKey
-      : (item.orderKey ?? (item.createdAt <= tail ? tail + 1 : undefined));
-    const positioned = applyStoredChatOutboxScope(
-      { ...item, storageScope: item.storageScope ?? outboxStorageScope(host) },
-      scope,
-    );
+    const positioned = positionChatOutboxItem(host, scope, item, retained);
     if (!outboxPayloadMatchesOwner(host, positioned)) {
       return positioned;
     }
-    if (orderKey === undefined) {
-      delete positioned.orderKey;
-    } else {
-      positioned.orderKey = orderKey;
+    if (retryable || this.volatile.has(item.id)) {
+      const local = locateLocalOutboxItem(state, item.id);
+      local?.queue.splice(local.index, 1);
+      this.volatile.set(item.id, { scope, item: positioned, owner: host });
+      this.publish(host);
+      return positioned;
     }
     const queue = [...(state.byScope.get(key)?.queue ?? [])];
     const index = queue.findIndex((entry) => entry.id === item.id);
@@ -427,20 +426,8 @@ class ChatOutboxGatewayOwner {
     }
     queue.sort(compareChatQueueOrder);
     state.byScope.set(key, { scope, queue });
-    if (retryable) {
-      state.retryable.add(item.id);
-    }
     this.syncHost(host);
     return positioned;
-  }
-  private local(state: HostProjection, id: string) {
-    for (const { scope, queue } of state.byScope.values()) {
-      const index = queue.findIndex((item) => item.id === id);
-      if (index >= 0) {
-        return { scope, queue, index };
-      }
-    }
-    return undefined;
   }
   change(
     host: Host,
@@ -448,8 +435,22 @@ class ChatOutboxGatewayOwner {
     update?: (item: ChatQueueItem) => ChatQueueItem,
     retryable = false,
   ): ChatQueueItem | null {
+    const volatile = this.volatile.get(id);
+    if (volatile) {
+      const current = volatile.item;
+      if (update) {
+        volatile.item = update(current);
+        volatile.owner = host;
+      } else {
+        this.volatile.delete(id);
+      }
+      this.publishAttention();
+      this.publish(host);
+      this.prune();
+      return update ? volatile.item : current;
+    }
     const state = this.state(host);
-    const match = this.local(state, id);
+    const match = locateLocalOutboxItem(state, id);
     if (!match) {
       this.prune(host);
       return null;
@@ -457,14 +458,13 @@ class ChatOutboxGatewayOwner {
     const current = match.queue[match.index]!;
     if (update) {
       const next = update(current);
-      match.queue[match.index] = next;
       if (retryable) {
-        state.retryable.add(id);
+        return this.keep(host, match.scope, next, true);
       }
+      match.queue[match.index] = next;
       this.syncHost(host);
       return next;
     }
-    state.retryable.delete(id);
     const stored = this.durable(host, id)?.queue.find((item) => item.id === id);
     if (stored) {
       state.durableSeen.add(id);
@@ -545,8 +545,25 @@ class ChatOutboxGatewayOwner {
     }
     return result;
   }
-  remove(host: Host, id: string, options?: { discard?: boolean }): ChatQueueItem | null {
-    const located = this.locate(host, id);
+  remove(
+    host: Host,
+    id: string,
+    options?: { discard?: boolean; captured?: CapturedChatOutboxInput<VolatileInput> },
+  ): ChatQueueItem | null {
+    const captured = options?.captured;
+    if (
+      captured &&
+      (this.volatile.get(id) !== captured.entry ||
+        captured.entry.item !== captured.item ||
+        [...owners.values()].some((owner) =>
+          owner.anyPane((pane) => pane.chatQueuedEdit?.id === id),
+        ))
+    ) {
+      return null;
+    }
+    const located = captured
+      ? { scope: captured.entry.scope, item: captured.item, durable: undefined }
+      : this.locate(host, id);
     const durable = located?.durable;
     const local = host.chatQueue.find((item) => item.id === id);
     const live = located && this.readLive(storedChatOutboxScopeKey(located.scope), id, durable);
@@ -581,40 +598,26 @@ class ChatOutboxGatewayOwner {
     }
     return located?.item ?? null;
   }
-  hasVolatile(host: Host, id: string): boolean {
-    return this.hosts.get(host)?.retryable.has(id) ?? false;
+  hasVolatile(_host: Host, id: string): boolean {
+    return this.volatile.has(id);
   }
   // Panes share this outbox and its drain while composer state stays per pane, so
   // a pane-local fact that blocks delivery has to be answerable from any of them.
   anyPane(matches: (host: Host) => boolean): boolean {
-    for (const pane of this.panes) {
-      if (matches(pane)) {
-        return true;
-      }
-    }
-    return false;
+    return [...this.panes].some(matches);
   }
   hasPendingSubmission(scope: Scope, item: ChatQueueItem): boolean {
-    return Boolean(
-      this.readLive(storedChatOutboxScopeKey(scope), item.id, item)?.submissionIsCurrent,
-    );
+    const live = this.readLive(storedChatOutboxScopeKey(scope), item.id, item);
+    return Boolean(live?.submissionIsCurrent);
   }
   /** Attention reads delivery state, not the reload-safe aliases stored during live work. */
   needsReview(scope: Scope, item: ChatQueueItem): boolean {
     const key = storedChatOutboxScopeKey(scope);
-    if (this.readLive(key, item.id, item)) {
-      return false;
-    }
-    for (const state of this.hosts.values()) {
-      if (
-        state.byScope
-          .get(key)
-          ?.queue.some((local) => local.id === item.id && local.sendState === "waiting-model")
-      ) {
-        return false;
-      }
-    }
-    return storedChatOutboxItemNeedsReview(item);
+    return (
+      !this.readLive(key, item.id, item) &&
+      !hasWaitingModelProjection(this.hosts.values(), key, item.id) &&
+      storedChatOutboxItemNeedsReview(item)
+    );
   }
   beginSubmission(
     host: Host,
@@ -672,7 +675,11 @@ class ChatOutboxGatewayOwner {
     const local = [...this.state(host).byScope.values()].flatMap(({ queue }) => queue);
     // The snapshot already merges durable and live state. A stale pane-local
     // copy must not hide its sending overlay during connection retirement.
-    const items = new Map([...local, ...durable].map((item) => [item.id, item]));
+    const items = new Map(
+      [...local, ...durable, ...[...this.volatile.values()].map((entry) => entry.item)].map(
+        (item) => [item.id, item],
+      ),
+    );
     this.prune(host);
     return [...items.values()].filter((item) => outboxPayloadMatchesOwner(host, item));
   }
@@ -683,18 +690,19 @@ class ChatOutboxGatewayOwner {
         this.hosts.delete(host);
       }
     }
-    if (!this.unsubscribe && !this.live.size && !this.hosts.size && !this.admissions.hasRequests) {
+    const empty = () =>
+      !this.unsubscribe &&
+      !this.live.size &&
+      !this.hosts.size &&
+      !this.volatile.size &&
+      !this.admissions.hasRequests;
+    if (empty()) {
       // Defer eviction until a synchronous send transition can add its live overlay.
       queueMicrotask(() => {
-        if (
-          !this.unsubscribe &&
-          !this.live.size &&
-          !this.hosts.size &&
-          !this.admissions.hasRequests &&
-          owners.get(this.ownerGatewayKey) === this
-        ) {
+        if (empty() && owners.get(this.ownerGatewayKey) === this) {
           owners.delete(this.ownerGatewayKey);
           chatOutboxAttentionOwners.delete(this.ownerGatewayKey);
+          this.reloadRecovery.dispose();
         }
       });
     }
@@ -711,13 +719,7 @@ export function chatOutboxOwner(host: Composer): ChatOutboxGatewayOwner {
   const owner = owners.get(key) ?? new ChatOutboxGatewayOwner(key);
   owners.set(key, owner);
   chatOutboxAttentionOwners.set(key, owner);
+  owner.reloadRecovery.bind(host.outboxRecovery);
   owner.adoptSubscriptions(host);
   return owner;
-}
-
-/** Read-only view of the existing tab/Gateway outbox; it does not claim a personal owner. */
-export function listChatOutboxAttention(host: Composer) {
-  return readOfflineStorageScope(host)
-    ? projectChatOutboxAttention(listOutboxes(host), owners.get(outboxOwnerKey(host)))
-    : [];
 }

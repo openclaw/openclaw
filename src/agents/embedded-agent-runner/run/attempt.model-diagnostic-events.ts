@@ -1,3 +1,4 @@
+import { observeAsyncIterator } from "@openclaw/llm-core";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
@@ -41,9 +42,35 @@ function observeModelCallIterator<T>(
   observeSharedResult: () => Promise<unknown>,
 ): AsyncIterableIterator<T> {
   const trackCleanup = captureAsyncWorkTracker();
-  let started = false;
+  const observed = observeAsyncIterator({
+    iterator: () => iterator,
+    onEvent: (chunk) => lifecycle.observeChunk(chunk),
+    onDone() {
+      // Result decorators retain cleanup ownership and explicit result() errors.
+      if (!lifecycle.observer.state.terminalError) {
+        void trackCleanup(observeSharedResult).catch(() => undefined);
+      } else {
+        lifecycle.emitCompleted();
+      }
+    },
+    onError: (error) => lifecycle.emitError(error),
+    onClose(_iterator, reason) {
+      // Diagnostics historically close only on return; source/observer/consumer
+      // errors leave cleanup with the provider. Keep that policy at this boundary.
+      if (reason === "return") {
+        return safeReturnIterator(iterator, trackCleanup).then(() => lifecycle.emitCompleted());
+      }
+      return undefined;
+    },
+    async onUnopenedReturn(value) {
+      // Acquired eagerly; preserve the unopened return's unawaited value.
+      await safeReturnIterator(iterator, trackCleanup);
+      lifecycle.emitCompleted();
+      return { done: true, value };
+    },
+  });
   let returning: Promise<IteratorResult<T>> | undefined;
-  const observed = observe();
+  const advance = () => observed.next();
   return {
     [Symbol.asyncIterator]() {
       return this;
@@ -52,67 +79,16 @@ function observeModelCallIterator<T>(
       if (returning) {
         return returning.then(() => ({ done: true as const, value: undefined }));
       }
-      started = true;
-      return lifecycle.runInTransportContext(() => observed.next());
+      return lifecycle.runInTransportContext(advance);
     },
     return(value) {
-      returning ??= lifecycle.runInTransportContext(() =>
-        started
-          ? observed.return(value)
-          : Promise.resolve().then(async () => {
-              // An unopened async generator skips its finally block. Forward closure
-              // explicitly so inner stream owners can settle their admitted repairs.
-              await safeReturnIterator(iterator, trackCleanup);
-              lifecycle.emitCompleted();
-              return { done: true as const, value };
-            }),
-      );
+      returning ??= lifecycle.runInTransportContext(() => observed.return(value));
       return returning;
     },
     throw(error) {
-      started = true;
       return lifecycle.runInTransportContext(() => observed.throw(error));
     },
   };
-
-  async function* observe(): AsyncGenerator<T> {
-    // Tracks whether the underlying iterator terminated on its own (done or threw).
-    // This is independent of state.terminalEventEmitted: result() can emit the
-    // terminal event first, but the abandoned iterator still needs return() cleanup.
-    let iteratorSettled = false;
-    try {
-      for (;;) {
-        const next = await iterator.next();
-        if (next.done) {
-          iteratorSettled = true;
-          break;
-        }
-        const chunk = next.value;
-        lifecycle.observeChunk(chunk);
-        yield chunk;
-      }
-      // EOF can precede result decorators' settlement. Retain that work through
-      // owner cleanup without delaying drain-only consumers or losing failures.
-      if (!lifecycle.observer.state.terminalError) {
-        void trackCleanup(observeSharedResult).catch(() => undefined);
-      } else {
-        lifecycle.emitCompleted();
-      }
-    } catch (err) {
-      iteratorSettled = true;
-      throwModelCallError(lifecycle, err);
-    } finally {
-      if (!iteratorSettled) {
-        // A consumer can stop reading before the provider emits done/error — e.g.
-        // the agent loop returns on the terminal event after awaiting result().
-        // Close the underlying iterator for provider cleanup (idle-timeout abort
-        // listeners, SSE readers) even when result() already emitted the terminal
-        // event; lifecycle completion self-dedupes via state.terminalEventEmitted.
-        await safeReturnIterator(iterator, trackCleanup);
-        lifecycle.emitCompleted();
-      }
-    }
-  }
 }
 
 function createSharedResultObserver(
@@ -181,13 +157,14 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
       ctx,
       options,
       requestTimeoutMs,
-      createObserver: (capturePromptStats) =>
+      createObserver: (capturePromptStats, captureByteStats) =>
         createModelObserver({
           diagnosticOwner: ctx.diagnosticOwner,
           streamContext,
           contentCapture: ctx.contentCapture,
           suppressPluginHooks: ctx.suppressPluginHooks,
           capturePromptStats,
+          captureByteStats,
           measurePromptStats,
         }),
     });

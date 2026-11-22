@@ -6,10 +6,8 @@ import { detectPackageManager } from "./detect-package-manager.js";
 import { isMissingPathError } from "./errno.js";
 import { createGitCommandError, executeGitCommand } from "./git-exec.js";
 import { readInstallOwner, type InstallOwner } from "./install-owner.js";
-import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { readPackageName } from "./package-json.js";
 import { canAccess } from "./path-existence.js";
-import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 import {
   channelToNpmTag,
   DEV_BRANCH,
@@ -289,14 +287,12 @@ async function resolveUpdateInstallOwnership(
 export async function resolveUpdateInstallIdentity(params: {
   root: string | null;
   timeoutMs?: number;
-  signal?: AbortSignal;
 }): Promise<UpdateInstallIdentity> {
   const { root, ...options } = params;
   const identity = await resolveUpdateInstallOwnership(root, options);
   const { installKind } = identity;
   const git =
     installKind === "git" && root ? await readGitUpdateIdentity(root, options) : undefined;
-  options.signal?.throwIfAborted();
   return { ...identity, git };
 }
 
@@ -593,18 +589,6 @@ export async function resolveNpmChannelTag(
     fetchTag("latest"),
   ]);
   return selectNpmChannelVersion(channelStatus, latestStatus);
-}
-
-export function compareSemverStrings(a: string | null, b: string | null): number | null {
-  if (a && b) {
-    const openClawReleaseCmp = compareOpenClawReleaseVersions(a, b);
-    if (openClawReleaseCmp != null) {
-      return openClawReleaseCmp;
-    }
-  }
-  const normalizedA = a ? normalizeLegacyDotBetaVersion(a) : null;
-  const normalizedB = b ? normalizeLegacyDotBetaVersion(b) : null;
-  return normalizedA && normalizedB ? compareValidSemver(normalizedA, normalizedB) : null;
 }
 
 export async function checkUpdateStatus(params: {

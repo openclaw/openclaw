@@ -9,6 +9,7 @@ import type {
 import {
   buildModelProviderCards,
   buildUnconfiguredProviderOptions,
+  listAgentUtilityOverrides,
   type DefaultModelSelection,
   modelCatalogRef,
   readModelProviderConfig,
@@ -312,6 +313,27 @@ it.each([
     ],
   },
   {
+    name: "filters an unselected model by global base readiness without alternatives",
+    models: [
+      model("global-ready", {
+        available: false,
+        defaultModelRuntimes: {
+          base: { agentRuntime: { id: "openclaw", source: "model" }, available: true },
+          alternatives: [],
+        },
+      }),
+      model("scoped-only-ready", {
+        available: true,
+        defaultModelRuntimes: {
+          base: { agentRuntime: { id: "openclaw", source: "model" }, available: false },
+          alternatives: [],
+        },
+      }),
+    ],
+    selection: modelSelection("openai/saved"),
+    expected: ["openai/global-ready", "openai/saved"],
+  },
+  {
     name: "preserves alias-valued and bare model defaults",
     models: [model("claude-opus", { provider: "anthropic", alias: "Opus", available: true })],
     selection: modelSelection("opus", ["unknown-model"]),
@@ -325,6 +347,19 @@ it("distinguishes unknown and empty catalogs for saved models", () => {
   const saved = modelSelection("saved-model");
   expect(choices(null, saved)[0]).not.toHaveProperty("available");
   expect(choices([], saved)[0]).toMatchObject({ available: false });
+});
+
+it("keeps saved-selection additions out of the shared catalog", () => {
+  const catalog = [model("ready", { available: true }), model("unavailable")];
+  expect(choices(catalog, modelSelection("openai/saved")).map(modelCatalogRef)).toEqual([
+    "openai/ready",
+    "openai/saved",
+  ]);
+  expect(choices(catalog, modelSelection("openai/unavailable")).map(modelCatalogRef)).toEqual([
+    "openai/ready",
+    "openai/unavailable",
+  ]);
+  expect(catalog.map(modelCatalogRef)).toEqual(["openai/ready", "openai/unavailable"]);
 });
 
 it.each([
@@ -430,5 +465,47 @@ it("keeps the first usage alias label and the last alias payload", () => {
       displayName: "First label",
       usage: { windows: [{ label: "latest", usedPercent: 75 }] },
     },
+  ]);
+});
+
+it("uses Gateway presentation ahead of auth and usage labels, retaining provider keys", () => {
+  const providerId = "rtx-pro-workstation";
+  const providerIcon = { source: "asset", url: "/provider-icon/opaque-version" } as const;
+  const cards = buildModelProviderCards({
+    authStatus: { ts: 1, providers: [provider(providerId, { displayName: "Auth label" })] },
+    models: [
+      model("local-model", { provider: providerId, providerName: "Workstation", providerIcon }),
+    ],
+    configProviders: [{ key: providerId, hasApiKey: false }],
+    providerPresentations: { [providerId]: { providerName: "Workstation", providerIcon } },
+    providerUsage: null,
+  });
+  expect(cards).toHaveLength(1);
+  expect(cards[0]).toMatchObject({
+    id: providerId,
+    configKey: providerId,
+    displayName: "Workstation",
+    providerName: "Workstation",
+    providerIcon,
+    modelCount: 1,
+  });
+});
+
+it("lists agents with their own utility model or fallbacks and what they select", () => {
+  const config = {
+    agents: {
+      defaults: { utilityModel: "openai/gpt-5-mini" },
+      entries: {
+        forge: { utilityModel: { primary: "anthropic/claude-sonnet-4-6", fallbacks: ["a/b"] } },
+        quiet: { utilityModel: "" },
+        backup: { utilityModel: { fallbacks: ["a/b", "c/d"] } },
+      },
+    },
+  };
+  const agents = ["forge", "quiet", "backup", "scout"].map((id) => ({ id, name: id }));
+  expect(listAgentUtilityOverrides(config, agents)).toEqual([
+    { agentId: "forge", label: "forge", model: "anthropic/claude-sonnet-4-6", fallbacks: ["a/b"] },
+    { agentId: "quiet", label: "quiet", model: "", fallbacks: [] },
+    { agentId: "backup", label: "backup", model: undefined, fallbacks: ["a/b", "c/d"] },
   ]);
 });

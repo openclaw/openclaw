@@ -4,11 +4,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { resolveSandboxAgentId } from "./shared.js";
 import type { SandboxScope } from "./types.js";
 
-function formatSandboxRecreateHint(params: {
-  scope: SandboxScope;
-  sessionKey: string;
-  browser?: boolean;
-}) {
+function formatSandboxRecreateHint(params: Parameters<typeof handleHotSandboxConfigMismatch>[0]) {
   const command = `openclaw sandbox recreate${params.browser ? " --browser" : ""}`;
   if (params.scope === "session") {
     return formatCliCommand(`${command} --session ${params.sessionKey}`);

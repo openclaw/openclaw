@@ -7,7 +7,17 @@ import type {
   UserMessage,
 } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
+import { transformTransportMessages } from "../../../src/agents/transport-message-transform.js";
+import {
+  freezeJsonSnapshot,
+  isDeeplyFrozenPlainData,
+  isPlainData,
+} from "../../../src/shared/immutable-data.js";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { createFailureMessage } from "../../agent-core/src/turn-interruption.js";
+import { createAiTransportHost, runWithAiTransportHost } from "./host.js";
+import type { AnthropicOptions } from "./provider-options.js";
+import { preparedRequestSuffix } from "./provider-options.js";
 import {
   anthropicModel,
   assistantMessage,
@@ -18,6 +28,7 @@ import {
   userMessage,
 } from "./provider-transport-parity.test-support.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "./replay-turn-classification.js";
+import { buildAnthropicRequest } from "./transports/anthropic-messages.js";
 
 function user(content: string, timestamp: number, turnScoped?: boolean): UserMessage {
   return userMessage(content, {
@@ -60,6 +71,11 @@ function system(text: string, turnScoped = false) {
   };
 }
 
+const wireUser = (content: unknown) => ({ role: "user", content });
+const wireAssistant = (content: unknown) => ({ role: "assistant", content });
+const toolBlocks = [{ type: "tool_use" }, { type: "tool_use" }];
+const resultBlocks = [{ type: "tool_result" }, { type: "tool_result" }];
+
 function appendToolRound(messages: Context["messages"], model: Model, round: number) {
   const ids = [`call_${round}_a`, `call_${round}_b`];
   const calls = ids.map((id) => ({
@@ -70,14 +86,7 @@ function appendToolRound(messages: Context["messages"], model: Model, round: num
   }));
   messages.push(
     assistant(model, calls, round * 2, "toolUse"),
-    ...ids.map((id) => ({
-      role: "toolResult" as const,
-      toolCallId: id,
-      toolName: "lookup",
-      timestamp: round * 2 + 1,
-      isError: false,
-      content: [{ type: "text" as const, text: `Answer ${id}` }],
-    })),
+    ...ids.map((id) => makeTextToolResult(id, "lookup", `Answer ${id}`, false, round * 2 + 1)),
   );
 }
 
@@ -90,19 +99,18 @@ describe("Anthropic runtime-context cache lifecycle", () => {
       "retained v2026.9.7 context",
       "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
     ].join("\n");
-    const legacyCarrier = userMessage([textBlock(legacyText)], {
-      timestamp: 2,
-      runtimeContextCarrier: true,
-      runtimeContextCarrierRetained: true,
-    });
     const messages: Context["messages"] = [
       user("Original question", 1),
-      legacyCarrier,
+      userMessage([textBlock(legacyText)], {
+        timestamp: 2,
+        runtimeContextCarrier: true,
+        runtimeContextCarrierRetained: true,
+      }),
       assistant(
         anthropicModel,
         [
           { type: "thinking", thinking: "signed thought", thinkingSignature: "signature" },
-          { type: "text", text: "Original answer" },
+          textBlock("Original answer"),
         ],
         3,
       ),
@@ -147,12 +155,12 @@ describe("Anthropic runtime-context cache lifecycle", () => {
     "preserves excluded-consult updates and the prompt prefix (prior conversation=%s)",
     async (priorConversation) => {
       const model = { ...anthropicModel, id: "claude-opus-5-5" };
-      const answer = assistant(model, [{ type: "text", text: "Answer" }]);
+      const answer = assistant(model, [textBlock("Answer")]);
       const prior: Context["messages"] = priorConversation
         ? [user("Earlier question", 0), answer]
         : [];
       // The generated consult prompt was excluded from replay; both updates survive.
-      const messages: Context["messages"] = [
+      const messages = [
         ...prior,
         user("Changed instructions", 2, false),
         user("Consult facts", 3, true),
@@ -160,16 +168,13 @@ describe("Anthropic runtime-context cache lifecycle", () => {
       appendToolRound(messages, model, 2);
       const expected = [
         ...(priorConversation
-          ? [
-              { role: "user", content: "Earlier question" },
-              { role: "assistant", content: [textBlock("Answer")] },
-            ]
+          ? [wireUser("Earlier question"), wireAssistant([textBlock("Answer")])]
           : []),
-        { role: "user", content: "." },
+        wireUser("."),
         system("Changed instructions"),
         system("Consult facts", true),
-        { role: "assistant", content: [{ type: "tool_use" }, { type: "tool_use" }] },
-        { role: "user", content: [{ type: "tool_result" }, { type: "tool_result" }] },
+        wireAssistant(toolBlocks),
+        wireUser(resultBlocks),
       ];
       for (const implementation of ["provider", "transport"] as const) {
         const first = await captureMessages(implementation, model, messages);
@@ -181,11 +186,13 @@ describe("Anthropic runtime-context cache lifecycle", () => {
         ]);
         expect(second.payload.messages).toMatchObject([
           ...expected,
-          { role: "assistant", content: [textBlock("Answer")] },
-          { role: "user", content: "Next question" },
+          wireAssistant([textBlock("Answer")]),
+          wireUser("Next question"),
         ]);
-        expect(second.payload.system).toEqual(first.payload.system);
-        expect(second.payload.system).toEqual([textBlock(context.systemPrompt)]);
+        expect([first.payload.system, second.payload.system]).toEqual([
+          [textBlock(context.systemPrompt)],
+          [textBlock(context.systemPrompt)],
+        ]);
         expect((second.payload.messages as unknown[]).slice(0, expected.length)).toEqual(
           first.payload.messages,
         );
@@ -193,7 +200,7 @@ describe("Anthropic runtime-context cache lifecycle", () => {
     },
   );
 
-  it("sends turn-scoped operator context with system authority", async () => {
+  it("keeps operator context at system authority and its historical position after an abort", async () => {
     const messages: Context["messages"] = [
       user("Question", 1),
       user("Prompt update", 2, false),
@@ -203,14 +210,28 @@ describe("Anthropic runtime-context cache lifecycle", () => {
       const { payload, headers } = await captureMessages(implementation, opusModel, messages, {
         headers: { "anthropic-beta": "custom-beta" },
       });
-      expect(payload.messages).toEqual([
-        { role: "user", content: "Question" },
+      const expected = [
+        wireUser("Question"),
         system("Prompt update"),
         system("Runtime facts", true),
-      ]);
+      ];
+      expect(payload.messages).toEqual(expected);
       const betas = headers.get("anthropic-beta")?.split(",");
       expect(betas).toContain("custom-beta");
       expect(betas).toContain("mid-conversation-system-clear-at-2026-08-21");
+      const replay = await captureMessages(implementation, opusModel, [
+        ...messages,
+        createFailureMessage(opusModel, new Error("Interrupted"), true),
+        user("Second question", 4),
+        user("Second turn facts", 5, true),
+      ]);
+      expect(replay.payload.system).toEqual(payload.system);
+      expect(replay.payload.messages).toEqual([
+        ...expected,
+        wireAssistant([textBlock(STREAM_ERROR_FALLBACK_TEXT)]),
+        wireUser("Second question"),
+        system("Second turn facts", true),
+      ]);
     }
   });
 
@@ -232,49 +253,14 @@ describe("Anthropic runtime-context cache lifecycle", () => {
       });
       expect(payload.messages).toMatchObject([
         { role: "user" },
-        {
-          role: "assistant",
-          content: [
-            { type: "thinking", thinking: "Use lookup", signature: "signed-tool-turn" },
-            { type: "tool_use" },
-            { type: "tool_use" },
-          ],
-        },
-        {
-          role: "user",
-          content: [
-            { type: "tool_result", tool_use_id: "call_1_a" },
-            { type: "tool_result", tool_use_id: "call_1_b" },
-          ],
-        },
+        wireAssistant([
+          { type: "thinking", thinking: "Use lookup", signature: "signed-tool-turn" },
+          ...toolBlocks,
+        ]),
+        wireUser(
+          ["call_1_a", "call_1_b"].map((tool_use_id) => ({ type: "tool_result", tool_use_id })),
+        ),
         system("Permission changed"),
-      ]);
-    }
-  });
-
-  it("preserves historical operator positions before the next user with an aborted assistant", async () => {
-    const messages: Context["messages"] = [
-      user("First question", 1),
-      user("First turn facts", 2, true),
-    ];
-    const nextMessages: Context["messages"] = [...messages];
-    nextMessages.push(createFailureMessage(opusModel, new Error("Interrupted"), true));
-    nextMessages.push(user("Second question", 4), user("Second turn facts", 5, true));
-    for (const implementation of ["provider", "transport"] as const) {
-      const initial = await captureMessages(implementation, opusModel, messages);
-      const replay = await captureMessages(implementation, opusModel, nextMessages);
-      if (!Array.isArray(initial.payload.messages)) {
-        throw new Error("Expected initial messages");
-      }
-      expect(replay.payload.system).toEqual(initial.payload.system);
-      expect(replay.payload.messages).toEqual([
-        ...initial.payload.messages,
-        {
-          role: "assistant",
-          content: [textBlock(STREAM_ERROR_FALLBACK_TEXT)],
-        },
-        { role: "user", content: "Second question" },
-        system("Second turn facts", true),
       ]);
     }
   });
@@ -289,11 +275,9 @@ describe("Anthropic runtime-context cache lifecycle", () => {
       const { payload, headers } = await captureMessages(implementation, opusModel, messages, {
         apiKey: "test-sk-ant-oat-fixture",
       });
-      expect(payload.messages).toEqual([
-        { role: "user", content: "Question" },
-        { role: "user", content: "Runtime facts" },
-        { role: "user", content: "Next question" },
-      ]);
+      expect(payload.messages).toEqual(
+        ["Question", "Runtime facts", "Next question"].map(wireUser),
+      );
       expect(headers.get("anthropic-beta")?.split(",") ?? []).not.toContain(
         "mid-conversation-system-clear-at-2026-08-21",
       );
@@ -337,10 +321,7 @@ describe("Anthropic runtime-context cache lifecycle", () => {
           const wire = payload.messages as Array<{ role: string; content: unknown }>;
           const stable = retained ? wire : wire.slice(0, -1);
           if (!retained) {
-            expect(wire.at(-1)).toEqual({
-              role: "user",
-              content: runtimeText,
-            });
+            expect(wire.at(-1)).toEqual(wireUser(runtimeText));
           } else {
             const retainedContent = wire[1]?.content;
             expect(
@@ -394,4 +375,144 @@ describe("Anthropic runtime-context cache lifecycle", () => {
       }
     },
   );
+});
+
+it.each(["provider", "transport"] as const)(
+  "reuses frozen %s history with isolated cache checkpoints, result groups and mutable tails",
+  async (profile) => {
+    const host = createAiTransportHost({
+      transformTransportMessages,
+      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData, isPlainData },
+    });
+    await runWithAiTransportHost(host, async () => {
+      const calls = ["a", "b"].map((id) => ({
+        type: "toolCall" as const,
+        id,
+        name: "read",
+        arguments: { path: id },
+      }));
+      const messages = [
+        user("question", 0),
+        assistant(anthropicModel, calls, 1, "toolUse"),
+        makeTextToolResult("a", "read", "A", false, 2),
+        makeTextToolResult("b", "read", "B", false, 3),
+        user("follow up", 4),
+        assistant(anthropicModel, [textBlock("done")], 5),
+      ];
+      messages.forEach(freezeJsonSnapshot);
+      const tail = user("current", 6);
+      const request = async (
+        history = [...messages, tail],
+        oauth = false,
+        cacheRetention: AnthropicOptions["cacheRetention"] = "none",
+      ) =>
+        (
+          await buildAnthropicRequest(
+            anthropicModel,
+            { messages: history },
+            { cacheRetention },
+            profile,
+            oauth,
+            false,
+          )
+        ).params.messages;
+      const golden =
+        '[{"role":"user","content":"question"},{"role":"assistant","content":[{"type":"tool_use","id":"a","name":"read","input":{"path":"a"}},{"type":"tool_use","id":"b","name":"read","input":{"path":"b"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"a","content":"A","is_error":false},{"type":"tool_result","tool_use_id":"b","content":"B","is_error":false}]},{"role":"user","content":"follow up"},{"role":"assistant","content":[{"type":"text","text":"done"}]},{"role":"user","content":"current"}]';
+      const first = await request();
+      expect(JSON.stringify(first)).toBe(golden);
+      expect(first.slice(0, -1).every(isDeeplyFrozenPlainData)).toBe(true);
+      expect(JSON.stringify(await request(undefined, true))).toContain('"name":"Read"');
+      const marked = await request(undefined, false, "long");
+      const expectedMarked = JSON.parse(golden);
+      for (const index of [3, 5]) {
+        expectedMarked[index].content = [
+          textBlock(index === 3 ? "follow up" : "current", { type: "ephemeral", ttl: "1h" }),
+        ];
+      }
+      expect(JSON.stringify(marked)).toBe(JSON.stringify(expectedMarked));
+      expect(marked[2]).toBe(first[2]);
+      const changed = messages.map((message, index) =>
+        index === 3
+          ? freezeJsonSnapshot(makeTextToolResult("b", "read", "changed", false, 3))
+          : message,
+      );
+      expect(JSON.stringify(await request([...changed, tail]))).toBe(
+        golden.replace('"content":"B"', '"content":"changed"'),
+      );
+      const again = await request();
+      expect(JSON.stringify(again)).toBe(golden);
+      for (let index = 0; index < first.length - 1; index++) {
+        expect(again[index]).toBe(first[index]);
+      }
+      tail.content = "edited tail";
+      expect(JSON.stringify(await request())).toBe(
+        golden.replace('"content":"current"', '"content":"edited tail"'),
+      );
+      expect(first.at(-1)?.content).toBe("current");
+    });
+  },
+);
+
+it("separates active tool-turn thinking and prepared suffix projections", async () => {
+  const host = createAiTransportHost({
+    transformTransportMessages,
+    immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData, isPlainData },
+  });
+  await runWithAiTransportHost(host, async () => {
+    const messages = freezeJsonSnapshot([
+      user("question", 0),
+      assistant(
+        anthropicModel,
+        [
+          { type: "thinking", thinking: "signed", thinkingSignature: "signature" },
+          { type: "toolCall", id: "read", name: "read", arguments: {} },
+        ],
+        1,
+        "toolUse",
+      ),
+      makeTextToolResult("read", "read", "result", false, 2),
+    ]);
+    const request = async (requestContext: Context) =>
+      (
+        await buildAnthropicRequest(
+          anthropicModel,
+          requestContext,
+          { cacheRetention: "none", thinkingEnabled: false },
+          "transport",
+          false,
+          false,
+        )
+      ).params.messages;
+    const active = await request({ messages });
+    expect(active[1]?.content).toEqual([
+      { type: "thinking", thinking: "signed", signature: "signature" },
+      { type: "tool_use", id: "read", name: "read", input: {} },
+    ]);
+    const inactive = await request({ messages: [...messages, user("next", 3)] });
+    expect(inactive[1]?.content).toEqual([
+      { type: "tool_use", id: "read", name: "read", input: {} },
+    ]);
+    expect((await request({ messages }))[1]).toBe(active[1]);
+    const suffix = {
+      messages: [freezeJsonSnapshot(makeTextToolResult("read:0", "read", "suffix", false, 4))],
+    };
+    preparedRequestSuffix.mark(suffix, new Set(["read_0"]));
+    expect(await request(suffix)).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "read_0", content: "suffix", is_error: false },
+        ],
+      },
+    ]);
+    preparedRequestSuffix.mark(suffix, new Set(["read:0"]));
+    expect(await request(suffix)).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "read:0", content: "suffix", is_error: false },
+        ],
+      },
+    ]);
+  });
 });

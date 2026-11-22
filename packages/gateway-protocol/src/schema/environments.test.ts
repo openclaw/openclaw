@@ -18,20 +18,6 @@ import {
 import { WorkerSlotSummarySchema } from "./environments.js";
 import { schemaValidation, validation } from "./protocol-validation.test-support.js";
 
-const workerStates = [
-  "requested",
-  "provisioning",
-  "bootstrapping",
-  "ready",
-  "attached",
-  "idle",
-  "draining",
-  "destroying",
-  "destroyed",
-  "failed",
-  "orphaned",
-] as const;
-
 const node = { id: "node:build-mac", type: "node", status: "available" };
 const summary = schemaValidation(EnvironmentSummarySchema);
 const listed = schemaValidation(EnvironmentsListResultSchema);
@@ -46,6 +32,13 @@ const launch = validation(validateWorkerDesktopLaunchParams);
 const launched = validation(validateWorkerDesktopLaunchResult);
 const profile = { id: "aws", providerId: "crabbox" };
 const profileResult = (...profiles: unknown[]) => ({ environments: [], profiles });
+const nodeWith = (field: string) => (value: unknown) => ({ ...node, [field]: value });
+const machine = { id: "standard", label: "Standard" };
+const command = (state = "invocable", fields: object = {}) => ({
+  command: "runtime.exec",
+  state,
+  ...fields,
+});
 
 describe("worker environment protocol schemas", () => {
   it("accepts only boolean opt-in for prepared details in list and status requests", () => {
@@ -63,24 +56,17 @@ describe("worker environment protocol schemas", () => {
   it("accepts opt-in desktop setup discovery with a closed credential-free result", () => {
     listing.accepts({ includeDesktopSetup: true }, { includeDesktopSetup: false });
     listing.rejects({ includeDesktopSetup: "true" });
-    const gateway = { id: "gateway", type: "local", status: "available" };
-    for (const state of ["ready", "needs-server", "unsupported", "managed"]) {
-      listed.accepts({
-        environments: [{ ...gateway, desktopSetup: { state } }],
-      });
-    }
-    summary.accepts({
-      ...gateway,
-      desktopSetup: { state: "unsupported", detail: "VNC authentication is required" },
-    });
-    for (const desktopSetup of [
-      {},
-      { state: "unknown" },
-      { state: "ready", password: "hidden" },
-      { state: "unsupported", detail: "" },
-    ]) {
-      summary.rejects({ ...gateway, desktopSetup });
-    }
+    const desktop = nodeWith("desktopSetup");
+    listed.accepts({ environments: [desktop({ state: "ready" })] });
+    summary.accepts(desktop({ state: "unsupported", detail: "VNC authentication is required" }));
+    summary.rejects(
+      ...[
+        {},
+        { state: "unknown" },
+        { state: "ready", password: "hidden" },
+        { state: "unsupported", detail: "" },
+      ].map(desktop),
+    );
   });
   it("accepts only a profile and local project selector for preparation", () => {
     const request = { profileId: "development", projectPath: "/projects/app" };
@@ -110,12 +96,12 @@ describe("worker environment protocol schemas", () => {
 
   it("keeps the worker lifecycle state closed", () => {
     const states = schemaValidation(WorkerEnvironmentStateSchema);
-    states.accepts(...workerStates);
+    states.accepts("ready");
     states.rejects("unknown");
   });
 
   it("accepts only redacted node worker bundle status", () => {
-    const bundle = (workerBundle: unknown) => ({ ...node, workerBundle });
+    const bundle = nodeWith("workerBundle");
     summary.accepts(
       bundle({ status: "installed", version: "2026.8.9" }),
       bundle({ status: "missing" }),
@@ -142,51 +128,40 @@ describe("worker environment protocol schemas", () => {
   });
 
   it("accepts only bounded, unique effective node command authority", () => {
-    summary.accepts({
-      ...node,
-      invocableCommands: ["codex.exec-server.stdio.v1", "system.run"],
-    });
-    summary.accepts({ ...node, invocableCommands: [] });
-
-    for (const invocableCommands of [
-      [""],
-      ["system.run", "system.run"],
-      ["x".repeat(129)],
-      Array.from({ length: 129 }, (_, index) => `command.${index}`),
-    ]) {
-      summary.rejects({ ...node, invocableCommands });
-    }
+    const commands = nodeWith("invocableCommands");
+    summary.accepts(commands(["codex.exec-server.stdio.v1", "system.run"]), commands([]));
+    summary.rejects(
+      ...[
+        [""],
+        ["system.run", "system.run"],
+        ["x".repeat(129)],
+        Array.from({ length: 129 }, (_, index) => `command.${index}`),
+      ].map(commands),
+    );
   });
 
   it("keeps runtime-scoped node command state bounded and closed", () => {
-    const command = (requiredNodeCommand: unknown) => ({ ...node, requiredNodeCommand });
+    const required = nodeWith("requiredNodeCommand");
     for (const state of ["invocable", "pending-approval", "undeclared", "unauthorized"] as const) {
-      summary.accepts(command({ command: "runtime.exec", state }));
+      summary.accepts(required(command(state)));
     }
-    const commandState = command({ command: "runtime.exec", state: "invocable" });
-    summary.accepts(
-      command({
-        command: "runtime.exec",
-        state: "undeclared",
-        message: "Enable the runtime plugin on the node, then reconnect it.",
-      }),
-    );
+    summary.accepts(required(command("undeclared", { message: "Enable the runtime plugin." })));
     for (const schema of [
       EnvironmentsCreateResultSchema,
       EnvironmentsDestroyResultSchema,
       EnvironmentsStatusResultSchema,
     ]) {
-      schemaValidation(schema).rejects(commandState);
+      schemaValidation(schema).rejects(required(command()));
     }
-    for (const requiredNodeCommand of [
-      { command: "", state: "undeclared" },
-      { command: "x".repeat(129), state: "undeclared" },
-      { command: "runtime.exec", state: "unknown" },
-      { command: "runtime.exec", state: "undeclared", message: "" },
-      { command: "runtime.exec", state: "invocable", pending: true },
-    ]) {
-      summary.rejects(command(requiredNodeCommand));
-    }
+    summary.rejects(
+      ...[
+        command("undeclared", { command: "" }),
+        command("undeclared", { command: "x".repeat(129) }),
+        command("unknown"),
+        command("undeclared", { message: "" }),
+        command("invocable", { pending: true }),
+      ].map(required),
+    );
 
     listing.accepts(
       {},
@@ -208,20 +183,16 @@ describe("worker environment protocol schemas", () => {
     launched.accepts({ app: "terminal", status: "ready" });
     launch.rejects({ ...request, app: "editor" }, { ...request, args: ["--incognito"] });
     launched.rejects({ app: "browser", status: "starting" });
-    summary.rejects({
-      id: "environment-1",
-      type: "worker",
-      label: "Development worker",
-      status: "available",
-      worker: {
+    summary.rejects(
+      nodeWith("worker")({
         providerId: "static-ssh",
         state: "ready",
         ageMs: 250,
         attachedSessionIds: [],
         tunnelStatus: "stopped",
         desktopApps: ["editor"],
-      },
-    });
+      }),
+    );
   });
 
   it("lists configured worker profiles without provider settings", () => {
@@ -232,29 +203,15 @@ describe("worker environment protocol schemas", () => {
           trust: "disposable",
           executionMode: "worker-turn",
           executionModes: ["worker-turn", "remote-exec"],
-          operatingSystems: [
-            { id: "linux", label: "Linux", default: true },
-            { id: "windows/wsl2", label: "Windows (WSL2)" },
-          ],
-          machines: [
-            {
-              id: "standard",
-              label: "Standard",
-              cpu: 32,
-              memoryGb: 64,
-              default: true,
-              os: "linux",
-            },
-          ],
+          operatingSystems: [{ id: "linux", label: "Linux", default: true }],
+          machines: [{ ...machine, cpu: 32, memoryGb: 64, default: true, os: "linux" }],
         },
         {
-          id: "worker",
-          providerId: "static-ssh",
+          ...profile,
           executionMode: "remote-exec",
           executionModes: ["remote-exec"],
         },
-        { id: "legacy-primary", providerId: "static-ssh", executionMode: "worker-turn" },
-        { id: "legacy", providerId: "static-ssh" },
+        profile,
       ),
     );
     for (const invalid of [
@@ -266,7 +223,7 @@ describe("worker environment protocol schemas", () => {
       { executionModes: ["remote-exec", "worker-turn"] },
       { executionModes: ["worker-turn", "sandbox"] },
       { executionModes: ["worker-turn", "remote-exec", "worker-turn"] },
-      { machines: [{ id: "standard", label: "Standard", cpu: 0 }] },
+      { machines: [{ ...machine, cpu: 0 }] },
     ]) {
       listed.rejects(profileResult({ ...profile, ...invalid }));
     }

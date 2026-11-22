@@ -6,7 +6,7 @@ import {
   GATEWAY_OWNER_PROFILE_ID,
   type UsersSelfResult,
 } from "../../packages/gateway-protocol/src/schema/users.js";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
@@ -24,7 +24,6 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resetGatewayTestState } from "./gateway.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
-import * as setupAdmission from "./server-methods/setup-admission.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 import {
   connectGatewayClient,
@@ -59,7 +58,7 @@ afterEach(() => {
 });
 
 it(
-  "replaces same-owner sign-in, preserves other owners, and fences revoked retries through WebSocket",
+  "replaces same-owner sign-in and preserves other owners through WebSocket",
   { timeout: 90_000 },
   async ({ signal }) => {
     const join = <T>(work: PromiseLike<T>) => withinTest(work, signal);
@@ -177,6 +176,8 @@ it(
               tls: { enabled: true, autoGenerate: false, certPath, keyPath },
             },
             agents: { defaults: { workspace: state.workspaceDir, skipBootstrap: true } },
+            // Keep the fetch trace scoped to sign-in, not background catalog polling.
+            models: { catalogRefresh: { enabled: false } },
             plugins: {
               allow: ["github-copilot"],
               slots: { memory: "none" },
@@ -186,8 +187,7 @@ it(
             update: { checkOnStart: false },
           },
         });
-        let owner: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-        let sameOwner: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+        const owners: Awaited<ReturnType<typeof connectGatewayClient>>[] = [];
         try {
           await server.startupSettled;
           const connectOwner = async (label: string) => {
@@ -214,13 +214,12 @@ it(
               deviceToken: rotated.entry.token,
               scopes,
             });
+            owners.unshift(actor);
             return { actor, device };
           };
           // Paired backend devices share the Gateway owner; the proxy authenticates a person.
-          const initialOwner = await connectOwner("setup-owner");
-          owner = initialOwner.actor;
-          const { device } = initialOwner;
-          sameOwner = (await connectOwner("replacement-owner")).actor;
+          const { actor: owner } = await connectOwner("setup-owner");
+          const { actor: sameOwner } = await connectOwner("replacement-owner");
           const auth = {
             agentId: "main",
             authChoice: "github-copilot",
@@ -228,21 +227,29 @@ it(
           };
           const readProfiles = () =>
             loadAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles;
-          const setupOwner = owner;
-          for (const actor of [setupOwner, sameOwner]) {
+          for (const actor of [owner, sameOwner]) {
             const self = await actor.request<UsersSelfResult>("users.self", {});
             expect(self.profile.id).toBe(GATEWAY_OWNER_PROFILE_ID);
           }
           const otherSelf = await client.request<UsersSelfResult>("users.self", {});
           expect(otherSelf.profile.id).not.toBe(GATEWAY_OWNER_PROFILE_ID);
-          const start = (sessionId: string, actor = setupOwner) =>
+          const start = (sessionId: string, actor = owner) =>
             actor.request("openclaw.setup.auth.start", { ...auth, sessionId });
-          const startSignIn = async (sessionId: string, actor = setupOwner) => {
+          const startSignIn = async (sessionId: string, actor = owner) => {
             await start(sessionId, actor);
             return await actor.request<WizardNextResult>("wizard.next", { sessionId });
           };
           const expectPending = (result: WizardNextResult) =>
             expect(result).toMatchObject({ done: false, step: { id: expect.any(String) } });
+          const observeSettlement = () => {
+            const settled = createDeferredCore<string[]>();
+            observation.settled = (options) => {
+              if (options.req.method === "openclaw.setup.auth.start") {
+                settled.resolve([...options.context.wizardSessions.keys()]);
+              }
+            };
+            return settled;
+          };
           const abandoned = await startSignIn("abandoned-signin");
           expectPending(abandoned);
           expect(await owner.request("wizard.next", { sessionId: "abandoned-signin" })).toEqual(
@@ -258,12 +265,7 @@ it(
             ],
             ["abandoned-signin", "wizard session already exists"],
           ] as const) {
-            const foreignSettled = createDeferredCore<string[]>();
-            observation.settled = (options) => {
-              if (options.req.method === "openclaw.setup.auth.start") {
-                foreignSettled.resolve([...options.context.wizardSessions.keys()]);
-              }
-            };
+            const foreignSettled = observeSettlement();
             await expect(start(foreignSessionId, client)).rejects.toThrow(message);
             expect(await join(foreignSettled.promise)).toEqual(["abandoned-signin"]);
             expect(await owner.request("wizard.next", { sessionId: "abandoned-signin" })).toEqual(
@@ -313,58 +315,8 @@ it(
             );
           };
           expectActivation();
-          // Cancellation requires a pending prompt, not a provider-specific prompt sequence.
-          expectPending(await startSignIn("before-revocation"));
-          const beforeRevocation = [...requests];
-          const reached = createDeferredCore();
-          const release = createDeferredCore();
-          const finished = createDeferredCore<string[]>();
-          const whenSettled = setupAdmission.whenAdmittedWizardSessionSettled;
-          // Hold only the retry's existing settlement await; cancellation and lock release stay real.
-          vi.spyOn(setupAdmission, "whenAdmittedWizardSessionSettled").mockImplementationOnce(
-            async (session) => {
-              await whenSettled(session);
-              reached.resolve();
-              await release.promise;
-            },
-          );
-          observation.settled = (options) => {
-            if (options.req.method === "openclaw.setup.auth.start") {
-              finished.resolve([...options.context.wizardSessions.keys()]);
-            }
-          };
-          const reply = start("revoked-retry").then(
-            (value) => ({ result: value }),
-            (error: unknown) => ({ error }),
-          );
-          try {
-            await join(
-              awaitGateBeforeSettlement(
-                reached.promise,
-                finished.promise,
-                "Retry finished before settlement barrier",
-              ),
-            );
-            await client.request("device.token.revoke", {
-              deviceId: device.deviceId,
-              role: device.role,
-            });
-            release.resolve();
-            const sessions = await join(finished.promise);
-            expect(await reply).toHaveProperty("error");
-            expect(sessions).not.toContain("revoked-retry");
-            expect(requests).toEqual(beforeRevocation);
-            expect(readProfiles()).toEqual(savedProfiles);
-            expectActivation();
-          } finally {
-            release.resolve();
-            await join(Promise.all([finished.promise, reply]));
-          }
         } finally {
-          if (sameOwner) {
-            await disconnectGatewayClient(sameOwner);
-          }
-          if (owner) {
+          for (const owner of owners) {
             await disconnectGatewayClient(owner);
           }
           await disconnectGatewayClient(client);

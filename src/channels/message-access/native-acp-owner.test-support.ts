@@ -1,5 +1,13 @@
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
+import { expect } from "vitest";
+import { getAcpSessionManager, testing } from "../../acp/control-plane/manager.js";
+import { disposeAcpSessionManagerInstance } from "../../acp/control-plane/manager.lifecycle.js";
+import { ensureConfiguredAcpBindingSession } from "../../acp/persistent-bindings.lifecycle.js";
 import { resolveConfiguredAcpBindingSpecFromRecord } from "../../acp/persistent-bindings.types.js";
+import {
+  registerAcpRuntimeBackend,
+  unregisterAcpRuntimeBackend,
+} from "../../acp/runtime/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -45,10 +53,19 @@ export function configureNativeAcp(
   if (!binding || !spec) {
     throw new Error("Expected configured native-command ACP binding");
   }
-  return { backendId, binding, spec };
+  return {
+    backendId,
+    spec,
+    target: { cfg, agentId: "main", sessionKey: binding.statefulTarget.sessionKey },
+    seed: async (overrides: Partial<typeof spec>) => {
+      expect(
+        await ensureConfiguredAcpBindingSession({ cfg, spec: { ...spec, ...overrides } }),
+      ).toMatchObject({ ok: true });
+    },
+  };
 }
 
-export function createNativeAcpRuntime(
+export function installNativeAcpRuntime(
   backendId: string,
   pauseAt: "capability" | "control" | undefined,
   extendedHandle = false,
@@ -69,10 +86,7 @@ export function createNativeAcpRuntime(
     async ensureSession(input) {
       effects.push("initialize");
       acceptedOptions.clear();
-      for (const [key, value] of [
-        ["model", input.model],
-        ["thinking", input.thinking],
-      ] as const) {
+      for (const [key, value] of Object.entries({ model: input.model, thinking: input.thinking })) {
         if (value) {
           acceptedOptions.set(key, value);
         }
@@ -111,8 +125,17 @@ export function createNativeAcpRuntime(
       throw new Error("Native preparation must not start a provider turn");
     },
   };
+  testing.resetAcpSessionManagerForTests();
+  registerAcpRuntimeBackend({ id: backendId, runtime });
+  const manager = getAcpSessionManager();
   return {
-    runtime,
+    manager,
+    close: async () => {
+      finish.resolve();
+      await disposeAcpSessionManagerInstance(manager, "test complete");
+      unregisterAcpRuntimeBackend(backendId);
+      testing.resetAcpSessionManagerForTests();
+    },
     effects,
     preparing,
     finish,

@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
+import { createEnteredGate as createGate } from "../../entered-gate.test-support.js";
 import type { SubagentRegistrationScope } from "../registry/subagent-registry.types.js";
 import {
   loadSubagentSpawnModuleForTest,
@@ -17,19 +18,6 @@ let PluginRegistryInspectionResources: typeof import("../../../plugins/registry-
 let retireInspectionInstances: typeof import("../../../plugins/registry-inspection.test-support.js").retireInspectionInstances;
 let withPluginRuntimeRegistryScope: typeof import("../../../plugins/runtime/gateway-request-scope.js").withPluginRuntimeRegistryScope;
 let AsyncWorkScope: typeof import("../../../shared/async-work-scope.js").AsyncWorkScope;
-
-function createGate() {
-  const entered = createDeferred();
-  const release = createDeferred();
-  return {
-    entered: entered.promise,
-    release: release.resolve,
-    wait: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-  };
-}
 
 function createEngineFixture(
   options: {
@@ -112,6 +100,7 @@ describe("spawn context-engine resource custody", () => {
   });
   let spawn: typeof import("./subagent-spawn.js").spawnSubagentDirect;
   let scheduler: typeof import("../swarm/swarm-scheduler.js");
+  let enqueueSwarmRun: typeof import("../swarm/swarm-scheduler.lifecycle.test-support.js").enqueueSwarmRun;
   let expectedCloseFailure: unknown;
   let GatewayDrainingError: typeof import("../../../process/gateway-work-admission.js").GatewayDrainingError;
   type Request = { method?: string; params?: Record<string, unknown> };
@@ -148,6 +137,7 @@ describe("spawn context-engine resource custody", () => {
       getRuntimeConfig: () => config,
     }));
     scheduler = await import("../swarm/swarm-scheduler.js");
+    ({ enqueueSwarmRun } = await import("../swarm/swarm-scheduler.lifecycle.test-support.js"));
     ({ LegacyContextEngine } = await import("../../../context-engine/legacy.js"));
     ({ registerContextEngineInRegistry, resolveContextEngine } =
       await import("../../../context-engine/registry.js"));
@@ -419,7 +409,7 @@ describe("spawn context-engine resource custody", () => {
       }
       return { runId: request.params?.idempotencyKey, status: "accepted" };
     });
-    scheduler.enqueueSwarmRun({
+    enqueueSwarmRun({
       groupId: JSON.stringify(["main", "main", "resource-group"]),
       runId: "blocker",
       maxConcurrent: 1,
@@ -486,7 +476,14 @@ describe("spawn context-engine resource custody", () => {
         expect(completeLaunchCleanup).not.toHaveBeenCalled();
       }
       expect(fixture.rollback).toHaveBeenCalledTimes(
-        ["rollback-failure", "disposal-failure", "withdrawal", "retired-draining"].includes(mode)
+        [
+          "rollback-failure",
+          "disposal-failure",
+          "withdrawal",
+          "retired-draining",
+          "shutdown-disposal-failure",
+          "shutdown-draining",
+        ].includes(mode)
           ? 1
           : 0,
       );

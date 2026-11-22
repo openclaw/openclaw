@@ -3,6 +3,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 // whole-vault scans (search and lookup) for wiki queries. Single-page reads stay
 // on the calling thread (query.ts) so they never wait behind a scan.
 import {
+  createPluginRuntimeProcessEntrypoint,
   resolveRuntimeWorkerUrl,
   WorkerTaskPool,
   type WorkerTaskResponse,
@@ -61,12 +62,10 @@ export type WikiPageScanResult =
 /** What the pool runs: the listing and the scan reads; one-page reads stay in-thread. */
 type WikiPagePoolTask = Exclude<WikiPageReadTask, { select: "page" }>;
 
-const memoryWikiQueryReaderEntrypoint = {
-  currentModuleUrl: import.meta.url,
-  sourceWorkerName: "query-reader.worker",
-  distWorkerPath: "extensions/memory-wiki/src/query-reader.worker.js",
-  package: { name: "@openclaw/memory-wiki", distWorkerPath: "src/query-reader.worker.js" },
-} as const;
+const memoryWikiQueryReaderEntrypoint = createPluginRuntimeProcessEntrypoint(
+  "memoryWikiQuery",
+  import.meta.url,
+);
 
 let pool: WorkerTaskPool<WikiPagePoolTask, WikiPageReadResult> | undefined;
 

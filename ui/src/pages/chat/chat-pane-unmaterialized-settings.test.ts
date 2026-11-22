@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { withSessionMutationOperations } from "../../lib/sessions/session-mutation-operations.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { renderPaneModelControl } from "./chat-pane-model-control.test-support.ts";
@@ -27,7 +28,7 @@ afterEach(resetTranscriptTestDom);
 const settings = {
   thinking: ["thinkingLevel", { thinkingLevel: "high" }, { thinking: "high" }],
   speed: ["fastMode", { fastMode: true, effectiveFastMode: true }, { fast: "true" }],
-  context: ["contextWindow", { contextWindow: "128k" }, { context: "true" }],
+  context: ["contextWindow", { contextWindow: "128k" }, { context: "Context window: 128K" }],
 } as const;
 const model: ModelCatalogEntry = {
   id: "fixture-model",
@@ -116,8 +117,8 @@ it.each([
         thinking: effort?.dataset.chatThinkingValue,
         fast: effort?.dataset.chatFastMode,
         context: container
-          .querySelector("[data-chat-context-window-toggle]")
-          ?.getAttribute("aria-checked"),
+          .querySelector(".chat-controls__context-trigger")
+          ?.getAttribute("aria-label"),
       };
     };
     const draw = () => {
@@ -126,6 +127,7 @@ it.each([
       const controls = renderChatPaneComposerControls({
         state: pane.state,
         selectedSession: selectedChatSessionRow(pane.state),
+        cachedSessionStatePending: false,
         agentDefaultModel: undefined,
         modelAccess: access.model,
         effortAccess: access.effort,
@@ -143,7 +145,12 @@ it.each([
     );
     const effort = container.querySelector<HTMLElement>("[data-chat-thinking-select]");
     const initialThinking = initialState === "placeholder" ? "low" : "";
-    const initialValues = { thinking: initialThinking, fast: "false", context: "false" };
+    const initialValues = {
+      thinking: initialThinking,
+      fast: "false",
+      context: "Context window: 64K",
+    };
+    await waitForSolid(() => expect(controlValues()).toEqual(initialValues));
     expect(effort?.dataset).toMatchObject({
       chatThinkingValue: initialThinking,
       chatThinkingDisabled: "false",
@@ -159,17 +166,18 @@ it.each([
       );
     if (setting === "context") {
       expect(
-        container.querySelector<HTMLButtonElement>("[data-chat-context-window-toggle]")?.disabled,
+        container.querySelector<HTMLButtonElement>(".chat-controls__context-trigger")?.disabled,
       ).toBe(false);
     }
     operation = select(props);
-    expect(patch).toHaveBeenCalledOnce();
-    expect(patch.mock.calls[0]?.[1]).not.toHaveProperty("expectedSessionId");
     // The RPC is still held; a real render must keep the admitted selection.
     const pendingProps = draw();
     expect.soft(controlValues()).toMatchObject(pending);
     expect(selectedChatSessionRow(pane.state)?.sessionId).toBeUndefined();
     expect(sessions.state.result?.sessions).toHaveLength(initialState === "placeholder" ? 1 : 0);
+    await withSessionMutationOperations(() => undefined);
+    expect(patch).toHaveBeenCalledOnce();
+    expect(patch.mock.calls[0]?.[1]).not.toHaveProperty("expectedSessionId");
     if (returnToInitial) {
       latestOperation = select(pendingProps, true);
       expect(patch).toHaveBeenCalledOnce();
@@ -195,7 +203,7 @@ it.each([
       await expect(operation).resolves.toBe(false);
     }
     draw();
-    expect(controlValues()).toEqual(initialValues);
+    await waitForSolid(() => expect(controlValues()).toEqual(initialValues));
     expect(pane.state.chatError).toEqual(
       returnToInitial
         ? null

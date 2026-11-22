@@ -1,6 +1,7 @@
 import { Type, type Static } from "typebox";
 import {
   UPDATE_NPM_ERROR_CODES,
+  UPDATE_RUN_CAUSES,
   UPDATE_RUN_DRIVER_LIMIT,
   UPDATE_RUN_PHASES,
   UPDATE_RUN_STATUSES,
@@ -88,6 +89,7 @@ export const UpdateRunRecordSchema = closedObject({
       }),
     ),
     sessionKey: Type.Optional(text),
+    noticeSurface: Type.Optional(Type.Literal("app")),
     deliveryContext: Type.Optional(
       closedObject({
         channel: Type.Optional(text),
@@ -99,6 +101,7 @@ export const UpdateRunRecordSchema = closedObject({
     campaignId: Type.Optional(text),
     doctorHint: Type.Optional(text),
     nextAction: Type.Optional(text),
+    cause: Type.Optional(Type.Enum(UPDATE_RUN_CAUSES)),
   }),
   target: closedObject({
     channel: Type.Optional(text),
@@ -274,6 +277,14 @@ export const UpdateRunRecordSchema = closedObject({
   downtimeMs: Type.Union([timestamp, Type.Null()]),
 });
 
+export const UpdateRecoveryCleanupParamsSchema = Type.Union([
+  closedObject({ runId, expectedOwnerId: Type.String({ minLength: 1 }) }),
+  closedObject({
+    dryRun: Type.Optional(Type.Boolean()),
+    expectedOwnerId: Type.String({ minLength: 1 }),
+  }),
+]);
+
 export const UpdateRunsGetParamsSchema = closedObject({ runId });
 export const UpdateRunsGetResultSchema = closedObject({
   run: Type.Union([UpdateRunRecordSchema, Type.Null()]),
@@ -299,6 +310,7 @@ export const UpdateRunResultSchema = closedObject({
   ackDelivered: Type.Optional(Type.Boolean()),
   ackQueued: Type.Optional(Type.Boolean()),
   acknowledgement: Type.Optional(Type.String()),
+  noticeInApp: Type.Optional(Type.Boolean()),
   code: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
   handoff: Type.Optional(Type.Unknown()),

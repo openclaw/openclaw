@@ -105,12 +105,9 @@ export async function initializeMemoryWikiVault(
   const rootDir = config.vault.path;
   const createdDirectories: string[] = [];
   const createdFiles: string[] = [];
-  const rootCreated = !(await pathExists(rootDir));
-
-  if (rootCreated) {
+  if (await fs.mkdir(rootDir, { recursive: true })) {
     createdDirectories.push(rootDir);
   }
-  await fs.mkdir(rootDir, { recursive: true });
   const hadVaultScaffold = (
     await Promise.all(
       WIKI_VAULT_SCAFFOLD.map((relativePath) => pathExists(path.join(rootDir, relativePath))),
@@ -123,10 +120,9 @@ export async function initializeMemoryWikiVault(
 
   for (const relativeDir of WIKI_VAULT_DIRECTORIES) {
     const fullPath = path.join(rootDir, relativeDir);
-    if (!(await pathExists(fullPath))) {
+    if (await fs.mkdir(fullPath, { recursive: true })) {
       createdDirectories.push(fullPath);
     }
-    await fs.mkdir(fullPath, { recursive: true });
   }
 
   await writeFileIfMissing(rootDir, "AGENTS.md", buildAgentsMarkdown(), createdFiles);

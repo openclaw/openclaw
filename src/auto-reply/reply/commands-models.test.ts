@@ -43,6 +43,23 @@ function configWithDefaults(defaults: AgentDefaults = {}): OpenClawConfig {
   };
 }
 
+function cliConfig(runtime = "claude-cli", defaults: AgentDefaults = {}) {
+  return configWithDefaults({
+    model: "anthropic/claude-opus-4-5",
+    models: { "anthropic/claude-opus-4-5": { agentRuntime: { id: runtime } } },
+    ...defaults,
+  });
+}
+
+function cliCatalog(extra: ModelCatalogEntry[] = []) {
+  catalog = [
+    { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+    { provider: "claude-cli", id: "claude-opus-4-5", name: "Claude Opus (CLI)" },
+    ...extra,
+  ];
+  setCredentials(["anthropic", "claude-cli"]);
+}
+
 function expectText(text: string | undefined, ...fragments: string[]) {
   for (const fragment of fragments) {
     expect(text).toContain(fragment);
@@ -157,6 +174,55 @@ function runModels(command: string, defaults?: AgentDefaults, surface = "discord
 }
 
 describe("handleModelsCommand", () => {
+  it("preserves the CLI route allowed by a role policy", async () => {
+    cliCatalog();
+    const config = cliConfig();
+    config.gateway = {
+      roles: {
+        definitions: {
+          cli: {
+            sessions: { others: "none" },
+            agents: "*",
+            scopes: ["operator.read"],
+            modelPolicy: { allow: ["claude-cli/*"] },
+          },
+        },
+      },
+    };
+    const data = await buildPreparedModelsProviderData(config, "main");
+    expect(data.providers).toEqual(["anthropic", "claude-cli"]);
+    expect(data.byProvider.get("anthropic")).toEqual(new Set(["claude-opus-4-5"]));
+  });
+
+  it("restores the CLI choice when its canonical twin is no longer available", async () => {
+    cliCatalog();
+    const config = cliConfig();
+    const available = await buildPreparedModelsProviderData(config, "main");
+    expect(available.providers).toEqual(["anthropic"]);
+
+    // Canonical provider discovery failed auth; the independent CLI account remains usable.
+    providerOutcomes = [{ provider: "anthropic", status: "auth-rejected" }];
+    const unavailable = await buildPreparedModelsProviderData(config, "main");
+    expect(unavailable.providers).toEqual(["anthropic", "claude-cli"]);
+    expect(unavailable.modelMenu?.byProvider.get("anthropic")?.available).toBe(0);
+    expect(unavailable.modelMenu?.byProvider.get("claude-cli")?.available).toBe(1);
+  });
+
+  it("keeps the only allowed CLI route even when the canonical default is configured", async () => {
+    cliCatalog();
+    setCredentials(["claude-cli"]);
+    const data = await buildPreparedModelsProviderData(
+      cliConfig("claude-cli", { modelPolicy: { allow: ["claude-cli/*"] } }),
+    );
+    expect(data.providers).toEqual(["claude-cli"]);
+  });
+
+  it("retains a distinct model under the CLI provider after removing its equivalent twin", async () => {
+    cliCatalog([{ provider: "claude-cli", id: "claude-sonnet-4-5", name: "Claude Sonnet (CLI)" }]);
+    const data = await buildPreparedModelsProviderData(cliConfig());
+    expect(data.byProvider.get("claude-cli")).toEqual(new Set(["claude-sonnet-4-5"]));
+  });
+
   it("labels the default route after clearing the session runtime pin", async () => {
     setCredentials(["anthropic", "claude-cli"]);
     const data = await buildPreparedModelsProviderData(
@@ -203,10 +269,7 @@ describe("handleModelsCommand", () => {
 
   it("reports sign-in needed for a logged-out configured CLI runtime", async () => {
     setCredentials([]);
-    const result = await runModels("/models anthropic", {
-      model: "anthropic/claude-opus-4-5",
-      models: { "anthropic/claude-opus-4-5": { agentRuntime: { id: "claude-cli" } } },
-    });
+    const result = await runModels("/models anthropic", cliConfig().agents?.defaults);
     expectText(
       result?.reply?.text,
       "Sign-in needed",
@@ -342,11 +405,11 @@ describe("handleModelsCommand", () => {
     ]);
   });
 
-  it("keeps /models list <provider> as an alias", async () => {
-    const result = await runModels("/models list anthropic");
-
-    expect(result?.reply?.text).toContain("Models (anthropic) — showing 1-2 of 2 (page 1/1)");
-    expect(result?.reply?.text).toContain("- anthropic/claude-opus-4-5");
+  it("follows the list alias's custom-size More hint", async () => {
+    const first = await runModels("/models list anthropic limit=1");
+    const more = /^More: (.+)$/m.exec(first?.reply?.text ?? "")?.[1] ?? "";
+    const result = await runModels(more);
+    expect(result?.reply?.text).toContain("showing 2-2 of 2 (page 2/2)");
   });
 
   it("returns a deprecation message for /models add", async () => {

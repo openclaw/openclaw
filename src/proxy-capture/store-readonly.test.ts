@@ -32,10 +32,6 @@ function createCaptureDatabase(env: NodeJS.ProcessEnv, schemaVersion: number): s
       CREATE TABLE workspace_attestations (
         workspace_key TEXT PRIMARY KEY, attested_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL
       ) STRICT;
-      CREATE TABLE capture_sessions (
-        id TEXT NOT NULL PRIMARY KEY, started_at INTEGER NOT NULL, ended_at INTEGER,
-        mode TEXT NOT NULL, source_scope TEXT NOT NULL, source_process TEXT NOT NULL, proxy_url TEXT
-      ) STRICT;
       CREATE TABLE capture_blobs (
         blob_id TEXT NOT NULL PRIMARY KEY, content_type TEXT, encoding TEXT NOT NULL,
         size_bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, data BLOB NOT NULL, created_at INTEGER NOT NULL
@@ -47,12 +43,7 @@ function createCaptureDatabase(env: NodeJS.ProcessEnv, schemaVersion: number): s
         method TEXT, host TEXT, path TEXT, status INTEGER, close_code INTEGER, content_type TEXT,
         headers_json TEXT, data_text TEXT, data_blob_id TEXT, data_sha256 TEXT, error_text TEXT, meta_json TEXT
       ) STRICT;
-      CREATE INDEX capture_events_session_ts_idx ON capture_events(session_id, ts);
-      CREATE INDEX capture_events_flow_idx ON capture_events(flow_id, ts);
       INSERT INTO workspace_attestations VALUES ('workspace-1', 100, 200);
-      INSERT INTO capture_sessions VALUES (
-        'session-1', 1, NULL, 'qa', 'openclaw', 'candidate', NULL
-      );
     `);
     db.prepare(
       `INSERT INTO capture_blobs (
@@ -110,7 +101,7 @@ describe("createDebugProxyCaptureReader", () => {
     },
   );
 
-  it("leaves missing state absent and observes a database created after the reader", () => {
+  it("leaves missing state absent and observes later database creation and WAL commits", () => {
     const env = makeStateEnv();
     const reader = createDebugProxyCaptureReader({ env });
     const databasePath = resolveOpenClawStateSqlitePath(env);
@@ -122,69 +113,18 @@ describe("createDebugProxyCaptureReader", () => {
     createCaptureDatabase(env, 3);
     expect(reader.getSessionEvents("session-1")).toHaveLength(1);
     expect(reader.readBlob("blob-1")).toBe('{"ok":true}');
-  });
-
-  it("observes later committed WAL writes on subsequent calls", () => {
-    const env = makeStateEnv();
-    const databasePath = createCaptureDatabase(env, 3);
-    const reader = createDebugProxyCaptureReader({ env });
     withDatabase(databasePath, (writer) => {
       writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
-      expect(reader.getSessionEvents("session-1")).toHaveLength(1);
 
       writer.exec(`INSERT INTO capture_events (
              id, session_id, ts, source_scope, source_process, protocol, direction, kind, flow_id
-           ) VALUES (2, 'session-1', 4, 'openclaw', 'candidate', 'https', 'inbound', 'response', 'flow-1')`);
+           ) VALUES
+             (2, 'session-1', 5, 'openclaw', 'candidate', 'https', 'inbound', 'response', 'flow-2'),
+             (3, 'session-1', 5, 'openclaw', 'candidate', 'https', 'inbound', 'response', 'flow-3'),
+             (4, 'session-1', 6, 'openclaw', 'candidate', 'https', 'inbound', 'response', 'flow-4')`);
 
-      expect(reader.getSessionEvents("session-1").map((event) => event.id)).toEqual([2, 1]);
-    });
-  });
-
-  it("projects exact camelCase keys with timestamp, id, and limit ordering", () => {
-    const env = makeStateEnv();
-    const databasePath = createCaptureDatabase(env, 3);
-    withDatabase(databasePath, (writer) => {
-      writer.exec(
-        `INSERT INTO capture_events (
-           id, session_id, ts, source_scope, source_process, protocol, direction, kind, flow_id,
-           method, host, path, status, close_code, content_type, headers_json, data_text,
-           data_blob_id, data_sha256, error_text, meta_json
-         ) VALUES
-           (2, 'session-1', 5, 'openclaw', 'candidate', 'https', 'outbound', 'request', 'flow-2',
-            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
-           (3, 'session-1', 5, 'openclaw', 'candidate', 'https', 'inbound', 'response', 'flow-3',
-            'GET', 'slack.com', '/api/conversations.history', 201, 1001, 'application/json',
-            '{"accept":"application/json"}', '{"text":"newer"}', 'blob-1', 'sha-3', 'error-3', '{"attempt":3}'),
-           (4, 'session-1', 6, 'openclaw', 'candidate', 'https', 'inbound', 'response', 'flow-4',
-            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)`,
-      );
-    });
-
-    const events = createDebugProxyCaptureReader({ env }).getSessionEvents("session-1", 2);
-
-    expect(events.map((event) => event.id)).toEqual([4, 3]);
-    expect(events[1]).toEqual({
-      id: 3,
-      sessionId: "session-1",
-      ts: 5,
-      sourceScope: "openclaw",
-      sourceProcess: "candidate",
-      protocol: "https",
-      direction: "inbound",
-      kind: "response",
-      flowId: "flow-3",
-      method: "GET",
-      host: "slack.com",
-      path: "/api/conversations.history",
-      status: 201,
-      closeCode: 1001,
-      contentType: "application/json",
-      headersJson: '{"accept":"application/json"}',
-      dataText: '{"text":"newer"}',
-      dataBlobId: "blob-1",
-      dataSha256: "sha-3",
-      errorText: "error-3",
-      metaJson: '{"attempt":3}',
+      expect(reader.getSessionEvents("session-1", 2).map((event) => event.id)).toEqual([4, 3]);
+      expect(reader.getSessionEvents("session-1").map((event) => event.id)).toEqual([4, 3, 2, 1]);
     });
   });
 

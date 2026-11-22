@@ -4,11 +4,12 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
-import { createDesktopFullscreen } from "../desktop-fullscreen.ts";
+import { createDesktopFullscreen, type DesktopFullscreen } from "../desktop-fullscreen.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
 import { nativeDockPanelCss as dockStyles } from "../dock-panel-styles.ts";
-import { FullscreenButton } from "../fullscreen-solid.tsx";
+import { IconButton } from "../solid/icon-button.tsx";
 import { StrokeIcon } from "../solid/stroke-icon.tsx";
+import "../tooltip.ts";
 import { createDesktopAppLauncher } from "./desktop-app-launcher.ts";
 import { DesktopAudioControl, DesktopAudioNotice } from "./desktop-audio-view.tsx";
 import { createDesktopAudio } from "./desktop-audio.ts";
@@ -34,6 +35,7 @@ import {
   type DesktopPictureInPicture,
 } from "./desktop-picture-in-picture.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
+import sessionPanelRailStyles from "../../styles/session-panel-rail.css?inline";
 import desktopStyles from "./desktop-panel.css?inline";
 
 type Methods = { handleToggleRequest(event: Event): void };
@@ -72,7 +74,7 @@ export const DesktopPanel = defineSolidBridge<DesktopPanelInputs, Methods>(
     const state = projectOwner(panel, (owner) => owner);
     return (
       <>
-        <style>{`${dockStyles}\n${desktopStyles}`}</style>
+        <style>{`${dockStyles}\n${sessionPanelRailStyles}\n${desktopStyles}`}</style>
         {inputs.available &&
           (inputs.documentMode || inputs.embedded || state.read().dockLayout.open) && (
             <DesktopPresentation view={state.read().view} presentation={inputs.presentation} />
@@ -119,6 +121,28 @@ declare module "@solidjs/web" {
       } & { embedded?: boolean };
     }
   }
+}
+
+function FullscreenButton(props: { controller: DesktopFullscreen }) {
+  const label = () =>
+    t(
+      props.controller.active()
+        ? "desktop.exitFullscreen"
+        : props.controller.supported()
+          ? "desktop.enterFullscreen"
+          : "desktop.fullscreenUnavailable",
+    );
+  return (
+    <IconButton
+      size={28}
+      class="rail-header__action bp-icon desktop-fullscreen-button"
+      label={label()}
+      icon={props.controller.active() ? "minimize" : "maximize"}
+      pressed={props.controller.active()}
+      aria-disabled={props.controller.supported() ? "false" : "true"}
+      onClick={(event) => void props.controller.toggle(event.currentTarget)}
+    />
+  );
 }
 
 function PictureInPictureButton(props: {

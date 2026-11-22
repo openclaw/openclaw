@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -12,7 +13,6 @@ import {
   MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
   registerMemoryCoreDoctorChecks,
 } from "./doctor-health.js";
-import { collectVectorProviderFindings } from "./doctor-vector-index-provider.js";
 
 type InspectManagedLocalEmbeddingSetup = Parameters<
   typeof registerMemoryCoreDoctorChecks
@@ -136,18 +136,8 @@ describe("managed local embedding setup health check", () => {
     expect(registerHealthCheck).toHaveBeenCalledTimes(2);
   });
 
-  it("passes configured local setup", async () => {
-    const stateDir = await createState();
-    const inspect = vi.fn<InspectManagedLocalEmbeddingSetup>(async () => null);
-    const check = captureCheck(inspect);
-
-    await expect(check.detect(context(stateDir, "local"))).resolves.toEqual([]);
-    expect(inspect.mock.calls.map(([params]) => params.provider)).toEqual(["local"]);
-  });
-
   it("snapshots only local agents while preserving their setup findings", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-setup-mixed-"));
-    roots.add(stateDir);
+    const stateDir = await createState(false);
     for (const agentId of ["default", "disabled", "local"]) {
       await createSemanticIndex(stateDir, "embeddinggemma-300m", agentId);
     }
@@ -285,25 +275,24 @@ describe("managed local embedding setup health check", () => {
         }),
       ]);
       const checkContext = context(stateDir, "local");
-      const config = checkContext.cfg;
-      const env = checkContext.env!;
       const check = captureCheck(async () => null);
       await expect(check.detect(checkContext)).resolves.toEqual([]);
-      await expect(
-        collectVectorProviderFindings(
-          { config, env, stateDir, shouldInspectAgent: () => true },
-          async () => ({
-            provider: "local",
-            reason: "Synthetic provider setup requirement",
-          }),
-        ),
-      ).resolves.toEqual([
+      const failureCheck = captureCheck(async ({ provider }) => ({
+        provider,
+        reason: "Synthetic provider setup requirement",
+      }));
+      await expect(failureCheck.detect(checkContext)).resolves.toEqual([
         {
-          agentId: "main",
-          model,
-          provider: "local",
-          configPrefix: "memory.search",
-          reason: "Synthetic provider setup requirement",
+          checkId: MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
+          severity: "error",
+          source: "memory-core",
+          path: "memory.search.provider",
+          target: "main/local",
+          requirement: "managed-local-embedding-setup",
+          message:
+            "Memory index for agent main uses vector model embeddinggemma-300m, but " +
+            'embedding provider "local" cannot initialize (Synthetic provider setup requirement).',
+          fixHint: undefined,
         },
       ]);
       expect(writer.exitCode).toBeNull();
@@ -318,6 +307,76 @@ describe("managed local embedding setup health check", () => {
       await closed;
     }
   }, 30_000);
+
+  it.each([
+    ["provider", "space"],
+    ["space", "provider"],
+  ])(
+    "preserves confirmed provider failure around unavailable inspection (%j)",
+    async (first, second) => {
+      const order = [first, second];
+      const stateDir = await createState(false);
+      const originals = new Map<string, Buffer>();
+      for (const agentId of order) {
+        const file = await createSemanticIndex(stateDir, model, agentId);
+        originals.set(file, await fs.readFile(file));
+      }
+      const prepare = sqliteRuntime.prepareSqliteReadOnlyLocation;
+      const mkdtemp = fsSync.mkdtempSync.bind(fsSync);
+      const snapshot = vi
+        .spyOn(sqliteRuntime, "prepareSqliteReadOnlyLocation")
+        .mockImplementation(async (file, options) => {
+          if (file !== agentDatabasePath(stateDir, "space")) {
+            return prepare(file, options);
+          }
+          const allocation = vi.spyOn(fsSync, "mkdtempSync").mockImplementation((...args) => {
+            if (args[0].includes("openclaw-sqlite-readonly-")) {
+              throw Object.assign(new Error("Temporary inspection storage exhausted"), {
+                code: "ENOSPC",
+              });
+            }
+            return mkdtemp(...args);
+          });
+          try {
+            return await prepare(file, options);
+          } finally {
+            allocation.mockRestore();
+          }
+        });
+      try {
+        const findings = await captureCheck(async ({ provider }) => ({
+          provider,
+          ...setupFailure,
+        })).detect({
+          ...context(stateDir, "local"),
+          cfg: {
+            memory: { search: { provider: "local" } },
+            agents: { entries: Object.fromEntries(order.map((agentId) => [agentId, {}])) },
+          },
+        });
+        expect(findings).toHaveLength(2);
+        expect(findings).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              severity: "warning",
+              errorCode: "memory-index-inspection-unavailable",
+              target: "space",
+            }),
+            expect.objectContaining({
+              severity: "error",
+              requirement: "managed-llama-cpp-setup",
+              target: "provider/local",
+            }),
+          ]),
+        );
+        for (const [file, bytes] of originals) {
+          expect(await fs.readFile(file)).toEqual(bytes);
+        }
+      } finally {
+        snapshot.mockRestore();
+      }
+    },
+  );
 
   it("returns a structured non-ready result when an agent database cannot be inspected", async () => {
     const stateDir = await createState(false);

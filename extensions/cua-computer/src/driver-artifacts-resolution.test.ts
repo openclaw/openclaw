@@ -1,34 +1,32 @@
-import { expect, it, vi } from "vitest";
+import fs from "node:fs";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { afterEach, expect, it, vi } from "vitest";
+import pluginManifest from "../package.json" with { type: "json" };
 
-const mocks = vi.hoisted(() => ({
-  inspect: vi.fn(() => ({ ok: true, applicable: false }) as const),
-}));
-
+const mocks = vi.hoisted(() => ({ inspect: vi.fn(() => ({ ok: true }) as const) }));
 vi.mock("./driver-artifact-verification.js", () => ({
   inspectCuaDriverArtifacts: mocks.inspect,
   readPackageIdentity: vi.fn(),
 }));
+afterEach(() => vi.restoreAllMocks());
 
-import { verifyInstalledCuaDriverArtifacts } from "./driver-artifacts.js";
-
-it("supplies the accepted artifact record without depending on the bundled module path", () => {
-  verifyInstalledCuaDriverArtifacts();
-
-  expect(mocks.inspect).toHaveBeenCalledWith(
-    expect.objectContaining({
-      pluginManifest: expect.objectContaining({
-        dependencies: expect.objectContaining({ "@trycua/cua-driver": "0.34.1" }),
-        cuaDriverArtifacts: expect.objectContaining({
-          "win32-arm64-msvc": {
-            files: {
-              "cua_driver_node_runtime.node":
-                "70abb783e676fa7c1f8e837237ee20eab51b2fe56e03611fa3420f298c35eedb",
-              "cua_driver_sdk.dll":
-                "93ecb9ccef649f57264c5b41f957928eb4cab718f084aebcd2d215870833869a",
-            },
-          },
-        }),
-      }),
-    }),
+it.runIf(process.platform === "linux").each([
+  ["/usr/lib/x86_64-linux-gnu/libc.so.6", "gnu"],
+  ["/lib/libc-2.31.so", "gnu"],
+  ["/lib/ld-musl-aarch64.so.1", "musl"],
+  ["unidentified runtime", undefined],
+])("registers with %s without a diagnostic report", async (maps, linuxLibc) => {
+  vi.resetModules();
+  const report = vi.spyOn(process.report, "getReport").mockImplementation(() => {
+    throw new Error("registration must not construct a native diagnostic report");
+  });
+  const { default: plugin } = await import("../index.js");
+  vi.spyOn(fs, "readFileSync").mockReturnValueOnce(`${maps}\n`);
+  const api = createTestPluginApi({ id: "cua-computer" });
+  api.config = { plugins: { entries: { "cua-computer": { enabled: true } } } };
+  plugin.register(api);
+  expect(mocks.inspect).toHaveBeenLastCalledWith(
+    expect.objectContaining({ linuxLibc, pluginManifest }),
   );
+  expect(report).not.toHaveBeenCalled();
 });

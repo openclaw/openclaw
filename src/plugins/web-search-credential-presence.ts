@@ -1,7 +1,6 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
 
 function hasConfiguredCredentialValue(value: unknown): boolean {
   if (typeof value === "string") {
@@ -34,7 +33,6 @@ function hasConfiguredPluginWebSearchCandidate(config: OpenClawConfig): boolean 
 function hasManifestWebSearchEnvCredentialCandidate(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  origin?: PluginManifestRecord["origin"];
 }): boolean {
   const env = params.env;
   if (!env) {
@@ -44,7 +42,7 @@ function hasManifestWebSearchEnvCredentialCandidate(params: {
     config: params.config,
     env,
   }).plugins.some((plugin) => {
-    if (params.origin && plugin.origin !== params.origin) {
+    if (plugin.origin !== "bundled") {
       return false;
     }
     if ((plugin.contracts?.webSearchProviders?.length ?? 0) === 0) {
@@ -58,7 +56,6 @@ function hasManifestWebSearchEnvCredentialCandidate(params: {
 export function hasConfiguredWebSearchCredential(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  origin?: PluginManifestRecord["origin"];
 }): boolean {
   return (
     hasConfiguredSearchCredentialCandidate(params.config.tools?.web?.search) ||

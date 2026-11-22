@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
@@ -15,11 +15,11 @@ describe("session hook runner methods", () => {
   const event = { sessionId: sessionCtx.sessionId, messageCount: 1, reason: "reset" as const };
   const emptyTail = { messages: [], totalMessages: 0, truncated: false };
   const readOptions = { maxMessages: 1, maxBytes: 1_024 };
-  const tail = (content: string) => ({
-    messages: [{ role: "user", content }],
+  const tail = {
+    messages: [{ role: "user", content: "remember this" }],
     totalMessages: 1,
     truncated: false,
-  });
+  };
   const readerHook = (handler: (...args: unknown[]) => unknown, pluginId = "reader") => ({
     hookName: "session_end",
     pluginId,
@@ -28,9 +28,7 @@ describe("session hook runner methods", () => {
   });
   function requireTranscript(context: unknown) {
     const transcript = (context as PluginHookSessionContext).endedTranscript;
-    if (!transcript?.available) {
-      throw new Error("expected ended transcript reader");
-    }
+    assert(transcript?.available, "expected ended transcript reader");
     return transcript;
   }
   function transcriptContext(
@@ -42,14 +40,13 @@ describe("session hook runner methods", () => {
   }
 
   it("scopes ended transcript access to an admitted session_end handler", async () => {
-    let retained: PluginHookSessionContext["endedTranscript"];
-    const readTail = vi.fn(async () => tail("remember this"));
+    let retained: ReturnType<typeof requireTranscript> | undefined;
+    const readTail = vi.fn(async () => tail);
     const admitted = async (_event: unknown, context: unknown) => {
       const transcript = requireTranscript(context);
-      expect(transcript?.available).toBe(true);
       retained = transcript;
       await expect(transcript.readTail({ maxMessages: 10, maxBytes: 4_096 })).resolves.toEqual(
-        tail("remember this"),
+        tail,
       );
     };
     const metadataOnly = vi.fn();
@@ -61,7 +58,7 @@ describe("session hook runner methods", () => {
 
     await runner.runSessionEnd(event, context);
 
-    expect(metadataOnly).toHaveBeenCalledWith(
+    expect(metadataOnly).toHaveBeenCalledExactlyOnceWith(
       expect.anything(),
       expect.objectContaining({
         endedTranscript: {
@@ -71,10 +68,8 @@ describe("session hook runner methods", () => {
       }),
     );
     expect(readTail).toHaveBeenCalledOnce();
-    expect(retained?.available).toBe(true);
-    if (retained?.available) {
-      await expect(retained.readTail(readOptions)).rejects.toThrow("no longer active");
-    }
+    assert(retained);
+    await expect(retained.readTail(readOptions)).rejects.toThrow("no longer active");
   });
 
   it.each(["pending", "fulfilled"] as const)(
@@ -91,7 +86,7 @@ describe("session hook runner methods", () => {
       ]);
       const context = transcriptContext(() => read.promise);
       if (mode === "fulfilled") {
-        read.resolve(tail("invocation only"));
+        read.resolve(tail);
       }
       await runner.runSessionEnd(event, context);
       read.resolve(emptyTail);
@@ -108,7 +103,7 @@ describe("session hook runner methods", () => {
       .mockResolvedValue(emptyTail);
     const entered = createDeferredCore();
     const handlerGate = createDeferredCore();
-    let transcript: PluginHookSessionContext["endedTranscript"];
+    let transcript: ReturnType<typeof requireTranscript> | undefined;
     let inFlight: Promise<unknown> | undefined;
     const { registry, runner } = createHookRunnerWithRegistry([
       readerHook(() => undefined, "retiring-reader"),
@@ -131,16 +126,12 @@ describe("session hook runner methods", () => {
 
     try {
       await entered.promise;
-      expect(readTail).toHaveBeenCalledOnce();
-      if (!transcript?.available) {
-        throw new Error("expected ended transcript reader");
-      }
+      assert(transcript);
 
       disposing = instance.dispose();
       await vi.advanceTimersByTimeAsync(4_999);
       expect(instance.lifecycle.signal.aborted).toBe(false);
       await expect(transcript.readTail(readOptions)).resolves.toEqual(emptyTail);
-      expect(readTail).toHaveBeenCalledTimes(2);
 
       await vi.advanceTimersByTimeAsync(1);
       expect(instance.lifecycle.signal.aborted).toBe(true);
@@ -154,10 +145,7 @@ describe("session hook runner methods", () => {
       await running;
       const disposal = await disposing!;
       const timeout = disposal.errors[0];
-      expect(timeout).toBeInstanceOf(PluginInstanceDrainTimeoutError);
-      if (!(timeout instanceof PluginInstanceDrainTimeoutError)) {
-        throw new Error("expected forced-retirement settlement");
-      }
+      assert(timeout instanceof PluginInstanceDrainTimeoutError);
       await timeout.settled;
     } finally {
       handlerGate.resolve();

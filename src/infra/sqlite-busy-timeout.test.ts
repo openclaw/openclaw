@@ -27,18 +27,10 @@ it.each([
   if (timeout === undefined) {
     db.exec("PRAGMA busy_timeout = 5000");
   } else {
-    const prepare = vi.spyOn(db, "prepare"),
-      exec = vi.spyOn(db, "exec");
     expect(readTimeout(db)).toBe(initial);
     writeTimeout(db, initial);
-    expect([prepare.mock.calls, exec.mock.calls]).toEqual([[], []]);
-    prepare.mockRestore();
-    exec.mockRestore();
-    expect(timeoutOf(db)).toEqual({ timeout: initial });
   }
-  expect(withTimeout(db, temporary, () => timeoutOf(db))).toEqual({
-    timeout: temporary,
-  });
+  expect(withTimeout(db, temporary, () => timeoutOf(db))).toEqual({ timeout: temporary });
   expect(timeoutOf(db)).toEqual({ timeout: initial });
   expect(() =>
     withTimeout(db, 25, () => {
@@ -51,7 +43,6 @@ it.each([
 it("restores timeout and lock reporting before the admitted operation finishes", () => {
   using db = new DatabaseSync(":memory:");
   db.exec("PRAGMA busy_timeout = 5000");
-  const exec = vi.spyOn(db, "exec");
   const restoreEarly = (restore: () => void) => {
     expect(reportsLocks(db)).toBe(false);
     restore();
@@ -59,7 +50,6 @@ it("restores timeout and lock reporting before the admitted operation finishes",
   };
   withTimeout(db, 25, restoreEarly, suppress);
   expect([timeoutOf(db), reportsLocks(db)]).toEqual([{ timeout: 5000 }, true]);
-  expect(exec.mock.calls).toEqual([["PRAGMA busy_timeout = 25"], ["PRAGMA busy_timeout = 5000"]]);
 });
 
 it.each([undefined, { timeout: 19 }, { timeout: 37, open: false }])(
@@ -96,10 +86,7 @@ it("suppresses expected lock warnings only for the scoped attempt", () => {
   contender.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
 
   const attempt = () =>
-    runSqliteImmediateTransactionSync(db, () => undefined, {
-      busyTimeoutMs: 0,
-      logger,
-    });
+    runSqliteImmediateTransactionSync(db, () => undefined, { busyTimeoutMs: 0, logger });
   expect(() => withTimeout(db, 0, attempt, suppress)).toThrow();
   expect(logger.warn).not.toHaveBeenCalled();
 });

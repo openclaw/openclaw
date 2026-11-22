@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
@@ -35,7 +36,7 @@ import {
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { listSessionParticipantsReadOnly } from "./session-accessor.sqlite-participant-read.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
-import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
 import {
@@ -101,9 +102,7 @@ const invalidateLineage = () => {
 };
 function sourceFor(native: OpenClawAgentReadOnlyDatabase): SessionEntryCurrentSource {
   const identity = readOpenClawAgentDatabaseIdentity(native);
-  if (typeof identity.identity !== "string") {
-    throw new Error("Expected the fixture's durable database identity");
-  }
+  assert(typeof identity.identity === "string", "Expected the fixture's durable database identity");
   return {
     agentId: native.agentId,
     path: native.path,
@@ -120,9 +119,7 @@ it.each(["native", "worker"] as const)(
       { ...scope, sessionId: "session-1" },
       { message: { role: "user", content: "receipt source" } },
     );
-    if (!appended.ok || !appended.value?.anchor) {
-      throw new Error("Expected committed transcript anchor");
-    }
+    assert(appended.ok && appended.value?.anchor, "Expected committed transcript anchor");
     const anchor = appended.value.anchor;
     const onCommitted = vi.fn();
     const options = {
@@ -324,7 +321,7 @@ it.each(["fresh", "sibling", "same-connection"] as const)(
     const update = (db: DatabaseSync) =>
       updateEntryJson(
         db,
-        "json_set(entry_json, '$.lifecycleRunId', ?, '$.subagentRecovery.lastRunId', ?)",
+        "json_set(entry_json, '$.lifecycleRunId', ?, '$.lastRunId', ?)",
         "next-lifecycle",
         "hidden-successor",
       );
@@ -335,7 +332,7 @@ it.each(["fresh", "sibling", "same-connection"] as const)(
     const observe = () =>
       expect(currentFacts(native)).toMatchObject({
         lifecycleRunId: "next-lifecycle",
-        subagentRecovery: { lastRunId: "hidden-successor" },
+        lastRunId: "hidden-successor",
       });
     if (writer === "sibling") {
       observe();
@@ -366,7 +363,7 @@ it("preserves parser values and last duplicate owner fields through native admis
     updateEntryJson(
       other,
       "substr(entry_json, 1, length(entry_json) - 1) || ?",
-      ',"lifecycleRevision":42,"lifecycleRunId":"old","lifecycleRunId":null,"activeWriterRunId":false,"deviceFolder":{"deviceId":"paired-host","path":"/home/example/project"},"subagentRecovery":{"lastRunId":23,"sessionLifecycleRunId":null}}',
+      ',"lifecycleRevision":42,"lifecycleRunId":"old","lifecycleRunId":null,"activeWriterRunId":false,"deviceFolder":{"deviceId":"paired-host","path":"/home/example/project"},"lastRunId":23}',
     );
   }
   const entry = currentFacts(database);
@@ -377,7 +374,7 @@ it("preserves parser values and last duplicate owner fields through native admis
     deviceFolder: { deviceId: "paired-host", path: "/home/example/project" },
     lifecycleRunId: null,
     activeWriterRunId: false,
-    subagentRecovery: { lastRunId: 23, sessionLifecycleRunId: null },
+    lastRunId: 23,
   };
   expect(entry).toEqual(expected);
   const source = sourceFor(database);

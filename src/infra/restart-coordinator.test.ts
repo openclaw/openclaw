@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as acpTurns from "../acp/control-plane/active-turns.js";
 import * as backgroundExec from "../agents/bash-process-registry.js";
 import * as mediaRuns from "../agents/media-generation-activity.js";
@@ -7,6 +7,10 @@ import * as cronJobs from "../cron/active-jobs.js";
 import * as cronTasks from "../cron/service/active-run-cancellation.js";
 import * as queue from "../process/command-queue.js";
 import * as gatewayWork from "../process/gateway-work-admission.js";
+import {
+  beginSessionEffect,
+  runSessionMutation,
+} from "../sessions/session-controller.lifecycle.js";
 import * as sessionRuns from "../sessions/session-controller.queries.js";
 import * as agentRuns from "./agent-run-registry.js";
 import {
@@ -57,111 +61,97 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("safe gateway restart coordinator", () => {
-  it("reports safe when no restart blockers are active", () => {
-    const preflight = createSafeGatewayRestartPreflight();
+it("counts an admitted spawn handoff while excluding the preflight request", async () => {
+  const handoff = gatewayWork.tryBeginGatewayRootWorkAdmission("subagents:spawn-handoff");
+  const request = gatewayWork.tryBeginGatewayRootWorkAdmission("ws:gateway.restart");
+  expect(handoff).not.toBeNull();
+  expect(request).not.toBeNull();
 
-    expect(preflight).toEqual({
+  try {
+    await request?.run(async () => {
+      const preflight = createSafeGatewayRestartPreflight();
+      expect(preflight.safe).toBe(false);
+      expect(preflight.counts).toMatchObject({ rootRequests: 1, totalActive: 1 });
+      expect(preflight.summary).toContain("restart deferred");
+      expect(preflight.blockers).toEqual([
+        {
+          kind: "root-request",
+          count: 1,
+          message: "1 active gateway request(s): subagents:spawn-handoff",
+        },
+      ]);
+    });
+  } finally {
+    request?.release();
+    handoff?.release();
+  }
+});
+
+it.each(["admission", "mutation"] as const)(
+  "reports session-only %s work until release",
+  async (kind) => {
+    const target = { scope: "restart-preflight.sqlite", identities: [kind] };
+    const check = async () => {
+      const result = scheduleSafeGatewayRestart();
+      expect(result.status).toBe("deferred");
+      expect(result.preflight).toMatchObject({
+        safe: false,
+        counts: {
+          sessionAdmissions: kind === "admission" ? 1 : 0,
+          sessionMutations: kind === "mutation" ? 1 : 0,
+          totalActive: 1,
+        },
+        blockers: [
+          { kind: kind === "admission" ? "session-admission" : "session-mutation", count: 1 },
+        ],
+      });
+      expect(result.preflight.summary).toContain("restart deferred:");
+    };
+    if (kind === "admission") {
+      const admission = await beginSessionEffect(target);
+      try {
+        await check();
+      } finally {
+        admission.release();
+      }
+    } else {
+      await runSessionMutation({ ...target, policy: "wait", run: check });
+    }
+    expect(createSafeGatewayRestartPreflight()).toMatchObject({
       safe: true,
-      counts: {
-        queueSize: 0,
-        pendingReplies: 0,
-        embeddedRuns: 0,
-        cronRuns: 0,
-        backgroundExecSessions: 0,
-        rootRequests: 0,
-        agentRuns: 0,
-        acpRuns: 0,
-        mediaRuns: 0,
-        totalActive: 0,
-      },
+      counts: { sessionAdmissions: 0, sessionMutations: 0, totalActive: 0 },
       blockers: [],
       summary: "safe to restart now",
     });
+  },
+);
+
+it.each([
+  { status: "deferred", active: 1, skipDeferral: false, coalesced: false },
+  { status: "coalesced", active: 0, skipDeferral: false, coalesced: true },
+  { status: "scheduled", active: 1, skipDeferral: true, coalesced: false },
+])("reports $status for safe restart requests", ({ status, active, skipDeferral, coalesced }) => {
+  scheduleGatewayRestart.mockReturnValueOnce({
+    ...restart,
+    coalesced,
+    delayMs: coalesced ? 500 : 0,
   });
-
-  it("returns structured blockers for active work", () => {
-    vi.mocked(queue.getTotalQueueSize).mockReturnValue(2);
-    vi.mocked(replies.getTotalPendingReplies).mockReturnValue(1);
-    vi.mocked(sessionRuns.getActiveSessionRunCount).mockReturnValue(1);
-    vi.mocked(cronJobs.getActiveCronJobCount).mockReturnValue(1);
-    vi.mocked(backgroundExec.getActiveBackgroundExecSessionCount).mockReturnValue(2);
-    vi.spyOn(gatewayWork, "getActiveGatewayRootWorkCount").mockReturnValue(1);
-    vi.mocked(agentRuns.getActiveAgentRunContextCount).mockReturnValue(1);
-    vi.mocked(acpTurns.getActiveAcpTurnCount).mockReturnValue(2);
-    vi.mocked(mediaRuns.getActiveMediaGenerationRunCount).mockReturnValue(3);
-    const preflight = createSafeGatewayRestartPreflight();
-
-    expect(preflight.safe).toBe(false);
-    expect(preflight.counts).toMatchObject({ totalActive: 14, backgroundExecSessions: 2 });
-    expect(preflight.blockers.map((blocker) => blocker.kind)).toEqual([
-      "queue",
-      "reply",
-      "embedded-run",
-      "background-exec",
-      "cron-run",
-      "agent-run",
-      "acp-run",
-      "media-generation",
-      "root-request",
-    ]);
-    expect(preflight.summary).toContain("restart deferred");
-    expect(preflight.summary).toContain("1 admitted agent run(s)");
-    expect(preflight.blockers).toContainEqual({
-      kind: "background-exec",
-      count: 2,
-      message: "2 active background exec session(s)",
-    });
-    expect(preflight.summary).toContain("2 active background exec session(s)");
+  vi.mocked(queue.getTotalQueueSize).mockReturnValue(active);
+  const result = scheduleSafeGatewayRestart({
+    reason: coalesced ? undefined : "test.safe",
+    skipDeferral,
   });
-
-  it("counts an admitted spawn handoff while excluding the preflight request", async () => {
-    const handoff = gatewayWork.tryBeginGatewayRootWorkAdmission("subagents:spawn-handoff");
-    const request = gatewayWork.tryBeginGatewayRootWorkAdmission("ws:gateway.restart");
-    expect(handoff).not.toBeNull();
-    expect(request).not.toBeNull();
-
-    try {
-      await request?.run(async () => {
-        const preflight = createSafeGatewayRestartPreflight();
-
-        expect(preflight.counts).toMatchObject({ rootRequests: 1, totalActive: 1 });
-        expect(preflight.blockers).toEqual([
-          {
-            kind: "root-request",
-            count: 1,
-            message: "1 active gateway request(s): subagents:spawn-handoff",
-          },
-        ]);
-      });
-    } finally {
-      request?.release();
-      handoff?.release();
-    }
-  });
-
-  it.each([
-    { status: "deferred", active: 1, skipDeferral: false, coalesced: false },
-    { status: "coalesced", active: 0, skipDeferral: false, coalesced: true },
-    { status: "scheduled", active: 1, skipDeferral: true, coalesced: false },
-  ])("reports $status for safe restart requests", ({ status, active, skipDeferral, coalesced }) => {
-    scheduleGatewayRestart.mockReturnValueOnce({
-      ...restart,
-      coalesced,
-      delayMs: coalesced ? 500 : 0,
+  expect(result).toMatchObject({ status, preflight: { safe: active === 0 } });
+  if (!active) {
+    expect(result.preflight).toMatchObject({
+      counts: { totalActive: 0 },
+      blockers: [],
+      summary: "safe to restart now",
     });
-    vi.mocked(queue.getTotalQueueSize).mockReturnValue(active);
-    const result = scheduleSafeGatewayRestart({
-      reason: coalesced ? undefined : "test.safe",
-      skipDeferral,
-    });
-    expect(result).toMatchObject({ status, preflight: { safe: active === 0 } });
-    expect(scheduleGatewayRestart).toHaveBeenCalledWith({
-      delayMs: 0,
-      reason: coalesced ? "gateway.restart.safe" : "test.safe",
-      ...(skipDeferral
-        ? { preservePendingEmitHooksOnDeferralBypass: true, skipDeferral: true }
-        : {}),
-    });
+  }
+  expect(scheduleGatewayRestart).toHaveBeenCalledWith({
+    delayMs: 0,
+    reason: coalesced ? "gateway.restart.safe" : "test.safe",
+    ...(skipDeferral ? { preservePendingEmitHooksOnDeferralBypass: true, skipDeferral: true } : {}),
   });
 });

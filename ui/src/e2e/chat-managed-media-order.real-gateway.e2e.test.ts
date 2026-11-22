@@ -2,7 +2,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
@@ -22,10 +21,10 @@ import type { ChatState } from "../pages/chat/chat-state-contract.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const sessionKey = "agent:main:managed-media-order";
@@ -124,10 +123,19 @@ async function startProvider() {
 }
 
 let instance: OpenClawTestInstance;
+let client: Awaited<ReturnType<typeof connectChatGateway>> | undefined;
 let provider: Awaited<ReturnType<typeof startProvider>>;
 const suite = createControlUiE2eSuite({
   name: "Managed image ordering through real chat.send and history",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(instance, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     provider = await startProvider();
     const close = () =>
@@ -233,11 +241,10 @@ async function runCli(args: string[]) {
 }
 
 async function callGateway(method: string, params: Record<string, unknown>) {
-  return asOptionalRecord(
-    JSON.parse(
-      await runCli(["gateway", "call", method, "--json", "--params", JSON.stringify(params)]),
-    ),
-  );
+  if (!client) {
+    throw new Error("Gateway fixture client is not connected");
+  }
+  return asOptionalRecord(await client.request(method, params));
 }
 
 const writeEvidence = (name: string, value: unknown) =>
@@ -369,7 +376,7 @@ async function runManagedMediaScenario() {
       await waitForControlUiGatewayReady(page);
       await page.getByRole("textbox", { name: "Chat composer", exact: true }).fill(prompt);
       await page.getByRole("button", { name: "Send message", exact: true }).click();
-      // The recap belongs to a run the pane observed, not a terminal history row.
+      // Observe the acknowledged live run before releasing the provider response.
       await page.waitForFunction((expectedSessionKey) => {
         const pane = document.querySelector<HTMLElement & { state?: ChatState }>(
           'openclaw-chat-pane[aria-hidden="false"]',
@@ -399,9 +406,7 @@ async function runManagedMediaScenario() {
       const renderedImages = bubble.locator("img.chat-message-image");
       // A durable reply can briefly overlap its live tail until the run retires.
       await expect.poll(() => bubble.count()).toBeGreaterThan(0);
-      await page
-        .getByRole("button", { name: "Stop generating", exact: true })
-        .waitFor({ state: "detached" });
+      await page.getByRole("button", { name: "Stop", exact: true }).waitFor({ state: "detached" });
       await bubble.getByText(closing, { exact: true }).waitFor();
       const assertDecoded = async () => {
         // Run retirement starts a final history read that can replace live image nodes.
@@ -454,8 +459,19 @@ async function runManagedMediaScenario() {
           )
           .toEqual([true, true]);
       };
-      // Read persisted history through its real owner, never pre-seed ordered content.
-      const history = await callGateway("chat.history", { sessionKey, limit: 20 });
+      // Text can settle before managed media; wait for the real history projection.
+      let history: Awaited<ReturnType<typeof callGateway>>;
+      await expect
+        .poll(async () => {
+          history = await callGateway("chat.history", { sessionKey, limit: 20 });
+          const messages = Array.isArray(history?.messages) ? history.messages : [];
+          const assistant = messages
+            .map(asOptionalRecord)
+            .find((entry) => entry?.role === "assistant");
+          const content = Array.isArray(assistant?.content) ? assistant.content : [];
+          return content.filter((block) => asOptionalRecord(block)?.type === "image").length;
+        })
+        .toBe(2);
       const messages = Array.isArray(history?.messages) ? history.messages : [];
       const assistants = messages
         .map(asOptionalRecord)
@@ -573,67 +589,6 @@ async function runManagedMediaScenario() {
         .poll(() => bubble.locator(".chat-image-frame--managed img.chat-message-image").count())
         .toBe(2);
       await assertDecoded();
-      // The terminal session recap arrives independently of final text and image decode.
-      // It adds height beside the bubble, so admit it before freezing live ancestry.
-      try {
-        await page
-          .locator(".chat-group.assistant")
-          .filter({ hasText: intro })
-          .locator(".chat-turn-recap")
-          .waitFor({ state: "visible" });
-      } catch (error) {
-        await withTimeout(
-          page.evaluate(
-            ({ expectedSessionKey, assistantRunId }) => {
-              const pane = document.querySelector<HTMLElement & { state?: ChatPageHost }>(
-                'openclaw-chat-pane[aria-hidden="false"]',
-              );
-              const state = pane?.state;
-              const row = state?.sessionsResult?.sessions.find(
-                (entry) => entry.key === expectedSessionKey,
-              );
-              const recaps = Array.from(pane?.querySelectorAll(".chat-turn-recap") ?? []);
-              return {
-                recapPanePresent: Boolean(pane),
-                recapSessionMatches: state?.sessionKey === expectedSessionKey,
-                recapRunCleared: state?.chatRunId === null,
-                recapWorkingIndicatorCount:
-                  pane?.querySelectorAll(".chat-working-indicator").length ?? null,
-                recapPendingSendCount:
-                  state?.chatQueue.filter(
-                    (item) => item.sendState === "submitting" || item.sendState === "sending",
-                  ).length ?? null,
-                recapPendingSendMatchesAssistant:
-                  state?.chatQueue.some((item) => item.sendRunId === assistantRunId) ?? null,
-                recapCount: recaps.length,
-                recapVisibleCount: recaps.filter((element) =>
-                  element.checkVisibility({ visibilityProperty: true }),
-                ).length,
-                recapAttachedCount: recaps.filter((element) =>
-                  element.closest(".chat-group.assistant"),
-                ).length,
-                recapTerminalRowPresent: Boolean(row),
-                recapTerminalRowDone: row?.status === "done",
-                recapTerminalRuntimeMs:
-                  typeof row?.runtimeMs === "number" && Number.isFinite(row.runtimeMs)
-                    ? row.runtimeMs
-                    : null,
-                recapAssistantRunPresent: assistantRunId !== null,
-                recapTerminalRunMatchesAssistant:
-                  assistantRunId !== null && row?.lastRunId === assistantRunId,
-              };
-            },
-            {
-              expectedSessionKey: sessionKey,
-              assistantRunId: readSessionMessageIdentity(assistants[0])?.runId ?? null,
-            },
-          ),
-          1_000,
-        )
-          .then((facts) => recordControlUiE2eFailureFacts(page, facts))
-          .catch(() => undefined);
-        throw error;
-      }
       const liveOrder = await captureOrder(page, bubble, "live");
       expect(await bubble.textContent()).not.toContain("MEDIA:");
       expect(sends).toEqual([prompt]);

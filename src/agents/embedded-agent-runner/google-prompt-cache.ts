@@ -1,9 +1,12 @@
 import {
-  sortPromptCacheToolsByName,
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
-import { mergeTransportHeaders, sanitizeTransportPayloadText } from "@openclaw/ai/transports";
+import {
+  convertGoogleTools,
+  mergeTransportHeaders,
+  sanitizeTransportPayloadText,
+} from "@openclaw/ai/transports";
 import { stableStringify } from "@openclaw/normalization-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
@@ -13,6 +16,7 @@ import {
   parseDateStringTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { omitNullRequestHeaders } from "../../../packages/llm-core/src/utils/request-headers.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import { cancelUnreadResponseBody } from "../../infra/http-body.js";
@@ -230,17 +234,7 @@ export async function prepareGooglePromptCacheStreamFn(
     if (!split || !systemPrompt.trim()) {
       return inner(model, context, options);
     }
-    const tools = context.tools?.length
-      ? [
-          {
-            functionDeclarations: sortPromptCacheToolsByName(context.tools).map((tool) => ({
-              name: tool.name,
-              description: tool.description,
-              parametersJsonSchema: tool.parameters,
-            })),
-          },
-        ]
-      : undefined;
+    const tools = convertGoogleTools(context.tools ?? []);
     const toolChoice = tools
       ? mapManagedGoogleToolChoice((options as { toolChoice?: unknown } | undefined)?.toolChoice)
       : undefined;
@@ -279,18 +273,20 @@ export async function prepareGooglePromptCacheStreamFn(
           );
     const callerHeaders = mergeTransportHeaders(params.model.headers, options?.headers);
     const headers =
-      resolveProviderRequestHeaders({
-        provider: params.model.provider,
-        api: params.model.api,
-        baseUrl: normalizeGoogleApiBaseUrl(params.model.baseUrl),
-        capability: "llm",
-        transport: "http",
-        defaultHeaders: authHeaders,
-        callerHeaders,
-        precedence: "caller-wins",
-      }) ??
-      mergeTransportHeaders(authHeaders, callerHeaders) ??
-      authHeaders;
+      omitNullRequestHeaders(
+        resolveProviderRequestHeaders({
+          provider: params.model.provider,
+          api: params.model.api,
+          baseUrl: normalizeGoogleApiBaseUrl(params.model.baseUrl),
+          capability: "llm",
+          transport: "http",
+          defaultHeaders: authHeaders,
+          callerHeaders,
+          precedence: "caller-wins",
+        }) ??
+          mergeTransportHeaders(authHeaders, callerHeaders) ??
+          authHeaders,
+      ) ?? {};
     const configuredModel = params.model;
     const provider = params.provider;
     const sessionManager = params.sessionManager;
@@ -434,7 +430,6 @@ export async function prepareGooglePromptCacheStreamFn(
       {
         ...context,
         systemPrompt: undefined,
-        tools: undefined,
         // Only a ready cache owns the stable system instructions. Keep fallback
         // requests intact, and never persist this per-request suffix projection.
         messages: prependRuntimeContextForModel(
@@ -446,6 +441,10 @@ export async function prepareGooglePromptCacheStreamFn(
       // must not rotate to another project's API key while referencing it.
       { ...options, headers },
       (payload) => {
+        // Retain canonical schemas for argument decoding and replay, but the
+        // cache resource owns their wire declarations and calling config.
+        delete payload.tools;
+        delete payload.toolConfig;
         payload.cachedContent = cachedContent;
       },
     );

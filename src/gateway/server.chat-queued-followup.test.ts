@@ -25,6 +25,8 @@ const CHAT_RESPONSE_TIMEOUT_MS = 10_000;
 const ANSWER = "late answer arrived over the live WebSocket";
 const completedOutcome = { kind: "completed" as const };
 const canvasCompleted = { ...completedOutcome, allowCanvasOnly: true as const };
+const prompt = "queue a reply while the previous run is active";
+type ReplyBatch = Parameters<NonNullable<InternalGetReplyOptions["onQueuedFollowupReplyBatch"]>>[0];
 let ws: WebSocket;
 let lifecycleWrites: ReturnType<typeof createPreparedLifecycleWriteTracker>;
 const gatewaySuite = installGatewayServerChatTestSuite(
@@ -85,17 +87,14 @@ describe("queued WebChat follow-up delivery", () => {
         const releaseDispatch = createDeferred();
         dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
           options = (args as { replyOptions?: InternalGetReplyOptions }).replyOptions;
-          queued = createQueueTestRun({
-            prompt: "queue a reply while the previous run is active",
-            originatingChannel: "webchat",
-          });
-          queued.turnAdoptionLifecycle = options?.turnAdoptionLifecycle;
-          queued.run = {
-            ...queued.run,
-            agentId: "main",
-            sessionKey: "agent:main:main",
-            sessionId: "sess-main",
-          };
+          queued = createQueueTestRun(
+            {
+              prompt,
+              originatingChannel: "webchat",
+              turnAdoptionLifecycle: options?.turnAdoptionLifecycle,
+            },
+            { agentId: "main", sessionKey: "agent:main:main", sessionId: "sess-main" },
+          );
           expect(bindReplySourceToFollowup(options, queued)).toBeDefined();
           expect(
             enqueueFollowupRun(
@@ -129,13 +128,15 @@ describe("queued WebChat follow-up delivery", () => {
         try {
           const response = await rpcReq(ws, "chat.send", {
             sessionKey: "main",
-            message: "queue a reply while the previous run is active",
+            message: prompt,
             idempotencyKey: sourceRunId,
           });
           expect(response.ok).toBe(true);
           await vi.waitFor(
             () => expect(options?.onQueuedFollowupReplyBatch).toBeTypeOf("function"),
-            { interval: 1 },
+            {
+              interval: 1,
+            },
           );
           releaseDispatch.resolve();
           await gatewaySuite.requestExecution.waitForDispatch(sourceRunId);
@@ -143,6 +144,14 @@ describe("queued WebChat follow-up delivery", () => {
           expect(terminalFrames).toHaveLength(0);
 
           const followupRunId = `idem-live-webchat-late-followup-${name}`;
+          const reply = (outcome: ReplyBatch["completion"], payloads: ReplyBatch["payloads"]) =>
+            options?.onQueuedFollowupReplyBatch?.({
+              kind: "queued-followup",
+              completion: outcome,
+              payloads,
+              runId: followupRunId,
+              originatingChannel: "webchat",
+            });
           const emit = (stream: AgentEventStream, data: Record<string, unknown>) =>
             emitAgentEvent({ runId: followupRunId, stream, data });
           observedFollowupRunId = followupRunId;
@@ -166,13 +175,7 @@ describe("queued WebChat follow-up delivery", () => {
             });
           }
           if (name === "text") {
-            await options?.onQueuedFollowupReplyBatch?.({
-              kind: "queued-followup",
-              completion: { kind: "progress" },
-              runId: followupRunId,
-              originatingChannel: "webchat",
-              payloads: [{ text: "working" }],
-            });
+            await reply({ kind: "progress" }, [{ text: "working" }]);
           }
           emit("assistant", { text: canvasOnly ? "" : ANSWER });
           if (completion.kind === "failed" || completion.kind === "aborted") {
@@ -187,13 +190,7 @@ describe("queued WebChat follow-up delivery", () => {
             ...(name === "silent-canvas" ? { terminalReply: { disposition: "silent" } } : {}),
             ...(completion.kind === "aborted" ? { aborted: true, stopReason: "restart" } : {}),
           });
-          await options?.onQueuedFollowupReplyBatch?.({
-            kind: "queued-followup",
-            completion: { ...completion },
-            runId: followupRunId,
-            originatingChannel: "webchat",
-            payloads: name === "text" ? [{ text: ANSWER }] : [],
-          });
+          await reply({ ...completion }, name === "text" ? [{ text: ANSWER }] : []);
           const completed = await queuedFinal;
           await rpcReq(ws, "health", {});
           expect(completed.payload?.state).toBe(state);

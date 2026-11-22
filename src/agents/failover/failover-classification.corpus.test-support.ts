@@ -63,7 +63,6 @@ export function messageRows(
 export const billingSource = "src/agents/embedded-agent-helpers.isbillingerrormessage.test.ts";
 export const matchesSource = "src/agents/embedded-agent-helpers/failover-matches.test.ts";
 export const patternsSource = "src/agents/embedded-agent-helpers/provider-error-patterns.test.ts";
-export const errorsSource = "src/agents/embedded-agent-helpers/errors.test.ts";
 export const structuredSource =
   "src/agents/embedded-agent-helpers/errors-provider-structured-signals.test.ts";
 export const httpSource = "src/agents/provider-http-errors.test.ts";

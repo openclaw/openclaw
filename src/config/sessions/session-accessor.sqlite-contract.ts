@@ -38,6 +38,13 @@ export type TranscriptEventAppendResult =
   | { appended: false }
   | { appended: true; effectiveParentId?: string | null };
 
+export type TranscriptEventReadOptions = {
+  beforeEventSeq?: number;
+  afterEventSeq?: number;
+  projection?: "reset-boundary";
+  maxEventBytes?: number;
+};
+
 export type CacheTtlProjectionPrefix = {
   anchorIds: string[];
   entries: Record<string, unknown>[];
@@ -86,6 +93,7 @@ export type SqliteSessionReclamationDiagnostics = {
     | "maintenance-pages"
     | "cold-batch"
     | "cold-maintain"
+    | "cold-sweep"
     | "cold-restore";
   workerThreadId?: number;
 };

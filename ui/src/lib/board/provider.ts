@@ -50,11 +50,6 @@ export function createNullBoardProvider(key: string): BoardProvider {
   };
 }
 
-type BoardProviderCapabilities = Pick<
-  BoardProvider,
-  "canPinWidgets" | "canPinMcpApps" | "canMutate" | "canGrant"
->;
-
 const gatewayProviders = new Map<
   string,
   { provider: GatewayBoardProvider; consumers: number; presentationScope?: object }
@@ -83,7 +78,7 @@ export type BoardProviderLease = {
   update: (
     client: BoardGatewayClient,
     connected: boolean,
-    capabilities: BoardProviderCapabilities,
+    capabilities: Pick<BoardProvider, "canPinWidgets" | "canPinMcpApps" | "canMutate" | "canGrant">,
   ) => void;
   release: () => void;
 };

@@ -67,6 +67,28 @@ describe("prepareAgentRunTerminalReply", () => {
     });
   });
 
+  it.each([
+    ["Nothing to report, so NO_REPLY.\n</think>\n\nNO_REPLY", undefined],
+    ["<think>quiet</think>\nno_reply", undefined],
+    ["<think>quiet</think>\nanswer\nNO_REPLY", "<think>quiet</think>\nanswer"],
+    [
+      "Alert: disk full.\n<think>check</think>\nNO_REPLY",
+      "Alert: disk full.\n<think>check</think>",
+    ],
+  ])("classifies the answer after closed reasoning in %j", (rawText, text) => {
+    expect(prepareAgentRunTerminalReply({ rawText }).terminalReply).toEqual(
+      text === undefined ? { disposition: "silent" } : { disposition: "visible", text },
+    );
+  });
+
+  it("preserves UTF-16 text exactly when retaining terminal evidence", () => {
+    const text = `Unicode 🦞 and a lone surrogate \ud800`;
+    expect(prepareAgentRunTerminalReply({ rawText: text })).toEqual({
+      text,
+      terminalReply: { disposition: "visible", text },
+    });
+  });
+
   it("keeps full prepared text separate from bounded, sanitized terminal evidence", () => {
     const text = `[Mon 2026-01-01 12:00 UTC] ${"A".repeat(5_000)}`;
     expect(prepareAgentRunTerminalReply({ rawText: `NO_REPLY\n${text}` })).toEqual({

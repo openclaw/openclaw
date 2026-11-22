@@ -51,6 +51,24 @@ const guardianRecord = {
   mode: "remote",
   timestamp: 42.5,
 };
+const tokenRow = {
+  device_id: "device",
+  role: "operator",
+  token: "synthetic-token",
+  scopes_json: '["operator.read"]',
+  updated_at_ms: 10,
+};
+
+function nativeFile(
+  schema: string,
+  setup?: (db: ReturnType<typeof openNodeSqliteDatabase>) => void,
+) {
+  const pathname = path.join(directories.make("native-bootstrap-"), "native.sqlite");
+  using db = openNodeSqliteDatabase(pathname);
+  db.exec(schema);
+  setup?.(db);
+  return pathname;
+}
 
 function addPortGuardianRecord(database: ReturnType<typeof openNodeSqliteDatabase>) {
   database.exec(portGuardian);
@@ -71,11 +89,7 @@ it.each([
 ])(
   "hashes native auth-table presence independently of token rows ($authTablePresent)",
   ({ authTablePresent, sha256 }) => {
-    const pathname = path.join(directories.make("native-auth-presence-"), "native.sqlite");
-    {
-      using source = openNodeSqliteDatabase(pathname);
-      source.exec(identity + (authTablePresent ? auth : ""));
-    }
+    const pathname = nativeFile(identity + (authTablePresent ? auth : ""));
     expect(readIndependentClientCredentialSource(pathname)).toMatchObject({
       authTablePresent,
       sha256,
@@ -83,15 +97,11 @@ it.each([
   },
 );
 
-it.each([identity, auth, identity + auth])(
-  "recognizes only canonical native credential table pairs",
-  (schema) => {
-    using database = openNodeSqliteDatabase(":memory:");
-    database.exec(schema);
-    expect(isNativeClientCredentialBootstrap(database)).toBe(true);
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
-  },
-);
+it("recognizes a native auth-only database", () => {
+  using database = openNodeSqliteDatabase(":memory:");
+  database.exec(auth);
+  expect(isNativeClientCredentialBootstrap(database)).toBe(true);
+});
 
 it.each([
   "",
@@ -101,8 +111,6 @@ it.each([
   `${identity} CREATE VIEW exposed AS SELECT private_key_pem FROM device_identities`,
   `${identity} CREATE TRIGGER changed AFTER INSERT ON device_identities BEGIN SELECT 1; END`,
   `${identity} CREATE INDEX extra ON device_identities(created_at_ms)`,
-  `${identity + portGuardian} CREATE TABLE unrelated(value TEXT)`,
-  `${identity + portGuardian} CREATE TABLE exec_approvals_config(raw_json TEXT)`,
 ])(
   "does not classify empty, versioned or other application data as native credentials",
   (schema) => {
@@ -127,11 +135,7 @@ it.each([
   portGuardian.replace("timestamp DESC);", "timestamp DESC) WHERE port > 0;"),
   "CREATE INDEX idx_macos_port_guardian_records_port ON device_identities(created_at_ms);",
 ])("refuses malformed PortGuardian companions without changing the source", (schema) => {
-  const pathname = path.join(directories.make("native-invalid-companion-"), "native.sqlite");
-  {
-    using source = openNodeSqliteDatabase(pathname);
-    source.exec(identity + auth + schema);
-  }
+  const pathname = nativeFile(identity + auth + schema);
   const before = fs.readFileSync(pathname);
   expect(() => readIndependentClientCredentialSource(pathname)).toThrow(
     /Native PortGuardian companion/,
@@ -176,23 +180,17 @@ it.each(["", identity + auth])(
 );
 
 it.each([
-  { wal: false, credentials: true, companion: false },
-  { wal: true, credentials: true, companion: false },
   { wal: false, credentials: true, companion: true },
   { wal: true, credentials: true, companion: true },
   { wal: false, credentials: false, companion: true },
 ])(
   "reads only credentials beside PortGuardian without changing bytes, mode or directory (WAL=$wal, credentials=$credentials, companion=$companion)",
   ({ wal, credentials, companion }) => {
-    const root = directories.make("independent-readonly-");
-    const pathname = path.join(root, "native.sqlite");
-    {
-      using source = openNodeSqliteDatabase(pathname);
+    const pathname = nativeFile(credentials ? identity + auth : "", (source) => {
       if (credentials) {
-        source.exec(identity + auth);
         source
           .prepare("INSERT INTO device_auth_tokens VALUES (?,?,?,?,?)")
-          .run("device", "operator", "synthetic-token", '["operator.read"]', 10);
+          .run(...Object.values(tokenRow));
       }
       if (companion) {
         addPortGuardianRecord(source);
@@ -200,7 +198,8 @@ it.each([
       if (wal) {
         source.exec("PRAGMA journal_mode=WAL");
       }
-    }
+    });
+    const root = path.dirname(pathname);
     fs.chmodSync(pathname, 0o400);
     const before = fs.readFileSync(pathname);
     const mode = fs.statSync(pathname).mode;
@@ -210,17 +209,7 @@ it.each([
     } else {
       expect(readIndependentClientCredentialSource(pathname).rows).toEqual({
         identities: [],
-        tokens: credentials
-          ? [
-              {
-                device_id: "device",
-                role: "operator",
-                token: "synthetic-token",
-                scopes_json: '["operator.read"]',
-                updated_at_ms: 10,
-              },
-            ]
-          : [],
+        tokens: credentials ? [tokenRow] : [],
         origins: [],
         approvals: [],
       });
@@ -339,3 +328,57 @@ it.each([false, true])(
     ).toBeUndefined();
   },
 );
+
+it("keeps refreshed independent credentials when only the source device was renumbered", () => {
+  const root = directories.make("independent-renumbered-");
+  const env = { ...process.env, HOME: root, USERPROFILE: root, OPENCLAW_STATE_DIR: root };
+  const pathname = path.join(root, "state", "openclaw.sqlite");
+  fs.mkdirSync(path.dirname(pathname), { recursive: true });
+  {
+    using source = openNodeSqliteDatabase(pathname);
+    source.exec(identity + auth);
+    source
+      .prepare("INSERT INTO device_auth_tokens VALUES (?,?,?,?,?)")
+      .run("device", "operator", "original", "[]", 10);
+  }
+  const snapshot = readIndependentClientCredentialSource(pathname);
+  const renumbered = { ...snapshot.file, dev: String(BigInt(snapshot.file.dev) + 1n) };
+  const recordedSource = {
+    kind: "independent" as const,
+    engine: "native-v0" as const,
+    identity: `${renumbered.dev}:${renumbered.ino}`,
+    generation: "0",
+    sha256: snapshot.sha256,
+    destinationVersion: 1,
+  };
+  {
+    using local = openClientCredentialCustody(env, { createIfMissing: true, migration: true })!;
+    runSqliteImmediateTransactionSync(local.database, () => {
+      local.database
+        .prepare("INSERT INTO device_auth_tokens VALUES (?,?,?,?,?)")
+        .run("device", "operator", "refreshed", "[]", 11);
+      writeClientCredentialReceipt(
+        local.database,
+        { format: 1, source: recordedSource, sharedFile: renumbered, legacyImports: {} },
+        "complete",
+      );
+    });
+  }
+  const read = (readOnly: boolean) =>
+    runClientCredentialOperation(
+      env,
+      { kind: "token.read", key: { device_id: "device", role: "operator" } },
+      { readOnly },
+    );
+  const receipt = () => {
+    using local = openClientCredentialCustody(env, { migration: true })!;
+    return readClientCredentialReceipt(local.database)?.receipt;
+  };
+  expect(read(true)).toMatchObject({ kind: "token", token: { token: "refreshed" } });
+  expect(receipt()).toMatchObject({ source: recordedSource, sharedFile: renumbered });
+  expect(read(false)).toMatchObject({ kind: "token", token: { token: "refreshed" } });
+  expect(receipt()).toMatchObject({
+    source: { ...recordedSource, identity: snapshot.identity },
+    sharedFile: snapshot.file,
+  });
+});

@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayHelloOk } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
@@ -62,7 +63,7 @@ describe("config write coordinator", () => {
     },
   );
 
-  it("surfaces an operator.admin reason when config mutations are out of scope", async () => {
+  it("names the required access without exposing scopes when config mutations are denied", async () => {
     const server = createConfigServerMock();
     const { runtimeConfig, publish, state } = await loadHarness(server.request);
     publish(true, undefined, {
@@ -75,7 +76,7 @@ describe("config write coordinator", () => {
     await expect(
       runtimeConfig.patch({ raw: { count: 2 }, note: "out-of-scope patch" }),
     ).resolves.toBe(false);
-    expect(state.lastError).toBe("Configuration changes require operator.admin access.");
+    expect(state.lastError).toBe("You need admin access to change settings.");
     expect(server.submissions).toHaveLength(0);
     runtimeConfig.dispose();
   });

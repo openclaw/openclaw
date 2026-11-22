@@ -225,7 +225,6 @@ it.each(
       });
     }
     const marker = await persistMarker(target, entry, payloads, {
-      admittedRecoverySource: undefined,
       deliveryContext: { channel: "matrix", to: "!restart:example" },
       commandOwnerReference: assertOwnerCurrent.recoveryReference,
     });
@@ -427,18 +426,17 @@ it.each(
       }
       const mayRecover =
         recoverable &&
-        (!configured || boundary === "restart-configured-allowed") &&
-        (!boundary.startsWith("restart-retained-") || boundary === "restart-retained-lifecycle");
+        (!configured ||
+          boundary === "restart-configured-allowed" ||
+          boundary === "restart-configured-handoff-removed") &&
+        (!boundary.startsWith("restart-retained-") ||
+          boundary === "restart-retained-lifecycle" ||
+          boundary === "restart-retained-grant-handoff-replaced" ||
+          boundary === "restart-retained-recovered-handoff-revoked");
       held = false;
+      // Recovery admits once. Policy changes inside the adapter affect the next
+      // start, not the admitted batch; writer and cancellation fences still apply.
       await recover();
-      if (
-        boundary === "restart-retained-recovered-handoff-revoked" ||
-        boundary === "restart-configured-handoff-removed"
-      ) {
-        expect(writes).toEqual([]);
-        expect(await loadPendingDeliveries(state.stateDir)).toHaveLength(1);
-        await recover();
-      }
       expect(writes).toEqual(mayRecover ? ["Captured final answer", "Final detail"] : []);
       expect(await loadPendingDeliveries(state.stateDir)).toHaveLength(0);
       if (recoverable) {
@@ -447,7 +445,11 @@ it.each(
       }
       if (mayRecover) {
         expect(loadSessionEntry(target)?.pendingFinalDelivery?.deliveries).toEqual([
-          { id: expect.any(String), state: "delivered" },
+          {
+            id: expect.any(String),
+            state: "delivered",
+            receipt: { platformMessageId: "delivered-final-2", resultCount: 2 },
+          },
         ]);
       }
       // Re-enter recovery after settlement; neither success nor revocation may replay.

@@ -12,13 +12,10 @@ import { handleLineWebhookEvents } from "./bot-handlers.js";
 import { createLineWebhookSpool } from "./webhook-spool.js";
 
 const DEFAULT_MEDIA_MAX_MB = 10;
-type BuildChannelInboundContext =
-  typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
-
 interface LineBotOptions {
   accountId?: string;
   runtime: RuntimeEnv;
-  buildContext?: BuildChannelInboundContext;
+  buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
   config: OpenClawConfig;
   onMessage: Parameters<typeof handleLineWebhookEvents>[1]["processMessage"];
 }

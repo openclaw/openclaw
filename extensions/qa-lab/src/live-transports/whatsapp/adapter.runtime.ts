@@ -26,12 +26,10 @@ import { startWhatsAppQaDriverSessionWithRetry } from "./whatsapp-live.driver.js
 import { unpackWhatsAppAuthArchive, waitForWhatsAppChannelStable } from "./whatsapp-live.setup.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
-type FactoryContext = Parameters<AdapterFactory["create"]>[0];
-type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 
 export async function createWhatsAppQaTransportAdapter(
-  context: FactoryContext,
-): Promise<AdapterDefinition> {
+  context: Parameters<AdapterFactory["create"]>[0],
+): Promise<Awaited<ReturnType<AdapterFactory["create"]>>> {
   const options = context.adapterOptions ?? {};
   const lease = await acquireQaCredentialLease<WhatsAppQaRuntimeEnv>({
     kind: "whatsapp",

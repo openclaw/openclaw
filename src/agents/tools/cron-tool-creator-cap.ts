@@ -3,6 +3,7 @@ import {
   cronUpdateNeedsCurrentJobForStreamAuthority,
   cronUpdateRequiresStreamExecAuthority,
 } from "../../cron/stream-exec-authority.js";
+import { resolveCronToolDefaults } from "../../cron/tool-defaults.js";
 import { isRecord } from "../../utils.js";
 import { readCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
 import { createToolPolicyMatcher } from "../tool-policy-match.js";
@@ -88,7 +89,7 @@ export function assertInheritedCronToolCaptureReady(
 export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: string }>(
   target: CronCreatorToolAllowlistEntry[],
   tools: readonly T[],
-  toolMeta?: (tool: T) => { pluginId?: string } | undefined,
+  toolMeta?: (tool: T) => { pluginId?: string; ownerUnverified?: boolean } | undefined,
   options: CronCreatorCapCaptureOptions = {},
 ): void {
   target.length = 0;
@@ -126,6 +127,7 @@ export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: s
     captured.set(name, {
       name,
       ...(pluginId ? { pluginId } : {}),
+      ...(meta?.ownerUnverified ? { ownerUnverified: true } : {}),
       ...(aliasName && aliasName !== name ? { aliasName } : {}),
       ...(name === "exec" ? { execOrigin: "openclaw" as const } : {}),
       ...(projection?.execTarget ? { execTarget: { ...projection.execTarget } } : {}),
@@ -159,7 +161,7 @@ export function captureFinalEffectiveCronCreatorToolAllowlist<T extends { name: 
   target: CronCreatorToolAllowlistEntry[],
   captureRef: CronToolsAllowCaptureRef,
   tools: readonly T[],
-  toolMeta?: (tool: T) => { pluginId?: string } | undefined,
+  toolMeta?: (tool: T) => { pluginId?: string; ownerUnverified?: boolean } | undefined,
   options: CronCreatorCapCaptureOptions = {},
 ): void {
   replaceWithEffectiveCronCreatorToolAllowlist(target, tools, toolMeta, options);
@@ -194,6 +196,7 @@ function normalizeCronCreatorToolsAllow(
     normalized.push({
       name,
       ...(pluginId ? { pluginId } : {}),
+      ...(tool.ownerUnverified ? { ownerUnverified: true } : {}),
       ...(aliasName && aliasName !== name ? { aliasName } : {}),
       ...(execOrigin ? { execOrigin } : {}),
       ...(execTarget ? { execTarget } : {}),
@@ -279,6 +282,26 @@ function explicitFiniteToolsNeedResolution(
   ).some((name) => !creatorNames.has(name));
 }
 
+/** Resolve the requested selection before deciding which creator authority is needed. */
+export function applyCronToolDefaults(
+  value: unknown,
+  defaultTools: readonly string[] | undefined,
+  mode: unknown,
+): void {
+  if (mode !== undefined && mode !== "exact") {
+    throw new Error('toolsAllowMode must be "exact" or omitted');
+  }
+  const payload = isRecord(value) && isRecord(value.payload) ? value.payload : undefined;
+  const toolsAllow = payload?.toolsAllow;
+  if (
+    payload &&
+    Array.isArray(toolsAllow) &&
+    toolsAllow.every((entry) => typeof entry === "string")
+  ) {
+    payload.toolsAllow = resolveCronToolDefaults({ toolsAllow, defaultTools, mode });
+  }
+}
+
 /** Whether an add needs the creator's complete authority rather than an explicit empty cap. */
 export function cronCreateRequiresCreatorAuthority(
   value: unknown,
@@ -348,7 +371,10 @@ function capCronJobToolsAllow(params: {
   }
   const pluginGroups = buildPluginToolGroups({
     tools: creatorToolsAllow,
-    toolMeta: (tool) => (tool.pluginId ? { pluginId: tool.pluginId } : undefined),
+    toolMeta: (tool) =>
+      tool.pluginId
+        ? { pluginId: tool.pluginId, ownerUnverified: tool.ownerUnverified }
+        : undefined,
   });
   const selected = new Set(
     requestedToolsAllow.flatMap((entry) => {

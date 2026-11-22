@@ -16,6 +16,7 @@ type RuntimeModule = typeof import("./runtime.js");
 type WebFetchProvidersRuntimeModule = typeof import("./web-fetch-providers.runtime.js");
 type WebProviderResolutionModule = typeof import("./web-provider-resolution-shared.js");
 
+let createPluginManifestRecordFixture: (typeof import("./plugin-metadata.test-support.js"))["createPluginManifestRecordFixture"];
 let loaderModule: LoaderModule;
 let manifestRegistryModule: ManifestRegistryModule;
 let webProviderResolutionModule: WebProviderResolutionModule;
@@ -55,37 +56,25 @@ function createManifestRegistryFixture(
 ): ReturnType<ManifestRegistryModule["loadPluginManifestRegistryCore"]> {
   return {
     plugins: [
-      {
+      createPluginManifestRecordFixture({
         id: "firecrawl",
         origin,
         rootDir,
         source,
-        manifestPath: path.join(rootDir, "openclaw.plugin.json"),
-        channels: [],
-        providers: [],
-        cliBackends: [],
         syntheticAuthRefs: [],
         nonSecretAuthMarkers: [],
-        skills: [],
-        hooks: [],
         contracts: { webFetchProviders: ["firecrawl"] },
         configUiHints: { "webFetch.apiKey": { label: "key" } },
-      },
-      {
+      }),
+      createPluginManifestRecordFixture({
         id: "noise",
-        origin: "bundled",
         rootDir: "/tmp/noise",
         source: "/tmp/noise/index.js",
         manifestPath: "/tmp/noise/openclaw.plugin.json",
-        channels: [],
-        providers: [],
-        cliBackends: [],
         syntheticAuthRefs: [],
         nonSecretAuthMarkers: [],
-        skills: [],
-        hooks: [],
         configUiHints: { unrelated: { label: "nope" } },
-      },
+      }),
     ],
     diagnostics: [],
   };
@@ -130,6 +119,8 @@ describe("resolvePluginWebFetchProviders", () => {
         }),
       };
     });
+    // The snapshot-backed fixture must load after the discovery mock is registered.
+    ({ createPluginManifestRecordFixture } = await import("./plugin-metadata.test-support.js"));
     loaderModule = await import("./loader.js");
     manifestRegistryModule = await import("./manifest-registry.js");
     webProviderResolutionModule = await import("./web-provider-resolution-shared.js");

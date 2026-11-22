@@ -37,6 +37,8 @@ type PluginToolMeta = {
   replaySafe?: boolean;
   sideEffecting?: boolean;
   trustedLocalMedia?: boolean;
+  /** Node-claimed plugin ids can match denies, but cannot grant plugin-scoped access. */
+  ownerUnverified?: true;
   mcp?: PluginToolMcpMeta;
 };
 
@@ -79,7 +81,7 @@ export function copyPluginToolMeta(source: AnyAgentTool, target: AnyAgentTool): 
 }
 
 /** Builds a collision-proof key for plugin-owned tool metadata lookups. */
-export function buildPluginToolMetadataKey(pluginId: string, toolName: string): string {
+function buildPluginToolMetadataKey(pluginId: string, toolName: string): string {
   return JSON.stringify([pluginId, toolName]);
 }
 

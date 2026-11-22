@@ -6,6 +6,7 @@ import {
   listClickClackAccountIds,
   listEnabledClickClackAccounts,
   resolveClickClackAccount,
+  resolveClickClackAccountAsync,
 } from "./accounts.js";
 import type { ClickClackAccountConfig, CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
@@ -42,27 +43,20 @@ function expectUnavailable(
 
 describe("ClickClack account resolution", () => {
   it("merges partial named-account group overrides with the root group policy", () => {
+    const group = {
+      requireMention: true,
+      requireMentionInBotThreads: false,
+      mentionPatterns: ["@root-bot"],
+    };
     const account = resolve(
       {
         token: "test-token-placeholder",
-        groups: {
-          " chn_1 ": {
-            requireMention: true,
-            requireMentionInBotThreads: false,
-            mentionPatterns: ["@root-bot"],
-          },
-        },
+        groups: { " chn_1 ": group },
         accounts: { work: { groups: { chn_1: { requireMention: false } } } },
       },
       "work",
     );
-    expect(account.groups).toEqual({
-      chn_1: {
-        requireMention: false,
-        requireMentionInBotThreads: false,
-        mentionPatterns: ["@root-bot"],
-      },
-    });
+    expect(account.groups).toEqual({ chn_1: { ...group, requireMention: false } });
     expect(account.config.groups).toEqual(account.groups);
   });
 
@@ -80,12 +74,7 @@ describe("ClickClack account resolution", () => {
     await withTempDir("clickclack-token-", async (tempDir) => {
       const tokenFile = path.join(tempDir, "token");
       fs.writeFileSync(tokenFile, "  file-token  \n", "utf8");
-      const settings = {
-        enabled: true,
-        tokenFile,
-        accounts: { work: { token: "work-token" } },
-      };
-      expect(listClickClackAccountIds(accountConfig(settings))).toEqual(["default", "work"]);
+      const settings = { tokenFile, accounts: { work: { token: "work-token" } } };
       expect(resolve(settings).token).toBe("file-token");
       expect(resolve(settings, "work").token).toBe("work-token");
     });
@@ -112,9 +101,11 @@ describe("ClickClack account resolution", () => {
         ["inherited", missingRootFile, "channels.clickclack.tokenFile"],
         ["work", missingAccountFile, "channels.clickclack.accounts.work.tokenFile"],
       ] as const) {
-        const account = resolveClickClackAccount({ cfg, accountId, env });
-        expect(account.configured).toBe(true);
-        expectUnavailable(account, configPath, "not-found", filePath);
+        for (const read of [resolveClickClackAccount, resolveClickClackAccountAsync]) {
+          const account = await read({ cfg, accountId, env });
+          expect(account.configured).toBe(true);
+          expectUnavailable(account, configPath, "not-found", filePath);
+        }
       }
     });
   });
@@ -135,8 +126,12 @@ describe("ClickClack account resolution", () => {
       }
 
       for (const [selectedFile, reason] of invalidFiles) {
-        const account = resolve({ token: "lower-priority-token", tokenFile: selectedFile });
-        expectUnavailable(account, "channels.clickclack.tokenFile", reason, selectedFile);
+        for (const read of [resolveClickClackAccount, resolveClickClackAccountAsync]) {
+          const account = await read({
+            cfg: accountConfig({ token: "lower-priority-token", tokenFile: selectedFile }),
+          });
+          expectUnavailable(account, "channels.clickclack.tokenFile", reason, selectedFile);
+        }
       }
     });
   });
@@ -149,63 +144,39 @@ describe("ClickClack account resolution", () => {
       model: "openai/gpt-5.4-mini",
       toolsAllow: ["web_search"],
     } satisfies ClickClackAccountConfig;
-    expect(resolve({ enabled: true, accounts: { peter: policy } }, "peter")).toEqual({
+    expect(resolve({ enabled: true, accounts: { peter: policy } }, "peter")).toMatchObject({
       ...policy,
-      ...ACCOUNT_BASE,
+      accountId: "peter",
+      configured: true,
       allowBots: false,
       allowFrom: ["*"],
-      accountId: "peter",
-      apiEndpoint: "https://app.clickclack.chat",
-      config: {
-        ...policy,
-        ...ACCOUNT_BASE,
-        allowFrom: ["*"],
-        enabled: true,
-      },
-      configured: true,
-      defaultTo: "channel:general",
-      enabled: true,
-      agentActivity: false,
-      commandMenu: true,
-      discussions: { enabled: false, workspace: "wsp_1", section: "Sessions" },
-      groups: {},
-      mentionPatterns: [],
-      nativeProgress: false,
-      reconnectMs: 1_500,
       requireMention: false,
+      agentActivity: false,
+      nativeProgress: false,
+      commandMenu: true,
       tokenSource: "config",
       tokenStatus: "available",
     });
   });
 
   it("normalizes per-account discussion settings and defaults", () => {
+    const root = { enabled: true, controlUrlBase: "https://team.openclaw.ai/" };
+    const support = { enabled: true, workspace: "operations", section: "Live work" };
     const cfg = accountConfig({
-      enabled: true,
       token: "test-token",
       workspace: "default",
-      discussions: {
-        enabled: true,
-        controlUrlBase: "https://team.openclaw.ai/",
-      },
-      accounts: {
-        support: {
-          workspace: "support",
-          discussions: { enabled: true, workspace: "operations", section: "Live work" },
-        },
-      },
+      discussions: root,
+      accounts: { support: { workspace: "support", discussions: support } },
     });
 
     expect(resolveClickClackAccount({ cfg }).discussions).toEqual({
-      enabled: true,
+      ...root,
       workspace: "default",
-      controlUrlBase: "https://team.openclaw.ai/",
       section: "Sessions",
     });
     expect(resolveClickClackAccount({ cfg, accountId: "support" }).discussions).toEqual({
-      enabled: true,
-      workspace: "operations",
-      controlUrlBase: "https://team.openclaw.ai/",
-      section: "Live work",
+      ...root,
+      ...support,
     });
   });
 });

@@ -674,6 +674,9 @@ export async function createQuotaResetFixture(
     path.dirname(requireCodex.resolve("@openai/codex/package.json")),
     "bin/codex.js",
   );
+  const noProxy = [process.env.no_proxy ?? process.env.NO_PROXY, "127.0.0.1", "localhost", "::1"]
+    .filter(Boolean)
+    .join(",");
   const gateway = await createOpenClawTestInstance({
     name: `quota-reset-${source}`,
     gatewayCommandPrefix: limitGatewayFileSize
@@ -689,7 +692,15 @@ export async function createQuotaResetFixture(
       : [process.execPath, "--import", preload.href],
     startTimeoutMs: 120_000,
     env: {
+      // Route owned loopback providers directly while retaining external proxy routing.
+      NO_PROXY: noProxy,
+      no_proxy: noProxy,
       ...(tls ? { NODE_EXTRA_CA_CERTS: caPath, CODEX_CA_CERTIFICATE: caPath } : {}),
+      // Dashboard bootstrap codes and auth readbacks must use the Gateway's
+      // advanced clock. NODE_OPTIONS also carries it through CLI respawns.
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${preload.href}`]
+        .filter(Boolean)
+        .join(" "),
       OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
       OPENCLAW_SKIP_PROVIDERS: undefined,
       OPENCLAW_AGENT_HARNESS_FALLBACK: "none",

@@ -11,7 +11,8 @@ import {
   runWithAiTransportHost,
 } from "../host.js";
 import { responsesPromptObserver, type ResponsesPromptObservation } from "../internal/openai.js";
-import { cleanupSessionResources } from "../session-resources.js";
+import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
+import { claimConversationProviderState, cleanupSessionResources } from "../session-resources.js";
 import { createNodeLlmRuntime } from "../stream.js";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { Context, Model, SimpleStreamOptions } from "../types.js";
@@ -30,6 +31,7 @@ import {
   createJwt,
   resetChatgptTransport,
   completedSseResponse,
+  sseResponse,
   createLoopbackModel,
   closeServer,
   runChatgpt as run,
@@ -251,7 +253,7 @@ describe("streamOpenAICodexResponses transport", () => {
   });
 
   it.each([
-    [true, "off", undefined, undefined, undefined, undefined],
+    [true, "off", undefined, undefined, undefined, "none"],
     [false, "high", ["none", "high"], undefined, undefined, undefined],
   ] as const)(
     "resolves reasoning=%s request=%s supported=%j scalar=%s off=%s",
@@ -483,12 +485,7 @@ describe("streamOpenAICodexResponses transport", () => {
     ];
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async () =>
-          new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
-            headers: { "content-type": "text/event-stream" },
-          }),
-      ),
+      vi.fn(async () => sseResponse(...events)),
     );
 
     const result = await run({ transport: "sse" });
@@ -738,7 +735,12 @@ describe("ChatGPT Responses runtime transport ownership", () => {
     await once(server, "listening");
     vi.stubGlobal("WebSocket", WebSocket);
     const loopbackModel = createLoopbackModel(server);
-    const options = { apiKey: "opaque", sessionId, transport: "websocket-cached" as const };
+    const options = {
+      apiKey: "opaque",
+      sessionId,
+      [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
+      transport: "websocket-cached" as const,
+    };
     const registry = createApiRegistry();
     registry.registerApiProvider({
       api: "openai-chatgpt-responses",
@@ -798,6 +800,7 @@ describe("ChatGPT Responses runtime transport ownership", () => {
       await streamOpenAICodexResponses(loopbackModel, context, {
         apiKey: "opaque",
         sessionId,
+        [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
         transport: "websocket-cached",
         onPayload: (body) => {
           configureAiTransportHost({ resolveSecretSentinel: () => runtimeToken });
@@ -807,6 +810,7 @@ describe("ChatGPT Responses runtime transport ownership", () => {
       await streamOpenAICodexResponses(loopbackModel, context, {
         apiKey: "opaque",
         sessionId,
+        [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
         transport: "websocket-cached",
       }).result();
 
@@ -814,6 +818,7 @@ describe("ChatGPT Responses runtime transport ownership", () => {
       await streamOpenAICodexResponses(loopbackModel, context, {
         apiKey: "opaque",
         sessionId,
+        [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
         transport: "websocket-cached",
       }).result();
 
@@ -832,16 +837,9 @@ describe("ChatGPT Responses runtime transport ownership", () => {
       let firstRequestHeaders: HeadersInit | undefined;
       const firstFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
         firstRequestHeaders = init?.headers;
-        return new Response(`data: ${JSON.stringify(completion("resp_first"))}\n\n`, {
-          headers: { "content-type": "text/event-stream" },
-        });
+        return completedSseResponse("resp_first");
       });
-      const secondFetch = vi.fn(
-        async () =>
-          new Response(`data: ${JSON.stringify(completion("resp_second"))}\n\n`, {
-            headers: { "content-type": "text/event-stream" },
-          }),
-      );
+      const secondFetch = vi.fn(async () => completedSseResponse("resp_second"));
       const host = createAiTransportHost({
         buildModelFetch: () => firstFetch,
         requiresManagedTransport: () => true,
@@ -880,12 +878,7 @@ describe("ChatGPT Responses runtime transport ownership", () => {
   );
 
   it("falls back to SSE when a relative auto endpoint cannot form a WebSocket URL", async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(`data: ${JSON.stringify(completion("resp_relative"))}\n\n`, {
-          headers: { "content-type": "text/event-stream" },
-        }),
-    );
+    const fetchMock = vi.fn(async () => completedSseResponse("resp_relative"));
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await streamOpenAICodexResponses(

@@ -5,7 +5,7 @@ import type { AgentsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
-import type { ChannelCapability } from "../lib/channels/index.ts";
+import type { ChannelCapability, createChannelCapability } from "../lib/channels/index.ts";
 import type {
   ChatAttachment,
   ChatComposerMemoryFallback,
@@ -25,6 +25,7 @@ import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import type { GuestWelcomeHandle } from "./guest-welcome-handle.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
 import type { NativeConversationBridge } from "./native-conversation-types.ts";
 import type { NativeDeviceSettingsCapability } from "./native-device-settings.ts";
@@ -137,7 +138,8 @@ export type ApplicationContext<TRouteId extends string = RouteId> = {
   readonly agentSelection: AgentSelectionCapability;
   /** Configured agent targeted by Settings, independent of chat/session selection. */
   readonly settingsAgentSelection: AgentSelectionCapability;
-  readonly channels: ChannelCapability;
+  /** Lazy routes provide the constructor; the application retains and disposes one owner. */
+  readonly acquireChannels: (create: typeof createChannelCapability) => ChannelCapability;
   readonly config: ApplicationConfigCapability;
   readonly scopeUpgrade: ScopeUpgradeCapability;
   readonly sidebarAttention: SidebarAttentionStore;
@@ -145,6 +147,8 @@ export type ApplicationContext<TRouteId extends string = RouteId> = {
   readonly sessions: SessionCapability;
   readonly placementStartup: ApplicationPlacementStartup;
   readonly plugins: ControlUiPluginCapability;
+  /** Visitor Access welcome-session setup for invited guests; app router documents only. */
+  readonly guestWelcome?: GuestWelcomeHandle;
   readonly assistantDock: AssistantDock;
   readonly overlays: ApplicationOverlays;
   readonly navigation: ApplicationNavigationPreferences;

@@ -2,14 +2,10 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { consultRunResult } from "./consult.test-support.ts";
 import { steerRealtimeTalkActiveConsult, submitRealtimeTalkConsult } from "./shared.ts";
 
-const consultRun = {
-  runId: "run-1",
-  idempotencyKey: "run-1",
-  agentId: "main",
-  agentSessionKey: "agent:main:main",
-};
+const consultRun = consultRunResult();
 
 function createChatEvents() {
   let listener: ((event: { event: string; payload?: unknown }) => void) | undefined;

@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { spawnCommand } from "../../process/exec.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { createRemoteShellSandboxBackend } from "./remote-shell-backend.js";
 import {
@@ -41,6 +42,7 @@ function createBackend(
   workspaceDir: string,
   createSession: () => Promise<RemoteShellSandboxSession>,
   options: Partial<Parameters<typeof createRemoteShellSandboxBackend>[0]> = {},
+  backendOptions: Partial<Parameters<typeof createRemoteShellSandboxBackend>[1]> = {},
 ) {
   return createRemoteShellSandboxBackend(
     {
@@ -52,25 +54,14 @@ function createBackend(
       skillsWorkspaceDir: workspaceDir,
       ...options,
     },
-    { createSession },
+    { ...backendOptions, createSession },
   );
 }
 
-function barrier() {
-  const entered = createDeferred();
-  const release = createDeferred();
-  return {
-    entered: entered.promise,
-    release: () => release.resolve(),
-    wait: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-  };
-}
-
-async function createCommandCancellationFixture() {
-  const workspaceDir = tempDirs.make("remote-shell-cancellation-");
+async function createCommandCancellationFixture(
+  workspaceDir = tempDirs.make("remote-shell-cancellation-"),
+  backendOptions: Partial<Parameters<typeof createRemoteShellSandboxBackend>[1]> = {},
+) {
   const session = {
     runCommand: vi.fn<RemoteShellSandboxSession["runCommand"]>(async () => ({
       ...emptyResult(),
@@ -83,7 +74,7 @@ async function createCommandCancellationFixture() {
     dispose: vi.fn(async () => {}),
   } satisfies RemoteShellSandboxSession;
   const createSession = vi.fn(async () => session);
-  const backend = await createBackend(workspaceDir, createSession);
+  const backend = await createBackend(workspaceDir, createSession, {}, backendOptions);
   await run(backend);
   session.runCommand.mockClear();
   session.uploadDirectory.mockClear();
@@ -98,8 +89,8 @@ describe("remote shell command cancellation", () => {
     async (phase) => {
       const { backend, session, createSession } = await createCommandCancellationFixture();
       const controller = new AbortController();
-      const work = barrier();
-      const disposal = barrier();
+      const work = createEnteredGate();
+      const disposal = createEnteredGate();
       const onAbort = vi.fn();
       const onComplete = vi.fn();
       const hold = async (signal?: AbortSignal) => {
@@ -146,6 +137,97 @@ describe("remote shell command cancellation", () => {
       }
     },
   );
+});
+
+describe("remote skills refresh", () => {
+  it.each([
+    {
+      name: "one SSH destination",
+      first: { configLabel: "ssh-a" },
+      second: { configLabel: "ssh-a" },
+      shared: true,
+    },
+    {
+      name: "different SSH targets",
+      first: { configLabel: "ssh-a" },
+      second: { configLabel: "ssh-b" },
+      shared: false,
+    },
+    {
+      name: "different Crabbox leases",
+      first: { backendId: "crabbox", runtimeId: "lease-a", configLabel: "provider/class" },
+      second: { backendId: "crabbox", runtimeId: "lease-b", configLabel: "provider/class" },
+      shared: false,
+    },
+  ])(
+    "queues refreshes only for $name when sharing a remote path",
+    async ({ first, second, shared }) => {
+      const workspaceDir = tempDirs.make("remote-shell-skills-refresh-");
+      const active = await createCommandCancellationFixture(workspaceDir, first);
+      const other = await createCommandCancellationFixture(workspaceDir, second);
+      const upload = createEnteredGate();
+      active.session.uploadDirectory.mockImplementationOnce(upload.wait);
+      const activeRun = run(active.backend);
+      const runs = [activeRun];
+      try {
+        await upload.entered;
+        runs.push(run(other.backend));
+        await setImmediate();
+        expect(other.session.runCommand.mock.calls[0]?.[0].remoteCommand).toEqual(
+          shared ? undefined : expect.stringContaining("openclaw-sandbox-clear"),
+        );
+        upload.release();
+        await Promise.all(runs);
+        expect(other.session.uploadDirectory).toHaveBeenCalledOnce();
+      } finally {
+        upload.release();
+        await Promise.allSettled(runs);
+      }
+    },
+  );
+
+  it("cancels a queued refresh promptly without letting a later writer overtake the upload", async () => {
+    const workspaceDir = tempDirs.make("remote-shell-skills-cancel-");
+    const active = await createCommandCancellationFixture(workspaceDir);
+    const waiting = await createCommandCancellationFixture(workspaceDir);
+    const following = await createCommandCancellationFixture(workspaceDir);
+    const upload = createEnteredGate();
+    active.session.uploadDirectory.mockImplementationOnce(upload.wait);
+    // Hold any premature clear so it cannot finish before the abort assertion.
+    waiting.session.runCommand.mockImplementationOnce(async () => {
+      await upload.wait();
+      return emptyResult();
+    });
+    const runs: Promise<unknown>[] = [run(active.backend)];
+    try {
+      await upload.entered;
+      const controller = new AbortController();
+      const reason = new Error("queued refresh interrupted");
+      const cancelled = waiting.backend
+        .runShellCommand({ script: "true", signal: controller.signal })
+        .catch((error: unknown) => error);
+      runs.push(cancelled);
+      await setImmediate();
+      expect(waiting.createSession).toHaveBeenCalledOnce();
+      controller.abort(reason);
+      expect(await Promise.race([cancelled, setImmediate("still waiting")])).toMatchObject({
+        name: "AbortError",
+        cause: reason,
+      });
+      expect(waiting.session.runCommand).not.toHaveBeenCalled();
+      expect(waiting.session.dispose).toHaveBeenCalledOnce();
+      const next = run(following.backend);
+      runs.push(next);
+      await setImmediate();
+      expect(following.session.runCommand).not.toHaveBeenCalled();
+      upload.release();
+      await Promise.all(runs);
+      expect(following.session.uploadDirectory).toHaveBeenCalledOnce();
+    } finally {
+      upload.release();
+      await Promise.allSettled(runs);
+    }
+  });
 });
 
 async function createFixture() {
@@ -207,7 +289,11 @@ async function createFixture() {
     expect((await fs.stat(protectedDir)).mode & 0o777).toBe(0o555);
     await expectText(path.join(protectedDir, "untouched"), "outside stage");
   };
-  const pausedBackend = (label: string, pause: ReturnType<typeof barrier>, readOnly = false) =>
+  const pausedBackend = (
+    label: string,
+    pause: ReturnType<typeof createEnteredGate>,
+    readOnly = false,
+  ) =>
     createTestBackend(label, async (params, upload) => {
       await upload(params);
       if (path.basename(params.remoteDir) === "agent") {
@@ -272,8 +358,8 @@ describe.runIf(process.platform === "linux" || process.platform === "darwin")(
       async (winner) => {
         const readOnlyLoser = winner === "edited";
         const fixture = await createFixture();
-        const firstGate = barrier();
-        const secondGate = barrier();
+        const firstGate = createEnteredGate();
+        const secondGate = createEnteredGate();
         const first = await fixture.pausedBackend("first", firstGate);
         const second = await fixture.pausedBackend("second", secondGate, readOnlyLoser);
         const one = run(first);

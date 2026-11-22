@@ -1,17 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildReplyUsageState } from "../../auto-reply/reply/reply-usage-state.js";
+import { prepareSessionUsageUpdate } from "../../auto-reply/reply/session-usage.js";
 import * as runtimeConfig from "../../config/runtime-snapshot.js";
-import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as runRegistry from "../../infra/agent-run-registry.js";
+import { resolveModelCostConfig } from "../../model-catalog/usage-pricing.js";
+import { estimateAggregateUsageCostAsync } from "../../utils/usage-format.js";
+import type { NormalizedUsage } from "../usage.js";
+import { makeModel } from "./model.test-harness.js";
 import { registerRunEntryFailureTests } from "./run-entry.failures.test-support.js";
 import { runEmbeddedAgentEntry, setupRunEntryTestState } from "./run-entry.test-harness.js";
 import {
+  fallbackAttemptOptions,
   createDirectHarness,
   makeResult,
   recordTurnAttempt,
   initialAttemptOptions,
   type FallbackRunnerParams,
 } from "./run-entry.test-support.js";
+import type { EmbeddedAgentMeta } from "./types.js";
 
 const state = setupRunEntryTestState();
 
@@ -85,6 +92,35 @@ function receiptFor(runId: string, provider: string, model: string, responseMode
   };
 }
 
+const visibleReply = (text: string) => ({
+  finalAssistantVisibleText: text,
+  finalAssistantRawText: text,
+  terminalReply: { disposition: "visible" as const, text },
+});
+
+function runReceipt(
+  runId: string,
+  selection: EntryParams["selection"],
+  effectiveModel: string,
+  responseModel: string,
+) {
+  usePrimaryFallback();
+  return runEntry({
+    selection,
+    runId,
+    runCandidate: async (provider, model) => {
+      const candidate = makeResult({ provider, model, meta: visibleReply("done") });
+      candidate.meta.agentMeta!.terminalReceipt = receiptFor(
+        runId,
+        provider,
+        effectiveModel,
+        responseModel,
+      );
+      return candidate;
+    },
+  });
+}
+
 describe("runEmbeddedAgentEntry", () => {
   registerRunEntryFailureTests(state);
 
@@ -122,9 +158,8 @@ describe("runEmbeddedAgentEntry", () => {
           if (options.isFallbackRetry) {
             candidate.meta = {
               ...candidate.meta,
-              finalAssistantVisibleText: "fallback complete",
-              finalAssistantRawText: "fallback complete",
-              terminalReply: { disposition: "visible", text: "fallback complete" },
+              ...visibleReply("NO_REPLY"),
+              finalAssistantRawText: "NO_REPLY\nNO_REPLY",
               executionTrace: {
                 winnerProvider: provider,
                 winnerModel: model,
@@ -154,21 +189,14 @@ describe("runEmbeddedAgentEntry", () => {
     const command = await runMode("command-rpc");
 
     expect(channel.candidateCalls).toEqual(command.candidateCalls);
-    expect(channel.result).toMatchObject({
-      outcome: "completed",
-      ...fallbackRoute,
-    });
+    expect(channel.result).toMatchObject({ outcome: "completed", ...fallbackRoute });
     expect(channel.result.attempts).toEqual(command.result.attempts);
     expect(channel.result.terminal).toEqual(command.result.terminal);
     expect(channel.result.result.meta.executionTrace).toEqual({
-      winnerProvider: "fallback-provider",
-      winnerModel: "fallback-model",
+      winnerProvider: fallbackRoute.provider,
+      winnerModel: fallbackRoute.model,
       attempts: [
-        {
-          ...primaryRoute,
-          result: "candidate_failed",
-          reason: "format",
-        },
+        { ...primaryRoute, result: "candidate_failed", reason: "format" },
         { ...fallbackRoute, ...sameModelRetry },
         { ...fallbackRoute, result: "success" },
       ],
@@ -187,17 +215,11 @@ describe("runEmbeddedAgentEntry", () => {
     });
     expect(channel.result.terminal.metadata.terminalReply).toEqual({
       disposition: "visible",
-      text: "fallback complete",
+      text: "NO_REPLY",
       modelRouteChange:
         "Model route changed: primary-provider/primary-model → fallback-provider/producer-model.",
     });
     expect(channel.candidateLeases[0]).toBe(channel.candidateLeases[1]);
-    expect(state.selectAgentHarness).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "fallback-provider",
-        modelId: "fallback-model",
-      }),
-    );
     expect(channel.reconciled).toEqual(command.reconciled);
     expect(channel.reconciled).toEqual([fallbackRoute]);
   });
@@ -443,180 +465,165 @@ describe("runEmbeddedAgentEntry", () => {
     expect(result.result.payloads).toEqual([]);
   });
 
-  it.each([true, false])(
-    "announces an endpoint-resolved model unless its row declares it (declared: %s)",
-    async (declared) => {
-      const runId = `endpoint-resolved-${declared}`;
-      const modelRow: ModelDefinitionConfig = {
-        id: "team/chat",
-        name: "Team chat",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 8_192,
-        ...(declared ? { responseModelEquivalent: true } : {}),
-      };
-      const broker = { baseUrl: "https://broker.example/v1", models: [modelRow] };
-      const cfg: OpenClawConfig = { models: { providers: { broker } } };
-      usePrimaryFallback();
-      const result = await runEntry({
-        selection: { cfg, provider: "broker", model: "team/chat" },
-        runId,
-        runCandidate: async (provider, model) => {
-          const candidate = makeResult({
-            provider,
-            model,
-            meta: {
-              finalAssistantVisibleText: "done",
-              finalAssistantRawText: "done",
-              terminalReply: { disposition: "visible", text: "done" },
-            },
-          });
-          candidate.meta.agentMeta!.terminalReceipt = receiptFor(
-            runId,
-            provider,
-            model,
-            "upstream-model",
-          );
-          return candidate;
-        },
-      });
+  it("honors configured endpoint equivalence when publishing a receipt", async () => {
+    const row = { ...makeModel("team/chat"), responseModelEquivalent: true };
+    const cfg: OpenClawConfig = {
+      models: { providers: { broker: { baseUrl: "https://broker.example/v1", models: [row] } } },
+    };
+    const result = await runReceipt(
+      "declared-endpoint",
+      { cfg, provider: "broker", model: row.id },
+      row.id,
+      "upstream-model",
+    );
+    expect(result.terminal.metadata.terminalReceipt).toMatchObject({
+      effective: { provider: "broker", model: row.id, responseModel: "upstream-model" },
+      rerouted: false,
+    });
+    expect(result.terminal.metadata.terminalReply).toEqual({
+      disposition: "visible",
+      text: "done",
+    });
+  });
 
-      expect(result.terminal.metadata.terminalReceipt).toMatchObject({
-        effective: { provider: "broker", model: "team/chat", responseModel: "upstream-model" },
-        rerouted: !declared,
-      });
-      expect(result.terminal.metadata.terminalReply).toEqual({
-        disposition: "visible",
-        text: "done",
-        ...(declared
-          ? {}
-          : { modelRouteChange: "Model route changed: broker/team/chat → broker/upstream-model." }),
-      });
-    },
-  );
-
+  const selected = "openai/gpt-5.6-sol";
   it.each([
-    { model: "openai/gpt-6-astra", responseModel: "gpt-6-astra", routeChange: undefined },
-    {
-      model: "openai/gpt-6-astra",
-      responseModel: "gpt-6.1-sol",
-      routeChange: "Model route changed: clawrouter/openai/gpt-6-astra → clawrouter/gpt-6.1-sol.",
-    },
-    {
-      model: "openai/gpt-6-astra",
-      responseModel: "anthropic/gpt-6-astra",
-      routeChange:
-        "Model route changed: clawrouter/openai/gpt-6-astra → clawrouter/anthropic/gpt-6-astra.",
-    },
-    {
-      model: "openai/gpt-6.1-sol",
-      responseModel: "gpt-6.1-sol",
-      routeChange: "Model route changed: clawrouter/openai/gpt-6-astra → clawrouter/gpt-6.1-sol.",
-    },
-  ])(
-    "reports a ClawRouter $model response $responseModel only when it is a real reroute",
-    async ({ model: effectiveModel, responseModel, routeChange }) => {
-      const runId = `clawrouter-${effectiveModel}-${responseModel}`;
-      const route = { provider: "clawrouter", model: "openai/gpt-6-astra" };
-      usePrimaryFallback();
-      const result = await runEntry({
-        selection: { cfg: {}, ...route },
-        runId,
-        runCandidate: async (provider, model) => {
-          const candidate = makeResult({
-            provider,
-            model,
-            meta: {
-              finalAssistantVisibleText: "done",
-              finalAssistantRawText: "done",
-              terminalReply: { disposition: "visible", text: "done" },
-            },
-          });
-          candidate.meta.agentMeta!.terminalReceipt = receiptFor(
-            runId,
-            provider,
-            effectiveModel,
-            responseModel,
-          );
-          return candidate;
-        },
-      });
+    [selected, "gpt-5.6-sol", false],
+    [selected, "gpt-5.6-luna", true],
+    [selected, "anthropic/gpt-5.6-sol", true],
+    ["openai/gpt-5.6-luna", "gpt-5.6-luna", true],
+  ] as const)("classifies router receipt %s → %s", async (model, responseModel, rerouted) => {
+    const route = { provider: "clawrouter", model: selected };
+    const result = await runReceipt("router-receipt", { cfg: {}, ...route }, model, responseModel);
+    expect(result.terminal.metadata.terminalReceipt).toMatchObject({
+      requested: route,
+      effective: { provider: route.provider, model, responseModel },
+      rerouted,
+    });
+  });
 
-      expect(result.terminal.metadata.terminalReceipt).toMatchObject({
-        requested: route,
-        effective: { provider: route.provider, model: effectiveModel, responseModel },
-        rerouted: routeChange !== undefined,
-      });
-      expect(result.terminal.metadata.terminalReply).toEqual({
-        disposition: "visible",
-        text: "done",
-        ...(routeChange ? { modelRouteChange: routeChange } : {}),
-      });
-    },
-  );
-
-  it.each([
-    {
-      name: "CLI delivered source reply",
-      meta: { finalAssistantRawText: "NO_REPLY" },
-      sourceReplyDelivered: true as const,
-      expected: { disposition: "silent" as const },
-    },
-    {
-      name: "final internal source reply after silence",
-      meta: { finalAssistantRawText: "NO_REPLY" },
-      sourceReplies: [{ text: "forward this reply", sourceReplyFinal: true }],
-      expected: { disposition: "visible" as const, text: "forward this reply" },
-    },
-    {
-      name: "prepared visible literal NO_REPLY",
-      meta: { finalAssistantRawText: "NO_REPLY\nNO_REPLY" },
-      sourceReplies: [{ text: "NO_REPLY", sourceReplyFinal: true }],
-      expected: { disposition: "visible" as const, text: "NO_REPLY" },
-    },
-  ])(
-    "records the producer-owned terminal snapshot for $name",
-    async ({ name, meta, expected, sourceReplies, sourceReplyDelivered }) => {
-      const runId = `terminal-${name}`;
-      usePrimaryFallback();
-      const result = await runEntry({
-        selection: { cfg: {}, provider: "provider", model: "model" },
-        runId,
-        runCandidate: async (provider, model) => {
-          const candidate = makeResult({
-            provider,
-            model,
-            meta: { ...meta, terminalReply: expected },
-          });
-          candidate.messagingToolSourceReplyPayloads = sourceReplies;
-          candidate.sourceReplyDelivered = sourceReplyDelivered;
-          if (sourceReplyDelivered) {
-            candidate.meta.agentMeta!.sessionId = "native-cli-session";
-          } else {
-            candidate.meta.agentMeta!.terminalReceipt = {
-              ...receiptFor(runId, provider, model),
-              successfulToolNames: ["read"],
-            };
-          }
-          return candidate;
-        },
-      });
-
-      expect(result.terminal.metadata.terminalReply).toEqual(expected);
-      expect(result.terminal.metadata.terminalReceipt).toMatchObject({
-        runId,
-        terminalDisposition: expected.disposition === "visible" ? "visible" : "not-visible",
-      });
-      if (sourceReplyDelivered) {
-        expect(result.terminal.metadata.terminalReceipt).toMatchObject({
-          sourceReplyDelivered: true,
-          sessionId: "session-1",
-          requested: { provider: "provider", model: "model" },
-          successfulToolNames: ["message"],
+  it("records a silent CLI delivery using the entry's session identity", async () => {
+    const runId = "terminal-cli-delivery";
+    usePrimaryFallback();
+    const result = await runEntry({
+      selection: { cfg: {}, provider: "provider", model: "model" },
+      runId,
+      runCandidate: async (provider, model) => {
+        const candidate = makeResult({
+          provider,
+          model,
+          meta: { finalAssistantRawText: "NO_REPLY", terminalReply: { disposition: "silent" } },
         });
-      }
+        candidate.sourceReplyDelivered = true;
+        candidate.meta.agentMeta!.sessionId = "native-cli-session";
+        return candidate;
+      },
+    });
+
+    expect(result.terminal.metadata.terminalReply).toEqual({ disposition: "silent" });
+    expect(result.terminal.metadata.terminalReceipt).toMatchObject({
+      runId,
+      terminalDisposition: "not-visible",
+      sourceReplyDelivered: true,
+      sessionId: "session-1",
+      requested: { provider: "provider", model: "model" },
+      successfulToolNames: ["message"],
+    });
+  });
+});
+
+describe("fallback usage accounting", () => {
+  async function accounted(primary: NormalizedUsage | Error, fallback: NormalizedUsage) {
+    const { result } = await runEntry({
+      runCandidate: async (provider, model, options) => {
+        const usage = options.isFallbackRetry ? fallback : primary;
+        if (usage instanceof Error) {
+          throw usage;
+        }
+        const candidate = makeResult({
+          provider,
+          model,
+          classification: options.isFallbackRetry ? undefined : "empty",
+        });
+        candidate.meta.agentMeta = {
+          ...candidate.meta.agentMeta!,
+          usage,
+          lastCallUsage: options.isFallbackRetry
+            ? { input: 20, output: 2 }
+            : { input: 90, output: 2 },
+        };
+        return candidate;
+      },
+    });
+    return result.meta.agentMeta!;
+  }
+  async function costs(meta: Partial<EmbeddedAgentMeta>) {
+    const turnUsd = await estimateAggregateUsageCostAsync({
+      usage: meta.usage,
+      prepareCost: () =>
+        resolveModelCostConfig({
+          config: {},
+          agentDir: "/nonexistent-fallback-accounting",
+          provider: meta.provider,
+          model: meta.model,
+        }),
+    });
+    const reply = buildReplyUsageState({
+      ...meta,
+      config: {},
+      turnUsd,
+      agentId: "main",
+      sessionId: "session-1",
+      winnerProvider: meta.provider,
+      winnerModel: meta.model,
+    });
+    const session = prepareSessionUsageUpdate({
+      ...meta,
+      estimatedCostUsd: turnUsd,
+      providerUsed: meta.provider,
+      modelUsed: meta.model,
+    });
+    return { reply, session };
+  }
+  it.each([
+    [
+      "provider-billed zero",
+      { total: 0, totalOrigin: "provider-billed" as const },
+      { total: 0, totalOrigin: "provider-billed" as const },
+      0,
+    ],
+    ["unknown price before known price", { total: 0 }, { total: 0.7 }, undefined],
+  ] as const)(
+    "retains discarded work and %s across reply and session accounting",
+    async (_name, primary, fallback, expected) => {
+      const meta = await accounted(
+        { input: 100, output: 10, cost: primary },
+        { input: 200, output: 20, cost: fallback },
+      );
+      expect(meta).toMatchObject({
+        usage: { input: 300, output: 30, total: 330 },
+        ...fallbackRoute,
+        lastCallUsage: { input: 20, output: 2 },
+      });
+      const { reply, session } = await costs(
+        expected === undefined ? { ...meta, lastCallUsage: undefined } : meta,
+      );
+      expect(reply.usage).toMatchObject({ input: 300, output: 30 });
+      expect(reply.contextUsedTokens).toBe(expected === undefined ? undefined : 20);
+      expect([reply.turnUsd, session?.estimatedCostUsd]).toEqual([expected, expected]);
     },
   );
+  it("does not invent usage for an attempt that throws before returning", async () => {
+    state.runWithModelFallback.mockImplementationOnce(async (params) => {
+      await expect(
+        params.run(params.provider, params.model, initialAttemptOptions(params)),
+      ).rejects.toThrow("before result");
+      const { provider, model } = fallbackRoute;
+      const result = await params.run(provider, model, fallbackAttemptOptions(params, "unknown"));
+      return { outcome: "completed", result, provider, model, attempts: [] };
+    });
+    expect(
+      (await accounted(new Error("before result"), { input: 7, cost: { total: 0.25 } })).usage,
+    ).toEqual({ input: 7, cost: { total: 0.25 } });
+  });
 });

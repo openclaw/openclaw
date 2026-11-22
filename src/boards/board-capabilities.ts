@@ -5,7 +5,10 @@ import {
 } from "../../packages/gateway-protocol/src/schema/board.js";
 import { normalizeSandboxHostCsp } from "../agents/sandbox-host.js";
 import { BoardValidationError } from "./board-layout.js";
-import { normalizeGitHubActionsGrant } from "./github-actions-capability.js";
+import {
+  normalizeBoardWidgetDataQueries,
+  normalizeGitHubActionsGrant,
+} from "./github-actions-capability.js";
 
 const MAX_DECLARED_ORIGINS = 32;
 const MAX_DECLARED_TOOLS = 64;
@@ -56,7 +59,7 @@ function normalizeTool(value: string): string {
 }
 
 export function normalizeBoardWidgetDeclared(
-  declared: BoardWidgetDeclared | undefined,
+  declared: (Pick<BoardWidgetDeclared, "netOrigins" | "tools"> & { queries?: unknown }) | undefined,
 ): BoardWidgetDeclared | undefined {
   if (!declared) {
     return undefined;
@@ -73,6 +76,7 @@ export function normalizeBoardWidgetDeclared(
     ...new Set((declared.netOrigins ?? []).map(normalizeBoardNetOrigin)),
   ].toSorted();
   const tools = [...new Set((declared.tools ?? []).map(normalizeTool))].toSorted();
+  const queries = normalizeBoardWidgetDataQueries(declared.queries);
   let sandboxOrigins: string[] | undefined;
   try {
     sandboxOrigins = normalizeSandboxHostCsp({ connectDomains: netOrigins })?.connectDomains;
@@ -86,12 +90,13 @@ export function normalizeBoardWidgetDeclared(
   ) {
     return invalidDeclaration("board widget network origin is not supported by the sandbox host");
   }
-  if (netOrigins.length === 0 && tools.length === 0) {
+  if (netOrigins.length === 0 && tools.length === 0 && queries.length === 0) {
     return undefined;
   }
   return {
     ...(netOrigins.length > 0 ? { netOrigins } : {}),
     ...(tools.length > 0 ? { tools } : {}),
+    ...(queries.length > 0 ? { queries } : {}),
   };
 }
 
@@ -103,7 +108,9 @@ export function boardDeclarationIsSubset(
   const grantedTools = new Set(granted?.tools ?? []);
   return (
     (requested?.netOrigins ?? []).every((origin) => grantedOrigins.has(origin)) &&
-    (requested?.tools ?? []).every((tool) => grantedTools.has(tool))
+    (requested?.tools ?? []).every((tool) => grantedTools.has(tool)) &&
+    // Definitions are canonical. Every query edit, including narrowing, needs a new decision.
+    JSON.stringify(requested?.queries ?? []) === JSON.stringify(granted?.queries ?? [])
   );
 }
 

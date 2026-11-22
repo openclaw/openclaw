@@ -3,6 +3,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
+import { configSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -46,7 +47,7 @@ it("reads a utility chain and preserves its remaining fallbacks when Activity ch
       current = saved;
       hash = "saved";
     }
-    return { config: current, raw: JSON.stringify(current), hash, valid: true, issues: [] };
+    return configSnapshot(current, hash, JSON.stringify(current));
   });
   const { gateway } = createGatewayHarness(client);
   const runtimeConfig = createRuntimeConfigCapability(gateway);

@@ -166,6 +166,101 @@ it("evaluates a captured provider without serializing the fleet config", () => {
   ).toHaveLength(0);
 });
 
+it.each(["synthetic-resolved-value", "custom-local"])(
+  "uses captured provider provenance without rescanning the live model catalog: %s",
+  (apiKey) => {
+    const { config, provider } = createProviderConfig(100);
+    provider.apiKey = apiKey;
+    provider.api = "openai-completions";
+    provider.baseUrl = "http://127.0.0.1:11434/v1";
+    let catalogReads = 0;
+    for (const entry of provider.models) {
+      const name = entry.name;
+      Object.defineProperty(entry, "name", {
+        get() {
+          catalogReads += 1;
+          return name;
+        },
+      });
+    }
+    setRuntimeConfigSnapshot(config, structuredClone(config));
+    const remote = structuredClone(config);
+    remote.models.providers.synthetic.baseUrl = "https://remote.example/v1";
+    const resolverFor = (cfg: OpenClawConfig) =>
+      createModelAuthAvailabilityResolver({
+        cfg: captureRuntimeConfig(cfg),
+        authStore: { version: 1, profiles: {} },
+        env: {},
+        metadataSnapshot: createPluginMetadataSnapshotFixture(),
+      });
+    const localResolver = resolverFor(config);
+    const remoteResolver = resolverFor(remote);
+    catalogReads = 0;
+
+    for (const [resolver, modelId, availability] of [
+      [localResolver, "synthetic-0", true],
+      [remoteResolver, "synthetic-99", apiKey === "custom-local" ? undefined : true],
+      [localResolver, "synthetic-99", true],
+    ] as const) {
+      expect(
+        resolver.evaluateRuntimeModelAuth("synthetic", {
+          modelId,
+          runtimeId: "openclaw",
+        }),
+      ).toMatchObject({
+        availability,
+        ...(apiKey === "custom-local" ? {} : { evidence: "provider-config" }),
+      });
+    }
+
+    expect(catalogReads).toBe(0);
+  },
+);
+
+it("skips configured model scans for complete routes while filling missing route fields", () => {
+  const { config, provider } = createProviderConfig(100);
+  delete provider.apiKey;
+  provider.api = "anthropic-messages";
+  const localBaseUrl = "http://127.0.0.1:11434/v1";
+  const localModel = provider.models[99]!;
+  localModel.api = "openai-completions";
+  localModel.baseUrl = localBaseUrl;
+  let catalogReads = 0;
+  for (const entry of provider.models) {
+    const id = entry.id;
+    Object.defineProperty(entry, "id", {
+      get() {
+        catalogReads += 1;
+        return id;
+      },
+    });
+  }
+  const resolver = createModelAuthAvailabilityResolver({
+    cfg: config,
+    authStore: { version: 1, profiles: {} },
+    env: {},
+    metadataSnapshot: createPluginMetadataSnapshotFixture(),
+    syntheticAuthProviderRefs: ["synthetic"],
+    preparedSyntheticAuthComplete: true,
+  });
+
+  for (const { baseUrl, availability, expectedReads } of [
+    { baseUrl: provider.baseUrl, availability: false, expectedReads: 0 },
+    { baseUrl: undefined, availability: true, expectedReads: 100 },
+  ]) {
+    catalogReads = 0;
+    expect(
+      resolver.evaluateRuntimeModelAuth("synthetic", {
+        modelId: "synthetic-99",
+        runtimeId: "openclaw",
+        api: "openai-completions",
+        baseUrl,
+      }),
+    ).toMatchObject({ availability, evidence: "synthetic" });
+    expect(catalogReads).toBe(expectedReads);
+  }
+});
+
 it("rechecks managed provider credentials after snapshot replacement", () => {
   const { config } = createProviderConfig();
   publishProvider(config);

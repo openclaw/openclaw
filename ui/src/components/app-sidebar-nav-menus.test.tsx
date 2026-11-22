@@ -5,7 +5,12 @@ import { de } from "../i18n/locales/de.ts";
 import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
-import { createGateway, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
+import {
+  createGateway,
+  createSessions,
+  mountSidebar,
+  TWO_AGENTS,
+} from "../test-helpers/app-sidebar.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -13,30 +18,16 @@ import {
 import { mountSolid as render } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { renderSidebarAgentMenu as AgentMenu } from "./app-sidebar-agent-menu.tsx";
-import {
-  SidebarDropdown,
-  renderSidebarNavLink,
-  type SidebarDropdownProps,
-} from "./app-sidebar-nav-menus.tsx";
+import { SidebarDropdown, type SidebarDropdownProps } from "./app-sidebar-dropdown.tsx";
+import { renderSidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import { renderSidebarSessionSectionHeader as SectionHeader } from "./app-sidebar-session-section-header.tsx";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
-import { SessionOrganizer } from "./session-organizer.ts";
 import { SidebarMenusRenderer } from "./sidebar-menus-render.tsx";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import { createSidebarMenus, type SidebarMenus } from "./sidebar-menus.tsx";
 
-it("updates retained agent creation menu labels when the locale changes", async () => {
-  await i18n.setLocale("en");
-  onTestFinished(async () => {
-    await i18n.setLocale("en");
-    i18n.registerTranslation("de", de);
-  });
-  // This new action does not have a foreign catalog translation yet.
-  i18n.registerTranslation("de", {
-    ...de,
-    agentChip: { createAgent: "Neuen Agenten erstellen" },
-  });
-  const view = render(() => (
+function renderAgentMenu(props: Partial<Parameters<typeof AgentMenu>[0]> = {}) {
+  return render(() => (
     <AgentMenu
       activeId="main"
       agents={[]}
@@ -57,8 +48,23 @@ it("updates retained agent creation menu labels when the locale changes", async 
       onSwitchAgent={vi.fn()}
       onClose={vi.fn()}
       onNavigate={vi.fn()}
+      {...props}
     />
   ));
+}
+
+it("updates retained agent creation menu labels when the locale changes", async () => {
+  await i18n.setLocale("en");
+  onTestFinished(async () => {
+    await i18n.setLocale("en");
+    i18n.registerTranslation("de", de);
+  });
+  // This new action does not have a foreign catalog translation yet.
+  i18n.registerTranslation("de", {
+    ...de,
+    agentChip: { createAgent: "Neuen Agenten erstellen" },
+  });
+  const view = renderAgentMenu();
   flush();
   const menu = view.getByRole("menu", { hidden: true });
   const row = view.getByRole("menuitem", { name: "Create new agent", hidden: true });
@@ -71,6 +77,100 @@ it("updates retained agent creation menu labels when the locale changes", async 
     expect(menu.querySelector('[data-value="command:new-agent"]')).toBe(row);
   });
   expect(view.getByRole("menu", { hidden: true })).toBe(menu);
+});
+
+it("keeps menu controls with their agent as the roster changes", () => {
+  const [agents, setAgents] = createSignal<Array<{ id: string; name: string }>>([]);
+  const [pending, setPending] = createSignal<{ id: string; name: string }>();
+  const view = renderAgentMenu({
+    get agents() {
+      return agents();
+    },
+    get pendingAgent() {
+      return pending();
+    },
+  });
+  flush();
+  const menu = view.getByRole("menu", { hidden: true });
+  expect(menu.querySelector('[data-value^="agent:"]')).toBeNull();
+  setAgents([
+    { id: "main", name: "Main" },
+    { id: "scout", name: "Scout" },
+  ]);
+  flush();
+  const scout = view.getByRole("menuitem", { name: "Scout", hidden: true });
+  const settings = view.getByRole("button", { name: "Scout settings", hidden: true });
+  settings.focus();
+  expect(document.activeElement).toBe(settings);
+  setAgents([
+    { id: "main", name: "Main" },
+    { id: "scout", name: "Scout renamed" },
+  ]);
+  flush();
+  expect(view.getByRole("menuitem", { name: "Scout renamed", hidden: true })).toBe(scout);
+  expect(view.getByRole("button", { name: "Scout renamed settings", hidden: true })).toBe(settings);
+  expect(document.activeElement).toBe(settings);
+  expect(menu.querySelector('[data-value="scope:all"]')).not.toBeNull();
+
+  setPending({ id: "scout", name: "Creating scout" });
+  flush();
+  expect(scout.getAttribute("aria-disabled")).toBe("true");
+  expect(scout.querySelector(".sidebar-agent-menu__settings")).toBeNull();
+  expect(menu.querySelectorAll('[data-value="agent:scout"]')).toHaveLength(1);
+  setPending(undefined);
+  flush();
+  expect(scout.getAttribute("aria-disabled")).toBeNull();
+  expect(view.getByRole("button", { name: "Scout renamed settings", hidden: true })).not.toBe(
+    settings,
+  );
+
+  setAgents([{ id: "main", name: "Main" }]);
+  flush();
+  expect(scout.isConnected).toBe(false);
+  expect(menu.querySelector('[data-value="scope:all"]')).toBeNull();
+  expect(view.queryByRole("button", { name: "Scout renamed settings", hidden: true })).toBeNull();
+});
+
+it("offers Share on each agent row only when sharing is available", () => {
+  const [share, setShare] = createSignal<((agentId: string) => void) | undefined>();
+  const [pending, setPending] = createSignal<{ id: string; name: string }>();
+  const onClose = vi.fn();
+  const onSwitchAgent = vi.fn();
+  const view = renderAgentMenu({
+    agents: [
+      { id: "main", name: "Main" },
+      { id: "scout", name: "Scout" },
+    ],
+    get onShareAgent() {
+      return share();
+    },
+    get pendingAgent() {
+      return pending();
+    },
+    onClose,
+    onSwitchAgent,
+  });
+  flush();
+  expect(view.queryByRole("button", { name: "Share Scout", hidden: true })).toBeNull();
+
+  const onShareAgent = vi.fn();
+  setShare(() => onShareAgent);
+  flush();
+  const scout = view.getByRole("menuitem", { name: "Scout", hidden: true });
+  const actions = [...scout.querySelectorAll(".sidebar-agent-menu__action")];
+  expect(actions.map((action) => action.getAttribute("aria-label"))).toEqual([
+    "Share Scout",
+    "Scout settings",
+  ]);
+  view.getByRole("button", { name: "Share Scout", hidden: true }).click();
+  expect(onShareAgent).toHaveBeenCalledExactlyOnceWith("scout");
+  expect(onClose).toHaveBeenCalledExactlyOnceWith(false);
+  expect(onSwitchAgent).not.toHaveBeenCalled();
+
+  setPending({ id: "scout", name: "Scout" });
+  flush();
+  expect(view.queryByRole("button", { name: "Share Scout", hidden: true })).toBeNull();
+  expect(view.getByRole("button", { name: "Share Main", hidden: true })).not.toBeNull();
 });
 
 const position = { x: 12, y: 30 };
@@ -112,45 +212,6 @@ it("keeps modified sidebar links native and handles ordinary navigation", () => 
   link.dispatchEvent(ordinary);
   expect(ordinary.defaultPrevented).toBe(true);
   expect(navigate).toHaveBeenCalledOnce();
-});
-
-it("uses the current preload callbacks without replacing a sidebar link", () => {
-  const SidebarNavLink = renderSidebarNavLink;
-  const preload = vi.fn();
-  const cancel = vi.fn();
-  const [handlers, setHandlers] = createSignal<{
-    onPreload?: (event: Event, immediate?: boolean) => void;
-    onCancelPreload?: (event: Event) => void;
-  }>({});
-  const view = render(() => (
-    <SidebarNavLink
-      href="/sessions"
-      active={false}
-      icon={<span />}
-      label="Sessions"
-      onNavigate={vi.fn()}
-      {...handlers()}
-    />
-  ));
-  const link = view.getByRole("link", { name: "Sessions" });
-  setHandlers({ onPreload: preload, onCancelPreload: cancel });
-  flush();
-  for (const type of ["focus", "pointerenter", "touchstart", "blur", "pointerleave"]) {
-    link.dispatchEvent(new Event(type, { bubbles: true }));
-  }
-  expect(preload.mock.calls.map(([event, immediate]) => [event.type, immediate])).toEqual([
-    ["focus", undefined],
-    ["pointerenter", undefined],
-    ["touchstart", true],
-  ]);
-  expect(cancel.mock.calls.map(([event]) => event.type)).toEqual(["blur", "pointerleave"]);
-  setHandlers({});
-  flush();
-  link.dispatchEvent(new Event("touchstart", { bubbles: true }));
-  link.dispatchEvent(new Event("blur", { bubbles: true }));
-  expect(preload).toHaveBeenCalledTimes(3);
-  expect(cancel).toHaveBeenCalledTimes(2);
-  expect(view.getByRole("link", { name: "Sessions" })).toBe(link);
 });
 
 it("uses current section actions while retaining the header", () => {
@@ -217,9 +278,6 @@ it("keeps personal pinning and navigation usable in an offline session menu", as
     sessionOrganizer: {
       isPersonalSessionPin: () => false,
       setPersonalSessionPin: pin,
-      runSessionAction(...args: Parameters<SessionOrganizer["runSessionAction"]>) {
-        return SessionOrganizer.prototype.runSessionAction.call(this, ...args);
-      },
     },
   } as unknown as SidebarMenusOwner;
   const view = render(() => (
@@ -275,9 +333,92 @@ it("returns to the durable trigger without consuming native Tab", async () => {
 describe("sidebar rail pin menu", () => {
   setupSidebarTest();
 
+  it("keeps section pins above Pages and the separator, and every other pin below", async () => {
+    const { sidebar } = await mountSidebar(
+      createGateway(createTestGatewayClient(createGatewayRequestMock())),
+      createSessions("main", []),
+    );
+    const order = () =>
+      [
+        ...sidebar
+          .querySelector(".sidebar-rail__pins")!
+          .querySelectorAll("[data-sidebar-entry], [data-rail-more], .sidebar-rail__separator"),
+      ].map(
+        (element) =>
+          element.getAttribute("data-sidebar-entry") ??
+          (element.hasAttribute("data-rail-more") ? "pages" : "separator"),
+      );
+    await sidebar.updateComplete;
+    // A new rail: Automations, Customize and Usage, then the "more" menu.
+    expect(order()).toEqual(["route:cron", "route:plugins", "route:usage", "pages"]);
+    sidebar.sidebarEntries = ["person:ada", "route:usage", "route:cron"];
+    await sidebar.updateComplete;
+    expect(order()).toEqual(["route:usage", "route:cron", "pages", "separator", "person:ada"]);
+    // Search lives with the footer controls, not above the pins.
+    expect(sidebar.querySelector(".sidebar-rail__bottom .sidebar-brand__search")).not.toBeNull();
+    sidebar.sidebarEntries = ["route:usage"];
+    await sidebar.updateComplete;
+    expect(order()).toEqual(["route:usage", "pages"]);
+  });
+
+  it("opens Activity and the people list from the People rail item", async () => {
+    const { sidebar } = await mountSidebar(
+      createGateway(createTestGatewayClient(createGatewayRequestMock())),
+      createSessions("main", []),
+    );
+    const navigate = vi.fn();
+    sidebar.onNavigate = navigate;
+    sidebar.navigationCollapsed = true;
+    sidebar.onToggleSidebar = () => (sidebar.navigationCollapsed = !sidebar.navigationCollapsed);
+    await sidebar.updateComplete;
+    sidebar.querySelector<HTMLButtonElement>('[data-navigation-view="online"]')!.click();
+    await sidebar.updateComplete;
+    await vi.dynamicImportSettled();
+    await sidebar.updateComplete;
+    expect(navigate).toHaveBeenCalledWith("activity");
+    expect(sidebar).toMatchObject({ navigationView: "online", navigationCollapsed: false });
+    const overview = sidebar.querySelector<HTMLAnchorElement>(".sidebar-online__overview a")!;
+    expect(overview.textContent).toContain("Activity");
+    expect(overview.getAttribute("href")).toBe("/activity");
+  });
+
+  it("opens the Sessions list and agent picker from separate rail buttons", async () => {
+    const { sidebar } = await mountSidebar(
+      createGateway(createTestGatewayClient(createGatewayRequestMock())),
+      createSessions("main", []),
+      "panel",
+      TWO_AGENTS,
+    );
+    sidebar.navigationView = "automations";
+    sidebar.navigationCollapsed = true;
+    sidebar.onToggleSidebar = () => (sidebar.navigationCollapsed = !sidebar.navigationCollapsed);
+    await sidebar.updateComplete;
+    const agent = sidebar.querySelector<HTMLButtonElement>(
+      '.sidebar-rail button[aria-label="Molty · Switch agent"]',
+    )!;
+    const sessions = sidebar.querySelector<HTMLButtonElement>(
+      '.sidebar-rail button[aria-label="Sessions"]',
+    )!;
+
+    agent.click();
+    await sidebar.updateComplete;
+    await vi.dynamicImportSettled();
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-agent-menu")).not.toBeNull();
+    expect(sidebar).toMatchObject({ navigationView: "automations", navigationCollapsed: true });
+    expect(sessions.getAttribute("aria-pressed")).toBe("false");
+
+    sessions.click();
+    await sidebar.updateComplete;
+    expect(sidebar).toMatchObject({ navigationView: "sessions", navigationCollapsed: false });
+    expect(sessions.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  // Section pins and person pins sit on either side of the rail separator, so
+  // moves never cross it: route:sessions cannot move down, person:ada cannot move up.
   it.each([
     ["before", 1, "route:usage"],
-    ["after", 1, "person:ada"],
+    ["after", 0, "route:sessions"],
     ["remove", 0, "route:usage"],
     ["remove", 2, "person:ada"],
   ] as const)(
@@ -344,10 +485,10 @@ describe("sidebar rail pin menu", () => {
       await waitForSolid(() => expect(view.queryByRole("menu", { hidden: true })).not.toBeNull());
       const menu = view.getByRole("menu", { hidden: true });
       expect(menu.querySelector('[data-value="before"]')?.hasAttribute("disabled")).toBe(
-        index === 0,
+        index !== 1,
       );
       expect(menu.querySelector('[data-value="after"]')?.hasAttribute("disabled")).toBe(
-        index === 2,
+        index !== 0,
       );
       expect(menus.triggers.get("railPin")).toBe(trigger);
       menu.querySelector<HTMLButtonElement>(`[data-value="${action}"]`)!.click();
@@ -361,7 +502,7 @@ describe("sidebar rail pin menu", () => {
         expect(remove).toHaveBeenCalledExactlyOnceWith(target);
         expect(move).not.toHaveBeenCalled();
       } else {
-        expect(move).toHaveBeenCalledExactlyOnceWith("route:sessions", target, action);
+        expect(move).toHaveBeenCalledExactlyOnceWith(entries[index], target, action);
         expect(remove).not.toHaveBeenCalled();
       }
     },

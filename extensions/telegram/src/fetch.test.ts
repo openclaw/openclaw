@@ -292,6 +292,14 @@ describe("resolveTelegramFetch", () => {
     const transport = resolveTelegramTransport(undefined, {
       network: { autoSelectFamily: false, dnsResultOrder: "verbatim" },
     });
+    expect(AgentCtor).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        connect: expect.objectContaining({
+          autoSelectFamily: false,
+          autoSelectFamilyAttemptTimeout: 300,
+        }),
+      }),
+    );
     const url = "https://api.telegram.org/botfixture/getMe";
     try {
       await expect(transport.fetch(url, init)).resolves.toBe(response);
@@ -321,26 +329,6 @@ describe("resolveTelegramFetch", () => {
     expect(callerDispatcher.destroy).not.toHaveBeenCalled();
     await expect(transport.fetch(url, init)).rejects.toThrow("Telegram transport is closed");
     expect(undiciFetch).toHaveBeenCalledTimes(2);
-  });
-
-  it.each([
-    { network: { dnsResultOrder: "verbatim" as const }, expected: true },
-    { network: { dnsResultOrder: "ipv4first" as const, autoSelectFamily: true }, expected: true },
-    { network: { dnsResultOrder: "verbatim" as const, autoSelectFamily: false }, expected: false },
-  ])("preserves family selection overrides: $network", async ({ network, expected }) => {
-    const transport = resolveTelegramTransport(undefined, { network });
-    try {
-      expect(AgentCtor).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          connect: expect.objectContaining({
-            autoSelectFamily: expected,
-            autoSelectFamilyAttemptTimeout: 300,
-          }),
-        }),
-      );
-    } finally {
-      await transport.close();
-    }
   });
 
   it.each([
@@ -410,6 +398,14 @@ describe("resolveTelegramFetch", () => {
     vi.stubEnv("OPENCLAW_TELEGRAM_DNS_RESULT_ORDER", "verbatim");
     undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
     const transport = resolveTelegramTransport();
+    expect(AgentCtor).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        connect: expect.objectContaining({
+          autoSelectFamily: true,
+          autoSelectFamilyAttemptTimeout: 300,
+        }),
+      }),
+    );
 
     await expect(
       transport.sourceFetch("https://api.telegram.org/botTOKEN/getFile"),

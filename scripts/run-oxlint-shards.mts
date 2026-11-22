@@ -49,7 +49,7 @@ type DirectoryLookup = Required<DirectoryOptions>;
 type ShardOptions = DirectoryOptions & { env?: NodeJS.ProcessEnv };
 type PlatformOptions = { env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform };
 type PlatformShardOptions = ShardOptions &
-  ResourceOptions & { splitCore?: boolean; splitExtensions?: boolean };
+  ResourceOptions & { splitCore?: boolean; splitExtensions?: boolean; only?: ReadonlySet<string> };
 type ResourceOptions = PlatformOptions & { hostResources?: HostResources };
 type RunnerOptions = {
   env: NodeJS.ProcessEnv;
@@ -172,6 +172,7 @@ export function createOxlintShards({
   readDir = fs.readdirSync,
   splitCore = false,
   splitExtensions = false,
+  only,
 }: PlatformShardOptions = {}) {
   const constrainedSerial =
     resolveCheckMemoryCapacityBytes(hostResources) < CI_PARALLEL_MIN_MEMORY_BYTES &&
@@ -188,6 +189,10 @@ export function createOxlintShards({
           }),
         ).flat()
       : coreGroups;
+  // Core-only jobs do not need inventories for the discarded shard families.
+  if (only?.size === 1 && only.has("core")) {
+    return coreShards;
+  }
   // Unsplit plugin lint can exceed small-host RAM even with a single lint thread.
   // Chunk serial runs; explicit stripes use independently bounded Programs that stay serial.
   const chunkExtensions = splitExtensions || platform === "win32" || constrainedSerial;
@@ -207,7 +212,22 @@ export function createOxlintShards({
     ? createExtensionOxlintShards({ cwd, env, platform, readDir, chunkSize: extensionChunkSize })
     : [EXTENSIONS_SHARD];
 
-  return [...coreShards, ...extensionShards, SCRIPTS_SHARD];
+  // CI retains --only=scripts even when hosted jobs own core/extension stripes.
+  // Keep test and root-script resource safety there without a second full type-aware lint pass.
+  const rootFiles = listOxlintRootEntries(".", { cwd, readDir }).rootFiles;
+  const resourceTargets = ["test", ...rootFiles];
+  const resourceSafety = {
+    name: "scripts:resource-safety",
+    args: [
+      "--config",
+      "config/oxlint/resource-safety.json",
+      "--openclaw-focused-config",
+      "--ignore-pattern=test/fixtures/oxlint-boundary-guards/**",
+      ...resourceTargets,
+    ],
+    canonicalTargets: resourceTargets,
+  };
+  return [...coreShards, ...extensionShards, SCRIPTS_SHARD, resourceSafety];
 }
 
 function createCoreOxlintShards({
@@ -362,6 +382,7 @@ export async function main(
     hostResources,
     splitCore: shardArgs.splitCore,
     splitExtensions,
+    only: shardArgs.only,
   });
   const stripedShards = selectExtensionOxlintStripe(
     selectCoreOxlintStripe(filterOxlintShards(shards, shardArgs.only), shardArgs.coreStripe, {

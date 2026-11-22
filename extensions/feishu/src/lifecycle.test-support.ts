@@ -85,19 +85,12 @@ export function resetFeishuLifecycleTestMocks(): void {
 
 // mock-isolation: Lifecycle fixtures must not create real Feishu clients or SDK interceptors.
 vi.mock("./client.js", () => ({
-  FEISHU_HTTP_TIMEOUT_ENV_VAR: "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS",
-  FEISHU_HTTP_TIMEOUT_MAX_MS: 300_000,
-  FEISHU_HTTP_TIMEOUT_MS: 30_000,
-  FEISHU_USER_AGENT: "openclaw-feishu-test",
-  clearClientCache: vi.fn(),
   createFeishuClient: vi.fn(() => {
     throw new Error("unexpected Feishu client call in lifecycle test");
   }),
   createFeishuWSClient: vi.fn(async () => ({ close: vi.fn(), start: vi.fn() })),
   createEventDispatcher: mocks.createEventDispatcherMock,
   getFeishuUserAgent: vi.fn(() => "openclaw-feishu-test"),
-  pluginVersion: "test",
-  setFeishuClientRuntimeForTest: vi.fn(),
 }));
 
 // mock-isolation: Lifecycle fixtures control transport completion without opening sockets or routes.
@@ -175,9 +168,5 @@ vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async () => {
       mocks.ensureConfiguredBindingRouteReadyMock.getMockImplementation()
         ? mocks.ensureConfiguredBindingRouteReadyMock(params)
         : actual.ensureConfiguredBindingRouteReady(params),
-    getSessionBindingService: () => ({
-      resolveByConversation: mocks.resolveBoundConversationMock,
-      touch: mocks.touchBindingMock,
-    }),
   };
 });

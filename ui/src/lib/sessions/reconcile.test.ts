@@ -140,16 +140,17 @@ test("sessions.changed deletes every nested null tombstone, not a hand-kept list
     agentStatus: { state: "needs_attention" },
     observerDigest: { headline: "Waiting" },
     controlOwnerSessionKey: "agent:main:owner",
-    restartRecoveryStatus: "pending",
     goal: "ship it",
   };
   const tombstones = Object.fromEntries(Object.keys(fields).map((field) => [field, null]));
-  const result = buildResult(sessionRow({ ...fields, modelOverrideSource: "user" } as never));
+  const previous = { modelOverrideSource: "user", workspaceReadDisabledReason: "denied" };
+  const kept = { updatedAt: 2, modelOverrideSource: null, workspaceReadDisabledReason: null };
+  const result = buildResult(sessionRow({ ...fields, ...previous } as never));
 
   const reconciled = reconcileSessionChanged(result, {
     sessionKey: key,
     reason: "patch",
-    session: sessionRow({ updatedAt: 2, ...tombstones, modelOverrideSource: null }),
+    session: sessionRow({ ...tombstones, ...kept }),
   } as never);
 
   expect(reconciled.applied).toBe(true);
@@ -157,8 +158,8 @@ test("sessions.changed deletes every nested null tombstone, not a hand-kept list
   for (const field of Object.keys(fields)) {
     expect(row?.[field], field).toBeUndefined();
   }
-  // Unlike optional fields, null pin provenance confirms inheritance.
-  expect(row).toMatchObject({ updatedAt: 2, modelOverrideSource: null });
+  // Unlike optional fields, null pin provenance and null read admission are decisions.
+  expect(row).toMatchObject(kept);
 });
 
 test("sessions.changed preserves the owner facet when ownership is unchanged", () => {
@@ -344,9 +345,7 @@ it.each([false, true])("reconciles thinking metadata (clear override: %s)", (cle
     thinkingLevel: clear ? null : "ultra",
     ...(clear ? {} : { agentRuntime: { id: "codex", source: "model" } }),
   });
-  expect(next.row?.thinkingLevel).toBe(clear ? undefined : "ultra");
-  if (!clear) {
-    expect(next.row?.thinkingLevels).toEqual(thinkingLevels);
-    expect(next.row?.thinkingOptions).toEqual(["max", "ultra"]);
-  }
+  expect(next.result?.sessions).toEqual([
+    { ...result.sessions[0], updatedAt: 2, thinkingLevel: clear ? undefined : "ultra" },
+  ]);
 });

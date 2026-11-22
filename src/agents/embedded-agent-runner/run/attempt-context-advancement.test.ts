@@ -226,9 +226,10 @@ describe("context advancement through embedded attempt guards", () => {
         expect(assemble.mock.calls[1]?.[0]).toMatchObject({
           prompt: promptText,
           availableTools: new Set(["read_fixture"]),
-          // 8192 context - 1024 reserve - 432 system pressure - 14 pending exchange.
-          tokenBudget: 6722,
         });
+        // 8192 context - 1024 explicit reserve - 479 nominal tokens for the system,
+        // tool schema and pending exchange.
+        expect(assemble.mock.calls[1]?.[0].tokenBudget).toBe(6689);
         expect(commitTurn).not.toHaveBeenCalled();
         expect(remembered).toEqual([]);
         expect(guards.getAfterTurnCheckpoint()).toBeNull();

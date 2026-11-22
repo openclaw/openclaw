@@ -4,6 +4,7 @@ import { runCliWithExitFinalization } from "../cli/one-shot-exit.js";
 import { withCliCommandCleanup, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import { closeCliResources, runCliDisposer } from "../cli/runtime-cleanup.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
+import { withSqliteSnapshotReuse } from "../infra/sqlite-snapshot-reuse.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { enableConsoleCapture } from "../logging/console.js";
 import { defaultRuntime } from "../runtime.js";
@@ -28,6 +29,8 @@ async function runDoctorLintWorker(): Promise<void> {
     withCliCommandCleanup(false, async (cleanup) => {
       let exitCode: number;
       try {
+        const { preparePostgresPoolForUpdate } = await import("../infra/postgres-sync/pool.js");
+        await preparePostgresPoolForUpdate("openclaw doctor --fix");
         const { runDoctorLintCliInProcess } = await import("./doctor-lint-runner.js");
         exitCode = await runDoctorLintCliInProcess(defaultRuntime, options, { commandStartedAtMs });
       } finally {
@@ -48,7 +51,7 @@ void withConsoleLogsRoutedToStderrForJson(
   process.argv,
   () =>
     runCliWithExitFinalization({
-      run: runDoctorLintWorker,
+      run: () => withSqliteSnapshotReuse(runDoctorLintWorker),
       onError: (error) => {
         process.stderr.write(`Doctor lint worker failed: ${scrubDoctorErrorMessage(error)}\n`);
         process.exitCode = 2;

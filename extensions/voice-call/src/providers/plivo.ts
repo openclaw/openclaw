@@ -21,7 +21,7 @@ import type {
 } from "../types.js";
 import { escapeXml } from "../voice-mapping.js";
 import { reconstructWebhookUrl, verifyPlivoWebhook } from "../webhook-security.js";
-import type { VoiceCallProvider } from "./base.js";
+import { assertVoiceCallProviderSetting, type VoiceCallProvider } from "./base.js";
 import { createCarrierApi } from "./shared/carrier-api.js";
 
 interface PlivoProviderOptions {
@@ -92,12 +92,8 @@ export class PlivoProvider implements VoiceCallProvider {
   }
 
   constructor(config: PlivoConfig, options: PlivoProviderOptions = {}) {
-    if (!config.authId) {
-      throw new Error("Plivo Auth ID is required");
-    }
-    if (!config.authToken) {
-      throw new Error("Plivo Auth Token is required");
-    }
+    assertVoiceCallProviderSetting(config.authId, "Plivo Auth ID is required");
+    assertVoiceCallProviderSetting(config.authToken, "Plivo Auth Token is required");
 
     this.authToken = config.authToken;
     this.options = options;

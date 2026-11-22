@@ -14,32 +14,20 @@ function grantRevision(value: object) {
 }
 
 function fixture() {
-  const heartbeat = {
-    id: "heartbeat",
-    enabled: false,
-    description: "Migrated automation",
-    schedule: { everyMs: 1_800_000, kind: "every" },
-    state: {},
-    wakeMode: "now",
-  };
-  const dreaming = { ...heartbeat, id: "dreaming", enabled: false };
-  const scheduled = {
-    ...dreaming,
-    enabled: true,
-    schedule: { expr: "17 12 20 10 *", kind: "cron", tz: "UTC" },
-  };
-  const row = (
-    definition: typeof heartbeat | typeof scheduled,
-    ordinal: number,
-    timestamp: number,
-  ) => {
-    const { enabled: _enabled, state: _state, ...grant } = definition;
+  const schedule = { expr: "17 12 20 10 *", kind: "cron", tz: "UTC" };
+  const row = (id: string, ordinal: number, timestamp: number, enabled = false) => {
+    const grant = {
+      id,
+      description: "Migrated automation",
+      wakeMode: "now",
+      schedule: enabled ? schedule : { everyMs: 1_800_000, kind: "every" },
+    };
     return {
       store_key: "active",
-      job_id: definition.id,
-      description: definition.description,
-      enabled: definition.enabled ? 1 : 0,
-      job_json: JSON.stringify(definition),
+      job_id: id,
+      description: grant.description,
+      enabled: Number(enabled),
+      job_json: JSON.stringify({ ...grant, enabled, state: {} }),
       state_json: "{}",
       schedule_identity: "{}",
       sort_order: ordinal,
@@ -52,14 +40,14 @@ function fixture() {
   };
   type Row = ReturnType<typeof row>;
   const before: [Row, Row, Row, Row] = [
-    row(heartbeat, 0, 1000),
-    row(dreaming, 10, 9_000_000_000_000),
-    { ...row({ ...heartbeat, id: "authored" }, 34, 1000), runtime_updated_at_ms: 1010 },
-    { ...row({ ...heartbeat, id: "inactive" }, 19, 1000), store_key: "inactive" },
+    row("heartbeat", 0, 1000),
+    row("dreaming", 10, 9_000_000_000_000),
+    { ...row("authored", 34, 1000), runtime_updated_at_ms: 1010 },
+    { ...row("inactive", 19, 1000), store_key: "inactive" },
   ];
   const after = structuredClone(before);
   Object.assign(after[1], {
-    ...row(scheduled, after[1].sort_order, Math.max(after[1].runtime_updated_at_ms, 2000)),
+    ...row("dreaming", after[1].sort_order, Math.max(after[1].runtime_updated_at_ms, 2000), true),
     state_json: JSON.stringify({
       consecutiveErrors: 0,
       scheduleErrorCount: 0,
@@ -68,8 +56,8 @@ function fixture() {
     }),
     schedule_identity: JSON.stringify({
       version: 2,
-      enabled: scheduled.enabled,
-      schedule: scheduled.schedule,
+      enabled: true,
+      schedule,
       hasTrigger: false,
     }),
     grant_definition_generation: 4,
@@ -80,7 +68,7 @@ function fixture() {
       storeKey: "active",
       jobId: "dreaming",
       startedAtMs: 1500,
-      frequency: "17 12 20 10 *",
+      frequency: schedule.expr,
     },
     rows: after,
   };

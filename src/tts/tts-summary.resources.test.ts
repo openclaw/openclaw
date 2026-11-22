@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
@@ -16,6 +15,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Context, Model, ProviderStreamOptions } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { summarizeText } from "../plugin-sdk/speech-core.js";
+import { writeFixtureJson } from "../plugins/loader-fixture-builders.test-support.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -24,6 +24,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { cleanupNativeFixture, nativeFixtureEnv } from "../plugins/native-resource.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
@@ -181,14 +182,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   });
 }};`,
   });
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      providers: [id],
-      configSchema: { type: "object", properties: {}, additionalProperties: false },
-    }),
-  );
+  writeFixtureJson(dir, "openclaw.plugin.json", {
+    id,
+    providers: [id],
+    configSchema: { type: "object", properties: {}, additionalProperties: false },
+  });
   const config: OpenClawConfig = {
     agents: {
       entries: { main: {} },
@@ -232,51 +230,39 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     },
     async run(test: (fixtureState: typeof state) => Promise<void>) {
       try {
-        await withEnvAsync(
-          {
-            OPENCLAW_HOME: dir,
-            OPENCLAW_STATE_DIR: path.join(dir, "state"),
-            OPENCLAW_CONFIG_PATH: path.join(dir, "config.json"),
-          },
-          async () => {
-            useNoBundledPlugins();
-            lease = await preparedRuntime.acquireReadOnlyPreparedModelRuntime(
-              {
-                config,
-                agentId: "main",
-                agentDir,
-                workspaceDir: dir,
-                loadRuntimePlugins: true,
-                skipCredentials: true,
-                runtimePluginSelections: [{ provider: id, modelId: "summary-model" }],
-              },
-              { catalogMode: "static" },
-            );
-            acquire = vi
-              .spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime")
-              .mockResolvedValue(lease);
-            try {
-              await test(state);
-            } finally {
-              state.finishSetup.resolve();
-              state.finishSetupTail.resolve();
-              state.finish.resolve();
-              state.finishTail.resolve();
-              state.finishCleanup.resolve();
-              await Promise.all(outcomes);
-              await parent.drain();
-              await lease[Symbol.asyncDispose]();
-              await closePreparedModelRuntimeSnapshots();
-            }
-          },
-        );
-      } finally {
-        for (const connection of connections) {
-          if (connection.database.isOpen) {
-            connection.database.close();
+        await withEnvAsync(nativeFixtureEnv(dir, path.join(dir, "state")), async () => {
+          useNoBundledPlugins();
+          lease = await preparedRuntime.acquireReadOnlyPreparedModelRuntime(
+            {
+              config,
+              agentId: "main",
+              agentDir,
+              workspaceDir: dir,
+              loadRuntimePlugins: true,
+              skipCredentials: true,
+              runtimePluginSelections: [{ provider: id, modelId: "summary-model" }],
+            },
+            { catalogMode: "static" },
+          );
+          acquire = vi
+            .spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime")
+            .mockResolvedValue(lease);
+          try {
+            await test(state);
+          } finally {
+            state.finishSetup.resolve();
+            state.finishSetupTail.resolve();
+            state.finish.resolve();
+            state.finishTail.resolve();
+            state.finishCleanup.resolve();
+            await Promise.all(outcomes);
+            await parent.drain();
+            await lease[Symbol.asyncDispose]();
+            await closePreparedModelRuntimeSnapshots();
           }
-        }
-        Reflect.deleteProperty(globalThis, key);
+        });
+      } finally {
+        cleanupNativeFixture(key, connections);
       }
     },
     summarize(timeoutMs = 1000, deps?: Parameters<typeof summarizeText>[1]) {

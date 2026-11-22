@@ -157,7 +157,7 @@ describe("DefaultResourceLoader", () => {
       api.registerCommand("shared", { handler: async () => {} });
     };
     const loader = createLoader(root, {
-      extensionFactories: [factory, factory, factory],
+      extensionFactories: [factory, factory],
     });
 
     await loader.reload();
@@ -165,16 +165,14 @@ describe("DefaultResourceLoader", () => {
     expect(loader.getExtensions().errors).toEqual([
       { path: "<inline:2>", error: 'Tool "shared" conflicts with <inline:1>' },
       { path: "<inline:2>", error: 'Flag "--shared" conflicts with <inline:1>' },
-      { path: "<inline:3>", error: 'Tool "shared" conflicts with <inline:1>' },
-      { path: "<inline:3>", error: 'Flag "--shared" conflicts with <inline:1>' },
     ]);
-    expect(loader.getExtensions().extensions).toHaveLength(3);
+    expect(loader.getExtensions().extensions).toHaveLength(2);
 
     loader.getExtensions().runtime.flagValues.set("shared", true);
     description = "Reloaded registration";
     await loader.reload();
     expect(loader.getExtensions().runtime.flagValues.get("shared")).toBe(false);
-    expect(loader.getExtensions().extensions).toHaveLength(3);
+    expect(loader.getExtensions().extensions).toHaveLength(2);
     for (const [index, extension] of loader.getExtensions().extensions.entries()) {
       const sourceInfo = {
         path: `<inline:${index + 1}>`,
@@ -200,12 +198,8 @@ describe("DefaultResourceLoader", () => {
     for (const directory of [defaultThemeDir, packageDir, variantPackageDir]) {
       await mkdir(directory, { recursive: true });
     }
-    const themePaths = [
-      join(defaultThemeDir, "default.json"),
-      join(packageDir, "package.json"),
-      join(packageDir, "extra.json"),
-    ];
-    for (const [index, name] of ["default", "package", "extra"].entries()) {
+    const themePaths = [join(defaultThemeDir, "default.json"), join(packageDir, "package.json")];
+    for (const [index, name] of ["default", "package"].entries()) {
       await writeFile(themePaths[index]!, JSON.stringify({ ...darkTheme, name }));
     }
     await withMockedWindowsPlatform(async () => {
@@ -231,7 +225,7 @@ describe("DefaultResourceLoader", () => {
       loader.extendResources({
         themePaths: [entry(variantPackageDir, "extension", "project")],
       });
-      expectSource("extra", "extension", "project", variantPackageDir);
+      expectSource("package", "extension", "project", variantPackageDir);
     });
   });
 });

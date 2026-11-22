@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterAll, assert, beforeAll, expect, it, onTestFinished, vi } from "vitest";
 import type { MockInstance } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
+import { UI_RAIL_SHORTCUTS_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -19,11 +20,14 @@ import {
   registerConfigWriteListener,
 } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { registerSessionMaintenancePreserveKeysProvider } from "../config/sessions/store-maintenance-preserve.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import * as pluginLifecycleLease from "../plugins/plugin-lifecycle-lease.js";
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
+import { setCanonicalUserPreferences } from "../state/user-preferences.js";
+import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -280,6 +284,60 @@ it("publishes agent mutations before acknowledging immediate session and roster 
   expect(recoveryRestart).not.toHaveBeenCalled();
 });
 
+it("finishes agent deletion when personal pins change during cleanup preparation", async ({
+  signal,
+}) => {
+  const id = "pin-race-agent";
+  await matches(rpc("agents.create", { name: id, workspace: path.join(state.home, id) }), {
+    agentId: id,
+  });
+  await matches(rpc("sessions.create", { agentId: id, key: "agent:" + id + ":chat" }), {
+    key: "agent:" + id + ":chat",
+  });
+  const profile = await ensureCanonicalUserProfileForEmail("purge-pins@example.test", {
+    env: state.env,
+  });
+  const entered = createDeferred();
+  const release = createDeferred();
+  let preparations = 0;
+  const unregister = registerSessionMaintenancePreserveKeysProvider(async ({ native }) => {
+    if (++preparations === 1) {
+      expect(native).toBe(false);
+      entered.resolve();
+      await release.promise;
+    }
+    return { capture: () => undefined, dispose: () => {} };
+  });
+  const deletion = rpc("agents.delete", { agentId: id, deleteFiles: false }).then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(
+        entered.promise,
+        deletion,
+        "Deletion did not reach cleanup preparation",
+      ),
+      signal,
+    );
+    const written = await setCanonicalUserPreferences(
+      profile.id,
+      { [UI_RAIL_SHORTCUTS_PREFERENCE_KEY]: ["session:agent:main:pinned"] },
+      { env: state.env },
+    );
+    expect(written).toMatchObject({ ok: true });
+    release.resolve();
+    expect(await withinTest(deletion, signal)).toMatchObject({ value: { ok: true, agentId: id } });
+    expect(getRuntimeConfig().agents?.entries?.[id]).toBeUndefined();
+    expect(preparations).toBe(2);
+  } finally {
+    release.resolve();
+    await deletion;
+    unregister();
+  }
+});
+
 it("publishes overlapping mutations from two operators", async ({ signal }) => {
   const peer = await connect();
   try {
@@ -381,12 +439,14 @@ it("reports unavailable publication and saved-only mutations", async ({ signal }
           (error: unknown) => ({ error }),
         );
       await withinTest(written.promise, signal);
-      const acquire = vi.spyOn(pluginLifecycleLease, "withPluginLifecycleLease").mockRejectedValue(
-        new OpenClawStateLeaseAcquisitionError("plugin lifecycle lease", {
-          kind: "store-unavailable",
-          reason,
-        }),
-      );
+      const acquire = vi
+        .spyOn(pluginLifecycleLease, "withPluginLifecycleLeaseAsync")
+        .mockRejectedValue(
+          new OpenClawStateLeaseAcquisitionError("plugin lifecycle lease", {
+            kind: "store-unavailable",
+            reason,
+          }),
+        );
       try {
         for (const delay of reason === "storage-error"
           ? [0]

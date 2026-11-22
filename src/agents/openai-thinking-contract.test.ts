@@ -15,6 +15,7 @@ import {
 } from "../auto-reply/thinking.js";
 import { resolveProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
 import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resolution.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const openaiModel = {
   api: "openai-responses",
@@ -41,19 +42,17 @@ describe("OpenAI thinking contract", () => {
     { name: "disabled scalar effort", scalar: { supportsReasoningEffort: false } },
     { name: "empty scalar efforts", scalar: { supportedReasoningEfforts: [] } },
   ])("keeps registered binary controls with $name", async ({ scalar }) => {
-    const model: Model<"openai-completions"> = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "binary-model",
       name: "Binary model",
       provider: "openai",
       api: "openai-completions",
       baseUrl: "https://reasoning.example/v1",
       reasoning: true,
-      input: ["text"],
       contextWindow: 32000,
       maxTokens: 1024,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       compat: { thinkingFormat: "qwen-chat-template", ...scalar },
-    };
+    });
     const profile = resolveThinkingProfile({
       provider: "openai",
       model: model.id,
@@ -431,7 +430,7 @@ async function captureHttpProviderPayload(params: {
       });
     },
     async (baseUrl) => {
-      const model: Model = {
+      const model = makeProviderModelFixture<"openai-completions" | "openai-responses">({
         id: params.modelId ?? (params.api === "openai-completions" ? "qwen3.6-27b" : "gpt-5.5"),
         name: "Thinking contract model",
         api: params.api,
@@ -439,10 +438,7 @@ async function captureHttpProviderPayload(params: {
         baseUrl: `${baseUrl}/v1`,
         reasoning: true,
         thinkingLevelMap: params.thinkingLevelMap,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 128_000,
-        maxTokens: 4_096,
         ...(params.thinkingFormat || params.reasoningCompat
           ? {
               compat: {
@@ -452,7 +448,7 @@ async function captureHttpProviderPayload(params: {
               },
             }
           : {}),
-      };
+      });
       const providerStream =
         params.transport === "direct"
           ? streamSimple

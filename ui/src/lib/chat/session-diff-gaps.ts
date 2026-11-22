@@ -7,23 +7,6 @@ export type SessionDiffGapDirection = "down" | "up" | "all";
 const GAP_CHUNK_SIZE = 20;
 const EXPAND_WHOLE_GAP_MAX = 25;
 
-function fileMatchesPatch(lines: readonly DiffLine[], fileLines: readonly string[]): boolean {
-  return lines.every(
-    (line) =>
-      (line.kind !== "add" && line.kind !== "ctx") ||
-      line.lineNo === undefined ||
-      fileLines[line.lineNo - 1] === line.text,
-  );
-}
-
-function contextRows(fileLines: readonly string[], start: number, count: number): DiffLine[] {
-  return Array.from({ length: count }, (_, index) => ({
-    kind: "ctx" as const,
-    lineNo: start + index,
-    text: fileLines[start + index - 1]!,
-  }));
-}
-
 /** Replaces part or all of one unchanged-lines marker with working-tree context. */
 export function expandSessionDiffGap(
   lines: readonly DiffLine[],
@@ -39,7 +22,12 @@ export function expandSessionDiffGap(
     target.newStart < 1 ||
     target.count < 1 ||
     gapEnd > fileLines.length ||
-    !fileMatchesPatch(lines, fileLines)
+    !lines.every(
+      (line) =>
+        (line.kind !== "add" && line.kind !== "ctx") ||
+        line.lineNo === undefined ||
+        fileLines[line.lineNo - 1] === line.text,
+    )
   ) {
     return null;
   }
@@ -50,7 +38,11 @@ export function expandSessionDiffGap(
       : Math.min(GAP_CHUNK_SIZE, target.count);
   const remainingCount = target.count - revealCount;
   const revealStart = direction === "up" ? target.newStart + remainingCount : target.newStart;
-  const replacement = contextRows(fileLines, revealStart, revealCount);
+  const replacement: DiffLine[] = Array.from({ length: revealCount }, (_, offset) => ({
+    kind: "ctx",
+    lineNo: revealStart + offset,
+    text: fileLines[revealStart + offset - 1]!,
+  }));
   if (remainingCount > 0) {
     replacement.splice(direction === "up" ? 0 : replacement.length, 0, {
       kind: "skip",

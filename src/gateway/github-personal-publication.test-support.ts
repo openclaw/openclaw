@@ -5,6 +5,7 @@ import {
   writeManagedGitHubProfileFiles,
 } from "../agents/github-tool-identity.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { assignSessionOwnerInWorker } from "../config/sessions/session-metadata-write.async.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
@@ -20,11 +21,13 @@ import {
   SESSION_KEY,
   createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
+  overrideCommands,
 } from "./github-publication.test-support.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { preparePersonalGitHubSessionActionV2 } from "./server-methods/github-personal-authorization.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const mocks = githubPublicationTestMocks();
@@ -42,16 +45,13 @@ afterEach(() => {
 });
 
 /** Gateway startup prepares profile authority again after database admission closes. */
-export async function preparePersonalPublicationProfileCatalog() {
+async function preparePersonalPublicationProfileCatalog() {
   const catalog = await prepareUserProfileCatalog();
   profileCatalogs.add(catalog);
   return catalog;
 }
 
-export async function preparePersonalPublicationFixtureV2(
-  fixture: PersonalClient,
-  signal?: AbortSignal,
-) {
+async function preparePersonalPublicationFixtureV2(fixture: PersonalClient, signal?: AbortSignal) {
   const owner = fixture.client.authenticatedUserProfile!.profileId;
   fixture.client.internal = {
     ...fixture.client.internal,
@@ -177,28 +177,19 @@ export async function createPersonalPublicationFixture() {
     });
   });
   vi.stubGlobal("fetch", fetchMock);
-  const fallback = mocks.runCommand.getMockImplementation()!;
-  mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+  overrideCommands((argv) => {
     if (argv[0] === "gh" && (argv[1] !== "api" || argv.includes("user"))) {
       throw new Error("Unexpected GitHub CLI credential operation");
     }
-    return await fallback(argv, options);
   });
   const client: GatewayClient = {
     connId: `direct-human-${generation}`,
-    authenticatedUserProfile: {
-      profileId: owner,
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
-    connect: {
-      role: "operator",
-      scopes: ["operator.write", "operator.read"],
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "test", mode: "test", platform: "test", version: "1" },
-    },
+    authenticatedUserProfile: gatewayProfile(owner),
+    connect: gatewayConnect(["operator.write", "operator.read"], {
+      id: "test",
+      mode: "test",
+      version: "1",
+    }),
   };
   const runtime = { live: true, verifiedAccount: account, client };
   const config: OpenClawConfig = {};
@@ -277,6 +268,15 @@ export async function createForeignPublicationSession(otherOwner: string, incogn
     createdActor: { type: "human" as const, source: "profile" as const, id: otherOwner },
   };
   await upsertSessionEntryCore({ agentId: "main", sessionKey: SESSION_KEY }, entry);
+  const owner = await assignSessionOwnerInWorker(
+    { agentId: "main", sessionKey: SESSION_KEY },
+    {
+      expectedSessionId: SESSION_ID,
+      owner: { type: "human", id: otherOwner },
+      assignedBy: { type: "system", id: "gateway" },
+    },
+  );
+  expect(owner?.actor.id).toBe(otherOwner);
   const original = mocks.loadSession.getMockImplementation()!;
   mocks.loadSession.mockImplementation((key: string) => ({
     ...original(key),

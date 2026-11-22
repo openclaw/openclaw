@@ -4,11 +4,13 @@ import {
   captureSessionActorStorageOwner,
   type CapturedSessionActorStorageOwner,
 } from "../config/sessions/session-actor-storage-binding.js";
+import { getPostgresPhysicalFactsForPath } from "../infra/database-engine/physical-facts.js";
 import {
   createSqliteSourceFenceAdmission,
   type SqliteSourceFenceOwner,
 } from "../infra/sqlite-source-fence-admission.js";
 import type { SqliteSourceFenceIdentity } from "../infra/sqlite-source-fence-contract.js";
+import { readSqliteWorkerMonotonicNs } from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -20,6 +22,7 @@ import {
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
+import { projectGitHubPublicationSessionFacts } from "../state/github-publication-session-facts.js";
 import type { GitHubPublicationSourcePredicate } from "../state/github-publication-source-contract.js";
 import type {
   GitHubPublicationSourceSelector,
@@ -117,7 +120,7 @@ export function bindGitHubPublicationSource(
         },
         sources: [binding.source],
         signal: binding.signal,
-        deadlineNs: process.hrtime.bigint() + 120_000_000_000n,
+        deadlineNs: readSqliteWorkerMonotonicNs() + 120_000_000_000n,
       })(operation);
     }) satisfies SqliteWorkerAdmissionFactory,
   };
@@ -133,21 +136,7 @@ function readMemorySourceFacts(
         { type: "session.members.read", input: {} },
         captured.authority,
       );
-  const entry = snapshot?.entry;
-  return {
-    entry: entry && {
-      sessionId: entry.sessionId,
-      lifecycleRevision: entry.lifecycleRevision,
-      archivedAt: entry.archivedAt,
-      visibility: entry.visibility,
-      incognito: entry.incognito,
-      createdActor: entry.createdActor,
-      owner: entry.owner,
-      worktree: entry.worktree,
-      repositoryWorkspaceId: entry.repositoryWorkspaceId,
-    },
-    members: snapshot?.members ?? [],
-  };
+  return projectGitHubPublicationSessionFacts(snapshot?.entry, snapshot?.members ?? []);
 }
 
 async function prepareMemoryPublicationSource(
@@ -301,7 +290,11 @@ export async function prepareGitHubPublicationSource(params: {
       incarnation = randomUUID();
       destinationIncarnations.set(context.admission, incarnation);
     }
-    const sourceRead = {
+    const sourceRead: {
+      source: SqliteSourceFenceIdentity;
+      destination: SqliteSourceFenceIdentity;
+      selector: GitHubPublicationSourceSelector;
+    } = {
       source: sourceIdentity,
       destination: { physical: context.admission.identity, incarnation },
       selector: structuredClone(params.selector),
@@ -313,6 +306,12 @@ export async function prepareGitHubPublicationSource(params: {
       { signal, assertCurrent },
     );
     sourceRead.destination.physical = context.admission.identity;
+    for (const identity of [sourceRead.source, sourceRead.destination]) {
+      const facts = getPostgresPhysicalFactsForPath(identity.physical.canonicalPath);
+      if (facts) {
+        identity.postgres = { namespace: facts.namespace, storeId: facts.storeId };
+      }
+    }
     // Policy callbacks may write SQLite. Such a write revokes this captured basis.
     params.assertCurrent();
     assertCurrent();

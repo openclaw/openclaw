@@ -8,35 +8,50 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../config/validation-core.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
-import { finalizePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  buildOpenAICompatibleLiveProviderCatalog,
+  clearLiveCatalogCacheForTests,
+} from "../plugin-sdk/provider-catalog-live-runtime.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   createPluginManifestRecordFixture,
   createPluginMetadataSnapshotFixture,
 } from "../plugins/plugin-metadata.test-support.js";
+import { copyProviderCatalogOutcomes } from "../plugins/provider-catalog-result.js";
 import {
   PREPARED_THINKING_POLICY,
   type ThinkingCatalogPolicyCarrier,
 } from "../plugins/provider-thinking-catalog.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { createEmptyPreparedModelRuntimeFixture } from "./embedded-agent-runner/model.fixture.test-support.js";
+import {
+  createEmptyAgentDiscoveryStores,
+  resolveModelAsync,
+} from "./embedded-agent-runner/model.js";
 import { resolveOAuthApiKeyMarker } from "./model-auth-markers.js";
 import { modelDefinition as configuredModel } from "./model-auth.fixtures.test-support.js";
 import { enrichHarnessRows, modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { row } from "./model-catalog-fixtures.test-support.js";
+import { findModelCatalogEntry, modelSupportsVision } from "./model-catalog-lookup.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
+import {
+  resolveLogicalVisibleModelCatalog,
+  resolveLogicalModelCatalogEntryState,
+} from "./model-catalog-visibility.js";
 import {
   buildPreparedModelCatalogSnapshot,
   type BuildPreparedModelCatalogParams,
-  findModelCatalogEntry,
   loadManifestModelCatalog,
-  modelSupportsVision,
   overlayConfiguredModelCatalog,
 } from "./model-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
+import { AuthStorage } from "./sessions/auth-storage.js";
+import { ModelRegistry } from "./sessions/model-registry.js";
 
 type AugmentModelCatalogWithProviderPlugins =
-  typeof import("../plugins/provider-runtime.js").augmentModelCatalogWithProviderPlugins;
+  typeof import("../plugins/provider-runtime.runtime.js").augmentModelCatalogWithProviderPlugins;
 
 const mocks = vi.hoisted(() => ({
   augmentModelCatalogWithProviderPlugins: vi.fn<AugmentModelCatalogWithProviderPlugins>(
@@ -125,7 +140,164 @@ const customRoute = {
 beforeEach(() => {
   mocks.augmentModelCatalogWithProviderPlugins.mockReset();
   mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([]);
+  // Live rows are cached by provider, endpoint and credential; cases must not share a listing.
+  clearLiveCatalogCacheForTests();
 });
+
+it("publishes a listed row without capability metadata as unknown, not excluded", async () => {
+  const baseUrl = "https://synthetic.invalid/v1";
+  const discovered = await buildOpenAICompatibleLiveProviderCatalog({
+    providerId: "synthetic",
+    providerConfig: { baseUrl, api: "openai-completions", models: [] },
+    discoveryMode: "strict",
+    fetchGuard: async () => ({
+      response: Response.json({ data: [{ id: "voice-v2" }] }),
+      finalUrl: `${baseUrl}/models`,
+      release: async () => {},
+    }),
+  });
+  expect(discovered && "provider" in discovered && discovered.provider.models).toEqual([
+    expect.not.objectContaining({ inference: expect.anything() }),
+  ]);
+});
+
+it("keeps an unlikely-chat bare row out of the default view but runs a typed ref", async () => {
+  const baseUrl = "https://synthetic.invalid/v1";
+  const config: OpenClawConfig = { plugins: { enabled: false } };
+  const discovered = await buildOpenAICompatibleLiveProviderCatalog({
+    providerId: "synthetic",
+    providerConfig: { baseUrl, api: "openai-completions", models: [] },
+    discoveryMode: "strict",
+    fetchGuard: async () => ({
+      response: Response.json({ data: [{ id: "voice-tts-2" }, { id: "chat-v2" }] }),
+      finalUrl: `${baseUrl}/models`,
+      release: async () => {},
+    }),
+  });
+  if (!discovered || !("provider" in discovered)) {
+    throw new Error("Expected provider discovery");
+  }
+  const snapshot = await build({
+    config,
+    entries: discovered.provider.models.map((model) => ({ ...model, provider: "synthetic" })),
+    providerOutcomes: copyProviderCatalogOutcomes(discovered),
+  });
+  const listed = async (view: "default" | "all") =>
+    (
+      await resolveLogicalVisibleModelCatalog({
+        cfg: config,
+        catalog: snapshot.entries,
+        routeVariants: snapshot.routeVariants,
+        defaultProvider: "synthetic",
+        view,
+        metadataSnapshot,
+        evaluateEntry: async () =>
+          resolveLogicalModelCatalogEntryState({
+            evaluation: { availability: true, routeResolution: null },
+          }),
+      })
+    ).map(({ id }) => id);
+  expect(await listed("default")).toEqual(["chat-v2"]);
+  expect((await listed("all")).toSorted()).toEqual(["chat-v2", "voice-tts-2"]);
+  const preparedModelRuntime = {
+    ...createEmptyPreparedModelRuntimeFixture({
+      config,
+      agentDir: "unused:unlikely-chat",
+      metadataSnapshot,
+      createStores: createEmptyAgentDiscoveryStores,
+    }),
+    modelCatalog: snapshot,
+  };
+  // The pre-run chat check passes; this fixture's empty registry has no transport for the row.
+  const resolution = await resolveModelAsync(
+    "synthetic",
+    "voice-tts-2",
+    preparedModelRuntime.agentDir,
+    config,
+    { preparedModelRuntime, skipAgentDiscovery: true },
+  );
+  expect(resolution.error).toMatch(/^Unknown model: synthetic\/voice-tts-2\./);
+});
+
+it.each([{ input: ["text"], output: ["audio"] }])(
+  "keeps an excluded pin with metadata %j and rejects it before execution",
+  async (modalities) => {
+    const baseUrl = "https://synthetic.invalid/v1";
+    const config: OpenClawConfig = {
+      plugins: { enabled: false },
+      agents: {
+        defaults: {
+          model: { primary: "synthetic/voice-v2" },
+          models: { "synthetic/voice-v2": {} },
+        },
+      },
+    };
+    const originalConfig = JSON.stringify(config);
+    const discovered = await buildOpenAICompatibleLiveProviderCatalog({
+      providerId: "synthetic",
+      providerConfig: { baseUrl, api: "openai-completions", models: [] },
+      discoveryMode: "strict",
+      fetchGuard: async () => ({
+        response: Response.json({
+          data: [
+            { id: "voice-v2", modalities },
+            { id: "chat-v2", modalities: { input: ["text"], output: ["text"] } },
+          ],
+        }),
+        finalUrl: `${baseUrl}/models`,
+        release: async () => {},
+      }),
+    });
+    expect(discovered && "provider" in discovered).toBe(true);
+    if (!discovered || !("provider" in discovered)) {
+      throw new Error("Expected provider discovery");
+    }
+    const snapshot = await build({
+      config,
+      entries: discovered.provider.models.map((model) => ({
+        ...model,
+        provider: "synthetic",
+        baseUrl,
+      })),
+      providerOutcomes: copyProviderCatalogOutcomes(discovered),
+    });
+    const visible = await resolveLogicalVisibleModelCatalog({
+      cfg: config,
+      catalog: snapshot.entries,
+      routeVariants: snapshot.routeVariants,
+      defaultProvider: "synthetic",
+      defaultModel: "voice-v2",
+      retainedModel: { provider: "synthetic", model: "voice-v2" },
+      view: "all",
+      metadataSnapshot,
+      evaluateEntry: async () =>
+        resolveLogicalModelCatalogEntryState({
+          evaluation: { availability: true, routeResolution: null },
+        }),
+    });
+    expect(visible.map(({ id }) => id)).toEqual(["chat-v2"]);
+    const preparedModelRuntime = {
+      ...createEmptyPreparedModelRuntimeFixture({
+        config,
+        agentDir: "unused:non-chat",
+        metadataSnapshot,
+        createStores: createEmptyAgentDiscoveryStores,
+      }),
+      modelCatalog: snapshot,
+    };
+    await expect(
+      resolveModelAsync("synthetic", "voice-v2", preparedModelRuntime.agentDir, config, {
+        preparedModelRuntime,
+        skipAgentDiscovery: true,
+      }),
+    ).rejects.toMatchObject({
+      reason: "format",
+      code: "model_chat_unsupported",
+      message: "This model doesn't support chat; pick another model.",
+    });
+    expect(JSON.stringify(config)).toBe(originalConfig);
+  },
+);
 
 it("keeps replace publication closed to a warm refreshable inventory", async () => {
   mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([
@@ -151,6 +323,23 @@ it("keeps replace publication closed to a warm refreshable inventory", async () 
   });
   expect([snapshot.entries, snapshot.routeVariants]).toEqual([[], []]);
   expect(mocks.augmentModelCatalogWithProviderPlugins).not.toHaveBeenCalled();
+});
+
+it("uses captured suppression rules without resolving ambient plugin metadata", async () => {
+  const supplied = createManifestSnapshot("demo", {
+    suppressions: [{ provider: "demo", model: "hidden" }],
+  });
+  using ambient = vi
+    .spyOn(pluginMetadata, "resolvePluginMetadataSnapshot")
+    .mockReturnValue(metadataSnapshot);
+  const snapshot = await build({
+    metadataSnapshot: supplied,
+    entries: [row("demo", "hidden"), row("demo", "visible")],
+  });
+
+  expect(snapshot.entries.map(({ id }) => id)).toEqual(["visible"]);
+  expect(snapshot.routeVariants.map(({ id }) => id)).toEqual(["visible"]);
+  expect(ambient).not.toHaveBeenCalled();
 });
 
 it("preserves ready provider membership without replenishing it from metadata", async () => {
@@ -184,6 +373,58 @@ it.each(["unowned", "disabled"] as const)(
     expect(snapshot.entries).toMatchObject([{ provider: "source", id: "model" }]);
   },
 );
+
+const discoveredRow = (id: string) => ({
+  id,
+  name: id,
+  reasoning: false,
+  input: ["text" as const],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 200_000,
+  maxTokens: 8192,
+});
+
+it("publishes the family a discovered row or its manifest declares, and none otherwise", async () => {
+  const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
+  // A routing provider's discovery names each row's family from its own service metadata.
+  registry.registerProvider("router", {
+    api: "openai-responses",
+    baseUrl: "https://router.example/v1",
+    models: [
+      { ...discoveredRow("anthropic/claude-model"), family: "anthropic" },
+      discoveredRow("acme/claude-model"),
+    ],
+  });
+  const snapshot = await buildPreparedModelCatalogSnapshot({
+    agentDir: "/tmp/model-catalog-test",
+    authCredentials: {},
+    config: { plugins: { enabled: false } },
+    readOnly: true,
+    models: registry.getAll(),
+    metadataSnapshot: createManifestSnapshot("native", {
+      providers: {
+        native: {
+          api: "anthropic-messages",
+          baseUrl: "https://native.example",
+          family: "anthropic",
+          models: [{ id: "native-model", name: "Native" }],
+        },
+      },
+      discovery: { native: "static" },
+    }),
+  });
+  const families = Object.fromEntries(
+    snapshot.entries.map((entry) => [`${entry.provider}/${entry.id}`, entry.family]),
+  );
+  expect(families).toEqual({
+    "native/native-model": "anthropic",
+    "router/anthropic/claude-model": "anthropic",
+    "router/acme/claude-model": undefined,
+  });
+  expect(snapshot.routeVariants.find(({ id }) => id === "anthropic/claude-model")?.family).toBe(
+    "anthropic",
+  );
+});
 
 it("carries manifest capability metadata into the prepared catalog", async () => {
   const snapshot = fableManifest({
@@ -647,7 +888,7 @@ describe("catalog declaration planning", () => {
   const normalize = vi.mocked(normalizeModelCatalogProviderRows);
   let config: OpenClawConfig;
   function catalog(discovery: "static" | "runtime", ...modelIds: string[]) {
-    const planningMetadata = finalizePluginMetadataSnapshot(
+    const planningMetadata = pluginMetadata.finalizePluginMetadataSnapshot(
       providerManifestSnapshot("catalog-fixture", discovery, modelIds),
     );
     const params = { config, metadataSnapshot: planningMetadata };

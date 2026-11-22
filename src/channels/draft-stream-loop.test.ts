@@ -1,6 +1,7 @@
 // Draft stream loop tests cover incremental draft updates while channel replies stream.
 import { setImmediate as nextMacrotask } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createDraftStreamLoop } from "./draft-stream-loop.js";
 
 const flushMicrotasks = async () => {
@@ -46,10 +47,7 @@ describe("createDraftStreamLoop", () => {
     async (outcome) => {
       vi.useFakeTimers();
       vi.setSystemTime(10_000);
-      let releaseFirst!: () => void;
-      const first = new Promise<void>((resolve) => {
-        releaseFirst = resolve;
-      });
+      const { promise: first, resolve: releaseFirst } = createDeferred();
       const error = new Error("send rejected");
       const onBackgroundFlushError = vi.fn();
       const send = vi.fn(async () => {
@@ -89,10 +87,7 @@ describe("createDraftStreamLoop", () => {
   it("coalesces updates arriving during a send without delaying explicit attention flushes", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
-    let releaseFirst!: () => void;
-    const first = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
+    const { promise: first, resolve: releaseFirst } = createDeferred();
     const send = vi.fn(async () => {
       if (send.mock.calls.length === 1) {
         await first;
@@ -134,10 +129,7 @@ describe("createDraftStreamLoop", () => {
   it("takes the latest queued text without interrupting the in-flight send", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
-    let releaseSend: (() => void) | undefined;
-    const sendPending = new Promise<void>((resolve) => {
-      releaseSend = resolve;
-    });
+    const { promise: sendPending, resolve: releaseSend } = createDeferred();
     const sendOrEditStreamMessage = vi.fn(async () => {
       await sendPending;
       return true;
@@ -198,10 +190,7 @@ describe("createDraftStreamLoop", () => {
     type Update = { text: string; blocks: string[] };
     const initial = { text: "initial", blocks: ["initial-blocks"] };
     const latest = { text: "latest", blocks: ["latest-blocks"] };
-    let releaseFirst: (() => void) | undefined;
-    const firstSend = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
+    const { promise: firstSend, resolve: releaseFirst } = createDeferred();
     const sendOrEditStreamMessage = vi
       .fn<(update: Update) => Promise<boolean>>()
       .mockImplementationOnce(async () => {

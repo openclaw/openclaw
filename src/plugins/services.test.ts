@@ -62,7 +62,7 @@ function start(
   registry: PluginRegistry,
   options: Pick<
     Parameters<typeof startPluginServices>[0],
-    "startupTrace" | "broadcastPluginEvent"
+    "startupTrace" | "broadcastPluginEvent" | "oneShotStopTimeouts"
   > = {},
 ) {
   return startPluginServices({
@@ -676,6 +676,60 @@ describe("startPluginServices", () => {
     } finally {
       cleanupDeferred.resolve();
       await stopping;
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { seed: "caller deadline", wallStep: -60_000 },
+    { seed: "one-shot stop budget", wallStep: 60_000 },
+  ])("preserves the $seed across a $wallStep ms wall-clock step", async ({ seed, wallStep }) => {
+    vi.useFakeTimers({
+      toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    const release = createDeferredCore();
+    const stalledStop = vi.fn(() => release.promise);
+    const registry = createRegistry([
+      { id: "stalled-cleanup", start() {}, stop: stalledStop },
+      {
+        id: "clock-correction",
+        start() {},
+        stop() {
+          vi.setSystemTime(Date.now() + wallStep);
+        },
+      },
+    ]);
+    const handle = await start(
+      registry,
+      seed === "one-shot stop budget"
+        ? { oneShotStopTimeouts: { eventDrainMs: 5_000, serviceStopMs: 5_000 } }
+        : {},
+    );
+    let settled = false;
+    const stopping = handle
+      .stop(
+        seed === "caller deadline"
+          ? { strict: true, deadlineAtMs: Date.now() + 5_000 }
+          : { strict: true },
+      )
+      .catch((error: unknown) => error)
+      .then((result) => {
+        settled = true;
+        return result;
+      });
+    try {
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      expect(await stopping).toMatchObject({
+        errors: [{ message: expect.stringContaining("plugin service stop timed out after") }],
+      });
+      expect(stalledStop).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      await stopping;
+      await handle.stop();
       vi.useRealTimers();
     }
   });

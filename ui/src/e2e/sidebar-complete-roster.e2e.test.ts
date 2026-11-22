@@ -6,6 +6,7 @@ import { expect, it } from "vitest";
 import { warmReloadProbe } from "../../../scripts/lib/control-ui-warm-reload-probe.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { controlUiE2eWaitTimeoutMs } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
@@ -15,6 +16,8 @@ import {
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createTeamScaleSidebarListOwner } from "../test-helpers/control-ui-sidebar-list-fixture.ts";
+import { installTeamScaleSidebarPresentation } from "../test-helpers/control-ui-sidebar-presentation.test-support.ts";
+import { revealSidebarTarget } from "../test-helpers/control-ui-sidebar-window.ts";
 import { createControlUiTeamScaleFixture } from "../test-helpers/control-ui-team-scale-fixture.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { chooseSidebarOwner } from "./sidebar-session-menu.test-support.ts";
@@ -23,18 +26,42 @@ const suite = createControlUiE2eSuite({ name: "Complete sidebar roster handoff" 
 
 suite.define(() => {
   it.each([
-    { face: "chat", cap: false, rootLast: false },
-    { face: "dashboard", cap: false, rootLast: false },
-    { face: "chat", cap: true, rootLast: false },
-    { face: "chat", cap: false, rootLast: true },
+    { face: "chat", changes: false, rootLast: false },
+    { face: "chat", changes: true, rootLast: false },
+    { face: "dashboard", changes: false, rootLast: true },
   ] as const)(
-    "releases the $face sidebar when complete or capped (cap=$cap, rootLast=$rootLast)",
-    async ({ face, cap, rootLast }) => {
+    "keeps cached $face rows until the roster settles (changes=$changes, rootLast=$rootLast)",
+    async ({ face, changes, rootLast }) => {
       const fixture = createControlUiTeamScaleFixture({
         baseUrl: suite.server.baseUrl,
         sidebarPersistentChildren: true,
+        sidebarPresentation: true,
       });
       const { parentKey, childKeys } = fixture.sidebarPersistentChildren!;
+      const owner = fixture.sidebarListInput.rows[0]!.owner!;
+      const ownerMatch = { ownerId: owner.actor.id };
+      // Involving me excludes off-window child links. Keep an owned roster
+      // larger than a boot page so its children still require a separate read.
+      const ownedRoots = fixture.sidebarListInput.rows.slice(0, fixture.counts.firstPage + 1);
+      const children = fixture.sidebarListInput.rows.filter((row) => childKeys.includes(row.key));
+      for (const row of [...ownedRoots, ...children]) {
+        row.owner = owner;
+      }
+      const collapsedParentKey = fixture.pinnedKeys[1]!;
+      const collapsedChildKey = "agent:main:chat:00000000-0000-4000-8000-000000009998";
+      fixture.sidebarListInput.rows.find((row) => row.key === collapsedParentKey)!.childSessions = [
+        collapsedChildKey,
+      ];
+      fixture.sidebarListInput.rows.push({
+        ...children[0]!,
+        key: collapsedChildKey,
+        sessionId: "collapsed-pin-child",
+        spawnedBy: collapsedParentKey,
+        parentSessionKey: collapsedParentKey,
+        childOwnerSessionKeys: [collapsedParentKey],
+        hasActiveRun: false,
+        status: "done",
+      });
       const lists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 1000 } },
@@ -49,7 +76,7 @@ suite.define(() => {
             }
           });
           await page.addInitScript(
-            ({ settingsKey, ownerKey, entries }) => {
+            ({ settingsKey, ownerKey, ownerId, entries }) => {
               localStorage.setItem(
                 settingsKey,
                 JSON.stringify({
@@ -58,10 +85,11 @@ suite.define(() => {
                   navigationByProfile: { "team-person-001": { railShortcuts: entries } },
                 }),
               );
-              localStorage.setItem(ownerKey, "involving-me");
+              localStorage.setItem(ownerKey, `owner:${ownerId}`);
             },
             {
               settingsKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+              ownerId: owner.actor.id,
               ownerKey: `openclaw.control.sidebarSessionOwnerFilter.v1:${controlUiBundledGatewayUrl(suite.server.baseUrl)}:team-person-001`,
               entries: fixture.sidebarEntries,
             },
@@ -85,12 +113,45 @@ suite.define(() => {
           await page.addInitScript({
             content: `{ const __name = (fn) => fn; (${warmReloadProbe.toString()})(); }`,
           });
+          await page.addInitScript({
+            content: `(${installTeamScaleSidebarPresentation.toString()})(${JSON.stringify(fixture.sidebarPresentation)});`,
+          });
           await page.goto(
             controlUiSessionUrl(suite.server.baseUrl, fixture.selectedSessionKey, face),
           );
           await gateway.waitForRequest("connect");
           await gateway.resolveDeferred("connect");
           const sidebar = page.locator("aside.sidebar");
+          const viewport = sidebar.locator(".sidebar-shell__body");
+          const geometry = () =>
+            sidebar.evaluate((element, titleKey) => {
+              const scroller = element.querySelector<HTMLElement>(".sidebar-shell__body")!;
+              return {
+                scrollTop: scroller.scrollTop,
+                height: scroller.clientHeight,
+                scrollHeight: scroller.scrollHeight,
+                top: scroller.getBoundingClientRect().top,
+                rows: [...element.querySelectorAll<HTMLElement>(".sidebar-recent-session")].map(
+                  (row) => ({
+                    key: row.getAttribute("data-session-key"),
+                    top: row.getBoundingClientRect().top,
+                    height: row.getBoundingClientRect().height,
+                    aside: row
+                      .querySelector(".session-row-aside")!
+                      .getBoundingClientRect()
+                      .toJSON(),
+                    // This pin has stable display facts; the selected row gains live viewers.
+                    title:
+                      row.getAttribute("data-session-key") === titleKey
+                        ? row
+                            .querySelector(".sidebar-recent-session__title-row")!
+                            .getBoundingClientRect()
+                            .toJSON()
+                        : undefined,
+                  }),
+                ),
+              };
+            }, fixture.pinnedKeys[1]!);
           const capture = async (stage: string) => {
             const frame = await takeControlUiScreenshotFrame(page, sidebar, [sidebar], {
               animations: "disabled",
@@ -101,8 +162,15 @@ suite.define(() => {
           const saved = () =>
             page.locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]');
           await saved().waitFor();
+          const collapsedToggle = sidebar.locator(
+            `[data-child-session-toggle="${collapsedParentKey}"]`,
+          );
+          await revealSidebarTarget(viewport, collapsedToggle);
+          if ((await collapsedToggle.getAttribute("aria-expanded")) === "true") {
+            await collapsedToggle.click();
+          }
           const toggle = sidebar.locator(`[data-child-session-toggle="${parentKey}"]`);
-          await toggle.waitFor();
+          await revealSidebarTarget(viewport, toggle);
           if ((await toggle.getAttribute("aria-expanded")) !== "true") {
             await toggle.click();
           }
@@ -136,19 +204,77 @@ suite.define(() => {
           await expansion.evaluate((observation) => observation.done);
           await expansion.dispose();
           await saved().waitFor();
-          const rowKeys = () =>
-            sidebar
-              .locator(".sidebar-session-content .sidebar-recent-session")
-              .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-session-key")));
-          const expected = await rowKeys();
-          expect(expected.length).toBeGreaterThan(10);
+          await viewport.evaluate((element) => {
+            element.scrollTop = 0;
+          });
+          // The selected pin is retained offscreen; wait for an unretained top
+          // row to prove the scroll event has published the new visible window.
+          await sidebar.locator(`[data-session-key="${fixture.pinnedKeys[1]}"]`).waitFor();
+          await sidebar.locator(".session-row-badge--pull-request").nth(6).waitFor();
+          await page.mouse.move(1000, 700);
+          await page.locator("#sidebar-session-owner-title").focus();
+          const beforeReload = await geometry();
+          const indicators = () =>
+            sidebar.locator(".sidebar-recent-session").evaluateAll((rows) =>
+              rows.map((row) => ({
+                key: row.getAttribute("data-session-key"),
+                unread: row.querySelectorAll(".session-unread-dot,.session-glyph__badge--unread")
+                  .length,
+                badges: [...row.querySelectorAll(".session-row-badge")].map((badge) => ({
+                  class: badge.className,
+                  state: badge.getAttribute("data-pull-request-state"),
+                })),
+              })),
+            );
+          const beforeIndicators = await indicators();
+          expect(beforeIndicators.some((row) => row.unread > 0)).toBe(true);
+          await writeFile(
+            path.join(suite.artifactDir, `${face}-before-reload-geometry.json`),
+            JSON.stringify(beforeReload, null, 2),
+          );
 
           await page.reload();
           await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
+          await collapsedToggle.waitFor();
+          expect(await collapsedToggle.count()).toBe(1);
+          expect(await collapsedToggle.isDisabled()).toBe(true);
+          await collapsedToggle.evaluate((button: HTMLButtonElement) => button.click());
+          expect(await collapsedToggle.getAttribute("aria-expanded")).toBe("false");
+          expect(await sidebar.locator(`[data-session-key="${collapsedChildKey}"]`).count()).toBe(
+            0,
+          );
           await capture("cached");
+          const cachedGeometry = await geometry();
+          // Connection status owns a footer while the Gateway reconnects. Keep
+          // exact content and geometry proof over the viewport both states share.
+          const commonTop = Math.max(beforeReload.top, cachedGeometry.top);
+          const commonBottom = Math.min(
+            beforeReload.top + beforeReload.height,
+            cachedGeometry.top + cachedGeometry.height,
+          );
+          const visibleGeometry = (layout: typeof beforeReload) =>
+            layout.rows.filter((row) => row.top + row.height > commonTop && row.top < commonBottom);
+          const expectedGeometry = visibleGeometry(beforeReload);
+          const expected = expectedGeometry.map((row) => row.key);
+          expect((await indicators()).filter((row) => expected.includes(row.key))).toEqual(
+            beforeIndicators.filter((row) => expected.includes(row.key)),
+          );
+          expect(expected.length).toBeGreaterThan(10);
+          expect(visibleGeometry(cachedGeometry)).toEqual(expectedGeometry);
+          const rowKeys = () =>
+            sidebar.locator(".sidebar-session-content .sidebar-recent-session").evaluateAll(
+              (rows, bounds) =>
+                rows
+                  .filter((row) => {
+                    const rect = row.getBoundingClientRect();
+                    return rect.bottom > bounds.top && rect.top < bounds.bottom;
+                  })
+                  .map((row) => row.getAttribute("data-session-key")),
+              { top: commonTop, bottom: commonBottom },
+            );
           const childMatch = { spawnedBy: parentKey };
           await gateway.deferNext("sessions.list", childMatch);
-          await gateway.deferNext("sessions.list", { involvingMe: true });
+          await gateway.deferNext("sessions.list", ownerMatch);
           if (rootLast) {
             await gateway.deferNext("sessions.list", { ownerFirst: true });
           }
@@ -160,21 +286,37 @@ suite.define(() => {
           const canonical = await gateway.waitForRequest("sessions.list", {
             match: { ownerFirst: true },
           });
-          const involving = await gateway.waitForRequest("sessions.list", {
-            match: { involvingMe: true },
+          const owned = await gateway.waitForRequest("sessions.list", {
+            match: ownerMatch,
           });
           expect(await sidebar.getAttribute("data-snapshot-state")).toBe("cached");
+          await writeFile(
+            path.join(suite.artifactDir, `${face}-cached-geometry.json`),
+            JSON.stringify(await geometry(), null, 2),
+          );
           expect(await rowKeys()).toEqual(expected);
           await gateway.resolveDeferred(
             "sessions.list",
-            lists.list(asRecord(involving.params)!).result,
+            lists.list(asRecord(owned.params)!).result,
             {
-              match: { involvingMe: true },
+              match: ownerMatch,
             },
           );
-          await page.clock.runFor(100);
+          await expect
+            .poll(
+              async () => {
+                // Reply delivery can outlive a clock jump. Drain the frame that discovers children.
+                await page.clock.runFor(20);
+                return (await gateway.getRequests("sessions.list", childMatch)).length;
+              },
+              { timeout: controlUiE2eWaitTimeoutMs },
+            )
+            .toBeGreaterThan(0);
           const childRequest = await gateway.waitForRequest("sessions.list", { match: childMatch });
           const childResult = lists.list(asRecord(childRequest.params)!).result;
+          await page.clock.runFor(3200);
+          await capture("awaiting-live");
+          expect(await sidebar.getAttribute("data-snapshot-state")).toBe("cached");
           let childReleased = false;
           const releaseChildren = async () => {
             if (!childReleased) {
@@ -182,7 +324,24 @@ suite.define(() => {
               await gateway.resolveDeferred("sessions.list", childResult, { match: childMatch });
             }
           };
+          const cachedVisibleRows = await sidebar.evaluateHandle((element, keys) => {
+            const rows = [
+              ...element.querySelectorAll(".sidebar-session-content .sidebar-recent-session"),
+            ].filter((row) => keys.includes(row.getAttribute("data-session-key")));
+            const host = element.closest("openclaw-app-sidebar")!;
+            const parent = host.parentNode!;
+            const next = host.nextSibling;
+            // Native layout moves preserve the same host and its cached children.
+            host.remove();
+            parent.insertBefore(host, next);
+            return rows;
+          }, expected);
           try {
+            expect(await sidebar.getAttribute("data-snapshot-state")).toBe("cached");
+            expect(await rowKeys()).toEqual(expected);
+            expect(
+              await cachedVisibleRows.evaluate((rows) => rows.every((row) => row.isConnected)),
+            ).toBe(true);
             if (rootLast) {
               await releaseChildren();
             }
@@ -205,21 +364,15 @@ suite.define(() => {
             ).not.toHaveLength(0);
 
             const readinessDiagnostic = JSON.stringify(beforeChildren);
-            expect(beforeChildren.elapsedMs, readinessDiagnostic).toBeLessThan(3000);
+            expect(beforeChildren.elapsedMs, readinessDiagnostic).toBeGreaterThan(3000);
             expect(beforeChildren.foregroundReady, readinessDiagnostic).toBe(true);
             expect(beforeChildren.state, readinessDiagnostic).toBe("cached");
             expect(beforeChildren.rows).toEqual(expected);
-            if (cap) {
-              await pauseVirtualClock(page);
-              await page.clock.runFor(3001);
+            if (changes) {
+              await releaseChildren();
               await page.clock.resume();
-              await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
-              for (const key of childKeys) {
-                await sidebar.locator(`[data-session-key="${key}"]`).waitFor({ state: "detached" });
-              }
-              await capture("cap");
-            }
-            if (cap) {
+              await saved().waitFor();
+              await revealSidebarTarget(viewport, toggle);
               const now = fixture.sidebarListInput.now + 1000;
               const renamed = {
                 ...fixture.sidebarListInput.rows[1]!,
@@ -252,13 +405,12 @@ suite.define(() => {
                 snapshotAt: now,
               } satisfies GatewaySessionRow;
               const renamedRow = sidebar.locator(`[data-session-key="${renamed.key}"]`);
+              await revealSidebarTarget(viewport, renamedRow);
               const retainedRow = await renamedRow.elementHandle();
               expect(retainedRow).not.toBeNull();
               const stoppedRow = sidebar.locator(`[data-session-key="${stopped.key}"]`);
               expect(await stoppedRow.getAttribute("class")).toContain("session-row-host--running");
-              const refreshBefore = (
-                await gateway.getRequests("sessions.list", { involvingMe: true })
-              ).length;
+              const refreshBefore = (await gateway.getRequests("sessions.list", ownerMatch)).length;
               lists.apply({ upsert: [renamed, stopped, created], removeKeys: [deleted.key] });
               for (const [row, reason] of [
                 [renamed, "patch"],
@@ -280,7 +432,7 @@ suite.define(() => {
               await page.clock.runFor(5001);
               await page.clock.resume();
               await gateway.waitForRequest("sessions.list", {
-                match: { involvingMe: true },
+                match: ownerMatch,
                 after: refreshBefore,
               });
               await renamedRow.getByText(renamed.label, { exact: true }).waitFor();
@@ -293,17 +445,27 @@ suite.define(() => {
                 .waitFor({ state: "detached" });
               expect(await retainedRow!.evaluate((element) => element.isConnected)).toBe(true);
               await retainedRow!.dispose();
-              const ownerId = stopped.owner?.actor.id;
-              assert.ok(ownerId, "The stopped fixture session must have an owner id");
-              await chooseSidebarOwner(page, `owner:${ownerId}`);
-              await gateway.waitForRequest("sessions.list", { match: { ownerId } });
+              const otherOwnerRow = fixture.sidebarListInput.rows.find(
+                (row) =>
+                  row.owner?.actor.id !== owner.actor.id &&
+                  !row.snoozedUntil &&
+                  !row.pinned &&
+                  !row.spawnedBy,
+              )!;
+              const otherOwnerId = otherOwnerRow.owner?.actor.id;
+              assert.ok(otherOwnerId, "The other fixture session must have an owner id");
+              await chooseSidebarOwner(page, `owner:${otherOwnerId}`);
+              await gateway.waitForRequest("sessions.list", { match: { ownerId: otherOwnerId } });
               await sidebar
                 .locator(`[data-session-key="${parentKey}"]`)
                 .waitFor({ state: "detached" });
               await sidebar
                 .getByText(created.label, { exact: true })
                 .waitFor({ state: "detached" });
-              await stoppedRow.waitFor();
+              await revealSidebarTarget(
+                viewport,
+                sidebar.locator(`[data-session-key="${otherOwnerRow.key}"]`),
+              );
             }
 
             await releaseChildren();
@@ -344,30 +506,43 @@ suite.define(() => {
                 2,
               ),
             );
-            if (cap) {
+            if (changes) {
               expect(finalRows).not.toContain(parentKey);
               for (const key of childKeys) {
                 expect(finalRows).not.toContain(key);
               }
             } else {
               expect(finalRows).toEqual(expected);
+              expect(visibleGeometry(await geometry())).toEqual(expectedGeometry);
             }
             expect(first).toBeGreaterThanOrEqual(0);
-            if (!cap) {
-              expect(frames.every((frame) => frame.rowIds.length === expected.length)).toBe(true);
+            if (!changes) {
               expect(
-                frames.every((frame) =>
-                  frame.rowIds.every((key, index) => key === expected[index]),
-                ),
+                frames.every((frame) => {
+                  const visible = frame.rowIds.filter((key) => expected.includes(key));
+                  return (
+                    visible.length === expected.length &&
+                    visible.every((key, index) => key === expected[index])
+                  );
+                }),
               ).toBe(true);
-              expect(frames.at(-1)?.retained).toBe(expected.length);
+              expect(frames.at(-1)?.retained).toBeGreaterThanOrEqual(expected.length);
+              expect(
+                await cachedVisibleRows.evaluate((rows) => rows.every((row) => row.isConnected)),
+              ).toBe(true);
             }
             expect(
               frames.filter(
                 (frame, index) => index > 0 && frame.cached !== frames[index - 1]!.cached,
               ),
             ).toHaveLength(1);
+            if (!changes) {
+              await revealSidebarTarget(viewport, toggle);
+              expect(await toggle.getAttribute("aria-expanded")).toBe("true");
+              await sidebar.locator(`[data-session-key="${childKeys[0]}"]`).waitFor();
+            }
           } finally {
+            await cachedVisibleRows.dispose();
             await releaseChildren();
           }
         },

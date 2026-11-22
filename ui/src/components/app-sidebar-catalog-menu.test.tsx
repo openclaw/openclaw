@@ -3,14 +3,24 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { SidebarCatalogMenu } from "./app-sidebar-catalog-menu.runtime.tsx";
 import { createSidebarCatalogMenu } from "./app-sidebar-catalog-menu.tsx";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
-import { CatalogSessionMenu } from "./catalog-session-menu-solid.tsx";
 import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts";
 
 const popupSelector = "openclaw-catalog-session-menu";
-const expectState = (view: ReturnType<typeof mountSolid>, state: string) =>
-  waitForSolid(() => expect(view.container.querySelector("output")?.textContent).toBe(state));
+const item = (menu: Element, action: string) =>
+  menu.querySelector<HTMLButtonElement>(`[data-value="${action}"]`)!;
+const expectOpen = (view: ReturnType<typeof mountSolid>) =>
+  waitForSolid(() => expect(view.container.querySelector('[data-value="viewer"]')).not.toBeNull());
+
+async function mountMenu(props: Partial<HTMLElementTagNameMap[typeof popupSelector]> = {}) {
+  const menu = document.createElement(popupSelector);
+  Object.assign(menu, props);
+  document.body.append(menu);
+  await menu.updateComplete;
+  return menu;
+}
 
 const request: CatalogSessionMenuRequest = {
   key: { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
@@ -43,12 +53,7 @@ function fixture(beforeOpen = () => {}) {
   const mount = () =>
     mountSolid(() => {
       const view = owner.createView(host);
-      return (
-        <>
-          <output>{view.isOpenFor(request.key) ? "open" : "closed"}</output>
-          {view.render(CatalogSessionMenu)}
-        </>
-      );
+      return view.render(SidebarCatalogMenu);
     });
   return { owner, mount };
 }
@@ -56,6 +61,7 @@ function fixture(beforeOpen = () => {}) {
 afterEach(() => {
   cleanupSolid();
   document.body.replaceChildren();
+  vi.restoreAllMocks();
 });
 
 it.each([false, true])("projects open/close menu state (replace view=%s)", async (replace) => {
@@ -69,21 +75,60 @@ it.each([false, true])("projects open/close menu state (replace view=%s)", async
   expect(order).toEqual(replace ? ["open"] : ["dismiss", "open"]);
   expect(owner.isOpen()).toBe(true);
   expect(owner.isOpenFor(request.key)).toBe(true);
-  await waitForSolid(() => {
-    expect(view.container.querySelector("output")?.textContent).toBe("open");
-    expect(view.container.querySelector('[data-value="viewer"]')).not.toBeNull();
-  });
+  await expectOpen(view);
   if (replace) {
     view.unmount();
     view = mount();
-    await expectState(view, "open");
+    await expectOpen(view);
   }
   owner.close();
   expect(owner.isOpen()).toBe(false);
-  await waitForSolid(() => {
-    expect(view.container.querySelector("output")?.textContent).toBe("closed");
-    expect(view.container.querySelector(popupSelector)).toBeNull();
+  await waitForSolid(() => expect(view.container.querySelector(popupSelector)).toBeNull());
+});
+
+it.each(["terminal", "viewer"] as const)(
+  "dispatches %s before closing, including synchronous removal",
+  async (action) => {
+    const warnings = vi.spyOn(console, "warn");
+    let backingState: { open: true } | null = { open: true };
+    const order: string[] = [];
+    const onClose = () => {
+      backingState = null;
+      order.push("close");
+    };
+    const menu = await mountMenu({
+      onAction: (selected) => {
+        order.push(backingState ? selected : "cleared");
+        if (action === "viewer") {
+          menu.remove();
+        }
+      },
+      onClose,
+    });
+    item(menu, action).click();
+
+    await waitForSolid(() => expect(order).toEqual([action, "close"]));
+    expect(
+      warnings.mock.calls.filter(
+        ([message]) => typeof message === "string" && message.includes("[NO_OWNER_EFFECT]"),
+      ),
+    ).toEqual([]);
+  },
+);
+
+it("opens and focuses the native menu while keeping unavailable terminal selection disabled", async () => {
+  const onAction = vi.fn();
+  const menu = await mountMenu({ lastActive: "57d", terminalDisabled: true, onAction });
+  const terminal = item(menu, "terminal");
+  await waitForSolid(() => expect(document.activeElement).toBe(item(menu, "viewer")));
+  expect(menu.querySelector('[role="menu"]')!.matches(":popover-open")).toBe(true);
+  expect(menu.querySelector(".session-menu__info")?.textContent?.trim()).toBe("Last active 57d");
+  expect(terminal).toMatchObject({
+    disabled: true,
+    title: "Terminal opening is unavailable for this session.",
   });
+  terminal.click();
+  expect(onAction).not.toHaveBeenCalled();
 });
 
 it("retargets an adopted row without remounting its open popup", async () => {

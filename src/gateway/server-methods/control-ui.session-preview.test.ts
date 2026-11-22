@@ -48,6 +48,22 @@ function expectPreview(respond: RespondFn, payload: unknown) {
   expect(respond).toHaveBeenCalledWith(true, payload, undefined);
 }
 
+function observeTranscript(match: (row: sessionRows.MaterializedRow) => boolean) {
+  const published = createDeferred();
+  const publish = sessionRows.publishTranscriptFields;
+  const spy = vi
+    .spyOn(sessionRows, "publishTranscriptFields")
+    .mockImplementation((row, ...args) => {
+      const changed = publish(row, ...args);
+      if (match(row)) {
+        published.resolve();
+      }
+      return changed;
+    });
+  onTestFinished(() => spy.mockRestore());
+  return published.promise;
+}
+
 async function createPreviewContext(cfg: OpenClawConfig = {}, getRuntimeConfig = () => cfg) {
   const projection = await createSessionRowProjection({ cfg });
   onTestFinished(() => projection.dispose());
@@ -245,26 +261,18 @@ describe("controlUi.sessionPreview", () => {
           messages: [{ message: { role: "user", content: `Title from ${agentId}` }, now: 42 }],
         });
       }
-      const publications = new Map([
-        ["main", createDeferred()],
-        ["research", createDeferred()],
-      ]);
-      const publishTranscriptFields = sessionRows.publishTranscriptFields;
-      const publication = vi
-        .spyOn(sessionRows, "publishTranscriptFields")
-        .mockImplementation((row, ...args) => {
-          const changed = publishTranscriptFields(row, ...args);
-          if (row.key === "global" && row.lastMessagePreview === `Title from ${row.agentId}`) {
-            publications.get(row.agentId)?.resolve();
-          }
-          return changed;
-        });
-      onTestFinished(() => publication.mockRestore());
+      const remaining = new Set(["main", "research"]);
+      const published = observeTranscript((row) => {
+        if (row.key === "global" && row.lastMessagePreview === `Title from ${row.agentId}`) {
+          remaining.delete(row.agentId);
+        }
+        return !remaining.size;
+      });
       const context = await createPreviewContext(cfg);
-      for (const agentId of publications.keys()) {
+      for (const agentId of ["main", "research"]) {
         requireSessionRowProjection(context).describe({ key: "global", agentId });
       }
-      await Promise.all([...publications.values()].map((completion) => completion.promise));
+      await published;
       const statements = observeHostDataSql();
       onTestFinished(() => statements.restore());
       for (const agentId of ["main", "research"]) {
@@ -286,7 +294,6 @@ describe("controlUi.sessionPreview", () => {
         );
       }
       expect(statements.queries).toEqual([]);
-      statements.restore();
     });
   });
 
@@ -316,24 +323,15 @@ describe("controlUi.sessionPreview", () => {
         updateMode: "none",
         messages: [{ message: { role: "user", content }, now: 1_786_000_000_000 }],
       });
-      const published = createDeferred();
-      const publishTranscriptFields = sessionRows.publishTranscriptFields;
-      const publication = vi
-        .spyOn(sessionRows, "publishTranscriptFields")
-        .mockImplementation((row, ...args) => {
-          const changed = publishTranscriptFields(row, ...args);
-          if (row.key === scope.sessionKey && row.lastMessagePreview) {
-            published.resolve();
-          }
-          return changed;
-        });
-      onTestFinished(() => publication.mockRestore());
+      const published = observeTranscript(
+        (row) => row.key === scope.sessionKey && Boolean(row.lastMessagePreview),
+      );
       const context = await createPreviewContext();
       requireSessionRowProjection(context).describe({
         key: scope.sessionKey,
         agentId: scope.agentId,
       });
-      await published.promise;
+      await published;
       const respond = vi.fn<RespondFn>();
       await preview(requestOptions({ sessionKey: " agent:main:research " }, respond, { context }));
 

@@ -2,8 +2,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import postcss, { type AnyNode } from "postcss";
 import { describe, expect, it } from "vitest";
-import { readThemeBlocks } from "./theme-palette.test-support.ts";
+import {
+  readThemeBlocks,
+  resolveThemes,
+  resolveOpaqueColor,
+} from "./theme-palette.test-support.ts";
 
 const stylesDir = path.dirname(fileURLToPath(import.meta.url));
 const readStyle = (name: string) => fs.readFileSync(path.join(stylesDir, name), "utf8");
@@ -63,17 +68,12 @@ describe("Control UI base theme tokens", () => {
 // Absolutely palette edits left both mirrors stale: pre-paint and preview chips
 // need each palette's own --bg, independent of the active theme.
 describe("Control UI theme --bg mirrors", () => {
+  const themes = resolveThemes(themeBlocks);
   const canonical = new Map(
-    [...themeBlocks].flatMap(([selector, tokens]) => {
-      const name =
-        selector === ":root"
-          ? "dark"
-          : selector === ':root:where([data-theme-mode="light"])'
-            ? "light"
-            : selector.match(/^:root\[data-theme="([^"]+)"\]$/u)?.[1];
-      const bg = tokens.get("--bg");
-      return name && bg ? [[name, bg] as const] : [];
-    }),
+    [...themes].map(([name, tokens]) => [
+      name,
+      resolveOpaqueColor("var(--bg)", tokens).map(Math.round),
+    ]),
   );
 
   it("keeps the index.html pre-paint background on every theme's --bg", () => {
@@ -87,34 +87,48 @@ describe("Control UI theme --bg mirrors", () => {
       ),
     );
     for (const [name, bg] of canonical) {
-      expect(prePaint.get(name), `${name}: pre-paint background`).toBe(bg.toLowerCase());
+      expect(
+        resolveOpaqueColor(prePaint.get(name) ?? "", themes.get(name)!).map(Math.round),
+        `${name}: pre-paint background`,
+      ).toEqual(bg);
     }
     expect(canonical.size).toBeGreaterThanOrEqual(2);
   });
 
   it("keeps the Appearance preview chips on every theme's --bg", () => {
-    const css = readStyle("config.css");
+    const css = postcss.parse(readStyle("config.css"));
     let checked = 0;
-    for (const match of css.matchAll(/\.settings-theme-card--([\w-]+)[^{]*\{([^}]*)\}/gu)) {
-      const chip = match[2]?.match(/--theme-chip-bg:\s*([^;]+);/u)?.[1]?.trim();
-      if (!chip || chip.startsWith("var(")) {
-        continue;
+    css.walkRules((rule) => {
+      const match = rule.selector.match(/\.settings-theme-card--([\w-]+)/u);
+      const declaration = rule.nodes.find(
+        (node) => node.type === "decl" && node.prop === "--theme-chip-bg",
+      );
+      if (!match || declaration?.type !== "decl") {
+        return;
       }
-      const light = css
-        .slice(0, match.index ?? 0)
-        .split(".settings-theme-card--")
-        .at(-1)
-        ?.includes('data-theme-mode="light"');
+      const chip = declaration.value.trim();
+      if (chip.startsWith("var(")) {
+        return;
+      }
+      let light = rule.selector.includes('data-theme-mode="light"');
+      for (let parent: AnyNode | undefined = rule.parent; parent; parent = parent.parent) {
+        if (parent.type === "rule" && parent.selector.includes('data-theme-mode="light"')) {
+          light = true;
+        }
+      }
       const family = match[1] === "knot" ? "openknot" : (match[1] ?? "");
       const name =
         family === "claw" ? (light ? "light" : "dark") : `${family}${light ? "-light" : ""}`;
       const bg = canonical.get(name);
       if (!bg) {
-        continue;
+        return;
       }
       checked += 1;
-      expect(chip.toLowerCase(), `${name}: chip background`).toBe(bg.toLowerCase());
-    }
+      expect(
+        resolveOpaqueColor(chip, themes.get(name)!).map(Math.round),
+        `${name}: chip background`,
+      ).toEqual(bg);
+    });
     expect(checked).toBeGreaterThan(0);
   });
 });

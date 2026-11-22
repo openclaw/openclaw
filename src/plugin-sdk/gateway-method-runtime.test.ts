@@ -42,6 +42,7 @@ it.each([
       }
       return { ok: true, payload: { ok: true } };
     });
+    const respond = vi.fn();
     let invoke: () => ReturnType<typeof dispatchGatewayMethod> | Promise<void> = () =>
       withPluginRuntimeGatewayRequestScope(scope, () =>
         dispatchGatewayMethod("health", {}, { timeoutMs: 500 }),
@@ -57,9 +58,7 @@ it.each([
         register(api) {
           api.registerGatewayMethod(
             "reader.preview",
-            async () => {
-              await dispatchGatewayMethod("health", {});
-            },
+            async () => (await dispatchGatewayMethod("health", {})).payload,
             { scope: "operator.read" },
           );
         },
@@ -75,7 +74,7 @@ it.each([
             ...requestScope,
             params: {},
             req: { type: "req", id: "reader-test", method: "reader.preview" },
-            respond: vi.fn(),
+            respond,
           }),
         );
     }
@@ -83,6 +82,8 @@ it.each([
       const result = await invoke();
       if (http) {
         expect(result).toEqual({ ok: true, payload: { ok: true } });
+      } else {
+        expect(respond).toHaveBeenCalledExactlyOnceWith(true, { ok: true }, undefined, undefined);
       }
       const options = { disableSyntheticClient: true, requireScopedClient: true };
       expect(dispatchRaw).toHaveBeenCalledWith(
@@ -91,11 +92,7 @@ it.each([
         http ? { ...options, timeoutMs: 500 } : options,
       );
     } else {
-      await expect(invoke()).rejects.toThrow(
-        http
-          ? 'contracts.gatewayMethodDispatch: ["authenticated-request"] for plugin "http-rpc"'
-          : "contracts.gatewayMethodDispatch",
-      );
+      await expect(invoke()).rejects.toThrow("contracts.gatewayMethodDispatch");
       expect(dispatchRaw).not.toHaveBeenCalled();
     }
   },

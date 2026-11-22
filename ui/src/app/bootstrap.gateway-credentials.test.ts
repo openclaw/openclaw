@@ -94,6 +94,7 @@ it.each(["start", "connect", "plugins"])(
     } else {
       store.current().testOptions.onHello?.({
         ...GATEWAY_STORE_TEST_HELLO,
+        auth: { role: "operator", scopes: ["operator.read"] },
         ...(entry === "plugins" ? { features: { methods: ["plugins.controlUi.list"] } } : {}),
       });
     }
@@ -216,7 +217,7 @@ describe("pending Gateway credentials", () => {
         ok: false,
         error: {
           code: "UNAVAILABLE",
-          message: "protocol mismatch: Control UI updated; reload this page to continue",
+          message: "protocol mismatch: OpenClaw updated; reload this page to continue",
           details: {
             code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
             gatewayBuildId: "replacement-build",

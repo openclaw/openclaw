@@ -1,16 +1,11 @@
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import type { ReplyExecutionSelection } from "../../sessions/session-controller.execution-selection.js";
 import type { FollowupRun } from "./queue/types.js";
 
 export type ReplyToolAuthorityInput = {
-  /** Original admitted selection; absent on released snapshots that cannot prepare a join. */
-  executionSelection?: ReplyExecutionSelection;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   originatingChannel?: FollowupRun["originatingChannel"];
   toolsAllow?: string[];
   disableTools?: boolean;
-  forceRestartSafeTools?: boolean;
-  forceCodeModeTools?: boolean;
   run: Partial<
     Pick<
       FollowupRun["run"],
@@ -55,6 +50,8 @@ export type ReplyToolAuthorityInput = {
       | "gatewayUiCommandTarget"
       | "toolBindings"
     >
-  > &
-    Pick<FollowupRun["run"], "sessionId" | "sessionFile" | "workspaceDir" | "provider" | "model">;
+  > & { operatorProfileId?: string } & Pick<
+      FollowupRun["run"],
+      "sessionId" | "sessionFile" | "workspaceDir" | "provider" | "model"
+    >;
 };

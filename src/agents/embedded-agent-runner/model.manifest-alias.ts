@@ -56,6 +56,14 @@ export function resolveManifestModelCatalogProviderAliasMetadata(params: {
   const claims: ManifestModelCatalogProviderAliasMetadata[] = [];
   const normalizedConfig = normalizePluginsConfig(params.cfg?.plugins);
   for (const plugin of plugins) {
+    const aliases = plugin.modelCatalog?.aliases;
+    // Only owners declaring this alias can claim it; skip their activation policy work otherwise.
+    if (
+      !aliases ||
+      !Object.keys(aliases).some((alias) => normalizeProviderId(alias) === provider)
+    ) {
+      continue;
+    }
     if (
       !isActivatedManifestOwner({ plugin, normalizedConfig, rootConfig: params.cfg }) ||
       !(
@@ -66,7 +74,7 @@ export function resolveManifestModelCatalogProviderAliasMetadata(params: {
     ) {
       continue;
     }
-    for (const [rawAlias, alias] of Object.entries(plugin.modelCatalog?.aliases ?? {})) {
+    for (const [rawAlias, alias] of Object.entries(aliases)) {
       const normalizedAlias = normalizeProviderId(rawAlias);
       const normalizedTarget = normalizeProviderId(alias.provider);
       if (

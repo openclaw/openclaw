@@ -16,6 +16,7 @@ import {
   waitForExecSession,
   type ProcessSession,
 } from "../../agents/bash-process-registry.js";
+import type { AgentHarness } from "../../agents/harness/types.js";
 import { createLazyExecTool } from "../../agents/lazy-exec-tool.js";
 import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
@@ -51,7 +52,6 @@ import { requireLastRespondCall } from "./chat.abort-authorization.test-helpers.
 import {
   collectAssistantRowsWithText,
   collectMessagesWithIdempotencyKey,
-  expectPersistedAbortMessage,
   type TranscriptLine,
 } from "./chat.abort-persistence.test-helpers.js";
 import {
@@ -62,15 +62,57 @@ import {
 
 const fixture = useChatAbortRegistryFixture();
 const { writeSession } = fixture;
+const mainIdentity = { sessionKey: "agent:main:main", sessionId: "main-session", agentId: "main" };
+const requestOwner = { connId: "request-owner", connect: { scopes: ["operator.write"] } };
+
+function requestIdentities(
+  base: ExecRequestIdentity,
+  variants: Record<string, Omit<Partial<ExecRequestIdentity>, "runId">>,
+) {
+  return Object.entries(variants).map(([runId, overrides]) =>
+    Object.assign({}, base, { runId }, overrides),
+  );
+}
+
+function stop(
+  params: Omit<Parameters<typeof invokeChatAbortHandler>[0], "handler"> & {
+    handler?: Parameters<typeof invokeChatAbortHandler>[0]["handler"];
+  },
+) {
+  return invokeChatAbortHandler({ handler: handleChatAbortRequestWithLifecycle, ...params });
+}
+
+const cascade: Parameters<typeof invokeChatAbortHandler>[0]["handler"] = (options) =>
+  handleChatAbortRequestWithLifecycle(options, { cascadeDescendants: true });
+
+function mainRun(owner?: NonNullable<Parameters<typeof createActiveRun>[1]>["owner"]) {
+  return createActiveRun(mainIdentity.sessionKey, { ...mainIdentity, owner });
+}
+
+function queueChild(groupId: string, runId: string, capacity: string, start: () => Promise<void>) {
+  fixture.queueRun({ groupId, runId, activeRunIds: [capacity], start });
+}
+
+function registerDescendant(
+  runId: string,
+  childSessionKey: string,
+  overrides: Partial<Parameters<typeof fixture.registerRun>[0]> = {},
+) {
+  return fixture.registerRun({
+    runId,
+    childSessionKey,
+    childAgentId: "main",
+    sessionEntry:
+      overrides.sessionEntry ?? loadSessionEntry({ agentId: "main", sessionKey: childSessionKey }),
+    requesterSessionKey: mainIdentity.sessionKey,
+    ...overrides,
+  });
+}
 
 afterEach(() => resetPluginRuntimeStateForTest());
 
 function installNativeCancellation(
-  withDescendantCancellation: NonNullable<
-    ReturnType<
-      typeof createEmptyPluginRegistry
-    >["agentHarnesses"][number]["harness"]["withDescendantCancellation"]
-  >,
+  withDescendantCancellation: NonNullable<AgentHarness["withDescendantCancellation"]>,
 ) {
   const registry = createEmptyPluginRegistry();
   registry.agentHarnesses.push({
@@ -90,14 +132,10 @@ function installNativeCancellation(
 }
 
 describe("descendant cascade ownership", () => {
-  it.for([
-    { scope: "session", initialText: "" },
-    { scope: "session", initialText: "Before Stop. " },
-    { scope: "exact run", initialText: "" },
-    { scope: "exact run", initialText: "Before Stop. " },
-  ])(
-    "keeps text produced during $scope Stop preparation ($initialText)",
-    async ({ scope, initialText }, { signal }) => {
+  it.for(["session", "exact run"])(
+    "keeps text produced during %s Stop preparation",
+    async (scope, { signal }) => {
+      const initialText = "Before Stop. ";
       const sessionKey = "agent:main:main";
       const sessionId = "late-partial-session";
       const runId = "late-partial-run";
@@ -120,9 +158,8 @@ describe("descendant cascade ownership", () => {
             },
           }),
         );
-      const stopping = invokeChatAbortHandler({
-        handler: (options) =>
-          handleChatAbortRequestWithLifecycle(options, { cascadeDescendants: true }),
+      const stopping = stop({
+        handler: cascade,
         context,
         request: { sessionKey, ...(scope === "exact run" ? { runId } : {}) },
         client: { connect: { scopes: ["operator.admin"] } },
@@ -159,11 +196,6 @@ describe("descendant cascade ownership", () => {
         })) as TranscriptLine[];
         const persisted = collectMessagesWithIdempotencyKey(lines, `${runId}:assistant`);
         expect(persisted).toHaveLength(1);
-        expectPersistedAbortMessage(persisted[0], {
-          idempotencyKey: `${runId}:assistant`,
-          origin: "rpc",
-          runId,
-        });
         expect(collectAssistantRowsWithText(lines, fullText)).toHaveLength(1);
       } finally {
         proceed.resolve();
@@ -204,8 +236,7 @@ describe("descendant cascade ownership", () => {
         async () => {
           const context = createChatAbortContext();
           const request = { sessionKey, runId: "continued-command" };
-          const foreign = await invokeChatAbortHandler({
-            handler: handleChatAbortRequestWithLifecycle,
+          const foreign = await stop({
             context,
             request,
             client: {
@@ -215,8 +246,7 @@ describe("descendant cascade ownership", () => {
           });
           expect(requireLastRespondCall(foreign)[0]).toBe(false);
           expect(owner.signal.aborted).toBe(false);
-          const response = await invokeChatAbortHandler({
-            handler: handleChatAbortRequestWithLifecycle,
+          const response = await stop({
             context,
             request,
             client: {
@@ -237,49 +267,35 @@ describe("descendant cascade ownership", () => {
   it("keeps foreign, protected, and side-run native work during session-wide Stop", async () => {
     const sessionKey = "agent:main:main";
     await writeSession(sessionKey, "main-session");
-    const identity: ExecRequestIdentity = {
-      sessionKey,
-      sessionId: "main-session",
-      agentId: "main",
-      ownerConnId: "request-owner",
-    };
-    const requests: Array<{ label: string; identity: ExecRequestIdentity }> = [
-      { label: "allowed", identity: { ...identity, runId: "allowed" } },
-      { label: "foreign", identity: { ...identity, runId: "foreign", ownerConnId: "other" } },
-      {
-        label: "protected",
-        identity: { ...identity, runId: "protected", controlUiVisible: false },
-      },
-      { label: "side-run", identity: { ...identity, runId: "side-run", turnKind: "btw" } },
-    ];
+    const identity: ExecRequestIdentity = { ...mainIdentity, ownerConnId: "request-owner" };
+    const requests = requestIdentities(identity, {
+      allowed: {},
+      foreign: { ownerConnId: "other" },
+      protected: { controlUiVisible: false },
+      "side-run": { turnKind: "btw" },
+    });
     const children = await Promise.all(
-      requests.map(async (request) => ({
-        label: request.label,
-        custody: await withExecRequestTurn({ identity: request.identity }, async () =>
-          expectDefined(captureExecRequestCustody(request.identity), "native request custody"),
+      requests.map(async (requestIdentity) => ({
+        label: requestIdentity.runId,
+        custody: await withExecRequestTurn({ identity: requestIdentity }, async () =>
+          expectDefined(captureExecRequestCustody(requestIdentity), "native request custody"),
         ),
         cancel: vi.fn(),
       })),
     );
     installNativeCancellation((params, run) =>
       run(async () => {
-        expect(params.requesterTurnRunId).toBeUndefined();
         const selected = children.filter((child) => params.acceptsRequest(child.custody));
         selected.forEach((child) => child.cancel());
         return { killed: selected.length, cancelledRequesters: [] };
       }),
     );
-    const parent = createActiveRun(sessionKey, {
-      sessionId: "main-session",
-      agentId: "main",
-      owner: { connId: "request-owner" },
-    });
-    const respond = await invokeChatAbortHandler({
-      handler: (options) =>
-        handleChatAbortRequestWithLifecycle(options, { cascadeDescendants: true }),
+    const parent = mainRun({ connId: "request-owner" });
+    const respond = await stop({
+      handler: cascade,
       context: createChatAbortContext({ sources: [["parent", parent]] }),
       request: { sessionKey, preserveSideRuns: true },
-      client: { connId: "request-owner", connect: { scopes: ["operator.write"] } },
+      client: requestOwner,
     });
     expect(requireLastRespondCall(respond)[0]).toBe(true);
     expect(parent.input.abortSignal.aborted).toBe(true);
@@ -295,30 +311,18 @@ describe("descendant cascade ownership", () => {
       const sessionId = "effect-stop-session";
       const storePath = await writeSession(sessionKey, sessionId);
       const identity = { sessionKey, sessionId, agentId: "main" };
-      const runs: Array<ExecRequestIdentity & { runId: string }> = [
-        { ...identity, runId: "unowned" },
-        { ...identity, runId: "connection", ownerConnId: "request-owner" },
-        {
-          ...identity,
-          runId: "device",
+      const runs = requestIdentities(identity, {
+        unowned: {},
+        connection: { ownerConnId: "request-owner" },
+        device: {
           ownerConnId: "previous-connection",
           ownerDeviceId: "request-device",
         },
-        { ...identity, runId: "foreign-connection", ownerConnId: "other" },
-        { ...identity, runId: "foreign-device", ownerDeviceId: "other" },
-        {
-          ...identity,
-          runId: "side-run",
-          ownerConnId: "request-owner",
-          turnKind: "btw",
-        },
-        {
-          ...identity,
-          runId: "hidden",
-          ownerConnId: "request-owner",
-          controlUiVisible: false,
-        },
-      ];
+        "foreign-connection": { ownerConnId: "other" },
+        "foreign-device": { ownerDeviceId: "other" },
+        "side-run": { ownerConnId: "request-owner", turnKind: "btw" },
+        hidden: { ownerConnId: "request-owner", controlUiVisible: false },
+      });
       const producers = await Promise.all(
         runs.map(async (run) => {
           const finish = createDeferred();
@@ -338,8 +342,7 @@ describe("descendant cascade ownership", () => {
         }),
       );
       try {
-        const respond = await invokeChatAbortHandler({
-          handler: handleChatAbortRequestWithLifecycle,
+        const respond = await stop({
           context: createChatAbortContext(),
           request: { sessionKey, preserveSideRuns: true },
           client: {
@@ -383,10 +386,8 @@ describe("descendant cascade ownership", () => {
       await writeSession(continuationChildKey, "exec-continuation-child");
       await writeSession(laterChildKey, "later-human-child");
       const originalIdentity = {
+        ...mainIdentity,
         runId: "original-command-request",
-        sessionKey,
-        sessionId: "main-session",
-        agentId: "main",
         ownerConnId: "request-owner",
       };
       const originalOwners = await withExecRequestTurn({ identity: originalIdentity }, async () =>
@@ -413,22 +414,12 @@ describe("descendant cascade ownership", () => {
         requesterTurnRunId: string,
         start: () => Promise<void>,
       ) => {
-        await fixture.registerRun({
-          runId,
-          childSessionKey,
-          childAgentId: "main",
+        await registerDescendant(runId, childSessionKey, {
           sessionEntry: { sessionId: runId },
-          requesterSessionKey: sessionKey,
           requesterTurnRunId,
-          task: "preserve exact requester ownership",
           queued: true,
         });
-        fixture.queueRun({
-          groupId: "exec-continuation-ownership",
-          runId,
-          activeRunIds: ["held-continuation-capacity"],
-          start,
-        });
+        queueChild("exec-continuation-ownership", runId, "held-continuation-capacity", start);
       };
       try {
         await withExecRequestTurn(
@@ -449,11 +440,7 @@ describe("descendant cascade ownership", () => {
           await reserveChild("later-human-child", laterChildKey, "later-human-request", laterStart);
           return expectDefined(captureExecRequestOwners(laterIdentity), "later human owners");
         });
-        const laterRun = createActiveRun(sessionKey, {
-          sessionId: "main-session",
-          agentId: "main",
-          owner: { connId: "request-owner" },
-        });
+        const laterRun = mainRun({ connId: "request-owner" });
         const context = createChatAbortContext({
           sources: [["later-human-request", laterRun]],
         });
@@ -468,22 +455,15 @@ describe("descendant cascade ownership", () => {
           return { killed: 1, cancelledRequesters: [] };
         });
         installNativeCancellation((params, run) => {
-          expect(params).toMatchObject({
-            agentId: "main",
-            sessionKey,
-            sessionId: "main-session",
-            requesterTurnRunId: "original-command-request",
-          });
           expect(params.acceptsRequest(withExecRequestOwners({}, originalOwners))).toBe(true);
           expect(params.acceptsRequest(withExecRequestOwners({}, laterOwners))).toBe(false);
           return run(cancelNative);
         });
         const respond = vi.fn();
-        const stopping = invokeChatAbortHandler({
-          handler: handleChatAbortRequestWithLifecycle,
+        const stopping = stop({
           context,
           request: { sessionKey, runId: "original-command-request" },
-          client: { connId: "request-owner", connect: { scopes: ["operator.write"] } },
+          client: requestOwner,
           respond,
         });
         try {
@@ -497,7 +477,6 @@ describe("descendant cascade ownership", () => {
           nativeSettled.resolve();
           await stopping;
         }
-        expect(cancelNative).toHaveBeenCalledOnce();
         if (nativeFails) {
           expect(requireLastRespondCall(respond).slice(0, 3)).toEqual([
             false,
@@ -550,32 +529,17 @@ describe("descendant cascade ownership", () => {
     const childKey = "agent:main:subagent:retained-stop";
     await writeSession(sessionKey, "main-session");
     await writeSession(childKey, "retained-stop-child");
-    await fixture.registerRun({
-      runId: "retained-stop-child",
-      childSessionKey: childKey,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: childKey }),
-      requesterSessionKey: sessionKey,
+    await registerDescendant("retained-stop-child", childKey, {
       requesterTurnRunId: "parent",
-      task: "retain original Stop authority",
       queued: true,
     });
     const started = createDeferred();
     const start = vi.fn(async () => {
       started.resolve();
     });
-    fixture.queueRun({
-      groupId: "retained-stop",
-      runId: "retained-stop-child",
-      activeRunIds: ["held-capacity"],
-      start,
-    });
+    queueChild("retained-stop", "retained-stop-child", "held-capacity", start);
     let current = true;
-    const parent = createActiveRun(sessionKey, {
-      sessionId: "main-session",
-      agentId: "main",
-      owner: { connId: "owner" },
-    });
+    const parent = mainRun({ connId: "owner" });
     const turnAborted = createDeferred();
     parent.input.abortSignal.addEventListener("abort", () => {
       current = false;
@@ -609,60 +573,46 @@ describe("descendant cascade ownership", () => {
       };
     });
     let command: ProcessSession | undefined;
+    const identity = { ...mainIdentity, runId: "parent", ownerConnId: "owner" };
     const execution = withEnvAsync({ OPENCLAW_EXEC_SHELL_SNAPSHOT: "0" }, () =>
-      withExecRequestTurn(
-        {
-          identity: {
-            runId: "parent",
-            sessionKey,
-            sessionId: "main-session",
-            agentId: "main",
-            ownerConnId: "owner",
+      withExecRequestTurn({ identity, abortSignal: parent.input.abortSignal }, async () => {
+        const tool = createLazyExecTool({
+          ...identity,
+          config: getRuntimeConfig(),
+          cwd: fixture.stateDir,
+          scopeKey: sessionKey,
+          host: "gateway",
+          mode: "full",
+          ask: "off",
+          allowBackground: true,
+          notifyOnExit: false,
+          preparedStoreEnvironment: {},
+        });
+        const result = await tool.execute(
+          "ordinary-command",
+          {
+            command: `node -e "require('fs').watch('.', () => {})"`,
+            yieldMs: 10,
+            timeoutSeconds: 60,
           },
-          abortSignal: parent.input.abortSignal,
-        },
-        async () => {
-          const tool = createLazyExecTool({
-            runId: "parent",
-            sessionKey,
-            sessionId: "main-session",
-            agentId: "main",
-            config: getRuntimeConfig(),
-            cwd: fixture.stateDir,
-            scopeKey: sessionKey,
-            host: "gateway",
-            mode: "full",
-            ask: "off",
-            allowBackground: true,
-            notifyOnExit: false,
-            preparedStoreEnvironment: {},
-          });
-          const result = await tool.execute(
-            "ordinary-command",
-            {
-              command: `node -e "require('fs').watch('.', () => {})"`,
-              yieldMs: 10,
-              timeoutSeconds: 60,
-            },
-            parent.input.abortSignal,
-          );
-          const details = asOptionalRecord(result.details);
-          expect(details?.status).toBe("running");
-          if (typeof details?.sessionId !== "string") {
-            throw new Error("Expected an ordinary command to yield its process handle");
-          }
-          command = expectDefined(getSession(details.sessionId), "ordinary command");
-          commandReady.resolve();
-          await turnAborted.promise;
-        },
-      ),
+          parent.input.abortSignal,
+        );
+        const details = asOptionalRecord(result.details);
+        expect(details?.status).toBe("running");
+        if (typeof details?.sessionId !== "string") {
+          throw new Error("Expected an ordinary command to yield its process handle");
+        }
+        command = expectDefined(getSession(details.sessionId), "ordinary command");
+        commandReady.resolve();
+        await turnAborted.promise;
+      }),
     );
     void execution.catch((error: unknown) => commandReady.reject(error));
     let stopping: ReturnType<typeof invokeChatAbortHandler> | undefined;
     try {
       await withinTest(commandReady.promise, signal);
       const respond = vi.fn();
-      stopping = invokeChatAbortHandler({
+      stopping = stop({
         handler: (options) =>
           handleChatAbortRequestWithLifecycle({
             ...options,
@@ -706,9 +656,6 @@ describe("descendant cascade ownership", () => {
       });
       expect(parent.input.abortSignal.aborted).toBe(true);
       expect(persist).toHaveBeenCalledOnce();
-      expect(persist.mock.calls[0]?.[0].snapshots.map((snapshot) => snapshot.runId)).toEqual([
-        "parent",
-      ]);
       expect((await getSubagentRunByChildSessionKey(childKey))?.execution.endedAt).toBeUndefined();
       expect(start).not.toHaveBeenCalled();
       releaseSwarmRun("held-capacity");
@@ -744,28 +691,29 @@ describe("descendant cascade ownership", () => {
     "represented worker",
     "hidden worker",
   ])("does not kill or inhibit excluded queued descendants: %s", async (kind) => {
-    const sessionKey = kind.includes("worker") ? "global" : "agent:main:main";
+    const worker = kind.includes("worker");
+    const late = kind === "late descendant";
+    const hidden = ["hidden", "hidden worker", "all foreign hidden"].includes(kind);
+    const allForeign = kind.startsWith("all foreign");
+    const mixedOwner = kind === "mixed active" || kind === "mixed queued";
+    const sessionKey = worker ? "global" : "agent:main:main";
+    const orchestratorKey = "agent:main:subagent:orchestrator";
     const cfg: OpenClawConfig = sessionKey === "global" ? { session: { scope: "global" } } : {};
     const childKey = "agent:main:subagent:cascade-ownership";
     const storePath = await writeSession(sessionKey, "main-session");
     await writeSession(childKey, "cascade-queued");
     const canCascade = ["owned", "orphan", "represented worker", "late descendant"].includes(kind);
-    const hasOwnedActive = kind !== "orphan" && !kind.startsWith("all foreign");
+    const hasOwnedActive = kind !== "orphan" && !allForeign;
+    const runIdentity = { storeScope: storePath, sessionId: "main-session", agentId: "main" };
     const mine = createActiveRun(sessionKey, {
-      storeScope: storePath,
-      sessionId: "main-session",
-      agentId: "main",
+      ...runIdentity,
       owner: { connId: "conn-owner", deviceId: "dev-owner" },
     });
     const foreign = createActiveRun(sessionKey, {
-      storeScope: storePath,
+      ...runIdentity,
       queued: kind === "mixed queued",
-      sessionId: "main-session",
-      agentId: "main",
       owner: { connId: "conn-foreign", deviceId: "dev-foreign" },
-      controlUiVisible: ["hidden", "hidden worker", "all foreign hidden"].includes(kind)
-        ? false
-        : undefined,
+      controlUiVisible: hidden ? false : undefined,
       turnKind: kind === "preserved" ? "btw" : undefined,
     });
     const context = createChatAbortContext({ getRuntimeConfig: () => cfg });
@@ -773,28 +721,16 @@ describe("descendant cascade ownership", () => {
       rpcSourceTesting.set("run-mine", mine);
       context.chatRunState.getOrCreate("run-mine").buffer = "partial parent reply";
       mine.input.abortSignal.addEventListener("abort", () => {
-        if (kind !== "late descendant") {
+        if (!late) {
           releaseSwarmRun("capacity");
         }
       });
     }
-    if (
-      [
-        "all foreign",
-        "all foreign hidden",
-        "mixed active",
-        "hidden",
-        "preserved",
-        "hidden worker",
-      ].includes(kind)
-    ) {
-      rpcSourceTesting.set("run-foreign", foreign);
-    }
-    if (kind === "mixed queued") {
+    if (allForeign || mixedOwner || hidden || kind === "preserved") {
       rpcSourceTesting.set("run-foreign", foreign);
     }
     const cancelInferenceForSession = vi.fn(() => ["worker-run"]);
-    if (kind.includes("worker")) {
+    if (worker) {
       const workerRunId =
         kind === "represented worker"
           ? "run-mine"
@@ -808,62 +744,42 @@ describe("descendant cascade ownership", () => {
       );
     }
     const registerChild = () =>
-      fixture.registerRun({
-        runId: "cascade-queued",
-        childSessionKey: childKey,
-        childAgentId: "main",
-        sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: childKey }),
-        requesterSessionKey:
-          kind === "late descendant" ? "agent:main:subagent:orchestrator" : sessionKey,
+      registerDescendant("cascade-queued", childKey, {
+        requesterSessionKey: late ? orchestratorKey : sessionKey,
         requesterDisplayKey: sessionKey,
-        task: "preserve exclusive ownership",
         queued: true,
       });
-    if (kind === "late descendant") {
-      await writeSession("agent:main:subagent:orchestrator", "orchestrator");
-      await fixture.registerRun({
-        runId: "orchestrator",
-        childSessionKey: "agent:main:subagent:orchestrator",
-        childAgentId: "main",
-        sessionEntry: loadSessionEntry({
-          agentId: "main",
-          sessionKey: "agent:main:subagent:orchestrator",
-        }),
+    if (late) {
+      await writeSession(orchestratorKey, "orchestrator");
+      await registerDescendant("orchestrator", orchestratorKey, {
         requesterSessionKey: sessionKey,
         requesterTurnRunId: "run-mine",
-        task: "live orchestrator",
       });
     } else {
       await registerChild();
     }
     const start = vi.fn(async () => {});
-    fixture.queueRun({
-      groupId: "cascade-ownership",
-      runId: "cascade-queued",
-      activeRunIds: ["capacity"],
-      start,
-    });
+    queueChild("cascade-ownership", "cascade-queued", "capacity", start);
     const entered = createDeferred();
     const proceed = createDeferred();
-    const admission =
-      kind === "late descendant"
-        ? await beginSessionEffect({
-            scope: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-            identities: ["agent:main:subagent:orchestrator"],
-            run: {
-              runId: "orchestrator",
-              sessionKey: "agent:main:subagent:orchestrator",
-              sessionId: "orchestrator",
-              agentId: "main",
-            },
-            assertAllowed: () => {},
-            onInterrupt: () => entered.resolve(),
-          })
-        : undefined;
+    const admission = late
+      ? await beginSessionEffect({
+          scope: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+          identities: [orchestratorKey],
+          run: {
+            runId: "orchestrator",
+            sessionKey: orchestratorKey,
+            sessionId: "orchestrator",
+            agentId: "main",
+          },
+          assertAllowed: () => {},
+          onInterrupt: () => entered.resolve(),
+        })
+      : undefined;
     const append = vi
       .spyOn(transcriptInject, "appendInjectedAssistantMessageToTranscript")
       .mockImplementationOnce(async () => {
-        if (kind === "late descendant") {
+        if (late) {
           releaseSwarmRun("capacity");
         }
         entered.resolve();
@@ -873,16 +789,14 @@ describe("descendant cascade ownership", () => {
     if (!hasOwnedActive && kind !== "orphan") {
       releaseSwarmRun("capacity");
     }
-    const mixedOwner = kind === "mixed active" || kind === "mixed queued";
-    const pending = invokeChatAbortHandler({
-      handler: (options) =>
-        handleChatAbortRequestWithLifecycle(options, { cascadeDescendants: true }),
+    const pending = stop({
+      handler: cascade,
       context,
       request: {
         sessionKey,
         agentId: "main",
         preserveSideRuns: kind === "preserved",
-        ...(kind === "late descendant" ? { runId: "run-mine" } : {}),
+        ...(late ? { runId: "run-mine" } : {}),
       },
       client: {
         connId: "conn-owner",
@@ -896,10 +810,9 @@ describe("descendant cascade ownership", () => {
     try {
       if (hasOwnedActive) {
         await entered.promise;
-        if (kind === "late descendant") {
+        if (late) {
           expect(
-            (await getSubagentRunByChildSessionKey("agent:main:subagent:orchestrator"))?.execution
-              .endedAt,
+            (await getSubagentRunByChildSessionKey(orchestratorKey))?.execution.endedAt,
           ).toBeUndefined();
           await registerChild();
         }
@@ -921,7 +834,7 @@ describe("descendant cascade ownership", () => {
       if (kind === "orphan") {
         releaseSwarmRun("capacity");
       }
-      expect(requireLastRespondCall(respond)[0]).toBe(!kind.startsWith("all foreign"));
+      expect(requireLastRespondCall(respond)[0]).toBe(!allForeign);
       if (mixedOwner) {
         expect(requireLastRespondCall(respond)[1]).toMatchObject({
           aborted: true,

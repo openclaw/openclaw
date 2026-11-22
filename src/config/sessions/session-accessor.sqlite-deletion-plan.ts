@@ -18,11 +18,8 @@ import {
   readSqliteSessionGenerationWindows,
 } from "./session-accessor.sqlite-generation-copy.js";
 import {
-  collectSessionStateIdsForEntry,
   shouldRemoveSessionEntry,
-  readSessionGenerationIdsForKeys,
   planSessionStateAfterEntryRemoval,
-  readReferencedSessionIdsAfterTargetMutation,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
   SessionDeletionPlanningOperation,
@@ -37,6 +34,11 @@ import type {
   SqliteSessionDeletionScope,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { readSessionNodeArtifactFingerprint } from "./session-accessor.sqlite-node-artifacts.js";
+import {
+  collectSessionStateIdsForEntry,
+  readSessionGenerationIdsForKeys,
+  readReferencedSessionIdsAfterTargetMutation,
+} from "./session-accessor.sqlite-references.js";
 import { collectSessionAdmissionReferences } from "./session-history-eviction-candidates.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 

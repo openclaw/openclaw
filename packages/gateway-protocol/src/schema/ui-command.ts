@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
+import { TemplatesDraftsReadParamsSchema } from "./template-drafts.js";
 
 export const UiSplitCommandSchema = closedObject({
   kind: Type.Literal("split"),
@@ -24,6 +25,7 @@ export const UiSidebarCommandSchema = closedObject({
 const UiPanelCommandFields = {
   kind: Type.Literal("panel"),
   open: Type.Boolean(),
+  expanded: Type.Optional(Type.Boolean()),
   dock: Type.Optional(stringLiteralUnion(["bottom", "right"])),
 };
 export const UiPanelCommandSchema = Type.Union([
@@ -59,6 +61,14 @@ export const UiNavigateCommandSchema = closedObject({
   kind: Type.Literal("navigate"),
   sessionKey: NonEmptyString,
 });
+export const UiAgentGitHubSettingsCommandSchema = closedObject({
+  kind: Type.Literal("agent-github-settings"),
+});
+
+export const UiTemplateReviewCommandSchema = closedObject({
+  kind: Type.Literal("template-review"),
+  draftId: TemplatesDraftsReadParamsSchema.properties.draftId,
+});
 
 export const UiCommandSchema = Type.Union([
   UiSplitCommandSchema,
@@ -67,6 +77,8 @@ export const UiCommandSchema = Type.Union([
   UiSidebarCommandSchema,
   UiPanelCommandSchema,
   UiNavigateCommandSchema,
+  UiAgentGitHubSettingsCommandSchema,
+  UiTemplateReviewCommandSchema,
 ]);
 export type UiCommand = Static<typeof UiCommandSchema>;
 

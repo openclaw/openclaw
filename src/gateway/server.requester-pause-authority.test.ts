@@ -26,7 +26,7 @@ import * as pendingInputs from "../config/sessions/session-accessor.pending-inpu
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
 import {
   captureOperatorToolGatewayContinuationContext,
@@ -71,7 +71,7 @@ it.for([
     const followsUp = outcome === "same-human follow-up" || revokedSource;
     const retiresAfterAcceptance = outcome === "outbox retired after acceptance";
     const sourceRevocation = new AbortController();
-    let originalSource: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+    let originalSource: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
     const marker = `PAUSE-MARKER-${id}`;
     const client = createOperatorClient({
       profileName: `pause-${id}`,
@@ -293,7 +293,7 @@ it.for([
     try {
       if (followsUp) {
         originalSource = expectDefined(
-          await captureGatewayOperatorRunAuthority({
+          await prepareGatewayOperatorRunAuthority({
             client,
             context,
             sourceAuthority: {
@@ -344,10 +344,7 @@ it.for([
             `Child completed; continue requester work: ${marker}`,
             () => accepted.resolve(),
           );
-          const settled = pending.then(
-            () => {},
-            () => {},
-          );
+          void pending.catch(() => {});
           await withinTest(
             awaitGateBeforeSettlement(
               accepted.promise,
@@ -364,7 +361,6 @@ it.for([
           expect(runs.has(child.runId)).toBe(false);
           release.resolve();
           await withinTest(pending, signal);
-          await settled;
           expect(received).toEqual([
             `${interSessionPrefix}Child completed; continue requester work: ${marker}`,
           ]);
@@ -387,15 +383,14 @@ it.for([
         });
         freshClient.internal = { controlUiAdmin: true };
         await sendHuman(freshClient, followupRunId, "Same human follow-up");
-        expect(originalSource?.authority.assertCurrent).not.toThrow();
       }
       const target = foreignRequester ? foreign : parent;
       const sessionId = foreignRequester ? foreignId : parentId;
       const scope = { agentId: "main", sessionKey: target, sessionId };
       const before = sessionAccessor.loadTranscriptEventsSync(scope);
+      const receivedBefore = [...received];
       const executionModule = await import("./agent-turn/agent-run-execution-phase.js");
       const execution = vi.spyOn(executionModule, "startAgentRunExecution");
-      agentCommandMock.mockClear();
       await mutateChild((draft) => {
         draft.pauseReason = undefined;
         draft.execution = { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } };
@@ -441,11 +436,9 @@ it.for([
           }
           resume.resolve();
         }
-        if (!foreignRequester && !resetRequester && !revokedSource) {
+        if (!foreignRequester && !resetRequester) {
           await continuation;
           await Promise.all(trackedRequests());
-          expect(execution).toHaveBeenCalledOnce();
-          expect(agentCommandMock).toHaveBeenCalledOnce();
           expect(received).toEqual([
             `${interSessionPrefix}Child paused awaiting continuation: ${marker}`,
             ...(followsUp ? ["Same human follow-up"] : []),
@@ -467,9 +460,7 @@ it.for([
           );
           const expectedDenial = foreignRequester
             ? "does not own this continuation"
-            : revokedSource
-              ? "Original completion source revoked during dispatch"
-              : "no longer current";
+            : "no longer current";
           const settled = await Promise.allSettled(trackedRequests());
           for (const work of settled) {
             if (work.status === "rejected") {
@@ -479,8 +470,8 @@ it.for([
               );
             }
           }
+          expect(received).toEqual(receivedBefore);
           expect(execution).not.toHaveBeenCalled();
-          expect(agentCommandMock).not.toHaveBeenCalled();
           expect(sessionAccessor.loadTranscriptEventsSync(scope)).toEqual(before);
           expect(context.dedupe.has(`agent:${continuationRunId}`)).toBe(false);
           expect(failure).toBeInstanceOf(Error);

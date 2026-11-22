@@ -4,7 +4,8 @@ import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveQaArtifactPath } from "./cli-paths.js";
-import { buildQaOccurrenceEvidenceSummary, type QaEvidenceOccurrence } from "./evidence-summary.js";
+import { buildQaOccurrenceEvidenceSummary } from "./evidence-summary.js";
+import { makeQaSuiteTestOccurrence } from "./suite-test-helpers.js";
 import {
   buildScriptProducerEvidence,
   makeTestFileScenario,
@@ -31,23 +32,7 @@ describe("script evidence reader", () => {
       status: "pass",
       artifacts: [{ kind: "log", path: "target.log", source: "synthetic-target" }],
     });
-    const occurrence: QaEvidenceOccurrence = {
-      id: "observation",
-      parentCell: null,
-      scenario: null,
-      retryOf: null,
-      terminalStatus: "pass",
-      assertions: null,
-      launch: {
-        source: { ref: null, integrity: null },
-        runtime: { id: null, version: null },
-        package: null,
-        protocol: null,
-        accountRef: null,
-        proofClass: null,
-      },
-      receipts: [],
-    };
+    const occurrence = makeQaSuiteTestOccurrence("observation");
     occurrence.receipts.push({
       id: "target",
       phase: "runtime",

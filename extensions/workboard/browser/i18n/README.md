@@ -3,6 +3,8 @@
 `locales/en.ts` owns the browser plugin's English text. `locales/translated.json`
 is an authored plugin catalog, including translations retained from the earlier
 Control UI and subsequent plugin edits. Missing translations fall back to English.
+English is included in the initial view bundle. The translated catalog loads on
+the first non-English locale; the view uses English until that request settles.
 
 The repository's `pnpm ui:i18n:verify` discovers `i18n/locales/` beside each
 plugin's declared browser entry. It checks English key references, catalog shape,

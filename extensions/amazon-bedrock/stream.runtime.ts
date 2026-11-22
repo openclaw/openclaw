@@ -1,8 +1,7 @@
 import {
   type CachePointBlock,
   CacheTTL,
-  BedrockRuntimeClient,
-  type BedrockRuntimeClientConfig,
+  type BedrockRuntimeClient,
   BedrockRuntimeServiceException,
   type ContentBlock,
   type ContentBlockDeltaEvent,
@@ -14,14 +13,13 @@ import {
   ImageFormat,
   type Message,
   StopReason as BedrockStopReason,
-  type SystemContentBlock,
   type Tool as BedrockTool,
   type ToolChoice,
   type ToolConfiguration,
   ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
-import { NodeHttpHandler } from "@smithy/node-http-handler";
 import type { DocumentType } from "@smithy/types";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   adjustMaxTokensForThinking,
@@ -29,14 +27,12 @@ import {
   buildBaseOptions,
   calculateCost,
   clampReasoning,
-  createHttpProxyAgentsForTarget,
   createToolArgumentPreviewSchedule,
   hasRuntimeContextMarker,
   parseStreamingJson,
   sanitizeSurrogates,
   transformMessages,
   type AssistantMessageEvent,
-  type CacheRetention,
   type Context,
   type Model,
   type SimpleStreamOptions,
@@ -59,12 +55,14 @@ import {
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import type { ConverseProxyTransportFactory } from "openclaw/plugin-sdk/provider-stream-family";
 import {
   applyAnthropicRefusal,
   createDeferredEventBuffer,
   notifyLlmRequestActivity,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
+  applyProviderPayloadHook,
   buildAssistantMessage,
   coerceTransportToolCallArguments,
   describeToolResultMediaPlaceholder,
@@ -73,20 +71,16 @@ import {
   finalizeTerminalToolCallArguments,
   notifyProviderHttpMetadata,
   sortPromptCacheToolsByName,
-  splitSystemPromptCacheBoundary,
-  stripSystemPromptCacheBoundary,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
-import {
-  asOptionalRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveBedrockRuntimeAuth } from "./aws-credential-refresh.js";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createBedrockStreamClient, getConfiguredBedrockRegion } from "./bedrock-client.js";
 import {
   resolveBedrockCachePoint,
   resolveBedrockCacheRetention,
   resolveBedrockPromptCachePolicy,
   type BedrockOptions,
 } from "./bedrock-options.js";
+import { buildBedrockSystemPrompt } from "./prompt-cache.runtime.js";
 import {
   isClaude5BedrockModel,
   resolveBedrockClaudeThinkingProfile,
@@ -131,11 +125,12 @@ function resolveAdaptiveBedrockMaxTokens(
   return OPENCLAW_FALLBACK_MODEL_MAX_TOKENS.has(model.maxTokens) ? undefined : model.maxTokens;
 }
 
-const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> = (
-  model,
-  context,
-  options = {},
-) => {
+function streamBedrock(
+  model: Model<"bedrock-converse-stream">,
+  context: Context,
+  options: BedrockOptions = {},
+  transport?: ConverseProxyTransportFactory,
+) {
   const stream = new AssistantMessageEventStream();
 
   void (async () => {
@@ -277,14 +272,19 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
           promptTokens,
           totalTokens: promptTokens + output.usage.output,
         };
-        const cacheWrite1h = event.usage.cacheDetails?.reduce(
-          (total, detail) =>
-            detail.ttl === CacheTTL.ONE_HOUR ? total + (detail.inputTokens ?? 0) : total,
-          0,
-        );
-        if (cacheWrite1h) {
-          output.usage.cacheWrite1h = cacheWrite1h;
+        const cacheWrites: Partial<Record<"cacheWrite1h" | "cacheWrite5m", number>> = {};
+        for (const detail of event.usage.cacheDetails ?? []) {
+          const key =
+            detail.ttl === CacheTTL.ONE_HOUR
+              ? "cacheWrite1h"
+              : detail.ttl === CacheTTL.FIVE_MINUTES
+                ? "cacheWrite5m"
+                : undefined;
+          if (key && detail.inputTokens !== undefined) {
+            cacheWrites[key] = (cacheWrites[key] ?? 0) + detail.inputTokens;
+          }
         }
+        Object.assign(output.usage, cacheWrites);
         calculateCost(model, output.usage);
       }
     }
@@ -355,48 +355,10 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
       }
     }
 
-    const config: BedrockRuntimeClientConfig = {
-      profile: options.profile,
-      ...resolveBedrockRuntimeAuth(options.bearerToken),
-    };
-    const configuredRegion = getConfiguredBedrockRegion(options);
-    const requestRegion = options.region || getBedrockModelArnRegion(model.id) || configuredRegion;
-    const hasConfiguredProfile = hasConfiguredBedrockProfile(options);
-    const endpointRegion = getStandardBedrockEndpointRegion(model.baseUrl);
-    const useExplicitEndpoint = !endpointRegion || (!requestRegion && !hasConfiguredProfile);
-
-    // Only pin standard AWS Bedrock runtime endpoints when no region/profile is configured.
-    // This preserves custom endpoints (VPC/proxy) from #3402 without forcing built-in
-    // catalog defaults such as us-east-1 to override AWS_REGION/AWS_PROFILE.
-    if (useExplicitEndpoint) {
-      config.endpoint = model.baseUrl;
-    }
-
-    // Region resolution: explicit option > model ARN > env vars > SDK default chain.
-    // When AWS_PROFILE is set, leave region undefined so the SDK can resolve it.
-    if (requestRegion) {
-      config.region = requestRegion;
-    } else if (endpointRegion && useExplicitEndpoint) {
-      config.region = endpointRegion;
-    } else if (!hasConfiguredProfile) {
-      config.region = "us-east-1";
-    }
-
-    const proxyAgents = createHttpProxyAgentsForTarget(model.baseUrl);
-    if (proxyAgents) {
-      // Bedrock runtime uses NodeHttp2Handler by default since v3.798.0, which is based
-      // on `http2` module and has no support for http agent.
-      // Use NodeHttpHandler to support HTTP(S) proxy agents.
-      config.requestHandler = new NodeHttpHandler(proxyAgents);
-    } else if (process.env.AWS_BEDROCK_FORCE_HTTP1 === "1") {
-      // Some custom endpoints require HTTP/1.1 instead of HTTP/2
-      config.requestHandler = new NodeHttpHandler();
-    }
-
     let client: BedrockRuntimeClient | undefined;
     try {
       options.signal?.throwIfAborted();
-      client = new BedrockRuntimeClient(config);
+      client = await createBedrockStreamClient(model, options, transport);
       const cachePolicy = resolveBedrockPromptCachePolicy(model);
       const cacheRetention = resolveBedrockCacheRetention(cachePolicy, options.cacheRetention);
       const cachePoint = resolveBedrockCachePoint(cachePolicy, cacheRetention);
@@ -407,32 +369,33 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         thinking !== null &&
         typeof thinking === "object" &&
         (thinking as { type?: unknown }).type === "adaptive";
+      const toolConfig = convertToolConfig(
+        context.tools,
+        fable5 || sendsAdaptiveThinking
+          ? normalizeAdaptiveClaudeToolChoice(options.toolChoice)
+          : options.toolChoice,
+      );
       let commandInput = {
         modelId: model.id,
-        messages: convertMessages(context, model, cachePoint),
-        system: buildSystemPrompt(context.systemPrompt, cacheRetention, cachePoint),
+        messages: convertMessages(context, model, cachePoint, toolConfig !== undefined),
+        system: buildBedrockSystemPrompt(context.systemPrompt, cacheRetention, cachePoint),
         inferenceConfig: {
           ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
+          // Grok 4.6 Converse profiles reject temperature rather than ignoring it.
           ...(options.temperature !== undefined &&
-            !sendsAdaptiveThinking && { temperature: options.temperature }),
+            !sendsAdaptiveThinking &&
+            model.id !== "us.xai.grok-4.6" &&
+            model.id !== "global.xai.grok-4.6" && { temperature: options.temperature }),
         },
-        toolConfig: convertToolConfig(
-          context.tools,
-          fable5 || sendsAdaptiveThinking
-            ? normalizeAdaptiveClaudeToolChoice(options.toolChoice)
-            : options.toolChoice,
-        ),
+        toolConfig,
         additionalModelRequestFields,
         ...(isClaude5BedrockModel(model)
           ? { additionalModelResponseFieldPaths: ["/stop_details"] }
           : {}),
         ...(options.requestMetadata !== undefined && { requestMetadata: options.requestMetadata }),
       };
-      const nextCommandInput = await options?.onPayload?.(commandInput, model);
-      options.signal?.throwIfAborted();
-      if (nextCommandInput !== undefined) {
-        commandInput = nextCommandInput as typeof commandInput;
-      }
+      const nextCommandInput = await applyProviderPayloadHook(options, commandInput, model);
+      commandInput = nextCommandInput as typeof commandInput;
       const command = new ConverseStreamCommand(commandInput);
 
       const response = await client.send(command, { abortSignal: options.signal });
@@ -559,7 +522,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
   })();
 
   return stream;
-};
+}
 
 /**
  * Human-readable prefixes for Bedrock SDK exception names.
@@ -588,7 +551,30 @@ export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", Simp
   model,
   context,
   options,
-) => {
+) => streamSimpleBedrockWithTransport(model, context, options);
+
+/** Same native machinery, with one explicit caller-owned serialized HTTP transport. */
+export function createConverseStreamFn(transport: ConverseProxyTransportFactory): StreamFn {
+  return (model, context, options) => {
+    if (model.api !== "bedrock-converse-stream") {
+      throw new Error("Converse transport requires the bedrock-converse-stream API");
+    }
+    return streamSimpleBedrockWithTransport(
+      // SAFETY: The API check above narrows the generic model to the native Converse model contract.
+      model as Model<"bedrock-converse-stream">,
+      context,
+      options,
+      transport,
+    );
+  };
+}
+
+function streamSimpleBedrockWithTransport(
+  model: Model<"bedrock-converse-stream">,
+  context: Context,
+  options?: SimpleStreamOptions,
+  transport?: ConverseProxyTransportFactory,
+) {
   const base: BedrockOptions = {
     ...options,
     ...buildBaseOptions(model, options, undefined),
@@ -597,7 +583,7 @@ export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", Simp
     base.maxTokens = resolveAdaptiveBedrockMaxTokens(model, base.maxTokens);
     base.reasoning = options?.reasoning;
     base.thinkingBudgets = options?.thinkingBudgets;
-    return streamBedrock(model, context, base);
+    return streamBedrock(model, context, base, transport);
   }
   if (!options?.reasoning || options.reasoning === "off") {
     base.reasoning =
@@ -609,7 +595,7 @@ export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", Simp
     if (base.reasoning === "high" || supportsAdaptiveThinking(model)) {
       base.maxTokens = resolveAdaptiveBedrockMaxTokens(model, base.maxTokens);
     }
-    return streamBedrock(model, context, base);
+    return streamBedrock(model, context, base, transport);
   }
 
   base.reasoning = options.reasoning;
@@ -636,8 +622,8 @@ export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", Simp
       }
     }
   }
-  return streamBedrock(model, context, base);
-};
+  return streamBedrock(model, context, base, transport);
+}
 
 function resolveClaudeProfileNameModelId(modelName?: string): string | undefined {
   const normalized =
@@ -769,34 +755,6 @@ function isAnthropicClaudeModel(model: Model<"bedrock-converse-stream">): boolea
   );
 }
 
-function buildSystemPrompt(
-  systemPrompt: string | undefined,
-  cacheRetention: CacheRetention,
-  cachePoint: CachePointBlock | undefined,
-): SystemContentBlock[] | undefined {
-  if (!systemPrompt) {
-    return undefined;
-  }
-
-  if (cacheRetention === "none") {
-    return [{ text: sanitizeSurrogates(stripSystemPromptCacheBoundary(systemPrompt)) }];
-  }
-  const split = splitSystemPromptCacheBoundary(systemPrompt);
-  const stablePrefix = split?.stablePrefix ?? systemPrompt;
-  const blocks: SystemContentBlock[] = stablePrefix
-    ? [{ text: sanitizeSurrogates(stripSystemPromptCacheBoundary(stablePrefix)) }]
-    : [];
-
-  if (stablePrefix && cachePoint) {
-    blocks.push({ cachePoint });
-  }
-
-  if (split?.dynamicSuffix) {
-    blocks.push({ text: sanitizeSurrogates(stripSystemPromptCacheBoundary(split.dynamicSuffix)) });
-  }
-  return blocks.length > 0 ? blocks : undefined;
-}
-
 function normalizeToolCallId(id: string): string {
   return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
 }
@@ -821,24 +779,43 @@ function convertTextImageContent(
   return content;
 }
 
-function createBedrockToolResult(message: ToolResultMessage): ContentBlock.ToolResultMember {
+function createBedrockToolResultContent(
+  message: ToolResultMessage,
+): Array<ContentBlock.TextMember | ContentBlock.ImageMember> {
   const content = convertTextImageContent(message.content, true);
+  if (content.length === 0) {
+    content.push({ text: describeToolResultMediaPlaceholder(message.content) ?? "(no output)" });
+  }
+  return content;
+}
+
+function createBedrockToolResult(message: ToolResultMessage): ContentBlock.ToolResultMember {
   return {
     toolResult: {
       toolUseId: message.toolCallId,
-      content:
-        content.length > 0
-          ? content
-          : [{ text: describeToolResultMediaPlaceholder(message.content) ?? "(no output)" }],
+      content: createBedrockToolResultContent(message),
       status: message.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
     },
   };
+}
+
+// Converse rejects toolUse/toolResult blocks unless the request also sends a
+// toolConfig. Tool-free calls (settled-turn finalization runs with tools
+// disabled) still need the settled evidence, so it replays as plain text.
+function formatToolCallReplayText(call: ToolCall): string {
+  const args = JSON.stringify(coerceTransportToolCallArguments(call.arguments));
+  return `[Assistant tool call]: ${call.name}(${args})`;
+}
+
+function formatToolResultReplayHeader(message: ToolResultMessage): string {
+  return `[Tool result: ${message.toolName}${message.isError ? " (error)" : ""}]:`;
 }
 
 function convertMessages(
   context: Context,
   model: Model<"bedrock-converse-stream">,
   cachePoint: CachePointBlock | undefined,
+  includeToolBlocks: boolean,
 ): Message[] {
   const result: Message[] = [];
   let firstVolatileMessageIndex: number | undefined;
@@ -883,13 +860,17 @@ function convertMessages(
               contentBlocks.push({ text: sanitizeSurrogates(c.text) });
               break;
             case "toolCall":
-              contentBlocks.push({
-                toolUse: {
-                  toolUseId: c.id,
-                  name: c.name,
-                  input: coerceTransportToolCallArguments(c.arguments) as DocumentType,
-                },
-              });
+              contentBlocks.push(
+                includeToolBlocks
+                  ? {
+                      toolUse: {
+                        toolUseId: c.id,
+                        name: c.name,
+                        input: coerceTransportToolCallArguments(c.arguments) as DocumentType,
+                      },
+                    }
+                  : { text: formatToolCallReplayText(c) },
+              );
               break;
             case "thinking": {
               if (c.redacted) {
@@ -955,18 +936,33 @@ function convertMessages(
       case "toolResult": {
         // Collect all consecutive toolResult messages into a single user message
         // Bedrock requires all tool results to be in one message
-        const toolResults = [createBedrockToolResult(m)];
+        const group: ToolResultMessage[] = [m];
         let j = i + 1;
         while (true) {
           const nextMsg = transformedMessages.at(j);
           if (nextMsg?.role !== "toolResult") {
             break;
           }
-          toolResults.push(createBedrockToolResult(nextMsg));
+          group.push(nextMsg);
           j++;
         }
 
         i = j - 1;
+
+        if (!includeToolBlocks) {
+          const replayContent: ContentBlock[] = [];
+          for (const resultMessage of group) {
+            replayContent.push({ text: formatToolResultReplayHeader(resultMessage) });
+            replayContent.push(...createBedrockToolResultContent(resultMessage));
+          }
+          result.push({
+            role: ConversationRole.USER,
+            content: replayContent,
+          });
+          break;
+        }
+
+        const toolResults = group.map((resultMessage) => createBedrockToolResult(resultMessage));
 
         // GPT-5.6 Sol accepts user images but rejects images nested in tool results.
         // Keep all tool outputs contiguous before labeled images, without rewriting history.
@@ -1055,40 +1051,6 @@ function convertToolConfig(
   }
 
   return { tools: bedrockTools, toolChoice: bedrockToolChoice };
-}
-
-function getBedrockModelArnRegion(modelId: string): string | undefined {
-  return /^arn:aws(?:-[a-z0-9-]+)?:bedrock:([a-z0-9-]+):/.exec(modelId)?.[1];
-}
-
-function getConfiguredBedrockRegion(options: BedrockOptions): string | undefined {
-  if (typeof process === "undefined") {
-    return options.region;
-  }
-
-  return (
-    options.region ||
-    normalizeOptionalString(process.env.AWS_REGION) ||
-    normalizeOptionalString(process.env.AWS_DEFAULT_REGION)
-  );
-}
-
-function hasConfiguredBedrockProfile(options: BedrockOptions): boolean {
-  if (options.profile) {
-    return true;
-  }
-  if (typeof process === "undefined") {
-    return false;
-  }
-
-  return Boolean(process.env.AWS_PROFILE);
-}
-
-function getStandardBedrockEndpointRegion(baseUrl: string | undefined): string | undefined {
-  const hostname = baseUrl ? URL.parse(baseUrl)?.hostname : undefined;
-  return hostname
-    ?.toLowerCase()
-    .match(/^bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\.amazonaws\.com(?:\.cn)?$/)?.[1];
 }
 
 function isGovCloudBedrockTarget(

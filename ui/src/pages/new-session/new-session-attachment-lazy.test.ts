@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import * as staleChunkReload from "../../app/stale-chunk-reload.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createNewSessionRouteData as routeData } from "./location.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import "./new-session-page-entry.ts";
 
@@ -27,16 +28,6 @@ type NewSessionElement = HTMLElement & {
   updateComplete: Promise<boolean>;
 };
 
-function routeData(agentId: string): NewSessionRouteData {
-  return {
-    agentId,
-    requestedAgentId: agentId,
-    catalogId: "",
-    catalogLabel: "",
-    startTerminal: false,
-  };
-}
-
 async function enterMessage(page: NewSessionElement, message: string) {
   const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message")!;
   textarea.value = message;
@@ -49,7 +40,7 @@ async function pasteAttachment(page: NewSessionElement, text: string) {
   const textarea = await enterMessage(page, "Review the attachment");
   const paste = new Event("paste", { bubbles: true, cancelable: true });
   Object.defineProperty(paste, "clipboardData", {
-    value: { items: [], getData: () => text },
+    value: { items: [], files: [], getData: () => text },
   });
   textarea.dispatchEvent(paste);
   expect(paste.defaultPrevented).toBe(true);

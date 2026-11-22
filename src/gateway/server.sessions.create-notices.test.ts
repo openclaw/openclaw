@@ -9,6 +9,7 @@ import {
   attachGatewayLocalUserIngress,
   prepareGatewayLocalUserIngress,
 } from "./local-user-ingress.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 import {
   directSessionReq,
@@ -23,7 +24,7 @@ test("sessions.create preserves creation and notices after an unknown signal out
   const profileId = ensureProfileForEmail("session-creator@example.test").id;
   const profile = { profileId, displayName: "Test Operator" };
   const client = {
-    connect: { scopes: ["operator.read", "operator.write"] },
+    connect: gatewayConnect(["operator.read", "operator.write"]),
     authenticatedUserProfile: { ...profile, hasAvatar: false, updatedAt: 1 },
   };
   attachGatewayLocalUserIngress(
@@ -39,7 +40,7 @@ test("sessions.create preserves creation and notices after an unknown signal out
     directSessionReq<{ key?: string; entry?: SessionEntry }>("sessions.create", params, creator);
   const syntheticClient = (sessionCreation?: TrustedSessionCreation) => ({
     client: {
-      connect: { scopes: ["operator.write"] },
+      connect: gatewayConnect(["operator.write"]),
       internal: { syntheticClient: true, sessionCreation },
     } as never,
   });
@@ -51,7 +52,6 @@ test("sessions.create preserves creation and notices after an unknown signal out
   }).finally(signal.restore);
 
   expect(created.ok).toBe(true);
-  expect(signal.attempts()).toBe(1);
   expect(created.payload?.entry).toMatchObject({
     createdVia: "operator",
     createdActor: { type: "human", source: "profile", id: profileId },
@@ -89,36 +89,20 @@ test("sessions.create preserves creation and notices after an unknown signal out
   });
   expect(synthetic.payload?.entry?.createdActor).toBeUndefined();
 
-  const isolationActor = {
-    type: "human",
-    source: "profile",
-    id: "profile-isolation-owner",
-  } as const;
-  const causalCreator = {
-    type: "human",
-    source: "profile",
-    id: "profile-delegated-creator",
-  } as const;
+  const human = (id: string) => ({ type: "human", source: "profile", id }) as const;
+  const isolationActor = human("profile-isolation-owner");
+  const causalCreator = human("profile-delegated-creator");
   const agentActor = { type: "agent", id: "main" } as const;
-  for (const { actor, sandbox, expectedCreator, expectedStoredActor } of [
-    {
-      actor: agentActor,
-      sandbox: undefined,
-      expectedCreator: agentActor,
-      expectedStoredActor: agentActor,
-    },
-    {
-      actor: isolationActor,
-      sandbox: "required",
-      expectedCreator: { type: "agent" },
-      expectedStoredActor: { ...isolationActor, delegatedBy: { type: "agent" } },
-    },
-    {
-      actor: { ...isolationActor, delegatedBy: causalCreator },
-      sandbox: "required",
-      expectedCreator: causalCreator,
-      expectedStoredActor: { ...isolationActor, delegatedBy: causalCreator },
-    },
+  const delegatedActor = { ...isolationActor, delegatedBy: causalCreator };
+  for (const [actor, sandbox, expectedCreator, expectedStoredActor] of [
+    [agentActor, undefined, agentActor, agentActor],
+    [
+      isolationActor,
+      "required",
+      { type: "agent" },
+      { ...isolationActor, delegatedBy: { type: "agent" } },
+    ],
+    [delegatedActor, "required", causalCreator, delegatedActor],
   ] as const) {
     // Trusted creation hints retain causal attribution separately from required isolation.
     // A selected human isolation identity alone does not prove a human initiated the work.

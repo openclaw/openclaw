@@ -83,8 +83,7 @@ export function startComputerHostProcess(params: {
             run.cancel("manual-cancel");
           }
         }
-        const timer = setTimeout(() => run?.cancel("manual-cancel"), SHUTDOWN_TIMEOUT_MS);
-        timer.unref?.();
+        const timer = setTimeout(() => run?.cancel("manual-cancel"), SHUTDOWN_TIMEOUT_MS).unref();
         try {
           exit = await run.wait();
         } catch (error) {
@@ -153,8 +152,7 @@ export function startComputerHostProcess(params: {
   const startupTimer = setTimeout(
     () => fail(new Error("Gateway computer provider startup timed out")),
     STARTUP_TIMEOUT_MS,
-  );
-  startupTimer.unref?.();
+  ).unref();
   void ready.promise.then(
     () => clearTimeout(startupTimer),
     () => clearTimeout(startupTimer),

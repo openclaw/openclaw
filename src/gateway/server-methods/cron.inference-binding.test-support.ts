@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, vi } from "vitest";
+import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import {
   removeAuthProfilesAcrossOwnerStores,
   setAuthProfileOrder,
@@ -9,6 +10,10 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profile
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../../agents/auth-profiles/store-runtime.js";
 import { createAuthOwnerTestFixtures } from "../../agents/auth-profiles/store-state-owner.test-support.js";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
+import {
+  createClaudeCliBackends,
+  testing as cliBackendsTesting,
+} from "../../agents/cli-backends.test-support.js";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
 import { prepareAgentRuntimeAuth } from "../../agents/runtime-plan/prepare-auth.js";
 import { resolvePreparedRuntimeModelAuth } from "../../agents/runtime-plan/resolve-auth.js";
@@ -31,6 +36,7 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { cronHandlers } from "./cron.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
@@ -61,6 +67,7 @@ export async function withFixture(
         clearRuntimeConfigSnapshot();
         setCurrentPluginMetadataSnapshot(undefined);
         resetPluginRuntimeStateForTest();
+        cliBackendsTesting.resetDepsForTest();
       }
     },
   );
@@ -77,6 +84,16 @@ async function createFixture(stateDir: string, agentDir: string) {
       order: { openai: [platformId, subscriptionId] },
     },
   };
+  const publish = (patch: Partial<OpenClawConfig>) => {
+    cfg = { ...cfg, ...patch };
+    setRuntimeConfigSnapshot(cfg);
+  };
+  const providerConfig = (provider: "openai" | "ollama", key?: string) => ({
+    ...(provider === "ollama" ? { api: "ollama" as const } : {}),
+    ...(key === undefined ? {} : { apiKey: key }),
+    baseUrl: provider === "ollama" ? "http://127.0.0.1:11434" : "https://api.openai.com/v1",
+    models: [],
+  });
   setRuntimeConfigSnapshot(cfg);
   await persistAuthProfileBatch({
     profiles: [
@@ -100,7 +117,8 @@ async function createFixture(stateDir: string, agentDir: string) {
       scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: false,
-      defaultAgentId: "main",
+      // Same owner resolution the Gateway wires into its cron service.
+      resolveDefaultAgentId: () => tryResolveAmbientOwnerAgentId(cfg),
       log: createNoopLogger(),
       enqueueSystemEvent: () => {},
       runIsolatedAgentJob: async () => {
@@ -128,7 +146,7 @@ async function createFixture(stateDir: string, agentDir: string) {
     return job;
   };
   const invoke = async (
-    method: "cron.add" | "cron.update" | "cron.get" | "cron.list",
+    method: "cron.add" | "cron.update" | "cron.get" | "cron.list" | "cron.runs",
     params: Record<string, unknown>,
     client: GatewayClient | null = null,
     options: { expectedSuccess?: boolean; beforeCommit?: () => void } = {},
@@ -185,20 +203,52 @@ async function createFixture(stateDir: string, agentDir: string) {
     );
   };
   return {
+    getConfig: () => cfg,
+    getCron: () => cron,
+    publish,
     invoke,
     reload,
     stop,
     setCreator,
+    storePath,
+    async setClaudeRuntime(profileId?: string) {
+      cliBackendsTesting.setDepsForTest({
+        resolveRuntimeCliBackends: createClaudeCliBackends,
+        resolvePluginSetupCliBackend: () => undefined,
+      });
+      if (profileId) {
+        await persistAuthProfileBatch({
+          profiles: [
+            {
+              profileId,
+              credential: {
+                type: "token",
+                provider: "anthropic",
+                token: "synthetic-claude-token",
+              },
+            },
+          ],
+        });
+      }
+      publish({
+        agents: {
+          ...cfg.agents,
+          defaults: {
+            ...cfg.agents?.defaults,
+            models: { "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } } },
+          },
+        },
+      });
+    },
     status: () => cron.status(),
     setWorkerInference(required: boolean, inference: "worker" | "gateway") {
       // Dedicated workers keep the model route on the Gateway, but own its credentials.
       cfg.models = {
         providers: {
           openai: {
+            ...providerConfig("openai"),
             api: "openai-responses",
-            baseUrl: "https://api.openai.com/v1",
             agentRuntime: { id: "openclaw" },
-            models: [],
           },
         },
       };
@@ -318,37 +368,23 @@ async function createFixture(stateDir: string, agentDir: string) {
     async useUnstoredCredential(provider: "openai" | "ollama", configuredKey?: string) {
       const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
       await removeAuthProfilesAcrossOwnerStores({ profileIds: Object.keys(store.profiles) });
+      const models =
+        provider === "ollama" || configuredKey
+          ? {
+              providers: {
+                [provider]: providerConfig(
+                  provider,
+                  provider === "ollama" ? "ollama-local" : configuredKey,
+                ),
+              },
+            }
+          : undefined;
       cfg = {
         agents: {
           entries: { main: { agentDir } },
           defaults: { model: provider === "openai" ? "openai/gpt-4.1" : "ollama/llama3.3" },
         },
-        ...(provider === "ollama"
-          ? {
-              models: {
-                providers: {
-                  ollama: {
-                    api: "ollama",
-                    apiKey: "ollama-local",
-                    baseUrl: "http://127.0.0.1:11434",
-                    models: [],
-                  },
-                },
-              },
-            }
-          : configuredKey
-            ? {
-                models: {
-                  providers: {
-                    openai: {
-                      apiKey: configuredKey,
-                      baseUrl: "https://api.openai.com/v1",
-                      models: [],
-                    },
-                  },
-                },
-              }
-            : {}),
+        ...(models ? { models } : {}),
       };
       setRuntimeConfigSnapshot(cfg);
     },
@@ -363,25 +399,13 @@ async function createFixture(stateDir: string, agentDir: string) {
       const person = (profileId: string): GatewayClient => ({
         connId: "synthetic-cron-person",
         invalidated: false,
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-          role: "operator",
-          scopes: ["operator.admin", "operator.write"],
-        },
-        authenticatedUserProfile: {
-          profileId,
-          displayName: "Synthetic Person",
-          hasAvatar: false,
-          updatedAt: 1,
-        },
+        connect: gatewayConnect(["operator.admin", "operator.write"]),
+        authenticatedUserProfile: gatewayProfile(profileId, "Synthetic Person"),
       });
       return { profileId: authProfileId, owner: person(owner.id), other: person(other.id) };
     },
     addAgent(agentId: string) {
-      cfg = {
-        ...cfg,
+      publish({
         agents: {
           ...cfg.agents,
           entries: {
@@ -389,12 +413,18 @@ async function createFixture(stateDir: string, agentDir: string) {
             [agentId]: { agentDir: path.join(stateDir, "agents", agentId, "agent") },
           },
         },
-      };
-      setRuntimeConfigSnapshot(cfg);
+      });
+    },
+    setSystemAgent(agentId: string) {
+      publish({
+        agents: {
+          ...cfg.agents,
+          defaults: { ...cfg.agents?.defaults, systemAgent: { agentId } },
+        },
+      });
     },
     setAlias() {
-      cfg = {
-        ...cfg,
+      publish({
         agents: {
           ...cfg.agents,
           defaults: {
@@ -402,15 +432,12 @@ async function createFixture(stateDir: string, agentDir: string) {
             models: { "openai/gpt-4o": { alias: "synthetic-alias" } },
           },
         },
-      };
-      setRuntimeConfigSnapshot(cfg);
+      });
     },
     setDefaultProfile(profileId: string) {
-      cfg = {
-        ...cfg,
+      publish({
         agents: { ...cfg.agents, defaults: { model: "openai/gpt-4.1@" + profileId } },
-      };
-      setRuntimeConfigSnapshot(cfg);
+      });
     },
     setScheduledProfile(profileId: string, scope: "agent" | "default", allowed: boolean) {
       const subagents = { model: "openai/gpt-4o@" + profileId };
@@ -430,12 +457,10 @@ async function createFixture(stateDir: string, agentDir: string) {
       setRuntimeConfigSnapshot(cfg);
     },
     async changeDefaults(profileId: string) {
-      cfg = {
-        ...cfg,
+      publish({
         agents: { ...cfg.agents, defaults: { model: "openai/gpt-4o@" + profileId } },
         auth: { ...cfg.auth, order: { openai: [profileId] } },
-      };
-      setRuntimeConfigSnapshot(cfg);
+      });
       await setAuthProfileOrder({ agentDir, provider: "openai", order: [profileId] });
     },
   };

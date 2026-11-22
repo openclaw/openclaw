@@ -80,21 +80,16 @@ describe("createMinimaxThinkingDisabledWrapper", () => {
   });
 });
 
-describe("createMinimaxFastModeWrapper", () => {
-  it("rewrites MiniMax-M2.7 to highspeed variant in fast mode", () => {
-    const baseStreamFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
-    void createMinimaxFastModeWrapper(baseStreamFn, true)(minimaxModel, { messages: [] }, {});
-    expect(baseStreamFn.mock.calls.map(([model]) => model.id)).toEqual(["MiniMax-M2.7-highspeed"]);
-  });
-
-  it("resolves dynamic fast mode for each stream call", () => {
-    const baseStreamFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
-    let enabled = true;
-    const wrapped = createMinimaxFastModeWrapper(baseStreamFn, () => enabled);
-    void wrapped(minimaxModel, { messages: [] }, {});
-    enabled = false;
-    void wrapped(minimaxModel, { messages: [] }, {});
-    const ids = baseStreamFn.mock.calls.map(([model]) => model.id);
-    expect(ids).toEqual(["MiniMax-M2.7-highspeed", "MiniMax-M2.7"]);
-  });
+it.each([true, false])("selects highspeed with a dynamic control=%s", (dynamic) => {
+  const baseStreamFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
+  let enabled = true;
+  const wrapped = createMinimaxFastModeWrapper(baseStreamFn, dynamic ? () => enabled : true);
+  void wrapped(minimaxModel, { messages: [] }, {});
+  enabled = false;
+  void wrapped(minimaxModel, { messages: [] }, {});
+  const ids = baseStreamFn.mock.calls.map(([model]) => model.id);
+  expect(ids).toEqual([
+    "MiniMax-M2.7-highspeed",
+    dynamic ? "MiniMax-M2.7" : "MiniMax-M2.7-highspeed",
+  ]);
 });

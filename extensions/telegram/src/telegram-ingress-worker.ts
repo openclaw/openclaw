@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createCpuTrackedWorker,
+  createPluginRuntimeProcessEntrypoint,
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
@@ -86,15 +87,9 @@ export type TelegramIngressWorkerFactory = (
 ) => TelegramIngressWorkerHandle;
 
 export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (options) => {
-  const workerUrl = resolveRuntimeWorkerUrl({
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "telegram-ingress-worker.runtime",
-    distWorkerPath: "telegram-ingress-worker.runtime.js",
-    package: {
-      name: "@openclaw/telegram",
-      distWorkerPath: "src/telegram-ingress-worker.runtime.js",
-    },
-  });
+  const workerUrl = resolveRuntimeWorkerUrl(
+    createPluginRuntimeProcessEntrypoint("telegramIngress", import.meta.url),
+  );
   const worker = createCpuTrackedWorker(workerUrl, {
     execArgv: resolveRuntimeWorkerArgv(workerUrl).slice(0, -1),
     workerData: { ...options, runtime: TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER },

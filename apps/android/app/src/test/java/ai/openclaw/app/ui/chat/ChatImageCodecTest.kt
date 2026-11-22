@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES
 import ai.openclaw.app.chat.CHAT_IMAGE_MAX_BASE64_CHARS
 import ai.openclaw.app.ui.image.imageSampleSize
 import android.content.ContentProvider

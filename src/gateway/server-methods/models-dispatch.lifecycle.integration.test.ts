@@ -3,11 +3,16 @@ import { text as readText } from "node:stream/consumers";
 import { expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 import {
+  catalogTransportModels,
   catalogReply,
   catalogSessionRpc,
+  createCatalogAuthProfiles,
+  createCatalogModel,
   expectAssistantReply,
+  writeCatalogPlugin,
 } from "./models-catalog-fixture.test-support.js";
 import {
   closeModelsEndpoint,
@@ -39,6 +44,10 @@ function expectDispatch(
   });
 }
 
+function providerModels(result: ModelsListResult) {
+  return result.models.filter((model) => model.provider === "opencode");
+}
+
 async function withDispatchLifecycle(
   signal: AbortSignal,
   run: (fixture: {
@@ -51,7 +60,7 @@ async function withDispatchLifecycle(
     saveAccount: (key: string) => Promise<void>;
     restart: () => Promise<void>;
     list: (refresh?: boolean, view?: "all" | "default") => Promise<ModelsListResult>;
-    send: (model: string, name: string) => Promise<{ status: string; error?: string }>;
+    send: (model: string, name: string, missing?: boolean) => Promise<void>;
   }) => Promise<void>,
 ) {
   await using state = await createModelsTestState("models-dispatch-lifecycle", {
@@ -117,21 +126,13 @@ async function withDispatchLifecycle(
   });
   let gateway: Awaited<ReturnType<typeof startModelsGateway>> | undefined;
   const saveAccount = async (key: string) => {
-    await state.writeAuthProfiles({
-      version: 1,
-      profiles: { "opencode:default": { type: "api_key", provider: "opencode", key } },
-    });
+    await state.writeAuthProfiles(createCatalogAuthProfiles({ opencode: key }));
   };
   try {
     const baseUrl = `${await listenModelsEndpoint(endpoint)}/v1`;
-    await state.writeJson("catalog-plugin/openclaw.plugin.json", {
-      id: "opencode",
-      providers: ["opencode"],
-      modelCatalog: { discovery: { opencode: "refreshable" } },
-      configSchema: { type: "object", additionalProperties: false },
-    });
-    const pluginPath = await state.writeText(
-      "catalog-plugin/index.cjs",
+    const pluginPath = await writeCatalogPlugin(
+      state,
+      "opencode",
       `module.exports = {
         id: "opencode",
         register(api) {
@@ -152,10 +153,7 @@ async function withDispatchLifecycle(
                 return { provider: {
                   baseUrl: ${JSON.stringify(baseUrl)}, api: "openai-completions",
                   models: data.map(({ id }) => ({
-                    id, name: id, reasoning: false, input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 32768, maxTokens: 1536,
-                    compat: { maxTokensField: "max_tokens" },
+                    ...${JSON.stringify({ ...createCatalogModel(""), maxTokens: 1536, compat: { maxTokensField: "max_tokens" } })}, id, name: id,
                   })),
                 }, outcomes: [{ provider: "opencode", profileId: auth.profileId, status: "ready" }] };
               },
@@ -163,21 +161,11 @@ async function withDispatchLifecycle(
           });
         },
       };`,
+      { modelCatalog: { discovery: { opencode: "refreshable" } } },
     );
     const token = "dispatch-lifecycle-gateway-token";
     const cfg = modelsTestConfig(state, token, {
-      models: {
-        providers: {
-          opencode: {
-            baseUrl: "",
-            models: [],
-            request: {
-              allowPrivateNetwork: true,
-              headers: { "X-Dispatch-Request": "initial-transport" },
-            },
-          },
-        },
-      },
+      models: catalogTransportModels("opencode", "initial-transport"),
       agents: {
         defaults: {
           skipBootstrap: true,
@@ -243,7 +231,7 @@ async function withDispatchLifecycle(
               ready: (result) => !result.pendingProviders?.length,
             })
           : readModels(false, view),
-      send: async (model, name) => {
+      send: async (model, name, missing = false) => {
         const rpc = catalogSessionRpc(active.client);
         const session = await rpc.create(`opencode/${model}`, `agent:main:${name}`, {
           label: name,
@@ -255,13 +243,17 @@ async function withDispatchLifecycle(
         );
         expect(started.status).toBe("started");
         const completed = await rpc.wait(started.runId);
+        expect(completed).toMatchObject(
+          missing
+            ? { status: "error", error: expect.stringContaining("This model was not found.") }
+            : { status: "ok" },
+        );
         if (completed.status === "ok") {
           expectAssistantReply(
             (await rpc.history(session.key)).messages,
             "LIFECYCLE_DISPATCH_REPLY",
           );
         }
-        return completed;
       },
     });
     expect(hotReloadRecovery).not.toHaveBeenCalled();
@@ -282,24 +274,21 @@ it(
   { timeout: 180_000 },
   async ({ signal }) => {
     await withDispatchLifecycle(signal, async (fixture) => {
+      const createSession = (name: string, label: string) =>
+        fixture.client.request<{ key: string }>("sessions.create", {
+          agentId: "main",
+          key: `agent:main:catalog-${name}`,
+          label,
+          model: "opencode/account-a-only",
+        });
       const expectedIds = [
         "account-a-only",
         ...Array.from({ length: 64 }, (_, index) => `account-a-extra-${index}`),
       ];
       fixture.advertised.set("account-a-key", expectedIds);
       await fixture.list(true);
-      const selected = await fixture.client.request<{ key: string }>("sessions.create", {
-        agentId: "main",
-        key: "agent:main:catalog-selected",
-        label: "Selected catalog session",
-        model: "opencode/account-a-only",
-      });
-      const other = await fixture.client.request<{ key: string }>("sessions.create", {
-        agentId: "main",
-        key: "agent:main:catalog-other",
-        label: "Other session",
-        model: "opencode/account-a-only",
-      });
+      const selected = await createSession("selected", "Selected catalog session");
+      const other = await createSession("other", "Other session");
       fixture.discoveryAccounts.length = 0;
       const held = fixture.holdDiscovery();
       const pending = settleModelsWork(
@@ -327,9 +316,8 @@ it(
       const outcome = await pending;
       expect(outcome.error).toBeUndefined();
       expect(
-        outcome.result?.models
-          .filter((model) => model.provider === "opencode")
-          .map(({ id, available }) => ({ id, available })),
+        outcome.result &&
+          providerModels(outcome.result).map(({ id, available }) => ({ id, available })),
       ).toEqual(
         ["account-a-only", ...expectedIds.filter((id) => id !== "account-a-only").toSorted()].map(
           (id) => ({ id, available: true }),
@@ -348,9 +336,7 @@ it("models.list retains executable rows on failed refresh and replaces them afte
     expect(discovered.models).toContainEqual(
       expect.objectContaining({ provider: "opencode", id: "account-a-only", available: true }),
     );
-    await expect(fixture.send("account-a-only", "before-failure")).resolves.toMatchObject({
-      status: "ok",
-    });
+    await fixture.send("account-a-only", "before-failure");
     expect(fixture.requests).toHaveLength(1);
 
     fixture.setDiscoveryAvailable(false);
@@ -359,26 +345,17 @@ it("models.list retains executable rows on failed refresh and replaces them afte
     expect(failed.models).toContainEqual(
       expect.objectContaining({ provider: "opencode", id: "account-a-only", available: true }),
     );
-    await expect(fixture.send("account-a-only", "after-failure")).resolves.toMatchObject({
-      status: "ok",
-    });
+    await fixture.send("account-a-only", "after-failure");
     expectDispatch(fixture.requests, 1, "account-a-only");
 
     fixture.advertised.set("account-a-key", ["after-restart"]);
     fixture.setDiscoveryAvailable(true);
     await fixture.restart();
     const restarted = await fixture.list(true);
-    expect(
-      restarted.models.filter((model) => model.provider === "opencode").map((model) => model.id),
-    ).toEqual(["after-restart"]);
-    await expect(fixture.send("after-restart", "first-after-restart")).resolves.toMatchObject({
-      status: "ok",
-    });
+    expect(providerModels(restarted).map((model) => model.id)).toEqual(["after-restart"]);
+    await fixture.send("after-restart", "first-after-restart");
     expectDispatch(fixture.requests, 2, "after-restart");
-    await expect(fixture.send("account-a-only", "withdrawn-after-restart")).resolves.toMatchObject({
-      status: "error",
-      error: expect.stringContaining("This model was not found."),
-    });
+    await fixture.send("account-a-only", "withdrawn-after-restart", true);
     expect(fixture.requests).toHaveLength(3);
   });
 }, 180_000);
@@ -388,9 +365,7 @@ it("models.authRefresh revokes old executable rows before discovery and config.p
 }) => {
   await withDispatchLifecycle(signal, async (fixture) => {
     await fixture.list(true);
-    await expect(fixture.send("account-a-only", "before-replacement")).resolves.toMatchObject({
-      status: "ok",
-    });
+    await fixture.send("account-a-only", "before-replacement");
     expect(fixture.requests[0]).toMatchObject({ authorization: "Bearer account-a-key" });
 
     const held = fixture.holdDiscovery();
@@ -401,26 +376,17 @@ it("models.authRefresh revokes old executable rows before discovery and config.p
       expect((await fixture.list()).models).not.toContainEqual(
         expect.objectContaining({ provider: "opencode", id: "account-a-only" }),
       );
-      await expect(fixture.send("account-a-only", "during-replacement")).resolves.toMatchObject({
-        status: "error",
-        error: expect.stringContaining("This model was not found."),
-      });
+      await fixture.send("account-a-only", "during-replacement", true);
       expect(fixture.requests).toHaveLength(1);
     } finally {
       held.release();
     }
     await expect
-      .poll(
-        async () =>
-          (await fixture.list()).models
-            .filter((model) => model.provider === "opencode")
-            .map((model) => model.id),
-        { timeout: 30_000 },
-      )
+      .poll(async () => providerModels(await fixture.list()).map((model) => model.id), {
+        timeout: 30_000,
+      })
       .toEqual(["account-b-only", "account-b-sibling"]);
-    await expect(fixture.send("account-b-only", "after-replacement")).resolves.toMatchObject({
-      status: "ok",
-    });
+    await fixture.send("account-b-only", "after-replacement");
     expectDispatch(fixture.requests, 1, "account-b-only", "account-b-key");
 
     const config = await fixture.client.request<{ hash: string }>("config.get", {});
@@ -442,9 +408,11 @@ it("models.authRefresh revokes old executable rows before discovery and config.p
           const publication = await fixture.list(false, "default");
           return {
             pending: publication.pendingProviders ?? [],
-            models: publication.models
-              .filter((model) => model.provider === "opencode")
-              .map(({ id, contextWindow, available }) => ({ id, contextWindow, available })),
+            models: providerModels(publication).map(({ id, contextWindow, available }) => ({
+              id,
+              contextWindow,
+              available,
+            })),
           };
         },
         { timeout: 30_000 },
@@ -461,9 +429,98 @@ it("models.authRefresh revokes old executable rows before discovery and config.p
       }),
     ).rejects.toThrow("model not allowed");
     expect(fixture.requests).toHaveLength(2);
-    await expect(fixture.send("account-b-only", "after-config-reload")).resolves.toMatchObject({
-      status: "ok",
-    });
+    await fixture.send("account-b-only", "after-config-reload");
     expectDispatch(fixture.requests, 2, "account-b-only", "account-b-key", "reloaded-transport");
   });
 }, 180_000);
+
+it(
+  "existing default threads follow config changes while explicit selections stay pinned",
+  { timeout: 180_000 },
+  async ({ signal }) => {
+    await withDispatchLifecycle(signal, async (fixture) => {
+      fixture.advertised.set("account-a-key", ["account-a-only", "account-a-new"]);
+      await fixture.list(true);
+      const changeDefault = async (model: string) => {
+        const config = await fixture.client.request<{ hash: string }>("config.get", {});
+        await fixture.client.request("config.patch", {
+          baseHash: config.hash,
+          raw: JSON.stringify({
+            agents: {
+              defaults: { model: { primary: `opencode/${model}` }, modelSelectionScope: "session" },
+            },
+          }),
+        });
+      };
+      await changeDefault("account-a-only");
+      const inherited = await fixture.client.request<{
+        key: string;
+        entry: { sessionId: string; modelOverrideSource: string };
+      }>("sessions.create", {
+        agentId: "main",
+        key: "agent:main:default-refresh",
+      });
+      expect(inherited.entry.modelOverrideSource).toBe("default");
+      // Reconstruct a persisted default snapshot written by an older Gateway.
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: inherited.key },
+        {
+          sessionId: inherited.entry.sessionId,
+          updatedAt: Date.now(),
+          providerOverride: "opencode",
+          modelOverride: "account-a-only",
+          modelOverrideSource: "default",
+        },
+      );
+      await changeDefault("account-a-new");
+      const pinned = await fixture.client.request<{ key: string }>("sessions.create", {
+        agentId: "main",
+        key: "agent:main:pinned-refresh",
+        model: "opencode/account-a-only",
+      });
+      const list = (sessionKey: string) =>
+        fixture.client.request<ModelsListResult>("models.list", {
+          agentId: "main",
+          sessionKey,
+          view: "configured",
+        });
+      const refreshed = await waitForCatalogPublication({
+        signal,
+        read: () => list(inherited.key),
+        ready: (result) => result.models.some((model) => model.id === "account-a-new"),
+      });
+      expect(refreshed.models[0]).toMatchObject({
+        id: "account-a-new",
+        available: true,
+        agentRuntime: { id: "openclaw" },
+      });
+      expect((await list(pinned.key)).models).toContainEqual(
+        expect.objectContaining({ id: "account-a-only", available: true }),
+      );
+      const rpc = catalogSessionRpc(fixture.client);
+      const send = async (key: string, name: string, model: string) => {
+        const index = fixture.requests.length;
+        const started = await rpc.send(key, "Reply with the lifecycle dispatch marker.", name);
+        expect(started.status).toBe("started");
+        expect(await rpc.wait(started.runId)).toMatchObject({ status: "ok" });
+        expectDispatch(fixture.requests, index, model);
+        expectAssistantReply((await rpc.history(key)).messages, "LIFECYCLE_DISPATCH_REPLY");
+      };
+      await send(inherited.key, "default-after-refresh", "account-a-new");
+      await send(pinned.key, "pin-after-refresh", "account-a-only");
+      await fixture.client.request("sessions.patch", {
+        key: inherited.key,
+        model: "opencode/account-a-only",
+      });
+      await send(inherited.key, "explicit-after-refresh", "account-a-only");
+      await fixture.client.request("sessions.patch", { key: inherited.key, model: null });
+      await send(inherited.key, "reset-after-refresh", "account-a-new");
+      const history = await fixture.client.request<{ sessionId: string; messages: unknown[] }>(
+        "chat.history",
+        { sessionKey: inherited.key },
+      );
+      expect(history.sessionId).toBe(inherited.entry.sessionId);
+      expect(history.messages.length).toBeGreaterThanOrEqual(6);
+    });
+  },
+);

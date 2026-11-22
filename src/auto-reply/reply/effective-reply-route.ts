@@ -17,20 +17,6 @@ import {
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
 
-/** Current finalized context fields used for reply route resolution. */
-type EffectiveReplyRouteContext = Pick<
-  FinalizedMsgContext,
-  | "Provider"
-  | "Surface"
-  | "OriginatingChannel"
-  | "OriginatingTo"
-  | "MessageThreadId"
-  | "AccountId"
-  | "InputProvenance"
-  | "InternalTurnSource"
-  | "ChatType"
->;
-
 /** Persisted session fields used as route fallback/inheritance. */
 type EffectiveReplyRouteEntry = Pick<SessionEntry, "delivery" | "chatType">;
 
@@ -96,7 +82,19 @@ function resolveTrustedInheritedThreadId(
 
 /** Resolves current, inherited, or persisted reply route for a session turn. */
 export function resolveEffectiveReplyRoute(params: {
-  ctx: EffectiveReplyRouteContext;
+  /** Current finalized context fields used for reply route resolution. */
+  ctx: Pick<
+    FinalizedMsgContext,
+    | "Provider"
+    | "Surface"
+    | "OriginatingChannel"
+    | "OriginatingTo"
+    | "MessageThreadId"
+    | "AccountId"
+    | "InputProvenance"
+    | "InternalTurnSource"
+    | "ChatType"
+  >;
   entry?: EffectiveReplyRouteEntry;
 }): EffectiveReplyRoute {
   const currentSurface =

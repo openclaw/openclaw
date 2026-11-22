@@ -15,6 +15,7 @@ import {
 } from "nostr-tools";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, beforeEach, vi } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
 import { startBuzzBus, type BuzzBus } from "./buzz-bus.js";
@@ -187,11 +188,7 @@ export async function createBuzzRelayFixture() {
     send(socket, ["AUTH", session.challenge]);
     socket.on("close", () => sessions.delete(socket));
     socket.on("message", (data) => {
-      const text = Buffer.isBuffer(data)
-        ? data.toString("utf8")
-        : Array.isArray(data)
-          ? Buffer.concat(data).toString("utf8")
-          : Buffer.from(data).toString("utf8");
+      const text = rawDataToString(data, "utf8");
       const [type, value, ...filters] = JSON.parse(text) as [string, string | Event, ...Filter[]];
       if (type === "AUTH" && typeof value !== "string") {
         const valid =
@@ -373,9 +370,7 @@ export async function createBuzzRelayFixture() {
       await new Promise<void>((resolve, reject) => {
         sockets.close((error) => (error ? reject(error) : resolve()));
       });
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await server[Symbol.asyncDispose]();
     },
   };
 }

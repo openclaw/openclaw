@@ -7,8 +7,10 @@ import { captureSessionTarget } from "../../../sessions/session-controller.lifec
 import { getRpcSourceForGateway } from "../../../sessions/session-controller.rpc-sources.js";
 import type { BoundedSerialQueue } from "../../../shared/bounded-serial-queue.js";
 import type { RealtimeVoiceAgentControlResult } from "../../../talk/agent-run-control.js";
-import type { ClientVoiceSessionSource } from "../../../talk/client-voice-session-source.js";
-import type { ClientVoiceSessionWriter } from "../../../talk/client-voice-session-write.js";
+import type {
+  ClientVoiceSessionSource,
+  ClientVoiceSessionWriter,
+} from "../../../talk/client-voice-session-source.js";
 import type { createClientVoiceTranscriptReadiness } from "../../../talk/client-voice-transcript-readiness.js";
 import type { InternalRealtimeVoiceProviderCapabilities } from "../../../talk/provider-internal.js";
 import type {
@@ -24,8 +26,8 @@ import type { RealtimeVoiceBridgeSession } from "../../../talk/session-runtime.j
 import type { TalkEvent, TalkEventInput } from "../../../talk/talk-session-controller.js";
 import { abortChatRunById } from "../../chat-abort.js";
 import type { GatewayRequestContext } from "../../server-methods/shared-types.js";
-import type { TalkAgentConsultAuthority } from "../client-gateway-control.js";
 import type { TalkClientRunAuthority } from "../client-run-authority.js";
+import type { TalkAgentConsultAuthority } from "../client-tool-authority.js";
 import type { PreparedTalkSessionTarget } from "../session-target.types.js";
 import type { RelayToolCallLedger } from "./tool-call-ledger.js";
 
@@ -109,6 +111,7 @@ export class TalkRealtimeRelayOutputOwnership {
     private readonly activeTurnId: () => string | undefined,
     private readonly ensureTurn: () => string,
     private readonly fail: (message: string) => void,
+    private readonly continuousOutput: () => boolean,
   ) {}
 
   get discarding(): boolean {
@@ -157,7 +160,13 @@ export class TalkRealtimeRelayOutputOwnership {
     if (this.discarding) {
       return undefined;
     }
-    const activeTurnId = this.activeTurnId();
+    // Continuous transports never send response.created, so output that arrives
+    // before client input starts its own turn, as an ID-less response does.
+    const activeTurnId =
+      this.activeTurnId() ??
+      (claim && this.phase === "unowned" && this.continuousOutput()
+        ? this.ensureTurn()
+        : undefined);
     if (activeTurnId && this.mode === "turn-bound" && claim && this.phase === "unowned") {
       this.cancelledTerminal = undefined;
       Object.assign(this, { phase: "owned" as const, turnId: activeTurnId });
@@ -269,7 +278,9 @@ export type RelaySession = {
   getToolAuthorityOverlay?: (
     authority?: TalkAgentConsultAuthority,
     source?: "reply" | "attempt",
-  ) => import("../../../sessions/session-controller.contracts.js").ReplyToolAuthorityOverlay;
+  ) => Promise<
+    import("../../../sessions/session-controller.contracts.js").ReplyToolAuthorityOverlay
+  >;
   id: string;
   connId: string;
   context: GatewayRequestContext;

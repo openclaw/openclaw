@@ -29,12 +29,7 @@ import {
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { clickClackSetupContract } from "./setup-core.js";
 import { clickClackSetupWizard } from "./setup-surface.js";
-import {
-  buildClickClackTarget,
-  looksLikeClickClackTarget,
-  parseClickClackTarget,
-  normalizeClickClackTarget,
-} from "./target.js";
+import { buildClickClackTarget, parseClickClackTarget } from "./target.js";
 import type { CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
 const CHANNEL_ID = CLICKCLACK_CHANNEL_ID;
@@ -105,10 +100,10 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
     },
     messaging: {
       targetPrefixes: ["clickclack", "cc"],
-      normalizeTarget: normalizeClickClackTarget,
+      normalizeTarget: (raw) => buildClickClackTarget(parseClickClackTarget(raw)),
       inferTargetChatType: ({ to }) => parseClickClackTarget(to).chatType,
       targetResolver: {
-        looksLikeId: looksLikeClickClackTarget,
+        looksLikeId: (raw) => raw.trim().length > 0,
         hint: "<channel:name|dm:usr_id|thread:msg_id>",
       },
       resolveOutboundSessionRoute: ({

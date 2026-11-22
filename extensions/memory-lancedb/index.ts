@@ -49,6 +49,10 @@ import {
   projectMemorySearchResult,
   shouldCapture,
 } from "./memory-policy.js";
+import {
+  createEmbeddingHealthTracker,
+  createLanceDbMemoryProviderRuntime,
+} from "./provider-runtime.js";
 import { startMemoryRecall } from "./recall-service.js";
 
 const loadMemoryHostCoreModule = createLazyRuntimeModule(
@@ -65,6 +69,33 @@ const MAX_AUTO_CAPTURE_TEXTS_PER_TURN = 3;
 // Keep recent material outcomes across compaction, sized for twenty three-text turns.
 // Older retained occurrences are still protected by their visited progress.
 const MAX_RECENT_AUTO_CAPTURE_TEXTS = 20 * MAX_AUTO_CAPTURE_TEXTS_PER_TURN;
+
+const memoryRecallSchema = Type.Object({
+  query: Type.String({ description: "Search query" }),
+  limit: Type.Optional(
+    Type.Integer({
+      description: "Max results (default: 5)",
+      minimum: 1,
+    }),
+  ),
+});
+
+const memoryStoreSchema = Type.Object({
+  text: Type.String({ description: "Information to remember" }),
+  importance: Type.Optional(
+    Type.Number({
+      description: "Importance 0-1 (default: 0.7)",
+      minimum: 0,
+      maximum: 1,
+    }),
+  ),
+  category: Type.Optional(Type.Enum(MEMORY_CATEGORIES, { type: "string" })),
+});
+
+const memoryForgetSchema = Type.Object({
+  query: Type.Optional(Type.String({ description: "Search to find memory" })),
+  memoryId: Type.Optional(Type.String({ description: "Specific memory ID" })),
+});
 
 type AutoCaptureSession = {
   messages: AutoCaptureMessageProgress[];
@@ -178,7 +209,8 @@ export default definePluginEntry({
       // changing provider/model/dimensions without re-embedding corrupts search compatibility.
       return { ...currentCfg, embedding: { ...cfg.embedding, apiKey, baseUrl } };
     };
-    const embeddings = createEmbeddings(api);
+    const embeddingHealth = createEmbeddingHealthTracker(createEmbeddings(api));
+    const embeddings = embeddingHealth.embeddings;
     const readMemoryRecallCooldown = (agentId: string): { error: string } | undefined => {
       const memoryRecallCooldown = memoryRecallCooldowns.get(agentId);
       if (!memoryRecallCooldown) {
@@ -205,6 +237,25 @@ export default definePluginEntry({
           return await listMemoryHostPublicArtifacts(params);
         },
       },
+      providerRuntime: createLanceDbMemoryProviderRuntime({
+        providerId: "memory-lancedb",
+        db,
+        embeddings,
+        resolveCurrentConfig: resolveCurrentHookConfig,
+        resolveEnabledAgentId,
+        countMemories: async (agentId) => {
+          const { readMemoryStats } = await import("./memory-stats.js");
+          return await readMemoryStats(
+            { dbPath: resolvedDbPath, storageOptions: cfg.storageOptions },
+            agentId,
+          );
+        },
+        lastEmbeddingFailure: embeddingHealth.lastFailure,
+        readRecallCooldown: readMemoryRecallCooldown,
+        recordRecallCooldown: recordMemoryRecallCooldown,
+        isRecallTimeoutError: isMemoryRecallTimeoutError,
+        logger: api.logger,
+      }),
     });
 
     const registerMemoryTool = (
@@ -227,15 +278,7 @@ export default definePluginEntry({
       label: "Memory Recall",
       description:
         "Search through long-term memories. Use when you need context about user preferences, past decisions, or previously discussed topics.",
-      parameters: Type.Object({
-        query: Type.String({ description: "Search query" }),
-        limit: Type.Optional(
-          Type.Integer({
-            description: "Max results (default: 5)",
-            minimum: 1,
-          }),
-        ),
-      }),
+      parameters: memoryRecallSchema,
       async execute(_toolCallId, params) {
         // Tool definitions outlive hot config reloads; revalidate before memory I/O.
         assertRetainedToolEnabled(agentId, ctx.getRuntimeConfig);
@@ -313,17 +356,7 @@ export default definePluginEntry({
       label: "Memory Store",
       description:
         "Save important information in long-term memory. Text over the configured capture limit is rejected. Success means the exact text already exists or the database commit completed; it does not guarantee semantic recall.",
-      parameters: Type.Object({
-        text: Type.String({ description: "Information to remember" }),
-        importance: Type.Optional(
-          Type.Number({
-            description: "Importance 0-1 (default: 0.7)",
-            minimum: 0,
-            maximum: 1,
-          }),
-        ),
-        category: Type.Optional(Type.Enum(MEMORY_CATEGORIES, { type: "string" })),
-      }),
+      parameters: memoryStoreSchema,
       async execute(_toolCallId, params) {
         assertRetainedToolEnabled(agentId, ctx.getRuntimeConfig);
         const currentCfg = resolveCurrentHookConfig();
@@ -388,10 +421,7 @@ export default definePluginEntry({
     registerMemoryTool("memory_forget", (ctx, agentId) => ({
       label: "Memory Forget",
       description: "Delete specific memories. GDPR-compliant.",
-      parameters: Type.Object({
-        query: Type.Optional(Type.String({ description: "Search to find memory" })),
-        memoryId: Type.Optional(Type.String({ description: "Specific memory ID" })),
-      }),
+      parameters: memoryForgetSchema,
       async execute(_toolCallId, params) {
         assertRetainedToolEnabled(agentId, ctx.getRuntimeConfig);
         const { query, memoryId } = params as { query?: string; memoryId?: string };
@@ -683,6 +713,7 @@ export default definePluginEntry({
     api.registerService({
       id: "memory-lancedb",
       start: () => {
+        db.start();
         embeddings.start();
         captureStopped = false;
         api.logger.info(
@@ -696,7 +727,7 @@ export default definePluginEntry({
           await embeddings.close?.();
         } finally {
           autoCaptureSessions.clear();
-          db.close();
+          await db.close();
           memoryRecallCooldowns.clear();
           api.logger.info("memory-lancedb: stopped");
         }

@@ -15,6 +15,7 @@ import { lookupCronRunExecSource } from "../../infra/cron-run-exec-source.js";
 import { resolveExecApprovalCommandDisplay } from "../../infra/exec-approval-command-display.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
+  boundExecApprovalVisibleText,
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalDisplayTextWithStatus,
   sanitizeExecApprovalWarningText,
@@ -40,6 +41,7 @@ import {
 } from "../operator-approval-standing-grants.js";
 import { listCronStandingGrants, revokeCronStandingGrant } from "../operator-approval-store.js";
 import { resolveGrantExpiryDaysConfig } from "../standing-grant-expiry-config.js";
+import { approvalReaderSessionPolicy } from "./approval-record-lookup.js";
 import {
   captureApprovalWorkerOwner,
   registerPendingApprovalRecord,
@@ -84,7 +86,7 @@ export function createExecApprovalHandlers(
         manager,
         inputId: params.id,
         client,
-        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
+        ...approvalReaderSessionPolicy(client, context.getRuntimeConfig),
         exposeAmbiguousPrefixError: true,
       });
       authority.assertCurrent();
@@ -118,7 +120,7 @@ export function createExecApprovalHandlers(
         manager,
         client,
         approvalKind: "exec",
-        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
+        ...approvalReaderSessionPolicy(client, context.getRuntimeConfig),
       });
       authority.assertCurrent();
       respond(true, approvals, undefined);
@@ -163,6 +165,19 @@ export function createExecApprovalHandlers(
         const effectiveCommandText = approvalContext.commandText;
         const requestRunId =
           trustedAgentRuntime?.operationalRunInstance.runId ?? normalizeOptionalString(p.runId);
+        // Admission: a request for a run that was already stopped never starts.
+        if (requestRunId && context.chatRunState.hasAbortMarker(requestRunId)) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "The approval run was stopped. Start a new turn to request approval again.",
+              { details: { reason: "EXEC_APPROVAL_RUN_ABORTED" } },
+            ),
+          );
+          return;
+        }
         if (host === "node" && !nodeId) {
           rejectRequest("nodeId is required for host=node");
           return;
@@ -262,11 +277,8 @@ export function createExecApprovalHandlers(
           cronExecutionSource && cronRunExecSource && effectiveCommandText
             ? {
                 kind: "standing-grant",
-                automation: sanitizeExecApprovalDisplayText(cronRunExecSource.jobName).slice(
-                  0,
-                  128,
-                ),
-                command: sanitizeExecApprovalDisplayText(effectiveCommandText).slice(0, 256),
+                automation: boundExecApprovalVisibleText(cronRunExecSource.jobName, 128),
+                command: boundExecApprovalVisibleText(effectiveCommandText, 256),
                 ...(grantDefaultExpiryDays !== null
                   ? { expiresInDays: grantDefaultExpiryDays }
                   : {}),
@@ -336,18 +348,6 @@ export function createExecApprovalHandlers(
               })
             : null,
         };
-        // This check is adjacent to manager creation with no await between them.
-        // The abort owner records the tombstone before sweeping pending approvals.
-        if (requestRunId && context.chatRunState.hasAbortMarker(requestRunId)) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "approval run already aborted", {
-              details: { reason: "EXEC_APPROVAL_RUN_ABORTED" },
-            }),
-          );
-          return;
-        }
         let record: ReturnType<typeof manager.create>;
         try {
           record = manager.create(request, timeoutMs, explicitId);
@@ -391,6 +391,24 @@ export function createExecApprovalHandlers(
         if (!registration) {
           return;
         }
+        if (requestRunId && context.chatRunState.hasAbortMarker(requestRunId)) {
+          await manager.forceDenyDetailed(
+            record.id,
+            "run-aborted",
+            { kind: "system", id: null },
+            "cancelled",
+          );
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "The approval run was stopped. Start a new turn to request approval again.",
+              { details: { reason: "EXEC_APPROVAL_RUN_ABORTED" } },
+            ),
+          );
+          return;
+        }
         await handlePendingApprovalRequestWithDelivery({
           approvalKind: "exec",
           manager,
@@ -418,7 +436,7 @@ export function createExecApprovalHandlers(
         manager,
         inputId: params.id,
         client,
-        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
+        ...approvalReaderSessionPolicy(client, context.getRuntimeConfig),
         respond,
         resolveTerminalReason: (snapshot) => {
           const runId = normalizeOptionalString(snapshot.request.runId);
@@ -449,11 +467,8 @@ export function createExecApprovalHandlers(
           agentId: grant.agentId,
           cronJobId: grant.cronJobId,
           cronJobName: grant.cronJobName,
-          command: sanitizeExecApprovalDisplayText(operation?.command ?? "(unreadable)").slice(
-            0,
-            512,
-          ),
-          cwd: operation?.cwd ? sanitizeExecApprovalDisplayText(operation.cwd).slice(0, 512) : null,
+          command: boundExecApprovalVisibleText(operation?.command ?? "(unreadable)", 512),
+          cwd: operation?.cwd ? boundExecApprovalVisibleText(operation.cwd, 512) : null,
           createdAtMs: grant.createdAtMs,
           expiresAtMs: grant.expiresAtMs,
           revokedAtMs: grant.revokedAtMs,

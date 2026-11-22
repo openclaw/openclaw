@@ -23,6 +23,11 @@ or starting another voice action discards the pending insertion.
 
 Native Talk is a continuous loop. It listens for speech. It sends the transcript to the model through the active session. It waits for the response. It then speaks the response through the configured Talk provider (`talk.speak`).
 
+While the Gateway is preparing an agent after startup, native Talk keeps the spoken
+turn pending in **Thinking…** and retries it with the same message identity. Stop
+Talk to cancel the pending turn. Other request failures keep their ordinary error
+handling; an uncertain network outcome does not trigger this startup retry.
+
 For replies dominated by fenced code, `talk.speak` uses a short spoken message directing the listener to the screen. Inline code and ordinary prose remain part of the spoken reply.
 
 Apple Watch also retains **Talk to Claw**, the separate [one-turn companion flow](/platforms/ios#talk-to-claw-with-the-iphone). That flow uses native dictation, text relayed through the iPhone, and system-voice readback. **Talk on Watch** is the realtime path included in normal Watch setup. See [standalone voice setup](/platforms/ios#standalone-voice).
@@ -224,7 +229,7 @@ settings from Voice Call, Doctor copies them into Talk while preserving explicit
 Talk settings and backing up the config. Later Voice Call edits no longer change
 realtime Talk. See [Talk realtime migration](/gateway/doctor/config-migrations#talk-realtime-inheritance).
 
-`talk.catalog` exposes primary provider ids and registry aliases. It exposes each provider's valid modes/transports/brain strategies/realtime audio formats/capability flags. It exposes the runtime-selected readiness result. First-party Talk clients should read that catalog instead of maintaining provider aliases locally. Treat an older Gateway that omits group readiness as unverified rather than definitively unconfigured. Streaming transcription providers are discovered through `talk.catalog.transcription`. The current Gateway relay uses the Voice Call streaming provider config until a dedicated Talk transcription config surface ships.
+`talk.catalog` exposes primary provider ids and registry aliases. It exposes each provider's valid modes/transports/brain strategies/realtime audio formats/capability flags. It exposes the runtime-selected readiness result. First-party Talk clients should read that catalog instead of maintaining provider aliases locally. Treat an older Gateway that omits group readiness as unverified rather than definitively unconfigured. Streaming transcription providers are discovered through `talk.catalog.transcription`. The current Gateway relay uses the Voice Call streaming provider config until a dedicated Talk transcription config surface ships. A provider named in `streaming.provider` with no key there or in the environment uses its saved API key (auth profile) when one exists; automatic selection counts only config and environment keys for Deepgram, ElevenLabs and Mistral.
 
 ## Notes
 

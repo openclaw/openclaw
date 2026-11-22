@@ -18,6 +18,8 @@ beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
 it("keeps settled transcript rows idle when the dashboard snapshot changes", async () => {
+  // Isolate the dashboard update from the transcript's minute refresh.
+  vi.spyOn(Date, "now").mockReturnValue(Date.now());
   const sessionKey = "agent:main:dashboard:row-refresh";
   const snapshot = new ValueSignal(emptyBoardSnapshot(sessionKey));
   const props = {

@@ -21,7 +21,6 @@ export type ChatRouteData =
       face: BoardFace;
       shortId?: string;
       routeLoadingSkeleton?: true;
-      deferSnapshotRows?: true;
       sessionResolutionFromCache?: "roster" | "snapshot";
       canonicalLocation?: RouteLocation;
       canonicalLocationReady?: Promise<RouteLocation | null>;
@@ -34,6 +33,7 @@ export type ChatRouteData =
       truncated: boolean;
       face: BoardFace;
     }
+  | { kind: "unavailable-home"; agentId: string; face: BoardFace }
   | MissingSessionRouteData
   | { kind: "route-error"; message: string; face: "chat" };
 

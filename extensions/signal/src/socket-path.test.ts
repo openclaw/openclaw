@@ -1,4 +1,4 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { once } from "node:events";
 import { chmod, lstat, mkdir, symlink, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
@@ -45,24 +45,13 @@ async function listen(endpoint = socketPath) {
 }
 
 async function createStaleSocket() {
-  const child = spawn(
-    process.execPath,
-    [
+  await expect(
+    execFileAsync(process.execPath, [
       "-e",
-      "require('node:net').createServer().listen(process.argv[1], () => process.stdout.write('ready'))",
+      "require('node:net').createServer().listen(process.argv[1], () => process.kill(process.pid, 'SIGKILL'))",
       socketPath,
-    ],
-    { stdio: ["ignore", "pipe", "pipe"] },
-  );
-  try {
-    await once(child.stdout, "data");
-  } finally {
-    if (child.exitCode === null && child.signalCode === null) {
-      const exit = once(child, "exit");
-      child.kill("SIGKILL");
-      await exit;
-    }
-  }
+    ]),
+  ).rejects.toMatchObject({ signal: "SIGKILL" });
 }
 
 let root: string;

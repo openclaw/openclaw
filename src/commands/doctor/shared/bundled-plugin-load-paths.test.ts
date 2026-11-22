@@ -76,14 +76,7 @@ describe("bundled plugin load path repair", () => {
 
   it("formats a doctor hint for legacy bundled plugin paths", () => {
     const warnings = collectBundledPluginLoadPathWarnings({
-      hits: [
-        {
-          pluginId: "feishu",
-          fromPath: legacyPath,
-          toPath: bundledPath,
-          pathLabel: "plugins.load.paths",
-        },
-      ],
+      hits: scanBundledPluginLoadPathMigrations(createPluginLoadPathConfig([legacyPath])),
       doctorFixCommand: "openclaw doctor --fix",
     });
 

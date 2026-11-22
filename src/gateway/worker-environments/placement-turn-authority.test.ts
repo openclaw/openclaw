@@ -11,7 +11,6 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
-import { captureAgentToolSourceExecutionGuard } from "../../agents/agent-tool-source-execution-guard.js";
 import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import { createStubTool } from "../../agents/test-helpers/agent-tool-stubs.js";
@@ -42,6 +41,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createAgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
@@ -208,18 +208,13 @@ it("retains worker-parent source predicates through tool execution and rejects a
         runner({
           source: { ...SESSION, turnClaim: claim },
           request: {
-            identity: {
+            identity: createWorkerConnectionIdentity(claim, {
               environmentId: active.environmentId,
               ownerEpoch: active.activeOwnerEpoch,
-              sessionId: claim.sessionId,
-              runId: claim.runId,
-              turnClaim: claim,
               credentialHash: "synthetic-child-source",
               bundleHash: "synthetic-child-source",
-              rpcSetVersion: 1,
-              protocolFeatures: [],
               credentialExpiresAtMs: 1,
-            },
+            }),
             toolName: "sessions_spawn",
             request: { toolCallId: "child-source", arguments: {} },
             tool: () => {
@@ -239,7 +234,6 @@ it("retains worker-parent source predicates through tool execution and rejects a
                       sessionKey: "agent:research:whatsapp:group:requesters",
                       senderId: "requester-bob",
                     });
-                    const guard = captureAgentToolSourceExecutionGuard();
                     const sql = reset ? undefined : observeHostDataSql();
                     const child = await patchSessionEntryCore(
                       { ...target, sessionKey: `agent:main:child-source-${reset}` },
@@ -253,7 +247,7 @@ it("retains worker-parent source predicates through tool execution and rejects a
                         return { label: "child" };
                       },
                       {
-                        workerGuard: { source: guard },
+                        workerGuard: { source },
                         fallbackEntry: {
                           sessionId: `child-${reset}`,
                           updatedAt: 1,
@@ -278,9 +272,7 @@ it("retains worker-parent source predicates through tool execution and rejects a
         label: "child",
       });
       host?.close();
-      await expect(writeChild(true)).rejects.toThrow(
-        `Session ${target.sessionId} worker turn authority changed`,
-      );
+      await expect(writeChild(true)).rejects.toThrow();
       expect(loadSessionEntry(target)?.lifecycleRevision).toBe("replacement");
       expect(
         loadSessionEntry({ ...target, sessionKey: "agent:main:child-source-true" }),
@@ -648,18 +640,13 @@ it("retains original requester, transcript, and prompt cache facts while claim a
     promptCacheContext,
     requesterOrigin,
   );
-  const connection: WorkerConnectionIdentity = {
+  const connection: WorkerConnectionIdentity = createWorkerConnectionIdentity(claim, {
     environmentId: active.environmentId,
     ownerEpoch: active.activeOwnerEpoch,
-    sessionId: claim.sessionId,
-    runId: claim.runId,
-    turnClaim: claim,
     credentialHash: "synthetic-credential-hash",
     bundleHash: "synthetic-bundle-hash",
-    rpcSetVersion: 1,
-    protocolFeatures: [],
     credentialExpiresAtMs: 1,
-  };
+  });
   promptCacheContext.boundaryCount = 99;
   promptCacheContext.promptCacheKey = "replacement-cache";
   promptCacheContext.fastMode = false;

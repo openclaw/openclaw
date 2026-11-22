@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
-import type { RuntimeEnv } from "../runtime-api.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import { startBotIdentityRecovery } from "./monitor.bot-identity.js";
 import type { ResolvedFeishuAccount } from "./types.js";
@@ -46,16 +45,12 @@ describe("Feishu bot identity recovery", () => {
   it("bypasses cache and stops only after a provider-verified refresh", async () => {
     fetchBotIdentityForMonitorMock
       .mockResolvedValueOnce({ botOpenId: "ou_cached", source: "cache" })
-      .mockResolvedValueOnce({
-        botOpenId: "ou_provider",
-        source: "provider",
-      });
-    const runtime = createRuntimeSpies() satisfies RuntimeEnv;
+      .mockResolvedValueOnce({ botOpenId: "ou_provider", source: "provider" });
+    const runtime = createRuntimeSpies();
 
     startRecovery({ runtime, currentSource: "cache" });
 
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(fetchBotIdentityForMonitorMock).toHaveBeenCalledTimes(1);
     expect(fetchBotIdentityForMonitorMock).toHaveBeenLastCalledWith(
       expect.anything(),
       expect.objectContaining({ allowCachedFallback: false }),
@@ -70,15 +65,17 @@ describe("Feishu bot identity recovery", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "feishu[person-2]: bot open_id recovered via background retry: ou_provider",
     );
-    expect(setFeishuBotIdentityStateMock).toHaveBeenCalledTimes(1);
-    expect(setFeishuBotIdentityStateMock).toHaveBeenLastCalledWith("person-2", "ou_provider");
+    expect(setFeishuBotIdentityStateMock).toHaveBeenCalledExactlyOnceWith(
+      "person-2",
+      "ou_provider",
+    );
   });
 });
 
 describe("Feishu bot identity retry failures", () => {
   it("reports a rejected background retry without leaking an unhandled rejection", async () => {
     fetchBotIdentityForMonitorMock.mockRejectedValueOnce(new Error("probe exploded"));
-    const runtime = createRuntimeSpies() satisfies RuntimeEnv;
+    const runtime = createRuntimeSpies();
     const unhandled: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => {
       unhandled.push(reason);
@@ -95,9 +92,7 @@ describe("Feishu bot identity retry failures", () => {
       await vi.advanceTimersByTimeAsync(0);
       await nextTurn;
 
-      expect(fetchBotIdentityForMonitorMock).toHaveBeenCalledTimes(1);
-      expect(runtime.error).toHaveBeenCalledTimes(1);
-      expect(runtime.error).toHaveBeenCalledWith(
+      expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
         "feishu[person-2]: bot identity background retry failed unexpectedly: Error: probe exploded",
       );
       expect(setFeishuBotIdentityStateMock).not.toHaveBeenCalled();
@@ -108,7 +103,7 @@ describe("Feishu bot identity retry failures", () => {
   });
 
   it("stops an aborted retry without probing or reporting an error", async () => {
-    const runtime = createRuntimeSpies() satisfies RuntimeEnv;
+    const runtime = createRuntimeSpies();
     const controller = new AbortController();
 
     startRecovery({ runtime, abortSignal: controller.signal });

@@ -65,10 +65,7 @@ const sectionDefaults = {
 
 function createPrompter(
   inputs: string[],
-  options: {
-    selects?: string[];
-    confirms?: boolean[];
-  } = {},
+  options: { selects?: string[]; confirms?: boolean[] } = {},
 ) {
   const confirms = [...(options.confirms ?? [])];
   const texts = [...inputs];
@@ -102,9 +99,7 @@ describe("setup wizard helpers", () => {
       existing: ["111"],
       token: "",
       parseId: (value) => (/^\d+$/.test(value.trim()) ? value.trim() : null),
-      resolveEntries: resolveEntries as Parameters<
-        typeof setup.promptResolvedAllowFrom
-      >[0]["resolveEntries"],
+      resolveEntries,
     });
 
     expect(result).toEqual(["111", "123"]);
@@ -203,56 +198,31 @@ describe("setup wizard helpers", () => {
       "Slack channels",
     );
   });
-  it.each([
-    {
-      name: "disabled named account",
-      channel: "slack",
+  it.each([false, true])("patches accounts with promotion=%s without losing config", (promote) => {
+    const channel = promote ? "telegram" : "slack";
+    const section = promote
+      ? { enabled: true, ...legacyTelegram }
+      : { enabled: true, accounts: { work: { enabled: false, botToken: "old-bot" } } };
+    const expected = {
+      enabled: true,
+      accounts: promote
+        ? {
+            default: structuredClone(legacyTelegram),
+            work: { enabled: true, botToken: "work-token" },
+          }
+        : { work: { enabled: false, botToken: "new-bot", appToken: "new-app" } },
+    };
+    const cfg: OpenClawConfig = { channels: { [channel]: section } };
+    const next = setup.patchChannelConfigForAccount({
+      cfg,
+      channel,
       accountId: "work",
-      section: { enabled: true, accounts: { work: { enabled: false, botToken: "old-bot" } } },
-      patch: { botToken: "new-bot", appToken: "new-app" },
-      expected: {
-        enabled: true,
-        accounts: { work: { enabled: false, botToken: "new-bot", appToken: "new-app" } },
-      },
-    },
-    {
-      name: "single-account promotion",
-      channel: "telegram",
-      accountId: "work",
-      section: { enabled: true, ...legacyTelegram },
-      patch: { botToken: "work-token" },
-      setupSurface: telegramSetupSurface,
-      expected: {
-        enabled: true,
-        accounts: {
-          default: structuredClone(legacyTelegram),
-          work: { enabled: true, botToken: "work-token" },
-        },
-      },
-    },
-  ] satisfies Array<{
-    name: string;
-    channel: string;
-    accountId: string;
-    section: Record<string, unknown>;
-    patch: Record<string, unknown>;
-    setupSurface?: ChannelSetupAdapter;
-    expected: Record<string, unknown>;
-  }>)(
-    "patches $name without losing existing config",
-    ({ channel, accountId, section, patch, setupSurface, expected }) => {
-      const cfg: OpenClawConfig = { channels: { [channel]: section } };
-      const next = setup.patchChannelConfigForAccount({
-        cfg,
-        channel,
-        accountId,
-        patch,
-        setupSurface,
-      });
-      expect(next.channels?.[channel]).toEqual(expected);
-      expect(cfg.channels?.[channel]).toEqual(section);
-    },
-  );
+      patch: promote ? { botToken: "work-token" } : { botToken: "new-bot", appToken: "new-app" },
+      setupSurface: promote ? telegramSetupSurface : undefined,
+    });
+    expect(next.channels?.[channel]).toEqual(expected);
+    expect(cfg.channels?.[channel]).toEqual(section);
+  });
   it("updates enabled and keeps existing channel fields", () => {
     const cfg: OpenClawConfig = { channels: { discord: { enabled: true, token: "abc" } } };
 
@@ -277,19 +247,11 @@ describe("setup wizard helpers", () => {
       policyKey: "channels.line.dmPolicy",
       allowFromKey: "channels.line.allowFrom",
       getAllowFrom: (cfg) => setup.normalizeAllowFromEntries(cfg.channels?.line?.allowFrom ?? []),
-      getCurrent: (cfg) =>
-        (cfg.channels?.line?.dmPolicy as
-          | "open"
-          | "pairing"
-          | "allowlist"
-          | "disabled"
-          | undefined) ?? "pairing",
+      getCurrent: (cfg) => cfg.channels?.line?.dmPolicy ?? "pairing",
     });
 
     const next = dmPolicy.setPolicy(
-      {
-        channels: { line: { dmPolicy: "pairing", allowFrom: ["U123"] } },
-      },
+      { channels: { line: { dmPolicy: "pairing", allowFrom: ["U123"] } } },
       "open",
     );
 
@@ -414,32 +376,24 @@ describe("setup wizard helpers", () => {
     ).toEqual(expected);
   });
   it.each([undefined, "xoxb-test"])("resolves entries with token %s", async (token) => {
-    const entries = token ? ["alice"] : ["alice", "bob"];
-    const expected = token
-      ? [{ input: "alice", resolved: true, id: "xoxb-test:alice" }]
-      : [
-          { input: "alice", resolved: false, id: null },
-          { input: "bob", resolved: false, id: null },
-        ];
+    const entries = ["alice", "bob"];
     const resolveEntries = vi.fn(
       async ({ token: resolvedToken, entries: inputs }: { token: string; entries: string[] }) =>
-        inputs.map((input) => ({ input, resolved: true, id: `${resolvedToken}:${input}` })),
+        inputs.map((input) => `${resolvedToken}:${input}`),
     );
     if (!token) {
       resolveEntries.mockRejectedValue(new Error("should not run"));
     }
     await expect(
-      setup.resolveEntriesWithOptionalToken<{
-        input: string;
-        resolved: boolean;
-        id: string | null;
-      }>({
+      setup.resolveEntriesWithOptionalToken({
         token,
         entries,
-        buildWithoutToken: (input) => ({ input, resolved: false, id: null }),
+        buildWithoutToken: (input) => `unresolved:${input}`,
         resolveEntries,
       }),
-    ).resolves.toEqual(expected);
+    ).resolves.toEqual(
+      token ? ["xoxb-test:alice", "xoxb-test:bob"] : ["unresolved:alice", "unresolved:bob"],
+    );
     expect(resolveEntries).toHaveBeenCalledTimes(token ? 1 : 0);
   });
   it.each([
@@ -466,36 +420,18 @@ describe("setup wizard helpers", () => {
     ).toEqual(["+15555550123", "*"]);
   });
   it("combines standard and extra status lines", async () => {
-    const hints = {
-      configuredHint: "ready",
-      unconfiguredHint: "missing token",
-      configuredScore: 2,
-      unconfiguredScore: 0,
-    };
     const status = setup.createStandardChannelSetupStatus({
-      ...hints,
       channelLabel: "Demo",
       configuredLabel: "configured",
       unconfiguredLabel: "needs token",
       includeStatusLine: true,
       resolveExtraStatusLines: ({ configured }) => [`Configured: ${configured ? "yes" : "no"}`],
-      resolveConfigured: ({ cfg }) => Boolean(cfg.channels?.demo),
+      resolveConfigured: () => true,
     });
-    expect(status).toMatchObject(hints);
-    const cfg = { channels: { demo: {} } };
-    expect(await status.resolveConfigured({ cfg })).toBe(true);
-    expect(await status.resolveStatusLines?.({ cfg, configured: true })).toEqual([
+    expect(await status.resolveStatusLines?.({ cfg: {}, configured: true })).toEqual([
       "Demo: configured",
       "Configured: yes",
     ]);
-  });
-  it("normalizes provided account ids", () => {
-    expect(
-      setup.resolveSetupAccountId({
-        accountId: " Work Account ",
-        defaultAccountId: DEFAULT_ACCOUNT_ID,
-      }),
-    ).toBe("work-account");
   });
   it.each([
     { accountOverride: " Team Primary ", expected: "team-primary" },

@@ -33,11 +33,10 @@ describe("producer coverage claims", () => {
   it("retains bound child assertions when the parent caps primary coverage", async () => {
     const evidenceMode = "full";
     const repoRoot = await harness.makeTempRepo("qa-child-coverage-cap-");
-    const coverage: QaEvidenceSummaryV3Json["entries"][number]["coverage"] = [
-      { id: "qa.coverage", role: "primary" },
-      { id: "qa.reporting", role: "primary" },
-      { id: "other.claim", role: "primary" },
-    ];
+    const coverage = ["qa.coverage", "qa.reporting", "other.claim"].map((id) => ({
+      id,
+      role: "primary" as const,
+    }));
     const launch = {
       source: { ref: "fixture-child", integrity: null },
       runtime: { id: null, version: null },
@@ -193,19 +192,19 @@ describe("producer coverage claims", () => {
     const repoRoot = await harness.makeTempRepo("qa-script-coverage-claims-");
     const outputDir = path.join(repoRoot, "out");
     const claims = [
-      [],
-      [{ id: "qa.coverage", role: "primary" }],
-      [{ id: "qa.coverage", role: "secondary" }],
-      [{ id: "qa.reporting", role: "primary" }],
-      [{ id: "qa.reporting", role: "secondary" }],
-      [{ id: "ui.control", role: "primary" }],
-      [{ id: "qa.coverage", role: "diagnostic" }],
-      [{ id: "qa.reporting", role: "diagnostic" }],
-    ];
+      [null, null, null],
+      ["qa.coverage", "primary", "primary"],
+      ["qa.coverage", "secondary", "secondary"],
+      ["qa.reporting", "primary", "secondary"],
+      ["qa.reporting", "secondary", "secondary"],
+      ["ui.control", "primary", null],
+      ["qa.coverage", "diagnostic", "diagnostic"],
+      ["qa.reporting", "diagnostic", "diagnostic"],
+    ] as const;
     const producerEntries = claims.flatMap(
-      (coverage, index) =>
+      ([id, role], index) =>
         buildScriptProducerEvidence({
-          coverage,
+          coverage: id === null ? [] : [{ id, role }],
           producerId: `claim-${index}`,
           status: "pass",
           artifacts: [{ kind: "log", path: "producer.log" }],
@@ -233,14 +232,7 @@ describe("producer coverage claims", () => {
     expect(result.results[0]?.status).toBe("fail");
     expect(result.evidence.entries.map((entry) => entry.coverage)).toEqual([
       [],
-      [],
-      [{ id: "qa.coverage", role: "primary" }],
-      [{ id: "qa.coverage", role: "secondary" }],
-      [{ id: "qa.reporting", role: "secondary" }],
-      [{ id: "qa.reporting", role: "secondary" }],
-      [],
-      [{ id: "qa.coverage", role: "diagnostic" }],
-      [{ id: "qa.reporting", role: "diagnostic" }],
+      ...claims.map(([id, , role]) => (role === null ? [] : [{ id, role }])),
     ]);
     expect(result.evidence.entries[0]?.result).toMatchObject({
       status: "fail",

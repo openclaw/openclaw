@@ -10,7 +10,7 @@ import type { AttachmentAdmission } from "./chat-message-attachment-admission-mo
 
 registerEnglishCatalog(registerChatComposerEnglish);
 
-type PastedTextProps = {
+export function ChatPastedText(props: {
   src?: string;
   sizeBytes?: number;
   scope: string;
@@ -18,9 +18,7 @@ type PastedTextProps = {
   composerAction?: SolidJSX.Element;
   composerRemoveAction?: SolidJSX.Element;
   admission?: AttachmentAdmission;
-};
-
-export function ChatPastedText(props: PastedTextProps) {
+}) {
   const source = createMemo(
     () => ({ src: props.src, sizeBytes: props.sizeBytes, scope: props.scope }),
     {

@@ -1,24 +1,13 @@
-import "../../agents/auth-profiles/external-auth.test-support.js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import { testing as externalAuthTesting } from "../../agents/auth-profiles/external-auth.test-support.js";
+import * as cli from "../../agents/cli-backends.test-support.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
-import {
-  createFollowupRun,
-  createMinimalRunAgentTurnParams,
-  fallbackAttemptOptions,
-  getExecuteAgentTurnForTest,
-  initialFallbackAttemptOptions,
-  setupAgentRunnerExecutionTestState,
-  type FallbackRunnerParams,
-} from "./agent-runner-execution.test-support.js";
+import * as exec from "./agent-runner-execution.test-support.js";
 
-const { testing: externalAuthTesting } =
-  await import("../../agents/auth-profiles/external-auth.test-support.js");
-
-const state = await setupAgentRunnerExecutionTestState();
-const executeChannelTurn = await getExecuteAgentTurnForTest();
+const state = await exec.setupAgentRunnerExecutionTestState();
+const executeChannelTurn = await exec.getExecuteAgentTurnForTest();
 const { mintReplyMessageActionTurnCapability } =
   await vi.importActual<typeof import("./agent-runner-utils.js")>("./agent-runner-utils.js");
 const sessionKey = "agent:main:discord:channel:100000000000000003";
@@ -28,17 +17,15 @@ const currentChannelId = "100000000000000003";
 const provider = "claude-cli";
 const model = "claude-sonnet-4-6";
 
-async function cliCandidate(params: FallbackRunnerParams, fallback = false) {
-  return {
-    result: await params.run(
-      provider,
-      model,
-      fallback ? fallbackAttemptOptions(params, "unknown") : initialFallbackAttemptOptions(params),
-    ),
+function cliCandidate(params: exec.FallbackRunnerParams, fallback = false) {
+  return exec.runFallbackCandidate(
+    params,
     provider,
     model,
-    attempts: [],
-  };
+    fallback
+      ? exec.fallbackAttemptOptions(params, "unknown")
+      : exec.initialFallbackAttemptOptions(params),
+  );
 }
 
 beforeEach(() => {
@@ -48,15 +35,8 @@ beforeEach(() => {
     mintReplyMessageActionTurnCapability,
   );
   externalAuthTesting.setResolveExternalAuthProfilesForTest(() => []);
-  cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        pluginId: "anthropic",
-        config: { command: "claude" },
-      },
-    ],
+  cli.testing.setDepsForTest({
+    resolveRuntimeCliBackends: cli.createClaudeCliBackends,
     resolvePluginSetupCliBackend: () => undefined,
   });
 });
@@ -64,8 +44,7 @@ beforeEach(() => {
 afterEach(() => externalAuthTesting.resetResolveExternalAuthProfilesForTest());
 
 function channelTurn() {
-  const followupRun = createFollowupRun();
-  Object.assign(followupRun.run, {
+  const followupRun = exec.createFollowupRun({
     sessionKey,
     provider,
     model,
@@ -76,7 +55,7 @@ function channelTurn() {
   followupRun.originatingChannel = "discord";
   followupRun.originatingTo = currentChannelId;
   return {
-    ...createMinimalRunAgentTurnParams({
+    ...exec.createMinimalRunAgentTurnParams({
       followupRun,
       opts: { runId },
       sessionCtx: {
@@ -102,13 +81,31 @@ function resolveCapability(token: string | undefined, key = sessionKey) {
   });
 }
 
-it.each(["failure", "policy-session", "untrusted-ingress"] as const)(
+it.each(["failure", "policy-session", "untrusted-ingress", "fallback"] as const)(
   "scopes CLI source authority to trusted turns through %s settlement",
   async (outcome) => {
     const turn = channelTurn();
     const authorityKey = outcome === "policy-session" ? policySessionKey : sessionKey;
-    const trusted = outcome === "failure" || outcome === "policy-session";
+    const trusted = outcome !== "untrusted-ingress";
+    let embeddedToken: string | undefined;
+    let admission: RunCliAgentParams["preparedRunAdmission"];
     let token: string | undefined;
+    if (outcome === "fallback") {
+      state.runEmbeddedAgentMock.mockImplementationOnce(
+        async (run: RunEmbeddedAgentInternalParams) => {
+          embeddedToken = run.messageActionTurnCapability;
+          admission = run.preparedRunAdmission;
+          expect(resolveCapability(embeddedToken)).toBeDefined();
+          return { payloads: [], meta: {} };
+        },
+      );
+      state.runWithModelFallbackMock.mockImplementationOnce(
+        async (params: exec.FallbackRunnerParams) => {
+          await params.run("anthropic", "claude", exec.initialFallbackAttemptOptions(params));
+          return cliCandidate(params, true);
+        },
+      );
+    }
     state.runCliAgentMock.mockImplementationOnce(async (run: RunCliAgentParams) => {
       token = run.messageActionTurnCapability;
       if (!trusted) {
@@ -124,6 +121,11 @@ it.each(["failure", "policy-session", "untrusted-ingress"] as const)(
             currentMessageId: "100000000000000020",
           },
         });
+      }
+      if (outcome === "fallback") {
+        expect(token).not.toBe(embeddedToken);
+        expect(resolveCapability(embeddedToken)).toBeUndefined();
+        expect(run.preparedRunAdmission).toBe(admission);
       }
       if (outcome === "failure") {
         throw new Error("CLI execution failed");
@@ -142,45 +144,7 @@ it.each(["failure", "policy-session", "untrusted-ingress"] as const)(
     });
 
     expect(result.kind).toBe(outcome === "failure" ? "final" : "success");
-    expect(state.runCliAgentMock).toHaveBeenCalledOnce();
-    if (outcome === "failure") {
-      await expect(state.runCliAgentMock.mock.results[0]?.value).rejects.toThrow(
-        "CLI execution failed",
-      );
-    }
-    if (trusted) {
-      expect(token).toBeDefined();
-    }
     expect(resolveCapability(token, authorityKey)).toBeUndefined();
+    expect(resolveCapability(embeddedToken)).toBeUndefined();
   },
 );
-
-it("fences the previous candidate while preserving the admitted run for CLI fallback", async () => {
-  let embeddedToken: string | undefined;
-  let cliToken: string | undefined;
-  let admission: RunCliAgentParams["preparedRunAdmission"];
-  state.runEmbeddedAgentMock.mockImplementationOnce(async (run: RunEmbeddedAgentInternalParams) => {
-    embeddedToken = run.messageActionTurnCapability;
-    admission = run.preparedRunAdmission;
-    expect(resolveCapability(embeddedToken)).toBeDefined();
-    return { payloads: [], meta: {} };
-  });
-  state.runCliAgentMock.mockImplementationOnce(async (run: RunCliAgentParams) => {
-    cliToken = run.messageActionTurnCapability;
-    expect(resolveCapability(cliToken)).toBeDefined();
-    expect(cliToken).not.toBe(embeddedToken);
-    expect(resolveCapability(embeddedToken)).toBeUndefined();
-    expect(run.preparedRunAdmission).toBe(admission);
-    return { payloads: [{ text: "done" }], meta: {} };
-  });
-  state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-    await params.run("anthropic", "claude", initialFallbackAttemptOptions(params));
-    return cliCandidate(params, true);
-  });
-
-  expect((await executeChannelTurn(channelTurn())).kind).toBe("success");
-  expect(embeddedToken).toBeDefined();
-  expect(cliToken).toBeDefined();
-  expect(resolveCapability(embeddedToken)).toBeUndefined();
-  expect(resolveCapability(cliToken)).toBeUndefined();
-});

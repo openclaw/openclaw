@@ -13,7 +13,7 @@ export function WorkboardBoardGlyph(props: {
           icon={props.board.icon ?? null}
           color={props.board.color ?? null}
           fallback=""
-          class={`workboard-board-glyph ${props.class ?? ""}`}
+          class={["workboard-board-glyph", props.class]}
         />
       ) : null}
     </>

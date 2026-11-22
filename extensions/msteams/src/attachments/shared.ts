@@ -6,60 +6,14 @@ import {
   normalizeHostnameSuffixAllowlist,
 } from "openclaw/plugin-sdk/ssrf-policy";
 import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  isRecord,
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { GRAPH_HOSTS, SHAREPOINT_HOSTS } from "../microsoft-hosts.js";
 import type { MSTeamsMonitorLogger } from "../monitor-types.js";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "../request-timeout.js";
-import type { MSTeamsAttachmentLike, MSTeamsInboundMedia } from "./types.js";
-
-type InlineImageReference =
-  | {
-      kind: "data";
-      src: string;
-      sourceId?: string;
-    }
-  | {
-      kind: "url";
-      url: string;
-      contentType?: string;
-      fileHint?: string;
-      sourceId?: string;
-    }
-  | { kind: "unavailable"; sourceId?: string };
-
-const IMAGE_EXT_RE = /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i;
-
-export const IMG_SRC_RE = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
-export const ATTACHMENT_TAG_RE = /<attachment[^>]+id=["']([^"']+)["'][^>]*>/gi;
-const GRAPH_HOSTED_CONTENT_SRC_RE = /\/hostedContents\/([^/?#]+)/i;
-
-function resolveInlineImageSourceId(src: string): string {
-  // Graph fallback names hosted content by item ID, while activity HTML carries its `$value` URL.
-  // Normalize both paths to one identity so a recovered image replaces its advertised slot.
-  const hostedContentId = GRAPH_HOSTED_CONTENT_SRC_RE.exec(src)?.[1];
-  if (!hostedContentId) {
-    return src;
-  }
-  try {
-    return decodeURIComponent(hostedContentId);
-  } catch {
-    return hostedContentId;
-  }
-}
 
 const DEFAULT_MEDIA_HOST_ALLOWLIST = [
-  "graph.microsoft.com",
-  "graph.microsoft.us",
-  "graph.microsoft.de",
-  "graph.microsoft.cn",
-  "sharepoint.com",
-  "sharepoint.us",
-  "sharepoint.de",
-  "sharepoint.cn",
-  "sharepoint-df.com",
+  ...GRAPH_HOSTS,
+  ...SHAREPOINT_HOSTS,
   "1drv.ms",
   "onedrive.com",
   "teams.microsoft.com",
@@ -86,10 +40,7 @@ const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
   // replies and inbound attachment downloads (clipboard-pasted images).
   "smba.trafficmanager.net",
   "botframework.azure.cn",
-  "graph.microsoft.com",
-  "graph.microsoft.us",
-  "graph.microsoft.de",
-  "graph.microsoft.cn",
+  ...GRAPH_HOSTS,
 ] as const;
 
 export const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
@@ -103,11 +54,7 @@ export const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
  * https://learn.microsoft.com/en-us/graph/api/shares-get for the encoding.
  */
 const GRAPH_SHARED_LINK_HOST_SUFFIXES = [
-  ".sharepoint.com",
-  ".sharepoint.us",
-  ".sharepoint.de",
-  ".sharepoint.cn",
-  ".sharepoint-df.com",
+  ...SHAREPOINT_HOSTS.map((host) => `.${host}`),
   "1drv.ms",
   "onedrive.live.com",
   "onedrive.com",
@@ -142,165 +89,6 @@ export function tryBuildGraphSharesUrlForSharedLink(url: string): string | undef
     return undefined;
   }
   return `${GRAPH_ROOT}/shares/${encodeGraphShareId(url)}/driveItem/content`;
-}
-
-export function normalizeContentType(value: unknown): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  // RFC 2045 makes the media type case-insensitive, but parameter values may
-  // remain case-sensitive, so normalize only the type before the first `;`.
-  const parameterIndex = trimmed.indexOf(";");
-  if (parameterIndex === -1) {
-    return trimmed.toLowerCase();
-  }
-  return `${trimmed.slice(0, parameterIndex).trim().toLowerCase()}${trimmed.slice(parameterIndex)}`;
-}
-
-export function resolveMSTeamsMediaKind(params: {
-  contentType?: string;
-  fileName?: string;
-  fileType?: string;
-}): MSTeamsInboundMedia["kind"] {
-  const mime = normalizeLowercaseStringOrEmpty(params.contentType);
-  const name = normalizeLowercaseStringOrEmpty(params.fileName);
-  const fileType = normalizeLowercaseStringOrEmpty(params.fileType);
-
-  const looksLikeImage =
-    mime.startsWith("image/") || IMAGE_EXT_RE.test(name) || IMAGE_EXT_RE.test(`x.${fileType}`);
-
-  return looksLikeImage ? "image" : "document";
-}
-
-export function isLikelyImageAttachment(att: MSTeamsAttachmentLike): boolean {
-  const contentType = normalizeContentType(att.contentType) ?? "";
-  const name = typeof att.name === "string" ? att.name : "";
-  if (contentType.startsWith("image/")) {
-    return true;
-  }
-  if (IMAGE_EXT_RE.test(name)) {
-    return true;
-  }
-
-  if (
-    contentType === "application/vnd.microsoft.teams.file.download.info" &&
-    isRecord(att.content)
-  ) {
-    const fileType = typeof att.content.fileType === "string" ? att.content.fileType : "";
-    if (fileType && IMAGE_EXT_RE.test(`x.${fileType}`)) {
-      return true;
-    }
-    const fileName = typeof att.content.fileName === "string" ? att.content.fileName : "";
-    if (fileName && IMAGE_EXT_RE.test(fileName)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-export function isDownloadableAttachment(att: MSTeamsAttachmentLike): boolean {
-  const contentType = normalizeContentType(att.contentType) ?? "";
-
-  if (
-    contentType === "application/vnd.microsoft.teams.file.download.info" &&
-    isRecord(att.content) &&
-    typeof att.content.downloadUrl === "string"
-  ) {
-    return true;
-  }
-
-  return typeof att.contentUrl === "string" && Boolean(att.contentUrl.trim());
-}
-
-export function isAdvertisedFileAttachment(attachment: MSTeamsAttachmentLike): boolean {
-  const contentType = normalizeContentType(attachment.contentType) ?? "";
-  if (
-    contentType.startsWith("text/html") ||
-    contentType.startsWith("application/vnd.microsoft.card.") ||
-    contentType.startsWith("application/vnd.microsoft.teams.card.")
-  ) {
-    return false;
-  }
-  return Boolean(
-    isDownloadableAttachment(attachment) ||
-    isLikelyImageAttachment(attachment) ||
-    attachment.name?.trim() ||
-    contentType,
-  );
-}
-
-export function extractHtmlFromAttachment(att: MSTeamsAttachmentLike): string | undefined {
-  if (!normalizeContentType(att.contentType)?.startsWith("text/html")) {
-    return undefined;
-  }
-  if (typeof att.content === "string") {
-    return att.content;
-  }
-  if (!isRecord(att.content)) {
-    return undefined;
-  }
-  return typeof att.content.text === "string"
-    ? att.content.text
-    : typeof att.content.body === "string"
-      ? att.content.body
-      : typeof att.content.content === "string"
-        ? att.content.content
-        : undefined;
-}
-
-function fileHintFromUrl(src: string): string | undefined {
-  return URL.parse(src)?.pathname.split("/").pop() || undefined;
-}
-
-export function extractInlineImageReferences(
-  attachments: MSTeamsAttachmentLike[],
-): InlineImageReference[] {
-  const out: InlineImageReference[] = [];
-  const seenReferences = new Set<string>();
-  const representedAttachmentIds = new Set(
-    attachments.flatMap((attachment) => {
-      const id = attachment.id?.trim();
-      return id && !extractHtmlFromAttachment(attachment) ? [id] : [];
-    }),
-  );
-  for (const att of attachments) {
-    const html = extractHtmlFromAttachment(att);
-    if (!html) {
-      continue;
-    }
-    IMG_SRC_RE.lastIndex = 0;
-    for (const match of html.matchAll(IMG_SRC_RE)) {
-      const src = match[1]?.trim();
-      if (src) {
-        if (src.startsWith("data:")) {
-          out.push({ kind: "data", src });
-        } else if (!seenReferences.has(src)) {
-          seenReferences.add(src);
-          if (src.startsWith("cid:")) {
-            const sourceId = src.slice("cid:".length) || undefined;
-            if (!sourceId || !representedAttachmentIds.has(sourceId)) {
-              out.push({ kind: "unavailable", sourceId });
-            }
-            continue;
-          }
-          out.push({
-            kind: "url",
-            url: src,
-            fileHint: fileHintFromUrl(src),
-            sourceId: resolveInlineImageSourceId(src),
-          });
-        }
-      }
-    }
-  }
-  return out;
-}
-
-export function safeHostForUrl(url: string): string {
-  const parsed = URL.parse(url);
-  return parsed ? normalizeLowercaseStringOrEmpty(parsed.hostname) : "invalid-url";
 }
 
 export type MSTeamsAttachmentFetchPolicy = {

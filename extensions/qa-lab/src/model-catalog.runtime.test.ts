@@ -7,8 +7,9 @@ import {
   type FixtureReceiptChannel,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { isProcessAlive } from "../../test-support/process.test-support.js";
 import { loadQaRunnerModelOptions } from "./model-catalog.runtime.js";
-import { isProcessAlive, waitForDead } from "./process-wait.test-helper.js";
+import { waitForDead } from "./process-wait.test-helper.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const { cleanup, makeTempDir } = createTempDirHarness();

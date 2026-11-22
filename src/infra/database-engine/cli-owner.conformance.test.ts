@@ -22,6 +22,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { dropPostgresTestSchemas } from "../postgres-sync/schema-cleanup.test-support.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { resolveDatabaseEngineSelection } from "./config.js";
 import { getDatabaseEngineSelection, withDatabaseEngineSelection } from "./context.js";
@@ -88,13 +89,7 @@ async function configWriteFixture(dsn = "OPENCLAW_CONFIG_WRITE_TEST_DSN") {
       await closeOpenClawStateDatabaseByPathAsync(
         path.join(foreignRoot, "state", "openclaw.sqlite"),
       );
-      const schemas = await client.query<{ nspname: string }>(
-        "SELECT nspname FROM pg_namespace WHERE left(nspname, $1) = $2",
-        [schemaPrefix.length + 1, `${schemaPrefix}_`],
-      );
-      for (const { nspname } of schemas.rows) {
-        await client.query(`DROP SCHEMA "${nspname}" CASCADE`);
-      }
+      await dropPostgresTestSchemas(client, schemaPrefix);
     } finally {
       await client.end();
       resetDatabaseEngineSelectionForTest();

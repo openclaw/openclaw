@@ -28,13 +28,14 @@ import {
 } from "../../../state/openclaw-state-worker-error.js";
 import {
   freezeSubagentRunReadRecord,
+  getSubagentSessionReadLookup,
   immutableSubagentRun,
-  isSubagentRunPayloadEvicted,
   restoreSubagentRunPayload,
 } from "./subagent-registry-memory.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentRunPayloadEvicted } from "./subagent-run-payload-facts.js";
 import { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
 
 type SubagentRunChange<T> = { entry: T | undefined };
@@ -62,7 +63,7 @@ type SubagentRunsCacheState<T extends SubagentRunReadRecord> = (
 
 export type SubagentRunsCache<T extends SubagentRunReadRecord> = {
   state: SubagentRunsCacheState<T>;
-  copy: (entry: SubagentRunRecord) => T;
+  copy: (entry: SubagentRunRecord) => T | undefined;
   project: (entry: SubagentRunRecord) => T;
 };
 
@@ -178,7 +179,10 @@ export function rememberSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
   }
   const snapshot = previous.snapshot;
   if (!changedRunIds) {
-    const replacement = new Map([...runs].map(([runId, entry]) => [runId, cache.copy(entry)]));
+    const replacement = new Map<string, T>();
+    for (const [runId, entry] of runs) {
+      setOrDeleteRun(replacement, runId, cache.copy(entry));
+    }
     if (previous.pending?.changes) {
       previous.pending.replacement = replacement;
       previous.pending.changes.clear();
@@ -458,24 +462,27 @@ export function mergeSelectedFullRuns(
   {
     context,
     runIds,
+    select,
     freshPersisted = false,
   }: {
     context?: OpenClawStateWorkerContext;
     runIds?: ReadonlySet<string>;
+    select?: (
+      lookup: SubagentSessionReadLookup,
+      additionalKeys: readonly string[],
+    ) => readonly string[];
     freshPersisted?: boolean;
   } = {},
 ): Map<string, SubagentRunRecord> {
   const current = context && !freshPersisted ? acceptedFullSnapshot(cache, context) : undefined;
   const merged = new Map<string, SubagentRunRecord>();
-  const withPayload = (entry: SubagentRunRecord) => {
-    const payload = persisted.get(entry.runId);
-    return isSubagentRunPayloadEvicted(entry) && payload && !isSubagentRunPayloadEvicted(payload)
-      ? restoreSubagentRunPayload(entry, payload)
-      : entry;
-  };
-  for (const [runId, entry] of selectedEntries(current ?? persisted, runIds)) {
+  const durable = current ?? persisted;
+  for (const [runId, entry] of selectedEntries(
+    durable,
+    select ? select(getSessionListLookup(cache, durable), []) : runIds,
+  )) {
     if (matches(entry)) {
-      merged.set(runId, withPayload(entry));
+      merged.set(runId, entry);
     }
   }
   const state = selectSubagentCacheStateForRead(cache.state, context);
@@ -488,18 +495,28 @@ export function mergeSelectedFullRuns(
     })
   ) {
     for (const [runId, { entry }] of state.changes ? selectedEntries(state.changes, runIds) : []) {
-      setOrDeleteRun(merged, runId, entry && matches(entry) ? withPayload(entry) : undefined);
+      setOrDeleteRun(merged, runId, entry && matches(entry) ? entry : undefined);
     }
   }
-  for (const [runId, entry] of selectedEntries(inMemoryRuns, runIds)) {
-    setOrDeleteRun(merged, runId, matches(entry) ? withPayload(entry) : undefined);
+  for (const [runId, entry] of selectedEntries(
+    inMemoryRuns,
+    // Include durable members so a live ownership move still vetoes their old scope.
+    select ? select(getSubagentSessionReadLookup(inMemoryRuns), [...merged.keys()]) : runIds,
+  )) {
+    setOrDeleteRun(merged, runId, matches(entry) ? entry : undefined);
+  }
+  for (const [runId, entry] of merged) {
+    const payload = persisted.get(entry.runId);
+    if (isSubagentRunPayloadEvicted(entry) && payload && !isSubagentRunPayloadEvicted(payload)) {
+      merged.set(runId, restoreSubagentRunPayload(entry, payload));
+    }
   }
   return merged;
 }
 
 function* selectedEntries<T>(
   rows: ReadonlyMap<string, T>,
-  runIds?: ReadonlySet<string>,
+  runIds?: Iterable<string>,
 ): Iterable<[string, T]> {
   if (!runIds) {
     yield* rows;

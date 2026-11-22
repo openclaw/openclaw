@@ -1,14 +1,6 @@
 import type { BoardWidgetMaterializedPutParams } from "../../packages/gateway-protocol/src/index.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import type { BoardStore, BoardSessionTarget } from "./board-store.js";
 import { createTestBoardStore } from "./board-store.test-support.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
@@ -17,7 +9,7 @@ export function testBoard(sessionKey = "agent:main:board") {
   return boardClient(createTestBoardStore(), { sessionKey });
 }
 
-export function boardClient(store: BoardStore, target: BoardSessionTarget) {
+function boardClient(store: BoardStore, target: BoardSessionTarget) {
   return {
     store,
     snapshot: () => store.getSnapshot(target),
@@ -33,13 +25,6 @@ export function boardClient(store: BoardStore, target: BoardSessionTarget) {
       decision: "granted" | "rejected" = "granted",
     ) => store.grant(target, name, decision, revision, instanceId),
   };
-}
-
-export async function closeBoardDatabases() {
-  await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
 }
 
 export function boardFixture(stateDir: string, sessionKey = "agent:main:board", agentId = "main") {

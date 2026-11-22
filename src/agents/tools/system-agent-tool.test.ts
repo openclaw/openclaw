@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSnapshot } from "../../config/mutate.test-support.js";
+import { redactSensitiveCommandText } from "../../system-agent/operations.js";
 import { hashSystemAgentOperation } from "../../system-agent/operator-approval.js";
 import { withSystemAgentOverviewSources } from "../../system-agent/overview.test-support.js";
 import {
@@ -65,11 +66,62 @@ const proposalTransition = (args: Record<string, unknown>, resultText: string) =
   resolveSystemAgentProposalTransition({ args, resultText });
 
 describe("openclaw tool", () => {
+  it.each(["template_review", "template_install"])(
+    "keeps %s registry-only when the Gateway supports local import",
+    async (action) => {
+      for (const source of [
+        { kind: "local", path: "/tmp/project" },
+        { kind: "upload", archiveBase64: "YQ==" },
+      ]) {
+        await expect(
+          makeTool({ operatorApprovalOnly: true }).execute("local", {
+            action,
+            source,
+            agentId: "research",
+            planIntegrity: "exact-plan",
+          }),
+        ).rejects.toThrow();
+      }
+      expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+    },
+  );
+  it.each(["template_review", "template_install"])(
+    "mirrors %s through native MCP without transferring host authority",
+    async (action) => {
+      const args = {
+        action,
+        source: { packageName: "@fixture/research", version: "1.0.0" },
+        ...(action === "template_install"
+          ? { agentId: "research", planIntegrity: "exact-plan" }
+          : {}),
+      };
+      const resultText = toolText(
+        await makeTool({ operatorApprovalOnly: true }).execute("native", args),
+      );
+      expect(directiveTransition(args, resultText)).toEqual({
+        kind: "template-operation",
+        operation: {
+          kind: action === "template_review" ? "template-review" : "template-install",
+          source: args.source,
+          ...(action === "template_install"
+            ? { agentId: "research", planIntegrity: "exact-plan" }
+            : {}),
+        },
+      });
+      expect(proposalTransition(args, resultText)).toBeNull();
+      expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+    },
+  );
+
   it("stays directly callable instead of entering tool catalogs", () => {
     const tool = createSystemAgentTool({ surface: "cli" });
     expect(tool.catalogMode).toBe("direct-only");
     expect(tool.description).toContain("Direct chat: exact user approval, then approved=true.");
     expect(tool.description).toContain("host applies session permission policy");
+    expect(tool.description).toMatch(/Gateway-bound.*live runtime application/);
+    expect(tool.description).toMatch(/without.*runtime callback.*restartRequired/);
+    expect(tool.description).toContain("observed browser activation");
+    expect(tool.description).not.toContain("Backend activation requires Gateway restart");
   });
 
   it("runs read actions immediately", async () => {
@@ -122,7 +174,7 @@ describe("openclaw tool", () => {
     const result = await withSystemAgentOverviewSources(snapshot, async () => {
       const out = await tool.execute("t-overview", { action: "overview" });
       const text = toolText(out);
-      expect(text).toContain("OpenClaw online. Little claws, typed tools.");
+      expect(text).toContain("OpenClaw online. Little templates, typed tools.");
       expect(text).toContain("Config: valid");
       expect(text).toContain("Default agent: main");
       expect(text).toContain("Default model: openai/gpt-5.2");
@@ -158,7 +210,7 @@ describe("openclaw tool", () => {
       secret,
     });
     expect(toolText(result)).toContain("needs-approval");
-    expect(toolText(result)).not.toContain(secret);
+    expect(toolText(result)).not.toContain(secret.trim());
     expect(proposalRef.operation).toEqual({
       kind: "config-set-ref",
       path: "models.providers.openai.apiKey",
@@ -195,19 +247,35 @@ describe("openclaw tool", () => {
     expect(proposalRef).toEqual({});
   });
 
-  it("rejects arbitrary plugin installs before creating an approval proposal", async () => {
-    const proposalRef: { current?: string } = {};
-    const tool = createSystemAgentTool({ surface: "cli", proposalRef });
-
-    await expect(
-      tool.execute("plugin-install", {
+  it.each(["npm:@example/plugin", "git:github.com/example/plugin@main"])(
+    "proposes source review in chat before installing %s",
+    async (spec) => {
+      const { proposalRef, tool } = gatewayFixture();
+      const result = await tool.execute("plugin-install", {
         action: "plugin_install",
-        spec: "npm:@example/plugin",
+        spec,
         approved: true,
-      }),
-    ).rejects.toThrow(/trusted shell/);
-    expect(proposalRef.current).toBeUndefined();
-    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+      });
+      expect(toolText(result)).toContain("outside ClawHub review");
+      expect(toolText(result)).not.toContain("trusted shell");
+      expect(proposalRef.operation).toEqual({ kind: "plugin-install", spec });
+      expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+    },
+  );
+
+  it("redacts authenticated Git sources in proposals and command history without changing approval identity", async () => {
+    const spec =
+      "git:https://x-access-token:SYNTHETIC_CREDENTIAL@github.com/example/plugin.git@main";
+    const { proposalRef, tool } = gatewayFixture();
+    const result = toolText(
+      await tool.execute("credentialed-source", { action: "plugin_install", spec }),
+    );
+    const history = redactSensitiveCommandText(`plugin install ${spec}`);
+    for (const display of [result, history]) {
+      expect(display).not.toContain("SYNTHETIC_CREDENTIAL");
+      expect(display).toContain("github.com/example/plugin.git@main");
+    }
+    expect(proposalRef.operation).toEqual({ kind: "plugin-install", spec });
   });
 
   it("finishes the exact artifact review before proposing and hands approved bytes to the host", async () => {

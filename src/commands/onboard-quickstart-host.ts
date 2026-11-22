@@ -1,4 +1,5 @@
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
+import { formatUserCliCommand } from "../daemon/durable-service-entrypoint.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
@@ -73,7 +74,11 @@ export async function runQuickstartForegroundGateway(params: {
           runtime.log(t("wizard.guided.quickstartBrowserUnavailable"));
         }
       } else {
-        runtime.log(t("wizard.guided.quickstartGatewayPending"));
+        runtime.log(
+          t("wizard.guided.quickstartGatewayPending", {
+            statusCommand: await formatUserCliCommand("gateway status"),
+          }),
+        );
       }
       const { url: dashboardUrl, setupOnly } = await resolveOnboardingDashboardTarget(
         links.httpUrl,
@@ -82,11 +87,20 @@ export async function runQuickstartForegroundGateway(params: {
       );
       runtime.log(t("wizard.guided.quickstartDashboard", { url: dashboardUrl.toString() }));
       runtime.log(t("wizard.guided.quickstartForeground"));
-      runtime.log(t("wizard.guided.quickstartBackground"));
-      runtime.log(t("wizard.guided.quickstartReopen"));
+      runtime.log(
+        t("wizard.guided.quickstartBackground", {
+          command: await formatUserCliCommand("gateway install"),
+        }),
+      );
+      runtime.log(
+        t("wizard.guided.quickstartReopen", {
+          tuiCommand: await formatUserCliCommand(),
+          dashboardCommand: await formatUserCliCommand("dashboard"),
+        }),
+      );
       if (setupOnly) {
         runtime.log(
-          "Use openclaw setup for the setup assistant. Choose a primary model with openclaw onboard before regular agent chat.",
+          `Use ${await formatUserCliCommand("setup")} for the setup assistant. Choose a primary model with ${await formatUserCliCommand("onboard")} before regular agent chat.`,
         );
       }
       await gateway.wait;

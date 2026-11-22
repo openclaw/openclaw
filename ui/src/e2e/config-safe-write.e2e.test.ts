@@ -3,7 +3,13 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
+import {
+  takeControlUiElementScreenshot,
+  takeControlUiViewportScreenshot,
+  waitForControlUiFrameLayout,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import {
   objectSchema,
@@ -64,6 +70,7 @@ function laboratoryConfig(endpoint: string, retryBudget = 2) {
 }
 
 async function installConfig(page: Page, config: Record<string, unknown>, hash: string) {
+  await page.clock.install();
   return installMockGateway(page, {
     methodResponses: {
       "config.get": configResponse(config, hash),
@@ -89,7 +96,13 @@ function mutationParams(request: MockGatewayRequest): MutationParams {
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
 const expectSaveStatus = (page: Page, status: string) =>
   expect
-    .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
+    .poll(async () => {
+      // Let each real config.get settle before advancing the next polling window.
+      if (status === "Apply changes") {
+        await page.clock.runFor(1_000);
+      }
+      return page.locator("openclaw-settings-save-indicator").textContent();
+    })
     .toContain(status);
 const requestCount = async (gateway: Awaited<ReturnType<typeof installConfig>>, method: string) =>
   (await gateway.getRequests(method)).length;
@@ -156,89 +169,192 @@ const withPage = pageRunner(suite, () => ({
 }));
 
 suite.define(() => {
+  it("reports autosave without moving the page and preserves untouched 64-bit identifiers through reload", async () => {
+    await withPage(async ({ page }) => {
+      const identifier = "1048113311314608148";
+      const initialConfig = {
+        ...laboratoryConfig("before-save"),
+        tools: { elevated: { allowFrom: { discord: [identifier, 42] } } },
+      };
+      const gateway = await installConfig(page, initialConfig, "id-snapshot-1");
+      const endpoint = await openLaboratory(page, "before-save", true);
+      await capture(page, "08-id-before-unrelated-save.png", endpoint);
+
+      await gateway.deferNext("config.set");
+      await endpoint.fill("after-save");
+      const save = mutationParams(await gateway.waitForRequest("config.set"));
+      const submitted = JSON.parse(String(save.raw)) as typeof initialConfig;
+      expect(save.baseHash).toBe("id-snapshot-1");
+      expect(String(save.raw)).toContain(`"${identifier}"`);
+      expect(String(save.raw)).not.toContain(String(Number(identifier)));
+      expect(submitted).toEqual({
+        laboratory: { endpoint: "after-save", retryBudget: 2 },
+        tools: { elevated: { allowFrom: { discord: [identifier, 42] } } },
+      });
+      expect(submitted.tools.elevated.allowFrom.discord[0]).toBe(identifier);
+      expect(typeof submitted.tools.elevated.allowFrom.discord[0]).toBe("string");
+      if (proof.enabled) {
+        await writeFile(
+          path.join(proof.directory(), "09-id-config-set-payload.json"),
+          `${JSON.stringify({ before: initialConfig, submitted }, null, 2)}\n`,
+        );
+      }
+
+      const indicator = page.locator(".settings-save-status openclaw-settings-save-indicator");
+      for (const viewport of [
+        { width: 1440, height: 900 },
+        { width: 1366, height: 768 },
+        { width: 768, height: 1024 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(viewport);
+        await capture(page, `autosave-saving-${viewport.width}.png`, endpoint);
+        expect.soft(await indicator.textContent()).toBe("Saving…");
+        expect.soft(await indicator.isVisible()).toBe(true);
+        const box = await indicator.boundingBox();
+        expect.soft(box && box.x >= 0 && box.x + box.width <= viewport.width).toBe(true);
+      }
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      // Observe the responsive handoff before settling its layout transitions.
+      const shell = page.locator(".shell");
+      await expect
+        .poll(() => shell.evaluate((element) => element.classList.contains("shell--mobile-nav")))
+        .toBe(false);
+      await shell.evaluate(finishElementAnimations);
+      await waitForControlUiProofSurface(endpoint, [endpoint]);
+      await waitForControlUiFrameLayout([shell, endpoint]);
+      const fieldBefore = await endpoint.boundingBox();
+      await gateway.resolveDeferred("config.set");
+      await expectSaveStatus(page, "Saved");
+      expect(await endpoint.boundingBox()).toEqual(fieldBefore);
+      // Saved gives way to Apply only once a later read still reports it unapplied.
+      await expectSaveStatus(page, "Apply changes");
+      expect(await endpoint.boundingBox()).toEqual(fieldBefore);
+      await page.reload();
+      await expect.poll(() => endpoint.inputValue()).toBe("after-save");
+      await button(page, "Raw").click();
+      const rawEditor = page.locator(".config-raw-field textarea");
+      await rawEditor.waitFor();
+      await expect.poll(() => rawEditor.inputValue()).toContain(`"${identifier}"`);
+      await capture(page, "10-id-after-unrelated-save.png", rawEditor);
+    });
+  });
+
+  it("keeps a failed autosave's edit until Retry or Discard resolves it", async () => {
+    await withPage(async ({ page }) => {
+      const gateway = await installConfig(page, laboratoryConfig("before-failure"), "failure-1");
+      const endpoint = await openLaboratory(page, "before-failure");
+      const indicator = page.locator(".settings-save-status openclaw-settings-save-indicator");
+      await gateway.deferNext("config.set");
+      await endpoint.fill("kept-after-failure");
+      await gateway.waitForRequest("config.set");
+      await gateway.rejectDeferred("config.set", {
+        code: "UNAVAILABLE",
+        message: "Synthetic config file is read-only",
+      });
+      await expectSaveStatus(page, "Couldn’t save settings. Try again.");
+      expect(await endpoint.inputValue()).toBe("kept-after-failure");
+      expect(await indicator.locator(".settings-save-indicator__reason").textContent()).toBe(
+        "Synthetic config file is read-only",
+      );
+      if (proof.enabled) {
+        await writeFile(
+          path.join(proof.directory(), "05-save-failed.png"),
+          await takeControlUiElementScreenshot(page, indicator, [indicator]),
+        );
+      }
+
+      // Discard asks first; cancelling keeps the edit.
+      await button(page, "Discard changes").click();
+      const confirm = page.getByRole("dialog");
+      await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+      expect(await endpoint.inputValue()).toBe("kept-after-failure");
+      await button(page, "Discard changes").click();
+      await confirm.getByRole("button", { name: "Discard changes", exact: true }).click();
+      await expect.poll(() => endpoint.inputValue()).toBe("before-failure");
+      await expect
+        .poll(() => indicator.textContent())
+        .not.toContain("Couldn’t save settings. Try again.");
+    });
+  });
+
   it.each([
     {
       name: "authored activation and limits",
       initialMode: { enabled: "auto", timeoutMs: 5000 },
-      expectedPatch: { executor: "quickjs" },
     },
     {
       name: "inherited automatic activation",
       initialMode: undefined,
-      expectedPatch: { enabled: "auto", executor: "quickjs" },
     },
-  ])(
-    "saves and reloads the Code Mode executor with $name",
-    async ({ initialMode, expectedPatch }) => {
-      await withPage(
-        async ({ page }) => {
-          const initialConfig = initialMode ? { tools: { codeMode: initialMode } } : {};
-          const retainedMode = { enabled: "auto", ...initialMode };
-          const quickjsConfig = {
-            tools: { codeMode: { ...retainedMode, executor: "quickjs" } },
-          };
-          const gateway = await installMockGateway(page, {
-            methodResponses: {
-              "config.get": configResponse(initialConfig, "executor-node"),
-            },
-          });
+  ])("saves and reloads the Code Mode executor with $name", async ({ initialMode }) => {
+    await withPage(
+      async ({ page }) => {
+        const initialConfig = initialMode ? { tools: { codeMode: initialMode } } : {};
+        const retainedMode = { enabled: "auto", ...initialMode };
+        const quickjsConfig = {
+          tools: { codeMode: { ...retainedMode, executor: "quickjs" } },
+        };
+        const nodeConfig = {
+          tools: { codeMode: { ...retainedMode, executor: "node" } },
+        };
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "config.get": configResponse(initialConfig, "executor-node"),
+            "config.schema": configSchemaResponse(),
+          },
+        });
 
-          expect((await page.goto(`${suite.server.baseUrl}settings/labs`))?.status()).toBe(200);
-          const executorRow = settingsRow(page, "Code Mode executor");
-          const executor = executorRow.getByRole("combobox", { name: "Code Mode executor" });
-          const enabled = settingsRow(page, "Code Mode").getByRole("switch", {
-            name: "Code Mode",
-            exact: true,
-          });
-          await expect.poll(() => executor.inputValue()).toBe("node");
-          expect(await executorRow.textContent()).toContain("not a security sandbox");
-          expect(await enabled.isChecked()).toBe(true);
-          await capture(page, "code-mode-node-default.png", executor);
+        expect(
+          (await page.goto(`${suite.server.baseUrl}settings/ai-agents?section=tools`))?.status(),
+        ).toBe(200);
+        const executorRow = settingsRow(page, "Code Mode executor");
+        const executor = executorRow.getByRole("combobox", { name: "Code Mode executor" });
+        const enabled = settingsRow(page, "Code Mode").getByRole("switch", {
+          name: "Code Mode",
+          exact: true,
+        });
+        await expect.poll(() => executor.inputValue()).toBe("node");
+        expect(await executorRow.textContent()).toContain("not a security sandbox");
+        expect(await enabled.isChecked()).toBe(true);
+        await capture(page, "code-mode-node-default.png", executor);
 
-          await gateway.deferNext("config.patch");
-          await executor.selectOption("quickjs");
-          const quickjsPatch = mutationParams(await gateway.waitForRequest("config.patch"));
-          expect(quickjsPatch.baseHash).toBe("executor-node");
-          expect(JSON.parse(String(quickjsPatch.raw))).toEqual({
-            tools: { codeMode: expectedPatch },
-          });
-          expect(await executor.isDisabled()).toBe(true);
+        await gateway.deferNext("config.set");
+        await executor.selectOption("quickjs");
+        const quickjsSave = mutationParams(await gateway.waitForRequest("config.set"));
+        expect(quickjsSave.baseHash).toBe("executor-node");
+        expect(JSON.parse(String(quickjsSave.raw))).toEqual(quickjsConfig);
+        await expectSaveStatus(page, "Saving");
 
-          const quickjsResponse = configResponse(quickjsConfig, "executor-quickjs");
-          await gateway.setMethodResponse("config.get", quickjsResponse);
-          await gateway.resolveDeferred("config.patch", { ok: true, ...quickjsResponse });
-          await expect.poll(() => executor.isDisabled()).toBe(false);
-          expect((await page.reload())?.status()).toBe(200);
-          await expect.poll(() => executor.inputValue()).toBe("quickjs");
-          expect(await enabled.isChecked()).toBe(true);
-          await capture(page, "code-mode-quickjs-reloaded.png", executor);
+        const quickjsResponse = configResponse(quickjsConfig, "executor-quickjs");
+        await gateway.setMethodResponse("config.get", quickjsResponse);
+        await gateway.resolveDeferred("config.set", { ok: true, ...quickjsResponse });
+        await expectSaveStatus(page, "Saved");
+        expect((await page.reload())?.status()).toBe(200);
+        await expect.poll(() => executor.inputValue()).toBe("quickjs");
+        expect(await enabled.isChecked()).toBe(true);
+        await capture(page, "code-mode-quickjs-reloaded.png", executor);
 
-          const priorPatches = (await gateway.getRequests("config.patch")).length;
-          await gateway.deferNext("config.patch");
-          await executor.selectOption("node");
-          const nodePatch = mutationParams(
-            await gateway.waitForRequest("config.patch", { after: priorPatches }),
-          );
-          expect(nodePatch.baseHash).toBe("executor-quickjs");
-          expect(JSON.parse(String(nodePatch.raw))).toEqual({
-            tools: { codeMode: { executor: null } },
-          });
+        const priorSaves = (await gateway.getRequests("config.set")).length;
+        await gateway.deferNext("config.set");
+        await executor.selectOption("node");
+        const nodeSave = mutationParams(
+          await gateway.waitForRequest("config.set", { after: priorSaves }),
+        );
+        expect(nodeSave.baseHash).toBe("executor-quickjs");
+        expect(JSON.parse(String(nodeSave.raw))).toEqual(nodeConfig);
 
-          const nodeResponse = configResponse(
-            { tools: { codeMode: retainedMode } },
-            "executor-node-restored",
-          );
-          await gateway.setMethodResponse("config.get", nodeResponse);
-          await gateway.resolveDeferred("config.patch", { ok: true, ...nodeResponse });
-          await expect.poll(() => executor.isDisabled()).toBe(false);
-          expect((await page.reload())?.status()).toBe(200);
-          await expect.poll(() => executor.inputValue()).toBe("node");
-          expect(await enabled.isChecked()).toBe(true);
-        },
-        { recordVideo: undefined },
-      );
-    },
-  );
+        const nodeResponse = configResponse(nodeConfig, "executor-node-restored");
+        await gateway.setMethodResponse("config.get", nodeResponse);
+        await gateway.resolveDeferred("config.set", { ok: true, ...nodeResponse });
+        await expectSaveStatus(page, "Saved");
+        expect((await page.reload())?.status()).toBe(200);
+        await expect.poll(() => executor.inputValue()).toBe("node");
+        expect(await enabled.isChecked()).toBe(true);
+      },
+      { recordVideo: undefined },
+    );
+  });
 
   it("retains a Raw revert when an autosave commits after its connection closes", async () => {
     await withPage(async ({ page }) => {
@@ -327,7 +443,7 @@ suite.define(() => {
         laboratory: { endpoint: "external-api", retryBudget: 3 },
       });
       await gateway.resolveDeferred("config.set");
-      await expectSaveStatus(page, "Saved");
+      await expectSaveStatus(page, "Apply changes");
       await page.reload();
       await endpoint.waitFor();
       await capture(page, "13-reconnect-save-reload.png", endpoint);
@@ -349,7 +465,9 @@ suite.define(() => {
         message: "QA configuration save failed",
       });
       const saveIndicator = page.locator("openclaw-settings-save-indicator");
-      await expect.poll(() => saveIndicator.textContent()).toContain("Save failed");
+      await expect
+        .poll(() => saveIndicator.textContent())
+        .toContain("Couldn’t save settings. Try again.");
       await button(page, "Raw").click();
       await page.locator(".config-raw-field textarea").fill(JSON.stringify(initialConfig, null, 2));
       await button(page, "Form").click();
@@ -369,7 +487,7 @@ suite.define(() => {
         laboratory: { endpoint: "saved-api", retryBudget: 3 },
       });
       await gateway.resolveDeferred("config.set");
-      await expect.poll(() => saveIndicator.textContent()).toContain("Saved");
+      await expect.poll(() => saveIndicator.textContent()).toContain("Apply changes");
     });
   });
 
@@ -378,29 +496,30 @@ suite.define(() => {
       const initialConfig = {
         ...laboratoryConfig("local-api"),
         tools: { codeMode: { timeoutMs: 5000 } },
+        gateway: { controlUi: { experimental: { chatBubbles: false } } },
       };
       const patchedConfig = {
-        laboratory: initialConfig.laboratory,
-        tools: { codeMode: { enabled: "auto", timeoutMs: 5000 } },
+        ...initialConfig,
+        gateway: { controlUi: { experimental: { chatBubbles: true } } },
       };
       const gateway = await installConfig(page, initialConfig, "snapshot-1");
 
       expect((await page.goto(`${suite.server.baseUrl}settings/labs`))?.status()).toBe(200);
       const labsLink = page.locator('.settings-sidebar__item[href="/settings/labs"]');
       await expect.poll(() => labsLink.getAttribute("aria-current")).toBe("page");
-      const codeModeRow = settingsRow(page, "Code Mode");
-      const codeModeSwitch = codeModeRow.getByRole("switch", { name: "Code Mode", exact: true });
-      await codeModeSwitch.waitFor();
-      await expect.poll(() => codeModeRow.textContent()).not.toContain("Using default:");
+      const bubblesRow = settingsRow(page, "Speech bubbles");
+      const bubblesSwitch = bubblesRow.getByRole("switch", { name: "Speech bubbles", exact: true });
+      await expect.poll(() => bubblesSwitch.isEnabled()).toBe(true);
+      await expect.poll(() => bubblesRow.textContent()).not.toContain("Using default:");
 
       const configGetsBeforePatch = (await gateway.getRequests("config.get")).length;
       await gateway.deferNext("config.patch");
-      await codeModeSwitch.click();
+      await bubblesSwitch.click();
       const patchParams = mutationParams(await gateway.waitForRequest("config.patch"));
       expect(patchParams.baseHash).toBe("snapshot-1");
       expect(patchParams.sessionKey).toBe("agent:main:main");
       expect(JSON.parse(String(patchParams.raw))).toEqual({
-        tools: { codeMode: { enabled: "auto" } },
+        gateway: { controlUi: { experimental: { chatBubbles: true } } },
       });
 
       const patchedResponse = configResponse(patchedConfig, "snapshot-2", "snapshot-1");
@@ -413,9 +532,9 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("config.get")).length)
         .toBe(configGetsBeforePatch);
-      await expect.poll(() => codeModeRow.textContent()).toContain("Default: Disabled");
+      await expect.poll(() => bubblesSwitch.isChecked()).toBe(true);
       await expect.poll(() => labsLink.getAttribute("aria-current")).toBe("page");
-      await capture(page, "00-labs-canonical-refresh.png", codeModeSwitch);
+      await capture(page, "00-labs-canonical-refresh.png", bubblesSwitch);
 
       const endpoint = await openLaboratory(page, "local-api", true);
       const advancedLink = page.locator('.settings-sidebar__item[href="/settings/advanced"]');
@@ -447,6 +566,11 @@ suite.define(() => {
       );
       const configGetsBeforeReload = (await gateway.getRequests("config.get")).length;
       await saveIndicator.getByRole("button", { name: "Reload" }).click();
+      // Reload drops the unsaved edit, so it asks first.
+      await page
+        .getByRole("dialog")
+        .getByRole("button", { name: "Discard changes", exact: true })
+        .click();
       await expect
         .poll(async () => (await gateway.getRequests("config.get")).length)
         .toBeGreaterThan(configGetsBeforeReload);
@@ -463,7 +587,7 @@ suite.define(() => {
       expect(JSON.parse(String(retriedSetParams.raw))).toMatchObject({
         laboratory: { endpoint: "form-api", retryBudget: 4 },
       });
-      await expect.poll(() => saveIndicator.textContent()).toContain("Saved");
+      await expect.poll(() => saveIndicator.textContent()).toContain("Apply changes");
 
       await button(page, "Raw").click();
       const rawEditor = page.locator(".config-raw-field textarea");
@@ -637,52 +761,6 @@ suite.define(() => {
         hash: "hmac-sha256:v1:opaque-next",
       });
       await expect.poll(() => endpoint.inputValue()).toBe("retained-draft");
-    });
-  });
-
-  it("preserves untouched 64-bit identifier strings during an unrelated form save", async () => {
-    await withPage(async ({ page }) => {
-      const identifier = "1048113311314608148";
-      const initialConfig = {
-        ...laboratoryConfig("before-save"),
-        tools: { elevated: { allowFrom: { discord: [identifier, 42] } } },
-      };
-      const gateway = await installConfig(page, initialConfig, "id-snapshot-1");
-
-      const endpoint = await openLaboratory(page, "before-save", true);
-      await capture(page, "08-id-before-unrelated-save.png", endpoint);
-
-      await gateway.deferNext("config.set");
-      await endpoint.fill("after-save");
-      const save = mutationParams(await gateway.waitForRequest("config.set"));
-      const submitted = JSON.parse(String(save.raw)) as typeof initialConfig;
-      expect(save.baseHash).toBe("id-snapshot-1");
-      expect(String(save.raw)).toContain(`"${identifier}"`);
-      expect(String(save.raw)).not.toContain(String(Number(identifier)));
-      expect(submitted).toEqual({
-        laboratory: { endpoint: "after-save", retryBudget: 2 },
-        tools: { elevated: { allowFrom: { discord: [identifier, 42] } } },
-      });
-      expect(submitted.tools.elevated.allowFrom.discord[0]).toBe(identifier);
-      expect(typeof submitted.tools.elevated.allowFrom.discord[0]).toBe("string");
-
-      if (proof.enabled) {
-        await writeFile(
-          path.join(proof.directory(), "09-id-config-set-payload.json"),
-          `${JSON.stringify({ before: initialConfig, submitted }, null, 2)}\n`,
-        );
-      }
-      await gateway.resolveDeferred("config.set");
-      const saveIndicator = page.locator("openclaw-settings-save-indicator");
-      await expect.poll(() => saveIndicator.textContent()).toContain("Saved");
-
-      await page.reload();
-      await expect.poll(() => endpoint.inputValue()).toBe("after-save");
-      await button(page, "Raw").click();
-      const rawEditor = page.locator(".config-raw-field textarea");
-      await rawEditor.waitFor();
-      await expect.poll(() => rawEditor.inputValue()).toContain(`"${identifier}"`);
-      await capture(page, "10-id-after-unrelated-save.png", rawEditor);
     });
   });
 });

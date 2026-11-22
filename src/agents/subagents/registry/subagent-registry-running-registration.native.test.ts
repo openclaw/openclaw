@@ -1,5 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
+import { withWorkerPreload } from "../../../../test/helpers/runtime-preload.js";
 import "./subagent-registry.mocks.shared.js";
 import "./subagent-registry.persistence.mocks.test-support.js";
 // Preserve fixture setup before importing the registry's owners.
@@ -24,8 +25,7 @@ const fixture = useSubagentPersistenceFixture();
 it("keeps ordinary subagent registration responsive while a SQLite writer is held", async () => {
   await fixture.allocateStateDir();
   vi.mocked(callGateway).mockResolvedValue({ status: "pending" });
-  const database = openOpenClawStateDatabase();
-  const db = requireNativeSqliteDatabase(database.db);
+  const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
   const context = captureOpenClawStateWorkerContext();
   expect(context.admission.databasePath.startsWith(fixture.stateDir)).toBe(true);
   const runId = "contended-registration";
@@ -52,19 +52,13 @@ it("keeps ordinary subagent registration responsive while a SQLite writer is hel
   const observeWorker = vi
     .spyOn(workerCpu, "createCpuTrackedWorker")
     .mockImplementation((filename, options) =>
-      createWorker(filename, {
-        ...options,
-        execArgv: [
-          ...(options?.execArgv ?? []),
-          "--import",
-          `data:text/javascript,${encodeURIComponent(preload)}`,
-        ],
-        workerData: {
-          ...options?.workerData,
+      createWorker(
+        filename,
+        withWorkerPreload(options, preload, {
           testRegistrationPath: db.location(),
           testRegistrationBegin: nativeBegin.buffer,
-        },
-      }),
+        }),
+      ),
     );
   let holder: ReturnType<typeof holdStateDatabaseWriteTransaction> | undefined;
   let registration: Promise<void> | undefined;
@@ -111,18 +105,13 @@ it("keeps ordinary subagent registration responsive while a SQLite writer is hel
     Atomics.notify(nativeBegin, 1);
     holder?.release();
     settled = await Promise.allSettled([registration, holder?.joined]);
-    try {
-      // Cover the whole registration through its ACK, including any later host-side fallback.
-      if (hostSql) {
-        expect(
-          hostSql.queries.filter((sql) =>
-            /^\s*(?:BEGIN|INSERT|UPDATE|DELETE|REPLACE)\b/iu.test(sql),
-          ),
-        ).toEqual([]);
-      }
-    } finally {
-      hostSql?.restore();
-      observeWorker.mockRestore();
+    hostSql?.restore();
+    observeWorker.mockRestore();
+    // Include the ACK and any later host-side fallback, not just the lock wait.
+    if (hostSql) {
+      expect(
+        hostSql.queries.filter((sql) => /^\s*(?:BEGIN|INSERT|UPDATE|DELETE|REPLACE)\b/iu.test(sql)),
+      ).toEqual([]);
     }
   }
   const failed = settled.find((result) => result.status === "rejected");

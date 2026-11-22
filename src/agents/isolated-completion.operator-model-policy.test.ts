@@ -1,5 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { runIsolatedAgentRuntimeCompletion } from "../plugins/runtime/runtime-llm-isolated.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import type { CliOutput } from "./cli-output-contracts.js";
 import { runCliAgent as runRealCliAgent } from "./cli-runner.js";
 import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
@@ -20,8 +22,8 @@ const cli = vi.hoisted(() => ({
 vi.mock("./cli-runner/prepare.runtime.js", () => ({ prepareCliRunContext: cli.prepare }));
 vi.mock("./cli-runner/execute.runtime.js", () => ({ executePreparedCliRun: cli.execute }));
 
-const { createAdmittedRunOperatorAuthority, readRunOperatorAuthority } =
-  await import("./admitted-run-context.js");
+const { attachProviderAuthAuthority } = await import("../plugins/provider-auth-authority.js");
+const { readRunOperatorAuthority } = await import("./admitted-run-context.js");
 const { prepareOperatorModelPolicy } = await import("./operator-model-policy.js");
 const { withGatewayToolCallerIdentity } = await import("./tools/gateway-caller-context.js");
 const { AsyncWorkScope } = await import("../shared/async-work-scope.js");
@@ -39,27 +41,18 @@ function operator(initial?: Partial<ModelPolicy>) {
       manifestPlugins: [],
     });
   let policy = prepare(initial ?? {});
-  const listeners = new Set<() => void>();
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId: "isolated-reader",
     scopes: ["operator.write"],
     assertCurrent: () => {},
     get modelPolicy() {
       return policy;
     },
-    onModelPolicyChanged: initial
-      ? (listener) => {
-          listeners.add(listener);
-          return () => void listeners.delete(listener);
-        }
-      : undefined,
   });
   return {
     authority,
-    listeners,
     setPolicy(this: void, overrides: Partial<ModelPolicy>) {
       policy = prepare(overrides);
-      listeners.forEach((listener) => listener());
       return policy;
     },
   };
@@ -79,12 +72,11 @@ function answer(text: string, model: string) {
   };
 }
 function waitForStart<T>(started: Promise<T>, ...runs: Promise<unknown>[]) {
-  return Promise.race([
+  return awaitGateBeforeSettlement(
     started,
-    Promise.all(runs).then(() => {
-      throw new Error("Completion settled before dispatch");
-    }),
-  ]);
+    Promise.all(runs),
+    "Completion settled before dispatch",
+  );
 }
 
 function runPluginCompletion(
@@ -119,8 +111,8 @@ beforeEach(() => {
   });
 });
 
-it("cancels a removed model while another model and the source remain active", async () => {
-  const { authority, listeners, setPolicy } = operator({
+it("keeps admitted completions and siblings alive while the next start uses current policy", async () => {
+  const { authority, setPolicy } = operator({
     allow: ["test-provider/model-a", "test-provider/model-b"],
   });
   mocks.resolveModelAsync.mockImplementation(async (provider, model) => ({
@@ -150,14 +142,16 @@ it("cancels a removed model while another model and the source remain active", a
   const second = work.track(() => runPluginCompletion(authority, "model-b"));
   try {
     await waitForStart(started.promise, first, second);
-    setPolicy({ allow: ["test-provider/model-b"] });
+    const modelPolicy = setPolicy({ allow: ["test-provider/model-b"] });
     expect([signals.get("model-a")?.aborted, signals.get("model-b")?.aborted]).toEqual([
-      true,
+      false,
       false,
     ]);
     expect(() => authority.assertCurrent()).not.toThrow();
+    const nextAuthority = createTestOperatorAuthority({ ...authority, modelPolicy });
+    await expect(runPluginCompletion(nextAuthority, "model-a")).rejects.toMatchObject(denied);
     finishA.resolve();
-    await expect(first).rejects.toMatchObject(denied);
+    await expect(first).resolves.toMatchObject({ text: "Allowed answer." });
     finishB.resolve();
     await expect(second).resolves.toMatchObject({ text: "Allowed answer." });
   } finally {
@@ -166,7 +160,6 @@ it("cancels a removed model while another model and the source remain active", a
     await Promise.allSettled([first, second]);
     await work.drain();
   }
-  expect(listeners.size).toBe(0);
 });
 it.each(["host", "harness"] as const)(
   "rejects a denied model resolved during %s preparation",
@@ -203,18 +196,10 @@ it("keeps automatic metadata independent of an ambient operator restriction", as
         }),
     ),
   ).resolves.toMatchObject({ text: "Session title" });
-  expect(dispatch).toHaveBeenCalledOnce();
 });
 
-it("preserves a retired CLI model denial after the model policy is restored", async () => {
-  const { authority, listeners, setPolicy } = operator({ deny: [] });
-  const context = buildPreparedCliRunContext({
-    provider: "google-gemini-cli",
-    model: "transport-alias",
-    backend: { sessionMode: "none" },
-    config,
-  });
-  const cleanup = vi.fn(async () => {});
+it("passes the operator and canonical model to the CLI execution owner", async () => {
+  const { authority } = operator({ deny: [] });
   cli.prepare.mockImplementation(async (params) => {
     expect(readRunOperatorAuthority({ preparedRunAdmission: params.preparedRunAdmission })).toBe(
       authority,
@@ -229,37 +214,46 @@ it("preserves a retired CLI model denial after the model policy is restored", as
     if (!admittedRunContext) {
       throw new Error("CLI completion requires its admitted run");
     }
-    return {
-      ...context,
-      params: { ...params, admittedRunContext },
-      preparedBackend: { ...context.preparedBackend, cleanup },
-    };
+    const context = buildPreparedCliRunContext({
+      provider: "google-gemini-cli",
+      model: "transport-alias",
+      config,
+      backend: { sessionMode: "none" },
+    });
+    return { ...context, params: { ...params, admittedRunContext } };
   });
-  const started = createDeferredCore<AbortSignal | undefined>();
-  const finish = createDeferredCore();
-  cli.execute.mockImplementation(async (prepared) => {
-    started.resolve(prepared.params.abortSignal);
-    await finish.promise;
-    return { text: "retired model output" };
-  });
+  cli.execute.mockResolvedValue({ text: "CLI answer" });
   mocks.resolveCliRuntimeCanonicalProvider.mockReturnValue("test-provider");
   mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
   mocks.runCliAgent.mockImplementation(runRealCliAgent);
-  const pending = runPluginCompletion(authority, "allowed", "test-cli");
-  const outcome = pending.catch((error: unknown) => error);
-  try {
-    const signal = await waitForStart(started.promise, pending);
-    setPolicy({ deny: ["test-provider/allowed"] });
-    expect(signal?.aborted).toBe(true);
-    const policy = setPolicy({ deny: [] });
-    expect(() => authority.assertCurrent()).not.toThrow();
-    expect(policy?.allows({ provider: "test-provider", model: "allowed" })).toBe(true);
-    finish.resolve();
-    expect(await outcome).toMatchObject(denied);
-    expect(cleanup).toHaveBeenCalledOnce();
-    expect(listeners.size).toBe(0);
-  } finally {
-    finish.resolve();
-    await outcome;
-  }
+  await expect(runPluginCompletion(authority, "allowed", "test-cli")).resolves.toMatchObject({
+    text: "CLI answer",
+  });
 });
+
+it.each(["before-dispatch", "during-native-preparation"] as const)(
+  "keeps host credential revocation observable to V2 harnesses %s",
+  async (stage) => {
+    let current = stage !== "before-dispatch";
+    const revoked = new Error("Selected credential authority retired");
+    mocks.prepareSimpleCompletionModel.mockResolvedValueOnce({
+      model: { provider: "openai", id: "gpt-test", api: "openai-responses" },
+      auth: attachProviderAuthAuthority(
+        { apiKey: "synthetic-key", mode: "api-key", source: "fixture" },
+        () => {
+          if (!current) {
+            throw revoked;
+          }
+        },
+      ),
+    });
+    const dispatch = vi.fn(async (params: { assertCurrent?: () => void }) => {
+      current = false;
+      params.assertCurrent?.();
+      throw new Error("Revoked credential reached inference");
+    });
+    registerIsolatedHarness({ runIsolatedCompletionV2: dispatch });
+    await expect(runIsolatedCompletion(isolatedRequest())).rejects.toBe(revoked);
+    expect(dispatch).toHaveBeenCalledTimes(stage === "before-dispatch" ? 0 : 1);
+  },
+);

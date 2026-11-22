@@ -43,14 +43,9 @@ export function recordTaskOwnership(
     return undefined;
   }
   const previous = session.taskOwners.get(taskId);
-  const owner =
-    task.owned_by_subagent === true
-      ? false
-      : (previous ??
-        (typeof task.parent_task_id === "string"
-          ? session.taskOwners.get(task.parent_task_id)
-          : undefined) ??
-        inputUuid);
+  // Native marks subagent Bash explicitly. Nested Agents and workflows can
+  // forward their completion to the parent input after their launcher ends.
+  const owner = task.owned_by_subagent === true ? false : (previous ?? inputUuid);
   if (owner !== previous) {
     session.taskOwners.set(taskId, owner);
   }
@@ -58,4 +53,84 @@ export function recordTaskOwnership(
     session.taskRuns.set(task.run_id, taskId);
   }
   return owner === false ? undefined : taskId;
+}
+
+/** Holds this input's background tasks; a task's answer is owed until its notification. */
+export function acquireBackgroundTaskHolds(
+  session: {
+    taskOwners: ReadonlyMap<string, string | false>;
+    runningDescendants: ReadonlyMap<string, string | undefined>;
+  },
+  input: {
+    inputUuid: string;
+    pendingBackgroundTaskIds: Set<string>;
+    foregroundTaskIds: ReadonlySet<string>;
+  },
+  snapshot: readonly Record<string, unknown>[],
+): void {
+  // Resolve to a fixed point: snapshots can list arbitrarily deep descendants before roots.
+  // Each productive pass acquires a new hold, so cycles without a held ancestor terminate.
+  let acquiredHold: boolean;
+  do {
+    acquiredHold = false;
+    for (const task of snapshot) {
+      const id = task.task_id;
+      if (
+        typeof id !== "string" ||
+        session.taskOwners.get(id) !== input.inputUuid ||
+        input.pendingBackgroundTaskIds.has(id)
+      ) {
+        continue;
+      }
+      const parentTaskId = session.runningDescendants.get(id);
+      if (
+        // Only children of held background work extend the input; foreground
+        // descendants still retire with their parent turn.
+        (parentTaskId === undefined || input.pendingBackgroundTaskIds.has(parentTaskId)) &&
+        (task.task_type === "local_agent" ||
+          task.task_type === "local_workflow" ||
+          (task.task_type === "local_bash" && input.foregroundTaskIds.has(id)))
+      ) {
+        // Disappearing from a snapshot does not acknowledge the queued answer.
+        input.pendingBackgroundTaskIds.add(id);
+        acquiredHold = true;
+      }
+    }
+  } while (acquiredHold);
+}
+
+/** Agents and workflows make their own tool calls; subagent-owned work can resume its Agent. */
+function isDescendantTask(task: Record<string, unknown>): boolean {
+  return (
+    task.task_type === "local_agent" ||
+    task.task_type === "local_workflow" ||
+    task.owned_by_subagent === true ||
+    typeof task.parent_task_id === "string"
+  );
+}
+
+export function recordRunningDescendants(
+  running: Map<string, string | undefined>,
+  message: Record<string, unknown>,
+): boolean {
+  const startedTasks =
+    message.subtype === "task_started"
+      ? [message]
+      : message.subtype === "background_tasks_changed" && Array.isArray(message.tasks)
+        ? message.tasks.filter(isRecord)
+        : [];
+  for (const task of startedTasks) {
+    if (typeof task.task_id === "string" && isDescendantTask(task)) {
+      running.set(
+        task.task_id,
+        typeof task.parent_task_id === "string" ? task.parent_task_id : running.get(task.task_id),
+      );
+    }
+  }
+  if (message.subtype === "task_notification" && typeof message.task_id === "string") {
+    const parentTaskId = running.get(message.task_id);
+    running.delete(message.task_id);
+    return parentTaskId !== undefined && running.has(parentTaskId);
+  }
+  return false;
 }

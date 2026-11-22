@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareRetainedUpdateRuntimeCleanup } from "../commands/doctor-retained-runtime.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
 import * as containerEnvironment from "../infra/container-environment.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
@@ -17,10 +18,7 @@ import * as processGroups from "../process/supervisor/service-child-group-owners
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
   createDoctorRuntimeProjection,
-  createDoctorHealthFlowContext,
   doctorRuntimeProjectedPath as projectedPath,
-  resolveDoctorHealthContributions,
-  runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
 
 const mocks = vi.hoisted(() => ({
@@ -69,24 +67,17 @@ function projection(suffix: string, root = parent): string {
 }
 
 async function runDoctor(repair: boolean, maintenance = true): Promise<string> {
-  const contributions = resolveDoctorHealthContributions().filter(
-    (entry) => entry.id === "doctor:retained-update-runtimes",
-  );
-  const ctx = createDoctorHealthFlowContext({
-    env: {
-      HOME: parent,
-      OPENCLAW_HOME: parent,
-      OPENCLAW_STATE_DIR: path.join(parent, "state"),
-      OPENCLAW_UPDATE_IN_PROGRESS: "1",
-      TMPDIR: path.join(parent, "shell-tmp"),
-    },
-    options: { repair },
-  });
-  ctx.prompter.shouldRepair = repair;
-  const run = () => runDoctorHealthContributionList(ctx, contributions);
+  const env = {
+    HOME: parent,
+    OPENCLAW_HOME: parent,
+    OPENCLAW_STATE_DIR: path.join(parent, "state"),
+    OPENCLAW_UPDATE_IN_PROGRESS: "1",
+    TMPDIR: path.join(parent, "shell-tmp"),
+  };
+  const run = async () => (await prepareRetainedUpdateRuntimeCleanup(env))(repair);
   if (maintenance) {
     const lock = await acquireGatewayLock({
-      env: ctx.env,
+      env,
       role: "sqlite-maintenance",
       allowInTests: true,
     });
@@ -183,9 +174,69 @@ it("Doctor scopes holders to each runtime and reports unknown custody once", asy
   expect(output).toContain(`Removed abandoned updater runtime: ${free}`);
 });
 
-it("Doctor reclaims an abandoned runtime despite unrelated helpers with unreadable cwd", async () => {
-  const held = projection("Held01");
-  const free = projection("Free01");
+it.each(["system helper", "foreign Node runtime"])(
+  "Doctor reclaims an abandoned runtime despite an unrelated %s with unreadable cwd",
+  async (helper) => {
+    const held = projection("Held01");
+    const free = projection("Free01");
+    const actual = await vi.importActual<typeof import("../infra/openclaw-process-census.js")>(
+      "../infra/openclaw-process-census.js",
+    );
+    mocks.census.mockImplementation(actual.inspectOtherOpenClawProcesses);
+    mockProcessPlatform("linux");
+    vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(false);
+    vi.spyOn(processGroups, "readProcessGroupMembers").mockImplementation(function* () {
+      for (const [pid, argv] of [
+        [process.pid, ["openclaw-doctor"]],
+        [
+          4242,
+          helper === "foreign Node runtime"
+            ? ["node", "/app/server/index.mjs"]
+            : ["/usr/bin/gpg-agent", "--supervised"],
+        ],
+        [4243, ["/usr/bin/fusermount3", "-o", "subtype=portal"]],
+        [4244, ["/bin/sleep", "600"]],
+      ] as const) {
+        yield {
+          pid,
+          pgid: process.pid,
+          state: "S",
+          command: {
+            ppid: 0,
+            argv: [...argv],
+            uid: pid === 4242 ? (process.getuid?.() === 0 ? 2000 : 0) : process.getuid?.(),
+          },
+        };
+      }
+    });
+    vi.spyOn(processArgv, "readProcessWorkingDirectories").mockReturnValue(
+      new Map([
+        [process.pid, parent],
+        [4244, held],
+      ]),
+    );
+    const readFile = fs.readFileSync;
+    vi.spyOn(fs, "readFileSync").mockImplementation((...args) => {
+      if (args[0] === "/proc/4242/environ") {
+        throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      }
+      return readFile(...args);
+    });
+    const output = await runDoctor(true);
+    expect(fs.existsSync(free)).toBe(false);
+    expect(fs.existsSync(held)).toBe(true);
+    expect(output).toContain(`Removed abandoned updater runtime: ${free}`);
+    expect(output).toContain("PIDs: 4244");
+    expect(output).not.toContain("4242");
+    expect(output).not.toContain("4243");
+  },
+);
+
+it.each([
+  ["Gateway", ["openclaw-gateway"], true],
+  ["title-erased CLI that may be its updater", ["openclaw"], false],
+] as const)("Doctor with a live %s", async (_name, argv, reclaimed) => {
+  const runtime = projection("Gate01");
   const actual = await vi.importActual<typeof import("../infra/openclaw-process-census.js")>(
     "../infra/openclaw-process-census.js",
   );
@@ -193,28 +244,24 @@ it("Doctor reclaims an abandoned runtime despite unrelated helpers with unreadab
   mockProcessPlatform("linux");
   vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(false);
   vi.spyOn(processGroups, "readProcessGroupMembers").mockImplementation(function* () {
-    for (const [pid, argv] of [
+    for (const [pid, command] of [
       [process.pid, ["openclaw-doctor"]],
-      [4242, ["/usr/bin/gpg-agent", "--supervised"]],
-      [4243, ["/usr/bin/fusermount3", "-o", "subtype=portal"]],
-      [4244, ["/bin/sleep", "600"]],
+      [4245, argv],
     ] as const) {
-      yield { pid, pgid: process.pid, state: "S", command: { ppid: 0, argv: [...argv] } };
+      yield { pid, pgid: process.pid, state: "S", command: { ppid: 0, argv: [...command] } };
     }
   });
   vi.spyOn(processArgv, "readProcessWorkingDirectories").mockReturnValue(
     new Map([
       [process.pid, parent],
-      [4244, held],
+      [4245, "/"],
     ]),
   );
   const output = await runDoctor(true);
-  expect(fs.existsSync(free)).toBe(false);
-  expect(fs.existsSync(held)).toBe(true);
-  expect(output).toContain(`Removed abandoned updater runtime: ${free}`);
-  expect(output).toContain("PIDs: 4244");
-  expect(output).not.toContain("4242");
-  expect(output).not.toContain("4243");
+  expect(fs.existsSync(runtime)).toBe(!reclaimed);
+  expect(output).toContain(
+    reclaimed ? `Removed abandoned updater runtime: ${runtime}` : "PIDs: 4245",
+  );
 });
 
 it("Doctor reclaims an npm-prefix runtime and releases its activation journal hardlink", async () => {

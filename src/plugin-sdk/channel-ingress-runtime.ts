@@ -161,7 +161,7 @@ type StandardRawEventIngressOptions<TRaw, TMetadata, TInspection> = Omit<
   classifyAdmissionError: (error: unknown) => string | undefined;
 };
 
-/** Version-1 raw events, 500 ms polling, eight deliveries, and standard retention. */
+/** Version-1 raw events, direct admission wakeups, eight deliveries, and standard retention. */
 export function createStandardRawEventIngressMonitor<
   TRaw,
   TMetadata,
@@ -245,9 +245,17 @@ export function fanInChannelIngressLifecycles(
     invoke: (lifecycle: ChannelIngressLifecycle) => void | Promise<void>,
     targets: readonly ChannelIngressLifecycle[] = lifecycles,
   ) => {
-    await Promise.all(targets.map(async (lifecycle) => await invoke(lifecycle)));
+    const outcomes = await Promise.allSettled(
+      targets.map(async (lifecycle) => await invoke(lifecycle)),
+    );
+    const failure = outcomes.find((outcome) => outcome.status === "rejected");
+    if (failure?.status === "rejected") {
+      throw failure.reason;
+    }
   };
   const abandonAll = () => settleOnce(() => fanOut((lifecycle) => lifecycle.onAbandoned()));
+  const dropAll = (reason: Parameters<NonNullable<ChannelIngressLifecycle["onDropped"]>>[0]) =>
+    settleOnce(() => fanOut((lifecycle) => lifecycle.onDropped?.(reason)));
   const failEach = (targets: readonly ChannelIngressLifecycle[], error: unknown) =>
     fanOut(
       (lifecycle) => (lifecycle.onFailed ? lifecycle.onFailed(error) : lifecycle.onAbandoned()),
@@ -271,6 +279,7 @@ export function fanInChannelIngressLifecycles(
     }
   };
   const supportsCancellation = lifecycles.every((lifecycle) => lifecycle.onCancelled !== undefined);
+  const supportsDrops = lifecycles.every((lifecycle) => lifecycle.onDropped !== undefined);
   const deferredHeartbeatIntervals = lifecycles
     .map((lifecycle) => lifecycle.deferredHeartbeatIntervalMs)
     .filter(
@@ -330,6 +339,16 @@ export function fanInChannelIngressLifecycles(
         handedOff = true;
         await abandonAll();
       },
+      ...(supportsDrops
+        ? {
+            onDropped: async (
+              reason: Parameters<NonNullable<ChannelIngressLifecycle["onDropped"]>>[0],
+            ) => {
+              handedOff = true;
+              await dropAll(reason);
+            },
+          }
+        : {}),
     },
     // A gated or deliberately skipped turn still consumed every source claim.
     settle: async () => {

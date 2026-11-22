@@ -452,7 +452,7 @@ it("waits for the build when a deferred child exits", async () => {
   await stopWatch(fakeProcess, runPromise);
 });
 
-it("replaces the prior lock holder before starting", async () => {
+it.for([0, 9_000])("replaces the prior lock holder after its %dms drain", async (drainMs) => {
   const { child, spawn, watcher, fakeProcess, run } = createWatchHarness();
   await withTestDir({ prefix: "openclaw-watch-node-lock-" }, async (cwd) => {
     const lockPath = resolveTestWatchLockPath(cwd, ["gateway", "--force"]);
@@ -469,6 +469,7 @@ it("replaces the prior lock holder before starting", async () => {
       "utf8",
     );
     let existingWatcherAlive = true;
+    let elapsedMs = 0;
     const signalProcess = vi.fn<NonNullable<WatchRunParams["signalProcess"]>>((pid, signal) => {
       if (signal === 0) {
         if (pid === 2121 && existingWatcherAlive) {
@@ -477,16 +478,21 @@ it("replaces the prior lock holder before starting", async () => {
         throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
       }
       if (pid === 2121 && signal === "SIGTERM") {
-        existingWatcherAlive = false;
+        existingWatcherAlive = drainMs > 0;
         return;
       }
       throw new Error(`unexpected signal ${signal} for pid ${pid}`);
     });
     const runPromise = run({
       cwd,
-      now: () => 1_700_000_000_000,
+      now: () => 1_700_000_000_000 + elapsedMs,
       signalProcess,
-      sleep: async () => {},
+      sleep: async (ms) => {
+        elapsedMs += ms;
+        if (elapsedMs >= drainMs) {
+          existingWatcherAlive = false;
+        }
+      },
     });
     await watchReady();
     await nextTurn();

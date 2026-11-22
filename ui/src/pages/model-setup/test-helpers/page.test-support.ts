@@ -3,10 +3,6 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { SystemAgentSetupDetectResult } from "../../../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../../app/context.ts";
 import { createRuntimeConfigCapability } from "../../../lib/config/runtime-config-capability.ts";
-import {
-  createApplicationContextProvider,
-  type ApplicationContextProvider,
-} from "../../../test-helpers/application-context.ts";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
 import type { ModelSetupRouteData } from "../first-run-setup.ts";
 import type { ModelSetupPageState } from "../state.ts";
@@ -36,8 +32,13 @@ export const detection: SystemAgentSetupDetectResult = {
 
 export function createContext() {
   const request = vi.fn<GatewayBrowserClient["request"]>();
+  // The early option list is best-effort; scenarios opt in by resolving it.
+  const setupOptions = vi.fn<GatewayBrowserClient["request"]>(async () => {
+    throw new Error("setup options not mocked");
+  });
   const client = {
-    request: (...args: Parameters<GatewayBrowserClient["request"]>) => request(...args),
+    request: (...args: Parameters<GatewayBrowserClient["request"]>) =>
+      (args[0] === "openclaw.setup.options" ? setupOptions : request)(...args),
   } as unknown as GatewayBrowserClient;
   const snapshot = {
     client,
@@ -73,21 +74,16 @@ export function createContext() {
     subscribeEvents: subscribe,
   } as unknown as ApplicationGateway;
   const runtimeConfig = createRuntimeConfigCapability(gateway);
-  return {
-    client,
-    request,
+  const context = {
+    gateway,
+    agentSelection: selection(),
+    settingsAgentSelection: selection(),
+    basePath: "/openclaw",
+    resourceBasePath: "/openclaw",
+    navigate: vi.fn(),
     runtimeConfig,
-    snapshot,
-    context: {
-      gateway,
-      agentSelection: selection(),
-      settingsAgentSelection: selection(),
-      basePath: "/openclaw",
-      resourceBasePath: "/openclaw",
-      navigate: vi.fn(),
-      runtimeConfig,
-    } as unknown as ApplicationContext,
-  };
+  } as unknown as ApplicationContext;
+  return { client, request, setupOptions, runtimeConfig, snapshot, context };
 }
 
 export async function mountPage(
@@ -96,8 +92,8 @@ export async function mountPage(
     state: Extract<ModelSetupPageState, { phase: "ready" }>;
     client: GatewayBrowserClient;
   },
-): Promise<{ page: TestModelSetupPage; provider: ApplicationContextProvider }> {
-  const provider = createApplicationContextProvider(context);
+) {
+  const provider = document.createElement("div");
   const page = createPage(context);
   vi.spyOn(fixture.client, "request").mockResolvedValueOnce(fixture.state.result);
   page.routeData = { firstRun: fixture.firstRun };

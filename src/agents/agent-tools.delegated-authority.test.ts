@@ -75,17 +75,14 @@ it("rechecks authority after the preparation await", async () => {
     const { bind, revoke } = fixture();
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
-    const pause = async () => {
-      entered.resolve();
-      await release.promise;
-    };
     const execute = vi.fn(async () => {
       await writeHostFile(file, "changed");
       return { content: [], details: {} };
     });
     const source = tool(execute);
     source.prepareBeforeToolCallParams = async (params) => {
-      await pause();
+      entered.resolve();
+      await release.promise;
       return params;
     };
     const bound = bind(source);

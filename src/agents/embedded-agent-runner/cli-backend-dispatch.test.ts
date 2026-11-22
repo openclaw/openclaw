@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -15,8 +14,10 @@ import {
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
+import { buildCliMcpGrantContext } from "../cli-runner/mcp-grant-context.js";
 import { loadCliSessionHistoryMessages } from "../cli-runner/session-history.js";
 import type { RunCliAgentParams } from "../cli-runner/types.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { SessionManager } from "../sessions/index.js";
 import { resolveEmbeddedCliBackendDispatchEligibility } from "./cli-backend-dispatch-eligibility.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
@@ -29,6 +30,7 @@ const resolveRuntimeCliBackends = vi.hoisted(() => vi.fn());
 const resolveCliRuntimeExecutionProvider = vi.hoisted(() => vi.fn());
 const runCliAgent = vi.hoisted(() => vi.fn());
 const retireSessionMcpRuntime = vi.hoisted(() => vi.fn());
+const readSessionEntryReadOnlyInWorker = vi.hoisted(() => vi.fn());
 const tempDirs = useSessionStoreTempDirs(afterAll, "cli-dispatch-history-");
 
 // mock-isolation: Dispatch eligibility uses fixture auth modes without host credential discovery.
@@ -50,6 +52,10 @@ vi.mock("../cli-runner.runtime.js", () => ({
 vi.mock("../agent-bundle-mcp-tools.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agent-bundle-mcp-tools.js")>()),
   retireSessionMcpRuntime,
+}));
+vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
+  readSessionEntryReadOnlyInWorker,
 }));
 const transcriptRecorder = vi.hoisted(() => ({
   noteToolEvent: vi.fn(),
@@ -401,37 +407,72 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     });
   });
 
-  // Fail-closed tool policy: only a non-empty named allowlist is expressible
-  // on the CLI surface. Every other embedded tool state keeps the passthrough
-  // so no closed state silently widens.
+  // Fail-closed tool policy: only a named allowlist is expressible on the CLI surface. Every
+  // other embedded tool state keeps the passthrough so no closed state silently widens.
   it.each([
     ["a mixed wildcard allowlist", { toolsAllow: ["memory_search", "*"] }],
-    ["a deny-all allowlist", { toolsAllow: [] }],
     ["no allowlist", { toolsAllow: undefined }],
     ["disableTools", { disableTools: true }],
     ["a raw model run", { modelRun: true }],
+    ["a plugin tool grant", { runtimePluginToolGrant: { pluginId: "p", toolNames: ["p_note"] } }],
+    ["a caller output cap", { streamParams: { maxTokens: 512 } }],
   ] as const)("refuses dispatch for %s", async (_label, overrides) => {
     expect(await runDispatch(overrides as Partial<CliDispatchParams>)).toBeUndefined();
     expect(runCliAgent).not.toHaveBeenCalled();
   });
 
-  it("settles execution-start work before dispatching the CLI run", async () => {
-    const entered = createDeferred();
-    const release = createDeferred();
-    const onExecutionStarted = vi.fn(async () => {
-      entered.resolve();
-      await release.promise;
+  // A session fork lists every session tool for its cache and executes only its own; on a
+  // subscription CLI only those run, under the source session's permission ceiling and requester.
+  it("runs a session fork on the subscription CLI under its source session's policy", async () => {
+    readSessionEntryReadOnlyInWorker.mockResolvedValue({
+      sessionId: "source-session",
+      updatedAt: 1,
+      permissionMode: "read-only",
+      sessionRoot: "/tmp/recall/workspace",
     });
+    const sessionManager = SessionManager.inMemory("/tmp/recall/workspace");
+    await runDispatch({
+      sessionFile: undefined,
+      sessionManager,
+      sessionKey: "agent:main:internal-session-effects:fork",
+      sandboxSessionKey: "agent:main:source",
+      toolsAllow: undefined,
+      toolExecutionAllow: ["read", "ls"],
+      senderIsOwner: false,
+      inputProvenance: { kind: "internal_system", sourceTool: "session_fork" },
+    });
+    const cliParams = runCliAgent.mock.calls[0]?.[0] as RunCliAgentParams;
+    expect(cliParams.sessionFile).toBe(`in-memory:${sessionManager.getSessionId()}`);
+    expect(cliParams.cliToolAvailability).toEqual({ native: [], openClaw: ["read", "ls"] });
+    const grant = buildCliMcpGrantContext({
+      run: cliParams,
+      config: {},
+      requireExplicitMessageTarget: true,
+      agentId: "main",
+      modelProvider: "claude-cli",
+      modelId: "claude-opus-4-8",
+    });
+    expect(grant).toMatchObject({
+      runtimePolicySessionKey: "agent:main:source",
+      sessionPermissionPolicy: { mode: "read-only", root: "/tmp/recall/workspace" },
+      senderIsOwner: false,
+      inputProvenance: { kind: "internal_system", sourceTool: "session_fork" },
+    });
+  });
+
+  it("settles execution-start work before dispatching the CLI run", async () => {
+    const executionGate = createEnteredGate();
+    const onExecutionStarted = vi.fn(executionGate.wait);
     const operation = runDispatch({ onExecutionStarted, lifecycleGeneration: "gen-1" });
     try {
-      await entered.promise;
+      await executionGate.entered;
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
       expect(runCliAgent).not.toHaveBeenCalled();
       expect(transcriptRecorder.finalize).not.toHaveBeenCalled();
     } finally {
-      release.resolve();
+      executionGate.release();
       await operation;
     }
     expect(runCliAgent).toHaveBeenCalledOnce();

@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withTestTimeout } from "../../test/helpers/promise.js";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { createMainThreadStallMonitor, runWithMainThreadTask } from "../infra/main-thread-stall.js";
@@ -7,6 +7,8 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { create as createSessionRow, type Lookup } from "./session-row-projection-record.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
+import * as sessionStoreKeys from "./session-store-key.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
 
@@ -15,6 +17,7 @@ function placementReadView() {
     isCurrent(): boolean;
     getPolicyConfig(): SessionRowReadView["state"]["policyConfig"];
   } = {
+    ...createSessionRowProjectionFixture({ cfg: {}, store: {} }),
     physicalPaths: (locator) => [locator],
     state: {
       cfg: {},
@@ -69,7 +72,7 @@ function placementSnapshot(reconciling: readonly string[]): WorkerSessionPlaceme
 }
 
 it.each(["gateway:rpc:sessions.list", "scheduler:maintenance:session-refresh"])(
-  "attributes prepared-row work after readiness waits to %s",
+  "attributes prepared-row work after readiness waits without relabeling roster consumers: %s",
   async (task) => {
     const { read, query } = placementReadView();
     let now = 0;
@@ -106,9 +109,27 @@ it.each(["gateway:rpc:sessions.list", "scheduler:maintenance:session-refresh"])(
         );
       });
       expect(monitor.drain().stalls).toEqual([
-        { elapsedMs: 300, task: `${task}:session-rows:select`, taskMs: 300 },
-        { elapsedMs: 350, task: `${task}:session-rows:prepare`, taskMs: 350 },
-        { elapsedMs: 900, task: `${task}:agent-roster`, taskMs: 500 },
+        {
+          elapsedMs: 300,
+          task: `${task}:session-rows:select`,
+          taskMs: 300,
+          startedAt: 5_000,
+          endedAt: 5_300,
+        },
+        {
+          elapsedMs: 350,
+          task: `${task}:session-rows:prepare`,
+          taskMs: 350,
+          startedAt: 5_300,
+          endedAt: 5_650,
+        },
+        {
+          elapsedMs: 900,
+          task: `${task}:session-rows:consume`,
+          taskMs: 900,
+          startedAt: 5_650,
+          endedAt: 6_550,
+        },
       ]);
     } finally {
       owner.dispose();
@@ -124,6 +145,8 @@ it.each([false, true])(
     const preparedState = projection.state;
     let topologyChanged = false;
     let consumed = 0;
+    let preparedKeyReads = 0;
+    const keyReads = vi.spyOn(sessionStoreKeys, "resolveStoredSessionKeyForAgentStore");
     Object.defineProperty(projection, "state", {
       get() {
         if (topologyChanged) {
@@ -137,16 +160,27 @@ it.each([false, true])(
       () => undefined,
     );
     try {
-      const reading = read(owner, "completed-native-read", () => {
-        consumed++;
-        queueMicrotask(() => {
-          topologyChanged = true;
-        });
-        return "prepared";
-      });
+      const reading = read(
+        owner,
+        "completed-native-read",
+        () => {
+          // Durable selection already classified these keys before entering the read view.
+          expect(keyReads).toHaveBeenCalledTimes(preparedKeyReads);
+          consumed++;
+          queueMicrotask(() => {
+            topologyChanged = true;
+          });
+          return "prepared";
+        },
+        () => {
+          preparedKeyReads = keyReads.mock.calls.length;
+          return undefined;
+        },
+      );
       await expect(reading).resolves.toEqual("prepared");
       expect(consumed).toBe(1);
     } finally {
+      keyReads.mockRestore();
       owner.dispose();
     }
   },

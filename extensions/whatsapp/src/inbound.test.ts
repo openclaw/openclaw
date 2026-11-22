@@ -33,18 +33,31 @@ describe("web inbound helpers", () => {
     expect(extractText(message(input))).toBe(expected);
   });
 
-  it("extracts WhatsApp contact cards", () => {
+  it.each([
+    {
+      label: "display names",
+      displayName: "Ada Lovelace",
+      card: vcard("Ada Lovelace", ["+15555550123"]),
+      name: "Ada Lovelace",
+    },
+    {
+      label: "escaped vCard names and telephone prefixes",
+      displayName: undefined,
+      card: vcard("Ada\\nLovelace\\, Countess\\; Byron", ["TeL: +15555550123 "]),
+      name: "Ada Lovelace, Countess Byron",
+    },
+  ])("extracts WhatsApp contact cards with $label", ({ displayName, card, name }) => {
     const input = message({
       contactMessage: {
-        displayName: "Ada Lovelace",
-        vcard: vcard("Ada Lovelace", ["+15555550123"]),
+        displayName,
+        vcard: card,
       },
     });
     expect(extractText(input)).toBe("<contact>");
     expect(extractContactContext(input)).toEqual({
       kind: "contact",
       total: 1,
-      contacts: [{ name: "Ada Lovelace", phones: ["+15555550123"] }],
+      contacts: [{ name, phones: ["+15555550123"] }],
     });
   });
 

@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspect } from "node:util";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { listDirectoryTreeStrict } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -14,7 +15,10 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { qaGatewayCleanupRuntimeEntrypoint } from "./gateway-child-artifacts-runtime.test-support.js";
-import { cleanupQaGatewayTempRoots } from "./gateway-child-artifacts.js";
+import {
+  cleanupQaGatewayTempRoots,
+  preserveQaGatewayDebugArtifacts,
+} from "./gateway-child-artifacts.js";
 import { createQaGatewaySetupHarness } from "./gateway-child-setup.test-support.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
 import { readQaAuthProfiles, writeQaAuthProfiles } from "./providers/shared/auth-store.js";
@@ -72,10 +76,9 @@ console.log(JSON.stringify({ scratch, cache }));
     };
     expect(await fs.realpath(path.dirname(scratch))).toBe(tempRoot);
     expect(path.relative(tempRoot, await fs.realpath(cache.directory))).not.toMatch(/^\.\./u);
-    const cacheEntries = await fs.readdir(cache.directory, {
-      recursive: true,
-      withFileTypes: true,
-    });
+    const cacheEntries = (await listDirectoryTreeStrict(cache.directory)).map(
+      (walkEntry) => walkEntry.dirent,
+    );
     expect(cacheEntries.some((entry) => entry.isFile())).toBe(true);
     expect(await lifetime.stop()).toEqual({ process: "never-spawned", errors: [] });
     await expect(fs.stat(tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
@@ -277,4 +280,104 @@ console.log(JSON.stringify({ scratch, cache }));
       ).resolves.toBeUndefined();
     },
   );
+});
+
+describe("preserveQaGatewayDebugArtifacts", () => {
+  it("preserves only sanitized gateway debug artifacts", async () => {
+    const tempRoot = await dirs.makeTempDir("qa-gateway-preserve-src-");
+    const repoRoot = await dirs.makeTempDir("qa-gateway-preserve-repo-");
+
+    const stdoutLogPath = path.join(tempRoot, "gateway.stdout.log");
+    const stderrLogPath = path.join(tempRoot, "gateway.stderr.log");
+    const artifactDir = path.join(repoRoot, ".artifacts", "qa-e2e", "gateway-runtime");
+    await fs.mkdir(path.dirname(artifactDir), { recursive: true });
+    await fs.writeFile(
+      stdoutLogPath,
+      [
+        "OPENCLAW_GATEWAY_TOKEN=qa-suite-token",
+        'OPENAI_API_KEY="openai-live"',
+        "OPENROUTER_API_KEY=openrouter-live",
+        'CUSTOM_API_KEYS="custom-a,custom-b"',
+        "CUSTOM_API_KEY_2=custom-b",
+        "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN=qa-token",
+        "OPENCLAW_LIVE_SETUP_TOKEN_VALUE=qa-token-alias",
+        "OPENCLAW_QA_CONVEX_SECRET_CI=convex-ci-secret",
+        "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER=convex-maintainer-secret",
+        "OPENCLAW_LIVE_CODEX_API_KEY=codex-live-secret",
+        "botToken=12345:AbCdEfGhIjKl",
+        "--botToken=12345:flag-secret",
+        '"driverToken":"12345:driver-secr3t"',
+        "sutToken='12345:sut-secr3t'",
+        "leaseToken=lease-12345",
+        '"apiKey":"secret-json-api-key"',
+        "clientSecret=secret-client-secret&secret-tail",
+        "url=http://127.0.0.1:18789/#token=abc123",
+        "callback=https://gateway.example.test/callback?access_token=secret-access-token&ok=1",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      stderrLogPath,
+      [
+        "Authorization: Bearer secret+/token=123456",
+        "Cookie: qa_session=secret-cookie; theme=dark",
+        "Set-Cookie: qa_session=secret-cookie; HttpOnly",
+        "x-api-key: secret-header-api-key",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.mkdir(path.join(tempRoot, "state"), { recursive: true });
+    await fs.writeFile(path.join(tempRoot, "state", "secret.txt"), "do-not-copy", "utf8");
+
+    await preserveQaGatewayDebugArtifacts({
+      preserveToDir: artifactDir,
+      stdoutLogPath,
+      stderrLogPath,
+      tempRoot,
+      repoRoot,
+    });
+
+    expect((await fs.readdir(artifactDir)).toSorted()).toEqual([
+      "README.txt",
+      "gateway.stderr.log",
+      "gateway.stdout.log",
+    ]);
+    await expect(fs.readFile(path.join(artifactDir, "gateway.stdout.log"), "utf8")).resolves.toBe(
+      [
+        "OPENCLAW_GATEWAY_TOKEN=<redacted>",
+        "OPENAI_API_KEY=<redacted>",
+        "OPENROUTER_API_KEY=<redacted>",
+        "CUSTOM_API_KEYS=<redacted>",
+        "CUSTOM_API_KEY_2=<redacted>",
+        "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN=<redacted>",
+        "OPENCLAW_LIVE_SETUP_TOKEN_VALUE=<redacted>",
+        "OPENCLAW_QA_CONVEX_SECRET_CI=<redacted>",
+        "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER=<redacted>",
+        "OPENCLAW_LIVE_CODEX_API_KEY=<redacted>",
+        "botToken=<redacted>",
+        "--botToken=<redacted>",
+        '"driverToken":"<redacted>"',
+        "sutToken=<redacted>",
+        "leaseToken=<redacted>",
+        '"apiKey":"<redacted>"',
+        "clientSecret=<redacted>",
+        "url=http://127.0.0.1:18789/#token=<redacted>",
+        "callback=https://gateway.example.test/callback?access_token=<redacted>&ok=1",
+      ].join("\n"),
+    );
+    await expect(fs.readFile(path.join(artifactDir, "gateway.stderr.log"), "utf8")).resolves.toBe(
+      [
+        "Authorization: Bearer <redacted>",
+        "Cookie: <redacted>",
+        "Set-Cookie: <redacted>",
+        "x-api-key: <redacted>",
+      ].join("\n"),
+    );
+    await expect(fs.readFile(path.join(artifactDir, "README.txt"), "utf8")).resolves.toContain(
+      "was not copied because it may contain credentials or auth tokens",
+    );
+    await expect(fs.readFile(path.join(artifactDir, "README.txt"), "utf8")).resolves.not.toContain(
+      tempRoot,
+    );
+  });
 });

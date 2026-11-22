@@ -9,15 +9,18 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
-import { listSessionTranscriptArchivesReadOnly } from "../config/sessions/session-accessor.sqlite-history.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
-import { listSessionTranscriptInstances } from "../config/sessions/session-history.js";
+import {
+  listSessionTranscriptArchivesReadOnly,
+  listSessionTranscriptInstances,
+} from "../config/sessions/session-history-read.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { assertOpenClawAgentCurrentRuntimeSchema } from "../state/openclaw-agent-db-schema-helpers.js";
@@ -26,6 +29,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   withOpenClawTestState,
@@ -118,7 +122,7 @@ function snapshotDatabase(filename: string) {
 }
 
 async function snapshotFiles(root: string) {
-  const entries = await fs.readdir(root, { recursive: true, withFileTypes: true });
+  const entries = (await listDirectoryTreeStrict(root)).map((walkEntry) => walkEntry.dirent);
   return await Promise.all(
     entries
       // Read-only WAL access may create coordination sidecars without changing committed state.
@@ -326,6 +330,47 @@ describe("reset canonical sessions", () => {
       expect(loadSessionEntry(scope)).toBeUndefined();
       await fs.access(scope.storePath);
       await fs.access(state.workspaceDir);
+    }));
+
+  it.each(["config", "credentials"] as const)(
+    "reports failed %s removal but removes the other path",
+    (failedRemoval) =>
+      withOpenClawTestState({ layout: "split", scenario: "minimal" }, async (state) => {
+        const credentials = await state.writeText("credentials/fixture", "synthetic");
+        const paths = { config: state.configPath, credentials: path.dirname(credentials) };
+        const removed = failedRemoval === "config" ? paths.credentials : paths.config;
+        const rm = fs.rm;
+        const failure = vi
+          .spyOn(fs, "rm")
+          .mockImplementation((target, options) =>
+            target === paths[failedRemoval]
+              ? Promise.reject(new Error("fixture removal failure"))
+              : rm(target, options),
+          );
+        const { runtime, log, error } = silentRuntime();
+
+        try {
+          await expect(reset(runtime)).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        } finally {
+          failure.mockRestore();
+        }
+        expect(error).toHaveBeenCalledWith(expect.stringContaining("fixture removal failure"));
+        expect(log.mock.calls.flat().join("\n")).not.toMatch(/^Next:/m);
+        await fs.access(paths[failedRemoval]);
+        await expectMissing(removed);
+      }),
+  );
+
+  it("refuses to remove an OAuth directory that contains the active state lock", () =>
+    withOpenClawTestState({ layout: "split", scenario: "minimal" }, async (state) => {
+      const marker = await state.writeText("fixture", "keep state");
+      const { runtime, error } = silentRuntime();
+      await withEnvAsync({ OPENCLAW_OAUTH_DIR: state.stateDir }, async () => {
+        await expect(reset(runtime)).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      });
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("contains an active state lock"));
+      await expectFileText(marker, "keep state");
+      await expectMissing(state.configPath);
     }));
 
   it("preserves a colliding archive's history while resetting other agents and independent paths", () =>

@@ -12,9 +12,8 @@ function buildCopilotRuntimeAuthMessage(failure: CopilotRuntimeAuthFailure): str
     return message;
   }
   return (
-    `${message}. Run \`openclaw models auth login-github-copilot\` in a terminal to ` +
-    "authenticate again. If this still fails, verify that your GitHub account has Copilot " +
-    "access and that your organization or enterprise policy permits it."
+    `${message}. Verify that your GitHub account has Copilot access and that your ` +
+    "organization or enterprise policy permits it."
   );
 }
 
@@ -22,7 +21,6 @@ export class CopilotRuntimeAuthError extends Error {
   readonly code = "github_copilot_auth_failed";
   readonly reason: CopilotRuntimeAuthFailure["reason"];
   readonly status?: number;
-  readonly timeoutMs?: number;
 
   constructor(failure: CopilotRuntimeAuthFailure) {
     super(
@@ -33,8 +31,6 @@ export class CopilotRuntimeAuthError extends Error {
     this.reason = failure.reason;
     if (failure.reason === "http_error") {
       this.status = failure.status;
-    } else {
-      this.timeoutMs = failure.timeoutMs;
     }
   }
 }

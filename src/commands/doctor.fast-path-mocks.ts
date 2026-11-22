@@ -125,8 +125,9 @@ vi.mock("./doctor-platform-notes.js", async (importOriginal) => ({
   noteMacGatewayPlatformWarnings: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("./doctor-sandbox.js", () => ({
-  maybeRepairSandboxImages: vi.fn(async (cfg: unknown) => cfg),
+vi.mock("./doctor-sandbox.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-sandbox.js")>()),
+  maybeRepairSandboxImages: vi.fn(async () => []),
   noteCodexBwrapNamespaceWarnings: vi.fn(),
   maybeRepairSandboxRegistryFiles: vi.fn().mockResolvedValue(undefined),
   noteSandboxScopeWarnings: vi.fn(),
@@ -179,8 +180,13 @@ vi.mock("../flows/doctor-startup-channel-maintenance.js", () => ({
   maybeRunDoctorStartupChannelMaintenance: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("./doctor-heartbeat-cadence-migration.js", () => ({
+vi.mock("./doctor-heartbeat-cadence-migration.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-heartbeat-cadence-migration.js")>()),
   collectHeartbeatCadenceMigrationFindings: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("./doctor-heartbeat-retirement.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-heartbeat-retirement.js")>()),
   maybeMigrateHeartbeatCadenceToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
 }));
 

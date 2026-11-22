@@ -153,14 +153,13 @@ private struct OnboardingSecurityNotice: View {
                     Text("Security notice")
                         .font(OpenClawType.subheadSemiBold)
                         .foregroundStyle(.primary)
-                    (
-                        Text("The connected OpenClaw agent can use device capabilities you enable.")
-                            + Text(verbatim: " ")
-                            + Text(
-                                "Camera, microphone, photos, contacts, calendar, and location may be available.")
-                            + Text(verbatim: " ")
-                            + Text(
-                                "Continue only if you trust the gateway and agent you connect to."))
+                    Text(verbatim: [
+                        String(localized: "The connected OpenClaw agent can use device capabilities you enable."),
+                        String(localized: """
+                        Camera, microphone, photos, contacts, calendar, and location may be available.
+                        """),
+                        String(localized: "Continue only if you trust the gateway and agent you connect to."),
+                    ].joined(separator: " "))
                         .font(OpenClawType.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -228,11 +227,15 @@ struct OnboardingIntroStep: View {
     let onContinue: () -> Void
 
     var body: some View {
+        let isPad = UIDevice.current.userInterfaceIdiom == .pad
+
         OnboardingActivationCanvas {
             VStack(alignment: .leading, spacing: 0) {
                 OnboardingHeroHeader(
                     title: "OpenClaw",
-                    subtitle: "Your agent, in your pocket. Pair this iPhone with your gateway to get started.")
+                    subtitle: isPad
+                        ? "Your agent, in your pocket. Pair this iPad with your gateway to get started."
+                        : "Your agent, in your pocket. Pair this iPhone with your gateway to get started.")
                     .padding(.top, 18)
 
                 OnboardingIntroPanel {
@@ -242,7 +245,9 @@ struct OnboardingIntroStep: View {
                             title: "Your agent runs on your own computer")
                         OnboardingSafetyRow(
                             symbol: "qrcode.viewfinder",
-                            title: "Pair this iPhone by scanning a setup code")
+                            title: isPad
+                                ? "Pair this iPad by scanning a setup code"
+                                : "Pair this iPhone by scanning a setup code")
                         OnboardingSafetyRow(
                             symbol: "message.fill",
                             title: "Chat, talk, and approve actions from anywhere")
@@ -274,6 +279,8 @@ struct OnboardingWelcomeStep: View {
     let isConnecting: Bool
     let onScanQRCode: () -> Void
     let onManualSetup: () -> Void
+    /// Set only while no Gateway has ever been saved on this device.
+    let onShowNewUserGuide: (() -> Void)?
 
     var body: some View {
         let statusText = self.statusLine.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -319,6 +326,16 @@ struct OnboardingWelcomeStep: View {
                         }
                         .buttonStyle(OpenClawSecondaryActionButtonStyle(height: 54))
                         .disabled(self.isConnecting)
+                    }
+
+                    if let onShowNewUserGuide {
+                        Button(action: onShowNewUserGuide) {
+                            Text("New to OpenClaw? Start here")
+                                .font(OpenClawType.subheadSemiBold)
+                                .foregroundStyle(OpenClawBrand.activationPrimaryAction)
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.top, 46)

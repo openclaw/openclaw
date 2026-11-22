@@ -10,6 +10,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { isValidMemoryEmbedding } from "./manager-embedding-vectors.js";
 import type { MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
 
 export type MemoryEmbeddingCacheSize = { size: number; exact: boolean };
@@ -40,16 +41,6 @@ type EmbeddingCacheDatabase = {
 export type MemoryEmbeddingCacheEvictionPreference = {
   identities: MemoryIndexProviderIdentity[];
 };
-
-/** Require a finite, nonempty vector compatible with the active embedding dimensions. */
-export function isValidMemoryEmbedding(embedding: number[], dimensions?: number): boolean {
-  return (
-    Array.isArray(embedding) &&
-    embedding.length > 0 &&
-    (dimensions === undefined || embedding.length === dimensions) &&
-    embedding.every((coordinate) => typeof coordinate === "number" && Number.isFinite(coordinate))
-  );
-}
 
 export function loadMemoryEmbeddingCache(params: {
   db: EngineConnection;
@@ -356,8 +347,8 @@ export function upsertMemoryEmbeddingCache(params: {
 }
 
 /*
- * Evicts before inserting so even an uncommitted write never holds more rows than the cap;
- * a forced rebuild otherwise grows the primary file before the excess is deleted. The
+ * Evicts before inserting so even an uncommitted write stays within its capacity budget;
+ * full rebuilds raise that budget until live completion or a later ordinary write. The
  * retained count needs a reread only when inexact. Below capacity a direct UPSERT cannot
  * overflow; at capacity, removing replaced rows makes every UPSERT row a true insert.
  */
@@ -394,20 +385,4 @@ function reserveMemoryEmbeddingCacheCapacity(params: {
     size -= deleteOldestMemoryEmbeddingCacheRows(params.db, excess, params.unreferencedFirst);
   }
   return { size, exactAfterInsert: true };
-}
-
-export function collectMemoryCachedEmbeddings(params: {
-  hashes: string[];
-  cached: Map<string, number[]>;
-}): { embeddings: number[][]; missing: number[] } {
-  const missing: number[] = [];
-  const embeddings = params.hashes.map((hash, index) => {
-    const hit = hash ? params.cached.get(hash) : undefined;
-    if (hit && hit.length > 0) {
-      return hit;
-    }
-    missing.push(index);
-    return [];
-  });
-  return { embeddings, missing };
 }

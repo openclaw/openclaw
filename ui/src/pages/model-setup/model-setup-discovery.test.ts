@@ -1,16 +1,23 @@
 /* @vitest-environment jsdom */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { WizardNextParams } from "../../../../packages/gateway-protocol/src/schema/wizard.ts";
 import { WizardSession } from "../../../../src/wizard/session.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { persistFirstRunActivationReceipt } from "./first-run-activation-receipt.ts";
 import {
+  authButton,
+  authOption,
+  detection,
+  selectManualProvider,
+  setInput,
+  waitForElement,
   missingWizardError,
   running,
   configuredDetection,
   waitForText,
-  waitForElement,
   runningStep,
   answerWizard,
   enterManualKey,
@@ -19,18 +26,115 @@ import {
   pendingReceipt,
   modalButton,
   callsFor,
-  setInput,
   candidate,
   clickCandidate,
   createFirstRunContext,
-  detection,
   mountDetection,
-  selectManualProvider,
 } from "./model-setup-first-run.test-support.ts";
+import { createPage, mountModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
+
+const knownChoices: SystemAgentSetupDetectResult = {
+  ...detection,
+  manualProviders: [{ id: "provider-key", label: "API provider" }],
+  authOptions: [authOption("provider-login", "Provider login")],
+};
+
+// Known choices answer at once; the slow local scan finishes only when the test says so.
+function mountDuringSlowDiscovery(
+  handlers: Record<string, (params: unknown) => unknown> = {},
+  beforeMount?: (context: ReturnType<typeof createFirstRunContext>["context"]) => void,
+) {
+  const fixture = createFirstRunContext();
+  const discovery = createDeferred<SystemAgentSetupDetectResult>();
+  fixture.setupOptions.mockResolvedValue(knownChoices);
+  mockRequests(fixture.request, {
+    "openclaw.setup.detect": () => discovery.promise,
+    ...handlers,
+  });
+  beforeMount?.(fixture.context);
+  const page = createPage(fixture.context);
+  page.routeData = { firstRun: true };
+  document.body.append(page);
+  mountModelSetupPage(page);
+  return { ...fixture, page, discovery };
+}
+
+const lateDiscovery = {
+  ...knownChoices,
+  candidates: [candidate("codex-cli", "openai/codex", true)],
+};
+
+describe("Model Setup known choices during discovery", () => {
+  useFirstRunFixtures("test-device-key");
+
+  it.each(["no receipt", "provider-login"] as const)(
+    "keeps the person's provider, draft, and focus when discovery finishes (%s)",
+    async (receipt) => {
+      const { page, request, discovery } = mountDuringSlowDiscovery({}, (context) => {
+        if (receipt === "provider-login") {
+          persistFirstRunActivationReceipt(context, { kind: "provider-login" });
+        }
+      });
+      await waitForFast(() => expect(authButton(page, "provider-login")?.disabled).toBe(false));
+      await selectManualProvider(page, "provider-key");
+      const input = page.querySelector<HTMLInputElement>(".model-setup__manual input")!;
+      setInput(page, ".model-setup__manual input", "synthetic-draft");
+      input.focus();
+      expect(page.querySelector('[data-candidate-kind="codex-cli"]')).toBeNull();
+      expect(
+        page.querySelector<HTMLButtonElement>(".model-setup__manual .btn.primary")!.disabled,
+      ).toBe(false);
+
+      discovery.resolve(lateDiscovery);
+      await waitForElement(page, '[data-candidate-kind="codex-cli"]');
+      expect(page.querySelector(".model-setup__manual input")).toBe(input);
+      expect(input.value).toBe("synthetic-draft");
+      expect(document.activeElement).toBe(input);
+      expect(page.querySelector(".model-setup-provider-select__trigger")?.textContent).toContain(
+        "API provider",
+      );
+      expect(callsFor(request, "openclaw.setup.detect")).toHaveLength(1);
+    },
+  );
+
+  it("keeps a browser sign-in started before discovery finishes", async () => {
+    vi.spyOn(window, "open").mockReturnValue(null);
+    const { page, request, discovery } = mountDuringSlowDiscovery({
+      "openclaw.setup.auth.start": () => running,
+      "wizard.next": () =>
+        runningStep({
+          id: "browser",
+          type: "text",
+          message: "Finish sign-in in your browser",
+          executor: "client",
+        }),
+    });
+    await waitForFast(() => expect(authButton(page, "provider-login")?.disabled).toBe(false));
+    authButton(page, "provider-login")!.click();
+    await waitForText(page, "Finish sign-in in your browser");
+
+    discovery.resolve(lateDiscovery);
+    await waitForElement(page, '[data-candidate-kind="codex-cli"]');
+    expect(page.textContent).toContain("Finish sign-in in your browser");
+    expect(callsFor(request, "openclaw.setup.auth.start")).toHaveLength(1);
+    expect(callsFor(request, "wizard.cancel")).toHaveLength(0);
+  });
+
+  it("waits for discovery while an earlier activation may still commit", async () => {
+    const { page, discovery, setupOptions } = mountDuringSlowDiscovery({}, (context) =>
+      persistFirstRunActivationReceipt(context, { kind: "provider-auth" }),
+    );
+    await waitForFast(() => expect(setupOptions).toHaveBeenCalledOnce());
+    await page.updateComplete;
+    expect(page.querySelector(".model-setup__loading")).not.toBeNull();
+    expect(authButton(page, "provider-login")).toBeNull();
+    discovery.resolve(knownChoices);
+    await waitForElement(page, ".model-setup__recovery");
+  });
+});
 
 describe("Model Setup explicit discovery", () => {
   useFirstRunFixtures("test-device-key");
-  const nativeInput = ".model-setup__native-discovery input";
   it.each(["cancel at credentials", "finish final commit"] as const)(
     "retains the admitted wizard after protected cancellation: %s",
     async (outcome) => {
@@ -116,7 +220,7 @@ describe("Model Setup explicit discovery", () => {
           expect(session!.getStatus()).toBe("running");
           allowCommit.resolve();
           await terminal.promise;
-          await waitForText(page, "Connection verified");
+          await waitForText(page, "Model verified");
           expect(answers).toEqual([true, "synthetic-key"]);
         }
         expect(starts).toBe(1);
@@ -168,7 +272,7 @@ describe("Model Setup explicit discovery", () => {
         page.querySelector("openclaw-modal-dialog")!.dispatchEvent(new CustomEvent("modal-cancel"));
       cancel();
       if (failure === "missing wizard") {
-        await waitForText(page, "It may already have finished");
+        await waitForText(page, "This setup may have finished");
         expect(cancels).toBe(1);
         expect(pendingReceipt()).toBe(receipt);
         expect(modalButton(page, "Close")).toBeDefined();
@@ -178,8 +282,8 @@ describe("Model Setup explicit discovery", () => {
         expect(pendingReceipt()).toBe(receipt);
       } else {
         await waitForFast(() =>
-          expect(page.querySelector(".model-setup-wizard .callout.warning")?.textContent).toContain(
-            "Could not confirm cancellation",
+          expect(page.querySelector(".model-setup-wizard .callout.warn")?.textContent).toContain(
+            "Couldn’t confirm cancellation",
           ),
         );
         expect(page.textContent).toContain(error.message);
@@ -196,13 +300,15 @@ describe("Model Setup explicit discovery", () => {
     },
   );
 
-  it("does not change upgrade catalog choices or select a manual provider implicitly", async () => {
+  it("never offers native conversations or selects a manual provider implicitly", async () => {
     const { context, client, request } = createFirstRunContext();
     request.mockResolvedValue({ done: true, status: "cancelled" });
+    // Even when the Gateway would record a fresh catalog preference, connecting AI
+    // leaves that choice to Session sources and lets the Gateway keep it off.
     const { page } = await mountDetection(context, client, {
       configuredModel: "openai/existing",
       setupComplete: true,
-      nativeSessionCatalogPreferenceRequired: false,
+      nativeSessionCatalogPreferenceRequired: true,
       nativeSessionCatalogs: [{ pluginId: "codex", label: "Codex" }],
       manualProviders: [{ id: "provider-key", label: "API provider" }],
     });
@@ -212,35 +318,5 @@ describe("Model Setup explicit discovery", () => {
     await enterManualKey(page, "provider-key", "test-only-key");
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     expect(request.mock.calls[0]![1]).not.toHaveProperty("nativeSessionCatalogsEnabled");
-  });
-  it("clears a pending credential and native discovery opt-in when the Gateway identity changes", async () => {
-    const { context, client, request, snapshot, publishGatewaySnapshot } = createFirstRunContext();
-    const fresh = {
-      ...detection,
-      nativeSessionCatalogPreferenceRequired: true,
-      nativeSessionCatalogs: [{ pluginId: "codex", label: "Codex" }],
-      manualProviders: [{ id: "provider-key", label: "API provider" }],
-    };
-    request.mockResolvedValue(fresh);
-    const { page } = await mountDetection(context, client, fresh);
-    page.querySelector<HTMLInputElement>(nativeInput)!.click();
-    await selectManualProvider(page, "provider-key");
-    setInput(page, ".model-setup__manual input", "test-only-pending-key");
-    await page.updateComplete;
-    expect(request).not.toHaveBeenCalled();
-    Object.assign(context.gateway, { connectionRevision: context.gateway.connectionRevision + 1 });
-    publishGatewaySnapshot({ ...snapshot });
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith(
-        "openclaw.setup.detect",
-        { agentId: "main" },
-        expect.objectContaining({ timeoutMs: expect.any(Number), signal: expect.any(AbortSignal) }),
-      ),
-    );
-    await waitForElement(page, nativeInput);
-    expect(page.querySelector(nativeInput)).toMatchObject({ checked: false });
-    expect(page.querySelector(".model-setup__manual input")).toMatchObject({ value: "" });
-    expect(page.querySelector("[data-selected]")).toBeNull();
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["openclaw.setup.detect"]);
   });
 });

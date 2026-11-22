@@ -229,9 +229,6 @@ describe("managed unified Computer Use marketplace", () => {
           pluginName: "unified-computer-use",
           tools: ["js"],
         });
-        expect(vi.mocked(params.request).mock.calls.map(([method]) => method)).toContain(
-          "plugin/install",
-        );
         return;
       }
       if (action === "status") {

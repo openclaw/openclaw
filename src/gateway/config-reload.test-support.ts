@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { assert, expect, it, onTestFinished, vi, type TestContext } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type {
   ConfigFileSnapshot,
   ConfigWriteNotification,
@@ -72,6 +73,7 @@ export function createPluginLifecycleLeaseTestClock() {
     return completion;
   });
   const withLease = pluginLifecycleLease.withPluginLifecycleLease;
+  const withAsyncLease = pluginLifecycleLease.withPluginLifecycleLeaseAsync;
   const withCleanupLease = pluginLifecycleLease.withPluginArtifactCleanupLease;
   let firstCompletion: Promise<unknown> | undefined;
   const trackLease = <T>(start: () => Promise<T>): Promise<T> => {
@@ -82,11 +84,15 @@ export function createPluginLifecycleLeaseTestClock() {
   const leaseSpy = vi
     .spyOn(pluginLifecycleLease, "withPluginLifecycleLease")
     .mockImplementation((options, run) => trackLease(() => withLease(options, run)));
+  const asyncLeaseSpy = vi
+    .spyOn(pluginLifecycleLease, "withPluginLifecycleLeaseAsync")
+    .mockImplementation((options, run) => trackLease(() => withAsyncLease(options, run)));
   const cleanupLeaseSpy = vi
     .spyOn(pluginLifecycleLease, "withPluginArtifactCleanupLease")
     .mockImplementation((options, run) => trackLease(() => withCleanupLease(options, run)));
   onTestFinished(() => {
     leaseSpy.mockRestore();
+    asyncLeaseSpy.mockRestore();
     cleanupLeaseSpy.mockRestore();
     sleepSpy.mockRestore();
   });
@@ -228,19 +234,11 @@ export function makeSnapshot(partial: Partial<ConfigFileSnapshot> = {}): ConfigF
   const runtimeConfig = partial.runtimeConfig ?? partial.config ?? {};
   const parsed = partial.parsed ?? sourceConfig;
   return {
-    path: "/tmp/openclaw.json",
+    ...createTestConfigSnapshot(sourceConfig, runtimeConfig),
     includedPaths: [],
-    exists: true,
     raw: partial.exists === false ? null : JSON.stringify(parsed),
     parsed,
-    sourceConfig,
-    resolved: sourceConfig,
-    valid: true,
-    runtimeConfig,
     config,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
     ...partial,
   };
 }
@@ -438,19 +436,14 @@ export function registerReverseHotReloadTest() {
     await waitForReloadState(() => onHotReload.mock.calls.length === 2);
     await flushReload(harness.reloader);
 
-    expect(onHotReload).toHaveBeenCalledTimes(2);
     expect(onHotReload.mock.calls.map(([, config]) => config)).toEqual([configA, initialConfig]);
     expect(onHotReload.mock.calls[1]?.[0].hotReasons).toContain("hooks.path");
-    expect(harness.onConfigAccepted).toHaveBeenCalledTimes(2);
-    expect(harness.onConfigAccepted.mock.calls.map((call) => call[0])).toEqual([
-      configA,
-      initialConfig,
-    ]);
-    expect(harness.onConfigApplied).toHaveBeenCalledTimes(2);
-    expect(harness.onConfigApplied.mock.calls.map(([, config]) => config)).toEqual([
-      configA,
-      initialConfig,
-    ]);
+    for (const configs of [
+      harness.onConfigAccepted.mock.calls.map(([config]) => config),
+      harness.onConfigApplied.mock.calls.map(([, config]) => config),
+    ]) {
+      expect(configs).toEqual([configA, initialConfig]);
+    }
     expect(promoteSnapshot.mock.calls.map(([snapshot]) => snapshot.hash)).toEqual([
       "post-commit-a",
       "reverse-b",

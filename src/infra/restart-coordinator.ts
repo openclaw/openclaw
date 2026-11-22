@@ -1,24 +1,9 @@
-import {
-  createGatewayActiveWorkSnapshot,
-  type GatewayActiveWorkBlocker,
-} from "./gateway-active-work.js";
+import { createGatewayActiveWorkSnapshot } from "./gateway-active-work.js";
+import type { RestartEmitHooks } from "./restart-request.js";
 import { scheduleGatewayRestart, type ScheduledRestart } from "./restart.js";
 
 // Safe restart coordination checks active local work before scheduling SIGUSR2
 // restarts, while still allowing explicit deferral bypasses for operators.
-type SafeGatewayRestartBlocker = Omit<GatewayActiveWorkBlocker, "kind"> & {
-  kind:
-    | "queue"
-    | "reply"
-    | "embedded-run"
-    | "cron-run"
-    | "background-exec"
-    | "root-request"
-    | "agent-run"
-    | "acp-run"
-    | "media-generation";
-};
-
 export type SafeGatewayRestartRequestResult = {
   ok: true;
   status: "scheduled" | "deferred" | "coalesced";
@@ -27,14 +12,7 @@ export type SafeGatewayRestartRequestResult = {
 };
 
 export function createSafeGatewayRestartPreflight() {
-  const snapshot = createGatewayActiveWorkSnapshot({
-    getSessionAdmissions: () => 0,
-    getSessionMutations: () => 0,
-    getChatRuns: () => 0,
-    getQueuedTurns: () => 0,
-    getTerminalPersistence: () => 0,
-    getTerminalSessions: () => 0,
-  });
+  const snapshot = createGatewayActiveWorkSnapshot();
   const counts = {
     queueSize: snapshot.counts.queueSize,
     pendingReplies: snapshot.counts.pendingReplies,
@@ -45,9 +23,15 @@ export function createSafeGatewayRestartPreflight() {
     agentRuns: snapshot.counts.agentRuns,
     acpRuns: snapshot.counts.acpRuns,
     mediaRuns: snapshot.counts.mediaRuns,
+    sessionAdmissions: snapshot.counts.sessionAdmissions,
+    sessionMutations: snapshot.counts.sessionMutations,
+    chatRuns: snapshot.counts.chatRuns,
+    queuedTurns: snapshot.counts.queuedTurns,
+    terminalPersistence: snapshot.counts.terminalPersistence,
+    terminalSessions: snapshot.counts.terminalSessions,
   };
   const totalActive = Object.values(counts).reduce((total, count) => total + count, 0);
-  const blockers = snapshot.blockers as SafeGatewayRestartBlocker[];
+  const blockers = snapshot.blockers;
 
   const summary =
     blockers.length === 0
@@ -66,6 +50,8 @@ export function scheduleSafeGatewayRestart(
   opts: {
     reason?: string;
     skipDeferral?: boolean;
+    sessionKey?: string;
+    emitHooks?: RestartEmitHooks;
   } = {},
 ): SafeGatewayRestartRequestResult {
   const preflight = createSafeGatewayRestartPreflight();
@@ -73,6 +59,8 @@ export function scheduleSafeGatewayRestart(
   const restart = scheduleGatewayRestart({
     delayMs: 0,
     reason: opts.reason ?? "gateway.restart.safe",
+    ...(opts.sessionKey ? { sessionKey: opts.sessionKey } : {}),
+    ...(opts.emitHooks ? { emitHooks: opts.emitHooks } : {}),
     ...(skipDeferral ? { preservePendingEmitHooksOnDeferralBypass: true, skipDeferral: true } : {}),
   });
   const status = restart.coalesced

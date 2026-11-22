@@ -7,7 +7,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
-  assignSessionOwner,
   loadSessionEntry,
   patchSessionEntryCore,
   upsertSessionEntryCore,
@@ -22,9 +21,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { isPublicSessionShareActive } from "../control-ui-public-session-read.js";
 import * as publicSessionTokens from "../control-ui-public-session-token.js";
-import { createTestProjection } from "../session-row-projection.read-fixture.test-support.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { sessionSharingHandlers } from "./sessions-sharing.js";
 import { identifiedClient, sessionSharingTestContext } from "./sessions-sharing.test-support.js";
@@ -49,6 +46,14 @@ const grant = () =>
   expectDefined(loadSessionEntry(scope)?.publicShare, "persisted public share grant");
 const resolveToken = (share: { token: string } | undefined) =>
   publicSessionTokens.resolvePublicSessionShareToken(share?.token ?? "");
+const entry = () => loadSessionEntry(scope);
+function adminClient() {
+  const client = identifiedClient("admin");
+  client.connect.scopes = ["operator.admin"];
+  return client;
+}
+const patch = (fields: Parameters<typeof upsertSessionEntryCore>[1]) =>
+  upsertSessionEntryCore(scope, fields);
 
 async function call(
   method: "session.publicShare.set" | "session.members.listEvidence" | "session.visibility.set",
@@ -96,43 +101,6 @@ async function setPublic(enabled: boolean, client?: GatewayClient, expectedSessi
   return call("session.publicShare.set", { ...scope, expectedSessionId, enabled }, client);
 }
 
-it("keeps explicit publication with the causal creator through a cold reopen", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async () => {
-    setRuntimeConfigSnapshot(cfg);
-    await upsertSessionEntryCore(scope, {
-      ...ownerEntry,
-      createdActor: {
-        type: "human",
-        source: "profile",
-        id: "isolation-owner",
-        delegatedBy: ownerEntry.createdActor,
-      },
-    });
-    assignSessionOwner(scope, {
-      owner: { type: "human", id: "assignee" },
-      assignedBy: ownerEntry.createdActor,
-    });
-    expect(loadSessionEntry(scope)?.publicShare).toBeUndefined();
-    for (const id of ["isolation-owner", "assignee"]) {
-      expect((await setPublic(true, identifiedClient(id)))?.[0]).toBe(false);
-    }
-    const published = publication(await setPublic(true));
-    const saved = grant();
-    await closeOpenClawAgentDatabasesAsync();
-    await expectToken(published, saved.id);
-    const locator = expectDefined(await resolveToken(published), "published locator");
-    using projection = await createTestProjection({ cfg, modelCatalog: [] });
-    await projection.ensureMaterialized();
-    expect(isPublicSessionShareActive(cfg, locator, projection)).toBe(true);
-    const retained = loadSessionEntry(scope)!;
-    expect(retained.createdActor?.id).toBe("isolation-owner");
-    expect(projectPublicSessionEntry(retained).createdActor).toEqual(ownerEntry.createdActor);
-    expect((await setPublic(false))?.[0]).toBe(true);
-    await projection.ensureMaterialized();
-    expect(isPublicSessionShareActive(cfg, locator, projection)).toBe(false);
-    expect(loadSessionEntry(scope)?.publicShare).toBeUndefined();
-  }));
-
 it("publishes, reuses, revokes and rotates links independently of team visibility", () =>
   withSession(async () => {
     const published = await setPublic(true);
@@ -143,6 +111,7 @@ it("publishes, reuses, revokes and rotates links independently of team visibilit
       token: expect.stringMatching(/^v1\.[A-Za-z0-9_-]+$/u),
       createdAt: firstGrant.createdAt,
     });
+    await closeOpenClawAgentDatabasesAsync();
     await expectToken(result, firstGrant.id);
     expect(isSecretValueRegisteredForRedaction(result?.token ?? "")).toBe(true);
     expect(isSecretValueRegisteredForRedaction(firstGrant.id)).toBe(true);
@@ -173,10 +142,8 @@ it("rejects non-managers and stale generations without changing publication", ()
     expect((await setPublic(true, identifiedClient("outsider")))?.[0]).toBe(false);
     expect((await setPublic(true, undefined, "previous-generation"))?.[0]).toBe(false);
     expect(loadSessionEntry(scope)?.publicShare).toBeUndefined();
-    const admin = identifiedClient("admin");
-    admin.connect.scopes = ["operator.admin"];
-    expect((await setPublic(true, admin))?.[0]).toBe(true);
-    const existingGrant = loadSessionEntry(scope)?.publicShare;
+    expect((await setPublic(true, adminClient()))?.[0]).toBe(true);
+    const existingGrant = entry()?.publicShare;
     expect((await setPublic(false, identifiedClient("outsider")))?.[0]).toBe(false);
     expect(loadSessionEntry(scope)?.publicShare).toEqual(existingGrant);
   }));
@@ -207,15 +174,13 @@ it("rejects publication when runtime config remaps the exact store before commit
     beforeWrite(() => {
       currentConfig = secondConfig;
     });
-    const admin = identifiedClient("admin");
-    admin.connect.scopes = ["operator.admin"];
     const respond = vi.fn<RespondFn>();
 
     await expectStale(
       call(
         "session.publicShare.set",
         { sessionKey, expectedSessionId: sessionId, enabled: true },
-        admin,
+        adminClient(),
         requestContext,
         respond,
       ),
@@ -245,10 +210,7 @@ it.each([
       expect(loadSessionEntry(scope)?.visibility).toBeUndefined();
     }
     const resetSession = () =>
-      upsertSessionEntryCore(
-        scope,
-        resetGeneration ? { sessionId: "replacement-generation" } : { visibility: "draft" },
-      );
+      patch(resetGeneration ? { sessionId: "replacement-generation" } : { visibility: "draft" });
     if (method !== "session.members.listEvidence") {
       beforeWrite(resetSession);
     } else {
@@ -268,12 +230,11 @@ it.each([
           });
     if (resetGeneration) {
       await expectStale(pending);
-      const entry = loadSessionEntry(scope);
-      expect(entry).toMatchObject({
+      expect(entry()).toMatchObject({
         sessionId: "replacement-generation",
         createdActor: { id: "owner" },
       });
-      expect(entry?.publicShare).toBeUndefined();
+      expect(entry()?.publicShare).toBeUndefined();
     } else {
       expect((await pending)?.[0]).toBe(true);
       expect(loadSessionEntry(scope)?.visibility).toBe("shared");
@@ -292,7 +253,7 @@ it.each([false, true])(
         const read = sharingStore.readSessionMembersInWorker;
         vi.spyOn(sharingStore, "readSessionMembersInWorker").mockImplementationOnce(
           async (input) => {
-            await upsertSessionEntryCore(scope, { publicShare: publishedGrant });
+            await patch({ publicShare: publishedGrant });
             return read(input);
           },
         );
@@ -301,9 +262,7 @@ it.each([false, true])(
       vi.spyOn(publicSessionTokens, "loadPublicSessionShareTokenCodec").mockImplementationOnce(
         async () => {
           const codec = await loadCodec();
-          await upsertSessionEntryCore(scope, {
-            sessionId: "replacement-generation",
-          });
+          await patch({ sessionId: "replacement-generation" });
           return codec;
         },
       );

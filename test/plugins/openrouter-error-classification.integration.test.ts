@@ -145,7 +145,7 @@ describe("OpenRouter runtime error classification", () => {
     expectRetryEffects(fixture, 0);
   });
 
-  it("keeps genuine HTTP 429 recovery at nine same-model retries", async () => {
+  it("keeps genuine HTTP 429 recovery at fifteen same-model retries", async () => {
     const result = await runAgainstOpenRouter({
       status: 429,
       message: "Rate limit exceeded",
@@ -157,18 +157,18 @@ describe("OpenRouter runtime error classification", () => {
       lastRetryFailoverReason: "rate_limit",
     };
     expect(fixture.recovery).toMatchObject(retryState);
-    for (let retry = 2; retry <= 9; retry++) {
+    for (let retry = 2; retry <= 15; retry++) {
       expect(await fixture.recover()).toMatchObject(retryState);
     }
     expect(await fixture.recover()).toEqual({ action: "proceed" });
-    expectRetryEffects(fixture, 9);
+    expectRetryEffects(fixture, 15);
     expect(fixture.onAgentEvent).toHaveBeenLastCalledWith({
       stream: "run_status",
       data: expect.objectContaining({
         phase: "retrying",
         reason: "rate_limit",
-        attempt: 10,
-        maxAttempts: 10,
+        attempt: 16,
+        maxAttempts: 16,
       }),
     });
   });

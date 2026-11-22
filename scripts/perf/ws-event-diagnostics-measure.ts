@@ -1,3 +1,8 @@
+// Recorder: node --expose-gc --import ./scripts/tsx.mjs scripts/perf/ws-event-diagnostics-measure.ts --batches 2000 --frames 64
+// Add --transport --port 41587 for real WebSocket sends. Run unchanged on base and
+// candidate in alternating order. Each run checks frame/byte/bucket totals and
+// measures sampled allocation (including collected objects) separately from CPU/GC.
+// This owner probe supplements the built-Gateway workload in ws-counter-stress.ts.
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import type { HeapProfiler } from "node:inspector";

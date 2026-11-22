@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
@@ -22,10 +23,7 @@ beforeEach(() => {
   for (const dir of ["tmp", "state", "dist"]) {
     fs.mkdirSync(path.join(root, dir), { mode: 0o700 });
   }
-  fs.writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "1.0.1" }),
-  );
+  writeFixtureJsonSync(path.join(root, "package.json"), { name: "openclaw", version: "1.0.1" });
   fs.writeFileSync(path.join(root, "dist", "index.js"), "");
   fs.writeFileSync(path.join(root, "state", "openclaw.json"), "{}\n");
   env = {
@@ -40,22 +38,19 @@ beforeEach(() => {
     runtimeInspected: true,
     running: false,
   });
-  mocks.validateCanary.mockResolvedValue({
+  mocks.checkCandidate.mockResolvedValue({
     status: "ok",
-    phase: "readiness",
     steps: [],
-    durationMs: 1,
-    logTail: [],
     doctorConfigWrites: true,
   });
 });
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["package", "artifact", "git"] as const)(
+it.each(["package", "artifact"] as const)(
   "admits the acquired owner at the real %s preparation boundary through activation and Doctor",
   async (kind) => {
     const params = {
-      ...executionParams(kind === "git" ? "git" : "package"),
+      ...executionParams("package"),
       root,
       shouldRestart: false,
     };
@@ -101,18 +96,6 @@ it.each(["package", "artifact", "git"] as const)(
           activated = true;
           doctor(options.getDoctorContext?.());
           return successfulUpdate;
-        },
-      );
-      mocks.runGitUpdate.mockImplementation(
-        async (
-          options: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0],
-        ) => {
-          await options.inspectGitTarget?.({ schemaVersions: { state: 15, agent: 19 } });
-          await options.validateCandidate?.(root);
-          await options.beforeGitMutation?.({ schemaVersions: { state: 15, agent: 19 } });
-          activated = true;
-          doctor(options.getDoctorContext?.());
-          return { ...successfulUpdate, mode: "git" };
         },
       );
       const result = await executeMutableUpdate(await bindExecutionGuards(params));

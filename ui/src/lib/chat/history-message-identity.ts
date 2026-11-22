@@ -1,6 +1,5 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ChatInputReceipts } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 
 export function readChatThreadMessageIdentity(message: unknown) {
   const record = asNullableRecord(message);
@@ -15,25 +14,6 @@ export function readChatThreadMessageIdentity(message: unknown) {
 export function userTurnRunId(message: unknown): string | null {
   const identity = readChatThreadMessageIdentity(message);
   return identity?.role === "user" ? identity.runId : null;
-}
-
-/** Exact custody is independent of display pagination, but stays physical-session scoped. */
-export function readChatInputReceipt(
-  history: {
-    inputReceipts?: ChatInputReceipts;
-    sessionInfo?: { sessionId?: string };
-    sessionId?: string;
-  },
-  item: { sendRunId?: string; sessionId?: string },
-) {
-  if (
-    !item.sendRunId ||
-    (item.sessionId && item.sessionId !== (history.sessionInfo?.sessionId ?? history.sessionId))
-  ) {
-    return undefined;
-  }
-  const receipt = history.inputReceipts?.find((input) => input.runId === item.sendRunId);
-  return receipt?.state === "pending" && receipt.cancelled ? "cancelled" : receipt?.state;
 }
 
 /** Submission proof uses the recorded key, never execution correlation. */
@@ -63,15 +43,30 @@ export function findChatSubmissionMessage(
   return match;
 }
 
-function nativeHistoryMessageSourceIdentity(message: unknown): string | null {
+/** Gateway anchor IDs also belong to roleless status and compaction rows. */
+export function nativeHistoryMessageSourceId(message: unknown): string | null {
+  const id = asNullableRecord(asNullableRecord(message)?.["__openclaw"])?.id;
+  return typeof id === "string" && id ? id : null;
+}
+
+/** Raw loaded rows retain the sources rendered inside activity summaries. */
+export function oldestNativeHistoryMessage(messages: unknown[]): unknown {
+  return messages.find(nativeHistoryMessageSourceId);
+}
+
+export function nativeHistoryMessageSourceIdentity(message: unknown): string | null {
   const record = asNullableRecord(message);
   const metadata = asNullableRecord(record?.["__openclaw"]);
   const seq = metadata?.seq;
-  const id = metadata?.id ?? record?.messageId;
-  return typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0
-    ? `seq:${seq}`
-    : typeof id === "string" && id.trim()
-      ? `id:${id}`
+  const identity = readSessionMessageIdentity(message);
+  if (identity?.isImported && identity.externalSource) {
+    return `import:${identity.externalSource}`;
+  }
+  const id = nativeHistoryMessageSourceId(message);
+  return id
+    ? `id:${id}`
+    : typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0
+      ? `seq:${seq}`
       : null;
 }
 

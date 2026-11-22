@@ -3,14 +3,16 @@ import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.j
 import { isCronWithinActiveHours } from "../active-hours.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
-import { readDefaultProactiveJobReceiptsAsync } from "../proactive-job-receipt.js";
+import { resolveCronOwnerTransferRecoveryError } from "../human-owner.js";
+import { cronOperatorSourceRefusal } from "../operator-source-error.js";
+import { readDefaultProactiveJobReceiptsByKeyAsync } from "../proactive-job-receipt.js";
 import { isProactiveJobMigrationPending } from "../proactive-job-receipt.kernel.js";
 import { resolveCronRunAdmissionSource } from "../run-authority.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import type { ScheduledOccurrence } from "../scheduled-occurrence.js";
 import { resolveCronToolsAllowExecTargetRecoveryError } from "../scheduled-tool-policy.js";
 import { isCronScratchEffectivelyEmpty } from "../scratch-contract.js";
-import { readCronScratchSnapshot } from "../scratch-read.js";
+import { readCronScratchSnapshotByKey } from "../scratch-read.js";
 import { cronScriptFailureMetadata } from "../script-failure.js";
 import { resolveCronSessionTargetSessionKey } from "../session-target.js";
 import { ownsCronSource } from "../source-schedule.js";
@@ -54,6 +56,10 @@ export async function executeJobCore(
   });
   if (abortSignal?.aborted) {
     return resolveAbortError();
+  }
+  const ownerTransferError = resolveCronOwnerTransferRecoveryError(job);
+  if (ownerTransferError) {
+    return { status: "error", error: ownerTransferError, executionStarted: false };
   }
   const executionBlockReason = describeCronHostExecutionRestriction(
     job,
@@ -110,7 +116,9 @@ export async function executeJobCore(
   );
   let migrationPending = options?.migrationPending;
   if (migrationPending === undefined && agentId) {
-    const receipts = await readDefaultProactiveJobReceiptsAsync(state.deps.storePath, [agentId]);
+    const receipts = await readDefaultProactiveJobReceiptsByKeyAsync(state.deps.storeKey, [
+      agentId,
+    ]);
     assertCurrent();
     migrationPending = isProactiveJobMigrationPending(receipts[agentId], job.id);
   }
@@ -194,8 +202,8 @@ export async function executeJobCore(
       }
     }
     if (job.payload.kind === "agentTurn" && job.payload.skipIfScratchEmpty) {
-      const snapshot = await readCronScratchSnapshot(
-        state.deps.storePath,
+      const snapshot = await readCronScratchSnapshotByKey(
+        state.deps.storeKey,
         { kind: "job", jobId: job.id, createdAtMsFallback: job.createdAtMs },
         {},
         { assertCurrent, signal: abortSignal },
@@ -209,12 +217,14 @@ export async function executeJobCore(
         !sessionPreparation?.notices.events.length &&
         isCronScratchEffectivelyEmpty(snapshot?.state.scratch?.content)
       ) {
+        // An empty checklist is a quiet check, not a failure: complete with nothing to deliver.
         return {
-          status: "skipped",
+          status: "ok",
           summary: "Automation scratch is explicitly empty",
           executionStarted: false,
           delivered: false,
           deliveryAttempted: false,
+          deliverySuppressionReason: "empty",
         };
       }
     }
@@ -271,19 +281,15 @@ export async function executeJobCore(
         streamBatch: options?.streamBatch,
         abortSignal,
         executionIdentity: options?.executionIdentity,
-      });
+      }).catch(cronOperatorSourceRefusal);
       sessionPreparation?.notices.assertCurrent();
       // Trigger scripts may settle after cancellation; never start payload work
       // or persist trigger results for a run that has already been aborted.
       if (abortSignal?.aborted) {
         return resolveAbortError();
       }
-      if (evaluation.kind === "busy") {
-        state.deps.log.debug({ jobId: job.id }, "cron: trigger evaluation skipped while busy");
-        return {
-          status: "ok",
-          triggerEval: { fired: false, stateChanged: false, busy: true },
-        };
+      if ("status" in evaluation) {
+        return evaluation;
       }
       if (evaluation.kind === "error") {
         return {
@@ -301,6 +307,39 @@ export async function executeJobCore(
       };
       if (!evaluation.fire) {
         return { status: "ok", triggerEval };
+      }
+      // The wait for a run slot pauses the run's time budget, like a lane wait.
+      const runSlot = await options?.onConditionFired?.({
+        signal: abortSignal,
+        onWait: (waiting) => options.onLaneWait?.({ waiting }),
+      });
+      if (abortSignal?.aborted) {
+        return resolveAbortError();
+      }
+      if (runSlot === "stopped") {
+        return {
+          status: "error",
+          error: "Automation stopped while waiting for a run slot",
+          errorClassification: { kind: "aborted" },
+        };
+      }
+      if (
+        runSlot === "taken-after-wait" &&
+        !isCronWithinActiveHours(
+          job.activeHours,
+          state.deps.nowMs(),
+          state.deps.resolveUserTimezone?.(),
+        )
+      ) {
+        // The window closed during the wait; the check already spent this occurrence.
+        return {
+          status: "skipped",
+          summary: "Outside this automation's active hours",
+          executionStarted: false,
+          delivered: false,
+          deliveryAttempted: false,
+          triggerEval,
+        };
       }
       if (evaluation.message !== undefined) {
         effectiveJob = { ...job, payload: appendCronPayloadText(job.payload, evaluation.message) };
@@ -332,6 +371,7 @@ export async function executeJobCore(
         effectiveJob,
         occurrence,
         abortSignal,
+        assertCurrent,
         options,
       );
       return triggerEval ? { ...result, triggerEval } : result;
@@ -348,6 +388,7 @@ export async function executeJobCore(
         effectiveJob,
         occurrence,
         abortSignal,
+        assertCurrent,
         options,
         sessionPreparation,
       );
@@ -374,6 +415,7 @@ async function executeMainSessionCronJob(
   job: CronStoredJob,
   occurrence: ScheduledOccurrence,
   abortSignal: AbortSignal | undefined,
+  assertCurrent: () => void,
   options?: ExecuteJobCoreOptions,
   sessionPreparation?: CronSessionRunPreparation,
 ): Promise<CronJobExecutionResult> {
@@ -395,13 +437,6 @@ async function executeMainSessionCronJob(
       error: "Session event execution is unavailable; restart the Gateway and retry",
     };
   }
-  const assertCurrent = () => {
-    abortSignal?.throwIfAborted();
-    options?.deliveryAttemptFence?.assertCurrent();
-    if (!isCronActiveJobMarkerCurrent(options?.activeJobMarker)) {
-      throw new Error("Gateway restarting.");
-    }
-  };
   const deliveryContext = await resolveMainSessionCronDeliveryContext(state, job);
   assertCurrent();
   await options?.assertRunCurrent?.();
@@ -415,6 +450,7 @@ async function executeMainSessionCronJob(
     onExecutionStarted: options?.onExecutionStarted,
     onExecutionPhase: options?.onExecutionPhase,
     onLaneWait: options?.onLaneWait,
+    providerRunSlot: options?.providerRunSlot,
     executionIdentity: options?.executionIdentity,
     job,
     text,
@@ -485,6 +521,7 @@ async function executeDetachedCronJob(
       deliverySuppressionReason: res.deliverySuppressionReason,
       deliveryState: res.deliveryState,
       summary: res.summary,
+      result: res.result,
       delivered: res.delivered,
       deliveryAttempted: res.deliveryAttempted,
       delivery: res.delivery,
@@ -519,6 +556,7 @@ async function executeDetachedCronJob(
     onExecutionStarted: options?.onExecutionStarted,
     onExecutionPhase: options?.onExecutionPhase,
     onLaneWait: options?.onLaneWait,
+    providerRunSlot: options?.providerRunSlot,
     executionIdentity: options?.executionIdentity,
   });
 
@@ -542,11 +580,13 @@ async function executeDetachedCronJob(
     deliveryState: res.deliveryState,
     nextCheck: res.nextCheck,
     summary: res.summary,
+    result: res.result,
     delivered: res.delivered,
     deliveryAttempted: res.deliveryAttempted,
     delivery: res.delivery,
     sessionId: res.sessionId,
     sessionKey: res.sessionKey,
+    agentTerminal: res.agentTerminal,
     diagnostics: res.diagnostics,
     failureNotificationDetail: res.failureNotificationDetail,
     model: res.model,

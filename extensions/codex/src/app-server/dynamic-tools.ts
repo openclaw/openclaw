@@ -50,10 +50,6 @@ import {
   isRecord,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
-  resolveLiveToolResultMaxChars,
-} from "openclaw/plugin-sdk/text-utility-runtime";
-import {
   computerFrameImageIdentity,
   invalidateCodexComputerFrame,
   type CodexComputerContextEpoch,
@@ -68,7 +64,7 @@ import {
   type CodexDynamicToolSchemaQuarantine,
   type CodexToolDescriptor,
 } from "./dynamic-tool-catalog.js";
-import { convertToolContents, enforceWholeSkillResult } from "./dynamic-tool-content.js";
+import { convertToolContents, createCodexToolResultPresentation } from "./dynamic-tool-content.js";
 import {
   type CodexDynamicToolHookContextBase,
   projectCodexExecutableDynamicToolSurface,
@@ -97,6 +93,8 @@ import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reaso
 type CodexDynamicToolHookContext = CodexDynamicToolHookContextBase & {
   remoteWorkspaceRoot?: string;
   remoteWorkspaceRequestTimeoutMs?: number;
+  /** Gateway-only skill name to Gateway directory, when the app-server is remote. */
+  gatewayOnlySkillDirs?: ReadonlyMap<string, string>;
   currentChannelProvider?: string;
   contextWindowTokens?: number;
   currentChannelId?: string;
@@ -121,6 +119,7 @@ export type CodexDynamicToolBridge = {
   specs: CodexDynamicToolSpec[];
   resultContentSourceForTool: (toolName: string) => AnyAgentTool["resultContentSource"];
   sideEffectOwnerKeyForTool: (toolName: string) => string | undefined;
+  hideFromChannelProgressForTool: (toolName: string) => boolean | undefined;
   handleToolCall: (
     params: CodexDynamicToolCallParams,
     options?: {
@@ -149,6 +148,7 @@ export function createCodexDynamicToolBridge(params: {
   tools: AnyAgentTool[];
   registeredTools?: readonly CodexToolDescriptor[];
   registeredSpecs?: readonly CodexDynamicToolSpec[];
+  requireExactRegisteredDefinitions?: boolean;
   signal: AbortSignal;
   assertCurrent?: () => void;
   assertCurrentAsync?: () => Promise<void>;
@@ -159,11 +159,9 @@ export function createCodexDynamicToolBridge(params: {
   directToolNames?: Iterable<string>;
 }): CodexDynamicToolBridge {
   const toolResultHookContext = toToolResultHookContext(params.hookContext);
-  const contextWindowTokens = params.hookContext?.contextWindowTokens;
-  const toolResultMaxChars =
-    contextWindowTokens !== undefined && contextWindowTokens > 0
-      ? Math.max(1, resolveLiveToolResultMaxChars({ contextWindowTokens }))
-      : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
+  const { maxChars: toolResultMaxChars, presentSkillResult } = createCodexToolResultPresentation(
+    params.hookContext,
+  );
   const availableProjection = projectCodexExecutableDynamicToolSurface(
     params.tools,
     params.hookContext,
@@ -181,6 +179,7 @@ export function createCodexDynamicToolBridge(params: {
     inheritedNames ?? new Set(registeredProjection.tools.map((entry) => entry.name));
   const finalized = finalizeCodexToolAvailability(
     availableProjection.tools.filter((entry) => registrationNames.has(entry.name)),
+    params.requireExactRegisteredDefinitions ? inheritedSpecs : undefined,
   );
   const availableTools = finalized.tools;
   const pluginLocalMediaTrustByToolName = new Map<string, ReadonlySet<string>>();
@@ -298,6 +297,8 @@ export function createCodexDynamicToolBridge(params: {
       const tool = toolMap.get(toolName)?.tool;
       return tool ? getPluginToolSideEffectOwnerKey(tool) : undefined;
     },
+    hideFromChannelProgressForTool: (toolName) =>
+      toolMap.get(toolName)?.tool.hideFromChannelProgress,
     telemetry,
     setRemoteWorkspaceFileReader: (reader) => {
       readRemoteWorkspaceFile = reader;
@@ -329,7 +330,7 @@ export function createCodexDynamicToolBridge(params: {
         notifyAgentToolResult(options?.onAgentToolResult, call.tool, result, true);
         return createFailedDynamicToolResponse(message, {
           executedArguments,
-          executionStarted: false,
+          unknownTool: true,
         });
       }
       const { tool, name: toolName } = toolEntry;
@@ -502,7 +503,7 @@ export function createCodexDynamicToolBridge(params: {
             isError: rawIsErrorForPresentation,
             result: event.result,
           });
-          const result = enforceWholeSkillResult(toolName, middlewareResult, toolResultMaxChars);
+          const result = await presentSkillResult(toolName, middlewareResult);
           presentationIsError = rawIsErrorForPresentation || isToolResultError(result);
           // A successful spawn is durable before presentation middleware can rewrite details.
           const acceptedSessionSpawn =

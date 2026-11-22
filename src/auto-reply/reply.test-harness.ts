@@ -9,18 +9,12 @@ import { withFastReplyConfig } from "./reply/get-reply-fast-path.test-support.js
 type ReplyRuntimeMocks = {
   runEmbeddedAgent: Mock;
   loadModelCatalog: Mock;
-  webAuthExists: Mock;
-  getWebAuthAgeMs: Mock;
-  readWebSelfId: Mock;
 };
 
 const replyRuntimeMockState = vi.hoisted(() => ({
   mocks: {
     runEmbeddedAgent: vi.fn(),
     loadModelCatalog: vi.fn(),
-    webAuthExists: vi.fn().mockResolvedValue(true),
-    getWebAuthAgeMs: vi.fn().mockReturnValue(120_000),
-    readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
   } as ReplyRuntimeMocks,
 }));
 
@@ -43,18 +37,8 @@ vi.mock("../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthSelection: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../commands-registry.runtime.js", () => ({
-  listChatCommands: () => [],
-}));
-
 vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
   prepareSkillCommandsForWorkspace: () => [],
-}));
-
-vi.mock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
-  webAuthExists: (...args: unknown[]) => replyRuntimeMockState.mocks.webAuthExists(...args),
-  getWebAuthAgeMs: (...args: unknown[]) => replyRuntimeMockState.mocks.getWebAuthAgeMs(...args),
-  readWebSelfId: (...args: unknown[]) => replyRuntimeMockState.mocks.readWebSelfId(...args),
 }));
 
 vi.mock("../agents/embedded-agent.runtime.js", async (importOriginal) => ({
@@ -68,34 +52,9 @@ vi.mock("../agents/embedded-agent.runtime.js", async (importOriginal) => ({
 
 vi.mock("./reply/agent-runner-run.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./reply/agent-runner-run.js")>()),
-  runReplyAgent: async (params: {
-    commandBody: string;
-    followupRun: {
-      prompt: string;
-      run: {
-        agentDir: string;
-        agentId: string;
-        config: unknown;
-        execOverrides?: unknown;
-        inputProvenance?: unknown;
-        messageProvider?: string;
-        model: string;
-        ownerNumbers?: string[];
-        provider: string;
-        reasoningLevel?: unknown;
-        senderIsOwner?: boolean;
-        sessionFile: string;
-        sessionId: string;
-        sessionKey: string;
-        skillsSnapshot?: unknown;
-        thinkLevel?: unknown;
-        timeoutMs?: number;
-        verboseLevel?: unknown;
-        workspaceDir: string;
-        bashElevated?: unknown;
-      };
-    };
-  }) => {
+  runReplyAgent: async (
+    params: Parameters<typeof import("./reply/agent-runner-run.js").runReplyAgent>[0],
+  ) => {
     const result = await replyRuntimeMockState.mocks.runEmbeddedAgent({
       prompt: params.followupRun.prompt || params.commandBody,
       agentDir: params.followupRun.run.agentDir,
@@ -188,9 +147,6 @@ export function createReplyRuntimeMocks(): ReplyRuntimeMocks {
   return {
     runEmbeddedAgent: vi.fn(),
     loadModelCatalog: vi.fn(),
-    webAuthExists: vi.fn().mockResolvedValue(true),
-    getWebAuthAgeMs: vi.fn().mockReturnValue(120_000),
-    readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
   };
 }
 

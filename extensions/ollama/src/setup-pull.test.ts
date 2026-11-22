@@ -2,6 +2,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { jsonResponse, withServer } from "openclaw/plugin-sdk/test-env";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   enrichOllamaModelsWithContext,
@@ -29,21 +30,9 @@ async function waitForSocketClose(closed: Promise<void> | undefined): Promise<vo
   if (!closed) {
     throw new Error("Ollama test server did not receive a request");
   }
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      closed,
-      new Promise<never>((_resolve, reject) => {
-        timeout = setTimeout(() => {
-          reject(new Error("Ollama response socket was not closed"));
-        }, 2_000);
-      }),
-    ]);
-  } finally {
-    if (timeout !== undefined) {
-      clearTimeout(timeout);
-    }
-  }
+  await raceWithTimeout(closed, 2_000, () => {
+    throw new Error("Ollama response socket was not closed");
+  });
 }
 
 afterEach(() => fetchWithSsrFGuardMock.mockReset());
@@ -77,22 +66,13 @@ describe("Ollama setup response cleanup", () => {
         release,
       });
 
-      let timeout: ReturnType<typeof setTimeout> | undefined;
       try {
-        await Promise.race([
-          run(),
-          new Promise<never>((_resolve, reject) => {
-            timeout = setTimeout(() => {
-              reject(new Error("Ollama cleanup waited for a captured response clone"));
-            }, 500);
-          }),
-        ]);
+        await raceWithTimeout<Awaited<ReturnType<typeof run>>, never>(run(), 500, () => {
+          throw new Error("Ollama cleanup waited for a captured response clone");
+        });
         expect(response.bodyUsed).toBe(true);
         expect(release).toHaveBeenCalledOnce();
       } finally {
-        if (timeout !== undefined) {
-          clearTimeout(timeout);
-        }
         await captureClone.body?.cancel().catch(() => undefined);
       }
     },

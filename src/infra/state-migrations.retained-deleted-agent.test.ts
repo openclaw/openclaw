@@ -139,9 +139,19 @@ describe("Doctor with a deleted agent database", () => {
       prompter: createDoctorPrompter({ runtime, options: { repair: true, nonInteractive: true } }),
     });
   }
+  function writeJson(file: string, value: unknown) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(value));
+  }
+  function storeCredentials(databasePath: string, key: string) {
+    using database = new DatabaseSync(databasePath);
+    database
+      .prepare("INSERT INTO auth_profile_store VALUES ('primary', ?, 1)")
+      .run(JSON.stringify(profile(key)));
+  }
   function writeExecApprovals() {
     const file = path.join(stateDir, "exec-approvals.json");
-    fs.writeFileSync(file, JSON.stringify({ version: 1, defaults: {}, agents: {} }));
+    writeJson(file, { version: 1, defaults: {}, agents: {} });
     return file;
   }
 
@@ -244,18 +254,16 @@ describe("Doctor with a deleted agent database", () => {
     } finally {
       fs.unlinkSync(activeAlias);
     }
-    fs.writeFileSync(
+    writeJson(
       path.join(path.dirname(databasePath), "models.json"),
-      JSON.stringify(catalog("synthetic-catalog-key")),
+      catalog("synthetic-catalog-key"),
     );
     const catalogs = await migrateCatalogs();
     expect(catalogs).toMatchObject({ detected: 1, migrated: 1, warnings: [] });
     const activeLegacyStore = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-    fs.mkdirSync(path.dirname(activeLegacyStore), { recursive: true });
-    fs.writeFileSync(
-      activeLegacyStore,
-      JSON.stringify({ "agent:main:legacy": { sessionId: "active-legacy", updatedAt: 1 } }),
-    );
+    writeJson(activeLegacyStore, {
+      "agent:main:legacy": { sessionId: "active-legacy", updatedAt: 1 },
+    });
     expect(() => assertSessionStoreMigrationComplete({ cfg, env, operation: "doctor" })).toThrow(
       "Legacy session store requires migration",
     );
@@ -266,13 +274,8 @@ describe("Doctor with a deleted agent database", () => {
       agentId: "ops",
       path: path.join(stateDir, "agents", "ops", "agent", "openclaw-agent.sqlite"),
     });
-    {
-      using source = new DatabaseSync(sourcePath);
-      source
-        .prepare("INSERT INTO auth_profile_store VALUES ('primary', ?, 1)")
-        .run(JSON.stringify(profile("synthetic-owner-key")));
-    }
-    const detected = detectSharedAuthStoreMigration({
+    storeCredentials(sourcePath, "synthetic-owner-key");
+    const detected = await detectSharedAuthStoreMigration({
       stateDir,
       env,
       doctorOnlyStateMigrations: true,
@@ -303,16 +306,10 @@ describe("Doctor with a deleted agent database", () => {
       agentId: "alive",
       path: path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
     });
-    const source = new DatabaseSync(sourcePath);
-    source
-      .prepare(
-        "INSERT INTO auth_profile_store(store_key,store_json,updated_at) VALUES('primary',?,1)",
-      )
-      .run(JSON.stringify(profile("synthetic-retained-main-key")));
-    source.close();
+    storeCredentials(sourcePath, "synthetic-retained-main-key");
     deleteAgent("main", path.dirname(sourcePath), "delete-shared-auth");
     const bytes = fs.readFileSync(sourcePath);
-    const detected = detectSharedAuthStoreMigration({
+    const detected = await detectSharedAuthStoreMigration({
       stateDir,
       env,
       doctorOnlyStateMigrations: true,
@@ -327,10 +324,7 @@ describe("Doctor with a deleted agent database", () => {
     expect(result.warnings.join("\n")).toContain(sourcePath);
     expect(result.warnings.join("\n")).toContain("openclaw doctor --fix");
     await expect(
-      noteStateIntegrity(
-        { agents: { ownership: "explicit", entries: { main: {} } }, plugins: { enabled: false } },
-        { confirmRuntimeRepair: async () => false },
-      ),
+      noteStateIntegrity(cfg, { confirmRuntimeRepair: async () => false }),
     ).resolves.toBeUndefined();
     expect(fs.readFileSync(sourcePath)).toEqual(bytes);
   });
@@ -344,8 +338,8 @@ describe("Doctor with a deleted agent database", () => {
     deleteAgent("retired", retiredDir, "delete-credential-alias", false, "retired-workspace");
     const catalogPath = path.join(retiredDir, "models.json");
     const auth = path.join(retiredDir, "auth-profiles.json");
-    fs.writeFileSync(catalogPath, JSON.stringify(catalog("synthetic-retained-key")));
-    fs.writeFileSync(auth, JSON.stringify(profile("synthetic-retained-key")));
+    writeJson(catalogPath, catalog("synthetic-retained-key"));
+    writeJson(auth, profile("synthetic-retained-key"));
     const bytes = [catalogPath, auth].map((file) => fs.readFileSync(file));
     expect(
       listAuthProfileRepairCandidates(cfg, env).map((candidate) => candidate.authPath),
@@ -466,7 +460,7 @@ describe("Doctor with a deleted agent database", () => {
           await noteSessionTranscriptLabelHealth({ cfg, env, shouldRepair: true });
           const catalogs = await migrateCatalogs();
           expect(catalogs.warnings).toEqual([]);
-          expect(detectTelegramGeneralTopicConversationRepairs({ cfg, env })).toEqual([]);
+          expect(await detectTelegramGeneralTopicConversationRepairs({ cfg, env })).toEqual([]);
           expect(
             await maybeRepairCodexSessionRoutes({ cfg, env, shouldRepair: true }),
           ).toMatchObject({ warnings: [] });

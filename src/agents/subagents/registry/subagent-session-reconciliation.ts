@@ -6,31 +6,24 @@ import {
   withSessionEntryReadOnlyInWorker,
 } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
+import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
 import { withSubagentSessionSource } from "../spawn/subagent-session-source.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
-import { hasRetainedRequiredCompletionDelivery } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
-
-export type SubagentRunOrphanReason =
-  | "missing-session-entry"
-  | "missing-session-id"
-  | "stale-unended-run";
 
 export type SubagentSessionCompletion = {
   startedAt?: number;
   endedAt: number;
   outcome: SubagentRunOutcome;
   reason: SubagentLifecycleEndedReason;
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
 function terminalSessionTimestamp(sessionEntry: SessionEntry | undefined): number | undefined {
@@ -81,76 +74,13 @@ export async function loadSubagentSessionEntry(params: {
   );
 }
 
-export function resolveSubagentRunOrphanReason(params: {
-  entry: SubagentRunRecord;
-  includeStaleUnended?: boolean;
-  now?: number;
-  cfg?: OpenClawConfig;
-}):
-  | SubagentRunOrphanReason
-  | null
-  | {
-      read: (assertCurrent: () => void) => Promise<{
-        orphanReason: SubagentRunOrphanReason | null;
-        sessionEntry: SessionEntry | undefined;
-      }>;
-    } {
-  const { entry } = params;
-  // Execution, recovery, and completion obligations outlive individual turns.
-  // Missing session metadata must not steal those owners or manufacture success.
-  if (
-    entry.execution.outcome ||
-    entry.collectorCompletion ||
-    entry.requesterSettleWake ||
-    hasRetainedRequiredCompletionDelivery(entry) ||
-    entry.pauseReason ||
-    entry.killIntent ||
-    entry.killReconciliation ||
-    entry.execution.restartRecovery ||
-    entry.terminalOwner === "interrupted-recovery" ||
-    entry.suppressAnnounceReason === "steer-restart" ||
-    entry.execution.status === "queued" ||
-    getAgentRunContext(entry.runId)
-  ) {
-    return null;
-  }
-  const childSessionKey = params.entry.childSessionKey?.trim();
-  if (!childSessionKey) {
-    return "missing-session-entry";
-  }
-  return {
-    async read(assertCurrent) {
-      const sessionEntry = await loadSubagentSessionEntry({
-        childSessionKey,
-        childAgentId: entry.childAgentId,
-        cfg: params.cfg,
-        assertCurrent,
-      });
-      let orphanReason: SubagentRunOrphanReason | null = null;
-      if (!sessionEntry) {
-        orphanReason = "missing-session-entry";
-      } else if (typeof sessionEntry.sessionId !== "string" || !sessionEntry.sessionId.trim()) {
-        orphanReason = "missing-session-id";
-      } else if (
-        params.includeStaleUnended === true &&
-        sessionEntry.abortedLastRun !== true &&
-        entry.execution.status !== "interrupted" &&
-        isStaleUnendedSubagentRun(entry, params.now)
-      ) {
-        orphanReason = "stale-unended-run";
-      }
-      return { orphanReason, sessionEntry };
-    },
-  };
-}
-
 export function resolveCompletionFromSessionEntry(
   sessionEntry: SessionEntry | undefined,
   fallbackEndedAt: number,
   opts?: { notBeforeMs?: number },
 ): SubagentSessionCompletion | null {
   const status = sessionEntry?.status;
-  // Interruption leaves registry settlement with the recovery owner.
+  // An interrupted history row is not evidence of a completed live child.
   if (status === "interrupted" || !isFreshForRun(sessionEntry, opts?.notBeforeMs)) {
     return null;
   }

@@ -23,11 +23,9 @@ const sessionRoot = tempDirs.make("openclaw-group-activation-");
 
 async function makeSessionStore(entries: Record<string, SessionEntry>) {
   const storePath = path.join(tempDirs.make("case-", sessionRoot), "sessions.json");
-  await Promise.all(
-    Object.entries(entries).map(([sessionKey, entry]) =>
-      upsertSessionEntry({ storePath, sessionKey, entry }),
-    ),
-  );
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    await upsertSessionEntry({ storePath, sessionKey, entry });
+  }
   return storePath;
 }
 
@@ -68,15 +66,13 @@ describe("resolveGroupActivationFor", () => {
     "uses configured policy without copying unscoped activation ($requireMention, $scoped)",
     async ({ requireMention, scoped }) => {
       const storePath = await makeSessionStore({
-        [DEFAULT_GROUP_SESSION_KEY]: {
-          ...session("older-unscoped-session", 123, requireMention ? "always" : "mention"),
-          label: "retained unscoped metadata",
-        },
+        [DEFAULT_GROUP_SESSION_KEY]: session(
+          "older-unscoped-session",
+          123,
+          requireMention ? "always" : "mention",
+        ),
         ...(scoped && {
-          [WORK_GROUP_SESSION_KEY]: {
-            ...session("work-session", 456),
-            label: "retained scoped metadata",
-          },
+          [WORK_GROUP_SESSION_KEY]: session("work-session", 456),
         }),
       });
       const before = readEntries(storePath);

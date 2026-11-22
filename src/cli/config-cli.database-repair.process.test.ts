@@ -3,14 +3,10 @@ import path from "node:path";
 import { afterAll, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { localStateOwnerFixtureEntrypoint } from "./cli-entrypoint.test-support.js";
-import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import { runStateOwnerCli, stateOwnerEnv } from "./cli-process-fixture.test-support.js";
 
 const roots = useAutoCleanupTempDirTracker(afterAll);
-const entrypoint = resolveRuntimeWorkerArgv(
-  resolveRuntimeWorkerUrl(localStateOwnerFixtureEntrypoint),
-);
+
 const database = {
   engine: "postgres",
   postgres: {
@@ -24,6 +20,19 @@ const schemaRepair = ["config", "set", "database.postgres.schemaPrefix", "repair
 const patchStdin = ["config", "patch", "--stdin"];
 const mixedPatch = '{"database":{"postgres":{"schemaPrefix":"repaired"}},"gateway":{"port":19002}}';
 const unresolved = "SecretRef is unresolved";
+const preservedConfig = {
+  gateway: { mode: "local" },
+  plugins: { entries: { brave: { enabled: true } } },
+  models: {
+    providers: {
+      example: {
+        baseUrl: "http://127.0.0.1:12345",
+        api: "openai-completions",
+        models: [{ id: "synthetic", name: "Synthetic" }],
+      },
+    },
+  },
+};
 const batch = (entries: [string, unknown][]) => [
   "config",
   "set",
@@ -42,25 +51,16 @@ async function fixture(existingState = false) {
     await fs.mkdir(path.dirname(statePath));
     await fs.writeFile(statePath, originalState);
   }
-  const env: NodeJS.ProcessEnv = {
-    PATH: process.env.PATH,
-    SystemRoot: process.env.SystemRoot,
-    HOME: root,
-    USERPROFILE: root,
-    OPENCLAW_HOME: root,
+  const env: NodeJS.ProcessEnv = stateOwnerEnv(root, {
     OPENCLAW_STATE_DIR: root,
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_NO_RESPAWN: "1",
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
     OPENCLAW_DEBUG: "1",
-    NODE_DISABLE_COMPILE_CACHE: "1",
-  };
+  });
   return {
     root,
     configPath,
     env,
     async run(args: string[], code = 0, input?: string) {
-      const result = await runCliProcessChild({ nodeArgs: [...entrypoint, ...args], env, input });
+      const result = await runStateOwnerCli(env, args, input);
       expect(result.code, result.stderr).toBe(code);
       return result;
     },
@@ -77,9 +77,10 @@ async function fixture(existingState = false) {
 }
 
 it.each(["set", "batch", "patch", "unset", "fast unset"] as const)(
-  "repairs through %s without creating or opening shared state",
+  "repairs through %s preserving plugins and providers without opening shared state",
   async (command) => {
-    const f = await fixture(command === "patch");
+    const f = await fixture(true);
+    await writeJson(f.configPath, { database, ...preservedConfig });
     const connection = "database.postgres.connection.id";
     const repaired = "OPENCLAW_REPAIRED_DSN";
     const patchPath = path.join(f.root, "patch.json");
@@ -103,7 +104,12 @@ it.each(["set", "batch", "patch", "unset", "fast unset"] as const)(
     } else {
       expect(config.database.postgres.connection.id).toBe(repaired);
     }
-    expect(config.gateway).toEqual({ mode: "local" });
+    expect({ gateway: config.gateway, plugins: config.plugins, models: config.models }).toEqual(
+      preservedConfig,
+    );
+    if (command === "batch") {
+      expect(config.database.postgres.schemaPrefix).toBe("repaired");
+    }
     await f.checkState();
   },
 );
@@ -188,10 +194,10 @@ it("validates the redirected source after selecting its engine", async () => {
     env: { vars: { OPENCLAW_STATE_DIR: targetDir } },
   });
   await writeJson(targetPath, { gateway: { port: "invalid" } });
-  const result = await runCliProcessChild({
-    nodeArgs: [...entrypoint, "config", "validate", "--json"],
-    env: { ...env, OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
-  });
+  const result = await runStateOwnerCli(
+    { ...env, OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
+    ["config", "validate", "--json"],
+  );
   expect(result.code, result.stderr).toBe(1);
   expect(JSON.parse(result.stdout)).toMatchObject({ valid: false, path: targetPath });
   for (const dir of [bootstrapDir, targetDir]) {
@@ -212,25 +218,6 @@ it("retains live-owner refusal for database-only repairs", async () => {
   } finally {
     await owner?.release();
   }
-});
-
-it("preserves configured providers without loading their shared metadata", async () => {
-  const f = await fixture();
-  const models = {
-    providers: {
-      example: {
-        baseUrl: "http://127.0.0.1:12345",
-        api: "openai-completions",
-        models: [{ id: "synthetic", name: "Synthetic" }],
-      },
-    },
-  };
-  await writeJson(f.configPath, { database, gateway: { mode: "local" }, models });
-  await f.run(schemaRepair);
-  const config = await readJson(f.configPath);
-  expect(config).toMatchObject({ database: { postgres: { schemaPrefix: "repaired" } } });
-  expect(config.models).toEqual(models);
-  await f.checkState();
 });
 
 it("repairs an included database config without shared state", async () => {

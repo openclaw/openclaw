@@ -1,11 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  attributeDelegatedSessionCreator,
-  buildSessionCreationStamp,
-  inheritSessionGitContributorProfileIds,
-} from "../../../config/sessions/session-entry-provenance.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { listSessionBindingsBySessionAsync } from "../../../infra/outbound/session-binding-service.js";
 import {
@@ -14,10 +8,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../../routing/session-key.js";
 import { deliveryContextFromSession } from "../../../utils/delivery-context.read.js";
-import {
-  hasDeliveryTargetFields,
-  normalizeDeliveryContext,
-} from "../../../utils/delivery-context.shared.js";
+import { hasDeliveryTargetFields } from "../../../utils/delivery-context.shared.js";
 import {
   resolveRequesterOriginForChild,
   resolveSpawnRequesterConversationTarget,
@@ -33,14 +24,6 @@ type AcpSpawnRequesterContext = SpawnRequesterConversationSource & {
   agentAccountId?: string;
   agentGroupSpace?: string | null;
   agentMemberRoleIds?: string[];
-};
-
-export type AcpSpawnRequesterState = {
-  isSubagentSession: boolean;
-  hasActiveSubagentBinding: boolean;
-  hasThreadContext: boolean;
-  sessionRelayRouteUsable: boolean;
-  origin: ReturnType<typeof normalizeDeliveryContext>;
 };
 
 export async function readAcpSpawnParentDeliveryContext(params: {
@@ -82,7 +65,7 @@ export async function resolveAcpSpawnRequesterState(params: {
   ownerAgentId: string;
   ctx: AcpSpawnRequesterContext;
   assertActive?: () => void;
-}): Promise<AcpSpawnRequesterState> {
+}) {
   const requesterParsedSession = parseAgentSessionKey(params.parentSessionKey);
   const isSubagentSession =
     Boolean(requesterParsedSession) && isSubagentSessionKey(params.parentSessionKey);
@@ -133,7 +116,7 @@ export function shouldStreamAcpSpawnToParent(params: {
   spawnMode: "run" | "session";
   requestThreadBinding: boolean;
   streamToParentRequested: boolean;
-  requester: AcpSpawnRequesterState;
+  requester: Awaited<ReturnType<typeof resolveAcpSpawnRequesterState>>;
 }): boolean {
   // Thread-bound requesters require an explicit request to avoid unsolicited progress chatter.
   const implicitStreamToParent =
@@ -145,28 +128,4 @@ export function shouldStreamAcpSpawnToParent(params: {
     params.requester.sessionRelayRouteUsable;
 
   return params.streamToParentRequested || implicitStreamToParent;
-}
-
-/** Build immutable creator facts from the requester captured before spawn awaits. */
-export function buildAcpSpawnCreationStamp(params: {
-  cfg: OpenClawConfig;
-  parentEntry?: SessionEntry;
-  requesterAgentId: string;
-  requesterSessionKey: string;
-  creatorProfileId?: string;
-  gitContributorProfileId?: string;
-}) {
-  return buildSessionCreationStamp({
-    via: "spawn",
-    actor: attributeDelegatedSessionCreator(
-      { type: "agent", id: params.requesterAgentId },
-      params.creatorProfileId,
-    ),
-    inheritedGitContributorProfileIds: inheritSessionGitContributorProfileIds(params.parentEntry, {
-      config: params.cfg,
-      agentId: params.requesterAgentId,
-      sessionKey: params.requesterSessionKey,
-      requesterProfileId: params.gitContributorProfileId,
-    }),
-  });
 }

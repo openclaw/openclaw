@@ -6,15 +6,16 @@ import type {
   SessionTypingEvent,
   TaskSuggestion,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { focusComposerInput } from "../../lib/composer-input.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { hasMultiplePresenceIdentities, projectPresencePayload } from "../../lib/presence-users.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import {
   resolveUiConversationIdentity,
   scopedSessionArtifactKey,
@@ -350,7 +351,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       scope.state.handleChatDraftChange(suggestion.text, []);
       // The native pane hands focus to the composer renderer after publishing the draft.
       queueMicrotask(() =>
-        getChatComposerState(this.presentationId).composerTextarea?.focus({
+        focusComposerInput(getChatComposerState(this.presentationId).composerTextarea, {
           preventScroll: true,
         }),
       );

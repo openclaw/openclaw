@@ -1,13 +1,12 @@
 import { text } from "node:stream/consumers";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { startOpenAiResponsesModelServer } from "../../test/helpers/openai-responses-model-fixture.js";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.js";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import * as subagentKillSettlement from "../agents/subagents/registry/subagent-control-kill-settlement.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { dispatchReplyWithBufferedBlockDispatcherCore } from "../auto-reply/reply/provider-dispatcher.js";
 import { buildTestCtx } from "../auto-reply/reply/test-ctx.js";
@@ -16,7 +15,6 @@ import {
   createChannelIngressDrain,
 } from "../channels/message/ingress-drain.js";
 import { createTestIngressQueue } from "../channels/message/ingress-drain.test-helpers.js";
-import { SESSION_CONTROLLER_DRAIN_TIMEOUT_MS } from "../sessions/session-controller.lifecycle.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import {
   createSubagentStopFixture,
@@ -31,14 +29,18 @@ import { disconnectGatewayClient } from "./test-helpers.e2e.js";
 const parentPrompt = "Spawn the child that will yield.";
 const childTask = "Pause this unfinished task until an incoming continuation arrives.";
 const queuedInput = "Queued durable child input";
-let responseSequence = 0;
+afterEach(async () => {
+  await resetSubagentRegistryForTests({ persist: false });
+});
 
-async function startYieldModelServer(allowYield: Promise<void>) {
+it("bounds public child Stop while yielded queued-input cleanup remains pending", async () => {
+  const allowYield = createDeferred();
   const childAccepted = createDeferred<SpawnReceipt>();
   const childModelStarted = createDeferred();
   let yieldSent = false;
   let queuedInputRequests = 0;
-  const server = await startOpenAiResponsesModelServer({
+  let responseSequence = 0;
+  const model = await startOpenAiResponsesModelServer({
     modelId: "stop-proof",
     bindError: "Expected queued cleanup model server address",
     onRequest: async (request, response) => {
@@ -50,7 +52,7 @@ async function startYieldModelServer(allowYield: Promise<void>) {
       // Only the fresh child attempt carries its task without a prior tool result.
       if (body.includes(childTask) && !body.includes("function_call_output")) {
         childModelStarted.resolve();
-        await allowYield;
+        await allowYield.promise;
         yieldSent = true;
         writeOpenAiResponsesSse(
           response,
@@ -81,27 +83,9 @@ async function startYieldModelServer(allowYield: Promise<void>) {
       });
     },
   });
-  return {
-    childAccepted: childAccepted.promise,
-    childModelStarted: childModelStarted.promise,
-    hasSentYield: () => yieldSent,
-    queuedInputRequests: () => queuedInputRequests,
-    url: `${server.baseUrl}/v1`,
-    close: server.close,
-  };
-}
-
-afterEach(async () => {
-  vi.useRealTimers();
-  await resetSubagentRegistryForTests({ persist: false });
-});
-
-it("bounds public child Stop while yielded queued-input cleanup remains pending", async () => {
-  const allowYield = createDeferred();
-  const model = await startYieldModelServer(allowYield.promise);
   const { state, cfg, start } = await createSubagentStopFixture(
     "subagent-yielded-queued-cleanup",
-    model.url,
+    `${model.baseUrl}/v1`,
   );
   cfg.messages = { queue: { mode: "followup" } };
   const childTerminal = createDeferred();
@@ -112,7 +96,7 @@ it("bounds public child Stop while yielded queued-input cleanup remains pending"
       event.event === "chat" &&
       payload &&
       payload.sessionKey === childSessionKey &&
-      model.hasSentYield() &&
+      yieldSent &&
       ["aborted", "error", "final"].includes(String(payload.state))
     ) {
       childTerminal.resolve();
@@ -121,23 +105,9 @@ it("bounds public child Stop while yielded queued-input cleanup remains pending"
   const releaseCleanup = createDeferred();
   const releaseStarted = createDeferred();
   const releaseFinished = createDeferred();
-  const sourceDrainStarted = createDeferred();
   let releaseCommitted = false;
   let stopResponse: Promise<KillResponse> | undefined;
   let drain: ReturnType<typeof createChannelIngressDrain> | undefined;
-  const settleSources = subagentKillSettlement.settleSubagentKillSources;
-  const sourceDrainSpy = vi
-    .spyOn(subagentKillSettlement, "settleSubagentKillSources")
-    .mockImplementation((params) => {
-      const pending = settleSources(params);
-      if (
-        childSessionKey !== undefined &&
-        params.cleanup?.inputs.some((input) => input.target?.sessionKey === childSessionKey)
-      ) {
-        sourceDrainStarted.resolve();
-      }
-      return pending;
-    });
   await runQaGatewayFixture(
     async () => {
       await gateway.server.startupSettled;
@@ -150,9 +120,9 @@ it("bounds public child Stop while yielded queued-input cleanup remains pending"
           deliver: false,
         }),
       ).resolves.toMatchObject({ runId: parentRunId, status: "started" });
-      const child = await model.childAccepted;
+      const child = await childAccepted.promise;
       childSessionKey = child.childSessionKey;
-      await model.childModelStarted;
+      await childModelStarted.promise;
 
       // Keep real ingress custody while the reply runner defers behind the child.
       const queue = createTestIngressQueue(state.stateDir);
@@ -203,16 +173,8 @@ it("bounds public child Stop while yielded queued-input cleanup remains pending"
 
       allowYield.resolve();
       await childTerminal.promise;
-      vi.useFakeTimers({ toFake: ["setTimeout"] });
       stopResponse = postSubagentKill(gateway.port, childSessionKey);
       await releaseStarted.promise;
-      // Advance only after the real source owner arms its cleanup deadline.
-      await awaitGateBeforeSettlement(
-        sourceDrainStarted.promise,
-        stopResponse,
-        "Stop responded before joining the held source cleanup",
-      );
-      await vi.advanceTimersByTimeAsync(SESSION_CONTROLLER_DRAIN_TIMEOUT_MS * 2 + 1);
       expect(await stopResponse).toMatchObject({
         status: 503,
         body: {
@@ -255,12 +217,11 @@ it("bounds public child Stop while yielded queued-input cleanup remains pending"
     },
     () => releaseCleanup.resolve(),
     () => stopResponse?.catch(() => undefined),
-    () => sourceDrainSpy.mockRestore(),
     () => drain?.dispose(),
     () => disconnectGatewayClient(gateway.client),
     () => gateway.server.close({ reason: "subagent yielded queued cleanup complete" }),
     () => model.close(),
     () => state.cleanup(),
   );
-  expect(model.queuedInputRequests()).toBe(0);
+  expect(queuedInputRequests).toBe(0);
 });

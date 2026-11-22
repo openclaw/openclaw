@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import * as hostSource from "../gateway/desktop/host-source.js";
 import * as execRunner from "../process/exec-runner.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { collectHostDesktopHealthFindings, noteHostDesktopHealth } from "./doctor-host-desktop.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
@@ -24,14 +25,9 @@ afterEach(() => {
 });
 
 async function repair(approved: boolean, code = 0) {
-  const runCommand = vi.spyOn(execRunner, "runCommandWithTimeout").mockResolvedValue({
-    stdout: "",
-    stderr: "",
-    code,
-    signal: null,
-    killed: false,
-    termination: "exit",
-  });
+  const runCommand = vi
+    .spyOn(execRunner, "runCommandWithTimeout")
+    .mockResolvedValue(createCommandResult({ code }));
   const confirmRuntimeRepair = vi.fn(async () => approved);
   await noteHostDesktopHealth(hostConfig, {
     prompter: { shouldRepair: true, confirmRuntimeRepair },

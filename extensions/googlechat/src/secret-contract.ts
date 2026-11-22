@@ -1,5 +1,6 @@
 // Secret-target discovery must not load provider setup or resolution runtimes.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { hasConfiguredAccountValue } from "openclaw/plugin-sdk/account-resolution";
 import {
   createChannelSecretContract,
   hasOwnProperty,
@@ -71,6 +72,12 @@ export const channelSecrets = createChannelSecretContract({
       expectedResolvedValue: "string-or-object",
     },
   ],
+  // Mirrors the implicit default that account listing starts from root or env credentials.
+  hasImplicitDefaultAccount: ({ channel, context }) =>
+    hasConfiguredAccountValue(channel.serviceAccount) ||
+    hasConfiguredAccountValue(channel.serviceAccountFile) ||
+    hasConfiguredAccountValue(context.env.GOOGLE_CHAT_SERVICE_ACCOUNT) ||
+    hasConfiguredAccountValue(context.env.GOOGLE_CHAT_SERVICE_ACCOUNT_FILE),
   collect(params) {
     const { channel: googleChat, surface } = params;
     const topLevelServiceAccountOwners = !surface.channelEnabled

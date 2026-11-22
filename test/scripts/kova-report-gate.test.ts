@@ -77,23 +77,6 @@ function infoCard() {
   };
 }
 
-function makeViolation(
-  kind: string,
-  metricId: string,
-  actual: number,
-  message: string,
-  role?: string,
-) {
-  return {
-    actual,
-    expected: kind === "soak" ? "<= 40" : "<= 900",
-    kind,
-    message,
-    metric: metricId,
-    ...(role ? { role } : {}),
-  };
-}
-
 function makeRecord(deep = false): JsonObject {
   const cpuPercentMax = deep ? 156.2 : 80;
   const peakRssMb = deep ? 923.7 : 650;
@@ -123,20 +106,19 @@ function makeRecord(deep = false): JsonObject {
     ...(deep
       ? {
           violations: [
-            makeViolation(
-              "threshold",
-              "peakRssMb",
-              peakRssMb,
-              "peak RSS 923.7 MB exceeded threshold 900 MB",
-            ),
-            makeViolation(
-              "resource",
-              "resourceByRole.agent-process.peakRssMb",
-              peakRssMb,
-              "agent-process peak RSS 923.7 MB exceeded threshold 900 MB",
-              "agent-process",
-            ),
-          ],
+            { kind: "threshold", metric: "peakRssMb" },
+            {
+              kind: "resource",
+              metric: "resourceByRole.agent-process.peakRssMb",
+              role: "agent-process",
+            },
+          ].map((violation) =>
+            Object.assign(violation, {
+              actual: peakRssMb,
+              expected: "<= 900",
+              message: violation.metric,
+            }),
+          ),
         }
       : {}),
   };
@@ -241,6 +223,27 @@ function profiledResourceReport(): JsonObject {
     ],
   });
   return report;
+}
+
+function addHistoricalTimeline(report: JsonObject): JsonObject {
+  const phase = {
+    id: "pre-cleanup-timeline",
+    driverKind: "kova",
+    measurementScope: "cleanup",
+    commands: [],
+    results: [],
+    metrics: {
+      timeline: {
+        schemaVersion: "kova.timelineCollector.v1",
+        commandStatus: 0,
+        available: true,
+        openSpans: [{ name: "gateway.ready", spanId: "terminal-ready", pid: 4321 }],
+        keySpans: {},
+      },
+    },
+  };
+  arrayAt(at(report, "records", 0).phases).push(phase);
+  return phase;
 }
 
 function attachPassingBaseline(report: JsonObject): void {
@@ -409,6 +412,101 @@ it("accepts a declared collector-only phase without commands", () => {
   expect(evaluateToleratedPartialKovaReport(report)).toEqual({ ok: true });
 });
 
+it.each([
+  ["current filtered", partialReport, ["--require-instrumented-performance-contract"]],
+  ["historical profiled", profiledResourceReport, []],
+] as const)(
+  "accepts %s reports with historical diagnostics at the CLI",
+  (_name, makeReport, flags) => {
+    const report = makeReport();
+    addHistoricalTimeline(report);
+    const result = runGate(report, ...flags);
+    expect(result.status, result.stderr).toBe(0);
+  },
+);
+
+it.each([
+  [
+    "unrelated phase",
+    (_report, phase) => {
+      phase.id = "other-history";
+    },
+    "commandless phase was not a collector-only phase",
+  ],
+  [
+    "wrong owner",
+    (_report, phase) => {
+      phase.driverKind = "none";
+    },
+    "historical timeline phase identity was invalid",
+  ],
+  [
+    "wrong scope",
+    (_report, phase) => {
+      phase.measurementScope = "product";
+    },
+    "historical timeline phase identity was invalid",
+  ],
+  [
+    "missing timeline",
+    (_report, phase) => {
+      delete objectAt(phase.metrics).timeline;
+    },
+    "invalid historical timeline",
+  ],
+  [
+    "wrong timeline schema",
+    (_report, phase) => {
+      at(phase, "metrics", "timeline").schemaVersion = "other";
+    },
+    "historical timeline collector was invalid",
+  ],
+  [
+    "malformed spans",
+    (_report, phase) => {
+      at(phase, "metrics", "timeline").openSpans = {};
+    },
+    "invalid historical timeline open spans",
+  ],
+  [
+    "metadata without scenario work",
+    (report, phase) => {
+      at(report, "records", 0).phases = [phase];
+    },
+    "record had no scenario phases",
+  ],
+  [
+    "commands disguised as history",
+    (_report, phase) => {
+      phase.commands = [commandResult().command];
+      phase.results = [commandResult()];
+    },
+    "historical timeline phase contained commands",
+  ],
+  [
+    "failed scenario command",
+    (report) => {
+      at(report, "records", 0, "phases", 0, "results", 0).status = 7;
+    },
+    "phase result 0 failed",
+  ],
+  [
+    "resource sample drift",
+    (report) => {
+      at(report, "records", 0, "measurements").peakRssMb = 999;
+    },
+    "record RSS samples did not match",
+  ],
+] satisfies Array<[string, (report: JsonObject, phase: JsonObject) => void, string]>)(
+  "rejects historical diagnostics with %s",
+  (_name, mutate, reason) => {
+    const report = partialReport();
+    const phase = addHistoricalTimeline(report);
+    mutate(report, phase);
+    expect(evaluateToleratedPartialKovaReport(report)).toEqual({ ok: false, reason });
+  },
+);
+
 it("accepts independently matching non-regressing baseline evidence", () => {
   const partial = partialReport();
   const profiled = profiledResourceReport();
@@ -443,7 +541,9 @@ it("accepts profiled RSS growth emitted as a soak violation", () => {
   const report = profiledResourceReport();
   const message = "resource-sampled RSS grew by 42 MB, over threshold 40 MB";
   at(report, "records", 0, "measurements").rssGrowthMb = 42;
-  at(report, "records", 0).violations = [makeViolation("soak", "rssGrowthMb", 42, message)];
+  at(report, "records", 0).violations = [
+    { kind: "soak", metric: "rssGrowthMb", actual: 42, expected: "<= 40", message },
+  ];
   Object.assign(at(report, "gate", "cards", 1), { summary: message, violations: [message] });
 
   expect(evaluateToleratedProfiledKovaReport(report)).toEqual({ ok: true });

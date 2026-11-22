@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { findExistingAncestor } from "../infra/fs-safe.js";
@@ -97,10 +98,12 @@ export function renderGatewayServiceCleanupHints(
             ? "system"
             : "gui/$UID";
         const launchctlCommand = domain === "system" ? "sudo launchctl" : "launchctl";
-        hints.push(`${launchctlCommand} bootout ${domain}/${quoteCliArg(service.label)}`);
+        hints.push(
+          terminalText`${launchctlCommand} bootout ${domain}/${quoteCliArg(service.label)}`,
+        );
         if (plistPath) {
           const removeCommand = service.scope === "system" ? "sudo rm" : "rm";
-          hints.push(`${removeCommand} ${quoteCliArg(plistPath)}`);
+          hints.push(terminalText`${removeCommand} ${quoteCliArg(plistPath)}`);
         }
         break;
       }
@@ -108,13 +111,16 @@ export function renderGatewayServiceCleanupHints(
         const systemctlCommand = `systemctl --${service.scope}`;
         const unit = quoteCliArg(service.label);
         // A discovered unit may be the only running Gateway; inspect before removal.
-        hints.push(`${systemctlCommand} status -- ${unit}`, `${systemctlCommand} cat -- ${unit}`);
+        hints.push(
+          terminalText`${systemctlCommand} status -- ${unit}`,
+          terminalText`${systemctlCommand} cat -- ${unit}`,
+        );
         break;
       }
       case "win32":
         if (service.windowsStartupEntry) {
           hints.push(
-            `Get-Item -LiteralPath '${service.windowsStartupEntry.replaceAll("'", "''")}'`,
+            terminalText`Get-Item -LiteralPath '${service.windowsStartupEntry.replaceAll("'", "''")}'`,
           );
           break;
         }
@@ -122,7 +128,7 @@ export function renderGatewayServiceCleanupHints(
         // The hint can be pasted into cmd.exe or PowerShell, so exclude names
         // that either shell can expand rather than guessing a common escape.
         if (/^[A-Za-z0-9_. ()\\/-]+$/.test(service.label)) {
-          hints.push(`schtasks /Query /TN "${service.label}" /V /FO LIST`);
+          hints.push(terminalText`schtasks /Query /TN "${service.label}" /V /FO LIST`);
         }
         break;
     }

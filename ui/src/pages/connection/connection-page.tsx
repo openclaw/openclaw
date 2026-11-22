@@ -3,6 +3,7 @@ import { createDeferred, createMemo, createSignal, onSettled } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { LearnMoreLink, SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -10,6 +11,8 @@ import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { SYSTEM_INFO_POLL_INTERVAL_MS } from "../../lib/system-info.ts";
 import { ConnectionDraft } from "./connection-draft.ts";
 import { ConnectionView } from "./view.tsx";
+
+registerRouteSubtitlesEnglish();
 
 const CONNECTION_DOCS_URL = "https://docs.openclaw.ai/gateway/remote";
 

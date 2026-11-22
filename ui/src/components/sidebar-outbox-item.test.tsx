@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import { createGatewayHarness, client } from "../app/overlays-access.test-support.ts";
 import { disposeSidebarContextLifecycles } from "../test-helpers/app-sidebar-context-lifecycle.ts";
 import { createContext, createSessions } from "../test-helpers/app-sidebar.ts";
@@ -14,11 +15,11 @@ afterEach(() => {
 });
 
 it.each([
-  ["reconnecting", false, true, "Your message may not have arrived"],
-  ["connected", false, false, "Your message wasn’t sent"],
-  ["connected", true, true, "Your command may not have run"],
-  ["connected", true, false, "Your command failed"],
-] as const)("reviews %s command=%s unconfirmed=%s: %s", (phase, command, unconfirmed, title) => {
+  ["reconnecting", false, true, "Your message needs review"],
+  ["connected", false, false, "Couldn’t send your message."],
+  ["connected", true, true, "Your message needs review"],
+  ["connected", true, false, "Couldn’t complete your command."],
+] as const)("reviews %s command=%s held=%s: %s", (phase, command, held, title) => {
   const request = vi.fn(async () => ({}));
   const harness = createGatewayHarness(client(request));
   harness.update({ phase });
@@ -28,9 +29,9 @@ it.each([
     id: "pending-1",
     sessionKey: "agent:writer:review",
     agentId: "writer",
-    unconfirmed,
+    held,
     command,
-    severity: unconfirmed ? "warning" : "error",
+    severity: held ? "warning" : "error",
     requiresAction: true,
     dismissal: { kind: "outbox", signature: "pending-1" },
   };
@@ -47,11 +48,12 @@ it.each([
       activate() {
         throw new Error("not used by renderer");
       },
+      refreshOpenClawId: vi.fn(),
       dismiss: vi.fn(),
       subscribe: () => () => {},
       dispose() {},
     },
-  };
+  } satisfies ApplicationContext;
   const { container } = mountSolid(() =>
     renderSidebarOutboxItem({ entry, onNavigate: navigate }, context),
   );
@@ -62,12 +64,10 @@ it.each([
   expect(link.getAttribute("href")).toBe("/team/chat/writer/review");
   const tooltip = container.querySelector<HTMLElement & { content: string }>("openclaw-tooltip");
   expect(container.querySelector(".sidebar-issues-panel__entity")?.textContent).toBe(title);
-  expect(tooltip?.content).toContain(
-    unconfirmed ? (command ? "may already have run" : "check whether it arrived") : "review it",
-  );
+  expect(tooltip?.content).toContain("review it");
   expect(container.querySelector("p, .sidebar-issues-panel__actions, button")).toBeNull();
   expect(container.querySelector(".sidebar-outbox-row__offline")?.textContent ?? null).toBe(
-    phase === "reconnecting" ? "· Offline" : null,
+    phase === "reconnecting" ? "· Disconnected" : null,
   );
   link.click();
   expect(navigate).toHaveBeenCalledExactlyOnceWith("chat", {

@@ -3,6 +3,7 @@ import {
   positiveSecondsToSafeMilliseconds,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { ProviderAuthFailure } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -22,17 +23,6 @@ const deviceVerificationUrl = (domain: string) => `https://${domain}/login/devic
 const githubAuthSsrfPolicy = (domain: string): SsrFPolicy => ({
   hostnameAllowlist: [domain],
 });
-
-type DeviceCodeResponse = {
-  deviceCode: string;
-  userCode: string;
-  verificationUri: string;
-  expiresInMs: number;
-  // Monotonic performance.now() deadline; wall-clock jumps must not stretch or
-  // shrink the device-code window. Sleeps also consume setTimeout (monotonic).
-  deadlineMs: number;
-  intervalMs: number;
-};
 
 type DeviceTokenResponse =
   | {
@@ -54,15 +44,14 @@ function parseJsonResponse(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function parseDeviceCodeResponse(
-  value: Record<string, unknown>,
-  issuedAtMs: number,
-): DeviceCodeResponse {
+function parseDeviceCodeResponse(value: Record<string, unknown>, issuedAtMs: number) {
   const expiresInMs = positiveSecondsToSafeMilliseconds(value.expires_in);
   const intervalMs =
     value.interval === undefined
       ? GITHUB_DEVICE_FLOW_DEFAULT_INTERVAL_MS
       : nonNegativeSecondsToSafeMilliseconds(value.interval);
+  // Monotonic performance.now() deadline; wall-clock jumps must not stretch or
+  // shrink the device-code window. Sleeps also consume setTimeout (monotonic).
   const deadlineMs = expiresInMs === undefined ? undefined : issuedAtMs + expiresInMs;
 
   if (
@@ -133,11 +122,6 @@ function normalizeGitHubDeviceUserCode(raw: string): string {
   return userCode;
 }
 
-type GitHubCopilotDeviceFlowResult =
-  | { status: "authorized"; accessToken: string }
-  | { status: "access_denied" }
-  | { status: "expired" };
-
 type GitHubCopilotDeviceFlowIO = {
   showCode(args: { verificationUrl: string; userCode: string; expiresInMs: number }): Promise<void>;
   openUrl?: (url: string) => Promise<void>;
@@ -148,7 +132,7 @@ type GitHubCopilotDeviceFlowIO = {
 export async function runGitHubCopilotDeviceFlow(
   io: GitHubCopilotDeviceFlowIO,
   domain: string = PUBLIC_GITHUB_COPILOT_DOMAIN,
-): Promise<GitHubCopilotDeviceFlowResult> {
+): Promise<string> {
   const host = normalizeGithubCopilotDomain(domain);
   const assertCurrent = () => {
     io.signal?.throwIfAborted();
@@ -181,6 +165,9 @@ export async function runGitHubCopilotDeviceFlow(
       if (!response.ok) {
         // Release closes the dispatcher, so cancel its unread response body first.
         await response.body?.cancel().catch(() => undefined);
+        if (response.status === 429) {
+          throw new ProviderAuthFailure("rate_limited");
+        }
         throw new Error(`${params.failureLabel}: HTTP ${response.status}`);
       }
       return parseJsonResponse(
@@ -191,7 +178,7 @@ export async function runGitHubCopilotDeviceFlow(
     }
   };
   assertCurrent();
-  const requestDeviceCode = async (): Promise<DeviceCodeResponse> => {
+  const requestDeviceCode = async () => {
     const { signal } = io;
     const body = new URLSearchParams({ client_id: CLIENT_ID, scope: "read:user" });
     const json = await postGitHubDeviceFlowForm({
@@ -247,7 +234,7 @@ export async function runGitHubCopilotDeviceFlow(
     assertCurrent();
     if ("access_token" in json) {
       if (typeof json.access_token === "string") {
-        return { status: "authorized", accessToken: json.access_token };
+        return json.access_token;
       }
       throw new Error("GitHub device flow returned an invalid access token");
     }
@@ -264,12 +251,12 @@ export async function runGitHubCopilotDeviceFlow(
       continue;
     }
     if (err === "expired_token") {
-      return { status: "expired" };
+      throw new ProviderAuthFailure("device_code_expired");
     }
     if (err === "access_denied") {
-      return { status: "access_denied" };
+      throw new ProviderAuthFailure("device_code_denied");
     }
     throw new Error(`GitHub device flow error: ${err}`);
   }
-  return { status: "expired" };
+  throw new ProviderAuthFailure("device_code_expired");
 }

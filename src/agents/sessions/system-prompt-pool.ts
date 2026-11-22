@@ -1,5 +1,5 @@
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { cloneTranscriptEnvelope } from "../../config/sessions/transcript-json.js";
 import { LruCache } from "../../infra/lru-cache.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { FileEntry } from "./session-manager-types.js";
@@ -7,7 +7,7 @@ import type { FileEntry } from "./session-manager-types.js";
 // Content is the immutable revision. Eviction only ends sharing, never changes a live prompt.
 const prefixes = resolveGlobalSingleton(
   Symbol.for("openclaw.systemPromptPrefixes"),
-  () => new LruCache<string>(64, { maxBytes: 8 * 1024 * 1024, sizeOf: (text) => text.length * 2 }),
+  () => new LruCache<string>(128, { maxBytes: 32 * 1024 ** 2, sizeOf: (text) => text.length * 2 }),
   (cache) => cache.clear(),
 );
 
@@ -15,15 +15,15 @@ export function shareSystemPromptPrefix(text: string): string {
   if (text.length < 1024) {
     return text;
   }
-  const hash = sha256Hex(text);
-  const existing = prefixes.get(hash);
-  // UTF-8 hashing can map distinct lone surrogates to the same replacement character.
-  if (existing === text) {
+  const existing = prefixes.peek(text);
+  if (existing !== undefined) {
+    // Promote the owned key, not a caller slice that could retain a larger source.
+    prefixes.get(existing);
     return existing;
   }
   // Detach slices once, rather than retaining their potentially much larger source string.
   const owned = Buffer.from(text, "utf16le").toString("utf16le");
-  prefixes.set(hash, owned);
+  prefixes.set(owned, owned);
   return owned;
 }
 
@@ -36,14 +36,15 @@ export function shareSessionSystemPrompt<T extends FileEntry>(entry: T): T {
   if (!isRecord(data)) {
     return entry;
   }
+  const shared = cloneTranscriptEnvelope(data);
+  if (typeof shared.prefix === "string") {
+    shared.prefix = shareSystemPromptPrefix(shared.prefix);
+  }
+  if (typeof shared.renderedPrefix === "string") {
+    shared.renderedPrefix = shareSystemPromptPrefix(shared.renderedPrefix);
+  }
   return {
     ...entry,
-    data: Object.freeze({
-      ...data,
-      ...(typeof data.prefix === "string" ? { prefix: shareSystemPromptPrefix(data.prefix) } : {}),
-      ...(typeof data.renderedPrefix === "string"
-        ? { renderedPrefix: shareSystemPromptPrefix(data.renderedPrefix) }
-        : {}),
-    }),
+    data: Object.freeze(shared),
   };
 }

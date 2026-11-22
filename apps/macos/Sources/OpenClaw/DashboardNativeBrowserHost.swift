@@ -93,7 +93,7 @@ final class DashboardNativeBrowserHost {
             return DashboardBrowserTabState(
                 id: tab.id,
                 sessionKey: tab.sessionKey,
-                url: browser.representedURL?.absoluteString ?? browser.requestedURL.absoluteString,
+                url: (browser.failedURL ?? browser.representedURL ?? browser.requestedURL).absoluteString,
                 title: browser.title ?? "",
                 loading: browser.webView.isLoading,
                 canGoBack: browser.webView.canGoBack,
@@ -158,25 +158,49 @@ final class DashboardNativeBrowserHost {
         }
         self.scheduleStatePush()
         self.onOpen?()
-        browser.webView.load(URLRequest(url: url))
+        browser.trackNavigation(browser.webView.load(URLRequest(url: url)))
     }
 
     func navigate(tabId: String, url: URL) throws {
         let webView = try self.requireWebView(tabId)
-        webView.load(URLRequest(url: url))
+        let browser = self.browserTab(for: webView)
+        browser?.resetAutomaticReloads()
+        browser?.trackNavigation(webView.load(URLRequest(url: url)))
     }
 
     func perform(_ action: DashboardBrowserAction, tabId: String) throws {
         let webView = try self.requireWebView(tabId)
+        let browser = self.browserTab(for: webView)
+        if action == .reload { browser?.resetAutomaticReloads() }
         switch action {
-        case .back: webView.goBack()
-        case .forward: webView.goForward()
-        case .reload: webView.reload()
-        case .stop: webView.stopLoading()
+        case .back: self.goBack(in: webView)
+        case .forward: self.goForward(in: webView)
+        case .reload:
+            if let url = browser?.failedURL {
+                browser?.trackNavigation(webView.load(URLRequest(url: url)))
+            } else {
+                browser?.trackNavigation(webView.reload())
+            }
+        case .stop: browser?.stopLoading()
         case .close: try self.close(tabId: tabId)
         case .snapshot, .download: throw DashboardBrowserError.invalidRequest
         }
         self.scheduleStatePush()
+    }
+
+    /// Back and Forward are user navigation from the Browser panel and the Navigate menu alike.
+    func goBack(in webView: WKWebView) {
+        let browser = self.browserTab(for: webView)
+        browser?.resetAutomaticReloads()
+        let navigation = webView.goBack()
+        browser?.trackNavigation(navigation)
+    }
+
+    func goForward(in webView: WKWebView) {
+        let browser = self.browserTab(for: webView)
+        browser?.resetAutomaticReloads()
+        let navigation = webView.goForward()
+        browser?.trackNavigation(navigation)
     }
 
     func close(tabId: String) throws {
@@ -226,15 +250,24 @@ final class DashboardNativeBrowserHost {
     func navigationWillStart(_ url: URL, in webView: WKWebView) {
         guard let browser = self.browserTab(for: webView) else { return }
         browser.updateRepresentedURL(url)
-        browser.favicon = nil
-        browser.faviconGeneration &+= 1
         self.scheduleStatePush()
     }
 
     func navigationDidStart(_ navigation: WKNavigation?, in webView: WKWebView) {
+        let browser = self.browserTab(for: webView)
+        browser?.clearFailure()
         if let navigation {
-            self.tabs.first { $0.browser.webView === webView }?.browser.startNavigation(navigation)
+            browser?.startNavigation(navigation)
         }
+        self.scheduleStatePush()
+    }
+
+    /// Fragment, failed, and response-cancelled navigations never commit, so the
+    /// displayed page keeps its icon until a new document replaces it.
+    func navigationDidCommit(in webView: WKWebView) {
+        guard let browser = self.browserTab(for: webView) else { return }
+        browser.favicon = nil
+        browser.faviconGeneration &+= 1
         self.scheduleStatePush()
     }
 
@@ -259,9 +292,50 @@ final class DashboardNativeBrowserHost {
         }
     }
 
-    func navigationDidFail(for webView: WKWebView) {
-        self.tabs.first { $0.browser.webView === webView }?.browser.failNavigation()
+    func navigationDidFail(_ navigation: WKNavigation?, for webView: WKWebView, error: Error) {
+        guard let tab = self.tabs.first(where: { $0.browser.webView === webView }) else { return }
+        let browser = tab.browser
+        browser.failNavigation(navigation)
+        let nsError = error as NSError
+        // Stop, replacement navigations, and response-policy handoffs (downloads,
+        // external browser) cancel deliberately and keep the current page.
+        if !Self.isDeliberateInterruption(nsError) {
+            let url = nsError.userInfo[NSURLErrorFailingURLErrorKey] as? URL ??
+                browser.representedURL ?? browser.requestedURL
+            browser.showFailure(
+                at: url,
+                title: String(localized: "This page couldn't be opened"),
+                message: nsError.localizedDescription,
+                reload: self.reloadAction(tabId: tab.id))
+        }
         self.scheduleStatePush()
+    }
+
+    /// WebKit leaves a terminated page blank. A bounded number of automatic reloads
+    /// keeps one-off recovery; a page that keeps crashing waits for the user.
+    func webContentProcessDidTerminate(_ webView: WKWebView) {
+        guard let tab = self.tabs.first(where: { $0.browser.webView === webView }) else { return }
+        let browser = tab.browser
+        if browser.consumeAutomaticReload() {
+            browser.trackNavigation(webView.reload())
+            return
+        }
+        browser.showFailure(
+            at: browser.failedURL ?? webView.url ?? browser.representedURL ?? browser.requestedURL,
+            title: String(localized: "This page stopped repeatedly"),
+            message: String(localized: "Choose Reload to try loading it again."),
+            reload: self.reloadAction(tabId: tab.id))
+        self.scheduleStatePush()
+    }
+
+    nonisolated static func isDeliberateInterruption(_ error: NSError) -> Bool {
+        // WKError.Code has no case for the legacy policy interruption (102).
+        (error.domain == NSURLErrorDomain && error.code == NSURLErrorCancelled) ||
+            (error.domain == "WebKitErrorDomain" && error.code == 102)
+    }
+
+    private func reloadAction(tabId: String) -> @MainActor () -> Void {
+        { [weak self] in try? self?.perform(.reload, tabId: tabId) }
     }
 
     func dispose() {
@@ -370,8 +444,12 @@ extension DashboardNativeBrowserHost {
 
     func inspect(tabId: String, x: Double, y: Double) async throws -> [String: Any] {
         let webView = try self.requireWebView(tabId)
-        let script = BrowserInspectScript.source
-        let node = try await webView.evaluateJavaScript("(\(script))(\(x), \(y))")
+        // The client world keeps page-replaced DOM methods from answering or observing the inspection.
+        let node = try await webView.callAsyncJavaScript(
+            "return (\(BrowserInspectScript.source))(x, y)",
+            arguments: ["x": x, "y": y],
+            in: nil,
+            contentWorld: .defaultClient)
         guard self.webView(for: tabId) === webView else { throw DashboardBrowserError.unknownTab }
         return ["ok": true, "node": node ?? NSNull()]
     }

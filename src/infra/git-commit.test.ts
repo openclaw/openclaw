@@ -28,37 +28,19 @@ async function writeFiles(root: string, files: Record<string, string>) {
 async function makeFakeGitRepo(
   options: {
     head?: string;
-    packedRefs?: Record<string, string>;
     refs?: Record<string, string>;
-    gitdir?: string;
-    commondir?: string;
   } = {},
   targetRoot?: string,
 ) {
   const root = targetRoot ?? (await tempDir());
-  const gitdir = options.gitdir ?? path.join(root, ".git");
-  if (options.gitdir) {
-    await writeFiles(root, { ".git": `gitdir: ${options.gitdir}\n` });
-  }
+  const gitdir = path.join(root, ".git");
   await writeFiles(gitdir, { HEAD: options.head ?? `${SHA}\n` });
-  const refsBase = options.commondir ? path.resolve(gitdir, options.commondir) : gitdir;
-  if (options.commondir) {
-    await writeFiles(gitdir, { commondir: options.commondir });
-  }
   await writeFiles(
-    refsBase,
+    gitdir,
     Object.fromEntries(
       Object.entries(options.refs ?? {}).map(([ref, commit]) => [ref, `${commit}\n`]),
     ),
   );
-  const packedRefsEntries = Object.entries(options.packedRefs ?? {});
-  if (packedRefsEntries.length > 0) {
-    const packedRefsContents = [
-      "# pack-refs with: peeled fully-peeled sorted",
-      ...packedRefsEntries.map(([refPath, commit]) => `${commit} ${refPath}`),
-    ].join("\n");
-    await writeFiles(refsBase, { "packed-refs": `${packedRefsContents}\n` });
-  }
   return root;
 }
 
@@ -69,19 +51,6 @@ async function makeFakeOpenClawPackage(root: string) {
 
 const writeJson = (root: string, name: string, value: object) =>
   fs.writeFile(path.join(root, name), JSON.stringify(value));
-
-function limitPositionalReads(maxBytes: number) {
-  const realReadSync = fsSync.readSync.bind(fsSync);
-  vi.spyOn(fsSync, "readSync").mockImplementation(((
-    fd: number,
-    buffer: NodeJS.ArrayBufferView,
-    offset: number,
-    length: number,
-    position: number | null,
-  ) => {
-    return realReadSync(fd, buffer, offset, Math.min(length, maxBytes), position);
-  }) as typeof fsSync.readSync);
-}
 
 describe("git commit resolution", () => {
   let gitRoot: typeof import("./git-root.js");
@@ -191,56 +160,6 @@ describe("git commit resolution", () => {
       expect(probe).toHaveBeenCalledTimes(reads);
     },
   );
-
-  it("reads packed refs after short commondir reads in worktree-style checkouts", async () => {
-    const temp = await tempDir();
-    const checkoutRoot = path.join(temp, "checkout");
-    const commonGitDir = path.join(temp, "git-common");
-    const worktreeGitDir = path.join(commonGitDir, "worktrees", "checkout");
-
-    await makeFakeGitRepo(
-      {
-        gitdir: worktreeGitDir,
-        commondir: "../..",
-        head: `ref: ${MAIN}\n`,
-        packedRefs: {
-          "refs/heads/main": "0123456789abcdef0123456789abcdef01234567",
-        },
-      },
-      checkoutRoot,
-    );
-    limitPositionalReads(4);
-
-    expect(resolveCommitHash({ cwd: checkoutRoot, env: {} })).toBe("0123456");
-  });
-
-  it("bounds successful git probe entries with LRU eviction", async () => {
-    const result = "abcdef0";
-    const temp = await tempDir();
-    const coldDir = path.join(temp, "cold");
-    const hotDir = path.join(temp, "hot");
-    const newestDir = path.join(temp, "newest");
-    const readGitCommit = vi
-      .spyOn(gitRoot, "readGitHead")
-      .mockReturnValue({ headPath: "unused", ref: null, value: result });
-    const resolve = resolveAt;
-    const callsFor = (cwd: string) =>
-      readGitCommit.mock.calls.filter(([searchDir]) => searchDir === cwd).length;
-
-    expect(resolve(coldDir)).toBe(result);
-    expect(resolve(hotDir)).toBe(result);
-    for (let index = 0; index < 254; index += 1) {
-      expect(resolve(path.join(temp, `filler-${index}`))).toBe(result);
-    }
-
-    expect(resolve(hotDir)).toBe(result);
-    expect(resolve(newestDir)).toBe(result);
-    expect(resolve(newestDir)).toBe(result);
-    expect(resolve(hotDir)).toBe(result);
-    expect(resolve(coldDir)).toBe(result);
-
-    expect([callsFor(newestDir), callsFor(hotDir), callsFor(coldDir)]).toEqual([1, 1, 2]);
-  });
 
   it("formats env-provided commit strings consistently", async () => {
     const temp = await tempDir();

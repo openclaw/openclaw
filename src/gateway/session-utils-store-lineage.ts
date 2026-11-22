@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveSessionConfiguredDefault } from "../agents/session-model-ref.js";
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
 import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -53,7 +54,8 @@ export async function prepareGatewaySessionEntryReader(params: {
     params.entry?.modelOverrideSource === "default" ||
     resolveDirectStoredModelOverride({
       sessionEntry: params.entry,
-      defaultProvider: resolveSessionConfiguredDefault(params.cfg, params.agentId).provider,
+      defaultProvider:
+        resolveSessionConfiguredDefault(params.cfg, params.agentId)?.provider ?? DEFAULT_PROVIDER,
     })
   ) {
     return (key) => params.store[key];

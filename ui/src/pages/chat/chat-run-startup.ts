@@ -19,7 +19,12 @@ export type ChatRunStartupState =
       waitReason?: "response" | "slot";
       seq?: number;
     }
-  | { state: "status"; runId: string; phase: "answer" | "finishing"; seq?: number }
+  | {
+      state: "status";
+      runId: string;
+      phase: "answer" | "finishing";
+      seq?: number;
+    }
   | {
       state: "status";
       runId: string;
@@ -120,7 +125,6 @@ export function chatStartupStatusLabel(
   run: ChatRunStartupStatus | null | undefined,
   placement: ApplicationPlacementStartupStatus | null | undefined,
   environmentStartStatus: WorkerEnvironmentStartStatus | undefined = placement?.startStatus,
-  awaitingActivity = false,
 ): string | undefined {
   const startStatus = environmentStartStatus;
   if (
@@ -164,12 +168,9 @@ export function chatStartupStatusLabel(
       return t("chat.startupStatus.preparingWorkspace");
     case "starting":
       return t("newSession.starting");
-    case "active":
-    case "sending":
-      return t("chat.composer.sendingMessage");
     default:
-      // Queue custody and recovery can precede execution; only an explicit phase proves preparation.
-      return awaitingActivity ? t("chat.startupStatus.waitingForTurn") : undefined;
+      // Ordinary send latency uses the same working indicator as an active turn.
+      return undefined;
   }
 }
 

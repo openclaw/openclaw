@@ -1,30 +1,5 @@
-import type {
-  ModelProviderConfig,
-  ProviderPlugin,
-} from "openclaw/plugin-sdk/provider-model-shared";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { OMLX_API_KEY_ENV_VAR, OMLX_LOCAL_API_KEY, OMLX_PROVIDER_ID } from "./defaults.js";
-
-function hasOmlxAuthorization(
-  providerConfig: ModelProviderConfig | undefined,
-  modelHeaders: Record<string, string> | undefined,
-  request: ModelProviderConfig["request"],
-): boolean {
-  const auth = request?.auth;
-  if (auth?.mode === "authorization-bearer") {
-    return true;
-  }
-  if (auth?.mode === "header") {
-    // Request auth replaces earlier Authorization headers, including with a custom header.
-    return auth.headerName.trim().toLowerCase() === "authorization";
-  }
-  return [providerConfig?.headers, request?.headers, modelHeaders].some((headers) =>
-    Object.entries(headers ?? {}).some(
-      ([name, value]) =>
-        name.trim().toLowerCase() === "authorization" &&
-        Boolean(typeof value === "string" ? value.trim() : value),
-    ),
-  );
-}
 
 export default {
   id: OMLX_PROVIDER_ID,
@@ -49,7 +24,7 @@ export default {
       mode: "api-key",
     };
   },
-  prepareRuntimeAuth: async ({ config, provider, model, apiKey }) => {
+  prepareRuntimeAuthV2: async ({ config, provider, model, apiKey }) => {
     const [
       { CUSTOM_LOCAL_AUTH_MARKER, findNormalizedProviderValue },
       { getModelProviderRequestTransport },
@@ -66,7 +41,20 @@ export default {
     ) {
       return undefined;
     }
-    if (hasOmlxAuthorization(providerConfig, model.headers, request)) {
+    const auth = request?.auth;
+    // Request auth replaces earlier Authorization headers, including with a custom header.
+    const hasAuthorization =
+      auth?.mode === "authorization-bearer" ||
+      (auth?.mode === "header"
+        ? auth.headerName.trim().toLowerCase() === "authorization"
+        : [providerConfig?.headers, request?.headers, model.headers].some((headers) =>
+            Object.entries(headers ?? {}).some(
+              ([name, value]) =>
+                name.trim().toLowerCase() === "authorization" &&
+                Boolean(typeof value === "string" ? value.trim() : value),
+            ),
+          ));
+    if (hasAuthorization) {
       // The generic marker clears Authorization downstream, including explicit headers.
       return { apiKey: OMLX_LOCAL_API_KEY };
     }

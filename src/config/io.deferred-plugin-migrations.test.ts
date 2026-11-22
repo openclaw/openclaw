@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, assert, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { finishConfigValidationForCli } from "../cli/config-cli-validation.js";
 import {
@@ -21,7 +21,11 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
-import { resolveDeferredPluginMigrationConfigPaths } from "./deferred-plugin-migration-config.js";
+import {
+  hasDeferredPluginMigrationConfig,
+  preserveDeferredPluginMigrationConfig,
+  resolveDeferredPluginMigrationConfigPaths,
+} from "./deferred-plugin-migration-config.js";
 import { createConfigIO } from "./io.factory.js";
 import { readCurrentConfigForPolicyCheck, withCurrentConfigPolicyReader } from "./io.runtime.js";
 import type { ConfigWriteOptions, ConfigIoFactoryOptions } from "./io.types.js";
@@ -33,24 +37,29 @@ import {
   validateConfigObjectWithPlugins,
 } from "./validation.js";
 
-const ledger = vi.hoisted(() => ({ pendingReadsOutsideWrites: 0 }));
-vi.mock("../infra/kysely-sync.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/kysely-sync.js")>();
-  return {
-    ...actual,
-    executeSqliteQuerySync: ((db, query) => {
-      const { sql, parameters } = query.compile();
-      // Publication reads pending rows inside its write transaction; other reads repeat that check.
-      if (
-        !("isTransaction" in db && db.isTransaction) &&
-        sql.includes('"migration_runs"') &&
-        parameters.includes("pending")
-      ) {
-        ledger.pendingReadsOutsideWrites += 1;
-      }
-      return actual.executeSqliteQuerySync(db, query);
-    }) satisfies typeof actual.executeSqliteQuerySync,
+it("retains the authored canonical config key for a mixed-case migration owner", () => {
+  const key = "mixed-upgrade-proof";
+  const sourceConfig = {
+    plugins: { entries: { [key]: { enabled: true, config: { token: "retained" } } } },
   };
+  const pending = {
+    pluginId: "MiXeD-upgrade-proof",
+    reason: "Package pending",
+    command: "openclaw doctor --fix",
+    ...resolveDeferredPluginMigrationConfigPaths({
+      config: sourceConfig,
+      pluginId: "MiXeD-upgrade-proof",
+    }),
+  };
+  expect(pending.configPaths).toContainEqual(["plugins", "entries", key, "config"]);
+  expect(hasDeferredPluginMigrationConfig(sourceConfig, pending)).toBe(true);
+  expect(
+    preserveDeferredPluginMigrationConfig({
+      sourceConfig,
+      nextConfig: { plugins: { entries: { [key]: { enabled: true } } } },
+      pending: [pending],
+    }),
+  ).toEqual(sourceConfig);
 });
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -114,32 +123,23 @@ function fixture(extraEnv: NodeJS.ProcessEnv = {}) {
   };
 }
 
-it("rereads policy after a config write while migration rows stay pinned", async () => {
-  const { configPath, env, writeSource } = fixture();
-  writeSource(gateway(18789));
-
-  await withPluginLifecycleLease({ env }, async (lease) =>
-    withCurrentConfigPolicyReader({ configPath, env, lease }, async (getCurrentConfig) => {
-      expect(getCurrentConfig().gateway?.port).toBe(18789);
-      writeSource(gateway(18790));
-      expect(getCurrentConfig().gateway?.port).toBe(18790);
-    }),
-  );
-});
-
-it.each(["worker", "transaction"] as const)(
-  "invalidates pinned policy before a nested %s migration write",
+it.each(["config", "worker", "transaction"] as const)(
+  "rereads config but invalidates changed migration policy after a %s write",
   async (writer) => {
     const { configPath, env, writeSource, recordPending } = fixture();
-    writeSource({ gateway: { mode: "local" } });
+    writeSource(gateway(18789));
     if (writer === "transaction") {
       await recordPending([pendingPlugin]);
     }
 
     await withPluginLifecycleLease({ env }, async (lease) =>
       withCurrentConfigPolicyReader({ configPath, env, lease }, async (getCurrentConfig) => {
-        expect(getCurrentConfig().gateway?.mode).toBe("local");
-        if (writer === "worker") {
+        expect(getCurrentConfig().gateway).toMatchObject({ mode: "local", port: 18789 });
+        if (writer === "config") {
+          writeSource(gateway(18790));
+          expect(getCurrentConfig().gateway?.port).toBe(18790);
+          return;
+        } else if (writer === "worker") {
           await recordPending([pendingPlugin]);
         } else {
           runOpenClawStateWriteTransaction(
@@ -244,6 +244,71 @@ it.each(["new", "stronger"])(
     await commit(resumedIo);
     expect(publicationChecked).toBe(true);
     expect(readConfig()).toMatchObject({ ...source, ...gateway(18790) });
+  },
+);
+
+it.each([
+  {
+    field: "guidance",
+    change: { reason: "Waiting for Doctor confirmation", command: "openclaw doctor --fix" },
+  },
+  { field: "pluginId", change: { pluginId: "another-owner" } },
+  { field: "configPaths", change: { configPaths: sessionPath } },
+  { field: "validationExcludedPaths", change: { validationExcludedPaths: sessionPath } },
+  { field: "requiresStateMigration", change: { requiresStateMigration: true as const } },
+  { field: "requiresDoctorInspection", change: { requiresDoctorInspection: true as const } },
+])("fences $field changes at Doctor config publication", async ({ field, change }) => {
+  const { env, readRaw, readConfig, writeSource, recordPending, ioFor } = fixture();
+  const source = {
+    ...gateway(18789),
+    plugins: { entries: { sample: { config: { retained: "authored" } } } },
+  };
+  const original = writeSource(source);
+  const pending = pendingMigration("sample", [pluginPath]);
+  await recordPending([pending]);
+  const io = ioFor([pending]);
+  const commit = io.writeConfigFile(gateway(18790), {
+    ...repairOptions,
+    beforeCommit: () => recordPending([{ ...pending, ...change }]),
+  });
+  if (field === "guidance") {
+    await commit;
+    expect(readConfig()).toMatchObject({ ...source, ...gateway(18790) });
+    expect(readDeferredPluginMigrations({ env })).toEqual([{ ...pending, ...change }]);
+  } else {
+    await expect(commit).rejects.toBeInstanceOf(DeferredPluginMigrationConflictError);
+    expect(readRaw()).toBe(original);
+  }
+});
+
+it.each([false, true])(
+  "publishes recomputed Codex obligations in a different order (guidance changed: %s)",
+  async (rewordGuidance) => {
+    const { env, readConfig, writeSource, recordPending, ioFor } = fixture();
+    const source = {
+      ...gateway(18789),
+      plugins: { entries: { codex: { config: { retained: "authored" } } } },
+    };
+    writeSource(source);
+    const obligation = (confirm: boolean): DeferredPluginMigration => ({
+      pluginId: "codex",
+      configPaths: [["plugins", "entries", "codex", "config"]],
+      reason: confirm
+        ? "The installed plugin has not confirmed that its saved data and settings are ready for this version."
+        : "The configured plugin package is missing or has not converged.",
+      command: confirm ? "openclaw doctor --fix" : "openclaw update repair",
+    });
+    const other = pendingMigration("another-owner");
+    const expected = [obligation(false), other];
+    await recordPending(expected);
+
+    await ioFor(expected).writeConfigFile(gateway(18790), {
+      ...repairOptions,
+      beforeCommit: () => recordPending([other, obligation(rewordGuidance)]),
+    });
+
+    expect(readConfig()).toMatchObject({ ...source, ...gateway(18790) });
+    expect(readDeferredPluginMigrations({ env })).toEqual([other, obligation(rewordGuidance)]);
   },
 );
 
@@ -371,7 +436,7 @@ it("Doctor supplies pending facts to preserve legacy inputs through repair write
   expect((await runtimeIo.readConfigFileSnapshot()).valid).toBe(true);
 });
 
-it("checks completion obligations only inside replace-then-write publication", async () => {
+it("rechecks completion obligations at replace-then-write publication", async () => {
   const { env, readRaw, readConfig, writeSource, recordPending, ioFor } = fixture();
   const source = {
     ...gateway(18789),
@@ -387,7 +452,6 @@ it("checks completion obligations only inside replace-then-write publication", a
     const expectedPending = readDeferredPluginMigrations({ env });
     const io = ioFor(expectedPending);
     const prepared = await io.readConfigFileSnapshotForWrite();
-    ledger.pendingReadsOutsideWrites = 0;
     await withDeferredPluginConfigCompletion(
       {
         configPath: prepared.snapshot.path,
@@ -413,11 +477,9 @@ it("checks completion obligations only inside replace-then-write publication", a
   await expect(complete(() => recordPending([late]))).rejects.toBeInstanceOf(
     DeferredPluginMigrationConflictError,
   );
-  expect(ledger.pendingReadsOutsideWrites).toBe(0);
   expect(readRaw()).toBe(original);
 
   await complete();
-  expect(ledger.pendingReadsOutsideWrites).toBe(0);
   const written: unknown = readConfig();
   expect(written).toMatchObject({
     gateway: { mode: "local", port: 18790 },

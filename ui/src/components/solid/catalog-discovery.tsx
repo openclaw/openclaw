@@ -1,7 +1,8 @@
 import type { JSX } from "@solidjs/web";
 import { Icon } from "./icon.tsx";
+import { useScrollState } from "./scroll-state.ts";
 
-/** Shared discovery controls for the Plugins and Claws catalogs. */
+/** Shared discovery controls for the Plugins and Templates catalogs. */
 export function CatalogDiscoverySearch(props: { children: JSX.Element }): JSX.Element {
   return (
     <label class="plugin-catalog-search">
@@ -17,14 +18,16 @@ export function CatalogDiscoveryChips(props: {
   label: string;
   children: JSX.Element;
 }): JSX.Element {
+  const scrollState = useScrollState(true);
   return (
-    <div class="plugin-catalog-chips" role="group" aria-label={props.label}>
+    <div class="plugin-catalog-chips" role="group" aria-label={props.label} ref={scrollState}>
       {props.children}
     </div>
   );
 }
 
 export function CatalogDiscoveryChip(props: {
+  ref?: (button: HTMLButtonElement) => void;
   active: boolean;
   icon?: JSX.Element;
   onClick: () => void;
@@ -33,6 +36,7 @@ export function CatalogDiscoveryChip(props: {
   return (
     <button
       type="button"
+      ref={(button) => props.ref?.(button)}
       class={["plugin-catalog-chip", { "is-active": props.active }]}
       aria-pressed={props.active ? "true" : "false"}
       onClick={() => props.onClick()}
@@ -48,6 +52,8 @@ export function CatalogDiscoverySection(props: {
   title: string;
   viewAllLabel?: string;
   onViewAll?: () => void;
+  /** Lays the section out immediately rather than behind the remembered shelf height. */
+  eager?: boolean;
   children: JSX.Element;
 }): JSX.Element {
   return (
@@ -56,6 +62,7 @@ export function CatalogDiscoverySection(props: {
         "plugin-catalog-section",
         { "plugin-catalog-section--expandable": Boolean(props.onViewAll) },
       ]}
+      style={{ "content-visibility": props.eager ? "visible" : undefined }}
       data-catalog-section={props.id}
     >
       <header class="plugin-catalog-section__header">

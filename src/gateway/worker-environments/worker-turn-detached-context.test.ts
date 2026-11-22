@@ -45,6 +45,7 @@ import {
   dispatchInitialWorkerPlacement,
   placements,
   readWorkerTurnTranscriptStorageRows as readRows,
+  reconcileUnchangedLocalWorkspace,
   root,
   seedActivePlacement,
   sessionTarget,
@@ -151,8 +152,7 @@ async function launchProbe(
   const tunnel = createWorkerTurnTunnel({
     runWorkspaceCommand: unexpected,
     syncWorkspace: unexpected,
-    quiesceWorkspace: unexpected,
-    reconcileWorkspace: unexpected,
+    reconcileWorkspace: reconcileUnchangedLocalWorkspace,
     launchTurn: async (request) => {
       const { plan } = request;
       launch = {
@@ -223,10 +223,9 @@ async function withAsyncReadHook<T>(
   run: () => Promise<T>,
   phase: "before" | "after" = "after",
 ) {
-  const original = SessionManager.openModelContextAsync.bind(SessionManager);
-  const read = vi
-    .spyOn(SessionManager, "openModelContextAsync")
-    .mockImplementation(async (...args) => {
+  const wrap =
+    <A extends unknown[]>(original: (...args: A) => Promise<SessionManager>) =>
+    async (...args: A) => {
       if (phase === "before") {
         await hook();
       }
@@ -235,7 +234,11 @@ async function withAsyncReadHook<T>(
         await hook();
       }
       return result;
-    });
+    };
+  const openModelContextAsync = wrap(SessionManager.openModelContextAsync.bind(SessionManager));
+  const read = vi
+    .spyOn(SessionManager, "openModelContextAsync")
+    .mockImplementation(openModelContextAsync);
   try {
     return { result: await run(), calls: read.mock.calls.length };
   } finally {

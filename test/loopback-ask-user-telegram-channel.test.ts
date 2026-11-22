@@ -10,7 +10,6 @@ import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
 } from "../src/agents/cli-runner.test-helpers.js";
-import { createCliRunCurrentAssertion } from "../src/agents/cli-runner/execution-target.js";
 import { prepareCliRunContext } from "../src/agents/cli-runner/prepare.js";
 import * as prepareDeps from "../src/agents/cli-runner/prepare.test-support.js";
 import { claimPendingAgentQuestionAnswerFromCaller } from "../src/agents/harness/gateway-question.js";
@@ -18,6 +17,7 @@ import { withQuestionGateway } from "../src/agents/harness/gateway-question.test
 import * as runtimeConfig from "../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { resolveMcpLoopbackClientGrant } from "../src/gateway/mcp-grant-store.js";
+import * as mcp from "../src/gateway/mcp-http-request.test-support.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../src/gateway/mcp-http.js";
 import * as toolResolution from "../src/gateway/tool-resolution.js";
 import { createDeferredCore } from "../src/shared/deferred.js";
@@ -34,10 +34,9 @@ vi.mock("../src/plugins/hook-runner-global.js", () => ({ getGlobalHookRunner: ()
 vi.mock("../src/agents/node-exec-availability.js", () => ({
   loadNodeExecAvailability: async () => ({ cacheKey: "no-nodes", isAvailable: () => false }),
 }));
-vi.mock("../src/tts/tts-settings.js", () => ({
-  buildTtsSystemPromptHint: () => undefined,
-  resolveModelOverridePolicy: vi.fn(),
-  setTtsMachinePrefsPathResolver: vi.fn(),
+vi.mock("../src/tts/tts-settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/tts/tts-settings.js")>()),
+  buildTtsSystemPromptHintAsync: async () => undefined,
 }));
 
 const sessionKey = "agent:main:telegram:direct:1";
@@ -158,25 +157,14 @@ it("publishes the prompt through Bot API and completes after the answer", async 
       let admission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
       let pendingResponse: Promise<McpResponse> | undefined;
       const request = async (token: string, method: "tools/list" | "tools/call") => {
-        const response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
-          method: "POST",
-          signal: requestController.signal,
-          headers: {
-            authorization: `Bearer ${token}`,
-            "content-type": "application/json",
-            "x-openclaw-cli-capture-key": captureKey,
-          },
-          body: JSON.stringify({
-            jsonrpc: "2.0",
-            id: 1,
-            method,
-            ...(method === "tools/call"
-              ? { params: { name: "ask_user", arguments: { questions: [question] } } }
-              : {}),
-          }),
-        });
-        expect(response.status).toBe(200);
-        return (await response.json()) as McpResponse;
+        const response = await mcp.request(
+          runtime,
+          method === "tools/call"
+            ? mcp.toolCall("ask_user", { questions: [question] })
+            : { jsonrpc: "2.0", id: 1, method },
+          { token, captureKey, signal: requestController.signal },
+        );
+        return (await mcp.json(response)) as McpResponse;
       };
       await runQaGatewayFixture(
         async () => {
@@ -204,9 +192,8 @@ it("publishes the prompt through Bot API and completes after the answer", async 
             context.preparedBackend.env?.OPENCLAW_MCP_TOKEN,
             "prepared CLI grant",
           );
-          context.preparedBackend.mcpClientGrantCapture?.activate(
-            captureKey,
-            createCliRunCurrentAssertion(context.params),
+          context.preparedBackend.mcpClientGrantCapture?.activate(captureKey, () =>
+            context?.params.abortSignal?.throwIfAborted(),
           );
           expect(
             resolveMcpLoopbackClientGrant({
@@ -252,7 +239,7 @@ it("publishes the prompt through Bot API and completes after the answer", async 
           ).toHaveLength(1);
           expect(completed.result).toMatchObject({
             isError: false,
-            content: [{ type: "text", text: expect.stringContaining('"status": "answered"') }],
+            content: [{ type: "text", text: expect.stringContaining('"status":"answered"') }],
           });
         },
         () => {

@@ -1,12 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  GatewayRequestError,
-  type GatewayBrowserClient,
-  type GatewayHelloOk,
-} from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { formatUiError } from "../format-error.ts";
 import { sessionsResult } from "./session-capability.test-support.ts";
 import type { SessionListScope } from "./session-capability.ts";
@@ -26,7 +24,8 @@ function createSessionDeletionHarness(...args: Parameters<typeof createDeletionH
       onTestFinished(h.sessions.subscribeList(scope, () => {}));
     },
     async finish(operation: Promise<unknown>, row = h.beta, deleted = false) {
-      h.responses.get(row.key)!.resolve({ deleted });
+      const response = await h.waitForDeleteRequest(row.key);
+      response.resolve({ deleted });
       await operation;
     },
   };
@@ -71,7 +70,8 @@ describe("optimistic session deletion", () => {
               errors: [{ target, error }],
               preservedWorktrees: [],
             });
-      h.responses.get(target.key)!.reject(error);
+      const response = await h.waitForDeleteRequest(target.key);
+      response.reject(error);
       await settled;
       expect(h.sessions.deletionState(target.key)).toBeUndefined();
       expect(h.rows()).toContainEqual(h.alpha);
@@ -119,11 +119,12 @@ describe("optimistic session deletion", () => {
       const secondKeys = secondMode === "single" ? [secondKey] : [secondKey, secondKey];
       const first = run(firstMode, firstKeys);
       const second = run(secondMode, secondKeys);
+      const response = await h.waitForDeleteRequest(firstKey);
       expect(h.request.mock.calls.filter(([method]) => method === "sessions.delete")).toHaveLength(
         1,
       );
       h.setRows([]);
-      h.responses.get(firstKey)!.resolve({ deleted: true, worktreePreserved });
+      response.resolve({ deleted: true, worktreePreserved });
       expect(await first).toMatchObject({
         deleted: [...new Set(firstKeys)],
         preservedWorktrees: [worktreePreserved],
@@ -152,11 +153,12 @@ describe("optimistic session deletion", () => {
         outcome === "rejection"
           ? expect(operation).rejects.toThrow("postcommit cleanup failed")
           : expect(operation).resolves.toEqual({ deleted: false });
+      const response = await h.waitForDeleteRequest(h.alpha.key);
       h.setRows([h.beta, h.sibling]);
       if (outcome === "rejection") {
-        h.responses.get(h.alpha.key)!.reject(new Error("postcommit cleanup failed"));
+        response.reject(new Error("postcommit cleanup failed"));
       } else {
-        h.responses.get(h.alpha.key)!.resolve({ deleted: false });
+        response.resolve({ deleted: false });
       }
       await settled;
       expect(h.sessions.state.deletedSessions).toEqual([]);
@@ -173,6 +175,7 @@ describe("optimistic session deletion", () => {
     h.setRows([h.sibling]);
     await h.sessions.refresh({ force: true });
     const deletion = h.sessions.delete(h.alpha.key);
+    const response = await h.waitForDeleteRequest(h.alpha.key);
     h.emitEvent({
       type: "event",
       event: "sessions.changed",
@@ -184,7 +187,7 @@ describe("optimistic session deletion", () => {
     });
     expect(h.sessions.deletionState(h.alpha.key)).toBe("pending");
     expect(facts).toEqual([]);
-    h.responses.get(h.alpha.key)!.resolve({ deleted: true });
+    response.resolve({ deleted: true });
     await deletion;
     expect(h.sessions.deletionState(h.alpha.key)).toBe("confirmed");
     expect(facts).toContain(h.alpha.key);
@@ -208,7 +211,8 @@ describe("optimistic session deletion", () => {
     });
     expect(h.sessions.deletionState("agent:work:home")).toBe("pending");
     expect(h.sessions.deletionState("global", "ops")).toBeUndefined();
-    h.responses.get("global")!.resolve({ deleted: false });
+    const response = await h.waitForDeleteRequest("global");
+    response.resolve({ deleted: false });
     await operation;
   });
 
@@ -262,7 +266,8 @@ describe("optimistic session deletion", () => {
         expect(h.sessions.deletionState("global", "ops")).toBeUndefined();
         expect(h.rows()).toContainEqual(other);
       }
-      h.responses.get(targetKey)!.resolve({ deleted: false });
+      const response = await h.waitForDeleteRequest(targetKey);
+      response.resolve({ deleted: false });
       await operation;
       expect(h.rows()).toContainEqual(current);
     },
@@ -280,7 +285,8 @@ describe("optimistic session deletion", () => {
     const operation = h.sessions.delete(h.beta.key);
     const rejected = expect(operation).rejects.toThrow("reclaim failed");
     expect(h.sessions.listSnapshot(larger).result?.sessions).toEqual([h.alpha]);
-    h.responses.get(h.beta.key)!.reject(new Error("reclaim failed"));
+    const response = await h.waitForDeleteRequest(h.beta.key);
+    response.reject(new Error("reclaim failed"));
     await rejected;
     expect(h.sessions.listSnapshot(smaller).result).toMatchObject({
       sessions: [h.alpha],
@@ -300,6 +306,7 @@ describe("optimistic session deletion", () => {
     h.hold(scope);
     await h.sessions.refreshList(scope);
     const operation = h.sessions.delete(h.beta.key);
+    await h.waitForDeleteRequest(h.beta.key);
     h.setRows([h.beta, h.alpha, h.sibling]);
     await h.sessions.list(scope);
     await h.finish(operation);
@@ -313,11 +320,12 @@ describe("optimistic session deletion", () => {
     onTestFinished(() => stop());
     await h.sessions.refreshList(scope);
     const operation = h.sessions.delete(h.beta.key);
+    const response = await h.waitForDeleteRequest(h.beta.key);
     stop();
     stop = h.sessions.subscribeList(scope, () => {});
     h.setRows([h.sibling]);
     await h.sessions.refreshList(scope);
-    h.responses.get(h.beta.key)!.resolve({ deleted: false });
+    response.resolve({ deleted: false });
     await operation;
     expect(h.sessions.listSnapshot(scope).result).toMatchObject({
       sessions: [h.sibling],
@@ -332,6 +340,7 @@ describe("optimistic session deletion", () => {
     h.hold(scope);
     await h.sessions.refreshList(scope);
     const operation = h.sessions.delete(h.beta.key);
+    await h.waitForDeleteRequest(h.beta.key);
     await h.sessions.refreshList({ ...scope, offset: 2, append: true });
     await h.finish(operation);
     expect(h.sessions.listSnapshot(scope).result).toMatchObject({
@@ -345,6 +354,7 @@ describe("optimistic session deletion", () => {
     const h = createSessionDeletionHarness();
     await h.sessions.refresh({ limit: 2, force: true });
     const operation = h.sessions.delete(h.beta.key);
+    await h.waitForDeleteRequest(h.beta.key);
     await h.sessions.refresh({ limit: 1, force: true });
     await h.finish(operation);
     expect(h.sessions.state.result).toMatchObject({
@@ -361,6 +371,7 @@ describe("optimistic session deletion", () => {
     await h.sessions.refresh({ force: true });
     await h.sessions.refreshList(scope);
     const operation = h.sessions.delete(h.beta.key);
+    await h.waitForDeleteRequest(h.beta.key);
     const replacement = { ...h.beta, sessionId: "replacement-beta" };
     h.setRows([h.alpha, replacement, h.sibling]);
     await h.sessions.refresh({ force: true });
@@ -377,9 +388,10 @@ describe("optimistic session deletion", () => {
     });
     const first = h.sessions.delete(h.alpha.key);
     const second = h.sessions.deleteMany([{ key: h.alpha.key }]);
-    expect(h.request.mock.calls.filter(([method]) => method === "sessions.delete")).toHaveLength(1);
     expect(h.sessions.deletionState(h.alpha.key)).toBe("pending");
-    h.responses.get(h.alpha.key)!.resolve({ deleted: false });
+    const response = await h.waitForDeleteRequest(h.alpha.key);
+    expect(h.request.mock.calls.filter(([method]) => method === "sessions.delete")).toHaveLength(1);
+    response.resolve({ deleted: false });
     await expect(first).resolves.toEqual({ deleted: false });
     await expect(second).resolves.toMatchObject({ deleted: [] });
     expect(h.rows()).toEqual([h.alpha, h.beta, h.sibling]);
@@ -389,12 +401,13 @@ describe("optimistic session deletion", () => {
   it("preserves a replacement identity and rejects delayed rows from the deleted identity", async () => {
     const h = await loadedHarness();
     const operation = h.sessions.delete(h.alpha.key, { expectedSessionId: h.alpha.sessionId });
+    const response = await h.waitForDeleteRequest(h.alpha.key);
     const replacement = { ...h.alpha, sessionId: "replacement", label: "New thread" };
     h.setRows([replacement, h.beta, h.sibling]);
     await h.sessions.refresh({ force: true });
     expect(h.rows()?.[0]).toEqual(replacement);
     expect(h.sessions.deletionState(h.alpha.key)).toBeUndefined();
-    h.responses.get(h.alpha.key)!.resolve({ deleted: true });
+    response.resolve({ deleted: true });
     await operation;
     expect(h.rows()?.[0]).toEqual(replacement);
     h.setRows([h.alpha, h.beta, h.sibling]);
@@ -413,6 +426,7 @@ describe("optimistic session deletion", () => {
         }
       });
       const operation = h.sessions.deleteMany([{ key: h.alpha.key }, { key: h.beta.key }]);
+      const response = await h.waitForDeleteRequest(h.alpha.key);
       h.publish(false);
       h.publish(
         true,
@@ -420,7 +434,7 @@ describe("optimistic session deletion", () => {
           ? ({ request: h.request } as unknown as GatewayBrowserClient)
           : h.gateway.snapshot.client,
       );
-      h.responses.get(h.alpha.key)!.resolve({ deleted: true });
+      response.resolve({ deleted: true });
       const result = await operation;
       expect(result.deleted).toEqual(replaceClient ? [] : [h.alpha.key]);
       if (replaceClient) {
@@ -435,6 +449,32 @@ describe("optimistic session deletion", () => {
       expect(h.keys()).toContain(h.beta.key);
     },
   );
+
+  it("retires a deletion before lazy dispatch when the connection is replaced", async () => {
+    const h = await loadedHarness();
+    const replacementRequest = vi.fn((method: string) =>
+      method === "sessions.list"
+        ? sessionsResult([h.alpha, h.beta, h.sibling])
+        : { subscribed: true },
+    );
+    const replacement = createTestGatewayClient(replacementRequest);
+
+    const operation = h.sessions.delete(h.alpha.key);
+    expect(h.keys()).not.toContain(h.alpha.key);
+    expect(h.sessions.deletionState(h.alpha.key)).toBe("pending");
+    h.publish(false);
+    h.publish(true, replacement);
+
+    await expect(operation).resolves.toEqual({ deleted: false });
+    await h.sessions.refresh({ force: true });
+    expect(h.rows()).toEqual([h.alpha, h.beta, h.sibling]);
+    expect(h.sessions.deletionState(h.alpha.key)).toBeUndefined();
+    expect(h.sessions.state.deletedSessions).toEqual([]);
+    expect(h.request.mock.calls.filter(([method]) => method === "sessions.delete")).toEqual([]);
+    expect(
+      replacementRequest.mock.calls.filter(([method]) => method === "sessions.delete"),
+    ).toEqual([]);
+  });
 
   it.each(["single", "batch"] as const)(
     "%s removes all selected rows before any delete response and fences stale list/event publications",
@@ -461,6 +501,7 @@ describe("optimistic session deletion", () => {
         }
       };
       assertRemoved();
+      await h.waitForDeleteRequest(h.alpha.key);
       for (const target of targets) {
         h.emitEvent({
           type: "event",
@@ -503,6 +544,7 @@ describe("optimistic session deletion", () => {
     const rejection = expect(alpha).rejects.toThrow("cloud cleanup failed");
     const beta = h.sessions.delete(h.beta.key);
     expect(h.rows()).toEqual([h.sibling]);
+    const response = await h.waitForDeleteRequest(h.alpha.key);
     h.sessions.patchRowLocal(
       h.sibling.key,
       { label: "new sibling name" },
@@ -511,7 +553,7 @@ describe("optimistic session deletion", () => {
         sessionId: h.sibling.sessionId!,
       },
     );
-    h.responses.get(h.alpha.key)!.reject(new Error("cloud cleanup failed"));
+    response.reject(new Error("cloud cleanup failed"));
     await rejection;
     expect(h.rows()).toEqual([h.alpha, { ...h.sibling, label: "new sibling name" }]);
     expect(h.sessions.listSnapshot(filtered).result?.sessions).toEqual([
@@ -527,11 +569,12 @@ describe("optimistic session deletion", () => {
   it("keeps pending deletion hidden through a same-client reconnect", async () => {
     const h = await loadedHarness();
     const operation = h.sessions.delete(h.alpha.key);
+    const response = await h.waitForDeleteRequest(h.alpha.key);
     h.publish(false);
     h.publish(true);
     await h.sessions.refresh({ force: true });
     expect(h.keys()).not.toContain(h.alpha.key);
-    h.responses.get(h.alpha.key)!.resolve({ deleted: true });
+    response.resolve({ deleted: true });
     await operation;
     expect(h.keys()).not.toContain(h.alpha.key);
   });

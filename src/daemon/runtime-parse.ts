@@ -12,9 +12,6 @@ export function parseKeyValueOutput(output: string, separator: string): Record<s
       continue;
     }
     const key = normalizeLowercaseStringOrEmpty(line.slice(0, idx));
-    if (!key) {
-      continue;
-    }
     const value = line.slice(idx + separator.length).trim();
     entries[key] = value;
   }

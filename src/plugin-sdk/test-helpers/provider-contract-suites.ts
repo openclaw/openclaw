@@ -39,22 +39,22 @@ export function installProviderPluginContractSuite(params: { provider: Lazy<Prov
   it("satisfies the base provider plugin contract", () => {
     const provider = resolveLazy(params.provider);
     const authIds = provider.auth.map((method) => method.id);
-    const wizardChoiceIds = new Set<string>();
-    const expectWizard = (wizard: NonNullable<ProviderPlugin["wizard"]>["setup"]) => {
+    const wizards = [...provider.auth.map((method) => method.wizard), provider.wizard?.setup];
+    const wizardChoiceIds = wizards.flatMap((wizard) =>
+      wizard?.choiceId ? [wizard.choiceId] : [],
+    );
+    wizardChoiceIds.forEach(expectText);
+    expectUnique(wizardChoiceIds);
+    for (const wizard of wizards) {
       if (!wizard) {
-        return;
-      }
-      if (wizard.choiceId) {
-        expectText(wizard.choiceId);
-        expect(wizardChoiceIds.has(wizard.choiceId)).toBe(false);
-        wizardChoiceIds.add(wizard.choiceId);
+        continue;
       }
       if (wizard.methodId) {
         expect(authIds).toContain(wizard.methodId);
       }
       expectUnique(wizard.modelAllowlist?.allowedKeys);
       expectUnique(wizard.modelAllowlist?.initialSelections);
-    };
+    }
 
     expect(provider.id).toMatch(/^[a-z0-9][a-z0-9-]*$/);
     expectText(provider.label);
@@ -63,26 +63,21 @@ export function installProviderPluginContractSuite(params: { provider: Lazy<Prov
       expect(provider.docsPath.startsWith("/")).toBe(true);
     }
     expectUnique(provider.aliases);
-    if (provider.envVars) {
-      expectUnique(provider.envVars);
-      expect(provider.envVars.every((entry) => entry.trim().length > 0)).toBe(true);
-    }
+    expectUnique(provider.envVars);
+    provider.envVars?.forEach(expectText);
 
-    expect(Array.isArray(provider.auth)).toBe(true);
     expectUnique(authIds);
     for (const method of provider.auth) {
       [method.id, method.label].forEach(expectText);
       if (method.hint !== undefined) {
         expectText(method.hint);
       }
-      expectWizard(method.wizard);
       expect(typeof method.run).toBe("function");
     }
 
     if (provider.wizard?.setup || provider.wizard?.modelPicker) {
       expect(provider.auth.length).toBeGreaterThan(0);
     }
-    expectWizard(provider.wizard?.setup);
     if (provider.wizard?.modelPicker?.methodId) {
       expect(authIds).toContain(provider.wizard.modelPicker.methodId);
     }

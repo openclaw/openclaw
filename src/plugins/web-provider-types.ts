@@ -37,6 +37,8 @@ export type WebSearchProviderToolExecutionContext = {
   signal?: AbortSignal;
   /** Synchronous caller fence; non-HTTP transports must invoke it before each side effect. */
   assertCurrent?: () => void;
+  /** Host-selected model/profile; model-backed providers preserve matching provider selections. */
+  modelSelection?: { provider: string; model: string; authProfileId?: string };
 };
 
 type WebFetchProviderContext = {
@@ -47,19 +49,6 @@ type WebFetchProviderContext = {
 
 export type WebSearchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
 
-type WebProviderConfiguredCredentialFallback = {
-  path: string;
-  value: unknown;
-};
-
-type WebSearchRuntimeMetadataContext = Omit<WebSearchProviderContext, "agentDir"> & {
-  resolvedCredential?: {
-    value?: string;
-    source: WebSearchCredentialResolutionSource;
-    fallbackEnvVar?: string;
-  };
-};
-
 export type WebSearchProviderSetupContext = {
   config: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -69,14 +58,6 @@ export type WebSearchProviderSetupContext = {
 };
 
 export type WebFetchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
-
-type WebFetchRuntimeMetadataContext = WebFetchProviderContext & {
-  resolvedCredential?: {
-    value?: string;
-    source: WebFetchCredentialResolutionSource;
-    fallbackEnvVar?: string;
-  };
-};
 
 type WebProviderPluginBase = {
   id: string;
@@ -95,9 +76,12 @@ type WebProviderPluginBase = {
   setCredentialValue: (configTarget: Record<string, unknown>, value: unknown) => void;
   getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
   setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
-  getConfiguredCredentialFallback?: (
-    config?: OpenClawConfig,
-  ) => WebProviderConfiguredCredentialFallback | undefined;
+  getConfiguredCredentialFallback?: (config?: OpenClawConfig) =>
+    | {
+        path: string;
+        value: unknown;
+      }
+    | undefined;
   applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
 };
 
@@ -111,7 +95,13 @@ export type WebSearchProviderPlugin = WebProviderPluginBase & {
   credentialNote?: string;
   runSetup?: (ctx: WebSearchProviderSetupContext) => OpenClawConfig | Promise<OpenClawConfig>;
   resolveRuntimeMetadata?: (
-    ctx: WebSearchRuntimeMetadataContext,
+    ctx: Omit<WebSearchProviderContext, "agentDir"> & {
+      resolvedCredential?: {
+        value?: string;
+        source: WebSearchCredentialResolutionSource;
+        fallbackEnvVar?: string;
+      };
+    },
   ) => Partial<RuntimeWebSearchMetadata> | Promise<Partial<RuntimeWebSearchMetadata>>;
   createTool: (ctx: WebSearchProviderContext) => WebSearchProviderToolDefinition | null;
 };
@@ -122,7 +112,13 @@ export type PluginWebSearchProviderEntry = WebSearchProviderPlugin & {
 
 export type WebFetchProviderPlugin = WebProviderPluginBase & {
   resolveRuntimeMetadata?: (
-    ctx: WebFetchRuntimeMetadataContext,
+    ctx: WebFetchProviderContext & {
+      resolvedCredential?: {
+        value?: string;
+        source: WebFetchCredentialResolutionSource;
+        fallbackEnvVar?: string;
+      };
+    },
   ) => Partial<RuntimeWebFetchMetadata> | Promise<Partial<RuntimeWebFetchMetadata>>;
   createTool: (ctx: WebFetchProviderContext) => WebFetchProviderToolDefinition | null;
 };

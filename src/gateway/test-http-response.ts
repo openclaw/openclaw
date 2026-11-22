@@ -10,12 +10,12 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 /**
  * Minimal HTTP response mock used by gateway handler tests.
  */
-export function makeMockHttpResponse(): {
+export function makeMockHttpResponse(options?: ConstructorParameters<typeof PassThrough>[0]): {
   res: ServerResponse;
   setHeader: ReturnType<typeof vi.fn>;
   end: ReturnType<typeof vi.fn>;
 } {
-  const stream = new PassThrough();
+  const stream = new PassThrough(options);
   const streamEnd = stream.end.bind(stream);
   const setHeader = vi.fn();
   const end = vi.fn((chunk?: unknown) => {

@@ -58,6 +58,16 @@ function compatRecord(
   };
 }
 
+function julyDeprecatedCompatRecord(
+  code: string,
+  record: Omit<CompatRecordInput, "previousRemoveAfter">,
+): DoctorDeprecationCompatRecord {
+  return compatRecord(code, "deprecated", {
+    previousRemoveAfter: "2026-09-18",
+    ...record,
+  });
+}
+
 // Doctor migrations and repair shims can outlive the runtime/config compatibility
 // path they repair. Release removals must check this inventory before deleting
 // doctor fixes, and replacement notes should be revalidated against the current
@@ -109,8 +119,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "provider catalog compat metadata, with config compat reserved for custom routes",
     docsPath: "/gateway/config-tools",
   }),
-  compatRecord("doctor-tier-eval-tranche", "deprecated", {
-    previousRemoveAfter: "2026-09-18",
+  julyDeprecatedCompatRecord("doctor-tier-eval-tranche", {
     owner: "config",
     introduced: "2026-07-20",
     source: "approved tier-eval tranche 6a and small hookify retirements",
@@ -119,8 +128,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
       "canonical config owners, shared SQLite state, built-in defaults, and plugin hooks",
     docsPath: "/gateway/doctor",
   }),
-  compatRecord("doctor-final-layout-polish", "deprecated", {
-    previousRemoveAfter: "2026-09-18",
+  julyDeprecatedCompatRecord("doctor-final-layout-polish", {
     owner: "config",
     introduced: "2026-07-19",
     source: "final layout renames, removed knobs, and agents.list",
@@ -128,8 +136,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "canonical final layout and built-in defaults",
     docsPath: "/gateway/doctor",
   }),
-  compatRecord("doctor-phase4-product-config-retirements", "deprecated", {
-    previousRemoveAfter: "2026-09-18",
+  julyDeprecatedCompatRecord("doctor-phase4-product-config-retirements", {
     owner: "config",
     introduced: "2026-07-19",
     source: "systemAgent; crestodian; marketplaces; cli.banner.taglineMode; commitments",
@@ -137,8 +144,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "built-in rescue, marketplace, banner, and retired commitments behavior",
     docsPath: "/gateway/doctor",
   }),
-  compatRecord("doctor-media-models-consolidation", "deprecated", {
-    previousRemoveAfter: "2026-09-18",
+  julyDeprecatedCompatRecord("doctor-media-models-consolidation", {
     owner: "tools",
     introduced: "2026-07-19",
     source: "tools.media.image/audio/video models",
@@ -146,8 +152,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "capability-tagged tools.media.models plus per-capability policy and defaults",
     docsPath: "/nodes/media-understanding",
   }),
-  compatRecord("doctor-runtime-tuning-knobs-purge", "deprecated", {
-    previousRemoveAfter: "2026-09-18",
+  julyDeprecatedCompatRecord("doctor-runtime-tuning-knobs-purge", {
     owner: "config",
     introduced: "2026-07-19",
     source: "retired runtime and bundled-channel numeric tuning knobs",
@@ -155,8 +160,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "built-in runtime and channel defaults",
     docsPath: "/gateway/doctor",
   }),
-  compatRecord("doctor-phase2-channel-dm-aliases", "deprecated", {
-    previousRemoveAfter: "2026-09-18",
+  julyDeprecatedCompatRecord("doctor-phase2-channel-dm-aliases", {
     owner: "channel",
     introduced: "2026-07-18",
     source: "Discord, Slack, and Google Chat dm.policy and dm.allowFrom",
@@ -164,8 +168,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "dmPolicy and allowFrom at the same channel or account level",
     docsPath: "/cli/doctor",
   }),
-  compatRecord("doctor-phase1-retired-runtime-config", "deprecated", {
-    previousRemoveAfter: "2026-09-18",
+  julyDeprecatedCompatRecord("doctor-phase1-retired-runtime-config", {
     owner: "config",
     introduced: "2026-07-18",
     source:
@@ -175,8 +178,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
       "canonical channel, media providerOptions, crossContext, and speakerVoice settings",
     docsPath: "/cli/doctor",
   }),
-  compatRecord("doctor-root-default-model", "deprecated", {
-    previousRemoveAfter: "2026-09-18",
+  julyDeprecatedCompatRecord("doctor-root-default-model", {
     owner: "config",
     introduced: "2026-07-18",
     source: "defaultModel",
@@ -184,8 +186,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "agents.defaults.model",
     docsPath: "/gateway/doctor",
   }),
-  compatRecord("doctor-session-prune-reset-aliases", "deprecated", {
-    previousRemoveAfter: "2026-09-18",
+  julyDeprecatedCompatRecord("doctor-session-prune-reset-aliases", {
     owner: "config",
     introduced: "2026-07-18",
     source: "session.maintenance.pruneDays; session.resetByType.dm",
@@ -193,8 +194,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "session.maintenance.pruneAfter; session.resetByType.direct",
     docsPath: "/gateway/configuration-reference",
   }),
-  compatRecord("doctor-mcp-timeout-aliases", "deprecated", {
-    previousRemoveAfter: "2026-09-18",
+  julyDeprecatedCompatRecord("doctor-mcp-timeout-aliases", {
     owner: "config",
     introduced: "2026-07-18",
     source: "mcp.servers.*.connectTimeout; connect_timeout; timeout",
@@ -202,8 +202,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "connectionTimeoutMs; requestTimeoutMs",
     docsPath: "/cli/mcp",
   }),
-  compatRecord("doctor-cron-webhook-fallback", "deprecated", {
-    previousRemoveAfter: "2026-09-18",
+  julyDeprecatedCompatRecord("doctor-cron-webhook-fallback", {
     owner: "config",
     introduced: "2026-07-18",
     source: "cron.webhook",
@@ -211,8 +210,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "per-job delivery.to or delivery.completionDestination",
     docsPath: "/automation/cron-jobs",
   }),
-  compatRecord("doctor-canvas-host-root", "deprecated", {
-    previousRemoveAfter: "2026-09-18",
+  julyDeprecatedCompatRecord("doctor-canvas-host-root", {
     owner: "plugin",
     introduced: "2026-07-18",
     source: "canvasHost",
@@ -220,8 +218,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "plugins.entries.canvas.config.host",
     docsPath: "/plugins",
   }),
-  compatRecord("doctor-phase1-channel-noops-aliases", "deprecated", {
-    previousRemoveAfter: "2026-09-18",
+  julyDeprecatedCompatRecord("doctor-phase1-channel-noops-aliases", {
     owner: "channel",
     introduced: "2026-07-18",
     source:
@@ -240,8 +237,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     notes:
       "Pre-June configs must pass through OpenClaw 2026.9.5 Doctor before upgrading; current Doctor no longer migrates this key.",
   }),
-  compatRecord("doctor-memory-search-owner-consolidation", "deprecated", {
-    previousRemoveAfter: "2026-09-18",
+  julyDeprecatedCompatRecord("doctor-memory-search-owner-consolidation", {
     owner: "config",
     introduced: "2026-07-19",
     source: "memorySearch; agents.defaults.memorySearch; agents.list[].memorySearch",
@@ -249,8 +245,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "memory.search; agents.list[].memory.search",
     docsPath: "/reference/memory-config",
   }),
-  compatRecord("doctor-session-typing-mode-owner", "deprecated", {
-    previousRemoveAfter: "2026-09-18",
+  julyDeprecatedCompatRecord("doctor-session-typing-mode-owner", {
     owner: "agent-runtime",
     introduced: "2026-07-19",
     source: "session.typingMode",
@@ -333,8 +328,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     notes:
       "WebChat is an internal control surface, not a configurable outbound channel. Doctor refuses this retired key with an intermediate-upgrade path.",
   }),
-  compatRecord("doctor-tts-top-level-owner", "deprecated", {
-    previousRemoveAfter: "2026-09-18",
+  julyDeprecatedCompatRecord("doctor-tts-top-level-owner", {
     owner: "tts",
     introduced: "2026-07-19",
     source: "messages.tts",

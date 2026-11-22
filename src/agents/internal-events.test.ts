@@ -46,7 +46,9 @@ function fragmentText(fragments: ReturnType<typeof buildEventContext>, kind?: st
 }
 
 it("keeps child output and task labels in data while retaining the producer instruction", () => {
-  const event = completionEvent("The measured value is < 5.");
+  const event = completionEvent("The measured value is < 5.", {
+    modelRouteChange: "Model route changed: requested/model → actual/model.",
+  });
   const fragments = buildEventContext([event]);
   const instructions = fragmentText(fragments, "runtime-instruction");
   const data = fragmentText(fragments, "conversation-data");
@@ -56,6 +58,9 @@ it("keeps child output and task labels in data while retaining the producer inst
   expect(data).toContain(event.result);
   expect(data).toContain(event.taskLabel);
   expect(event.result).toBe("The measured value is < 5.");
+  const prompt = renderEvents([event]);
+  expect(extract(prompt, /<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/)).toBe(event.result);
+  expect(prompt).toContain(event.modelRouteChange);
 });
 
 it.each([
@@ -100,16 +105,6 @@ it("normalizes media references while preserving Unicode and delimiter modes", (
   expect(protectedPrompt).toContain(`\nGenerated media:\nMEDIA:${protectedReference}\n`);
   expect(protectedPrompt.split("\nMEDIA:")).toHaveLength(2);
   expect(mediaUrls).toEqual([reference, normalized]);
-});
-
-it("keeps a bounded route change separate from child result text", () => {
-  const event = completionEvent("child result", {
-    modelRouteChange: "Model route changed: requested/model → actual/model.",
-  });
-  const prompt = renderEvents([event]);
-
-  expect(extract(prompt, /<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/)).toBe("child result");
-  expect(prompt).toContain(event.modelRouteChange);
 });
 
 it("never splits a surrogate pair when truncating a status label", () => {

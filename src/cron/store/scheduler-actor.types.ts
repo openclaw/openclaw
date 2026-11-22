@@ -2,20 +2,31 @@ import type { CronConfig } from "../../config/types.cron.js";
 import type { PluginCommandScheduleHost } from "../plugin-command-schedule.types.js";
 import type { CronNotificationIntent } from "../service/notification-intents.js";
 import type { CronJob } from "../types.js";
-import type { CronRunQueueOperations, CronRunRequestContext } from "./run-queue.types.js";
+import type {
+  CronProviderBackoffSnapshot,
+  CronRunQueueOperations,
+  CronRunRequestContext,
+} from "./run-queue.types.js";
 import type { CronRunRecoveryOutcome } from "./run-recovery.types.js";
 
 export type CronScheduleMaintenanceOptions = {
   recomputeExpired?: boolean;
   nowMs?: number;
   repairFutureCronNextRunAtMs?: boolean;
-  preserveExpiredPacedNextRunJobId?: string;
+  /** Manual force runs retain the disabled job's pending schedule. */
+  preserveDisabledJobId?: string;
   skipScheduleErrorHandling?: boolean;
 };
 
 export type CronSchedulerConfig = {
   cronEnabled: boolean;
   preparingAgentIds?: string[];
+  /** See `cron.drainQueue`. */
+  busyConversationJobIds?: string[];
+  /** See `cron.drainQueue`. */
+  memoryAllowsExtraRun?: boolean;
+  /** See `cron.drainQueue`. */
+  providerBackoff?: CronProviderBackoffSnapshot;
   cronConfig?: CronConfig;
   defaultAgentId?: string;
   configuredChannels?: string[];
@@ -56,6 +67,8 @@ export type CronSchedulerOperations = {
       snapshot: CronSchedulerSnapshot;
       skipJobIds?: string[];
       deferAgentWork?: boolean;
+      /** Slots due at or after this process went live are late, not downtime catch-up. */
+      liveSinceMs?: number;
     };
     output: CronSchedulerResult;
   };

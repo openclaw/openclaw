@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import * as registryLifecycle from "../../plugins/registry-lifecycle.js";
@@ -10,7 +10,7 @@ import * as stateDb from "../../state/openclaw-state-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
 import { assignSessionOwner } from "./session-accessor.js";
-import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
+import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-read.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
@@ -59,12 +59,10 @@ export function databasePath(stateDir: string, agentId: string): string {
 
 export function assignHumanOwner(storePath: string): void {
   const { actor: owner, ...assignment } = humanOwner;
-  expect(
-    assignSessionOwner(
-      { agentId: "main", sessionKey: "agent:main:chat", storePath },
-      { owner, ...assignment },
-    ),
-  ).toEqual(humanOwner);
+  assignSessionOwner(
+    { agentId: "main", sessionKey: "agent:main:chat", storePath },
+    { owner, ...assignment },
+  );
 }
 
 const claimScope = ({

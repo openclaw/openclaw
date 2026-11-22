@@ -6,7 +6,7 @@ import {
   readSessionTranscriptMessageEventPage,
   scanDoctorSessionEntriesTolerant,
 } from "../config/sessions/session-accessor.js";
-import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
+import { SessionTranscriptColdError } from "../config/sessions/session-transcript-cold-error.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deriveGoalSessionTitle } from "../gateway/derive-goal-session-title.js";
 import { projectSessionDisplayMessage } from "../gateway/session-display-projection.js";
@@ -15,8 +15,10 @@ import {
   listExistingAgentDatabaseTargets,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
+import { prepareArtifactPreservingSqliteRead } from "../infra/sqlite-snapshot-source.js";
 import { isIncognitoSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
+import { getActiveOpenClawStateDatabaseReadSnapshotAsync } from "../state/openclaw-state-db-readonly.js";
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 
@@ -85,11 +87,13 @@ export async function repairLegacySessionTitles(params: {
     scannedStores: 0,
     warnings,
   };
+  await getActiveOpenClawStateDatabaseReadSnapshotAsync({ env: params.env });
   for (const target of params.targets ?? listExistingAgentDatabaseTargets(params.cfg, params.env)) {
     if (params.apply) {
       assertRepairAuthority();
     }
     report.scannedStores++;
+    await prepareArtifactPreservingSqliteRead(target.sqlitePath);
     const scope = { agentId: target.agentId, storePath: target.storePath, env: params.env };
     const scan = runDoctorAgentDatabaseOperation({
       agentId: target.agentId,

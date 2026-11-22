@@ -8,6 +8,7 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Device binding capability lifecycle" });
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const nodes = [
   ["default-node", "Default worker"],
   ["agent-node", "Research worker"],
@@ -56,13 +57,13 @@ async function bindingControls(
   });
   await page.goto(`${suite.server.baseUrl}settings/devices`);
   const section = page.locator(".settings-section").filter({
-    has: page.getByRole("heading", { name: "Exec node binding", exact: true }),
+    has: page.getByRole("heading", { name: "Device binding", exact: true }),
   });
-  const defaultSelect = section.getByRole("combobox", { name: "Node", exact: true });
+  const defaultSelect = section.getByRole("combobox", { name: "Device", exact: true });
   const researchSelect = section
     .locator(".settings-row")
     .filter({
-      has: page.locator(".settings-row__title").getByText("Research (research)", { exact: true }),
+      has: page.locator(".settings-row__title").getByText("Research", { exact: true }),
     })
     .getByRole("combobox");
   return { gateway, section, defaultSelect, researchSelect };
@@ -95,7 +96,11 @@ suite.define(() => {
       const config = makeConfig(defaultBinding, agentBinding);
       const viewport = { width: 1280, height: 900 };
       await suite.withPage(
-        { viewport, colorScheme: "dark", recordVideo: { dir: suite.artifactDir, size: viewport } },
+        {
+          viewport,
+          colorScheme: "dark",
+          ...(captureUiProof ? { recordVideo: { dir: suite.artifactDir, size: viewport } } : {}),
+        },
         async ({ page }) => {
           const { gateway, section, defaultSelect, researchSelect } = await bindingControls(
             page,
@@ -108,8 +113,6 @@ suite.define(() => {
           for (const select of selects) {
             await expect(select.locator("option:checked")).toBeEnabled();
           }
-          const saveButton = section.getByRole("button", { name: "Save", exact: true });
-          await expect(saveButton).toBeDisabled();
           const capture = async (name: string) => {
             await section.scrollIntoViewIfNeeded();
             for (const select of selects) {
@@ -117,7 +120,9 @@ suite.define(() => {
               expect(bounds?.y).toBeGreaterThanOrEqual(0);
               expect(bounds && bounds.y + bounds.height).toBeLessThanOrEqual(viewport.height);
             }
-            await page.screenshot({ path: path.join(suite.artifactDir, name) });
+            if (captureUiProof) {
+              await page.screenshot({ path: path.join(suite.artifactDir, name) });
+            }
           };
           await capture("available.png");
 
@@ -134,7 +139,6 @@ suite.define(() => {
             await Promise.all(selects.map((select) => select.inputValue())),
             "BINDING_SELECTION_LOSS_133032",
           ).toEqual(values);
-          await expect(saveButton).toBeDisabled();
           await expectBindings(
             selects,
             values,
@@ -146,7 +150,6 @@ suite.define(() => {
           await expect(defaultSelect).toBeEnabled();
           await expectBindings(selects, values, availableLabels);
           await capture("recovered.png");
-          await expect(saveButton).toBeDisabled();
           await expectWrites(gateway, 0);
         },
       );
@@ -159,7 +162,10 @@ suite.define(() => {
       const requireRecord = createRequireRecord("record", "expected-object-value");
       const config = makeConfig("default-node", "agent-node");
       await suite.withPage({ viewport: { width: 1280, height: 1000 } }, async ({ page }) => {
-        const artifacts = createControlUiE2eArtifactDir("device-binding-clear");
+        await page.clock.install();
+        const artifacts = captureUiProof
+          ? createControlUiE2eArtifactDir("device-binding-clear")
+          : undefined;
         const { gateway, section, defaultSelect, researchSelect } = await bindingControls(
           page,
           config,
@@ -182,12 +188,16 @@ suite.define(() => {
         );
         await expectWrites(gateway, 0);
         await section.scrollIntoViewIfNeeded();
-        await page.screenshot({ path: path.join(artifacts, "unavailable-before-clear.png") });
+        if (artifacts) {
+          await page.screenshot({ path: path.join(artifacts, "unavailable-before-clear.png") });
+        }
         await expect(defaultSelect).toBeEnabled();
         await expect(researchSelect).toBeEnabled();
-        await page.screenshot({ path: path.join(artifacts, "unavailable-clear-enabled.png") });
+        if (artifacts) {
+          await page.screenshot({ path: path.join(artifacts, "unavailable-clear-enabled.png") });
+        }
         await gateway.deferNext("config.set");
-        await defaultSelect.selectOption({ label: "Any node" });
+        await defaultSelect.selectOption({ label: "Any device" });
         const clearedDefault = requireRecord((await gateway.waitForRequest("config.set")).params);
         expect(JSON.parse(String(clearedDefault.raw))).toEqual({
           ...config,
@@ -201,23 +211,33 @@ suite.define(() => {
         await expect(indicator).toContainText("Saved");
         await gateway.waitForRequest("config.get", { after: refreshReads });
         await gateway.resolveDeferred("config.get");
-        await page.screenshot({ path: path.join(artifacts, "after-clear-refresh.png") });
+        if (artifacts) {
+          await page.screenshot({ path: path.join(artifacts, "after-clear-refresh.png") });
+        }
         await expectBindings(selects, ["", "agent-node"]);
         await expect(defaultSelect).toBeDisabled();
         await expect(researchSelect).toBeEnabled();
 
         await gateway.deferNext("config.set");
-        await researchSelect.selectOption({ label: "Use default" });
+        await researchSelect.selectOption({ label: "Use default (Any device)" });
         const clearedAgent = requireRecord(
           (await gateway.waitForRequest("config.set", { after: 1 })).params,
         );
         expect(JSON.parse(String(clearedAgent.raw))).toEqual(makeConfig("", ""));
         await gateway.resolveDeferred("config.set");
-        await expect(indicator).toContainText("Saved");
-        await expect(researchSelect).toHaveValue("__default__");
-        await expect(researchSelect).toBeDisabled();
-        await expect(defaultSelect).toBeDisabled();
-        await page.screenshot({ path: path.join(artifacts, "unavailable-cleared.png") });
+        await expect
+          .poll(async () => {
+            // Let each real config.get settle before advancing the next polling window.
+            await page.clock.runFor(1_000);
+            return indicator.textContent();
+          })
+          .toContain("Apply changes");
+        await expect(
+          section.getByText("No devices can run commands yet.", { exact: true }),
+        ).toBeVisible();
+        if (artifacts) {
+          await page.screenshot({ path: path.join(artifacts, "unavailable-cleared.png") });
+        }
 
         await gateway.setMethodResponse("node.list", { nodes });
         await gateway.emitGatewayEvent("node.runnerInventory.changed", {});

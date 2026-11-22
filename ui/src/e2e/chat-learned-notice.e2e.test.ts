@@ -1,5 +1,7 @@
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openAiAuthor } from "./chat-flow.test-support.ts";
+import { polledAttribute, polledVisible } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Learned notice answer preservation" });
@@ -15,6 +17,7 @@ suite.define(() => {
           { role: "user", content: "Check staging and summarize the result.", timestamp: 1000 },
           {
             role: "assistant",
+            ...openAiAuthor,
             content: [
               { type: "toolCall", id: "check", name: "read", arguments: { path: "checks.txt" } },
             ],
@@ -31,6 +34,7 @@ suite.define(() => {
           },
           {
             role: "assistant",
+            ...openAiAuthor,
             content: answerText,
             stopReason: "stop",
             timestamp: 4000,
@@ -52,13 +56,17 @@ suite.define(() => {
           ...(format === "marked"
             ? {
                 openclawDeliveryMirror: {
-                  kind: "skill-workshop-change",
-                  agentId: "main",
-                  runId: "review-run",
-                  skills: [
-                    { name: "staging-checks", action: "updated", summary: "check rollback" },
-                    { name: "release-summary", action: "created", summary: "report checks" },
-                  ],
+                  kind: "plugin-notice",
+                  pluginId: "skill-workshop",
+                  type: "skills-changed",
+                  data: {
+                    agentId: "main",
+                    runId: "review-run",
+                    skills: [
+                      { name: "staging-checks", action: "updated", summary: "check rollback" },
+                      { name: "release-summary", action: "created", summary: "report checks" },
+                    ],
+                  },
                 },
               }
             : {}),
@@ -68,8 +76,12 @@ suite.define(() => {
         const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
         const answer = pane.getByText(answerText, { exact: true });
         const worked = pane.locator(".chat-work-group > .chat-activity-group__summary");
+        const noticeText = (name: string) =>
+          pane
+            .locator(".chat-bubble, .chat-notice, .chat-skill-notice")
+            .getByText(name, { exact: false });
         await answer.waitFor();
-        await expect.poll(() => worked.getAttribute("aria-expanded")).toBe("false");
+        await polledAttribute(worked, "aria-expanded").toBe("false");
         const persisted = [...history, notice];
         await gateway.setHistoryMessages(persisted);
         await gateway.emitGatewayEvent("session.message", {
@@ -82,21 +94,13 @@ suite.define(() => {
             await installMockGateway(page, { sessionKey, historyMessages: persisted });
             await page.reload();
           }
-          await pane
-            .locator(".chat-bubble, .chat-notice, .chat-skill-notice")
-            .getByText("staging-checks", { exact: false })
-            .waitFor();
-          await expect.poll(() => answer.isVisible()).toBe(true);
+          await noticeText("staging-checks").waitFor();
+          await polledVisible(answer).toBe(true);
           for (const expanded of [true, false]) {
             await worked.click();
-            await expect.poll(() => worked.getAttribute("aria-expanded")).toBe(String(expanded));
+            await polledAttribute(worked, "aria-expanded").toBe(String(expanded));
             expect(await answer.isVisible()).toBe(true);
-            expect(
-              await pane
-                .locator(".chat-bubble, .chat-notice, .chat-skill-notice")
-                .getByText("release-summary", { exact: false })
-                .isVisible(),
-            ).toBe(true);
+            expect(await noticeText("release-summary").isVisible()).toBe(true);
             expect(
               await answer.locator("xpath=ancestor::*[contains(@class,'chat-work-group')]").count(),
             ).toBe(0);

@@ -159,11 +159,7 @@ function normalizeElevenLabsLatencyTier(value: unknown): number | undefined {
 
 const ELEVENLABS_OUTPUT_FAMILIES = new Set(["opus", "mp3", "pcm", "ulaw", "alaw", "wav"]);
 
-function resolveElevenLabsOutputPlan(req: SpeechSynthesisRequest): {
-  outputFormat: string;
-  fileExtension: string;
-  voiceCompatible: boolean;
-} {
+function resolveElevenLabsOutputPlan(req: SpeechSynthesisRequest) {
   const outputFormat =
     trimToUndefined(req.providerOverrides?.outputFormat) ??
     (req.target === "voice-note" ? "opus_48000_64" : "mp3_44100_128");
@@ -226,10 +222,12 @@ function readElevenLabsProviderConfig(config: SpeechProviderConfig) {
 }
 
 function resolveElevenLabsApiKey(...candidates: Array<string | undefined>): string | undefined {
-  return resolveSpeechProviderApiKey(
-    ...candidates,
-    resolveElevenLabsApiKeyWithProfileFallback() ?? undefined,
-    process.env.XI_API_KEY,
+  return (
+    resolveSpeechProviderApiKey(...candidates) ??
+    resolveSpeechProviderApiKey(
+      resolveElevenLabsApiKeyWithProfileFallback() ?? undefined,
+      process.env.XI_API_KEY,
+    )
   );
 }
 

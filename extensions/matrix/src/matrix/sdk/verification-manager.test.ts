@@ -99,7 +99,6 @@ describe("MatrixVerificationManager", () => {
       client: { getCrypto: () => crypto, getUserId: () => "@bot:example.org" },
       verificationManager: manager,
       recoveryKeyStore,
-      isRoomEncrypted: async () => false,
       downloadContent: async () => Buffer.alloc(0),
     });
     return { facade, recoveryKeyStore };

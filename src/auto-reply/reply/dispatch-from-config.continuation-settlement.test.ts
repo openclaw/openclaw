@@ -5,6 +5,7 @@ import {
   emptyConfig,
   hookMocks,
   mocks,
+  mockSessionStorePath,
   resetPluginTtsAndThreadMocks,
   sessionStoreMocks,
   setDiscordTestRegistry,
@@ -120,9 +121,7 @@ beforeEach(() => {
   sessionStoreMocks.loadSessionStoreEntry
     .mockReset()
     .mockImplementation(() => sessionStoreMocks.currentEntry);
-  sessionStoreMocks.resolveSessionStorePathCore
-    .mockReset()
-    .mockReturnValue("/tmp/mock-sessions.json");
+  sessionStoreMocks.resolveSessionStorePathCore.mockReset().mockReturnValue(mockSessionStorePath);
   sessionStoreMocks.updateSessionEntry.mockClear();
 });
 
@@ -158,7 +157,6 @@ describe("accepted continuation status delivery", () => {
         sessionId: "session-1",
         updatedAt: 1,
         pendingFinalDelivery: pending,
-        restartRecoverySourceIngress: "channel",
       });
       const error = new OutboundDeliveryError("retained for recovery", {
         cause: new PlatformMessageNotDispatchedError("offline", { cause: new Error("offline") }),
@@ -186,7 +184,6 @@ describe("accepted continuation status delivery", () => {
       expect(memory.read()?.pendingFinalDelivery).toEqual(
         expected ? { ...pending, deliveries: [{ id: "delivery-1", state: expected }] } : undefined,
       );
-      expect(memory.read()?.restartRecoverySourceIngress).toBe(expected ? "channel" : undefined);
     },
   );
 
@@ -419,7 +416,7 @@ describe("accepted continuation status delivery", () => {
         expectedSessionId: "session-1",
         expectedWriterRunId: "run-before-replacement",
         sessionKey: "agent:test:session",
-        storePath: "/tmp/mock-sessions.json",
+        storePath: mockSessionStorePath,
       },
     });
     sessionStoreMocks.currentEntry = currentEntry;

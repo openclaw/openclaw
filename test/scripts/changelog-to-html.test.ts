@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { renderReleaseDocsMirror } from "../../scripts/lib/release-docs-mirror.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeFixtureFiles } from "./z0632-fixtures.test-support.js";
 
@@ -10,13 +9,10 @@ const version = "2026.8.2";
 const footer =
   '<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>';
 
-function render(section: string, split = false) {
+function render(section: string) {
   const root = tempDirs.make("openclaw-changelog-html-");
   const file = path.join(root, "CHANGELOG.md");
-  writeFixtureFiles(root, {
-    "CHANGELOG.md": split ? `# Changelog\n\n- [Release](CHANGELOG/${version}.md)\n` : section,
-    ...(split ? { [`CHANGELOG/${version}.md`]: section } : {}),
-  });
+  writeFixtureFiles(root, { "CHANGELOG.md": section });
   return renderFile(file);
 }
 
@@ -33,27 +29,19 @@ function expectHtml(result: ReturnType<typeof renderFile>, content: string) {
   expect(result.stdout).toBe(`<h2>OpenClaw ${version}</h2>\n${content}\n${footer}\n`);
 }
 
-it("renders the selected split file through the source index", () => {
-  const result = render("## 2026.8.2\n\n### Fixes\n- Current release.\n", true);
-  expectHtml(result, "<h3>Fixes</h3>\n<ul>\n<li>Current release.</li>\n</ul>");
-});
-
 it.each(["index", "entry"])(
   "renders a docs mirror through its %s with one release heading",
   (route) => {
     const rootDir = tempDirs.make("openclaw-changelog-html-mirror-");
-    const source = `docs/releases/${version}.md`;
+    const metadata = {
+      version,
+      sources: [`docs/releases/${version}.md`],
+      sourceDigest: `sha256:${"0".repeat(64)}`,
+    };
     writeFixtureFiles(rootDir, {
-      [source]: '---\ntitle: "Release notes"\n---\n\n- Current release.\n',
-      "CHANGELOG.md": `# Changelog\n\n- [${version}](CHANGELOG/${version}.md)\n`,
+      "CHANGELOG.md": "# Changelog\n",
       [`CHANGELOG/records/${version}.md`]: `## ${version}\n\n### Complete contribution record\n\nFrozen record.\n`,
-    });
-    writeFixtureFiles(rootDir, {
-      [`CHANGELOG/${version}.md`]: renderReleaseDocsMirror({
-        rootDir,
-        version,
-        sources: [source],
-      }),
+      [`CHANGELOG/${version}.md`]: `<!-- openclaw-docs-mirror-v1 ${JSON.stringify(metadata)} -->\n\n## ${version}\n\n### Release notes\n\n- Current release.\n`,
     });
     const result = renderFile(
       path.join(rootDir, route === "index" ? "CHANGELOG.md" : `CHANGELOG/${version}.md`),
@@ -66,8 +54,8 @@ it("preserves markup ordering, literal HTML, links, backslashes and list boundar
   const fragments = [
     ["### Highlights", "<h3>Highlights</h3>"],
     [
-      "- **Fast** & reliable `path\\file`\n- [Guide](https://example.com?a=1&b=2) and **bold**",
-      '<ul>\n<li><strong>Fast</strong> & reliable <code>path\\file</code></li>\n<li><a href="https://example.com?a=1&b=2">Guide</a> and <strong>bold</strong></li>\n</ul>',
+      "- **Fast** & reliable `path\\file`; run `openclaw cron enable <job-id>` and keep `a&b > c` / `&lt;`\n- [Guide](https://example.com?a=1&b=2) and **bold**",
+      '<ul>\n<li><strong>Fast</strong> & reliable <code>path\\file</code>; run <code>openclaw cron enable &lt;job-id&gt;</code> and keep <code>a&amp;b &gt; c</code> / <code>&amp;lt;</code></li>\n<li><a href="https://example.com?a=1&b=2">Guide</a> and <strong>bold</strong></li>\n</ul>',
     ],
     ["\n#### Details\n<p>Existing &amp; HTML</p>", "<h4>Details</h4>\n<p>Existing &amp; HTML</p>"],
     ["##### More\n- Plain <tag>", "<h5>More</h5>\n<ul>\n<li>Plain <tag></li>\n</ul>"],

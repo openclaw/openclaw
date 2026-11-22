@@ -1,9 +1,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import {
-  resetDiagnosticSessionStateForTest,
-  type SessionState,
-} from "../logging/diagnostic-session-state.js";
-import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
+import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
+import { ToolInterruptedByUser } from "../../packages/agent-core/src/tool-interruption.js";
+import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import {
   addSession,
   appendOutput,
@@ -18,12 +16,6 @@ import {
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
-import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
-import {
-  detectToolCallLoop,
-  recordToolCall,
-  recordToolCallOutcome,
-} from "./tool-loop-detection.js";
 import { isToolResultError } from "./tool-result-error.js";
 
 const { cancel, killTree } = vi.hoisted(() => ({ cancel: vi.fn(), killTree: vi.fn() }));
@@ -102,26 +94,6 @@ function writableSession() {
 const inputCall = (action: string, extra: Record<string, unknown> = {}) =>
   createProcessTool().execute(action, { action, sessionId: "input", ...extra });
 
-test("does not close stdin when requester authority is revoked during a write", async () => {
-  let current = true;
-  const controller = new AbortController();
-  const budget = createAgentToolExecutionBudget({
-    signal: controller.signal,
-    abort: (error) => controller.abort(error),
-    isCurrent: () => current,
-  });
-  const { stdin } = writableSession();
-  stdin.write.mockImplementation((_data, done) => {
-    current = false;
-    done?.(null);
-  });
-  await expect(
-    budget.run(() => inputCall("write", { data: "allowed input", eof: true })),
-  ).rejects.toThrow("execution scope is no longer active");
-  expect(stdin.write).toHaveBeenCalledOnce();
-  expect(stdin.end).not.toHaveBeenCalled();
-});
-
 test("exposes idle input controls only while stdin remains writable", async () => {
   const { session, stdin } = writableSession();
   appendOutput(session, "stdout", "Name? ");
@@ -152,39 +124,9 @@ test("exposes idle input controls only while stdin remains writable", async () =
   ]);
 });
 
-test.each(["poll", "log"])(
-  "blocks repeated %s input waits despite elapsed time, then recognizes new output",
-  async (action) => {
-    const { session } = writableSession();
-    const tool = createProcessTool();
-    const params = { action, sessionId: session.id };
-    const state: SessionState = { lastActivity: Date.now(), state: "processing", queueDepth: 0 };
-    let sequence = 0;
-    const observe = async () => {
-      const toolCallId = `process-${sequence++}`;
-      recordToolCall(state, "process", params, toolCallId);
-      const result = await tool.execute(toolCallId, params);
-      recordToolCallOutcome(state, { toolName: "process", toolParams: params, toolCallId, result });
-      acknowledgeInternalToolResult(result);
-      return result;
-    };
-
-    for (let index = 0; index < 20; index++) {
-      vi.setSystemTime(Date.now() + 1_000);
-      await observe();
-    }
-    expect(detectToolCallLoop(state, "process", params)).toMatchObject({
-      stuck: true,
-      level: "critical",
-      detector: "known_poll_no_progress",
-      count: 20,
-    });
-
-    appendOutput(session, "stdout", "New prompt: ");
-    check(await observe(), { idleMs: 40_000, lastOutputAt: session.startedAt }, ["New prompt:"]);
-    expect(detectToolCallLoop(state, "process", params)).toEqual({ stuck: false });
-  },
-);
+test("declares only observation actions repeatable for the tool repeat guard", () => {
+  expect(createProcessTool().repeatable).toEqual({ actions: ["list", "poll", "log"] });
+});
 
 test("sorts by start time then registration order across terminal transitions", async () => {
   const sessions = (
@@ -214,18 +156,31 @@ test("sorts by start time then registration order across terminal transitions", 
   await expectOrder();
 });
 
-test("poll returns a new interactive prompt before its wait expires", async () => {
-  const { session, poll } = harness();
-  let settled = false;
-  const pending = poll(30_000).then((result) => {
-    settled = true;
-    return result;
-  });
-  appendOutput(session, "stderr", "interactive prompt\n");
-  await tick();
-  expect(settled).toBe(true);
-  check(await pending, { status: "running", sessionId: session.id }, ["interactive prompt"]);
-});
+test.each(["output", "exit"])(
+  "poll observes %s without waiting for a timer tick",
+  async (event) => {
+    const { session, poll } = harness();
+    let settled = false;
+    const pending = poll(30_000).then((result) => {
+      settled = true;
+      return result;
+    });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(settled).toBe(false);
+    if (event === "output") {
+      appendOutput(session, "stderr", "interactive prompt\n");
+    } else {
+      markExited(session, 0, null, "completed");
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(true);
+    check(
+      await pending,
+      { status: event === "output" ? "running" : "completed", sessionId: session.id },
+      [event === "output" ? "interactive prompt" : "Process exited with code 0."],
+    );
+  },
+);
 
 test("an already-aborted poll leaves buffered output unread", async () => {
   const { session, poll } = harness();
@@ -234,6 +189,22 @@ test("an already-aborted poll leaves buffered output unread", async () => {
   controller.abort();
   await expect(poll(30_000, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
   check(await poll(), { status: "running", sessionId: session.id }, ["interactive prompt"]);
+});
+
+test("Send now stops a poll wait without cancelling its background process", async () => {
+  const { session, poll } = harness();
+  const controller = new AbortController();
+  const pending = poll(30_000, controller.signal);
+  await vi.advanceTimersByTimeAsync(0);
+  controller.abort(new ToolInterruptedByUser());
+  check(await pending, { status: "running", sessionId: session.id }, [
+    "Poll interrupted by the user",
+    "remains independently managed",
+  ]);
+  expect(getSession(session.id)).toBe(session);
+  expect(session.exited).toBe(false);
+  expect(cancel).not.toHaveBeenCalled();
+  expect(killTree).not.toHaveBeenCalled();
 });
 
 test("a waiting poll cannot adopt a same-id successor after removal", async () => {
@@ -247,7 +218,7 @@ test("a waiting poll cannot adopt a same-id successor after removal", async () =
   await tick();
   const original = await pending;
   check(original, { status: "failed" });
-  expect(text(original)).toBe(`No session found for ${session.id}`);
+  expect(text(original)).toContain(`Process ${session.id} is no longer tracked`);
   expect(remove).not.toHaveBeenCalled();
   const result = await poll();
   expect(result.details).toMatchObject({ status: "completed", aggregated: "successor output\n" });
@@ -308,7 +279,9 @@ test("capped stream output stays ordered, compact, and frozen through terminal d
   appendOutput(session, "stderr", "late".repeat(1_000));
   expect(text(await poll())).toBe(discarded + "(no new output)\n\nProcess exited with code 0.");
   expect(session).toMatchObject({ totalOutputChars: 8_000, pendingOutput: "" });
-  expect(text(await call("log"))).toBe(discarded + "oe".repeat(1_500));
+  expect(text(await call("log"))).toBe(
+    discarded + "oe".repeat(1_500) + "\n\nProcess exited with code 0.",
+  );
 });
 
 test.each([
@@ -413,11 +386,11 @@ test("removes a retained completed session and its logs", async () => {
   expect((await call("remove")).details).toMatchObject({ status: "completed" });
   expect((await call("log")).details).toMatchObject({
     status: "failed",
-    error: `No session found for ${session.id}`,
+    error: expect.stringContaining(`Process ${session.id} is no longer tracked`),
   });
   expect((await call("kill")).details).toMatchObject({
     status: "failed",
-    error: `No active session found for ${session.id}`,
+    error: expect.stringContaining(`Process ${session.id} is no longer tracked`),
   });
 });
 

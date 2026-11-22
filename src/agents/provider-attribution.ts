@@ -21,23 +21,15 @@ import { asBoolean } from "../utils/boolean.js";
 import type { RuntimeVersionEnv } from "../version.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 
-type ProviderAttributionVerification =
-  | "vendor-documented"
-  | "vendor-hidden-api-spec"
-  | "vendor-sdk-hook-only"
-  | "internal-runtime";
-
-type ProviderAttributionHook =
-  | "request-headers"
-  | "default-headers"
-  | "user-agent-extra"
-  | "custom-user-agent";
-
 export type ProviderAttributionPolicy = {
   provider: string;
   enabledByDefault: boolean;
-  verification: ProviderAttributionVerification;
-  hook?: ProviderAttributionHook;
+  verification:
+    | "vendor-documented"
+    | "vendor-hidden-api-spec"
+    | "vendor-sdk-hook-only"
+    | "internal-runtime";
+  hook?: "request-headers" | "default-headers" | "user-agent-extra" | "custom-user-agent";
   docsUrl?: string;
   reviewNote?: string;
   product: string;
@@ -329,7 +321,12 @@ function resolveProviderAttributionPolicy(
         headers: { "X-Pplx-Integration": userAgent },
       };
     case "openai":
-    case "xai":
+    case "xai": {
+      // ChatGPT gates models on this header and on the /models `client_version` that reads it
+      // (extensions/openai/base-url.ts). Send the numeric release; prerelease or build suffixes are
+      // untested, and placeholders such as "unknown" fail the gate. User-Agent keeps the full build.
+      const release = /^(\d{4})\.\d+\.\d+/u.exec(version);
+      const gateVersion = release && Number(release[1]) >= 2026 ? release[0] : "99.0.0";
       return {
         ...policy,
         verification: "vendor-hidden-api-spec",
@@ -339,10 +336,11 @@ function resolveProviderAttributionPolicy(
             : "xAI api.x.ai accepts a standard openclaw User-Agent. Companion originator/version headers mirror the OpenAI attribution shape for consistency; they are not validated against an xAI-specific spec and are expected to be ignored by xAI's OpenAI-compatible surface.",
         headers: {
           originator: OPENCLAW_ATTRIBUTION_ORIGINATOR,
-          version,
+          version: normalized === "openai" ? gateVersion : version,
           "User-Agent": userAgent,
         },
       };
+    }
     case "opencode":
       return {
         ...policy,

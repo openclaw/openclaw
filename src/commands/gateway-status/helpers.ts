@@ -7,7 +7,6 @@ import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayProbeSurfaceAuth } from "../../gateway/auth-surface-resolution.js";
 import { isLoopbackHost } from "../../gateway/net.js";
 import type { GatewayProbeCapability, GatewayProbeResult } from "../../gateway/probe.js";
-import { pickBestEffortPrimaryTailnetIPv4 } from "../../infra/network-discovery-display.js";
 
 const LEGACY_MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
 
@@ -208,31 +207,6 @@ export function extractConfigSummary(snapshotUnknown: unknown) {
     },
     discovery: { wideAreaEnabled },
   };
-}
-
-export function buildNetworkHints(cfg: OpenClawConfig, localPortOverride?: number) {
-  const tailnetIPv4 = pickBestEffortPrimaryTailnetIPv4();
-  const port = localPortOverride ?? resolveGatewayPort(cfg);
-  const localScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
-  return {
-    localLoopbackUrl: `${localScheme}://127.0.0.1:${port}`,
-    localTailnetUrl: tailnetIPv4 ? `${localScheme}://${tailnetIPv4}:${port}` : null,
-    tailnetIPv4: tailnetIPv4 ?? null,
-  };
-}
-
-export function renderTargetHeader(target: GatewayStatusTarget, rich: boolean) {
-  const kindLabel =
-    target.kind === "localLoopback"
-      ? "Local loopback"
-      : target.kind === "sshTunnel"
-        ? "Remote over SSH"
-        : target.kind === "configRemote"
-          ? target.active
-            ? "Remote (configured)"
-            : "Remote (configured, inactive)"
-          : "URL (explicit)";
-  return `${colorize(rich, theme.heading, kindLabel)} ${colorize(rich, theme.muted, target.url)}`;
 }
 
 /** Returns true when auth succeeded enough to connect but lacks the read scope. */

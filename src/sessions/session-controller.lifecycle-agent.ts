@@ -1,5 +1,8 @@
 import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveAgentCreationClaimAgentId } from "../state/agent-creation-claim.js";
+import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
 import {
   agentWorkAdmissionIdentity,
   matchesAgentWorkAdmission,
@@ -27,6 +30,28 @@ export function assertAgentControllerAdmissionOpen(effect: Effect): void {
     if (closure.agent && matchesAgentWorkAdmission(closure.agent, effect.agent)) {
       throw closure.reason;
     }
+  }
+}
+
+export async function assertAgentControllerDeletionAdmissionOpen(
+  agent: NonNullable<Effect["agent"]>,
+  env: NodeJS.ProcessEnv | undefined,
+  signal: AbortSignal,
+): Promise<void> {
+  const journal = await readAgentDeletionJournalStatusInWorker(
+    agent.agentId,
+    { path: agent.statePath, env },
+    signal,
+  );
+  // Creation stages its chat before config publication claims a completed tombstone.
+  if (
+    journal !== "absent" &&
+    (journal !== "complete" ||
+      resolveAgentCreationClaimAgentId(agent.agentId, agent.statePath) !== agent.agentId)
+  ) {
+    throw new Error(
+      "Agent " + agent.agentId + " deletion is in progress; new work is unavailable.",
+    );
   }
 }
 
@@ -109,12 +134,7 @@ export function startAgentWorkAdmissionInterruption(
   }
   return {
     released: Promise.all(settlements).then(() => {
-      if (failures.length === 1) {
-        throw failures[0];
-      }
-      if (failures.length) {
-        throw new AggregateError(failures, "Agent work interruption failed");
-      }
+      throwCollectedErrors(failures, "Agent work interruption failed");
     }),
   };
 }

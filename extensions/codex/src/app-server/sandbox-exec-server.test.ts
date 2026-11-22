@@ -9,7 +9,6 @@ import { sendResult } from "./sandbox-exec-server/json-rpc.js";
 
 const CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES = 100 * 1024 * 1024;
 import {
-  collectNotifications,
   codexFsSandboxContext,
   createClient,
   createSandboxContext,
@@ -39,14 +38,6 @@ const unrestricted = (network: "enabled" | "restricted") => ({
 
 const register = (sandbox: Sandbox, client = createClient()) =>
   ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
-const envPolicy = (inherit: "all" | "none", set: Record<string, string> = {}) => ({
-  inherit,
-  ignoreDefaultExcludes: true,
-  exclude: [],
-  set,
-  includeOnly: [],
-});
-
 function execSpec(script = "", stdinMode: "pipe-open" | "pipe-closed" = "pipe-closed") {
   return { argv: [process.execPath, "-e", script], env: { PATH: process.env.PATH }, stdinMode };
 }
@@ -97,8 +88,8 @@ function setBackend(sandbox: Sandbox, backendId?: string) {
 
 async function registeredSocket(sandbox = createSandboxContext({})) {
   const client = createClient();
-  await register(sandbox, client);
-  return { client, socket: await openSocket(execServerUrlFromClient(client)) };
+  const environment = await register(sandbox, client);
+  return { client, environment, socket: await openSocket(execServerUrlFromClient(client)) };
 }
 
 it("rejects an incomplete sandbox environment before publishing an exec-server", async () => {
@@ -115,7 +106,14 @@ it("rejects an incomplete sandbox environment before publishing an exec-server",
 it("reports target shell, encoded workdir, and readiness", async () => {
   const sandbox = createSandboxContext({});
   sandbox.containerWorkdir = "/workspace/space #project";
-  const socket = await openSandboxSocket(sandbox);
+  const { client, environment, socket } = await registeredSocket(sandbox);
+  expect(environment).toEqual({
+    environmentId: expect.stringMatching(/^openclaw-sandbox-/),
+    cwd: sandbox.containerWorkdir,
+  });
+  expect(execServerUrlFromClient(client)).toMatch(/^ws:\/\/127\.0\.0\.1:/);
+  await rpc(socket, "initialize", { clientName: "test" });
+  socket.send(JSON.stringify({ method: "initialized" }));
   await expect(rpc(socket, "environment/info", {})).resolves.toEqual({
     shell: { name: "sh", path: "/bin/sh" },
     cwd: "file:///workspace/space%20%23project",
@@ -142,60 +140,6 @@ it("does not treat 127-prefixed DNS names as local app-server hosts", async () =
     }),
   ).rejects.toThrow("cannot be registered with a remote Codex app-server");
   expect(client.request).not.toHaveBeenCalled();
-});
-
-it("registers a sandbox-backed Codex environment and routes process execution through it", async () => {
-  const buildExecSpec = vi.fn(async () =>
-    execSpec("process.stdout.write('sandbox-process-ok\\n')"),
-  );
-  const sandbox = createSandboxContext({ buildExecSpec });
-  const client = createClient();
-  const environment = await register(sandbox, client);
-  expect(client.request.mock.calls[0]?.[0]).toBe("environment/add");
-  expect(environment).toEqual({
-    environmentId: expect.stringMatching(/^openclaw-sandbox-/),
-    cwd: "/workspace",
-  });
-  const execServerUrl = execServerUrlFromClient(client);
-  expect(execServerUrl).toMatch(/^ws:\/\/127\.0\.0\.1:/);
-  const socket = await openSocket(execServerUrl);
-  const notifications = collectNotifications(socket);
-  await rpc(socket, "initialize", { clientName: "test" });
-  socket.send(JSON.stringify({ method: "initialized" }));
-  const start = await startProcess(socket, "proc-1", {
-    argv: ["/bin/sh", "-lc", "printf ok"],
-    cwd: "file:///projects/example%20repo",
-    env: {
-      POLICY_SET: "env-wins",
-      TEST_FLAG: "1",
-      CODEX_API_KEY: "must-not-cross",
-      OPENAI_API_KEY: "must-not-cross",
-    },
-    envPolicy: envPolicy("none", {
-      POLICY_SET: "policy",
-      POLICY_ONLY: "1",
-      CODEX_ACCESS_TOKEN: "must-not-cross",
-    }),
-  });
-  expect(start).toEqual({ processId: "proc-1", sandboxType: "none" });
-  const read = await readUntilClosed(socket, "proc-1");
-  expect(read).toMatchObject({ exited: true, exitCode: 0, closed: true });
-  expect(output(read.chunks?.slice(0, 1))).toBe("sandbox-process-ok\n");
-  expect(buildExecSpec).toHaveBeenCalledWith(
-    expect.objectContaining({
-      env: expect.objectContaining({
-        CODEX_SANDBOX_EXEC_ID: expect.any(String),
-        POLICY_ONLY: "1",
-        POLICY_SET: "env-wins",
-        TEST_FLAG: "1",
-      }),
-      usePty: false,
-      workdir: "/projects/example repo",
-    }),
-  );
-  expect(notifications.map((notification) => notification.method)).toEqual(
-    expect.arrayContaining(["process/output", "process/exited", "process/closed"]),
-  );
 });
 
 it.each([
@@ -287,44 +231,36 @@ it.each([
   },
 );
 
-it.each([
-  {
-    description: "unrestricted managed filesystem access",
-    sandbox: unrestricted("enabled"),
-  },
-  {
-    description: "network restrictions already enforced by a Podman container",
-    sandbox: { permissions: { type: "external", network: "restricted" } },
-    backendId: "podman",
-  },
-])(
-  "preserves $description and reports its actual sandbox type",
-  async ({ sandbox: policy, backendId }) => {
-    const buildExecSpec = vi.fn(async () => execSpec());
-    const sandbox = createSandboxContext({ buildExecSpec });
-    setBackend(sandbox, backendId);
-    const socket = await openSandboxSocket(sandbox, false);
-    await expect(
-      startProcess(socket, "proc-external-sandbox", { sandbox: policy }),
-    ).resolves.toEqual({ processId: "proc-external-sandbox", sandboxType: "none" });
-    expect(buildExecSpec).toHaveBeenCalledOnce();
-  },
-);
+it.each<[string, object, string?]>([
+  ["unrestricted filesystem", unrestricted("enabled")],
+  [
+    "Podman network isolation",
+    { permissions: { type: "external", network: "restricted" } },
+    "podman",
+  ],
+])("preserves %s and reports its actual sandbox type", async (_label, policy, backendId) => {
+  const sandbox = createSandboxContext({});
+  setBackend(sandbox, backendId);
+  const socket = await openSandboxSocket(sandbox, false);
+  await expect(startProcess(socket, "proc-external-sandbox", { sandbox: policy })).resolves.toEqual(
+    { processId: "proc-external-sandbox", sandboxType: "none" },
+  );
+});
 
 it.runIf(process.platform !== "win32")(
   "provides a real terminal and Ctrl-C for tty processes",
   async () => {
-    const buildExecSpec = vi.fn(async () =>
-      execSpec(
-        [
-          "process.on('SIGINT', () => { console.log('INTERRUPTED'); process.exit(42); });",
-          "console.log('PID=' + process.pid + ' TTY=' + Boolean(process.stdin.isTTY && process.stdout.isTTY));",
-          "setInterval(() => {}, 1000);",
-        ].join(" "),
-        "pipe-open",
-      ),
-    );
-    const socket = await connect({ buildExecSpec });
+    const socket = await connect({
+      buildExecSpec: async () =>
+        execSpec(
+          [
+            "process.on('SIGINT', () => { console.log('INTERRUPTED'); process.exit(42); });",
+            "console.log('PID=' + process.pid + ' TTY=' + Boolean(process.stdin.isTTY && process.stdout.isTTY));",
+            "setInterval(() => {}, 1000);",
+          ].join(" "),
+          "pipe-open",
+        ),
+    });
     await startProcess(socket, "proc-tty", { argv: ["/bin/sh", "-lc", "cat"], tty: true });
     await readStartedPid(socket, "proc-tty");
     const initial = await readProcess(socket, "proc-tty");
@@ -336,7 +272,6 @@ it.runIf(process.platform !== "win32")(
       }),
     ).resolves.toEqual({ status: "accepted" });
     const read = await readUntilClosed(socket, "proc-tty");
-    expect(buildExecSpec).toHaveBeenCalledWith(expect.objectContaining({ usePty: true }));
     expect(read.chunks?.[0]?.stream).toBe("pty");
     expect(output(read.chunks)).toContain("INTERRUPTED");
     expect(read.exitCode).toBe(42);
@@ -353,11 +288,27 @@ it("does not let Codex env policy inherit host secret variables", async () => {
     async () => {
       const buildExecSpec = vi.fn(async () => ({ ...execSpec(), env: {} }));
       const socket = await connect({ buildExecSpec });
-      await startProcess(socket, "proc-secret-env", { envPolicy: envPolicy("all") });
+      await startProcess(socket, "proc-secret-env", {
+        env: {
+          POLICY_SET: "env-wins",
+          TEST_FLAG: "1",
+          CODEX_API_KEY: "must-not-cross",
+          OPENAI_API_KEY: "must-not-cross",
+        },
+        envPolicy: {
+          inherit: "all",
+          set: { POLICY_SET: "policy", POLICY_ONLY: "1", CODEX_ACCESS_TOKEN: "must-not-cross" },
+        },
+      });
       const [{ env: execEnv }] = buildExecSpec.mock.calls[0] as unknown as [
         { env: Record<string, string> },
       ];
-      expect(execEnv).toEqual({ CODEX_SANDBOX_EXEC_ID: expect.any(String) });
+      expect(execEnv).toEqual({
+        CODEX_SANDBOX_EXEC_ID: expect.any(String),
+        POLICY_SET: "env-wins",
+        POLICY_ONLY: "1",
+        TEST_FLAG: "1",
+      });
     },
   );
 });
@@ -497,32 +448,28 @@ it.runIf(process.platform !== "win32")(
   "preserves literal argv process identity and exit status through a shell backend",
   async () => {
     const sandbox = createSandboxContext({
-      buildExecSpec: async ({ command, env }) => ({
-        argv: [
-          "/bin/sh",
-          "-c",
-          // Prevent implicit shell exec optimization, which otherwise hides the extra process.
-          `export BACKEND_EXEC_PID=$$; trap 'printf "BACKEND_EXIT\\n"; exit 99' EXIT; ${command}`,
-        ],
-        env: { ...env, PATH: process.env.PATH },
-        stdinMode: "pipe-closed",
-      }),
+      buildExecSpec: async ({ command, env, workdir, usePty }) => {
+        expect({ workdir, usePty }).toEqual({ workdir: "/projects/example repo", usePty: false });
+        return {
+          argv: [
+            "/bin/sh",
+            "-c",
+            // Prevent implicit shell exec optimization, which otherwise hides the extra process.
+            `export BACKEND_EXEC_PID=$$; trap 'printf "BACKEND_EXIT\\n"; exit 99' EXIT; ${command}`,
+          ],
+          env: { ...env, PATH: process.env.PATH },
+          stdinMode: "pipe-closed",
+        };
+      },
     });
-    const client = createClient();
-    await register(sandbox, client);
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "command-identity-test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
-    await rpc(socket, "process/start", {
-      processId: "literal-command",
+    const socket = await openSandboxSocket(sandbox);
+    await startProcess(socket, "literal-command", {
+      cwd: "file:///projects/example%20repo",
       argv: [
         process.execPath,
         "-e",
         "console.log(process.pid + ':' + process.env.BACKEND_EXEC_PID); process.exit(42)",
       ],
-      cwd: "file:///workspace",
-      env: {},
-      tty: false,
     });
     const read = await readUntilClosed(socket, "literal-command");
     expect(read).toMatchObject({ exited: true, closed: true, exitCode: 42 });

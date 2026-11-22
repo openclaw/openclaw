@@ -36,7 +36,7 @@ afterEach(async () => {
 async function liveProjection() {
   const current = await harness.createClients();
   clients.push(current);
-  await current.connection.start();
+  await current.start();
   const runtime = createWorkerLiveRuntime({
     enqueuePreview: (event) => current.live.enqueuePreview(RUN_ID, event),
     emitTerminal: (event) => current.live.emitTerminal(RUN_ID, event),

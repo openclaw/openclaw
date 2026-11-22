@@ -108,6 +108,7 @@ function boundedResult() {
   return {
     text: "The update was sent successfully.",
     items: [],
+    submittedInput: [{ type: "text", text: createAttempt().prompt, text_elements: [] }],
     model: "synthetic-catalog-id",
     nativeSelection: { model: "synthetic-summary-model", modelProvider: "openai" },
     usage: { input: 5, output: 4, cacheRead: 2, cacheWrite: 1, reasoningTokens: 3, total: 12 },
@@ -436,4 +437,11 @@ it("rejects a stale idempotency hit instead of delivering an unpersisted answer"
   );
 
   await expect(finalize()).rejects.toThrow("transcript attestation mismatch");
+});
+
+it("does not borrow host credentials to finalize a command-auth turn", async () => {
+  const attempt = createAttempt("api-key");
+  attempt.runtimePlan!.auth.selectedAuthMode = "native-command";
+  await expect(finalize(attempt)).rejects.toThrow("settled-tool fallback");
+  expect(mocks.runBounded).not.toHaveBeenCalled();
 });

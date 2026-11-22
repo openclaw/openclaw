@@ -1,6 +1,7 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveOpenClawReferencePaths } from "./docs-path.js";
 import { createSandboxFsBridge } from "./sandbox/fs-bridge.js";
@@ -21,7 +22,7 @@ async function makePackageRoot(hasDocs = false, git = false): Promise<string> {
   return root;
 }
 
-async function writeDocsJson(root: string): Promise<void> {
+async function writeDocsJson(root: string) {
   await fs.mkdir(path.join(root, "docs"), { recursive: true });
   await fs.writeFile(path.join(root, "docs", "docs.json"), "{}\n");
 }
@@ -30,34 +31,25 @@ const rejectShell = () =>
   Promise.reject(new Error("Reference discovery must not execute shell commands"));
 
 describe("resolveOpenClawReferencePaths", () => {
-  it.each(["workspace", "nested", "incomplete", "npm", "git"])(
-    "resolves local references for %s roots",
-    async (scenario) => {
-      const hasDocs = ["workspace", "nested", "git"].includes(scenario);
-      const root = await makePackageRoot(hasDocs, scenario === "git");
-      const cwd = scenario === "nested" ? path.join(root, "dist", "agents") : root;
-      await fs.mkdir(cwd, { recursive: true });
-      if (scenario === "incomplete") {
-        await fs.mkdir(path.join(root, "docs", "reference", "templates"), { recursive: true });
-      }
-      const references = await resolveOpenClawReferencePaths(
-        scenario === "workspace" ? { workspaceDir: root } : { cwd },
-      );
-      const docsPath = hasDocs ? path.join(root, "docs") : null;
-      expect(references.docsPath).toBe(docsPath);
-      if (scenario === "git") {
-        expect(references).toEqual({ docsPath, sourcePath: root });
-      } else if (scenario === "npm") {
-        expect(references.sourcePath).toBeNull();
-      }
-    },
-  );
+  it.each([true, false])("requires local reference markers (complete=%s)", async (complete) => {
+    const root = await makePackageRoot(complete, complete);
+    if (!complete) {
+      await fs.mkdir(path.join(root, "docs", "reference", "templates"), { recursive: true });
+    }
+    using exists = vi.spyOn(syncFs, "existsSync");
+    expect(await resolveOpenClawReferencePaths({ cwd: root })).toEqual({
+      docsPath: complete ? path.join(root, "docs") : null,
+      sourcePath: complete ? root : null,
+    });
+    expect(exists).not.toHaveBeenCalled();
+  });
   it.each([
     ["unmounted", null, null],
     ["workspace", "/workspace/docs", "/workspace"],
     ["remote", "/remote/workspace/docs", "/remote/workspace"],
     ["remote-alias", "/remote/workspace/docs", "/remote/workspace"],
     ["read-only", "/agent/docs", "/agent"],
+    ["agent-bind-tie", "/reference/docs", "/reference"],
     ["bind", "/reference", null],
     ["shadow", null, "/workspace"],
     ["symlink", null, null],
@@ -83,7 +75,7 @@ describe("resolveOpenClawReferencePaths", () => {
     const sandbox = createSandboxTestContext({
       overrides: {
         workspaceDir,
-        agentWorkspaceDir: scenario === "read-only" ? root : workspaceDir,
+        agentWorkspaceDir: ["read-only", "agent-bind-tie"].includes(scenario) ? root : workspaceDir,
         workspaceAccess: scenario === "read-only" ? "ro" : "rw",
       },
     });
@@ -93,7 +85,9 @@ describe("resolveOpenClawReferencePaths", () => {
         ? [`${root}/docs:/reference:ro`]
         : scenario === "shadow"
           ? [`${workspace}:/workspace/docs:ro`]
-          : [];
+          : scenario === "agent-bind-tie"
+            ? [`${root}:/reference:ro`]
+            : [];
     if (scenario === "remote" || scenario === "remote-alias") {
       sandbox.fsBridge = createRemoteShellSandboxFsBridge({
         sandbox,
@@ -107,11 +101,15 @@ describe("resolveOpenClawReferencePaths", () => {
       const context = { ...sandbox, backend: { runShellCommand: rejectShell } };
       sandbox.fsBridge = createSandboxFsBridge({ sandbox: context });
     }
+    using realpath = vi.spyOn(syncFs.realpathSync, "native");
+    using exists = vi.spyOn(syncFs, "existsSync");
     const references = await resolveOpenClawReferencePaths({
       workspaceDir: sandbox.workspaceDir,
       cwd: scenario === "remote-alias" ? workspaceDir : root,
       sandbox,
     });
     expect(references).toEqual({ docsPath, sourcePath });
+    expect(realpath).not.toHaveBeenCalled();
+    expect(exists).not.toHaveBeenCalled();
   });
 });

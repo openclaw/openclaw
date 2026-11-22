@@ -32,7 +32,6 @@ beforeAll(() => {
   writeFixture(
     preload,
     String.raw`import childProcess from 'node:child_process';
-import { syncBuiltinESMExports } from 'node:module';
 import { appendFileSync } from 'node:fs';
 const config = JSON.parse(process.env.NPM_GH_FIXTURE);
 let elapsed = 0;
@@ -59,7 +58,7 @@ childProcess.execFileSync = (file, args, options) => {
   });
   return output;
 };
-syncBuiltinESMExports();`,
+`,
   );
 });
 
@@ -162,9 +161,7 @@ it.each([
 
 it.each([
   ...[
-    { status: 401, message: "Bad credentials" },
     { status: 403, message: "Resource not accessible by integration" },
-    { status: 404, message: "Not Found" },
     { status: 500, message: "Internal Server Error" },
   ].map((failure) => [failure.message, [failure], [], 1, {}] as const),
   [

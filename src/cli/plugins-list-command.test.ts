@@ -1,14 +1,12 @@
+import { stripVTControlCharacters } from "node:util";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginRecord } from "../plugins/registry.js";
 import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import type { PluginsListOptions } from "./plugins-list-command.js";
 
-type SnapshotPlugin = {
-  id: string;
-  enabled: boolean;
-  commands?: string[];
-  agentHarnessIds?: string[];
-};
+type SnapshotPlugin = Pick<PluginRecord, "id" | "enabled"> &
+  Partial<Pick<PluginRecord, "name" | "trust" | "commands" | "agentHarnessIds">>;
 
 function mockPluginListSnapshot(
   plugins: SnapshotPlugin[],
@@ -17,8 +15,6 @@ function mockPluginListSnapshot(
 ): void {
   // mock-isolation: Each plugin-list fixture supplies its config without loading operator state.
   vi.doMock("../config/config.js", () => ({
-    getRuntimeConfig: () => config,
-    loadConfig: () => config,
     captureRuntimeConfigAsyncReader: () => async () => config,
   }));
   // mock-isolation: Supply synthetic inventory without discovering installed plugins.
@@ -36,27 +32,27 @@ function mockPluginListSnapshot(
   }));
 }
 
-function mockHumanListModules(importedModules: string[] = []): void {
-  const identity = (value: string) => value;
-  const modules = {
-    "../plugins/source-display.js": {
-      formatPluginSourceForTable: vi.fn(),
-      resolvePluginSourceRoots: vi.fn(),
-    },
-    "../../packages/terminal-core/src/table.js": {
-      getTerminalTableWidth: vi.fn(),
-      renderTable: vi.fn(),
-    },
-    "../../packages/terminal-core/src/theme.js": { theme: { muted: identity, warn: identity } },
-    "./command-format.js": { formatCliCommand: (value: string) => `formatted(${value})` },
-    "./plugins-list-format.js": { formatPluginLine: vi.fn(), formatPluginStatus: vi.fn() },
-  };
-  for (const [module, exports] of Object.entries(modules)) {
-    vi.doMock(module, () => {
-      importedModules.push(module);
-      return exports;
-    });
-  }
+const humanModules = [
+  "../plugins/source-display.js",
+  "../../packages/terminal-core/src/table.js",
+  "../../packages/terminal-core/src/theme.js",
+  "./command-format.js",
+  "./plugins-list-format.js",
+];
+function mockHumanListModules(width = 120) {
+  // mock-isolation: Human-list fixtures use synthetic roots instead of inspecting installed sources.
+  vi.doMock("../plugins/source-display.js", () => ({
+    formatPluginSourceForTable: () => ({ value: "/workspace/plugins", rootKey: undefined }),
+    resolvePluginSourceRoots: () => ({}),
+  }));
+  vi.doMock("../../packages/terminal-core/src/table.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../packages/terminal-core/src/table.js")>()),
+    getTerminalTableWidth: () => width,
+  }));
+  vi.doMock("./command-format.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("./command-format.js")>()),
+    formatCliCommand: (value: string) => `formatted(${value})`,
+  }));
 }
 
 async function runList(options: PluginsListOptions) {
@@ -72,38 +68,33 @@ async function runList(options: PluginsListOptions) {
   return writes;
 }
 
-const importedHumanModules: string[] = [];
-beforeEach(() => {
-  importedHumanModules.length = 0;
-  mockHumanListModules(importedHumanModules);
-});
+beforeEach(() => mockHumanListModules());
 afterEach(() => {
-  vi.doUnmock("../config/config.js");
-  vi.doUnmock("../plugins/status.js");
-  vi.doUnmock("../plugins/status-snapshot.js");
-  vi.doUnmock("../plugins/source-display.js");
-  vi.doUnmock("../../packages/terminal-core/src/table.js");
-  vi.doUnmock("../../packages/terminal-core/src/theme.js");
-  vi.doUnmock("./command-format.js");
-  vi.doUnmock("./plugins-list-format.js");
+  for (const module of [
+    ...humanModules,
+    "../config/config.js",
+    "../plugins/status.js",
+    "../plugins/status-snapshot.js",
+    "./plugins-command-helpers.js",
+  ]) {
+    vi.doUnmock(module);
+  }
   vi.resetModules();
 });
 
 it("does not import human list renderers for JSON output", async () => {
   vi.resetModules();
-  vi.doMock("../plugins/status.js", () => {
-    throw new Error("plugins list JSON must use the snapshot status module");
-  });
-  vi.doMock("./plugins-command-helpers.js", () => {
-    throw new Error("plugins list JSON must not import plugin command helpers");
-  });
+  for (const module of [...humanModules, "../plugins/status.js", "./plugins-command-helpers.js"]) {
+    vi.doMock(module, () => {
+      throw new Error(`JSON inventory must not load ${module}`);
+    });
+  }
   mockPluginListSnapshot([
     { id: "demo", enabled: true, commands: ["demo"], agentHarnessIds: ["runtime-only"] },
   ]);
 
   const writes = await runList({ json: true });
 
-  expect(importedHumanModules).toEqual([]);
   expect(writes).toEqual([
     {
       workspaceDir: "/workspace",
@@ -140,4 +131,37 @@ it("makes omitted workspace plugin scope visible in human output", async () => {
     "",
     "No plugins found. Run formatted(openclaw plugins install <plugin>) to add one, or formatted(openclaw plugins list --json) to inspect raw discovery state.",
   ]);
+});
+
+it.each([80, 120])("shows trust provenance within a %s-column table", async (width) => {
+  mockHumanListModules(width);
+  mockPluginListSnapshot([
+    {
+      id: "official",
+      enabled: true,
+      trust: { reason: "trusted-official", registryPath: null, origin: "global" },
+    },
+    {
+      id: "external",
+      enabled: true,
+      trust: { reason: "provenance-missing", registryPath: null, origin: "global" },
+    },
+  ]);
+  const writes = await runList({});
+  const table = stripVTControlCharacters(
+    writes.map(String).find((line) => /[│|] Name\s+[│|]/.test(line)) ?? "",
+  );
+  expect(table).toMatch(/[│|] Trust\s+[│|]/);
+  expect(table).toMatch(/[│|] official\s+[│|]/);
+  expect(table).toMatch(/[│|] external\s+[│|]/);
+  const trustCells = table
+    .split("\n")
+    .filter((line) => /^[│|]/.test(line))
+    .flatMap((line) => line.split(/[│|]/).slice(-2, -1))
+    .map((cell) => cell.trim())
+    .join("");
+  expect(trustCells).toContain("trusted-official");
+  expect(trustCells).toContain("provenance-missing");
+  expect(table.split("\n").every((line) => line.length <= width)).toBe(true);
+  expect(writes.join("\n")).toContain("Trust is provenance, not a code-safety guarantee.");
 });

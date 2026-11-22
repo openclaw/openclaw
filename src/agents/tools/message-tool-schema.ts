@@ -187,13 +187,27 @@ function buildSendSchema(options: MessageToolSchemaOptions) {
     props.clawhub = Type.Optional(
       Type.Object(
         {
-          query: Type.String({ minLength: 1, maxLength: 160 }),
+          query: Type.Optional(
+            Type.String({
+              minLength: 1,
+              maxLength: 160,
+              description: "Search official plugins/skills. Omit kind: plugins, then skills.",
+            }),
+          ),
           kind: Type.Optional(stringEnum(["plugin", "skill"])),
+          plugin: Type.Optional(
+            Type.String({
+              minLength: 1,
+              maxLength: 214,
+              description:
+                "Exact plugin package name, e.g. @scope/name, when already known: shows only that plugin; no search. Excludes query/kind.",
+            }),
+          ),
         },
         {
           additionalProperties: false,
           description:
-            "Official plugin/skill cards in current chat; user chooses install. Omit kind: plugins, then skills.",
+            "ClawHub plugin/skill cards in current chat; user chooses install. Give query or plugin, not both.",
         },
       ),
     );
@@ -544,6 +558,12 @@ function buildMessageToolSchema(actions: readonly string[], options: MessageTool
     }),
     ...properties,
     ...schemaOptions.extraProperties,
+    final: Type.Optional(
+      Type.Boolean({
+        description:
+          "For source replies, set false for progress; set true, or omit, for a completed send. For react, set true when adding a reaction to the current source message is your complete response; omit or set false when more work follows. A confirmed final source reply ends the turn.",
+      }),
+    ),
   });
 }
 

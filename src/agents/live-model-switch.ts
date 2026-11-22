@@ -11,7 +11,6 @@ import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import type { LiveSessionModelSelection } from "./live-model-switch-error.js";
 import {
   normalizeStoredOverrideModel,
@@ -37,12 +36,11 @@ function resolveSelectionFromSessionEntry(params: {
 }): LiveSessionModelSelection {
   const { cfg, entry } = params;
   const agentId = normalizeOptionalString(params.agentId);
-  const defaultModelRef = agentId
-    ? resolveDefaultModelForAgent({
-        cfg,
-        agentId,
-      })
-    : { provider: params.defaultProvider, model: params.defaultModel };
+  // Without a configured model, the caller's run model is the session default.
+  const defaultModelRef = (agentId && resolveDefaultModelForAgent({ cfg, agentId })) || {
+    provider: params.defaultProvider,
+    model: params.defaultModel,
+  };
   const normalizedSelection = normalizeStoredOverrideModel({
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
@@ -111,8 +109,8 @@ export function prepareLiveModelSwitchAfterRun(params: {
       config: params.cfg,
       agentId: params.agentId,
     }),
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
+    defaultProvider: provider,
+    defaultModel: model,
   });
   if (
     !(provider === persisted.provider && model === persisted.model) &&
@@ -190,7 +188,7 @@ export async function shouldSwitchToLiveModel(params: {
   const entry = await readSessionEntryReadOnlyInWorker({
     storePath,
     sessionKey,
-    hydrateSkillPromptRefs: false,
+    projection: "list",
     clone: false,
     readConsistency: "latest",
   });

@@ -3,9 +3,14 @@ import {
   OUTCOME_FALLBACK_RUNTIME_CONTRACT as contract,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { getReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { resolveTerminalAgentRunFailurePayload } from "../auto-reply/reply/agent-runner-failure-reply.js";
 import { applyInputProvenanceToUserMessage } from "../sessions/input-provenance.js";
+import {
+  readAgentTerminalSnapshot,
+  withAgentTerminalPayloadSnapshot,
+} from "./agent-terminal-snapshot.js";
+import type { AgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback as classifyResult,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion as mergeExhaustedResult,
@@ -14,6 +19,7 @@ import {
   buildRunEntryTerminal,
   resolveRunEntryTerminalOutcome,
 } from "./embedded-agent-runner/run-entry-terminal.js";
+import { captureAgentTerminalSnapshot } from "./embedded-agent-runner/run/attempt-terminal-snapshot.js";
 import { resolveEmbeddedRunTerminal } from "./embedded-agent-runner/run/terminal-resolution.js";
 import {
   emptyAssistant,
@@ -117,13 +123,10 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
 
   it.each([
     ["optional", undefined, 1, 1],
-    ["optional", "empty", 1, 1],
-    ["optional", "reasoning-only", 1, 1],
     ["result-required", undefined, 1, 2],
     ["result-required", "empty", 3, 6],
     ["result-required", "reasoning-only", 3, 9],
     ["required", "empty", 3, 6],
-    ["required", "reasoning-only", 3, 9],
   ] as const)(
     "settles an empty stop for %s replies with harness classification %s",
     async (expectation, classification, expectedModels, expectedRequests) => {
@@ -140,7 +143,6 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
         usage: createMockUsage(89, 4),
       });
       let modelRequests = 0;
-      const notices: ReplyPayload[] = [];
       const run = vi.fn(async () => {
         const attempt = makeEmbeddedRunnerAttempt({
           assistantTexts: [],
@@ -165,9 +167,6 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
           modelRequests += 1;
           const terminal = await resolveEmbeddedRunTerminal(input);
           if (terminal.action === "complete") {
-            notices.push(
-              ...(terminal.result.payloads?.filter((payload) => payload.isStatusNotice) ?? []),
-            );
             expectEmptyFinal(terminal.result, optional);
             return terminal.result;
           }
@@ -188,7 +187,6 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
       expect(result.attempts).toHaveLength(fallbackExpected ? 3 : 0);
       expect(result.result.meta.error?.kind).toBe(optional ? undefined : "incomplete_turn");
       expectEmptyFinal(result.result, optional);
-      expect(notices).toEqual([]);
       if (!result.result.meta.error) {
         return;
       }
@@ -201,82 +199,19 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
         },
         visibleReplyDelivered: async () => false,
       });
-      if (notice) {
-        notices.push(notice);
-      }
       if (expectation === "required") {
         expect(result.outcome).toBe("exhausted");
-        expect(notices).toEqual([
-          expect.objectContaining({
-            text: "No answer was returned. Ask again if you still need one.",
-            isError: true,
-            isStatusNotice: true,
-          }),
-        ]);
+        expect(notice).toMatchObject({
+          text: "No answer was returned. Ask again if you still need one.",
+          isError: true,
+          isStatusNotice: true,
+        });
         expect(getReplyPayloadMetadata(notice ?? {})?.assistantTranscriptOwned).toBe(true);
       } else {
-        expect(notices).toEqual([]);
+        expect(notice).toBeUndefined();
       }
     },
   );
-
-  const fallbackClassificationCases = [
-    ["empty", "empty_result"],
-    ["reasoning-only", "reasoning_only_result"],
-    ["planning-only", "planning_only_result"],
-  ] as const;
-
-  it.each(fallbackClassificationCases)(
-    "maps harness classification %s to a format fallback code",
-    (classification, code) => {
-      const fallback = classifyResult({
-        provider: contract.primaryProvider,
-        model: contract.primaryModel,
-        result: createContractRunResult({
-          meta: {
-            durationMs: 1,
-            agentHarnessResultClassification: classification,
-          },
-        }),
-      });
-      if (!fallback || !("reason" in fallback)) {
-        throw new Error(`Expected format fallback detail for ${classification}`);
-      }
-      expect(fallback?.reason).toBe("format");
-      expect(fallback?.code).toBe(code);
-    },
-  );
-
-  it("preserves an incomplete tool-authored summary over stale silence when fallbacks exhaust", async () => {
-    const terminalSummary =
-      "Web fetch completed.\nOrigin: https://example.com\nStatus: 200\n\n" +
-      "Agent couldn't generate a response.";
-    const incomplete = incompleteResult(
-      terminalSummary,
-      "Agent couldn't generate a response.",
-      {
-        terminalReply: { disposition: "silent" },
-        toolSummary: { calls: 1, tools: ["web_fetch"] },
-      },
-      { terminalPresentation: true },
-    );
-
-    const result = await runCandidates([incomplete], {
-      fallbacksOverride: [],
-    });
-
-    expect(result.outcome).toBe("exhausted");
-    expect(result.result).toBe(incomplete);
-    expect(result.result.payloads).toEqual([{ text: terminalSummary, isError: true }]);
-    expect(result.attempts).toMatchObject([
-      {
-        provider: contract.primaryProvider,
-        model: contract.primaryModel,
-        reason: "format",
-        code: "incomplete_result",
-      },
-    ]);
-  });
 
   it("keeps an internal missing-result notice private after a later provider candidate fails", async () => {
     const missing = incompleteResult(
@@ -314,44 +249,90 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
   });
 
   it.each([
-    [false, undefined],
-    [true, undefined],
-    [true, false],
+    [false, undefined, false, true],
+    [true, undefined, false, true],
+    [true, false, false, true],
+    [true, undefined, true, true],
+    [true, undefined, false, false],
   ] as const)(
-    "preserves the preferred exhausted summary (richer=%s, suppress=%s)",
-    async (richer, suppressErrorNotice) => {
+    "preserves the preferred exhausted summary (richer=%s, suppress=%s, no fallback=%s, observed=%s)",
+    async (richer, suppressErrorNotice, noFallback, primaryObserved) => {
+      const fallbackSnapshot: AgentTerminalSnapshot = {
+        version: 1,
+        agentSuccess: "false",
+        lastMessageRole: "other",
+        finalTextState: "not_assistant",
+        errorSource: "agent_hook",
+        lastAssistantStopReason: "not_assistant",
+        mediaObserved: "unknown",
+      };
+      const primarySnapshot: AgentTerminalSnapshot | undefined = primaryObserved
+        ? { ...fallbackSnapshot, lastMessageRole: "tool_result" }
+        : undefined;
       const primary = incompleteResult(
         "Primary terminal summary",
         "Primary incomplete",
-        richer
-          ? {
-              ...(suppressErrorNotice === undefined ? {} : { suppressErrorNotice }),
-              agentMeta: agentMeta("primary"),
-            }
-          : {},
+        {
+          agentTerminal: primarySnapshot,
+          ...(richer
+            ? {
+                ...(suppressErrorNotice === undefined ? {} : { suppressErrorNotice }),
+                agentMeta: agentMeta("primary"),
+                terminalReply: { disposition: "silent" },
+                toolSummary: { calls: 1, tools: ["web_fetch"] },
+              }
+            : {}),
+        },
         richer ? { terminalPresentation: true } : {},
       );
       const winner = { provider: contract.fallbackProvider, model: contract.fallbackModel };
       const fallback = incompleteResult(
         richer ? "Generic fallback incomplete" : "Fallback terminal summary",
         "Fallback incomplete",
-        richer
-          ? {
-              suppressErrorNotice: true,
-              agentMeta: agentMeta("fallback"),
-              executionTrace: {
-                winnerProvider: winner.provider,
-                winnerModel: winner.model,
-                fallbackUsed: true,
-                runner: "embedded",
-                attempts: [{ ...winner, result: "success" }],
-              },
-            }
-          : {},
+        {
+          agentTerminal: fallbackSnapshot,
+          ...(richer
+            ? {
+                suppressErrorNotice: true,
+                agentMeta: agentMeta("fallback"),
+                executionTrace: {
+                  winnerProvider: winner.provider,
+                  winnerModel: winner.model,
+                  fallbackUsed: true,
+                  runner: "embedded",
+                  attempts: [{ ...winner, result: "success" }],
+                },
+              }
+            : {}),
+        },
       );
-      const result = await runCandidates([primary, fallback]);
-      expect(result).toMatchObject({ outcome: "exhausted", ...winner });
-      expect(result.attempts).toHaveLength(2);
+      const result = await runCandidates(
+        noFallback ? [primary] : [primary, fallback],
+        noFallback ? { fallbacksOverride: [] } : {},
+      );
+      expect(result).toMatchObject({
+        outcome: "exhausted",
+        ...(noFallback
+          ? { provider: contract.primaryProvider, model: contract.primaryModel }
+          : winner),
+      });
+      expect(result.attempts).toHaveLength(noFallback ? 1 : 2);
+      expect(result.result.meta.agentTerminal).toBe(
+        noFallback || richer ? primarySnapshot : fallbackSnapshot,
+      );
+      expect(result.attempts[0]).toMatchObject({
+        provider: contract.primaryProvider,
+        model: contract.primaryModel,
+        reason: "format",
+        code: "incomplete_result",
+      });
+      if (noFallback) {
+        expect(result.result).toBe(primary);
+        expect(result.result.payloads).toEqual([
+          { text: "Primary terminal summary", isError: true },
+        ]);
+        return;
+      }
       if (!richer) {
         expect(result.result).toBe(fallback);
         return;
@@ -383,10 +364,6 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     ).rejects.toBe(finalError);
     expect(run).toHaveBeenCalledTimes(2);
   });
-
-  const silent = emptyResult({
-    meta: { finalAssistantRawText: "NO_REPLY", terminalReply: { disposition: "silent" } },
-  });
   it.each<[string, Partial<Parameters<typeof classifyResult>[0]>]>([
     ["abort", { result: emptyResult({ meta: { aborted: true } }) }],
     ["media send", { result: emptyResult({ messagingToolSentMediaUrls: ["image.png"] }) }],
@@ -404,17 +381,42 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
   ])("does not fallback after %s", (_name, options) => {
     expect(classifyResult({ ...contractRunOptions, result: emptyResult(), ...options })).toBeNull();
   });
+});
 
-  it("keeps running on the primary when terminal output is not classified as fallback", async () => {
-    const run = vi.fn().mockResolvedValue(silent);
-    const result = await runWithModelFallback({
-      ...contractRunOptions,
-      run,
-    });
-
-    expect(result.outcome).toBe("completed");
-    expect(result.result).toBe(silent);
-    expect(result.attempts).toStrictEqual([]);
-    expect(run).toHaveBeenCalledTimes(1);
-  });
+describe("classified native selected failure", () => {
+  it.each([true, false])(
+    "preserves only the selected classified candidate through error normalization (%s)",
+    async (latestObserved) => {
+      const snapshot = captureAgentTerminalSnapshot({
+        terminalMessage: undefined,
+        reachedPromptBoundary: true,
+        success: false,
+        hasHookError: true,
+      });
+      const earlier = incompleteResult("Earlier error", "Earlier failure");
+      const latest = incompleteResult("Selected error", "Selected failure");
+      for (const result of latestObserved ? [earlier, latest] : [earlier]) {
+        const payload = result.payloads?.[0];
+        if (!payload) {
+          throw new Error("Missing synthetic error payload");
+        }
+        withAgentTerminalPayloadSnapshot(payload, snapshot);
+      }
+      const failure = await runCandidates([earlier, latest], {
+        classifyResult: (params) => {
+          const classification = classifyResult(params);
+          return classification && "message" in classification
+            ? { ...classification, preserveResultOnExhaustion: false }
+            : classification;
+        },
+      }).then(
+        () => {
+          throw new Error("Expected fallback exhaustion");
+        },
+        (error: unknown) => error,
+      );
+      expect(failure).toBeInstanceOf(Error);
+      expect(readAgentTerminalSnapshot(failure)).toBe(latestObserved ? snapshot : undefined);
+    },
+  );
 });

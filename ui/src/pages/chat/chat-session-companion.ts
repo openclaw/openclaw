@@ -5,21 +5,27 @@ import type {
   SessionsCompanionResetResult,
   SessionsCompanionStateResult,
 } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
-import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../../../../packages/gateway-protocol/src/session-companion-contract.js";
+import {
+  SESSION_COMPANION_MAX_MS,
+  SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS,
+} from "../../../../packages/gateway-protocol/src/session-companion-contract.js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { FastMode } from "../../api/types.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, DurableComposerDraftScope } from "../../lib/chat/chat-types.ts";
 import { showToast } from "../../lib/toast.ts";
 import { assertUploadsEnabled } from "../../lib/uploads.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import { buildChatApiAttachments } from "./attachment-api.ts";
 import {
+  generateAttachmentId,
   releaseChatAttachmentPayloads,
   releaseDisplacedChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
+import { ChatSessionCompanionComments } from "./chat-session-companion-comments.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import { formatChatSelectionAnnotation } from "./components/chat-selection-attachment.ts";
 
@@ -27,8 +33,10 @@ registerChatSessionEnglish();
 
 const COMPANION_BUSY_DETAIL_CODE = "SESSION_COMPANION_BUSY";
 const MAX_COMPANION_EXCHANGES = 24;
-const COMPANION_ASK_TIMEOUT_MS = 70_000;
+const COMPANION_ASK_TIMEOUT_MS = SESSION_COMPANION_MAX_MS + 10_000;
 const COMPANION_FAILURE_HINTS = new Map([
+  ["timeout", "timeout"],
+  ["stopped", "stopped"],
   ["context-unavailable", "history-unavailable"],
   ["session-missing", "missing"],
   ["rate-limited", "rate-limited"],
@@ -40,7 +48,7 @@ export type ChatSessionCompanionTurn = {
   question: string;
   attachments?: ChatAttachment[];
 } & (
-  | { status: "pending"; startedAt: number }
+  | { status: "pending"; startedAt: number; askId?: string }
   | ({ status: "answered" } & SessionCompanionExchange)
   | {
       status: "failed";
@@ -48,6 +56,8 @@ export type ChatSessionCompanionTurn = {
       startedAt: number;
       hint:
         | "busy"
+        | "timeout"
+        | "stopped"
         | "history-unavailable"
         | "missing"
         | "model-unavailable"
@@ -71,6 +81,8 @@ export type ChatSessionCompanionThread = {
   loading: boolean;
   draft: string;
   attachments?: ChatAttachment[];
+  /** A pending browser draft write, not an unanswered Side chat question. */
+  commentsSaving?: boolean;
   attachmentReads?: ChatAttachmentReadLifecycle;
   /** Model the Gateway answers with when no model is chosen; absent until hydrated. */
   defaultModel?: string;
@@ -78,6 +90,7 @@ export type ChatSessionCompanionThread = {
 };
 
 type MutableCompanionThread = ChatSessionCompanionThread & {
+  comments?: ChatSessionCompanionComments;
   revision: number;
   draftRevision: number;
   pendingResets: Set<Deferred>;
@@ -162,16 +175,23 @@ function companionThreadKey(sessionKey: string, agentId?: string | null): string
   return `${companionAgentKey(agentId)}\0${sessionKey.trim()}`;
 }
 
-/** Pane-owned ephemeral companion threads, keyed by the exact selected session. */
+/** Pane-owned companion threads; unsent comments reuse account-scoped draft storage. */
 export class ChatSessionCompanionThreads {
   private readonly threads = new Map<string, MutableCompanionThread>();
   private readonly hydrationTokens = new Map<string, symbol>();
   private readonly submissionTokens = new Map<string, Deferred>();
-  // Model choices follow the agent across its sessions for this pane's lifetime,
-  // like the ephemeral threads themselves; a Gateway's catalog owns their validity.
+  // Model choices follow the agent across its sessions for this pane's lifetime;
+  // only unsent comments are persisted. The Gateway catalog owns model validity.
   private readonly modelSelections = new Map<string, ChatSessionCompanionModelSelection>();
 
   private publish?: () => void;
+
+  constructor(
+    private readonly commentStorage?: {
+      scope: (sessionKey: string, agentId: string) => DurableComposerDraftScope | null;
+      onError: () => void;
+    },
+  ) {}
 
   subscribe(listener: () => void): () => void {
     this.publish = listener;
@@ -231,11 +251,12 @@ export class ChatSessionCompanionThreads {
       (companionSelectionContext(attachments)?.length ?? 0) >
       SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS
     ) {
-      showToast({ message: t("chat.rail.selectionTooLong") });
+      showToast({ severity: "error", message: t("chat.rail.selectionTooLong") });
       return false;
     }
     const thread = this.get(companionThreadKey(sessionKey, agentId));
     thread.attachments = attachments;
+    this.persistComments(thread);
     this.notify();
     return true;
   }
@@ -296,6 +317,7 @@ export class ChatSessionCompanionThreads {
       sessionKey: string,
       question: string,
       attachments?: ChatAttachment[],
+      askId?: string,
     ) => Promise<SessionsCompanionAskResult>,
     agentId?: string | null,
   ): Promise<void> {
@@ -306,6 +328,23 @@ export class ChatSessionCompanionThreads {
     }
     const key = companionThreadKey(targetSessionKey, agentId);
     const thread = this.get(key);
+    const comments = thread.comments;
+    if (typeof question === "string" && comments) {
+      const draftRevision = thread.draftRevision;
+      const editRevision = comments.editRevision;
+      // The first read owns saved context too. Recheck live intent after it
+      // settles before consuming any draft or issuing the question.
+      await comments.restoration;
+      if (
+        !comments.ready ||
+        this.threads.get(key) !== thread ||
+        thread.comments !== comments ||
+        thread.draftRevision !== draftRevision ||
+        comments.editRevision !== editRevision
+      ) {
+        return;
+      }
+    }
     if (
       thread.turns.some((turn) => turn.status === "pending") ||
       thread.attachmentReads?.pendingReads
@@ -322,6 +361,7 @@ export class ChatSessionCompanionThreads {
     const turn: ChatSessionCompanionTurn = {
       question: normalized,
       status: "pending",
+      askId: generateUUID(),
       startedAt: Date.now(),
       ...(attachments?.length ? { attachments } : {}),
     };
@@ -334,6 +374,7 @@ export class ChatSessionCompanionThreads {
       thread.attachments = [];
       thread.draft = "";
       thread.draftRevision += 1;
+      this.persistComments(thread);
     } else {
       // A retry is new intent in the same slot, outside any earlier Clear snapshot.
       thread.turns = thread.turns.map((previous) => (previous === question ? turn : previous));
@@ -343,7 +384,7 @@ export class ChatSessionCompanionThreads {
     this.submissionTokens.set(key, token);
     this.notify();
     try {
-      const result = await ask(targetSessionKey, normalized, turn.attachments);
+      const result = await ask(targetSessionKey, normalized, turn.attachments, turn.askId);
       if (this.submissionTokens.get(key) !== token) {
         return;
       }
@@ -358,7 +399,10 @@ export class ChatSessionCompanionThreads {
       }
       const details = asRecord(asRecord(error).details);
       const reason = readStringField(details, "reason") ?? null;
-      const imageUnsupported = reason === "image-input-unsupported";
+      const canRetryManually =
+        reason === "image-input-unsupported" ||
+        reason === "utility-model-unavailable" ||
+        reason === "unavailable";
       const hint =
         details.code === COMPANION_BUSY_DETAIL_CODE
           ? "busy"
@@ -367,7 +411,7 @@ export class ChatSessionCompanionThreads {
         status: "failed",
         hint,
         // Changing the model is a user action, not an automatic retry condition.
-        retryable: imageUnsupported || Boolean(asRecord(error).retryable) || reason === null,
+        retryable: canRetryManually || Boolean(asRecord(error).retryable) || reason === null,
       });
     } finally {
       token.resolve();
@@ -402,9 +446,27 @@ export class ChatSessionCompanionThreads {
     const hydration = this.hydrationTokens.get(key);
     const reset = createDeferredCore();
     thread.pendingResets.add(reset);
+    const comments = thread.comments;
+    const editRevision = comments?.editRevision;
+    // Snapshot restored identities as soon as the read settles. Clear owns
+    // that saved input, not comments added while its server request is pending.
+    const restoredComments = comments?.restoration.then(() => {
+      if (comments.ready && comments.editRevision === editRevision) {
+        for (const attachment of thread.attachments ?? []) {
+          if (attachment.selectionAnnotation) {
+            priorAttachmentIds.add(attachment.id);
+          }
+        }
+      }
+    });
     try {
       await clear(targetSessionKey);
-      if (this.threads.get(key) !== thread) {
+      await restoredComments;
+      if (
+        this.threads.get(key) !== thread ||
+        thread.comments !== comments ||
+        (comments && !comments.ready)
+      ) {
         return;
       }
       const previousAttachments = [
@@ -437,6 +499,7 @@ export class ChatSessionCompanionThreads {
         thread.turns.flatMap((turn) => turn.attachments ?? []),
       ]);
       thread.revision += 1;
+      this.persistComments(thread);
       this.notify();
     } finally {
       thread.pendingResets.delete(reset);
@@ -450,6 +513,7 @@ export class ChatSessionCompanionThreads {
       if (key && key !== threadKey) {
         continue;
       }
+      thread.comments?.dispose();
       thread.attachmentReads?.abortReads();
       releaseChatAttachmentPayloads(thread.attachments ?? []);
       for (const turn of thread.turns) {
@@ -470,6 +534,9 @@ export class ChatSessionCompanionThreads {
         loading: false,
         draft: "",
         attachments: [],
+        get commentsSaving() {
+          return thread?.comments?.saving ?? false;
+        },
         attachmentReads: new ChatAttachmentReadLifecycle(this.notify),
         modelSelection: this.modelSelections.get(key.slice(0, key.indexOf("\0"))) ?? {},
         revision: 0,
@@ -479,7 +546,60 @@ export class ChatSessionCompanionThreads {
       };
       this.threads.set(key, thread);
     }
+    this.synchronizeComments(key, thread);
     return thread;
+  }
+
+  private persistComments(thread: MutableCompanionThread) {
+    thread.comments?.save(
+      (thread.attachments ?? []).flatMap((attachment) =>
+        attachment.selectionAnnotation ? [attachment.selectionAnnotation] : [],
+      ),
+    );
+  }
+
+  private synchronizeComments(key: string, thread: MutableCompanionThread) {
+    if (!this.commentStorage) {
+      return;
+    }
+    const boundary = key.indexOf("\0");
+    const agentId = key.slice(0, boundary);
+    const sessionKey = key.slice(boundary + 1);
+    const currentScope = () => this.commentStorage!.scope(sessionKey, agentId);
+    const scope = currentScope();
+    if (!scope) {
+      return;
+    }
+    const identity = JSON.stringify(scope);
+    if (thread.comments && JSON.stringify(thread.comments.scope) !== identity) {
+      thread.comments.dispose();
+      thread.comments = undefined;
+      thread.attachments = (thread.attachments ?? []).filter((item) => !item.selectionAnnotation);
+    }
+    if (thread.comments) {
+      return;
+    }
+    thread.comments = new ChatSessionCompanionComments(
+      scope,
+      () => this.threads.get(key) === thread && JSON.stringify(currentScope()) === identity,
+      (comments) => {
+        thread.attachments = [
+          ...(thread.attachments ?? []).filter((item) => !item.selectionAnnotation),
+          ...comments.map((selectionAnnotation) => ({
+            id: generateAttachmentId(),
+            mimeType: "text/plain",
+            fileName: "selection-comment.txt",
+            selectionAnnotation,
+          })),
+        ];
+        this.notify();
+      },
+      this.commentStorage.onError,
+      this.notify,
+    );
+    if (thread.attachments?.some((item) => item.selectionAnnotation)) {
+      this.persistComments(thread);
+    }
   }
 }
 
@@ -492,32 +612,32 @@ function companionSelectionContext(attachments: readonly ChatAttachment[]): stri
   return selections.length ? selections.join("\n\n") : undefined;
 }
 
-export function requestSessionCompanionAnswer(
+export function createSessionCompanionAsk(
   client: Pick<GatewayBrowserClient, "request">,
-  sessionKey: string,
-  question: string,
   agentId?: string | null,
-  attachments?: ChatAttachment[],
   uploadConfig?: ApplicationConfigCapability,
   selection?: ChatSessionCompanionModelSelection,
-): Promise<SessionsCompanionAskResult> {
-  const selectionContext = companionSelectionContext(attachments ?? []);
-  const media = attachments?.filter((attachment) => !attachment.selectionAnnotation);
-  if (media?.length) {
-    assertUploadsEnabled(uploadConfig);
-  }
-  return client.request<SessionsCompanionAskResult>(
-    "sessions.companion.ask",
-    {
-      sessionKey,
-      ...(agentId ? { agentId } : {}),
-      question,
-      ...(selectionContext ? { selectionContext } : {}),
-      ...(media?.length ? { attachments: buildChatApiAttachments(media) } : {}),
-      ...(selection?.model ? { model: selection.model } : {}),
-      ...(selection?.thinkingLevel ? { thinkingLevel: selection.thinkingLevel } : {}),
-      ...(selection?.fastMode !== undefined ? { fastMode: selection.fastMode } : {}),
-    },
-    { timeoutMs: COMPANION_ASK_TIMEOUT_MS },
-  );
+): Parameters<ChatSessionCompanionThreads["submit"]>[2] {
+  return (sessionKey, question, attachments, askId) => {
+    const selectionContext = companionSelectionContext(attachments ?? []);
+    const media = attachments?.filter((attachment) => !attachment.selectionAnnotation);
+    if (media?.length) {
+      assertUploadsEnabled(uploadConfig);
+    }
+    return client.request<SessionsCompanionAskResult>(
+      "sessions.companion.ask",
+      {
+        sessionKey,
+        ...(agentId ? { agentId } : {}),
+        ...(askId ? { askId } : {}),
+        question,
+        ...(selectionContext ? { selectionContext } : {}),
+        ...(media?.length ? { attachments: buildChatApiAttachments(media) } : {}),
+        ...(selection?.model ? { model: selection.model } : {}),
+        ...(selection?.thinkingLevel ? { thinkingLevel: selection.thinkingLevel } : {}),
+        ...(selection?.fastMode !== undefined ? { fastMode: selection.fastMode } : {}),
+      },
+      { timeoutMs: COMPANION_ASK_TIMEOUT_MS },
+    );
+  };
 }

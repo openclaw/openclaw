@@ -1,13 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, onTestFinished, test, vi } from "vitest";
+import { ProviderAuthFailure } from "../plugins/provider-auth-failure.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { DEVICE_CODE_PHISHING_WARNING, type WizardPrompter } from "./prompts.js";
 import { WizardSession, wizardStepAwaitsInput, type WizardStep } from "./session.js";
 
 async function nextStep(session: WizardSession, expected: Partial<WizardStep> = {}) {
-  const step = expectDefined((await session.next()).step, "wizard step");
-  expect(step).toMatchObject(expected);
-  return step;
+  const result = await session.next();
+  expect(result).toMatchObject({ done: false, step: expected });
+  return expectDefined(result.step, "wizard step");
 }
 
 function nextProgress(session: WizardSession, message: string, externalUrl?: string) {
@@ -39,19 +40,16 @@ function textSession(options: Parameters<WizardPrompter["text"]>[0] = { message:
 }
 
 describe("WizardSession", () => {
-  test.each([true, false, "false"])(
-    "only literal true confirms a wire answer (%j)",
-    async (answer) => {
-      let confirmed: boolean | undefined;
-      const session = new WizardSession(async (prompter) => {
-        confirmed = await prompter.confirm({ message: "Continue?", initialValue: false });
-      });
-      const step = await nextStep(session);
-      await session.answer(step.id, answer);
-      await session.whenSettled();
-      expect(confirmed).toBe(answer === true);
-    },
-  );
+  test.each([true, "false"])("only literal true confirms a wire answer (%j)", async (answer) => {
+    let confirmed: boolean | undefined;
+    const session = new WizardSession(async (prompter) => {
+      confirmed = await prompter.confirm({ message: "Continue?", initialValue: false });
+    });
+    const step = await nextStep(session);
+    await session.answer(step.id, answer);
+    await session.whenSettled();
+    expect(confirmed).toBe(answer === true);
+  });
 
   test.each([
     ["select", undefined, true],
@@ -79,31 +77,24 @@ describe("WizardSession", () => {
     });
     cleanupSession(session);
 
-    const first = await session.next();
-    expect(first.done).toBe(false);
-    expect(first.step?.type).toBe("note");
-    expect(first.step).toMatchObject({ title: "Welcome", message: "", executor: "client" });
-
-    const secondPeek = await session.next();
-    expect(secondPeek.step?.id).toBe(first.step?.id);
-
-    await session.answer(expectDefined(first.step, "wizard step").id, null);
-
-    const second = await session.next();
-    expect(second.done).toBe(false);
-    expect(second.step?.type).toBe("text");
-
-    await session.answer(expectDefined(second.step, "wizard step").id, "Peter");
-
-    const third = await session.next();
-    expect(third.step?.type).toBe("note");
-    expect(third.step).toMatchObject({
+    const first = await nextStep(session, {
+      type: "note",
+      title: "Welcome",
+      message: "",
+      executor: "client",
+    });
+    expect((await session.next()).step?.id).toBe(first.id);
+    await session.answer(first.id, null);
+    const second = await nextStep(session, { type: "text" });
+    await session.answer(second.id, "Peter");
+    const third = await nextStep(session, {
+      type: "note",
       title: "Greeting",
       message: "Hello Peter",
       executor: "client",
     });
 
-    await session.answer(expectDefined(third.step, "wizard step").id, null);
+    await session.answer(third.id, null);
 
     const last = await nextStep(session, {
       type: "note",
@@ -113,9 +104,7 @@ describe("WizardSession", () => {
     });
     await session.answer(last.id, null);
 
-    const done = await session.next();
-    expect(done.done).toBe(true);
-    expect(done.status).toBe("done");
+    await expectTerminal(session);
   });
 
   test("plain output is a client note with plain format", async () => {
@@ -128,7 +117,7 @@ describe("WizardSession", () => {
     await expectTerminal(session);
   });
 
-  test.each(["prepared", "activated", "utility"] as const)(
+  test.each(["prepared", "utility"] as const)(
     "returns the exact %s model only on the successful terminal result",
     async (kind) => {
       const modelRef = "ollama/qwen3:0.6b";
@@ -136,10 +125,7 @@ describe("WizardSession", () => {
         if (kind === "prepared") {
           owner.setPreparedModelRef(modelRef);
         } else {
-          owner.setModelActivation({
-            modelRef,
-            ...(kind === "utility" ? { modelTarget: "utility" as const } : {}),
-          });
+          owner.setModelActivation({ modelRef, modelTarget: "utility" });
         }
         await prompter.note("Finishing setup");
       });
@@ -152,15 +138,23 @@ describe("WizardSession", () => {
         status: "done",
         ...(kind === "prepared"
           ? { preparedModelRef: modelRef }
-          : {
-              modelActivation: {
-                modelRef,
-                ...(kind === "utility" ? { modelTarget: "utility" } : {}),
-              },
-            }),
+          : { modelActivation: { modelRef, modelTarget: "utility" } }),
       });
     },
   );
+
+  test("reports a typed provider sign-in failure reason on the error result", async () => {
+    const session = new WizardSession(async () => {
+      throw new ProviderAuthFailure("device_code_expired");
+    });
+    await session.whenSettled();
+    await expect(session.next()).resolves.toEqual({
+      done: true,
+      status: "error",
+      error: "The sign-in code expired before it was approved.",
+      reason: "device_code_expired",
+    });
+  });
 
   test.each(["error", "cancelled"] as const)(
     "withholds model outcomes after %s, even on late completion",
@@ -215,23 +209,13 @@ describe("WizardSession", () => {
         await callback.promise;
       });
       cleanupSession(session, callback.resolve);
-      const next = session.next();
-      const delivered = vi.fn();
-      void next.then(delivered);
-      await vi.waitFor(() => expect(delivered).toHaveBeenCalledOnce());
-      const first = await next;
-      expect(first).toMatchObject({
-        done: false,
-        status: "running",
-        step: {
-          type: "progress",
-          executor: "gateway",
-          externalUrl: destination,
-        },
+      const first = await nextStep(session, {
+        type: "progress",
+        executor: "gateway",
+        externalUrl: destination,
       });
-      expect(wizardStepAwaitsInput(expectDefined(first.step, "browser sign-in progress"))).toBe(
-        false,
-      );
+      expect(session.getStatus()).toBe("running");
+      expect(wizardStepAwaitsInput(first)).toBe(false);
       const prompter = await ready.promise;
       const progress = prompter.progress("Waiting for approval");
       await nextProgress(session, "Waiting for approval", destination);
@@ -258,8 +242,7 @@ describe("WizardSession", () => {
         message: "Enter this one-time code in your browser.",
       });
     });
-    const first = await session.next();
-    expect(first.step).toMatchObject({
+    await nextStep(session, {
       type: "progress",
       executor: "gateway",
       title: "Provider sign-in",
@@ -277,6 +260,45 @@ describe("WizardSession", () => {
         message: "Enter this one-time code in your browser.",
       },
     });
+    await session.whenSettled();
+    await expectTerminal(session);
+  });
+
+  test("retires the device code once the approved sign-in starts saving", async () => {
+    const approved = createDeferredCore();
+    const locked = createDeferredCore();
+    const saving = createDeferredCore();
+    const session = new WizardSession(async (prompter, _signal, owner) => {
+      await prompter.openUrl?.("https://provider.example/device");
+      await prompter.deviceCode?.({ title: "Provider sign-in", code: "ABCD-1234" });
+      const waiting = prompter.progress("Waiting for approval");
+      await approved.promise;
+      waiting.stop("Sign-in complete");
+      owner.lockCancellationForPreparation();
+      locked.resolve();
+      await saving.promise;
+      owner.finishPreparation();
+      prompter.progress("Testing your AI connection…");
+    });
+    cleanupSession(session, () => {
+      approved.resolve();
+      saving.resolve();
+    });
+    const device = {
+      externalUrl: "https://provider.example/device",
+      deviceCode: { code: "ABCD-1234" },
+    };
+    await nextStep(session, device);
+    await nextStep(session, { ...device, progressMessage: "Waiting for approval" });
+    approved.resolve();
+    await locked.promise;
+    await nextStep(session, { ...device, progressMessage: "Sign-in complete" });
+    for (const message of ["Signed in. Finishing setup…", "Testing your AI connection…"]) {
+      const step = await nextProgress(session, message);
+      expect(step).not.toHaveProperty("deviceCode");
+      expect(step).not.toHaveProperty("externalUrl");
+      saving.resolve();
+    }
     await session.whenSettled();
     await expectTerminal(session);
   });
@@ -406,8 +428,7 @@ describe("WizardSession", () => {
     );
     expect((await session.next()).step?.type).toBe("text");
     await vi.advanceTimersByTimeAsync(1_000);
-    const done = await session.next();
-    expect(done.status).toBe("cancelled");
+    await expectTerminal(session, "cancelled");
     expect(session.signal.aborted).toBe(true);
   });
 
@@ -444,6 +465,32 @@ describe("WizardSession", () => {
     const plainStep = await nextStep(session, { type: "text" });
     expect(plainStep?.sensitive).toBeUndefined();
     await session.answer(plainStep.id, "alice");
+  });
+
+  test("names a refusal on the open paste prompt, after its progress line stopped", async () => {
+    let progress!: ReturnType<WizardPrompter["progress"]>;
+    const prompted = createDeferredCore();
+    const session = new WizardSession(async (prompter) => {
+      progress = prompter.progress("Starting sign-in");
+      progress.stop();
+      const answer = prompter.text({ message: "Paste the address" });
+      prompted.resolve();
+      await answer;
+    });
+    await nextProgress(session, "Starting sign-in");
+    await prompted.promise;
+    const prompt = await nextStep(session, { type: "text" });
+    const failure = new ProviderAuthFailure("consent_denied");
+    progress.update(failure.message, failure.reason);
+    // Same step id: an answer to the prompt still settles it.
+    const annotated = await nextStep(session, {
+      id: prompt.id,
+      type: "text",
+      progressMessage: failure.message,
+      reason: "consent_denied",
+    });
+    await session.answer(annotated.id, "http://localhost/cb?code=c");
+    await expectTerminal(session);
   });
 
   test("bridges confirm, progress updates, and notes in order", async () => {

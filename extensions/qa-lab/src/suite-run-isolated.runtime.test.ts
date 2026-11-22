@@ -3,11 +3,8 @@ import "./suite-run-isolated.test-mocks.js";
 import { expect, it, vi } from "vitest";
 import * as scenarioCatalog from "./scenario-catalog.js";
 import { runQaSuite } from "./suite-launch.runtime.js";
-import {
-  createCleanupTestContext,
-  createCleanupTestLab,
-  mocks,
-} from "./suite-run-isolated.test-support.js";
+import { createCleanupTestContext, mocks } from "./suite-run-isolated.test-support.js";
+import { createTestLab as createCleanupTestLab } from "./suite-runtime-parity.test-support.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import * as suite from "./suite.js";
 

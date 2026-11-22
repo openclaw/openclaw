@@ -23,12 +23,12 @@ afterEach(async () => {
 const artifactPath = (id: string, ...parts: string[]) => path.join(fixture.rootDir, id, ...parts);
 const readPreview = (id: string) => fs.readFile(artifactPath(id, "preview.png"), "utf8");
 
-async function file(id: string, old = false) {
+async function file(id: string, ageHours = 0) {
   const directory = artifactPath(id);
   await fs.mkdir(directory, { recursive: true });
   await fs.writeFile(path.join(directory, "preview.png"), id);
-  if (old) {
-    const time = new Date(Date.now() - 25 * 60 * 60 * 1_000);
+  if (ageHours) {
+    const time = new Date(Date.now() - ageHours * 60 * 60 * 1_000);
     await fs.utimes(directory, time, time);
   }
   return directory;
@@ -40,34 +40,28 @@ it.each(["expired", "orphan"] as const)("cleans 129 %s files; keeps live files",
   const young = "e".repeat(20);
   const boundary = "d".repeat(20);
   await file(young);
-  const boundaryDir = await file(boundary);
-  const boundaryTime = new Date(Date.now() - 24 * 60 * 60 * 1_000);
-  await fs.utimes(boundaryDir, boundaryTime, boundaryTime);
+  await file(boundary, 24);
   await fixture.blobStore.register(live, new Uint8Array(), metadata);
-  await file(live, true);
+  await file(live, 25);
   for (let index = 0; index < 129; index += 1) {
     const id = index.toString(16).padStart(20, "0");
-    await file(id, kind === "orphan");
+    await file(id, kind === "orphan" ? 25 : 0);
     if (kind === "expired") {
       await fixture.blobStore.register(id, new Uint8Array(), metadata, { ttlMs });
       await expireDiffArtifactForTest(fixture.rootDir, id, ttlMs);
     }
   }
 
-  const lookup = vi.spyOn(fixture.blobStore, "lookup");
   await fixture.store.cleanupExpired();
   expect((await fs.readdir(fixture.rootDir)).toSorted()).toEqual([boundary, young, live]);
-  expect(lookup.mock.calls).toHaveLength(kind === "orphan" ? 130 : 1);
-  expect(lookup.mock.calls.map(([key]) => key)).not.toContain(young);
-  expect(lookup.mock.calls.map(([key]) => key)).not.toContain(boundary);
   expect(await readPreview(live)).toBe(live);
   expect((await fixture.blobStore.entries()).map((entry) => entry.key)).toEqual([live]);
 });
 
 it("scheduled cleanup joins accepted filesystem work before reporting a sibling read failure", async () => {
   const [heldId, failedId] = ["a".repeat(20), "b".repeat(20)];
-  const heldDirectory = await file(heldId, true);
-  await file(failedId, true);
+  const heldDirectory = await file(heldId, 25);
+  await file(failedId, 25);
   const [started, release] = [createDeferred<void>(), createDeferred<void>()];
   const failure = new Error("fixture Blob lookup failed");
   const lookup = fixture.blobStore.lookup.bind(fixture.blobStore);

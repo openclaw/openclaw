@@ -32,6 +32,13 @@ function expectClosed(handle: ReturnType<typeof createHandle>) {
     expect(close).toHaveBeenCalledOnce();
   }
 }
+function pairingRequest() {
+  return vi
+    .fn<Parameters<typeof maybeApprovePendingBridgePairing>[0]["request"]>()
+    .mockResolvedValueOnce({
+      pending: [{ requestId: "pair-request", deviceId: "bridge-device", role: "operator" }],
+    });
+}
 afterEach(() => vi.useRealTimers());
 
 it("creates unique client temp state and removes token files on cleanup", () => {
@@ -56,11 +63,7 @@ it.each([false, true])(
   "reuses one MCP temp state after pairing (auto-approved: %s)",
   async (autoApproved) => {
     const { tempState, first, second, connect } = reconnectFixture();
-    const request = vi
-      .fn<Parameters<typeof maybeApprovePendingBridgePairing>[0]["request"]>()
-      .mockResolvedValueOnce({
-        pending: [{ requestId: "pair-request", deviceId: "bridge-device", role: "operator" }],
-      });
+    const request = pairingRequest();
     if (autoApproved) {
       request
         .mockRejectedValueOnce(new Error("unknown requestId"))
@@ -96,13 +99,7 @@ it.each([
   { label: "wrong role", paired: [{ deviceId: "bridge-device", roles: ["node"] }] },
 ])("preserves stale-approval failure for $label", async ({ paired, message }) => {
   const failure = new Error(message ?? "unknown requestId");
-  const request = vi
-    .fn<Parameters<typeof maybeApprovePendingBridgePairing>[0]["request"]>()
-    .mockResolvedValueOnce({
-      pending: [{ requestId: "pair-request", deviceId: "bridge-device", role: "operator" }],
-    })
-    .mockRejectedValueOnce(failure)
-    .mockResolvedValueOnce({ paired });
+  const request = pairingRequest().mockRejectedValueOnce(failure).mockResolvedValueOnce({ paired });
   await expect(maybeApprovePendingBridgePairing({ request })).rejects.toBe(failure);
 });
 

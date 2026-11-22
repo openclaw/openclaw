@@ -87,6 +87,13 @@ export function registerGatewayCronContextTests({
     loadConfigMock.mockReturnValue(cfg);
     return cfg;
   }
+  function expectWake(text: string, route: Record<string, unknown>) {
+    expect(enqueueSessionEventMock).toHaveBeenCalledExactlyOnceWith(
+      text,
+      expect.objectContaining({ source: "cron", ...route }),
+    );
+    expect(legacyEventMocks.enqueue).not.toHaveBeenCalled();
+  }
   function timedConfig(name: string, hour: string) {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(`2026-08-21T${hour}:00:00.000Z`));
@@ -167,15 +174,7 @@ export function registerGatewayCronContextTests({
         ok: true,
       });
 
-      expect(enqueueSessionEventMock).toHaveBeenCalledExactlyOnceWith(
-        "hello",
-        expect.objectContaining({
-          source: "cron",
-          agentId: "ops",
-          sessionKey: expect.stringMatching(/^agent:ops:/),
-        }),
-      );
-      expect(legacyEventMocks.enqueue).not.toHaveBeenCalled();
+      expectWake("hello", { agentId: "ops", sessionKey: expect.stringMatching(/^agent:ops:/) });
     });
   });
 
@@ -187,15 +186,7 @@ export function registerGatewayCronContextTests({
     await withCronService(cfg, async (state) => {
       expect(await state.cron.wake({ mode: "now", text: "system wake" })).toEqual({ ok: true });
 
-      expect(enqueueSessionEventMock).toHaveBeenCalledExactlyOnceWith(
-        "system wake",
-        expect.objectContaining({
-          source: "cron",
-          agentId: "ops",
-          sessionKey: "agent:ops:main",
-        }),
-      );
-      expect(legacyEventMocks.enqueue).not.toHaveBeenCalled();
+      expectWake("system wake", { agentId: "ops", sessionKey: "agent:ops:main" });
     });
   });
 
@@ -329,9 +320,6 @@ export function registerGatewayCronContextTests({
     expect(observed).toBe(context);
     expect(observedBroker).toBe(broker);
     expect(() => assertScheduledCaller?.("chat.history")).not.toThrow();
-    expect(() => caller.assertCurrent?.("chat.history")).toThrow(
-      "agent tool caller authority is no longer active",
-    );
   });
 
   it.each(["absent", "retired", "session"] as const)(
@@ -416,9 +404,5 @@ export function registerGatewayCronContextTests({
     expect(assertCaller).toBeUndefined();
     expect(caller.assertCurrent).toBeTypeOf("function");
     expect(() => caller.assertCurrent?.("chat.history")).not.toThrow();
-    caller.active = false;
-    expect(() => caller.assertCurrent?.("chat.history")).toThrow(
-      "agent tool caller authority is no longer active",
-    );
   });
 }

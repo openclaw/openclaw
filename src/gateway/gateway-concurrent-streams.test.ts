@@ -181,42 +181,27 @@ async function stopMockProcess(
   owner: MockProcessOwner,
   { verifyMissingClose = false }: { verifyMissingClose?: boolean } = {},
 ): Promise<void> {
-  // The negative fixture must observe the missing close without awaiting it.
-  // Normal teardown joins the retained native close before inspecting resources.
-  const deadline = verifyMissingClose ? Date.now() + 2_000 + 1_000 : undefined;
+  // A mocked stop must fail the close check; real teardown joins native closure.
   await gatewayBenchChild.stopChild(owner.child);
   if (!verifyMissingClose) {
     await owner.closed;
   }
-  while (true) {
-    const { child } = owner;
-    const exited = child.exitCode !== null || child.signalCode !== null;
-    // This mock and its checked-in imports spawn no descendants. Windows proof
-    // is native leader/close/stdio, not a nominally dead POSIX group.
-    const groupClosed =
-      process.platform === "win32" ||
-      inspectManagedProcessGroup(child, {
-        deadlineAt: deadline,
-        errorPolicy: "indeterminate",
-      }) === "dead";
-    if (
-      exited &&
-      owner.closeObserved &&
-      owner.stdin.closed &&
-      owner.stdout.closed &&
-      owner.stderr.closed &&
-      groupClosed
-    ) {
-      return;
-    }
-    const remaining = deadline === undefined ? 0 : deadline - Date.now();
-    if (remaining <= 0) {
-      throw new Error("Mock provider shutdown unverified; Gateway state retained", {
-        cause: owner.error,
-      });
-    }
-    await gatewayBenchChild.delay(Math.min(10, remaining));
+  const { child } = owner;
+  // This mock spawns no descendants; Windows proves native leader/close/stdio.
+  if (
+    (child.exitCode !== null || child.signalCode !== null) &&
+    owner.closeObserved &&
+    owner.stdin.closed &&
+    owner.stdout.closed &&
+    owner.stderr.closed &&
+    (process.platform === "win32" ||
+      inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" }) === "dead")
+  ) {
+    return;
   }
+  throw new Error("Mock provider shutdown unverified; Gateway state retained", {
+    cause: owner.error,
+  });
 }
 
 async function cleanupConcurrentStreamResources(owners: {
@@ -315,23 +300,21 @@ describe("Gateway concurrent HTTP streams", () => {
           exitedBeforeTeardown: false,
         });
         try {
-          const cleanupOutcome = await cleanupConcurrentStreamResources({
-            closeClient,
-            stopGateway,
-            stopMock: () => stopMockProcess(processOwner, { verifyMissingClose: true }),
-            settleStreams,
-            cleanupGateway,
-          }).then(
-            () => ({ status: "fulfilled" }),
-            (error: unknown) => ({ status: "rejected", error }),
-          );
+          await expect(
+            cleanupConcurrentStreamResources({
+              closeClient,
+              stopGateway,
+              stopMock: () => stopMockProcess(processOwner, { verifyMissingClose: true }),
+              settleStreams,
+              cleanupGateway,
+            }),
+          ).rejects.toMatchObject({
+            message: "Mock provider shutdown unverified; Gateway state retained",
+          });
           expect(closeClient).toHaveBeenCalledOnce();
           expect(stopGateway).toHaveBeenCalledOnce();
           expect(settleStreams).toHaveBeenCalledOnce();
-          expect(processOwner).toMatchObject({
-            closeObserved: false,
-            child: { exitCode: null, signalCode: null, pid: expect.any(Number) },
-          });
+          expect(processOwner.closeObserved).toBe(false);
           expect(() => process.kill(processOwner.child.pid!, 0)).not.toThrow();
           if (process.platform !== "win32") {
             expect(
@@ -340,10 +323,6 @@ describe("Gateway concurrent HTTP streams", () => {
           }
           await expect(fs.readFile(controlPath, "utf8")).resolves.toBe(control);
           expect(cleanupGateway).not.toHaveBeenCalled();
-          expect(cleanupOutcome).toMatchObject({
-            status: "rejected",
-            error: { message: "Mock provider shutdown unverified; Gateway state retained" },
-          });
         } finally {
           reportedStop.mockRestore();
         }

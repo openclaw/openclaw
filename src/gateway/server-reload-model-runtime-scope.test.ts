@@ -87,8 +87,7 @@ it.each<[changedPaths: string[], invalidates: boolean, reloadPlugins?: boolean]>
   [["agents.defaults.compaction"], true],
   [["agents.defaults.compaction.model"], true],
   [["agents.defaults.compaction.provider"], true],
-  [["agents.defaults.compaction.memoryFlush"], true],
-  [["agents.defaults.compaction.memoryFlush.model"], true],
+  [["agents.defaults.compaction.memoryFlush"], false],
   [["agents.defaults.subagents"], true],
   [["agents.defaults.subagents.model.primary"], true],
   [["agents.entries"], true],
@@ -98,6 +97,7 @@ it.each<[changedPaths: string[], invalidates: boolean, reloadPlugins?: boolean]>
   [["agents.entries.main.tools"], false],
   [["agents.defaults.subagents.thinking"], false],
   [["logging.level"], false],
+  [["browser.profiles.temporary"], false],
   [[], true, true],
   [["logging.level", "agents.defaults.workspace"], true],
 ])(

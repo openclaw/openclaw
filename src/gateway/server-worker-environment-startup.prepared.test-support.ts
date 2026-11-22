@@ -24,6 +24,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { parseNodeWorkerPreparedWorkspaceResult } from "../worker/node-workspace-prepared-protocol.js";
 import { NODE_WORKSPACE_DRAIN_COMMAND } from "../worker/node-workspace-protocol.js";
+import { closeMinimalGatewayServer } from "./minimal-gateway.test-helpers.js";
 import { createNodeRegistryRuntime, updateNodeRunnerInventory } from "./node-registry-private.js";
 import { NodeRegistry } from "./node-registry.js";
 import { makeClient } from "./node-registry.test-helpers.js";
@@ -151,14 +152,7 @@ async function createPreparedNodeAcknowledgement(root: string, cleanup: AsyncDis
       }),
   );
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  network.defer(async () => {
-    for (const socket of server.clients) {
-      socket.terminate();
-    }
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  });
+  network.defer(() => closeMinimalGatewayServer(server));
   await once(server, "listening");
   const address = server.address();
   assert(address && typeof address !== "string", "Expected loopback listener");

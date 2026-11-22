@@ -11,9 +11,7 @@ import {
   verifyChainSegment,
   type AuditEntry,
 } from "../protocol/audit.js";
-import type { ReefAuditAppendEvent, ReefAuditOperations } from "./audit-state-operation.js";
 import {
-  getReefAuditOperationState,
   openReefAuditStore,
   reefAuditEntryKey,
   REEF_AUDIT_HEAD_KEY,
@@ -49,19 +47,6 @@ describe("Reef SQLite audit state", () => {
   const key = new Uint8Array(32).fill(1);
   const open = (maxEntries = 2, signal?: AbortSignal) =>
     openReefAuditStore(runtime, key, maxEntries, signal);
-  const appendGroup = (audit: ReturnType<typeof open>, events: ReefAuditAppendEvent[]) => {
-    const state = getReefAuditOperationState(audit)!;
-    return state.head.createOperation!<ReefAuditOperations>(
-      [state.head, state.migration, state.entries],
-      { moduleName: "audit-state-operation-api.js", exportName: "executeReefAuditOperation" },
-    ).execute(
-      {
-        type: "append",
-        input: { head: 0, migration: 1, entries: 2, auditKey: key, maxEntries: 2, events },
-      },
-      { writeStores: [0, 2] },
-    );
-  };
   const heads = () =>
     runtime.state.openSyncKeyedStore<ReefAuditHeadRecord>({
       namespace: REEF_AUDIT_HEAD_NAMESPACE,
@@ -90,22 +75,22 @@ describe("Reef SQLite audit state", () => {
   it("commits an ordered event group with encryption and the retained suffix", async () => {
     const audit = open();
     await audit.appendEvent("before", {}, 9);
-    const result = await appendGroup(audit, [
+    const result = await audit.appendEvents([
       { type: "proposal", payload: { text: "private text" }, ts: 10 },
       { type: "verdict", payload: { reason: "private reason" }, ts: 11 },
       { type: "envelope", payload: { id: 3 }, ts: 12 },
     ]);
-    expect(result.value.map((entry) => entry.event.seq)).toEqual([2, 3, 4]);
-    expect(decryptAuditText(result.value[0]!, key).event.payload).toEqual({ text: "private text" });
-    expect(JSON.stringify(result.value)).not.toContain("private");
+    expect(result.map((entry) => entry.event.seq)).toEqual([2, 3, 4]);
+    expect(decryptAuditText(result[0]!, key).event.payload).toEqual({ text: "private text" });
+    expect(JSON.stringify(result)).not.toContain("private");
     const retained = await audit.entries();
     expect(eventTypes(retained)).toEqual(["verdict", "envelope"]);
-    expect(retained).toEqual(result.value.slice(1));
+    expect(retained).toEqual(result.slice(1));
     expect(
       verifyChainSegment(retained, {
-        previousHash: result.value[0]!.entryHash,
+        previousHash: result[0]!.entryHash,
         previousSeq: 2,
-        head: result.value[2]!.entryHash,
+        head: result[2]!.entryHash,
       }),
     ).toBe(true);
   });
@@ -114,7 +99,7 @@ describe("Reef SQLite audit state", () => {
     const audit = open();
     const initial = await audit.appendEvent("before", {}, 9);
     await expectAuditOperationError(
-      appendGroup(audit, [
+      audit.appendEvents([
         { type: "valid", payload: {}, ts: 10 },
         { type: "invalid", payload: {}, ts: -1 },
       ]),

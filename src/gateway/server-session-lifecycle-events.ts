@@ -163,6 +163,7 @@ export function createLifecycleEventBroadcastHandler(params: {
               ? {
                   prepareSessionProjection: prepareSessionEventProjection(projection, read, {
                     ancestors,
+                    reuseEnvelope: true,
                   }),
                 }
               : {}),

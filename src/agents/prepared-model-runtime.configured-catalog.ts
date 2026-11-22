@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { dedupeByKey, indexFirstByKey } from "../shared/dedupe-by-key.js";
-import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import { assignProviderModelOrder } from "./model-catalog-order.js";
@@ -16,19 +15,14 @@ import type { PreparedModelRuntimeCatalogFacts } from "./prepared-model-runtime.
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.types.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
-type ConfiguredCatalogAgentFacts = {
-  input: { config: OpenClawConfig; env?: NodeJS.ProcessEnv };
-  configuredModelRefs: readonly ModelCatalogRef[];
-};
-
-type ConfiguredCatalogWorkspaceFacts = {
-  pluginMetadataSnapshot: PluginMetadataSnapshot;
-  inlineProviderModels: readonly InlineModelEntry[];
-};
-
 export function prepareConfiguredRuntimeFacts(params: {
-  agentFacts: ConfiguredCatalogAgentFacts;
-  workspaceFacts: ConfiguredCatalogWorkspaceFacts;
+  agentFacts: {
+    input: { config: OpenClawConfig; env?: NodeJS.ProcessEnv };
+    configuredModelRefs: readonly ModelCatalogRef[];
+  };
+  workspaceFacts: {
+    pluginMetadataSnapshot: PluginMetadataSnapshot;
+  };
   templateModelRegistry: ModelRegistry;
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
 }): PreparedModelRuntimeCatalogFacts {
@@ -88,7 +82,6 @@ export function prepareConfiguredRuntimeFacts(params: {
     templateModelRegistry,
     modelCatalog,
     configuredRuntimeModels: params.configuredRuntimeModels,
-    inlineProviderModels: params.workspaceFacts.inlineProviderModels,
   };
 }
 

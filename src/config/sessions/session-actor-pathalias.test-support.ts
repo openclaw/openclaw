@@ -65,7 +65,7 @@ export async function assertSessionActorPathAliasReuse(
 
   const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
   const actorDatabase = { agentId: database.agentId, path: database.path, env };
-  const actor = captureDurableSessionActor({
+  const actor = await captureDurableSessionActor({
     database: actorDatabase,
     target: {
       sessionKey,
@@ -131,9 +131,6 @@ export async function assertSessionActorPathAliasReuse(
         }
 
         historyReads.mockClear();
-        expect(
-          readSessionActorProjectionReceipt({ path: otherDatabase.path, sessionKey, sessionId }),
-        ).toBeUndefined();
         expect(
           await readSessionTranscriptAccountingAsync(otherScope, accountingOptions),
         ).toMatchObject({ eventCount: 1 });

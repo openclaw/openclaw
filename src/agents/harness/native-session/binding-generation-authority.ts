@@ -206,15 +206,7 @@ export async function retainNativeSessionGenerationAuthority(
   params: NativeSessionGenerationParams,
 ) {
   params.assertCurrent?.();
-  const read = {
-    agentId: params.target.agentId,
-    sessionKey: params.target.sessionKey?.trim() ?? "",
-    storePath:
-      params.storePath?.trim() ||
-      resolveSessionStorePathCore(params.config?.session?.store, {
-        agentId: params.target.agentId,
-      }),
-  };
+  const read = resolveGenerationRead(params);
   let captured:
     | Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsyncInternal>>
     | undefined;
@@ -325,15 +317,7 @@ export async function prepareNativeSessionGenerationAuthority(
 async function prepareNativeSessionGenerationAuthorityInternal(
   params: NativeSessionGenerationParams,
 ) {
-  const read = {
-    agentId: params.target.agentId,
-    sessionKey: params.target.sessionKey?.trim() ?? "",
-    storePath:
-      params.storePath?.trim() ||
-      resolveSessionStorePathCore(params.config?.session?.store, {
-        agentId: params.target.agentId,
-      }),
-  };
+  const read = resolveGenerationRead(params);
   const entry = await (async () => {
     try {
       return read.sessionKey
@@ -416,4 +400,16 @@ async function reclaimPreparedGeneration<TAuthority extends NativeSessionBinding
     return false;
   }
   return params.generation.reclaim(plan.expectedPreviousSessionId, authority.authority);
+}
+
+function resolveGenerationRead(params: NativeSessionGenerationParams) {
+  return {
+    agentId: params.target.agentId,
+    sessionKey: params.target.sessionKey?.trim() ?? "",
+    storePath:
+      params.storePath?.trim() ||
+      resolveSessionStorePathCore(params.config?.session?.store, {
+        agentId: params.target.agentId,
+      }),
+  };
 }

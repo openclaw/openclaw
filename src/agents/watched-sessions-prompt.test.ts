@@ -68,19 +68,8 @@ beforeEach(() => {
   configSnapshot.setRuntimeConfigSnapshot({});
 });
 
-it("returns key-sorted watched sessions with store-derived titles", async () => {
-  await watchGroup(groupKey(), "Family group");
-  await watchGroup(groupKey("alpha:topic:7"));
-  expect(await preparePrompt()).toEqual({
-    sessions: [{ key: groupKey("alpha:topic:7") }, { key: groupKey(), title: "Family group" }],
-    hiddenCount: 0,
-    readToolNames: ["sessions_history", "sessions_search"],
-    listToolAvailable: true,
-  });
-});
-
-it("caps rendered rows and reports the overflow count", async () => {
-  for (let index = 0; index < 23; index += 1) {
+it("sorts and caps watched sessions with store-derived titles and overflow", async () => {
+  for (let index = 22; index >= 0; index -= 1) {
     await watchGroup(
       groupKey(`room-${String(index).padStart(2, "0")}`),
       index === 0 ? "A".repeat(79) + "🦞tail" : undefined,
@@ -104,10 +93,18 @@ it("caps rendered rows and reports the overflow count", async () => {
 
   expect(prepared?.sessions).toHaveLength(20);
   expect(prepared?.sessions[0]).toEqual({ title: "A".repeat(79), key: groupKey("room-00") });
+  expect(prepared?.sessions[1]).toEqual({ key: groupKey("room-01") });
+  expect(prepared?.sessions.map(({ key }) => key)).toEqual(
+    Array.from({ length: 20 }, (_, index) => groupKey(`room-${String(index).padStart(2, "0")}`)),
+  );
   expect(prepared).toMatchObject({
     hiddenCount: 3,
     readToolNames: ["sessions_history"],
     listToolAvailable: false,
+  });
+  expect(await preparePrompt()).toMatchObject({
+    readToolNames: ["sessions_history", "sessions_search"],
+    listToolAvailable: true,
   });
 });
 
@@ -119,6 +116,7 @@ it("keeps sandboxed watches only when non-spawned reads are allowed", async () =
     config: sandboxConfig({ sessionToolsVisibility: "all" }),
   });
   expect(prepared?.sessions).toHaveLength(1);
+  expect(prepared?.hiddenCount).toBe(0);
 });
 
 it.each([

@@ -12,19 +12,6 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
-type SandboxListOptions = {
-  browser: boolean;
-  json: boolean;
-};
-
-type SandboxRecreateOptions = {
-  all: boolean;
-  session?: string;
-  agent?: string;
-  browser: boolean;
-  force: boolean;
-};
-
 function displayUsage(container: SandboxContainerInfo, runtime: RuntimeEnv): void {
   runtime.log(
     `    Age:     ${formatDurationCompact(Date.now() - container.createdAtMs, { spaced: true }) ?? "0s"}`,
@@ -41,7 +28,10 @@ function formatRecreateRuntimeLabel(container: SandboxContainerInfo): string {
 }
 
 export async function sandboxListCommand(
-  opts: SandboxListOptions,
+  opts: {
+    browser: boolean;
+    json: boolean;
+  },
   runtime: RuntimeEnv,
 ): Promise<void> {
   // A failing backend/registry probe must surface, not render as an empty
@@ -99,7 +89,13 @@ export async function sandboxListCommand(
 }
 
 export async function sandboxRecreateCommand(
-  opts: SandboxRecreateOptions,
+  opts: {
+    all: boolean;
+    session?: string;
+    agent?: string;
+    browser: boolean;
+    force: boolean;
+  },
   runtime: RuntimeEnv,
 ): Promise<void> {
   if (!opts.all && !opts.session && !opts.agent) {

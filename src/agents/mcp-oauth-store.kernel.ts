@@ -7,6 +7,7 @@ import {
   OpenIdProviderDiscoveryMetadataSchema,
 } from "@modelcontextprotocol/core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { engineStringPosition } from "../infra/database-engine/scalar.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -278,7 +279,9 @@ export function listMcpOAuthStoreKeysInDatabase(
     getNodeSqliteKysely<McpOAuthDatabase>(database)
       .selectFrom("mcp_oauth_stores")
       .select("store_key")
-      .where((eb) => eb(eb.fn<number>("instr", [eb.ref("store_key"), eb.val(prefix)]), "=", 1))
+      .where((eb) =>
+        eb(engineStringPosition(database, eb.ref("store_key"), eb.val(prefix)), "=", 1),
+      )
       .orderBy("store_key", "asc"),
   ).rows;
   return rows.map((row) => row.store_key);
@@ -296,7 +299,9 @@ export function countMcpOAuthPrincipalsInDatabase(
     getNodeSqliteKysely<McpOAuthDatabase>(database)
       .selectFrom("mcp_oauth_stores")
       .select(["store_key", "format_version", "store_json"])
-      .where((eb) => eb(eb.fn<number>("instr", [eb.ref("store_key"), eb.val(prefix)]), "=", 1))
+      .where((eb) =>
+        eb(engineStringPosition(database, eb.ref("store_key"), eb.val(prefix)), "=", 1),
+      )
       .orderBy("store_key", "asc"),
   );
   let count = 0;

@@ -82,6 +82,35 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
   beforeAll(() => layoutBrowser.start());
   afterAll(() => layoutBrowser.close());
 
+  it.each(["user", "assistant", "tool"])(
+    "keeps %s group bounds stable when shared identity arrives",
+    async (role) => {
+      await withBrowserPage(openBrowserPage(1200, 800), async (page) => {
+        await page.setContent(`<style>${readUiCss()}</style>
+          <div class="chat-thread chat-thread--direct" style="width:760px;height:300px">
+            <div class="chat-group ${role}">
+              <div class="chat-group-messages"><div class="chat-bubble">Saved answer</div></div>
+            </div>
+          </div>`);
+        const before = await getRect(page, ".chat-group");
+        await page.locator(".chat-thread").evaluate((thread) => {
+          thread.classList.remove("chat-thread--direct");
+        });
+        const shared = await getRect(page, ".chat-group");
+        expect(shared.left).toBeCloseTo(before.left, 1);
+        expect(shared.right).toBeCloseTo(before.right, 1);
+        await page.setViewportSize({ width: 390, height: 844 });
+        const mobile = await getRect(page, ".chat-group");
+        await page.locator(".chat-thread").evaluate((thread) => {
+          thread.classList.add("chat-thread--direct");
+        });
+        const mobileDirect = await getRect(page, ".chat-group");
+        expect(mobileDirect.left).toBeCloseTo(mobile.left, 1);
+        expect(mobileDirect.right).toBeCloseTo(mobile.right, 1);
+      });
+    },
+  );
+
   it("does not rebuild the footer layout tree while autosizing the editor", async () => {
     await withBrowserPage(openBrowserPage(1200, 800), async (page) => {
       // Keep the grid/flex chain: a directly sized conversation cannot reproduce
@@ -172,10 +201,68 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
       expect(await fadeContent()).toBe("none");
       expect(await editorCap()).toBeLessThan(tallEditorCap);
       expect(thread.height).toBeGreaterThan(0);
-      expect(thread.bottom).toBeLessThanOrEqual(footer.top);
+      await page.locator(".chat-thread").evaluate((node) => node.scrollTo(0, node.scrollHeight));
+      const lastMessage = await getRect(page, ".chat-thread > p:last-child");
+      expect(lastMessage.bottom).toBeLessThanOrEqual(footer.top);
       expect(footer.bottom).toBeLessThanOrEqual(shortConversation.bottom);
     });
   });
+
+  it.each([390, 1200])(
+    "keeps the editor inset when a %spx-wide pane crosses the short-pane height",
+    async (width) => {
+      // A phone keyboard leaves a conversation pane of roughly 300-340px; the
+      // draft must not jump against the composer frame as that pane crosses 320px.
+      // The keyboard shrinks the app shell, not the layout viewport, so device
+      // media queries stay those of the full screen.
+      await withBrowserPage(openBrowserPage(width, 844), async (page) => {
+        await page.setContent(`<style>${readUiCss()}</style>
+          <section class="chat" style="height:340px">${nest(
+            "chat-workbench > chat-workbench__main > chat-split-container > chat-main > chat-main__conversation-column",
+            conversation(
+              `<div class="chat-thread">${"<p>Earlier message</p>".repeat(20)}</div>${nest(
+                "chat-footer > agent-chat__composer-shell > agent-chat__input agent-chat__input--chat agent-chat__input--mobile-toolbar",
+                `${nest(
+                  "agent-chat__composer-input-row > agent-chat__composer-combobox",
+                  '<textarea placeholder="Message"></textarea>',
+                )}<div class="agent-chat__composer-footer"><button>Send</button></div>`,
+              )}`,
+            ),
+          )}</section>`);
+        const editor = async () => {
+          await waitForLayoutSettled(page, ".chat-main__conversation, .chat-footer");
+          return page.locator("textarea").evaluate((textarea) => {
+            const box = textarea.getBoundingClientRect();
+            const computed = getComputedStyle(textarea);
+            const paddingTop = Number.parseFloat(computed.paddingTop);
+            const paddingBottom = Number.parseFloat(computed.paddingBottom);
+            const surface = textarea.closest(".agent-chat__input")!.getBoundingClientRect();
+            return {
+              pane: textarea.closest(".chat-main__conversation")!.getBoundingClientRect().height,
+              textInset: box.top + paddingTop - surface.top,
+              paddingBottom,
+              lineRoom: textarea.clientHeight - paddingTop - paddingBottom,
+              line: Number.parseFloat(computed.lineHeight),
+              cap: Number.parseFloat(computed.maxHeight),
+            };
+          });
+        };
+        const tall = await editor();
+        expect(tall.pane).toBe(340);
+        await page.locator(".chat").evaluate((chat) => {
+          chat.style.height = "300px";
+        });
+        const short = await editor();
+        expect(short.pane).toBe(300);
+        expect(short.textInset).toBe(tall.textInset);
+        expect(short.paddingBottom).toBe(tall.paddingBottom);
+        expect(short.lineRoom).toBeGreaterThanOrEqual(short.line);
+        // The short pane still caps the editor at one complete line.
+        expect(short.cap).toBeLessThan(tall.cap);
+        expect(short.cap).toBe(short.line + 2 * short.paddingBottom);
+      });
+    },
+  );
 
   it("aligns and separates mobile cards above the composer after Chat styles load", async () => {
     await withBrowserPage(openBrowserPage(390, 844), async (page) => {
@@ -185,31 +272,49 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
           composerFooter(
             "Composer",
             `<div class="chat-footer__context">
-                <div class="chat-inline-approval">Approval</div>
                 <div class="chat-prs"><article class="chat-pr">Pull request</article></div>
                 <div class="session-suggestions">Suggestion</div>
-                <div class="chat-swarm">Parallel task</div>
+                <div class="chat-inline-approval">Approval context</div>
                 <openclaw-plugin-contributions><button data-plugin-action>Plugin action</button></openclaw-plugin-contributions>
               </div>`,
           ),
         )}</section>`);
       const composer = await getRect(page, ".agent-chat__input");
-      for (const selector of [
-        ".chat-prs",
-        ".chat-swarm",
-        ".session-suggestions",
-        ".chat-inline-approval",
-      ]) {
+      for (const selector of [".chat-prs", ".session-suggestions", ".chat-inline-approval"]) {
         const card = await getRect(page, selector);
         expect(card.left, selector).toBeCloseTo(composer.left, 0);
         expect(card.right, selector).toBeCloseTo(composer.right, 0);
       }
-      for (const selector of [".session-suggestions", ".chat-swarm", "[data-plugin-action]"]) {
+      for (const selector of [
+        ".session-suggestions",
+        ".chat-inline-approval",
+        "[data-plugin-action]",
+      ]) {
         const pullRequest = await getRect(page, ".chat-pr");
         const neighbor = await getRect(page, selector);
         expect(neighbor.top, selector).toBeGreaterThan(pullRequest.bottom);
         await page.locator(selector).evaluate((element) => element.remove());
       }
+    });
+  });
+
+  it("reserves the mobile activity strip before its metadata arrives", async () => {
+    await withBrowserPage(openBrowserPage(390, 844), async (page) => {
+      await page.setContent(`<style>${readUiCss()}${readStyleSheet("ui/src/styles/chat/composer-mobile.css")}${readStyleSheet("ui/src/pages/chat/components/chat-activity-pills.css")}</style>
+        <div class="agent-chat__composer-shell" data-mobile-composer="true" style="position:relative;margin-top:200px">
+          <div class="agent-chat__composer-float"><div class="chat-footer__context"></div></div>
+          <div class="agent-chat__input">Composer</div>
+        </div>`);
+      const before = await getRect(page, ".agent-chat__composer-float");
+      await page.locator(".agent-chat__composer-float").evaluate((element) => {
+        element.insertAdjacentHTML(
+          "beforeend",
+          '<div class="chat-activity-pills"><div class="chat-activity-pills__row"><button class="activity-pill">18 working</button><button class="activity-pill">Task progress</button></div></div>',
+        );
+      });
+      const after = await getRect(page, ".agent-chat__composer-float");
+      expect(after.height).toBeGreaterThan(0);
+      expect(after).toEqual(before);
     });
   });
 
@@ -328,12 +433,12 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         );
         await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head>
           <body style="margin:0;height:100vh;overflow:hidden">
-            <div class="shell shell--chat ${label.startsWith("mobile") ? "shell--mobile-nav shell--merged-chat-chrome" : ""}">
+            <div class="shell shell--chat shell--session ${label.startsWith("mobile") ? "shell--mobile-nav shell--merged-chat-chrome" : ""}">
               <main class="content content--chat" style="padding:0"><div class="sidebar-region">
                 ${nest("sidebar-region__header", '<header class="chat-pane__header">Session</header>')}
                 <div class="sidebar-region__primary" data-region="main"><section class="chat">${chat}</section></div>
               </div></main>
-              <openclaw-toast-host data-toast-placement="shell">${nest("app-toast", "Connection notice")}</openclaw-toast-host>
+              <openclaw-toast-host data-toast-placement="shell">${nest("app-toast-lanes > app-toast-lane app-toast-lane--top-center > app-toast", "Connection notice")}</openclaw-toast-host>
             </div>
           </body></html>`);
         await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
@@ -353,11 +458,23 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
               input: rect(".agent-chat__input"),
               fadeContent: fade.content,
               thread: rect(".chat-thread"),
+              content: rect(".chat-thread-inner"),
             };
           });
         expect(await page.locator(".chat-topbar-notices").isVisible()).toBe(false);
         expect(await page.locator(".agent-chat__composer-notices").isVisible()).toBe(false);
         expect(await page.locator(".chat-footer__context").isVisible()).toBe(withPullRequest);
+        const restingGutterPadding = await style(page, ".chat-gutter-stack", "padding-top");
+        await page.locator(".sidebar-region__header").evaluate((header) => {
+          const indicator = document.createElement("span");
+          indicator.className = "chat-pane__connection";
+          header.append(indicator);
+        });
+        expect(await style(page, ".chat-gutter-stack", "padding-top")).toBe("38px");
+        expect(await style(page, ".chat-topbar-notices", "padding-top")).toBe("38px");
+        await page.locator(".chat-pane__connection").evaluate((indicator) => indicator.remove());
+        expect(await style(page, ".chat-gutter-stack", "padding-top")).toBe(restingGutterPadding);
+        expect(await style(page, ".chat-topbar-notices", "padding-top")).toBe("0px");
         const before = await geometry();
         await page.locator(".chat-footer__context").evaluate((node) => {
           const notices = node.querySelector(".agent-chat__composer-notices")!;
@@ -371,14 +488,14 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
             '<openclaw-chat-outbox-recovery style="display:contents"></openclaw-chat-outbox-recovery>',
           );
           notices.innerHTML =
-            '<span class="chat-composer-lit-content" style="display:contents"><openclaw-chat-child-attention style="display:contents"></openclaw-chat-child-attention></span>';
+            '<span class="chat-composer-lit-content" style="display:contents"></span>';
         });
         await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
         expect(await page.locator(".agent-chat__composer-notices").isVisible()).toBe(false);
         expect(await page.locator(".chat-footer__context").isVisible()).toBe(withPullRequest);
         expect(await geometry()).toEqual(before);
         expect(before.fadeContent).toBe("none");
-        expect(before.thread.bottom).toBeLessThanOrEqual(before.footer.top);
+        expect(before.content.bottom).toBeLessThanOrEqual(before.footer.top);
         await setHtml(
           page,
           ".chat-topbar-notices",
@@ -387,7 +504,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         await setHtml(
           page,
           ".agent-chat__composer-notices",
-          '<span class="chat-composer-lit-content" style="display:contents"><div class="chat-composer-neighbor-card chat-error">Model unavailable</div></span>',
+          '<span class="chat-composer-lit-content" style="display:contents"><div class="app-toast chat-error">Model unavailable</div></span>',
         );
         await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
         expect(await page.getByText("Disk space low").isVisible()).toBe(true);
@@ -401,7 +518,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         expect(after.input).toEqual(before.input);
         expect(after.footer.height).toBeGreaterThan(before.footer.height);
         expect(after.thread.height).toBeLessThan(before.thread.height);
-        expect(after.thread.bottom).toBeLessThanOrEqual(after.footer.top);
+        expect(after.content.bottom).toBeLessThanOrEqual(after.footer.top);
         const notices = await getRect(page, ".agent-chat__composer-notices");
         expect(notices.top).toBeGreaterThanOrEqual(after.footer.top);
         expect(notices.bottom).toBeLessThanOrEqual(after.input.top);
@@ -414,16 +531,20 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         ).toBe(false);
         if (withPullRequest) {
           const pullRequest = await getRect(page, ".chat-pr");
-          expect(pullRequest.top).toBeGreaterThanOrEqual(after.thread.bottom);
+          expect(pullRequest.top).toBeGreaterThanOrEqual(after.content.bottom);
           expect(pullRequest.bottom).toBeLessThanOrEqual(notices.top);
           await page.getByRole("link", { name: "PR #42" }).click({ trial: true });
         }
         const position = (selector: string) => style(page, selector, "position");
         expect(await position(".chat-topbar-notices")).toBe("absolute");
         const header = await getBoundingBox(page, ".chat-pane__header");
-        for (const selector of [".chat-topbar-notices", ".chat-gutter-stack", ".app-toast"]) {
+        for (const selector of [
+          ".chat-topbar-notices",
+          ".chat-gutter-stack",
+          ".app-toast-lane .app-toast",
+        ]) {
           const top = (await getBoundingBox(page, selector)).y;
-          if (label.startsWith("mobile") || selector === ".app-toast") {
+          if (label.startsWith("mobile") || selector === ".app-toast-lane .app-toast") {
             expect(top, selector).toBeGreaterThanOrEqual(header.y + header.height);
           } else if (selector === ".chat-topbar-notices") {
             expect(top).toBeCloseTo(header.y + header.height + 8, 0);

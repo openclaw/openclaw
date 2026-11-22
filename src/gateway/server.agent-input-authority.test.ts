@@ -12,7 +12,6 @@ import {
   prepareAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
 import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
-import { captureAgentToolSourceExecutionGuard } from "../agents/agent-tool-source-execution-guard.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -29,18 +28,19 @@ import {
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import * as gatewayWork from "../process/gateway-work-admission.js";
 import { createReplyTurnParticipants } from "../sessions/session-controller.tool-authority.js";
-import type { PreparedAgentRunDispatch } from "./agent-turn/agent-run-admission-types.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import * as gatewayDispatch from "./server-plugin-in-process-dispatch.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
 import { runIndependentCreationInputCase } from "./server.agent-input-authority.create.test-helper.js";
-import { installAuthorityProofGateway } from "./server.agent-runtime-authority-proof.test-support.js";
+import {
+  holdExecution,
+  installAuthorityProofGateway,
+} from "./server.agent-runtime-authority-proof.test-support.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { withPreparedSessionResolve } from "./sessions-resolve.js";
@@ -98,24 +98,12 @@ describe("spawn input ownership transfer", () => {
   const holdInput = async (
     scope: { storePath: string; agentId: string },
     beforeStaging: boolean,
+    signal: AbortSignal,
   ) => {
     const staged = createDeferred();
-    const entered = createDeferred<PreparedAgentRunDispatch>();
     const releaseWriter = createDeferred();
-    const releaseExecution = createDeferred();
     let writer: Promise<unknown> | undefined;
-    let execution: Promise<void> | undefined;
-    let prepared: PreparedAgentRunDispatch | undefined;
-    const module = await import("./agent-turn/agent-run-execution-phase.js");
-    const execute = module.startAgentRunExecution;
-    const executionSpy = vi
-      .spyOn(module, "startAgentRunExecution")
-      .mockImplementationOnce((params) => {
-        prepared = params.prepared;
-        entered.resolve(params.prepared);
-        execution = releaseExecution.promise.then(() => execute(params));
-        return execution;
-      });
+    const execution = await holdExecution(signal);
     const stage = pendingInputs.stageSessionPendingInput;
     const stageSpy = vi
       .spyOn(pendingInputs, "stageSessionPendingInput")
@@ -137,26 +125,18 @@ describe("spawn input ownership transfer", () => {
         return await pending;
       });
     return {
+      ...execution,
       staged,
-      entered,
-      executionSpy,
       releaseWriter,
-      releaseExecution,
-      get prepared() {
-        return prepared;
-      },
-      get execution() {
-        return execution;
-      },
       release(this: void) {
         releaseWriter.resolve();
-        releaseExecution.resolve();
       },
       async close(pending?: Promise<unknown>) {
         this.release();
-        await Promise.allSettled([writer, pending, execution]);
+        await Promise.allSettled([writer, pending, execution.resume()]);
+        // A pending dispatch can enter execution after resume; drain it before restoring the spy.
+        await execution.cleanup().catch(() => {});
         stageSpy.mockRestore();
-        executionSpy.mockRestore();
       },
     };
   };
@@ -214,7 +194,7 @@ describe("spawn input ownership transfer", () => {
         },
         (resolved) => expect(resolved).toMatchObject({ ok: true, key: childKey }),
       );
-      const operator = await captureGatewayOperatorRunAuthority({ client, context });
+      const operator = await prepareGatewayOperatorRunAuthority({ client, context });
       if (!operator) {
         throw new Error("Expected original operator authority");
       }
@@ -392,7 +372,7 @@ describe("spawn input ownership transfer", () => {
           },
         );
       }
-      const operator = await captureGatewayOperatorRunAuthority({ client, context });
+      const operator = await prepareGatewayOperatorRunAuthority({ client, context });
       if (!operator) {
         throw new Error("Expected operator-owned Gateway admission");
       }
@@ -436,12 +416,11 @@ describe("spawn input ownership transfer", () => {
           client,
         );
         sending = pending;
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           prepared.promise,
-          pending.then(() => {
-            throw new Error("Send ended before preparing real custody");
-          }),
-        ]);
+          pending,
+          "Send ended before preparing real custody",
+        );
         const revokedKey = revoked === "requester" ? parentKey : childKey;
         const entry = (await loadSessionEntryAsync(revokedKey, { agentId: "main" })).entry;
         if (!entry) {
@@ -532,7 +511,7 @@ describe("spawn input ownership transfer", () => {
         const transcript = sessionAccessor.loadTranscriptEventsSync(scope);
         admission = prepareAdmission(config, `send-policy-source-${runId}`, "send-policy-proof");
         const admitted = await admission.admit("embedded");
-        held = await holdInput(scope, boundary === "before staging");
+        held = await holdInput(scope, boundary === "before staging", signal);
         signal.addEventListener("abort", held.release, { once: true });
         if (boundary === "before acknowledgement") {
           const dispatch = gatewayDispatch.dispatchGatewayMethodInProcess;
@@ -563,7 +542,7 @@ describe("spawn input ownership transfer", () => {
         );
         if (boundary !== "before staging") {
           expect((await withinTest(pending, signal)).details).toMatchObject({ status: "accepted" });
-          await withinTest(held.entered.promise, signal);
+          await withinTest(held.entered, signal);
           expect((await listSessionPendingInputs(scope)).total).toBe(1);
         }
         withdraw();
@@ -577,19 +556,18 @@ describe("spawn input ownership transfer", () => {
             error: expect.stringContaining("tools.agentToAgent.send"),
           });
           expect(result.details).not.toHaveProperty("sentBeforeError");
-          expect(held.executionSpy).not.toHaveBeenCalled();
+          expect(held.observer).not.toHaveBeenCalled();
           expect(agentCommandMock).not.toHaveBeenCalled();
           expect((await listSessionPendingInputs(scope)).total).toBe(0);
           expect(sessionAccessor.loadTranscriptEventsSync(scope)).toEqual(transcript);
         } else {
-          const prepared = await held.entered.promise;
+          const prepared = await held.entered;
           const recorder = expectDefined(prepared.userTurn.recorder, "accepted input recorder");
           const persisted = await recorder.withPendingInput!(() => recorder.persistApproved());
           expect(persisted?.appended).toBe(true);
           expect(persisted?.message.content).toContain(message);
           expect((await listSessionPendingInputs(scope)).total).toBe(0);
-          held.releaseExecution.resolve();
-          await withinTest(held.execution!, signal);
+          await withinTest(held.resume(), signal);
           expect(agentCommandMock).toHaveBeenCalledOnce();
           expect(agentCommandMock.mock.calls[0]?.[0]).toMatchObject({ sessionKey: targetKey });
         }
@@ -605,118 +583,37 @@ describe("spawn input ownership transfer", () => {
     },
   );
 
-  it.for([
-    "before staging",
-    "after acceptance",
-    "child abort",
-    "before reset",
-    "live reset",
-  ] as const)("keeps input authority at its current owner: %s", async (boundary, { signal }) => {
-    await prepareGatewayReplyRuntimeForTest();
-    const context = getContext();
-    const runId = randomUUID();
-    const parentKey = `agent:main:parent:${runId}`;
-    const childKey = `agent:main:subagent:${runId}`;
-    const sessionId = `child-${runId}`;
-    await sessionAccessor.upsertSessionEntryCore(
-      { agentId: "main", sessionKey: childKey },
-      { sessionId, updatedAt: Date.now() },
-    );
-    const scope = await inputScope(childKey, sessionId);
-    const admission = prepareAdmission(
-      context.getRuntimeConfig(),
-      `parent-${runId}`,
-      "spawn-input-proof",
-    );
-    const admitted = await admission.admit("embedded");
-    const guard = await withGatewayToolCallerIdentity(caller(admitted, parentKey), () =>
-      captureAgentToolSourceExecutionGuard(),
-    );
-    if (boundary === "before reset" || boundary === "live reset") {
-      const before = (await loadSessionEntryAsync(childKey, { agentId: "main" })).entry;
-      let hookCalls = 0;
-      const onReset = (event: import("../hooks/internal-hooks.js").InternalHookEvent) => {
-        if (event.sessionKey !== childKey) {
-          return;
-        }
-        hookCalls++;
-        if (boundary === "before reset") {
-          admission.close();
-        }
-      };
-      registerInternalHook("command:new", onReset);
-      try {
-        const reset = dispatchGatewayMethodInProcess(
-          "agent",
-          { message: "/new", sessionKey: childKey, idempotencyKey: runId },
-          {
-            forceSyntheticClient: true,
-            syntheticScopes: ["operator.admin"],
-            resolveGatewayContext: () => context,
-            sessionMutationCommitGuard: guard,
-          },
-        );
-        if (boundary === "before reset") {
-          await expect(reset).rejects.toThrow("tool invocation authority is no longer active");
-          expect((await loadSessionEntryAsync(childKey, { agentId: "main" })).entry).toEqual(
-            before,
-          );
-        } else {
-          await expect(reset).resolves.toMatchObject({ status: "ok", summary: "completed" });
-          const after = (await loadSessionEntryAsync(childKey, { agentId: "main" })).entry;
-          expect(after?.sessionId).toBe(sessionId);
-          expect(after?.lifecycleRevision).not.toBe(before?.lifecycleRevision);
-        }
-        expect(hookCalls).toBe(1);
-      } finally {
-        unregisterInternalHook("command:new", onReset);
-        admission.close();
-      }
-      return;
-    }
-    const held = await holdInput(scope, boundary === "before staging");
-    signal.addEventListener("abort", held.release, { once: true });
-    let dispatch: Promise<unknown> | undefined;
-    try {
-      dispatch = dispatchGatewayMethodInProcess(
+  it.for(["completed", "aborted"] as const)(
+    "keeps accepted input with its child until %s",
+    async (outcome, { signal }) => {
+      await prepareGatewayReplyRuntimeForTest();
+      const context = getContext();
+      const runId = randomUUID();
+      const childKey = `agent:main:subagent:${runId}`;
+      const sessionId = `child-${runId}`;
+      await sessionAccessor.upsertSessionEntryCore(
+        { agentId: "main", sessionKey: childKey },
+        { sessionId, updatedAt: Date.now() },
+      );
+      const scope = await inputScope(childKey, sessionId);
+      const held = await holdInput(scope, false, signal);
+      signal.addEventListener("abort", held.release, { once: true });
+      const dispatch = dispatchGatewayMethodInProcess(
         "agent",
         { message: "synthetic staged child input", sessionKey: childKey, idempotencyKey: runId },
-        {
-          forceSyntheticClient: true,
-          resolveGatewayContext: () => context,
-          sessionMutationCommitGuard: guard,
-        },
+        { forceSyntheticClient: true, resolveGatewayContext: () => context },
       );
-      const outcome = dispatch.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      await Promise.race([
-        held.staged.promise,
-        outcome.then((value) => {
-          if ("error" in value) {
-            throw value.error;
-          }
-          throw new Error(`Dispatch ended before staging: ${JSON.stringify(value)}`);
-        }),
-      ]);
-      if (boundary === "before staging") {
-        admission.close();
-        held.releaseWriter.resolve();
-        expect(await outcome).toHaveProperty(
-          "error.message",
-          "tool invocation authority is no longer active",
+      try {
+        await awaitGateBeforeSettlement(
+          held.staged.promise,
+          dispatch,
+          "Dispatch ended before staging",
         );
-        expect(held.prepared).toBeUndefined();
-        expect((await listSessionPendingInputs(scope)).total).toBe(0);
-      } else {
-        expect(await outcome).toHaveProperty("value.status", "accepted");
-        const prepared = await held.entered.promise;
+        await expect(dispatch).resolves.toMatchObject({ status: "accepted" });
+        const prepared = await held.entered;
         const recorder = prepared.userTurn.recorder!;
         expect(recorder.getPendingInputMessage?.()).toBeDefined();
-        admission.close();
-        expect(() => guard()).toThrow("tool invocation authority is no longer active");
-        if (boundary === "child abort") {
+        if (outcome === "aborted") {
           prepared.activeRunAbort.controller.abort(new Error("child stopped"));
           expect(() => recorder.withPendingInput!(() => undefined)).toThrow(
             "agent input admission no longer owns this run",
@@ -727,11 +624,10 @@ describe("spawn input ownership transfer", () => {
           expect(persisted?.message.content).toBe("synthetic staged child input");
           expect((await listSessionPendingInputs(scope)).total).toBe(0);
         }
+      } finally {
+        await held.close(dispatch);
+        signal.removeEventListener("abort", held.release);
       }
-    } finally {
-      await held.close(dispatch);
-      admission.close();
-      signal.removeEventListener("abort", held.release);
-    }
-  });
+    },
+  );
 });

@@ -1,7 +1,7 @@
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
+import type { CronAddOptions } from "../service/job-options.types.js";
 import type { CronNotificationIntent } from "../service/notification-intents.js";
-import type { CronAddOptions } from "../service/state.js";
 import type { CronJobCreate, CronJobPatch, CronStoredJob, CronStoreFile } from "../types.js";
 import type { CronRunRecoveryOutcome } from "./run-recovery.types.js";
 import type { CronSchedulerSnapshot } from "./scheduler-actor.types.js";
@@ -12,6 +12,7 @@ type CronJobMutationOptions = Pick<
   | "pluginCommand"
   | "pluginCommandSourceDigest"
   | "streamSandbox"
+  | "streamOperatorSource"
   | "enabledExplicit"
   | "systemOwned"
   | "createdActor"
@@ -24,6 +25,7 @@ type CronJobMutationOptions = Pick<
   | "toolsAllowExecTarget"
 > & {
   scheduledToolPolicy?: CronScheduledToolPolicy | null;
+  bindSourceConversation?: NonNullable<CronStoredJob["sourceConversation"]>;
   captured: boolean;
   runtimeAuthority?: CronRuntimeAuthority;
 };
@@ -31,6 +33,7 @@ type CronJobMutationOptions = Pick<
 export type CronJobMutation =
   | {
       kind: "add";
+      createdAtMs?: number;
       input: CronJobCreate;
       matchingJobIds?: string[];
       options: CronJobMutationOptions;

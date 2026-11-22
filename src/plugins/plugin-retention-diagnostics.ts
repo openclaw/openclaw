@@ -49,7 +49,7 @@ export class PluginReferenceDiagnostics {
     parentToken: object | undefined,
     kind: PluginRetainedReference["kind"],
     reason: PluginRetentionReason,
-    owner = getPluginExecutionFrame()?.retentionOwner,
+    owner?: PluginRetentionOwner,
   ): PluginRetainedReference {
     const parent = parentToken && this.references.get(parentToken);
     const reference: PluginRetainedReference = {
@@ -57,7 +57,11 @@ export class PluginReferenceDiagnostics {
       kind,
       reason,
       acquiredAtMs: Date.now(),
-      owner: copyOwner(owner) ?? parent?.owner ?? "unknown",
+      // Frame owners were already bounded and frozen at scope entry.
+      owner:
+        (owner ? copyOwner(owner) : getPluginExecutionFrame()?.retentionOwner) ??
+        parent?.owner ??
+        "unknown",
       ...(parent ? { parentReferenceId: parent.referenceId } : {}),
       cleanupState: kind === "cleanup" ? "pending" : "active",
     };

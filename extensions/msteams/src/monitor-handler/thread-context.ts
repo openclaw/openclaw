@@ -1,7 +1,7 @@
 import { resolveAllowlistMatchSimple } from "openclaw/plugin-sdk/allow-from";
 import { resolveInboundSupplementalSenderAllowed } from "openclaw/plugin-sdk/channel-inbound";
 import { filterSupplementalContextItems } from "openclaw/plugin-sdk/context-visibility-runtime";
-import type { OpenClawConfig } from "../../runtime-api.js";
+import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { formatUnknownError } from "../errors.js";
 import {
   buildThreadContext,
@@ -18,81 +18,17 @@ import {
 } from "../request-timeout.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
-import { resolveTeamGroupId } from "../team-identity.js";
 import {
   fetchParentMessageCached,
   formatParentContextEvent,
   markParentContextInjected,
   shouldInjectParentContext,
 } from "../thread-parent-context.js";
-import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
-
-export function prepareMSTeamsThreadRouting(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  context: MSTeamsTurnContext;
-  isDirectMessage: boolean;
-  isChannel: boolean;
-  senderId: string;
-  conversationId: string;
-  conversationMessageId?: string;
-  teamId?: string;
-  log: MSTeamsMessageHandlerDeps["log"];
-}) {
-  const core = getMSTeamsRuntime();
-  const route = core.channel.routing.resolveAgentRoute({
-    cfg: params.cfg,
-    channel: "msteams",
-    accountId: params.accountId,
-    teamId: params.teamId,
-    peer: {
-      kind: params.isDirectMessage ? "direct" : params.isChannel ? "channel" : "group",
-      id: params.isDirectMessage ? params.senderId : params.conversationId,
-    },
-  });
-  route.sessionKey = resolveMSTeamsRouteSessionKey({
-    baseSessionKey: route.sessionKey,
-    isChannel: params.isChannel,
-    conversationMessageId: params.conversationMessageId,
-    replyToId: params.context.activity.replyToId,
-  });
-
-  let teamAadGroupId = params.context.activity.channelData?.team?.aadGroupId?.trim() || undefined;
-  const conversationTeamId = params.isChannel ? params.teamId : undefined;
-  let teamGroupIdPromise: Promise<string | undefined> | undefined;
-  // The first caller's deadline bounds the shared lookup; later callers reuse its result.
-  const resolveTeamAadGroupId = async (
-    deadline: MSTeamsRequestDeadline,
-  ): Promise<string | undefined> => {
-    if (!conversationTeamId) {
-      return undefined;
-    }
-    teamGroupIdPromise ??= resolveTeamGroupId({
-      conversationTeamId,
-      aadGroupId: teamAadGroupId,
-      getTeamDetails: params.context.getTeamDetails,
-      deadline,
-    }).catch((err: unknown) => {
-      params.log.debug?.("failed to resolve Teams AAD group ID", {
-        teamId: conversationTeamId,
-        error: formatUnknownError(err),
-      });
-      return undefined;
-    });
-    teamAadGroupId = await teamGroupIdPromise;
-    return teamAadGroupId;
-  };
-
-  return {
-    route,
-    threadRootId: params.conversationMessageId ?? params.context.activity.replyToId,
-    resolveTeamAadGroupId,
-    getTeamAadGroupId: () => teamAadGroupId,
-  };
-}
 
 export async function resolveMSTeamsThreadContext(params: {
-  routing: ReturnType<typeof prepareMSTeamsThreadRouting>;
+  route: ResolvedAgentRoute;
+  threadRootId?: string;
+  resolveTeamAadGroupId: (deadline: MSTeamsRequestDeadline) => Promise<string | undefined>;
   context: MSTeamsTurnContext;
   tokenProvider: MSTeamsMessageHandlerDeps["tokenProvider"];
   quoteInfo: ReturnType<typeof extractMSTeamsQuoteInfo>;
@@ -107,11 +43,11 @@ export async function resolveMSTeamsThreadContext(params: {
 }) {
   const core = getMSTeamsRuntime();
   const activity = params.context.activity;
-  const { route } = params.routing;
+  const { route } = params;
   // Start the enrichment budget after media resolution so slow attachment
   // transfers do not starve quote and thread lookups.
   const deadline = createMSTeamsInboundEnrichmentDeadline();
-  const teamAadGroupId = await params.routing.resolveTeamAadGroupId(deadline);
+  const teamAadGroupId = await params.resolveTeamAadGroupId(deadline);
   let quoteBodyFull: string | undefined;
   let quoteSenderId: string | undefined;
   let quoteSenderName: string | undefined;
@@ -138,7 +74,7 @@ export async function resolveMSTeamsThreadContext(params: {
 
   let threadContext: ReturnType<typeof buildThreadContext> = [];
   // Use the same root as session routing; Teams can omit replyToId on replies.
-  const threadParentId = params.routing.threadRootId;
+  const threadParentId = params.threadRootId;
   if (threadParentId && threadParentId !== activity.id && params.isChannel && teamAadGroupId) {
     try {
       const graphToken = await withMSTeamsRequestDeadline({

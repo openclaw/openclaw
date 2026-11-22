@@ -3,6 +3,7 @@ import type {
   PreparedAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import { resolvePreparedSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { resolveStoredSessionPermissionPolicy } from "../../agents/tool-fs-policy.js";
@@ -27,45 +28,11 @@ type RequesterAuthorization = {
   assertOwnerCurrent?: () => void;
 };
 
-export type NativeSubagentRequesterState = {
-  cfg: OpenClawConfig;
-  sessionAgentId: string;
-  sessionKey: string | undefined;
-  entry: SessionEntry | undefined;
-  runId?: string;
-  operatorAuthority?: AdmittedRunOperatorAuthority;
-  authorizeRequester: () => Promise<RequesterAuthorization>;
-  resolveToolAuthority: (authorization: RequesterAuthorization) => ReplyToolAuthorityOverlay;
-  messageChannel?: string;
-  messageTo?: string;
-  getAbortSignal: () => AbortSignal | undefined;
-  assertCurrent: () => void;
-  /** Ingress owns turn adoption, recorder commitment and exact receipt validation. */
-  commitTurn: (assertCurrent: () => void) => Promise<boolean>;
-  /** Cron supplies genuine schedule admission; live ingress retains its existing channel producer. */
-  prepareAdmission?: (params: {
-    cfg: OpenClawConfig;
-    runId: string;
-    agentId: string;
-    operatorAuthority: AdmittedRunOperatorAuthority;
-    assertSourceCurrent: () => void;
-    onAdmitted: NonNullable<Parameters<typeof prepareChannelRunAdmission>[0]["onAdmitted"]>;
-  }) => PreparedAgentRunAdmission;
-  /** Only the live external-command owner sets this; scheduled runs cannot recursively schedule. */
-  enableScheduledTurns?: boolean;
-  ingress?: Pick<
-    Parameters<typeof prepareChannelRunAdmission>[0],
-    "ingressKind" | "boundary" | "evidence" | "gatewayLocalUserIngress"
-  >;
-  /** Undefined retains the legacy lazy hook path. Commands reauthorize each run. */
-  commandIngressEligible?: boolean;
-};
-
 /** One per-run gate for live and requester-admitted scheduled command ingress.
  * Host metadata/provenance and current authority are explicit inputs; prepare verifies
  * both native tools and commits the ingress-owned user turn. No fake message is needed.
  */
-export async function resolveCommandNativeSubagentEligibility(params: {
+async function resolveCommandNativeSubagentEligibility(params: {
   command: NativeSubagentRuntimeGuard["command"];
   ingressEligible: boolean;
   assertCurrent: () => void;
@@ -102,7 +69,39 @@ export async function resolveCommandNativeSubagentEligibility(params: {
 
 /** Ingress owners supply real authority, lineage and committed input, not plugin arguments. */
 export async function withRequesterNativeSubagents<T>(
-  state: NativeSubagentRequesterState,
+  state: {
+    cfg: OpenClawConfig;
+    sessionAgentId: string;
+    sessionKey: string | undefined;
+    entry: SessionEntry | undefined;
+    runId?: string;
+    operatorAuthority?: AdmittedRunOperatorAuthority;
+    authorizeRequester: () => Promise<RequesterAuthorization>;
+    resolveToolAuthority: (authorization: RequesterAuthorization) => ReplyToolAuthorityOverlay;
+    messageChannel?: string;
+    messageTo?: string;
+    getAbortSignal: () => AbortSignal | undefined;
+    assertCurrent: () => void;
+    /** Ingress owns turn adoption, recorder commitment and exact receipt validation. */
+    commitTurn: (assertCurrent: () => void) => Promise<boolean>;
+    /** Cron supplies genuine schedule admission; live ingress retains its existing channel producer. */
+    prepareAdmission?: (params: {
+      cfg: OpenClawConfig;
+      runId: string;
+      agentId: string;
+      operatorAuthority: AdmittedRunOperatorAuthority;
+      assertSourceCurrent: () => void;
+      onAdmitted: NonNullable<Parameters<typeof prepareChannelRunAdmission>[0]["onAdmitted"]>;
+    }) => PreparedAgentRunAdmission;
+    /** Only the live external-command owner sets this; scheduled runs cannot recursively schedule. */
+    enableScheduledTurns?: boolean;
+    ingress?: Pick<
+      Parameters<typeof prepareChannelRunAdmission>[0],
+      "ingressKind" | "boundary" | "evidence" | "gatewayLocalUserIngress"
+    >;
+    /** Undefined retains the legacy lazy hook path. Commands reauthorize each run. */
+    commandIngressEligible?: boolean;
+  },
   run: (create: NativeSubagentCommandFactory) => Promise<T>,
 ): Promise<T> {
   let admission: PreparedAgentRunAdmission | undefined;
@@ -137,6 +136,9 @@ export async function withRequesterNativeSubagents<T>(
           entry.spawnedWorkspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
         const overlay = state.resolveToolAuthority(owner);
         const model = resolveSessionModelRef(cfg, entry, sessionAgentId);
+        if (!model) {
+          throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+        }
         const options = {
           ...overlay,
           config: cfg,

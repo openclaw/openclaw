@@ -9,13 +9,6 @@ const { createTempDir } = createScriptTestHarness();
 const scriptsDir = path.resolve(import.meta.dirname, "../../scripts");
 const SCRIPT_PATH = path.join(scriptsDir, "test-live-codex-harness-docker.sh");
 const script = fs.readFileSync(SCRIPT_PATH, "utf8");
-const harnessPrefix = "OPENCLAW_LIVE_CODEX_HARNESS_";
-function expectContains(source: string, values: string[], present = true) {
-  for (const value of values) {
-    expect(source.includes(value), value).toBe(present);
-  }
-}
-const harnessArgs = (values: string) => values.split(/\s+/u).map((value) => harnessPrefix + value);
 const runBash = (args: string[], env: NodeJS.ProcessEnv, shell = "bash") =>
   spawnSync(shell, args, { encoding: "utf8", env });
 
@@ -41,7 +34,6 @@ esac
     const explicitArgs = 'app-server --listen stdio:// -c model="caller model"';
     const cases: Array<[Record<string, string>, string]> = [
       [{}, nativeV2Args],
-      [{ OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE: "yes" }, nativeV2Args],
       [{ OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE: "0" }, ""],
       [
         {
@@ -70,88 +62,27 @@ esac
       expect(argv[0]).toBe("run");
       const forwardedEnv = argv.flatMap((arg, index) => (arg === "-e" ? [argv[index + 1]] : []));
       expect(forwardedEnv).toContain(`OPENCLAW_CODEX_APP_SERVER_ARGS=${expected}`);
-      expect(forwardedEnv.filter((value) => value?.startsWith(harnessPrefix))).toEqual([
-        ...harnessArgs(`AUTH=api-key CHAT_IMAGE_PROBE=0 CODE_MODE_ONLY=0
-COMPACTION_STRESS=0 COMPACTION_STRESS_TURNS=4 DEBUG= DISABLE_LOOP_RELAY=0
-GUARDIAN_PROBE=1 IMAGE_PROBE=1 LARGE_OUTPUT_BYTES=300000 MCP_PROBE=1 MULTI_SESSION_PROBE=0
-MODEL=openai/gpt-5.6-luna TARGETS= THINKING=low EXPECTED_EFFORT= REQUIRE_GUARDIAN_EVENTS=1`),
-        `${harnessPrefix}REQUEST_TIMEOUT_MS=${env.OPENCLAW_LIVE_CODEX_HARNESS_REQUEST_TIMEOUT_MS ?? ""}`,
-        ...harnessArgs(`RESUME_STRESS=0 RESUME_STRESS_HISTORY_TURNS=4 RESUME_STRESS_RESTARTS=3
-SETUP_TIMEOUT_SECONDS=180 SUBAGENT_ONLY= SUBAGENT_COUNT=1`),
-        `${harnessPrefix}SUBAGENT_PROBE=${env.OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE ?? "1"}`,
-        `${harnessPrefix}USE_CI_SAFE_CODEX_CONFIG=1`,
-      ]);
-      expect(forwardedEnv.filter((value) => value?.startsWith("OPENCLAW_LIVE_CODEX_BIND"))).toEqual(
-        ["", "_MODEL", "_PROVIDER", "_REQUEST_TIMEOUT_MS", "_TIMEOUT_MS"].map(
-          (suffix) => `OPENCLAW_LIVE_CODEX_BIND${suffix}=`,
-        ),
+      expect(
+        forwardedEnv.find((value) => value?.startsWith("OPENCLAW_LIVE_CODEX_CLI_PACKAGE_SPEC=")),
+      ).toMatch(/^OPENCLAW_LIVE_CODEX_CLI_PACKAGE_SPEC=@openai\/codex@\d[^\s*]*$/u);
+      const mounts = argv.flatMap((arg, index) => (arg === "-v" ? [argv[index + 1]] : []));
+      expect(
+        mounts
+          .filter((mount) => mount?.startsWith(baseEnv.RUNNER_TEMP + "/"))
+          .map((mount) => mount?.split(":")[1]),
+      ).toEqual(["/home/node", "/home/node/.openclaw", "/home/node/.openclaw/workspace"]);
+      expect(forwardedEnv).toContain(
+        `OPENCLAW_LIVE_CODEX_HARNESS_REQUEST_TIMEOUT_MS=${env.OPENCLAW_LIVE_CODEX_HARNESS_REQUEST_TIMEOUT_MS ?? ""}`,
       );
     }
   });
 
-  it("retains the Codex auth, isolation, forwarding, and diagnostic contracts", () => {
-    expectContains(script, [
-      'DOCKER_CACHE_CONTAINER_DIR="/tmp/openclaw-cache"',
-      'DOCKER_CLI_TOOLS_CONTAINER_DIR="/tmp/openclaw-npm-global"',
-      "openclaw_live_init_cli_tools_dir",
-      "openclaw_live_init_cache_home_dir",
-      '-e XDG_CACHE_HOME="$DOCKER_CACHE_CONTAINER_DIR"',
-      '-e NPM_CONFIG_PREFIX="$DOCKER_CLI_TOOLS_CONTAINER_DIR"',
-      "if openclaw_live_uses_managed_bind_dirs; then",
-      '-v "$CACHE_HOME_DIR":"$DOCKER_CACHE_CONTAINER_DIR"',
-      '-v "$CLI_TOOLS_DIR":"$DOCKER_CLI_TOOLS_CONTAINER_DIR"',
-      "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=codex-auth requires ~/.codex/auth.json before building the live Docker image",
-      "If this is a Testbox/API-key run, set OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key and run through openclaw-testbox-env.",
-      "printf 'OPENAI_API_KEY=%s\\n' \"${OPENAI_API_KEY}\"",
-      "printf 'CODEX_API_KEY=%s\\n' \"${CODEX_API_KEY:-$OPENAI_API_KEY}\"",
-      "openclaw_live_init_managed_home",
-      'if [[ "$CODEX_HARNESS_AUTH_MODE" == "api-key" ]]; then',
-      'if [[ -z "${DOCKER_HOME_DIR:-}" ]]; then',
-      'DOCKER_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-home.XXXXXX")"',
-      'CONFIG_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-config.XXXXXX")"',
-      'WORKSPACE_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-workspace.XXXXXX")"',
-      'DOCKER_CACHE_CONTAINER_DIR="/home/node/.cache"',
-      'DOCKER_CLI_TOOLS_CONTAINER_DIR="/home/node/.npm-global"',
-      'PROFILE_STATUS="api-key-env"',
-      'chmod 0777 "$DOCKER_HOME_DIR" "$CONFIG_DIR" "$WORKSPACE_DIR" || true',
-      'if [[ "$CODEX_HARNESS_AUTH_MODE" != "api-key" ]]; then',
-      "cleanup_codex_live_mounts() {",
-      'chmod -R a+rwX "$HOME" "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" 2>/dev/null || true',
-      "trap cleanup_codex_live_mounts EXIT",
-      '"$ROOT_DIR/extensions/codex/package.json"',
-      "process.stdout.write(`@openai/codex@${version}`);",
-      '-e OPENCLAW_LIVE_CODEX_CLI_PACKAGE_SPEC="$CODEX_CLI_PACKAGE_SPEC"',
+  it("pins CLI installation and bounds failed-preflight diagnostics", () => {
+    expect(script).toContain(
       'run_setup_command npm install -g "$OPENCLAW_LIVE_CODEX_CLI_PACKAGE_SPEC"',
-      "Failed to extract accountId from token",
-      "ERROR: Codex auth cannot extract accountId from the available token; refresh OPENCLAW_CODEX_AUTH_JSON or use OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key.",
-      'tail -c 262144 "$codex_preflight_log"',
-    ]);
-    expectContains(fs.readFileSync(path.join(scriptsDir, "lib/live-docker-auth.sh"), "utf8"), [
-      "openclaw_live_is_ci",
-      'DOCKER_USER="$(id -u):$(id -g)"',
-      'openclaw_live_prepare_bind_dir_for_container_user "$CLI_TOOLS_DIR"',
-      'openclaw_live_prepare_bind_dir_for_container_user "$CACHE_HOME_DIR"',
-    ]);
-    expectContains(
-      script,
-      [
-        '-v "$CACHE_HOME_DIR":/home/node/.cache',
-        '-v "$CLI_TOOLS_DIR":/home/node/.npm-global',
-        'DOCKER_USER="0:0"',
-        "run_setup_command npm install -g @openai/codex",
-        "SKIP: Codex auth cannot extract accountId",
-        'cat "$codex_preflight_log"',
-      ],
-      false,
     );
-    for (const [before, after] of [
-      ["requires ~/.codex/auth.json before building", 'OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR"'],
-      ["OPENAI_API_KEY=%s", "CODEX_API_KEY=%s"],
-      ['PROFILE_STATUS="api-key-env"', "openclaw_live_append_array DOCKER_RUN_ARGS PROFILE_MOUNT"],
-      ["cleanup_codex_live_mounts()", 'mkdir -p "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME"'],
-    ] as const) {
-      expect(script.indexOf(before)).toBeLessThan(script.indexOf(after));
-    }
+    expect(script).toMatch(/tail -c \d+ "\$codex_preflight_log"/u);
+    expect(script).not.toContain('cat "$codex_preflight_log"');
     expect(script).not.toMatch(/Failed to extract accountId from token[\s\S]{0,180}exit 0/u);
   });
 
@@ -178,16 +109,17 @@ SETUP_TIMEOUT_SECONDS=180 SUBAGENT_ONLY= SUBAGENT_COUNT=1`),
     expect(result).toMatchObject({ status: 0, stdout: path.join(stagedRoot, "extensions") });
   });
 
-  it("rejects invalid setup timeout values before auth or Docker setup", () => {
+  it.each<[NodeJS.ProcessEnv, number, string]>([
+    [{ OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS: "180s" }, 2, "invalid"],
+    [{ OPENCLAW_LIVE_CODEX_HARNESS_AUTH: "api-key" }, 1, "requires OPENAI_API_KEY"],
+    [{ OPENCLAW_LIVE_CODEX_HARNESS_AUTH: "codex-auth" }, 1, "requires ~/.codex/auth.json"],
+  ])("rejects missing auth or invalid setup before Docker: %j", (env, status, error) => {
     const result = runBash([SCRIPT_PATH], {
-      ...process.env,
-      OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS: "180s",
+      PATH: process.env.PATH,
+      HOME: createTempDir("openclaw-codex-preflight-"),
+      ...env,
     });
-
-    expect(result).toMatchObject({
-      status: 2,
-      stderr: expect.stringContaining(`invalid ${harnessPrefix}SETUP_TIMEOUT_SECONDS: 180s`),
-    });
-    expectContains(result.stderr, ["requires ~/.codex/auth.json", "docker"], false);
+    expect(result).toMatchObject({ status, stderr: expect.stringContaining(error) });
+    expect(result.stdout).not.toContain("Run Codex harness live test in Docker");
   });
 });

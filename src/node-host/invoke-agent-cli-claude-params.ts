@@ -65,7 +65,7 @@ const ENV_ALLOWLIST = new Set([
   "NO_COLOR",
   "TERM",
 ]);
-const CLEAR_ENV_ALLOWLIST = new Set([
+export const CLAUDE_NODE_CLEAR_ENV = new Set([
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_API_KEY_OLD",
   "ANTHROPIC_API_TOKEN",
@@ -114,6 +114,7 @@ const ALLOWED_PARAMS = new Set([
   "cwd",
   "env",
   "clearEnv",
+  "nativeAuthOnly",
   "systemPrompt",
   "agentId",
   "sessionKey",
@@ -220,6 +221,9 @@ export async function decodeClaudeCliNodeRunParams(raw?: string | null) {
   if (value.skillRuntime !== undefined && value.skillRuntime !== true) {
     throw new Error("INVALID_REQUEST: skillRuntime must be true when supplied");
   }
+  if (value.nativeAuthOnly !== undefined && value.nativeAuthOnly !== true) {
+    throw new Error("INVALID_REQUEST: nativeAuthOnly must be true when supplied");
+  }
   const stdin = optionalBoundedString(value.stdin, "stdin", MAX_REQUEST_BYTES);
   const systemPrompt = optionalBoundedString(value.systemPrompt, "systemPrompt", MAX_REQUEST_BYTES);
   const agentId = optionalBoundedString(value.agentId, "agentId", MAX_ARG_BYTES);
@@ -262,13 +266,13 @@ export async function decodeClaudeCliNodeRunParams(raw?: string | null) {
   }
   let clearEnv: string[] | undefined;
   if (value.clearEnv !== undefined) {
-    if (!Array.isArray(value.clearEnv) || value.clearEnv.length > CLEAR_ENV_ALLOWLIST.size) {
+    if (!Array.isArray(value.clearEnv) || value.clearEnv.length > CLAUDE_NODE_CLEAR_ENV.size) {
       throw new Error("INVALID_REQUEST: clearEnv must be a bounded array");
     }
     clearEnv = [];
     for (const candidate of value.clearEnv) {
       const key = requireBoundedString(candidate, "clearEnv entry", MAX_ARG_BYTES);
-      if (!CLEAR_ENV_ALLOWLIST.has(key)) {
+      if (!CLAUDE_NODE_CLEAR_ENV.has(key)) {
         throw new Error(`INVALID_REQUEST: clearEnv key is not allowed: ${key}`);
       }
       if (!clearEnv.includes(key)) {
@@ -279,6 +283,7 @@ export async function decodeClaudeCliNodeRunParams(raw?: string | null) {
   return {
     argv,
     ...(value.skillRuntime === true ? { skillRuntime: true as const } : {}),
+    ...(value.nativeAuthOnly === true ? { nativeAuthOnly: true as const } : {}),
     ...(stdin !== undefined ? { stdin } : {}),
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
     ...(agentId ? { agentId } : {}),

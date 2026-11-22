@@ -2,14 +2,15 @@ import { addAbortListener } from "node:events";
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS } from "./attempt-timeouts.js";
+import { readCodexNativeModelContext } from "./native-model-context.js";
 import { readCodexRetainedBackgroundCommands } from "./native-process-authority.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 
 export async function beginCodexAttemptSettlement(
-  resources: CodexAttemptResources,
+  resources: StartedCodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   notifications: CodexAttemptNotificationController,
   activeTurn: CodexAttemptActiveTurn,
@@ -24,6 +25,16 @@ export async function beginCodexAttemptSettlement(
   const drainGraceElapsed = createDeferred<void>();
   let settlementPhase: "active" | "expired" | "closed" = "active";
   let drainGraceTimer: ReturnType<typeof setTimeout> | undefined;
+  // Optional context reporting never gates settlement: it runs beside the drain, lands
+  // only while settlement is active (before the result is built), and is abandoned after.
+  const nativeModelContextRead = new AbortController();
+  if (!runAbortController.signal.aborted) {
+    void readCodexNativeModelContext(resources, nativeModelContextRead.signal).then((context) => {
+      if (context && settlementPhase === "active") {
+        resources.prompt.setNativeModelContext(context);
+      }
+    });
+  }
   const beginDrainGrace = () => {
     if (settlementPhase !== "active" || drainGraceTimer) {
       return;
@@ -33,6 +44,7 @@ export async function beginCodexAttemptSettlement(
       // The cutoff also closes optional native binding/subscription admission.
       // Queuing fresh row authority after this point would rejoin the blocked writer.
       resourceState.nativeSettlementExpired = true;
+      nativeModelContextRead.abort();
       drainGraceElapsed.resolve();
     }, TURN_FINALIZE_DRAIN_ABORT_GRACE_MS);
     drainGraceTimer.unref?.();
@@ -51,6 +63,7 @@ export async function beginCodexAttemptSettlement(
       return;
     }
     settlementPhase = "closed";
+    nativeModelContextRead.abort();
     abortListener[Symbol.dispose]();
     clearTimeout(drainGraceTimer);
     deadlines.dispose();

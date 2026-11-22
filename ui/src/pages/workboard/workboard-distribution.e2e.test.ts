@@ -94,7 +94,10 @@ suite.define(() => {
       const response = await page.goto(url.href);
       expect(response?.status()).toBe(200);
       expect(errors).toEqual([]);
-      const confirmation = await waitForConfirmModal(page, ".gateway-switch");
+      const confirmation = await waitForConfirmModal(
+        page,
+        page.locator("openclaw-modal-dialog").filter({ has: page.locator(".gateway-switch") }),
+      );
       await confirmation
         .getByRole("button", { name: "Switch to gateway.example", exact: true })
         .click();

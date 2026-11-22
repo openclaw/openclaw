@@ -16,6 +16,7 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import { leaseMcpAppModelContextForSessionTurn } from "../../agents/mcp-ui-resource.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
 import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
+import { prepareChildSessionPublication } from "../../channels/message-access/child-session-publication.js";
 import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -32,7 +33,10 @@ import { bindAgentRunTerminalWriteSettlement } from "../../infra/agent-run-termi
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
-import { progressCardRefreshRunProjection } from "../../sessions/input-provenance.js";
+import {
+  isCronExecutionInputProvenance,
+  progressCardRefreshRunProjection,
+} from "../../sessions/input-provenance.js";
 import { markReplyOperationExecutionStarted } from "../../sessions/session-controller.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { notifyPreparedAgentRunStart } from "../agent-run-start.js";
@@ -155,6 +159,10 @@ async function executeAgentTurnInternalLoop(
       verboseLevel: params.resolvedVerboseLevel,
       isControlUiVisible: shouldSurfaceToControlUi,
       ...progressCardRefreshRunProjection(params.followupRun.run.inputProvenance),
+      // Scheduled checks must not replace foreground status; their authored results still publish.
+      ...(isCronExecutionInputProvenance(params.followupRun.run.inputProvenance)
+        ? { projectSessionActive: false, projectSessionLifecycle: false }
+        : {}),
       completionSource: params.completionSource,
       sessionEventDelivery: resolveReplySessionEventDelivery(params.opts, params.followupRun.run),
     });
@@ -175,7 +183,6 @@ async function executeAgentTurnInternalLoop(
   let currentTurnImages: CurrentTurnImages;
   let modelPatch: Awaited<ReturnType<typeof createAgentPatchedSessionModelRunGuard>>;
   try {
-    await prepareReplySubagentContinuation(params, runId, runtimeConfig, preparedRunAdmission);
     replyMediaContext =
       params.replyMediaContext ??
       agentTurnTiming.measureSync("reply_media_context", () =>
@@ -310,6 +317,10 @@ async function executeAgentTurnInternalLoop(
       ) {
         params.mcpAppContextLease?.commit();
       }
+      if (info.phase === "before_agent_reply") {
+        // A dispatched hook can accept external work even when it declines the reply.
+        params.followupRun.run.internalEventExecution?.onStarted(runId);
+      }
       const isUserVisibleExecutionActivity =
         info.phase === "turn_accepted" ||
         info.phase === "process_spawned" ||
@@ -372,8 +383,15 @@ async function executeAgentTurnInternalLoop(
       storePath: params.storePath,
     });
 
+  let subagentContinuationPrepared = false;
   while (true) {
     try {
+      // Settle a memoized preflight refusal here, before continuation or model work.
+      await prepareChildSessionPublication(params.followupRun.run);
+      if (!subagentContinuationPrepared) {
+        await prepareReplySubagentContinuation(params, runId, runtimeConfig, preparedRunAdmission);
+        subagentContinuationPrepared = true;
+      }
       const presentation = createAgentTurnPresentation({
         turn: params,
         replyMediaContext,
@@ -445,11 +463,12 @@ async function executeAgentTurnInternalLoop(
       }
     }
     if (cycle.kind === "aborted") {
-      return cycle;
+      return { ...cycle, sessionWriter: fallbackCycleState.sessionWriter };
     }
     if (cycle.kind === "final") {
       return {
         ...cycle,
+        sessionWriter: fallbackCycleState.sessionWriter,
         resolved: {
           provider: fallbackCycleState.attemptedRuntimeProvider,
           model: fallbackCycleState.attemptedRuntimeModel,
@@ -569,7 +588,7 @@ async function executeAgentTurnOutcome(
   // Keep committed facts outside cleanup so a restart cannot erase them.
   const compaction: AgentTurnCompaction = { count: 0, durable: [] };
   const completedCompaction = () =>
-    compaction.count > 0
+    compaction.count > 0 || compaction.durable.length > 0
       ? { compaction: { count: compaction.count, durable: [...compaction.durable] } }
       : {};
   let terminalOutcomeCommitted = false;
@@ -585,7 +604,7 @@ async function executeAgentTurnOutcome(
   try {
     const internal = await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
       try {
-        const execution = prepareReplyTurnExecution(executionParams, runId);
+        const execution = await prepareReplyTurnExecution(executionParams, runId);
         let scheduledInference: CronRunInference | undefined;
         let workspaceLease: CronWorkspaceLease | undefined;
         try {
@@ -608,9 +627,11 @@ async function executeAgentTurnOutcome(
             run.workspaceDir = workspace.workspaceDir;
             run.cwd = workspace.cwd;
           }
-          const binding = run.scheduledAutomation?.job.inferenceBinding;
-          if (binding) {
+          const scheduledJob = run.scheduledAutomation?.job;
+          const binding = scheduledJob?.inferenceBinding;
+          if (scheduledJob && binding) {
             scheduledInference = await prepareCronRunInference({
+              job: scheduledJob,
               binding,
               cfg: selectLiveRuntimeConfig(executionParams.followupRun.run.config),
               agentDir: executionParams.followupRun.run.agentDir,
@@ -649,12 +670,21 @@ async function executeAgentTurnOutcome(
       internal.kind !== "aborted" &&
       resolveReplyOperationAbortReason(executionParams.replyOperation);
     if (abortReason) {
-      return { runId, outcome: { kind: "aborted", reason: abortReason, ...completedCompaction() } };
+      return {
+        runId,
+        outcome: {
+          kind: "aborted",
+          reason: abortReason,
+          sessionWriter: internal.sessionWriter,
+          ...completedCompaction(),
+        },
+      };
     }
     const outcome: AgentTurnExecutionResult["outcome"] =
       internal.kind === "final"
         ? {
             kind: "rejected",
+            sessionWriter: internal.sessionWriter,
             payload: internal.payload,
             resolved: internal.resolved,
             ...(internal.postCompactionModelFailure

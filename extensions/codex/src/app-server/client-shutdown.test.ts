@@ -5,6 +5,11 @@ import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
+import {
+  getOrCreateSharedClientEntry,
+  getSharedCodexAppServerClientState,
+} from "./shared-client-lifecycle.js";
+import { clearSharedCodexAppServerClientIfCurrentAndUnclaimed } from "./shared-client.js";
 import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
 import * as processSnapshot from "./transport-process-snapshot.js";
 
@@ -13,18 +18,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
-});
-
-it("waits for a delayed EOF exit without forcing the app-server", async () => {
-  vi.useFakeTimers();
-  const harness = createClientHarness({ autoEmitExit: false });
-  Object.assign(harness.process, { pid: process.pid });
-  const closing = harness.client.closeAndWait({ forceKillDelayMs: 1_000 });
-  await vi.advanceTimersByTimeAsync(500);
-  expect(harness.process.kill).not.toHaveBeenCalled();
-  harness.emitExit();
-  await expect(closing).resolves.toEqual({ exited: true, cleanup: "closed" });
-  expect(vi.getTimerCount()).toBe(0);
 });
 
 describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
@@ -62,14 +55,37 @@ describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
       cleanup: cleanup === "confirmed" ? "terminated" : "uncertain",
     });
     expect(kill).toHaveBeenCalledWith(-root.pid, "SIGKILL");
-    if (cleanup === "confirmed") {
-      expect(warning).toHaveBeenCalledWith(
-        "Codex app-server required forced shutdown; process cleanup confirmed",
-      );
-    } else {
-      expect(warning).not.toHaveBeenCalled();
-    }
+    expect(warning).toHaveBeenCalledTimes(cleanup === "confirmed" ? 1 : 0);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("preserves the requested grace when shared retirement starts shutdown", async () => {
+    vi.useFakeTimers();
+    const harness = createClientHarness({ autoEmitExit: false });
+    Object.assign(harness.process, { pid: 12345 });
+    const snapshot = vi
+      .spyOn(processSnapshot, "readCodexAppServerProcessSnapshot")
+      .mockRejectedValue(new processSnapshot.ProcessInspectionError("unavailable"));
+    const state = getSharedCodexAppServerClientState();
+    const entry = getOrCreateSharedClientEntry(state, "delayed-clean-exit");
+    entry.client = harness.client;
+    state.entriesByClient.set(harness.client, entry);
+    const options = { forceKillDelayMs: 5_000, exitTimeoutMs: 6_000 };
+    try {
+      expect(
+        clearSharedCodexAppServerClientIfCurrentAndUnclaimed(harness.client, options).closed,
+      ).toBe(true);
+      const closing = harness.client.closeAndWait(options);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(snapshot).not.toHaveBeenCalled();
+      expect(harness.process.kill).not.toHaveBeenCalled();
+      harness.process.emit("exit", 0, null);
+      await expect(closing).resolves.toEqual({ exited: true, cleanup: "closed" });
+    } finally {
+      harness.process.emit("exit", 0, null);
+      state.clients.delete(entry.key);
+      state.entriesByClient.delete(harness.client);
+    }
   });
 
   it("lets the native server exit through its npm launcher", async () => {
@@ -103,16 +119,21 @@ child.on("exit", (code, signal) => {
       env: { HOME: root, OPENCLAW_STATE_DIR: path.join(root, "state") },
     });
     const exited = once(child, "exit");
-    const client = CodexAppServerClient.fromTransportForTests(child);
+    const client = CodexAppServerClient.fromTransport(child);
     const warning = vi.spyOn(embeddedAgentLog, "warn");
     try {
       await client.request("test/ready", {}, { timeoutMs: 5_000 });
+      vi.useFakeTimers();
       // Shared-client retirement calls close before its owner joins closeAndWait.
       client.close();
-      await expect(client.closeAndWait()).resolves.toEqual({ exited: true, cleanup: "closed" });
+      const closing = client.closeAndWait();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(child.killed).toBe(false);
+      await expect(closing).resolves.toEqual({ exited: true, cleanup: "closed" });
       await exited;
       expect(child.exitCode).toBe(0);
       expect(warning).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       child.kill("SIGKILL");
       await exited;

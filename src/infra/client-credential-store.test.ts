@@ -3,15 +3,23 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { ClientIdentityRecord } from "./client-credential-operations.js";
+import {
+  performClientCredentialOperation,
+  type ClientIdentityRecord,
+} from "./client-credential-operations.js";
 import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
-import { writeClientCredentialReceipt } from "./client-credential-readiness.js";
+import {
+  readClientCredentialReceipt,
+  writeClientCredentialReceipt,
+} from "./client-credential-readiness.js";
 import {
   emptyClientCredentialReceipt,
   readClientCredentialFileIdentity,
+  type ClientCredentialFileIdentity,
 } from "./client-credential-receipt.js";
 import {
   openClientCredentialCustody,
+  openClientCredentialCustodyAsync,
   isClientCredentialBusyError,
   runClientCredentialOperation,
   type ClientTokenRecord,
@@ -22,6 +30,7 @@ import {
   storedDeviceIdentityToRow,
 } from "./device-identity-material.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { thrownBy } from "./sqlite-maintenance-fixture.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 function fixture() {
@@ -48,16 +57,21 @@ const token: ClientTokenRecord = {
   updated_at_ms: 789,
 };
 
-it("reports store creation for rollback attribution without claiming an existing store", () => {
-  const { env } = fixture();
-  {
-    using first = openClientCredentialCustody(env, { createIfMissing: true, migration: true });
-    expect(first?.created).toBe(true);
-  }
-  using reopened = openClientCredentialCustody(env, { createIfMissing: true, migration: true });
-  expect(reopened?.created).toBe(false);
-  expect(fs.statSync(resolveClientCredentialStorePath(env)).mode & 0o077).toBe(0);
-});
+it.each(["sync SDK", "async Doctor"] as const)(
+  "reports native creation and preserves existing custody (%s)",
+  async (mode) => {
+    const { env } = fixture();
+    const open =
+      mode === "sync SDK" ? openClientCredentialCustody : openClientCredentialCustodyAsync;
+    {
+      using first = await open(env, { createIfMissing: true, migration: true });
+      expect(first?.created).toBe(true);
+    }
+    using reopened = await open(env, { createIfMissing: true, migration: true });
+    expect(reopened?.created).toBe(false);
+    expect(fs.statSync(resolveClientCredentialStorePath(env)).mode & 0o077).toBe(0);
+  },
+);
 
 it.each(["./../state/openclaw.sqlite", "./state//openclaw.sqlite", "./state\\openclaw.sqlite"])(
   "refuses an unsafe relative receipt binding: %s",
@@ -177,13 +191,7 @@ it("retains exclusive custody across commits and rejects overlapping local owner
     expect.objectContaining({ name: "ClientCredentialBusyError" }),
   );
   using other = openNodeSqliteDatabase(resolveClientCredentialStorePath(env), { timeout: 0 });
-  let failure: unknown;
-  try {
-    other.exec("BEGIN IMMEDIATE");
-  } catch (error) {
-    failure = error;
-  }
-  expect(isClientCredentialBusyError(failure)).toBe(true);
+  expect(isClientCredentialBusyError(thrownBy(() => other.exec("BEGIN IMMEDIATE")))).toBe(true);
   expect(owner!.run({ kind: "identity.read", identity_key: identity.identity_key })).toEqual({
     kind: "identity",
     identity,
@@ -300,14 +308,7 @@ it("requires Doctor for pending legacy files while an existing canonical identit
   );
   expect(fs.existsSync(resolveClientCredentialStorePath(env))).toBe(false);
   withClientCredentialStore(env, true, (db) => {
-    db.prepare("INSERT INTO device_identities VALUES (?,?,?,?,?,?)").run(
-      identity.identity_key,
-      identity.device_id,
-      identity.public_key_pem,
-      identity.private_key_pem,
-      identity.created_at_ms,
-      identity.updated_at_ms,
-    );
+    performClientCredentialOperation(db, { kind: "identity.create", identity }, root);
     writeClientCredentialReceipt(db, emptyClientCredentialReceipt(), "complete");
   });
   expect(run({ kind: "identity.read", identity_key: "node" })).toEqual({
@@ -372,5 +373,77 @@ it.runIf(process.platform !== "win32")(
       kind: "identity",
       identity,
     });
+  },
+);
+
+// Binds a completed canonical receipt to the shared file with one recorded field shifted.
+function bindRecordedSharedFile(
+  root: string,
+  env: NodeJS.ProcessEnv,
+  shift: "dev" | "ino",
+): { current: ClientCredentialFileIdentity; recorded: ClientCredentialFileIdentity } {
+  const shared = path.join(root, "state", "openclaw.sqlite");
+  fs.mkdirSync(path.dirname(shared));
+  fs.writeFileSync(shared, "");
+  const current = readClientCredentialFileIdentity(shared)!;
+  const recorded = { ...current, [shift]: String(BigInt(current[shift]) + 1n) };
+  withClientCredentialStore(env, true, (db) =>
+    writeClientCredentialReceipt(
+      db,
+      {
+        ...emptyClientCredentialReceipt(recorded),
+        source: {
+          kind: "canonical",
+          engine: "sqlite",
+          identity: `${recorded.path}:17`,
+          generation: "bootstrap:17",
+          sha256: "0".repeat(64),
+          destinationVersion: 1,
+        },
+      },
+      "complete",
+    ),
+  );
+  return { current, recorded };
+}
+
+function recordedSharedFile(env: NodeJS.ProcessEnv) {
+  return withClientCredentialStore(
+    env,
+    false,
+    (db) => readClientCredentialReceipt(db)?.receipt.sharedFile,
+  );
+}
+
+it.each([false, true])(
+  "admits a renumbered shared device with the same path and inode (readOnly: %s)",
+  (readOnly) => {
+    const { root, env } = fixture();
+    const { current, recorded } = bindRecordedSharedFile(root, env, "dev");
+    expect(
+      runClientCredentialOperation(
+        env,
+        { kind: "identity.read", identity_key: "primary" },
+        { readOnly },
+      ),
+    ).toEqual({ kind: "identity", identity: null });
+    // Writable admission records the new device; read-only inspection leaves the receipt alone.
+    expect(recordedSharedFile(env)).toEqual(readOnly ? recorded : current);
+  },
+);
+
+it.each([false, true])(
+  "still refuses a shared file whose inode changed (readOnly: %s)",
+  (readOnly) => {
+    const { root, env } = fixture();
+    const { recorded } = bindRecordedSharedFile(root, env, "ino");
+    expect(() =>
+      runClientCredentialOperation(
+        env,
+        { kind: "identity.read", identity_key: "primary" },
+        { readOnly },
+      ),
+    ).toThrow("run openclaw doctor --fix");
+    expect(recordedSharedFile(env)).toEqual(recorded);
   },
 );

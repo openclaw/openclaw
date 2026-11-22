@@ -151,6 +151,10 @@ export async function discoverKilocodeModels(
             name: entry.name || entry.id,
             reasoning: parseReasoning(entry),
             input: parseModality(entry),
+            // Rows without parameter metadata keep the default tool-capable behavior.
+            ...(Array.isArray(entry.supported_parameters)
+              ? { compat: { supportsTools: entry.supported_parameters.includes("tools") } }
+              : {}),
             cost: {
               input: toPricePerMillion(entry.pricing.prompt, fallbackCost?.input),
               output: toPricePerMillion(entry.pricing.completion, fallbackCost?.output),

@@ -26,6 +26,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { openExistingSqliteWorkerBackend } from "../state/openclaw-state.worker.js";
 import {
+  DeferredPluginMigrationConflictError,
   type DeferredPluginMigration,
   assertDeferredPluginMigrationsCurrent,
   readDeferredPluginMigrationCompletions,
@@ -400,6 +401,92 @@ describe("deferred configured-plugin migrations", () => {
         await expect(complete()).rejects.toThrow("Plugin migration obligations changed");
         expect(readDeferredPluginMigrations({ env })).toEqual(before);
       }
+    },
+  );
+
+  it("reports bounded obligation differences and the settlement phase through the worker", async () => {
+    const { env } = fixture();
+    await recordDeferredPluginMigrations({ env, pending: [pending] });
+    const expectedPending = readDeferredPluginMigrations({ env });
+    await recordDeferredPluginMigrations({
+      env,
+      pending: [{ ...pending, requiresStateMigration: true }],
+    });
+
+    const error = await recordDeferredPluginMigrations({
+      env,
+      pending: [],
+      resolvedPluginIds: [pending.pluginId],
+      expectedPending,
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(DeferredPluginMigrationConflictError);
+    if (!(error instanceof DeferredPluginMigrationConflictError)) {
+      throw error;
+    }
+    expect(error.message).toContain("during migration settlement");
+    expect(error.message).toContain("expected=[fixture-plugin]");
+    expect(error.message).toContain("current=[fixture-plugin]");
+    expect(error.message).toContain("changed=[fixture-plugin:requiresStateMigration]");
+    expect(error.message).not.toContain(pending.reason);
+  });
+
+  it("bounds conflict diagnostics and omits configured paths", () => {
+    const expected = [
+      {
+        pluginId: "fixture-plugin",
+        reason: "before",
+        command: "before",
+        requiresStateMigration: true,
+        requiresDoctorInspection: true,
+        configPaths: [["/private/before.json"]],
+        validationExcludedPaths: [["/private/before.json"]],
+      },
+    ] satisfies DeferredPluginMigration[];
+    const current = [
+      {
+        pluginId: "fixture-plugin",
+        reason: "after",
+        command: "after",
+        configPaths: [["/private/after.json"]],
+        validationExcludedPaths: [["/private/after.json"]],
+      },
+    ] satisfies DeferredPluginMigration[];
+
+    const error = new DeferredPluginMigrationConflictError(current, {
+      expected,
+      phase: "config include publication",
+    });
+
+    expect(error.message).toContain("during config include publication");
+    expect(error.message).toContain("+2 more");
+    expect(error.message).not.toContain("/private/");
+  });
+
+  it.each(["added", "removed"] as const)(
+    "names an owner %s beyond the displayed ID prefix when refusing publication",
+    (change) => {
+      const { env, stateDir } = fixture();
+      const common = ["alpha", "bravo", "charlie", "delta"].map((pluginId) => ({
+        pluginId,
+        reason: pending.reason,
+        command: pending.command,
+      }));
+      const extra = { ...pending, pluginId: "zulu" };
+      const expected = change === "added" ? common : [...common, extra];
+      const current = change === "added" ? [...common, extra] : common;
+      for (const entry of current) {
+        writePending(env, entry);
+      }
+      const outputPath = path.join(path.dirname(stateDir), "published.txt");
+
+      expect(() =>
+        withDeferredPluginMigrationsCurrent({ env, expectedPending: expected }, () => {
+          fs.writeFileSync(outputPath, "published");
+        }),
+      ).toThrow(`changed=[zulu:${change}]`);
+      expect(fs.existsSync(outputPath)).toBe(false);
+      expect(readDeferredPluginMigrations({ env })).toEqual(current);
     },
   );
 

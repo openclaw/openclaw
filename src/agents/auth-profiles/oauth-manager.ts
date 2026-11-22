@@ -17,6 +17,7 @@ import {
   isPersistedExternalCliAuthProfile,
   readExternalCliBootstrapCredential,
 } from "./external-cli-sync.js";
+import type { OAuthRefreshParams } from "./oauth-manager.types.js";
 import { withOAuthProfileLock } from "./oauth-profile-lock.js";
 import { canRefreshOAuthCredential, refreshOAuthCredential } from "./oauth-provider-operations.js";
 import {
@@ -48,10 +49,9 @@ import {
   mergeOAuthRefreshPeerClaims,
   OAuthRefreshPeerFenceError,
   rollbackOAuthRefreshPeerClaims,
-  settleOAuthRefreshPeerClaims,
   type OAuthRefreshPeerClaim,
 } from "./oauth-refresh-peers.js";
-import { createOAuthRefreshQueue, type OAuthRefreshCohort } from "./oauth-refresh-queue.js";
+import { createOAuthRefreshQueue } from "./oauth-refresh-queue.js";
 import {
   isSafeOAuthOwnerRefreshResult,
   isSafeOAuthPostClaimSettlement,
@@ -69,7 +69,8 @@ import {
   persistOAuthRefreshClaim,
   rollbackOAuthRefreshOwnerClaim,
   rollbackTransientOAuthRefreshClaim,
-  resolveAuthoritativeSharedOAuthCredentialUnderLock,
+  resolveOAuthAccessBesideStateOwner,
+  settleOAuthRefreshPeerClaimsUnderLock,
   settleOAuthRefreshClaim,
   type OAuthRefreshClaim,
   type OAuthRefreshFailureSettlement,
@@ -88,52 +89,9 @@ import { runAuthProfileUsage } from "./usage-lifecycle.js";
 
 const oauthRefreshRecoveryBuildFailures = new WeakSet<Error>();
 
-type OAuthRefreshParams = {
-  cohort: OAuthRefreshCohort;
-  personalStore?: PersonalAuthProfileStore;
-  profileId: string;
-  provider: string;
-  agentDir?: string;
-  cfg?: OpenClawConfig;
-  signal?: AbortSignal;
-  forceRefresh?: boolean;
-  attemptedCredential: OAuthCredential;
-  attemptedCredentials?: OAuthCredential[];
-  bootstrapCredential?: OAuthCredential | null;
-  bootstrapBaseCredential?: OAuthCredential;
-  validateCredential?: (credential: OAuthCredential) => void;
-};
-
 /** Create an independent OAuth refresh queue using the native provider operations. */
 export function createOAuthManager() {
   const refreshQueue = createOAuthRefreshQueue();
-
-  async function settlePeerClaimsUnderRefreshLock(params: {
-    claim: Extract<OAuthRefreshClaim, { kind: "claimed" }>;
-    claims: readonly OAuthRefreshPeerClaim[];
-    replacement: OAuthCredential;
-    validateCredential?: (credential: OAuthCredential) => void;
-  }): Promise<void> {
-    validateSettlementCredential(params.validateCredential, params.replacement);
-    if (params.claim.personalStore) {
-      return;
-    }
-    const authoritativeSharedCredential =
-      params.claim.authPath === resolveSharedAuthStorePath()
-        ? params.replacement
-        : await resolveAuthoritativeSharedOAuthCredentialUnderLock({
-            profileId: params.claim.profileId,
-            candidate: params.replacement,
-            validateCredential: params.validateCredential,
-          });
-    await settleOAuthRefreshPeerClaims({
-      profileId: params.claim.profileId,
-      fence: params.claim.fence,
-      claims: params.claims,
-      authoritativeSharedCredential,
-      replacement: params.replacement,
-    });
-  }
 
   async function claimOAuthRefresh(params: OAuthRefreshParams): Promise<OAuthRefreshClaim> {
     const personalProfile = isUserModelAuthProfileId(params.profileId);
@@ -337,6 +295,7 @@ export function createOAuthManager() {
           observation = beginOAuthRefreshObservation();
           const claimed = await persistOAuthRefreshClaim({
             personalStore: params.personalStore,
+            assertAdmission: params.assertRefreshAdmission,
             assertCurrent: () => {
               params.signal?.throwIfAborted();
               assertPersonalRefreshCurrent?.();
@@ -593,7 +552,7 @@ export function createOAuthManager() {
             }
             if (supersedingOwner && cleanupErrors.length === 0) {
               try {
-                await settlePeerClaimsUnderRefreshLock({
+                await settleOAuthRefreshPeerClaimsUnderLock({
                   claim,
                   claims: activePeerClaims,
                   replacement: supersedingOwner,
@@ -752,7 +711,7 @@ export function createOAuthManager() {
               return null;
             }
             try {
-              await settlePeerClaimsUnderRefreshLock({
+              await settleOAuthRefreshPeerClaimsUnderLock({
                 claim,
                 claims: activePeerClaims,
                 replacement: claimSettlement.credential,
@@ -838,6 +797,7 @@ export function createOAuthManager() {
     signal?: AbortSignal;
     forceRefresh?: boolean;
     validateCredential?: (credential: OAuthCredential) => void;
+    assertRefreshAdmission?: () => void;
   }): Promise<ResolvedOAuthAccess | null> {
     params.signal?.throwIfAborted();
     if (!isUserModelAuthProfileId(params.profileId)) {
@@ -908,6 +868,10 @@ export function createOAuthManager() {
       hasUsableOAuthCredential(effectiveCredential)
     ) {
       return await buildValidatedOAuthAccess(effectiveCredential, params);
+    }
+    const besideStateOwner = await resolveOAuthAccessBesideStateOwner(effectiveCredential, params);
+    if (besideStateOwner) {
+      return besideStateOwner;
     }
 
     try {
@@ -1017,13 +981,8 @@ export function createOAuthManager() {
     }
   }
 
-  function resetRefreshQueuesForTest(): void {
-    refreshQueue.reset();
-  }
-
   return {
     resolveOAuthAccess,
-    resetRefreshQueuesForTest,
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

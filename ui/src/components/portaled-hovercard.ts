@@ -8,8 +8,37 @@ import { resolveTransientContainer } from "./transient-container.ts";
 
 const CARD_GAP = 10;
 const VIEWPORT_PADDING = 12;
+// Travel toward an open card: the corridor apex backs off its exit edge so jitter
+// there stays inside, and a pointer resting on another trigger hands off to it.
+const AIM_APEX_SLACK = 4;
+const AIM_REST_MS = 150;
 
 type PortaledHovercardPlacement = "horizontal" | "vertical";
+type Point = { x: number; y: number };
+// Zag's ray-casting `isPointInPolygon`. Importing it from @zag-js/rect-utils
+// brings that module's unused rect helpers into the boot chunk.
+function isPointInPolygon(polygon: Point[], { x, y }: Point): boolean {
+  let inside = false;
+  let previous = polygon.at(-1);
+  for (const current of polygon) {
+    if (
+      previous &&
+      current.y > y !== previous.y > y &&
+      x < ((previous.x - current.x) * (y - current.y)) / (previous.y - current.y) + current.x
+    ) {
+      inside = !inside;
+    }
+    previous = current;
+  }
+  return inside;
+}
+
+type HovercardAim = {
+  apex: Point;
+  path: EventTarget[];
+  pending: { target: Element; run: () => void } | null;
+  restTimer: number | null;
+};
 
 // Hold flags stay synchronous: callers write them and immediately decide whether to open or close.
 export function createPortaledHovercardOwner(
@@ -24,16 +53,16 @@ export function createPortaledHovercardOwner(
   let positionCard: (() => void) | null = null;
   let triggerElement: HTMLElement | null = null;
   let triggerAncestors: Node[] = [];
-  const presentationObserver = new MutationObserver(() => {
-    if (checkPresentation()) {
-      observePresentation();
-    }
-  });
+  let presentationObserver: MutationObserver | undefined;
   let unmountCardContents: (() => void) | null = null;
+  let cardAnchor: HTMLElement | null = null;
+  let lastPoint: Point | null = null;
+  let aim: HovercardAim | null = null;
   const handleCardPointerEnter = (event: PointerEvent) => {
     if (event.currentTarget === portal.card) {
       portal.pointerOverCard = true;
       portal.clearClose();
+      stopAim();
     }
   };
   const handleCardFocusIn = (event: FocusEvent) => {
@@ -53,6 +82,76 @@ export function createPortaledHovercardOwner(
     }
     portal.cardFocusInside = false;
     portal.scheduleClose();
+  };
+
+  function stopAim(): void {
+    if (aim?.restTimer != null) {
+      window.clearTimeout(aim.restTimer);
+    }
+    aim = null;
+  }
+
+  // Leaving the corridor, or resting in it, ends travel: the trigger still under
+  // the pointer takes over, otherwise the card closes.
+  function finishAim(): void {
+    const pending = aim?.pending;
+    const path = aim?.path ?? [];
+    stopAim();
+    if (pending && path.includes(pending.target)) {
+      pending.run();
+      return;
+    }
+    portal.scheduleClose();
+  }
+
+  // Zag's submenu corridor: the apex, then the card's corners from its near edge.
+  function aimsAtCard(current: HovercardAim, event: PointerEvent): boolean {
+    const card = portal.card;
+    if (!card) {
+      return false;
+    }
+    const side = card.dataset.side;
+    const { x, y } = current.apex;
+    const { left, top, right, bottom } = card.getBoundingClientRect();
+    const tl = { x: left, y: top };
+    const tr = { x: right, y: top };
+    const br = { x: right, y: bottom };
+    const bl = { x: left, y: bottom };
+    const polygon =
+      side === "left"
+        ? [{ x: x + AIM_APEX_SLACK, y }, br, bl, tl, tr]
+        : side === "bottom"
+          ? [{ x, y: y - AIM_APEX_SLACK }, tr, br, bl, tl]
+          : side === "top"
+            ? [{ x, y: y + AIM_APEX_SLACK }, bl, tl, tr, br]
+            : [{ x: x - AIM_APEX_SLACK, y }, tl, tr, br, bl];
+    return isPointInPolygon(polygon, { x: event.clientX, y: event.clientY });
+  }
+
+  function armAimRest(current: HovercardAim): void {
+    if (current.restTimer !== null) {
+      window.clearTimeout(current.restTimer);
+    }
+    current.restTimer = current.pending ? window.setTimeout(finishAim, AIM_REST_MS) : null;
+  }
+
+  const handlePointerMove = (event: PointerEvent) => {
+    // Boundary events fire before the move that crosses the boundary, so a
+    // pointer exit still sees the last point inside its trigger.
+    if (aim && portal.pointerInside) {
+      stopAim();
+    } else if (aim) {
+      aim.path = event.composedPath();
+      if (aim.pending && !aim.path.includes(aim.pending.target)) {
+        aim.pending = null;
+      }
+      if (aimsAtCard(aim, event)) {
+        armAimRest(aim);
+      } else {
+        finishAim();
+      }
+    }
+    lastPoint = { x: event.clientX, y: event.clientY };
   };
 
   function checkPresentation(): boolean {
@@ -81,6 +180,11 @@ export function createPortaledHovercardOwner(
     ) {
       return;
     }
+    presentationObserver ??= new MutationObserver(() => {
+      if (checkPresentation()) {
+        observePresentation();
+      }
+    });
     presentationObserver.disconnect();
     triggerAncestors = ancestors;
     // Only the active trigger's ancestry: retained panes can retire without removal,
@@ -106,6 +210,21 @@ export function createPortaledHovercardOwner(
     handleCardPointerLeave: () => {
       portal.pointerOverCard = false;
       portal.scheduleClose();
+    },
+
+    // Document-level Escape: close, and return focus to the trigger when it was in the card.
+    handleEscape: (event: KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const trigger = triggerElement;
+      const restore = portal.card?.contains(document.activeElement);
+      close();
+      if (restore) {
+        portal.returnFocus(trigger);
+      }
     },
 
     handleTriggerKeyDown: (event: KeyboardEvent) => {
@@ -217,11 +336,47 @@ export function createPortaledHovercardOwner(
       );
     },
 
-    schedulePointerExit(): void {
+    schedulePointerExit(event?: PointerEvent): void {
       portal.pointerInside = false;
-      // Portaled cards can be viewport-clamped diagonally from their trigger, so
-      // exit coordinates cannot reliably tell whether the pointer is crossing the gap.
+      stopAim();
+      // A mouse leaving toward an open card keeps it while the pointer stays in
+      // the corridor, even across other triggers. Leaving the window has no
+      // later moves to judge, so it keeps the timed close.
+      const anchor = cardAnchor?.getBoundingClientRect();
+      if (event && event.pointerType !== "touch" && event.relatedTarget && anchor) {
+        // Aim from the pointer's last point inside the trigger: fast moves land
+        // the exit event well past the edge, off the line toward the card.
+        const from = lastPoint ?? { x: event.clientX, y: event.clientY };
+        const next: HovercardAim = {
+          apex: {
+            x: Math.min(Math.max(from.x, anchor.left), anchor.right),
+            y: Math.min(Math.max(from.y, anchor.top), anchor.bottom),
+          },
+          path: event.composedPath(),
+          pending: null,
+          restTimer: null,
+        };
+        if (aimsAtCard(next, event)) {
+          aim = next;
+          portal.clearClose();
+          return;
+        }
+      }
+      // Otherwise keep the grace period: without an exit point the pointer may
+      // still be crossing to a card clamped diagonally from its trigger.
       portal.scheduleClose(220);
+    },
+
+    // Another trigger hovered on the way to the open card waits until the
+    // pointer rests on it or leaves the corridor.
+    deferPointerSwitch(event: PointerEvent, target: Element, run: () => void): boolean {
+      if (!aim || !aimsAtCard(aim, event)) {
+        return false;
+      }
+      aim.path = event.composedPath();
+      aim.pending = { target, run };
+      armAimRest(aim);
+      return true;
     },
 
     focusables(): HTMLElement[] {
@@ -288,6 +443,7 @@ export function createPortaledHovercardOwner(
       }
       portal.clearCard();
       portal.card = card;
+      cardAnchor = anchor;
       unmountCardContents = unmountContents ?? null;
       const trigger = triggerElement ?? anchor;
       const ancestors: Element[] = [];
@@ -333,6 +489,7 @@ export function createPortaledHovercardOwner(
         listen(card, "focusout", { handleEvent: handleCardFocusOut }),
         listen(window, "resize", schedulePosition),
         listen(window, "scroll", handleScroll, true),
+        listen(document, "pointermove", handlePointerMove, { capture: true, passive: true }),
         viewport && listen(viewport, "resize", schedulePosition),
         viewport && listen(viewport, "scroll", schedulePosition),
       ];
@@ -353,6 +510,9 @@ export function createPortaledHovercardOwner(
       stopPositioning?.();
       stopPositioning = null;
       positionCard = null;
+      cardAnchor = null;
+      lastPoint = null;
+      stopAim();
       exitCleanup?.();
       exitCleanup = null;
       const card = portal.card;
@@ -397,7 +557,7 @@ export function createPortaledHovercardOwner(
     },
 
     reset(exitDurationMs = 0): void {
-      presentationObserver.disconnect();
+      presentationObserver?.disconnect();
       triggerAncestors = [];
       if (openTimer !== null) {
         window.clearTimeout(openTimer);

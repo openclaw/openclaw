@@ -33,6 +33,9 @@ beforeEach(() => {
           "ui.theme": "claw",
           "ui.themeMode": "light",
           "ui.railShortcuts": ["route:sessions"],
+          "ui.personalSessionGroups": [
+            { id: "focus", label: "Focus", sessionKeys: ["agent:main:work"] },
+          ],
         },
       },
     }),
@@ -72,4 +75,5 @@ it("does not adopt navigation-authenticated preferences for a selected bearer id
   runtime = bootstrapApplication();
   expect(runtime.context.runtimeConfig.state.bootstrapConfig).toBeNull();
   expect(runtime.context.theme.settings.themeMode).not.toBe("light");
+  expect(runtime.context.theme.settings.sidebarEntries).not.toEqual(["route:sessions"]);
 });

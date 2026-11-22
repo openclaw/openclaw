@@ -1,6 +1,7 @@
 import type { GatewayClientRequestOptions } from "@openclaw/gateway-client";
 import { afterEach, vi } from "vitest";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { BrowserDashboardTarget, BrowserInspectedNode } from "./browser-client.ts";
 import {
   createBrowserPanel,
@@ -11,6 +12,20 @@ import type { BrowserPanelView } from "./browser-panel-surface.ts";
 import type { BrowserTabTarget } from "./browser-target.ts";
 
 const BROWSER_PANEL_TEST_PAGE_TITLE = "Page";
+
+export function stubBrowserPanelTestStageBounds(stage: Element): void {
+  vi.spyOn(stage, "getBoundingClientRect").mockReturnValue({
+    x: 0,
+    y: 0,
+    left: 0,
+    top: 0,
+    right: 100,
+    bottom: 100,
+    width: 100,
+    height: 100,
+    toJSON: () => ({}),
+  });
+}
 
 export type BrowserRequestEnvelope = {
   method: string;
@@ -89,17 +104,7 @@ export class TestBrowserPanelHost implements BrowserPanelHost {
   constructor(public client: GatewayBrowserClient | null) {
     const stage = this.stage;
     stage.className = "bp-stage";
-    vi.spyOn(stage, "getBoundingClientRect").mockReturnValue({
-      x: 0,
-      y: 0,
-      left: 0,
-      top: 0,
-      right: 100,
-      bottom: 100,
-      width: 100,
-      height: 100,
-      toJSON: () => ({}),
-    });
+    stubBrowserPanelTestStageBounds(stage);
     this.renderRoot.append(stage);
   }
 

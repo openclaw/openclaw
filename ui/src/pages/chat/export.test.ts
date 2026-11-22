@@ -17,6 +17,32 @@ function msg(role: string, content: unknown, extra: Record<string, unknown> = {}
 const header = "# Chat with OpenClaw\n\n";
 const transcript = (messages: unknown[]) => buildChatMarkdown(messages, "OpenClaw");
 
+it("exports saved inline summaries for direct and nested results, without component payloads", () => {
+  const view = {
+    type: "plugin_view",
+    pluginId: "incidents",
+    viewId: "incident",
+    version: 7,
+    payload: { incidentId: "private-reference" },
+    summary: "Incident is investigating.",
+    toolCallId: "call",
+    toolName: "show_incident",
+  };
+  const markdown = buildChatMarkdown(
+    [
+      {
+        role: "assistant",
+        runId: "second",
+        content: [{ type: "toolResult", details: { pluginView: view } }],
+      },
+    ],
+    "OpenClaw",
+  );
+  expect(markdown?.match(/Incident is investigating\./g)).toHaveLength(1);
+  expect(markdown).not.toContain("private-reference");
+  expect(markdown).not.toContain("plugin_view");
+});
+
 it.each([
   ["empty", []],
   ["tool-only", [toolCall]],
@@ -82,20 +108,17 @@ it("uses transcript speaker normalization and preserves prepared literal control
     header +
       "## Kai\n\nPlease check the build.\n\n" +
       "## Build assistant (1970-01-01T00:00:01.000Z)\n\nThe build passed.\n\n" +
-      "## Tool\n\n  exit 0\n\n\n" +
       "## OpenClaw\n\nNO_REPLY\n",
   );
 });
 
-it.each([
-  ["empty envelope", msg("assistant", "Body", { toolCallId: "" }), "Tool"],
-  [
-    "tool in user",
-    msg("user", [null, ...textBlock("Body", "text"), { type: "tool_result" }]),
-    "Tool",
-  ],
-] as const)("classifies %s", (_name, message, speaker) => {
-  expect(transcript([message])).toBe(`${header}## ${speaker}\n\nBody\n`);
+it("drops messages carrying a tool envelope, even with an assistant role", () => {
+  expect(transcript([msg("assistant", "Body", { toolCallId: "" })])).toBeNull();
+});
+
+it("keeps a user turn whose content mixes in tool blocks", () => {
+  const message = msg("user", [null, ...textBlock("Body", "text"), { type: "tool_result" }]);
+  expect(transcript([message])).toBe(`${header}## Message\n\nBody\n`);
 });
 
 it("preserves imported content and attribution", () => {

@@ -22,10 +22,8 @@ export type MatrixEventDecryptor = (event: FakeMatrixEvent) => Promise<void>;
 
 export class FakeMatrixEvent extends EventEmitter {
   private readonly data: FakeMatrixEventParams;
-  private readonly encrypted: boolean;
   private clearEvent?: { type: string; content: Record<string, unknown> };
   private decryptionFailureReasonValue: DecryptionFailureCode | null;
-  private decryptionFailure: boolean;
   private decryptionPromise: Promise<void> | null = null;
   private decryptAttemptHandler?: (options?: { isRetry?: boolean }) => Promise<void> | void;
   readonly attemptDecryption = vi.fn(
@@ -37,11 +35,9 @@ export class FakeMatrixEvent extends EventEmitter {
   constructor(params: FakeMatrixEventParams) {
     super();
     this.data = { ...params };
-    this.encrypted = params.type === "m.room.encrypted";
     this.decryptionFailureReasonValue = params.decryptionFailure
       ? (params.decryptionFailureReason ?? DecryptionFailureCode.UNKNOWN_ERROR)
       : null;
-    this.decryptionFailure = params.decryptionFailure === true;
   }
 
   get decryptionFailureReason(): DecryptionFailureCode | null {
@@ -59,8 +55,9 @@ export class FakeMatrixEvent extends EventEmitter {
   getUnsigned = (): NonNullable<FakeMatrixEventParams["unsigned"]> => this.data.unsigned ?? {};
   getStateKey = () => this.data.stateKey;
   getWireStateKey = () => this.data.stateKey;
-  isDecryptionFailure = () => this.decryptionFailure;
-  shouldAttemptDecryption = () => this.encrypted && this.clearEvent === undefined;
+  isDecryptionFailure = () => this.decryptionFailureReasonValue !== null;
+  shouldAttemptDecryption = () =>
+    this.data.type === "m.room.encrypted" && this.clearEvent === undefined;
   getDecryptionPromise = () => this.decryptionPromise;
 
   setDecryptionPromise(promise: Promise<void> | null): void {
@@ -79,7 +76,6 @@ export class FakeMatrixEvent extends EventEmitter {
         body: `** Unable to decrypt: ${reason} **`,
       },
     };
-    this.decryptionFailure = true;
     this.decryptionFailureReasonValue ??= DecryptionFailureCode.MEGOLM_UNKNOWN_INBOUND_SESSION_ID;
     this.emit("decrypted", this, new Error(reason));
   }
@@ -87,7 +83,6 @@ export class FakeMatrixEvent extends EventEmitter {
   markDecrypted(params: { type: string; content: Record<string, unknown> }): void {
     Object.assign(this.data, params);
     this.clearEvent = { ...params };
-    this.decryptionFailure = false;
     this.decryptionFailureReasonValue = null;
   }
 }

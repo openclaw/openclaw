@@ -1,6 +1,7 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createContainerEnvFile, withContainerEnvFile } from "./container-env-file.js";
 
 const [before, after] = ["synthetic-before", "synthetic-after"];
@@ -22,6 +23,7 @@ it("preserves values and private permissions, then removes both file and directo
     WHITESPACE: "  padded  ",
     UTF8: "test-🦞-環境",
   };
+  using sync = vi.spyOn(syncFs, "fsyncSync");
   const staged = await createContainerEnvFile(environment);
   try {
     expect(await fs.readFile(staged.path, "utf8")).toBe(
@@ -29,6 +31,7 @@ it("preserves values and private permissions, then removes both file and directo
     );
     expect((await fs.stat(path.dirname(staged.path))).mode & 0o777).toBe(0o700);
     expect((await fs.stat(staged.path)).mode & 0o777).toBe(0o600);
+    expect(sync).not.toHaveBeenCalled();
   } finally {
     await staged.cleanup();
   }

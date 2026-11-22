@@ -1,9 +1,12 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
+import * as acpRows from "../acp/runtime/session-meta-keys.js";
 import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -15,9 +18,15 @@ import {
 import { recordSessionParticipant as recordNativeParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.transcript-turn.js";
 import { recordSessionParticipantInWorker as recordSessionParticipant } from "../config/sessions/session-sharing-store.async.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../config/sessions/session-sharing-store.native.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getSessionRowSelectionMetrics } from "../infra/gateway-work-metrics.js";
+import { getSqliteDatabaseAdmissionIdentityForPath } from "../infra/sqlite-database-admission.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -27,7 +36,13 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync,
+} from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
 import {
@@ -35,7 +50,13 @@ import {
   sessionReadHandlers,
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
-import { ready } from "./session-row-projection-record.js";
+import {
+  ready,
+  create as createRow,
+  identity,
+  type RetainedSessionRowDatabaseFacts,
+} from "./session-row-projection-record.js";
+import { prepareSessionRowSharedFacts } from "./session-row-projection-shared-facts.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import {
   createTestProjection,
@@ -43,6 +64,7 @@ import {
   watchRowFacts as observeRowFacts,
 } from "./session-row-projection.read-fixture.test-support.js";
 import {
+  acpProjectionMeta,
   requestSessionRow,
   withSessionRowProjectionState as withProjectionState,
 } from "./session-row-projection.test-support.js";
@@ -55,9 +77,81 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 afterEach(() => vi.restoreAllMocks());
 const mainConfig = { agents: { entries: { main: {} } } };
 
+it("retains materialized rows and sharing after unchanged prepared reads, but publishes real changes", () =>
+  withProjectionState(async (create) => {
+    const query = { agentId: "main", key: "agent:main:materialized-identity" };
+    const entry: SessionEntry = { sessionId: "materialized-identity", updatedAt: 1 };
+    write(query.key, entry);
+    const projection = await create({
+      cfg: { agents: { entries: { main: {} }, defaults: { model: "fixture/initial" } } },
+      modelCatalog: [],
+    });
+    await projection.ensureMaterialized();
+    expect(Object.values(projection.describe(query)!.materialized.row)).not.toContain(undefined);
+    // Profile patches and fresh materialization must use the same absent-field shape.
+    sessionChanges.emit({ all: true, scope: "profiles" });
+    const previous = projection.describe(query)!;
+    const materialized = previous.materialized;
+    expect(Object.values(materialized.row)).not.toContain(undefined);
+    const facts = previous.facts;
+    const before = getSessionRowSelectionMetrics().materialization;
+    sessionChanges.emit({ agentId: query.agentId, sessionKey: query.key, scope: "automation" });
+    const sharing = projection.sharingRevision;
+    await projection.ensureMaterialized();
+    const current = projection.describe(query)!;
+    expect(current.materialized).toBe(materialized);
+    expect(current.facts).toBe(facts);
+    expect(projection.sharingRevision).toBe(sharing);
+    expect(getSessionRowSelectionMetrics().materialization.skipped - before.skipped).toBe(1);
+
+    for (const patch of [
+      { label: "Renamed" },
+      { modelOverride: "changed-model", providerOverride: "fixture" },
+      { visibility: "read-only" as const },
+      { visibility: "shared" as const },
+      { status: "failed" as const },
+      { status: "done" as const },
+    ]) {
+      const prior = projection.describe(query)!.materialized;
+      const revision = projection.sharingRevision;
+      write(query.key, { ...entry, ...patch });
+      await projection.ensureMaterialized();
+      expect(projection.describe(query)!.materialized).not.toBe(prior);
+      expect(projection.describe(query)!.materialized.source.configuredAgentIds).toBe(
+        prior.source.configuredAgentIds,
+      );
+      expect(projection.sharingRevision).not.toBe(revision);
+      expect(projection.describe(query)!.materialized.source.entry).toMatchObject(patch);
+      expect(projection.snapshot(query).row).toMatchObject(
+        "modelOverride" in patch ? { model: "changed-model", modelProvider: "fixture" } : patch,
+      );
+    }
+    const scope = { agentId: query.agentId, sessionKey: query.key };
+    for (const member of [true, false]) {
+      const prior = projection.describe(query)!.materialized;
+      const revision = projection.sharingRevision;
+      if (member) {
+        addSessionMember(scope, { identityId: "fixture-viewer", addedBy: "fixture-owner" });
+      } else {
+        removeSessionMember(scope, "fixture-viewer");
+      }
+      await projection.ensureMaterialized();
+      expect(projection.describe(query)!.membership.has("fixture-viewer")).toBe(member);
+      expect(projection.describe(query)!.materialized).not.toBe(prior);
+      expect(projection.sharingRevision).not.toBe(revision);
+    }
+  }, true));
+
 function write(key: string, entry: SessionEntry, agentId = "main", storePath?: string) {
   replaceSessionEntrySync({ agentId, sessionKey: key, storePath }, entry);
 }
+
+const modelEntry = (sessionId: string, modelOverride: string, updatedAt = 1): SessionEntry => ({
+  sessionId,
+  updatedAt,
+  providerOverride: "unit-test",
+  modelOverride,
+});
 
 function snapshotRow(
   projection: SessionRowProjection,
@@ -245,15 +339,7 @@ it.each(["config", "static", "unowned-map", "empty-map"] as const)(
         }
       });
       for (const target of targets) {
-        write(
-          target.key,
-          {
-            sessionId: target.key,
-            updatedAt: 1,
-            displayName: fromConfig ? "Policy fixture" : "Publication fixture",
-          },
-          target.agentId,
-        );
+        write(target.key, { sessionId: target.key, updatedAt: 1 }, target.agentId);
       }
       using projection = await createTestProjection({
         cfg,
@@ -364,27 +450,14 @@ it("keeps cross-agent inheritance bound to a stored qualified parent", () =>
       ["work", "global", "work-global"],
       ["work", "agent:work:main", "work"],
     ] as const) {
-      write(
-        sessionKey,
-        {
-          sessionId: `${label}-parent`,
-          updatedAt: 1,
-          providerOverride: "unit-test",
-          modelOverride: `${label}-model`,
-        },
-        agentId,
-      );
+      write(sessionKey, modelEntry(`${label}-parent`, `${label}-model`), agentId);
     }
     const key = "agent:main:child";
     write(key, { sessionId: "child", updatedAt: 2, parentSessionKey: "agent:work:main" });
     const projection = await create({ cfg });
     const parentKey = "agent:work:main";
     const writeParent = (sessionId: string, updatedAt: number, modelOverride: string) =>
-      write(
-        parentKey,
-        { sessionId, updatedAt, providerOverride: "unit-test", modelOverride },
-        "work",
-      );
+      write(parentKey, modelEntry(sessionId, modelOverride, updatedAt), "work");
     const children = (parentSessionKey: string, agentId?: string) =>
       projection.selectEntries({ agentId, parentSessionKey }).map((child) => child.key);
     const expectInherited = (parentSessionKey: string, model: string) =>
@@ -397,6 +470,15 @@ it("keeps cross-agent inheritance bound to a stored qualified parent", () =>
     expectInherited(parentKey, "work-model");
     expect(children(parentKey, "work")).toEqual([]);
     expect(children(parentKey, "main")).toEqual([key]);
+    expect(children("AGENT:WORK:MAIN", "main")).toEqual([key]);
+    expect(
+      projection
+        .selectEntries({
+          agentId: "main",
+          parentSessionKey: projection.describe({ agentId: "work", key: parentKey })!,
+        })
+        .map((child) => child.key),
+    ).toEqual([key]);
     writeParent("work-parent", 3, "updated-work-model");
     await projection.ensureMaterialized();
     expectInherited(parentKey, "updated-work-model");
@@ -416,6 +498,19 @@ it("keeps cross-agent inheritance bound to a stored qualified parent", () =>
     expect(children(parentKey, "main")).toEqual([key]);
     expect(projection.selectEntries({ parentSessionKey: "global" })).toEqual([]);
     expectInherited(parentKey, "restored-work-model");
+    const previous = projection.capture({ agentId: "main", key });
+    write(key, {
+      sessionId: "child",
+      updatedAt: 2,
+      parentSessionKey: "agent:main:main",
+      spawnedBy: "agent:main:main",
+    });
+    await projection.ensureMaterialized();
+    expect(children(parentKey, "main")).toEqual([]);
+    expect(children("global", "main")).toEqual([key]);
+    expect(projection.capture({ agentId: "main", key })).not.toBe(previous);
+    expectInherited("global", "main-global-model");
+    expect(snapshotRow(projection, key)?.spawnedBy).toBe("global");
   }));
 
 it.each(["global", "unknown"])(
@@ -428,12 +523,7 @@ it.each(["global", "unknown"])(
         session: { scope: "global" as const, store: storePath },
       };
       openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-      const parent = {
-        sessionId: "work-parent",
-        updatedAt: 1,
-        providerOverride: "unit-test",
-        modelOverride: "before",
-      };
+      const parent = modelEntry("work-parent", "before");
       write(sentinel, parent, "work", storePath);
       const key = "agent:main:child";
       write(
@@ -449,6 +539,9 @@ it.each(["global", "unknown"])(
       expect(snapshotRow(projection, key)?.model).toBe("after");
       expect(snapshotRow(projection, sentinel, "work")?.childSessions).toEqual([key]);
       const oldOwner = projection.describe({ agentId: "work", key: sentinel })!;
+      expect(
+        projection.selectEntries({ parentSessionKey: oldOwner }).map((row) => row.key),
+      ).toEqual([key]);
       cfg = {
         ...cfg,
         agents: { ...cfg.agents, defaults: { sessionStore: { agentId: "main" } } },
@@ -530,14 +623,7 @@ it("searches cold archives with worker-prepared facts across publications and li
       seedCanonicalAcpSessionMeta({
         sessionKey: key,
         lifecycleRevision: "first",
-        meta: {
-          backend,
-          agent: "main",
-          runtimeSessionName: "archived",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 1,
-        },
+        meta: acpProjectionMeta(backend, "archived"),
       });
     publishAcp("fixture-runtime-first");
     using cleanup = new DisposableStack();
@@ -599,6 +685,7 @@ it("searches cold archives with worker-prepared facts across publications and li
     const board = new SqliteBoardStore({
       resolveSession: ({ sessionKey }) => ({ agentId: "main", sessionKey }),
     });
+    const beforeBoard = projection.sharingRevision;
     await board.putWidget({
       sessionKey: key,
       name: "status",
@@ -607,6 +694,7 @@ it("searches cold archives with worker-prepared facts across publications and li
     expect((await list("fixture-runtime-next", true)).sessions.map((row) => row.key)).toEqual([
       key,
     ]);
+    expect(projection.sharingRevision).not.toBe(beforeBoard);
     expect((await list("fixture-runtime-next", false)).sessions).toEqual([]);
     replaceSessionEntrySync(target, { ...entry, lifecycleRevision: "replacement", updatedAt: 2 });
     expect((await list("fixture-runtime-next")).sessions).toEqual([]);
@@ -630,8 +718,8 @@ function sessionDescriber(context: ReturnType<typeof requestContext>, key: strin
 }
 
 it("publishes local placement receipts without rereading or adopting another store's facts", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg = { agents: { entries: { main: {} } } };
+  await withProjectionState(async (create, state, cleanup) => {
+    const cfg = mainConfig;
     const target = {
       agentId: "main",
       sessionKey: "agent:main:local-placement-receipt",
@@ -641,7 +729,7 @@ it("publishes local placement receipts without rereading or adopting another sto
     const database = openOpenClawStateDatabase();
     let nowMs = 10;
     const placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
-    const projection = await createSessionRowProjection({
+    const projection = await create({
       cfg,
       modelCatalog: [],
       placementFactsReader: placements,
@@ -657,66 +745,60 @@ it("publishes local placement receipts without rereading or adopting another sto
       owner: { kind: "local" as const },
     };
     const resumeRead = createDeferredCore();
-    try {
-      await projection.ensureMaterialized();
-      const readProjection = placements.readProjection.bind(placements);
-      const reads = vi.spyOn(placements, "readProjection");
-      const rowReads = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
-      const metadataReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-      const claim = await placements.claimTurn(claimInput);
-      await describe(10);
-      nowMs = 20;
-      await placements.releaseTurn(claim);
-      await describe(20);
-      expect(reads).not.toHaveBeenCalled();
-      expect(rowReads).not.toHaveBeenCalled();
-      expect(
-        metadataReads.mock.calls.filter(
-          ([, command]) => command.type === "sessionRows.sharedFacts",
-        ),
-      ).toEqual([]);
+    cleanup.defer(resumeRead.resolve);
+    await projection.ensureMaterialized();
+    const readProjection = placements.readProjection.bind(placements);
+    const reads = vi.spyOn(placements, "readProjection");
+    const rowReads = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
+    const metadataReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    const claim = await placements.claimTurn(claimInput);
+    await describe(10);
+    nowMs = 20;
+    await placements.releaseTurn(claim);
+    await describe(20);
+    expect(reads).not.toHaveBeenCalled();
+    expect(rowReads).not.toHaveBeenCalled();
+    expect(
+      metadataReads.mock.calls.filter(([, command]) => command.type === "sessionRows.sharedFacts"),
+    ).toEqual([]);
 
-      const reading = createDeferredCore();
-      reads.mockImplementationOnce(async (...args) => {
-        const snapshot = await readProjection(...args);
-        reading.resolve();
-        await resumeRead.promise;
-        return snapshot;
-      });
-      sessionChanges.emit(target);
-      await reading.promise;
-      nowMs = 30;
-      const next = await placements.claimTurn({ ...claimInput, claimId: "next-receipt-claim" });
-      resumeRead.resolve();
-      await describe(30);
-      expect(reads).toHaveBeenCalledTimes(1);
-      await placements.releaseTurn(next);
+    const reading = createDeferredCore();
+    reads.mockImplementationOnce(async (...args) => {
+      const snapshot = await readProjection(...args);
+      reading.resolve();
+      await resumeRead.promise;
+      return snapshot;
+    });
+    sessionChanges.emit(target);
+    await reading.promise;
+    nowMs = 30;
+    const next = await placements.claimTurn({ ...claimInput, claimId: "next-receipt-claim" });
+    resumeRead.resolve();
+    await describe(30);
+    expect(reads).toHaveBeenCalledTimes(1);
+    await placements.releaseTurn(next);
 
-      reads.mockClear();
-      const other = createWorkerSessionPlacementStore({
-        database: openOpenClawStateDatabase({ path: state.statePath("other-state.sqlite") }),
-        now: () => 99,
-      });
-      const otherClaim = await other.claimTurn(claimInput);
-      await describe(30);
-      expect(reads).toHaveBeenCalled();
-      await other.releaseTurn(otherClaim);
-      await projection.ensureMaterialized();
+    reads.mockClear();
+    const other = createWorkerSessionPlacementStore({
+      database: openOpenClawStateDatabase({ path: state.statePath("other-state.sqlite") }),
+      now: () => 99,
+    });
+    const otherClaim = await other.claimTurn(claimInput);
+    await describe(30);
+    expect(reads).toHaveBeenCalled();
+    await other.releaseTurn(otherClaim);
+    await projection.ensureMaterialized();
 
-      reads.mockClear();
-      const shared = createWorkerSessionPlacementStore({ database, now: () => nowMs });
-      nowMs = 40;
-      const sharedClaim = await shared.claimTurn(claimInput);
-      await describe(40);
-      expect(reads).not.toHaveBeenCalled();
-      nowMs = 50;
-      await shared.releaseTurn(sharedClaim);
-      await describe(50);
-      expect(reads).not.toHaveBeenCalled();
-    } finally {
-      resumeRead.resolve();
-      projection.dispose();
-    }
+    reads.mockClear();
+    const shared = createWorkerSessionPlacementStore({ database, now: () => nowMs });
+    nowMs = 40;
+    const sharedClaim = await shared.claimTurn(claimInput);
+    await describe(40);
+    expect(reads).not.toHaveBeenCalled();
+    nowMs = 50;
+    await shared.releaseTurn(sharedClaim);
+    await describe(50);
+    expect(reads).not.toHaveBeenCalled();
   });
 });
 
@@ -771,11 +853,11 @@ it("reuses placement after runtime events and entry writes and refreshes actual 
     });
     const sharedReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
     for (const [index, record] of [recordNativeParticipant, recordSessionParticipant].entries()) {
-      const identity = { type: "agent" as const, id: `peer-${index}` };
+      const participantIdentity = { type: "agent" as const, id: `peer-${index}` };
       for (const promptedAt of [10, 20]) {
         rowFactReads.length = 0;
         sharedReads.mockClear();
-        expect(await record(target, { identity, promptedAt })).toBe(
+        expect(await record(target, { identity: participantIdentity, promptedAt })).toBe(
           promptedAt === 10 ? "inserted" : "updated",
         );
         await describe({
@@ -829,5 +911,90 @@ it("reuses placement after runtime events and entry writes and refreshes actual 
     replaceSessionEntrySync(target, { sessionId: "replacement-session", updatedAt: 2 });
     const respond = await describe({ sessionId: "replacement-session" });
     expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("session.placement");
+  });
+});
+
+it("prepares cold ACP shared facts without filesystem work in optional receipt lookup", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const key = "agent:main:acp:cold-shared-probe";
+    const entry: SessionEntry = {
+      sessionId: "cold-shared-probe",
+      lifecycleRevision: "probe-generation",
+      updatedAt: 1,
+    };
+    const row = createRow(
+      {
+        key,
+        agentId: "main",
+        storeTarget: { agentId: "main", storePath: state.path("agent-projection.sqlite") },
+      },
+      entry,
+    );
+    using reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    const readCount = () =>
+      reads.mock.calls.filter(([, command]) => command.type === "sessionRows.sharedFacts").length;
+    const prepare = async (env: NodeJS.ProcessEnv, expectedReads: number) => {
+      const databasePath = resolveOpenClawStateSqlitePath(env);
+      const beforeReads = readCount();
+      const prepared: RetainedSessionRowDatabaseFacts = {
+        sessionKey: key,
+        entry,
+        hasBoard: false,
+        transcriptAssistantMessage: null,
+      };
+      using filesystem = observeMainThreadFs();
+      const read = acpRows.readPublishedAcpSessionRows;
+      let getterFilesystemCalls = 0;
+      using observed = vi
+        .spyOn(acpRows, "readPublishedAcpSessionRows")
+        .mockImplementation((...args) => {
+          const before = filesystem.count();
+          try {
+            return read(...args);
+          } finally {
+            getterFilesystemCalls += filesystem.count() - before;
+          }
+        });
+      const shared = captureOpenClawStateReadWorkerContext({ env, path: databasePath });
+      const pending = prepareSessionRowSharedFacts({
+        rows: [row],
+        facts: new Map([[identity(row), prepared]]),
+        env,
+        shared,
+      });
+      if (pending) {
+        const reply = await pending.reply;
+        pending.assertCurrent();
+        await pending.accept(reply);
+        pending.assertCurrent();
+      }
+      expect(observed).toHaveBeenCalledTimes(1);
+      expect(getterFilesystemCalls).toBe(0);
+      expect(readCount() - beforeReads).toBe(expectedReads);
+      return prepared.acpMeta;
+    };
+    const original = resolveOpenClawStateSqlitePath(state.env);
+    expect(getSqliteDatabaseAdmissionIdentityForPath(original)).toBeUndefined();
+    expect(await prepare(state.env, 1)).toBeNull();
+    expect(await prepare(state.env, 1)).toBeNull();
+    await expect(fs.stat(original)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const metadata = acpProjectionMeta("probe-backend", "probe-runtime", 7);
+    seedCanonicalAcpSessionMeta({
+      sessionKey: key,
+      lifecycleRevision: entry.lifecycleRevision,
+      meta: metadata,
+      env: state.env,
+    });
+    expect(await prepare(state.env, 0)).toMatchObject(metadata);
+
+    await closeOpenClawStateDatabaseAsync();
+    const env = { ...state.env, OPENCLAW_STATE_DIR: state.path("copied-shared-state") };
+    const copied = resolveOpenClawStateSqlitePath(env);
+    await fs.mkdir(path.dirname(copied), { recursive: true });
+    await fs.copyFile(original, copied);
+    expect(getSqliteDatabaseAdmissionIdentityForPath(copied)).toBeUndefined();
+    expect(await prepare(env, 1)).toMatchObject(metadata);
+    expect(await prepare(env, 0)).toMatchObject(metadata);
   });
 });

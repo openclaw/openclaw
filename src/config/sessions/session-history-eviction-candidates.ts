@@ -10,9 +10,11 @@ import type {
   ArchivedSessionEvictionQuery,
 } from "./disk-budget.types.js";
 import { collectRecentSessionHistoryIds } from "./session-accessor.sqlite-history-recency.js";
-import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
-import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import {
+  collectSessionStateIdsForEntry,
+  readReferencedSessionIds,
+} from "./session-accessor.sqlite-references.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";

@@ -94,7 +94,7 @@ export function readSelectedSessionEntryRows(
       ]),
   );
   const participantQuery = windowQuery.$if(
-    options?.includeWindowFacts === true &&
+    (options?.includeWindowFacts === true || options?.includeRowTranscriptProjection === true) &&
       options.projectParticipants !== false &&
       projection !== "delivery",
     (builder) =>
@@ -114,7 +114,6 @@ export function readSelectedSessionEntryRows(
                     inner.ref("actor_id"),
                     inner.ref("identity_namespace"),
                   ],
-                  "native",
                 ).as("identities"),
               )
               .whereRef("session_participants.session_key", "=", "session_nodes.session_key")
@@ -138,12 +137,29 @@ export function readSelectedSessionEntryRows(
           "session_nodes.current_session_id",
         )
         .select([
-          "row_transcript_window.session_id as row_transcript_window_id",
           "row_transcript_window.row_transcript_json",
           "row_transcript_window.row_transcript_updated_at",
           "row_transcript_window.transcript_updated_at as row_transcript_source_updated_at",
           "row_transcript_index.indexed_seq as row_transcript_indexed_seq",
-        ]),
+        ])
+        .select((eb) =>
+          eb
+            .or([
+              eb.exists(
+                eb
+                  .selectFrom("transcript_events")
+                  .select("seq")
+                  .whereRef("session_id", "=", "session_nodes.current_session_id"),
+              ),
+              eb.exists(
+                eb
+                  .selectFrom("session_transcript_cold_archives")
+                  .select("session_id")
+                  .whereRef("session_id", "=", "session_nodes.current_session_id"),
+              ),
+            ])
+            .as("row_transcript_present"),
+        ),
   );
   const eb = expressionBuilder<OpenClawAgentKyselyDatabase, "session_nodes">();
   // Old stores have no board tables until first use; branch before compiling SQL.
@@ -166,9 +182,12 @@ export function readSelectedSessionEntryRows(
           ? outer
               .selectFrom("session_members")
               .select((builder) =>
-                jsonOrderedArray(database.db, builder.ref("identity_id"), [
+                jsonOrderedArray(
+                  database.db,
                   builder.ref("identity_id"),
-                ]).as("ids"),
+                  [builder.ref("identity_id")],
+                  "not-null",
+                ).as("ids"),
               )
               .whereRef("session_members.session_key", "=", "session_nodes.session_key")
               .$asScalar()

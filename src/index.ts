@@ -8,6 +8,7 @@ import {
   resolveOpenClawCompileCacheDirectory,
   resolveOpenClawCompileCacheRespawnEnv,
 } from "../node-compile-cache.mjs";
+import { forwardToReleaseLauncher } from "../release-launcher-forward.mjs";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { resolveCliDatabaseProcessRole } from "./cli/database-process-role.js";
 import { isForegroundGatewayRunArgv } from "./cli/gateway-run-argv.js";
@@ -31,9 +32,12 @@ const isMain = isMainModule({
 if (isMain) {
   installDatabaseProcessRole(resolveCliDatabaseProcessRole(normalizeWindowsArgv(process.argv)));
 }
-const handledAdmission =
-  isMain && (await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv)));
 const packageRootUrl = new URL("../", import.meta.url);
+// A converted install's older entry points run the current release through its launcher.
+const handledAdmission =
+  isMain &&
+  ((await forwardToReleaseLauncher(packageRootUrl)) ||
+    (await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv))));
 if (
   !handledAdmission &&
   !existsSync(new URL("entry.ts", import.meta.url)) &&
@@ -170,59 +174,28 @@ if (shouldRunCli && !compileCacheRespawnEnv) {
     foregroundGateway: isForegroundGatewayRunArgv(process.argv),
   });
   const [
-    { formatCliFailureLines, formatCliJsonFailure, isExpectedCliError },
+    { formatCliFailureLines, formatCliJsonFailure, handleCliUncaughtException, isExpectedCliError },
     { isJsonOutputModeActive },
     { runCliWithExitFinalization },
     { withCliProcessScope },
-    { formatUncaughtError },
     { runFatalErrorHooks },
-    {
-      installUnhandledRejectionHandler,
-      isBenignUncaughtExceptionError,
-      isUncaughtExceptionHandled,
-    },
+    { installUnhandledRejectionHandler },
   ] = await Promise.all([
     import("./cli/failure-output.js"),
     import("./cli/json-output-mode.js"),
     import("./cli/one-shot-exit.js"),
     import("./cli/runtime-cleanup-scope.js"),
-    import("./infra/errors.js"),
     import("./infra/fatal-error-hooks.js"),
     import("./infra/unhandled-rejections.js"),
   ]);
 
   const { defaultRuntime, restoreRuntimeTerminalState } = await import("./runtime.js");
-  const { exitAfterSignalExitBarriers } = await import("./cli/signal-exit-barrier.js");
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
-    if (isUncaughtExceptionHandled(error)) {
-      return;
-    }
-    if (isBenignUncaughtExceptionError(error)) {
-      console.warn(
-        "[openclaw] Non-fatal uncaught exception (continuing):",
-        formatUncaughtError(error),
-      );
-      return;
-    }
-    if (isJsonOutputModeActive(process.argv)) {
-      defaultRuntime.writeJson(formatCliJsonFailure(error));
-    }
-    for (const line of formatCliFailureLines({
-      title: "OpenClaw hit an unexpected runtime error.",
-      error,
-      argv: process.argv,
-    })) {
-      console.error(line);
-    }
-    for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
-      console.error("[openclaw]", message);
-    }
-    restoreRuntimeTerminalState("uncaught exception");
-    exitAfterSignalExitBarriers(1, "uncaught exception");
+    handleCliUncaughtException(error);
   });
 
   void runCliWithExitFinalization({

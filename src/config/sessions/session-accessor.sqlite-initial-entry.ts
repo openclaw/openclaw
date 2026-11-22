@@ -8,13 +8,10 @@ import type {
   SessionTranscriptWriteScope,
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRowScan } from "./session-accessor.sqlite-entry-read.js";
-import {
-  parseReadableSqliteSessionEntryRow,
-  writeSessionEntry,
-} from "./session-accessor.sqlite-entry-store.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
+import { assertCanonicalSessionKeyWrite } from "./session-canonical-row.js";
 /** Lazy session identity creation, including the original admission's first writer claim. */
 import type { InitialSessionEntryCommit } from "./session-manager-write-contract.js";
 import {
@@ -47,13 +44,7 @@ export function ensureSessionEntryInTransaction(
   ) {
     return { owned: false };
   }
-  const previous = new Map<string, SessionEntry>();
-  for (const row of snapshot?.rows ?? []) {
-    const previousEntry = parseReadableSqliteSessionEntryRow(database, row);
-    if (previousEntry) {
-      previous.set(row.session_key, previousEntry);
-    }
-  }
+  const previous = snapshot?.entries ?? new Map<string, SessionEntry>();
   const persisted = writeSessionEntry(
     database,
     resolved.sessionKey,

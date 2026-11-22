@@ -28,17 +28,15 @@ type ExpectedGatewayAuth =
   | { token: string; deviceToken?: never }
   | { token?: never; deviceToken: string };
 
-async function startGateway(
+export async function startGateway(
   handle: ((ws: WebSocket, frame: Request) => void) | Record<string, unknown>,
   connect?: (frame: Request) => Hello,
   host = "127.0.0.1",
 ) {
-  let connectionCount = 0;
   const calls: string[] = [];
   const wss = new WebSocketServer({ host, port: 0 });
   activeServers.add(wss);
   wss.on("connection", (ws) => {
-    connectionCount += 1;
     sendMinimalGatewayConnectChallenge(ws);
     ws.on("message", (data) => {
       const frame = parseMinimalGatewayRequestFrame(data);
@@ -70,8 +68,9 @@ async function startGateway(
     calls,
     url: "ws://" + host + ":" + port,
     port,
-    get connectionCount() {
-      return connectionCount;
+    close: async () => {
+      await closeMinimalGatewayServer(wss);
+      activeServers.delete(wss);
     },
   };
 }
@@ -129,6 +128,14 @@ export async function startCliReadGateway(token?: string): Promise<{ url: string
       if (frame.method === "cron.status") {
         sendMinimalGatewayResponse(ws, frame.id, { enabled: true, jobs: 0 });
       }
+      if (
+        frame.method === "diagnostics.cpuProfile" ||
+        frame.method === "diagnostics.heapSnapshot"
+      ) {
+        sendMinimalGatewayResponse(ws, frame.id, {
+          captured: frame.method === "diagnostics.cpuProfile" ? "cpu" : "heap",
+        });
+      }
       if (frame.method === "message.action") {
         expect(frame.params).toMatchObject({
           channel: "discord",
@@ -139,7 +146,13 @@ export async function startCliReadGateway(token?: string): Promise<{ url: string
         sendMinimalGatewayResponse(ws, frame.id, { messages: [] });
       }
     },
-    authenticate(token, ["cron.list", "cron.status", "message.action"]),
+    authenticate(token, [
+      "cron.list",
+      "cron.status",
+      "message.action",
+      "diagnostics.cpuProfile",
+      "diagnostics.heapSnapshot",
+    ]),
   );
 }
 

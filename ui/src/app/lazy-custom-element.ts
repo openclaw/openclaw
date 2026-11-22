@@ -1,11 +1,9 @@
-type CustomElementModuleLoader = () => Promise<unknown>;
-
 const pendingLoads = new Map<string, Promise<void>>();
 
 /** Load a custom-element module once and verify that it registered its tag. */
 export function ensureCustomElementDefined(
   tagName: string,
-  loadModule: CustomElementModuleLoader,
+  loadModule: () => Promise<unknown>,
 ): Promise<void> {
   if (customElements.get(tagName)) {
     return Promise.resolve();

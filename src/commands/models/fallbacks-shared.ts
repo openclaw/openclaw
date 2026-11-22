@@ -1,4 +1,4 @@
-import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { resolveAgentModelFallbackValues, toAgentModelListLike } from "../../config/model-input.js";
@@ -67,18 +67,18 @@ export async function listFallbacksCommand(
   }
   if (opts.plain) {
     for (const entry of fallbacks) {
-      writeRuntimeStdout(runtime, sanitizeTerminalText(entry));
+      writeRuntimeStdout(runtime, terminalText`${entry}`);
     }
     return;
   }
 
-  runtime.log(`${params.label} (${fallbacks.length}):`);
+  runtime.log(terminalText`${params.label} (${fallbacks.length}):`);
   if (fallbacks.length === 0) {
     runtime.log("- none");
     return;
   }
   for (const entry of fallbacks) {
-    runtime.log(`- ${sanitizeTerminalText(entry)}`);
+    runtime.log(terminalText`- ${entry}`);
   }
 }
 
@@ -137,10 +137,10 @@ export async function changeFallbacksCommand(
   );
 
   if (warning) {
-    runtime.error?.(warning);
+    runtime.error?.(terminalText`${warning}`);
   }
   logConfigUpdated(runtime);
-  runtime.log(`${params.label}: ${getFallbacks(updated, params.key).join(", ")}`);
+  runtime.log(terminalText`${params.label}: ${getFallbacks(updated, params.key).join(", ")}`);
 }
 
 export async function clearFallbacksCommand(
@@ -152,5 +152,5 @@ export async function clearFallbacksCommand(
   });
 
   logConfigUpdated(runtime);
-  runtime.log(params.clearedMessage);
+  runtime.log(terminalText`${params.clearedMessage}`);
 }

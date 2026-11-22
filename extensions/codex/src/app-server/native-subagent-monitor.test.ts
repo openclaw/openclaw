@@ -9,6 +9,7 @@ import {
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import {
+  collabItem,
   directSpawnItem,
   CodexNativeSubagentMonitor,
   registerCodexNativeSubagentMonitor,
@@ -50,26 +51,12 @@ describe("CodexNativeSubagentMonitor", () => {
     first.bindTurn("turn-first");
     second.bindTurn("turn-second");
 
-    await client.notify({
-      method: "item/completed",
-      params: {
-        threadId: "parent-thread",
-        turnId: "turn-second",
-        item: directSpawnItem("v1", "parent-thread", "child-second"),
-      },
-    });
+    await client.item(directSpawnItem("v1", "parent-thread", "child-second"), "turn-second");
     expect(firstClaim).not.toHaveBeenCalled();
     expect(secondClaim).toHaveBeenCalledWith("child-second");
 
     await second.unregister();
-    await client.notify({
-      method: "item/completed",
-      params: {
-        threadId: "parent-thread",
-        turnId: "turn-first",
-        item: directSpawnItem("v1", "parent-thread", "child-first"),
-      },
-    });
+    await client.item(directSpawnItem("v1", "parent-thread", "child-first"), "turn-first");
     expect(firstClaim).toHaveBeenCalledWith("child-first");
     await monitor.dispose();
   });
@@ -81,27 +68,17 @@ describe("CodexNativeSubagentMonitor", () => {
 
     await notifyChildStarted(client, "parent-thread", "child-thread", "");
     await client.notify(turnStartedNotification("child-turn"));
-    await client.notify({
-      method: "item/completed",
-      params: {
-        threadId: "parent-thread",
-        turnId: "parent-turn",
-        item: {
-          type: "collabAgentToolCall",
-          id: "wait-child",
-          tool: "wait",
-          status: "completed",
-          senderThreadId: "parent-thread",
-          receiverThreadIds: ["child-thread"],
-          agentsStates: {
-            "child-thread": {
-              status: "completed",
-              message: "child final result",
-            },
+    await client.item(
+      collabItem("wait", ["child-thread"], {
+        id: "wait-child",
+        agentsStates: {
+          "child-thread": {
+            status: "completed",
+            message: "child final result",
           },
         },
-      },
-    });
+      }),
+    );
 
     expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
     await parent.unregister();

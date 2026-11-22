@@ -11,11 +11,17 @@ import {
   bundledPluginCaptureInputs,
   resolveBundledPluginReloadSource,
 } from "./plugin-bundled-reload.js";
-import { resetPluginCache, waitForPluginCacheRetirement } from "./plugin-cache.js";
+import {
+  getPluginCacheRoot,
+  resetPluginCache,
+  waitForPluginCacheRetirement,
+} from "./plugin-cache.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
+import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const instances: PluginInstance[] = [];
@@ -29,6 +35,82 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 type Probe = { value: string; increment: () => number; late: () => Promise<string> };
+
+it.each(
+  ["_scriptName", "import.meta.url"].flatMap((base) =>
+    ["sync", "async"].map((mode) => ({ base, mode })),
+  ),
+)(
+  "does not capture the host build for a discarded URL based on $base ($mode)",
+  async ({ base, mode }) => {
+    const root = temp.make("bundled-reload-url-base-");
+    const captures = temp.make("bundled-reload-url-captures-");
+    const plugin = path.join(root, "dist/extensions/demo");
+    const entry = path.join(plugin, "index.mjs");
+    const codec = path.join(root, "dist/codec.mjs");
+    const asset = path.join(root, "dist/codec.wasm");
+    const unrelated = path.join(root, "dist/unrelated/private.txt");
+    const codecBytes = `const _scriptName = import.meta.url;
+    export const asset = new URL("./codec.wasm", _scriptName);
+    export function probe() {
+      if (globalThis.window) new URL(".", ${base}).href;
+    }`;
+    fs.mkdirSync(plugin, { recursive: true });
+    fs.mkdirSync(path.dirname(unrelated), { recursive: true });
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
+    fs.writeFileSync(entry, 'export { probe } from "../../codec.mjs";');
+    fs.writeFileSync(codec, codecBytes);
+    fs.writeFileSync(asset, Buffer.from("0061736d01000000", "hex"));
+    fs.writeFileSync(unrelated, "unrelated host asset");
+    fs.writeFileSync(
+      path.join(root, "dist/runtime-dependency-ownership.json"),
+      JSON.stringify({
+        chunks: {
+          "codec.mjs": {
+            sha256: createHash("sha256").update(codecBytes).digest("hex"),
+            extensions: ["demo"],
+          },
+        },
+      }),
+    );
+    const policy = resolveBundledPluginReloadSource(plugin);
+    const artifact =
+      mode === "async"
+        ? (
+            await withPluginSourceCaptureStorage(
+              { stateDir: captures, placement: "temporary" },
+              () =>
+                preparePluginGenerationArtifact({
+                  rootDir: plugin,
+                  source: entry,
+                  bundledReload: true,
+                }),
+            )
+          ).artifact
+        : withPluginSourceCaptureDirectory(captures, () =>
+            capturePluginGenerationArtifact(
+              ...bundledPluginCaptureInputs({
+                rootDir: plugin,
+                source: entry,
+                bundledReloadSource: policy,
+              }),
+              (run) => run(),
+              undefined,
+              undefined,
+              undefined,
+              policy,
+            ),
+          );
+    try {
+      expect(artifact.hasSource(entry)).toBe(true);
+      expect(artifact.hasSource(codec)).toBe(true);
+      expect(artifact.hasSource(asset)).toBe(true);
+      expect(artifact.hasSource(unrelated)).toBe(false);
+    } finally {
+      await artifact.disposeAsync();
+    }
+  },
+);
 
 it("leaves absolute host imports outside a captured dependency's package untouched", async () => {
   const root = temp.make("bundled-reload-dependency-source-");
@@ -51,7 +133,11 @@ it("leaves absolute host imports outside a captured dependency's package untouch
   const policy = resolveBundledPluginReloadSource(plugin);
   const artifact = withPluginSourceCaptureDirectory(captures, () =>
     capturePluginGenerationArtifact(
-      ...bundledPluginCaptureInputs(plugin, entry, policy, false, false),
+      ...bundledPluginCaptureInputs({
+        rootDir: plugin,
+        source: entry,
+        bundledReloadSource: policy,
+      }),
       (run) => run(),
       undefined,
       undefined,
@@ -144,7 +230,7 @@ it("keeps host shared imports available to bundled Workers across recovery and d
   expect(fs.readdirSync(fileURLToPath(load(instance).directory.href))).toContain("alias");
   expect(host.count).toBe(1);
   await runWorker(load(instance).workerUrl);
-  const recovery = withPluginSourceCaptureDirectory(captures, () =>
+  const recovery = await withPluginSourceCaptureDirectory(captures, () =>
     instance.captureModuleLoaderRecovery(),
   );
   await instance.dispose();
@@ -210,7 +296,7 @@ it("captures bundled WebAssembly libraries without requiring their bundled-away 
   const load = (owner: PluginInstance) =>
     (owner.loadModule(entry) as { default(): boolean }).default();
   expect(load(instance)).toBe(true);
-  const recovery = withPluginSourceCaptureDirectory(captures, () =>
+  const recovery = await withPluginSourceCaptureDirectory(captures, () =>
     instance.captureModuleLoaderRecovery(),
   );
   await instance.dispose();
@@ -325,6 +411,8 @@ it.each([
   };
   writeVersion("A");
   const first = create();
+  // The host package keeps its own cache facts while the plugin code is captured.
+  expect(getPluginCacheRoot(selectedRoot)).not.toBe(getPluginCacheRoot(root));
   expect(load(first).value).toBe("AA");
   expect(load(first).increment()).toBe(1);
   expect(host.count).toBe(1);
@@ -334,7 +422,7 @@ it.each([
   expect(load(second).increment()).toBe(2);
   expect(host.count).toBe(2);
   expect(await second.run(() => load(second).late())).toBe("B late");
-  const recovery = withPluginSourceCaptureDirectory(captures, () =>
+  const recovery = await withPluginSourceCaptureDirectory(captures, () =>
     second.captureModuleLoaderRecovery(),
   );
   await second.dispose();

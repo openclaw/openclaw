@@ -17,6 +17,8 @@ export type UserProfileAvatarInspection = {
   profile: UserProfile | undefined;
   hasAvatar: boolean;
   avatar?: Omit<UserProfileAvatar, "bytes"> & { byteLength: number };
+  /** Built by the verified GitHub identity owner, never caller-supplied remote metadata. */
+  githubAvatarUrl?: string;
   emails: string[];
 };
 

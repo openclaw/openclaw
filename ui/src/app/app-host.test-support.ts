@@ -58,7 +58,7 @@ export function createRosterRefreshContext(params: {
     agents: { state: agentsState, refreshList, invalidateFiles: actions.invalidateFiles },
     agentIdentity: { invalidate: actions.invalidateIdentity, ensure: actions.ensureIdentity },
     agentSelection: { state: selectionState, set: actions.setSelection },
-    runtimeConfig: { state: { configFormDirty: false }, refresh: actions.refreshConfig },
+    runtimeConfig: { state: { configFormDirty: false }, refreshDisplay: actions.refreshConfig },
   } as unknown as ApplicationContext;
   return { context, ...actions };
 }

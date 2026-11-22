@@ -1,8 +1,6 @@
 import { saveResponseMedia } from "openclaw/plugin-sdk/media-runtime";
-import { resolveMSTeamsMediaKind } from "./shared.js";
+import { resolveMSTeamsMediaKind } from "./html.js";
 import type { MSTeamsInboundMedia } from "./types.js";
-
-type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 /**
  * Direct save path used when the caller supplies the already-guarded fetch
@@ -12,7 +10,7 @@ type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respo
 export async function downloadAndStoreMSTeamsRemoteMedia(params: {
   url: string;
   filePathHint: string;
-  fetchImpl: FetchLike;
+  fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   maxBytes: number;
   contentTypeHint?: string;
   kind?: MSTeamsInboundMedia["kind"];

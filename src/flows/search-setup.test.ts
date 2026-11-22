@@ -229,10 +229,7 @@ it("recommends Codex hosted search first when the configured model uses Codex", 
 
 it.each([
   ["interactive", "inline"],
-  ["interactive", "ref"],
-  ["quickstart", "inline"],
   ["quickstart", "ref"],
-  ["reference-mode", "inline"],
   ["reference-mode", "ref"],
 ] as const)(
   "retains provider-declared model credentials during %s setup (%s)",

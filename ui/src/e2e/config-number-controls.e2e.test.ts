@@ -24,6 +24,7 @@ function values(request: MockGatewayRequest): Record<string, number> {
 suite.define(() => {
   it("starts empty numeric buttons and native arrows at the same permitted endpoint", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      await page.clock.install();
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "config.get": configSnapshot({ laboratory: {} }, "numeric-endpoints", true),
@@ -53,6 +54,8 @@ suite.define(() => {
         const before = (await gateway.getRequests("config.set")).length;
         const step = `${field.direction === 1 ? "+" : "-"}${field.multipleOf}`;
         await page.getByRole("button", { name: `${field.title}: ${step}`, exact: true }).click();
+        // Each native edit has synchronously armed the owner's 800 ms autosave.
+        await page.clock.runFor(801);
         const request = await gateway.waitForRequest("config.set", { after: before });
         buttonValues[field.key] = values(request)[field.key]!;
         await expect.poll(() => input.inputValue()).toBe(String(buttonValues[field.key]));
@@ -62,10 +65,12 @@ suite.define(() => {
         const before = (await gateway.getRequests("config.set")).length;
         await input.fill("");
         await input.blur();
+        await page.clock.runFor(801);
         const cleared = await gateway.waitForRequest("config.set", { after: before });
         expect(values(cleared)).not.toHaveProperty(field.key);
         await expect.poll(() => input.isEnabled()).toBe(true);
         await input.press(field.direction === 1 ? "ArrowUp" : "ArrowDown");
+        await page.clock.runFor(801);
         const request = await gateway.waitForRequest("config.set", { after: before + 1 });
         keyboardValues[field.key] = values(request)[field.key]!;
       }

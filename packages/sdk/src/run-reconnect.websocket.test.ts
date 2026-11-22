@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vite
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { OpenClaw } from "./client.js";
 import { GatewayClientTransport } from "./transport.js";
-import { createSdkWebSocketServer } from "./transport.websocket.test-support.js";
+import { createSdkWebSocketServer, replySdkRequest } from "./transport.websocket.test-support.js";
 import type { OpenClawEvent } from "./types.js";
 
 let gateway: Awaited<ReturnType<typeof createSdkWebSocketServer>>;
@@ -44,15 +44,7 @@ type Reply = (payload: unknown, ok?: boolean) => void;
 type Socket = Parameters<typeof gateway.sendEvent>[0];
 function respond(handler: (request: Request, reply: Reply, socket: Socket) => unknown) {
   gateway.setRequestHandler((socket, request) => {
-    const reply: Reply = (payload, ok = true) =>
-      socket.send(
-        JSON.stringify({
-          type: "res",
-          id: request.id,
-          ok,
-          ...(ok ? { payload } : { error: payload }),
-        }),
-      );
+    const reply: Reply = (payload, ok = true) => replySdkRequest(socket, request.id, payload, ok);
     const result = handler(request, reply, socket);
     if (result !== undefined) {
       reply(result);
@@ -90,7 +82,13 @@ const submit = (
 ) => oc.request("chat.send", { ...target, message: "hello", idempotencyKey });
 
 async function expectNext(events: AsyncIterator<OpenClawEvent>, value: unknown) {
-  await expect(events.next()).resolves.toMatchObject({ value });
+  const next = await events.next();
+  expect(next).toMatchObject({ value });
+  return next.value;
+}
+
+async function expectRecovery(events: AsyncIterator<OpenClawEvent>, value: unknown) {
+  expect((await expectNext(events, value))?.raw).toBeUndefined();
 }
 
 function createClient(options: ConstructorParameters<typeof GatewayClientTransport>[0] = {}) {
@@ -144,74 +142,64 @@ async function baseline(): Promise<AsyncIterator<OpenClawEvent>> {
   return events;
 }
 
-it.each(["agent-lifecycle", "chat-delta", "accepted", "chat-final"])(
+it.each(["chat-delta", "accepted", "chat-final"])(
   "preserves the full terminal reply across a %s reconnect",
   async (mode) => {
-    const outputText =
-      mode === "accepted" ? "complete output" : `    ${"complete answer ".repeat(400)}\n`;
+    const accepted = mode === "accepted",
+      delivered = mode === "chat-final";
+    const outputText = accepted ? "complete output" : `    ${"complete answer ".repeat(400)}\n`;
+    const terminalReply = accepted
+      ? { text: "clipped summary" }
+      : { disposition: "visible", text: outputText.slice(0, 4_096) };
     const methods: string[] = [];
     respond((request) => {
       methods.push(request.method);
-      return request.method === "chat.send"
-        ? runResult("started")
-        : request.method === "agent.wait"
-          ? runResult("ok", {
-              endedAt: 123,
-              terminalReply:
-                mode === "accepted"
-                  ? { text: "clipped summary" }
-                  : { disposition: "visible", text: outputText.slice(0, 4_096) },
-            })
-          : historyResult({
-              messages: [
-                { role: "assistant", content: outputText, __openclaw: { runId: scope.runId } },
-              ],
-            });
+      if (request.method === "chat.send") {
+        return runResult("started");
+      }
+      if (request.method === "agent.wait") {
+        return runResult("ok", { endedAt: 123, terminalReply });
+      }
+      return historyResult({
+        messages: [{ role: "assistant", content: outputText, __openclaw: { runId: scope.runId } }],
+      });
     });
     const connection = await connect();
-    if (mode === "accepted") {
+    if (accepted) {
       await submit(scope.runId);
     }
-    const events =
-      mode === "accepted" ? oc.runEvents(scope.runId)[Symbol.asyncIterator]() : await baseline();
-    const terminal = mode === "accepted" ? undefined : events.next();
+    const events = accepted ? oc.runEvents(scope.runId)[Symbol.asyncIterator]() : await baseline();
+    const terminal = accepted ? undefined : events.next();
     const socket = gateway.socket();
     const sendGap = (event: string, payload: unknown, seq: number) => {
       socket.send(JSON.stringify({ type: "event", event, payload, seq }));
     };
-    if (mode === "accepted") {
+    if (accepted) {
       socket.close();
     } else {
-      sendGap(
-        mode === "agent-lifecycle" ? "agent" : "chat",
-        mode === "agent-lifecycle"
-          ? { ...scope, stream: "lifecycle", data: { phase: "end" } }
-          : mode === "chat-final"
-            ? chat("final", outputText)
-            : chat("delta", undefined, { deltaText: " lost suffix" }),
-        3,
-      );
-      if (mode !== "chat-final") {
+      const payload = delivered
+        ? chat("final", outputText)
+        : chat("delta", undefined, { deltaText: " lost suffix" });
+      sendGap("chat", payload, 3);
+      if (!delivered) {
         sendGap("chat", chat("final", outputText), 4);
       }
     }
-    const delivered = mode === "chat-final" ? await terminal : undefined;
+    const beforeReconnect = delivered ? await terminal : undefined;
     await connection.reconnect(false);
-    const recovered = delivered ?? (await (terminal ?? events.next()));
+    const recovered = beforeReconnect ?? (await (terminal ?? events.next()));
     expect(recovered.value).toMatchObject({
       type: "run.completed",
       data: {
         outputText,
-        ...(mode === "chat-final" ? {} : { recovery: { status: "recovered" } }),
+        ...(delivered ? {} : { recovery: { status: "recovered" } }),
       },
     });
-    if (mode !== "chat-final") {
+    if (!delivered) {
       expect(recovered.value?.raw).toBeUndefined();
     }
     expect(methods).toEqual(
-      mode === "chat-final"
-        ? []
-        : [...(mode === "accepted" ? ["chat.send"] : []), "agent.wait", "chat.history"],
+      delivered ? [] : [...(accepted ? ["chat.send"] : []), "agent.wait", "chat.history"],
     );
     await events.return?.();
   },
@@ -227,9 +215,21 @@ function assistant(
 
 it("bounds replay after 150 confirmed session unsubscribe cycles", async () => {
   createLiveClient();
-  const subscriptions = new Map<string, { runId: string; sessionKey: string }>();
   let runIndex = 0;
-  function sessionDelta(...[socket, target, data]: Parameters<typeof assistant>) {
+  respond((request, _reply, socket) => {
+    const key = request.params.key;
+    if (typeof key !== "string") {
+      throw new Error("Expected a session key");
+    }
+    const canonicalKey = key === "global" ? key : `agent:main:${key}`;
+    if (
+      !["sessions.messages.subscribe", "sessions.messages.unsubscribe"].includes(request.method)
+    ) {
+      throw new Error(`Unexpected request: ${request.method}`);
+    }
+    const subscribed = request.method === "sessions.messages.subscribe";
+    const target = { runId: `run-${runIndex}`, sessionKey: canonicalKey };
+    const data = subscribed ? { text: "prefix", delta: "prefix" } : { delta: " tail" };
     gateway.sendEvent(socket, "chat", {
       ...target,
       agentId: "main",
@@ -238,29 +238,11 @@ it("bounds replay after 150 confirmed session unsubscribe cycles", async () => {
       ...(data.text ? { message: { role: "assistant", content: data.text } } : {}),
     });
     assistant(socket, target, data);
-  }
-  respond((request, _reply, socket) => {
-    const key = request.params.key;
-    if (typeof key !== "string") {
-      throw new Error("Expected a session key");
-    }
-    const canonicalKey = key === "global" ? key : `agent:main:${key}`;
-    if (request.method === "sessions.messages.subscribe") {
-      const target = { runId: `run-${runIndex++}`, sessionKey: canonicalKey };
-      subscriptions.set(key, target);
-      sessionDelta(socket, target, { text: "prefix", delta: "prefix" });
-      return { subscribed: true, key: canonicalKey };
-    } else if (request.method === "sessions.messages.unsubscribe") {
-      const target = subscriptions.get(key);
-      if (!target) {
-        throw new Error("Expected a live subscription");
-      }
-      sessionDelta(socket, target, { delta: " tail" });
+    if (!subscribed) {
       gateway.sendEvent(socket, "board.changed", {});
-      subscriptions.delete(key);
-      return { subscribed: false, key: canonicalKey };
+      runIndex++;
     }
-    return undefined;
+    return { subscribed, key: canonicalKey };
   });
   await oc.connect();
   for (let index = 0; index < 150; index += 1) {
@@ -268,7 +250,6 @@ it("bounds replay after 150 confirmed session unsubscribe cycles", async () => {
     await oc.request("sessions.messages.subscribe", { key, agentId: "main" });
     await oc.request("sessions.messages.unsubscribe", { key, agentId: "main" });
   }
-  expect(subscriptions.size).toBe(0);
   const recent = oc.runEvents("run-50")[Symbol.asyncIterator]();
   await expectNext(recent, { data: { text: "prefix" } });
   const expired = oc.runEvents("run-49")[Symbol.asyncIterator]();
@@ -332,11 +313,11 @@ it("keeps healthy concurrent event readers alive when another subscriber fails",
   await expect(normalizedFirst).resolves.toMatchObject({
     value: { type: "assistant.delta", data: { text: "hello", delta: "hello" } },
   });
-  const normalizedSecond = await normalized.next();
-  expect(normalizedSecond).toMatchObject({
-    value: { type: "assistant.delta", data: { text: "hello world", delta: " world" } },
+  const normalizedSecond = await expectNext(normalized, {
+    type: "assistant.delta",
+    data: { text: "hello world", delta: " world" },
   });
-  expect(normalizedSecond.value?.raw?.payload).not.toHaveProperty("message");
+  expect(normalizedSecond?.raw?.payload).not.toHaveProperty("message");
 });
 
 it.each(["history", "newer-live-snapshot", "failed-history"])(
@@ -363,16 +344,10 @@ it.each(["history", "newer-live-snapshot", "failed-history"])(
     resolveHistory();
     await waiting;
     if (mode === "history") {
-      const recovered = await events.next();
-      expect(recovered.value).toMatchObject({
+      await expectRecovery(events, {
         type: "assistant.delta",
-        data: {
-          text: "hello recovered",
-          replace: true,
-          recovery: { projection: "chat" },
-        },
+        data: { text: "hello recovered", replace: true, recovery: { projection: "chat" } },
       });
-      expect(recovered.value?.raw).toBeUndefined();
     } else if (mode === "failed-history") {
       await expectNext(events, {
         type: "raw",
@@ -447,12 +422,10 @@ it.each(["queued", "pending-error", "unavailable"])(
     });
     await connection.reconnect();
     if (mode === "unavailable") {
-      const unavailable = await events.next();
-      expect(unavailable.value).toMatchObject({
+      await expectRecovery(events, {
         type: "raw",
         data: { recovery: { status: "unavailable", reason: "run-state-unavailable" } },
       });
-      expect(unavailable.value?.raw).toBeUndefined();
       await vi.advanceTimersByTimeAsync(1_000);
       await rearmed.promise;
     } else {
@@ -477,13 +450,8 @@ it("releases 150 accepted runs before their first output without inferring owner
       return runResult("started", { runId: request.params.idempotencyKey });
     } else if (request.method === "sessions.messages.unsubscribe") {
       const key = request.params.key;
-      return {
-        key:
-          key === "review"
-            ? `agent:${request.params.agentId === "ops" ? "ops" : "main"}:review`
-            : key,
-        subscribed: false,
-      };
+      const owner = request.params.agentId === "ops" ? "ops" : "main";
+      return { key: key === "review" ? `agent:${owner}:review` : key, subscribed: false };
     } else if (request.method === "agent.wait") {
       waited.push(String(request.params.runId));
       return runResult("ok", {

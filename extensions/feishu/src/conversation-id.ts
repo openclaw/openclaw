@@ -66,10 +66,7 @@ export function parseFeishuDirectConversationId(raw: unknown): string | undefine
     return undefined;
   }
   const withoutProvider = stripFeishuProviderPrefix(target);
-  if (!withoutProvider) {
-    return undefined;
-  }
-  const lowered = normalizeLowercaseStringOrEmpty(withoutProvider);
+  const lowered = withoutProvider.toLowerCase();
   for (const prefix of ["user:", "dm:", "open_id:"]) {
     if (lowered.startsWith(prefix)) {
       return normalizeText(withoutProvider.slice(prefix.length));

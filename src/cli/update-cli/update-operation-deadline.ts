@@ -48,18 +48,48 @@ export function createUpdateOperationDeadline<E extends Error = Error>(
     get failure() {
       return failure;
     },
-    start(error: E, timeoutMs: number) {
+    start(error: E, timeoutMs: number, absoluteDeadlineAtMs?: number) {
       assertCurrent();
       if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
         throw new Error("Update operation requires a finite positive budget.");
       }
+      if (absoluteDeadlineAtMs !== undefined && !Number.isFinite(absoluteDeadlineAtMs)) {
+        throw new Error("Update operation requires a finite deadline.");
+      }
       if (admission) {
         return;
       }
-      admission = { error, timeoutMs, deadlineAtMs: performance.now() + timeoutMs };
-      cancelDeadline = scheduleAbsoluteDeadline(admission.deadlineAtMs, inspectDeadline, () =>
-        performance.now(),
-      );
+      admission = {
+        error,
+        timeoutMs,
+        deadlineAtMs: absoluteDeadlineAtMs ?? performance.now() + timeoutMs,
+      };
+      inspectDeadline();
+      if (!failure) {
+        cancelDeadline = scheduleAbsoluteDeadline(admission.deadlineAtMs, inspectDeadline, () =>
+          performance.now(),
+        );
+      }
+    },
+    /** Separately bounded work the budget does not cover: the deadline moves by its duration. */
+    async exclude<T>(operation: () => Promise<T>): Promise<T> {
+      assertCurrent();
+      const started = admission;
+      if (!started) {
+        return await operation();
+      }
+      cancelDeadline?.();
+      const pausedAtMs = performance.now();
+      try {
+        return await operation();
+      } finally {
+        started.deadlineAtMs += performance.now() - pausedAtMs;
+        if (!closed && !failure) {
+          cancelDeadline = scheduleAbsoluteDeadline(started.deadlineAtMs, inspectDeadline, () =>
+            performance.now(),
+          );
+        }
+      }
     },
     async run<T>(
       operation: () => Promise<T>,

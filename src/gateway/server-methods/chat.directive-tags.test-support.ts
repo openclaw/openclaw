@@ -34,6 +34,63 @@ import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readChatSendDedupeResponse } from "./chat-send-reservation.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
+export const handedOffDashboardSession = {
+  createdVia: "spawn",
+  spawnedBy: "agent:main:main",
+  parentSessionKey: "agent:main:main",
+  spawnDepth: 1,
+} as const;
+
+export const deniedChatCronAuthorityCases = [
+  {
+    name: "internal re-entry, including Talk consults",
+    client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
+    directExternal: false,
+    message: "Talk realtime agent consult prompt",
+  },
+  {
+    name: "incognito session",
+    client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
+    sessionEntry: { incognito: true },
+  },
+  {
+    name: "synthetic client",
+    client: {
+      internal: { isLocalClient: true, syntheticClient: true },
+      scopes: ["operator.admin"],
+    },
+  },
+  {
+    name: "input provenance",
+    client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
+    requestParams: { systemInputProvenance: { kind: "external_user" } },
+  },
+  {
+    name: "explicit origin",
+    client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
+    requestParams: { originatingChannel: "slack", originatingTo: "D123" },
+  },
+  {
+    name: "delegated handoff",
+    client: {
+      internal: { isLocalClient: true, delegatedToolPolicyHandoffId: "handoff-1" },
+      scopes: ["operator.admin"],
+    },
+  },
+  {
+    name: "spawned lineage",
+    client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
+    sessionEntry: { spawnedBy: "agent:main:parent" },
+  },
+  {
+    name: "persisted cron continuation",
+    client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
+    sessionEntry: {
+      cronRunContinuation: { lifecycleRevision: "revision-1", phase: "running" },
+    },
+  },
+];
+
 export function createExpectedAcpUserTurn(params: {
   content: string;
   idempotencyKey: string;
@@ -47,6 +104,7 @@ export function createExpectedAcpUserTurn(params: {
     idempotencyKey: params.idempotencyKey,
     __openclaw: {
       chatRequestIdentity: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      modelSelection: { provider: "openai", model: "gpt-6-astra" },
       requesterOrigin: {
         sessionKey: "agent:main:main",
         messageProvider: "webchat",
@@ -203,8 +261,16 @@ export function readChatDirectiveConfig(
   state: Pick<ChatDirectiveSessionState, "config" | "mainSessionKey" | "storePath">,
 ): OpenClawConfig {
   const session = state.config.session as OpenClawConfig["session"];
-  return inheritLegacyDefaultAgentId(state.config, {
-    ...state.config,
+  const agents = state.config.agents as OpenClawConfig["agents"];
+  // Chat runs need a configured model; fixtures that name none get the test default.
+  const withModel = agents?.defaults?.model
+    ? state.config
+    : {
+        ...state.config,
+        agents: { ...agents, defaults: { ...agents?.defaults, model: "openai/gpt-6-astra" } },
+      };
+  return inheritLegacyDefaultAgentId(withModel, {
+    ...withModel,
     session: {
       ...session,
       mainKey: state.mainSessionKey,

@@ -16,12 +16,15 @@ import type { NativeDeviceSettingsCapability } from "../app/native-device-settin
 import { t } from "../i18n/index.ts";
 import { registerAppsEnglish } from "../i18n/locales/en-apps.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
-import { loadCronCatalog } from "../lib/cron/catalog.ts";
+import { registerRouteSubtitlesEnglish } from "../i18n/locales/en-route-subtitles.ts";
+import { readCronInventory } from "../lib/cron/inventory.ts";
 import type { PluginListResult } from "../lib/plugins/index.ts";
 import { settingsNavigationLabelForRoute } from "../lib/settings-navigation.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
 import type { IconName } from "./icon-data.ts";
 import { askBrandLabel } from "./theme-brand-label.ts";
+
+registerRouteSubtitlesEnglish();
 
 registerCommandPaletteEnglish();
 
@@ -155,9 +158,9 @@ export function filterCommandPaletteItems(params: {
   if (!params.query) {
     return baseItems;
   }
-  const query = normalizeLowercaseStringOrEmpty(params.query);
+  const query = normalizeLowercaseStringOrEmpty(params.query).normalize("NFC");
   const matchRank = (item: CommandPaletteItem) => {
-    const label = normalizeLowercaseStringOrEmpty(item.label);
+    const label = normalizeLowercaseStringOrEmpty(item.label).normalize("NFC");
     if (label === query) {
       return 3;
     }
@@ -165,10 +168,10 @@ export function filterCommandPaletteItems(params: {
       return 2;
     }
     return label.includes(query) ||
-      normalizeLowercaseStringOrEmpty(item.description).includes(query) ||
-      normalizeLowercaseStringOrEmpty(item.searchText).includes(query) ||
+      normalizeLowercaseStringOrEmpty(item.description).normalize("NFC").includes(query) ||
+      normalizeLowercaseStringOrEmpty(item.searchText).normalize("NFC").includes(query) ||
       (params.primaryModelSearch &&
-        normalizeLowercaseStringOrEmpty(item.primaryModel).includes(query))
+        normalizeLowercaseStringOrEmpty(item.primaryModel).normalize("NFC").includes(query))
       ? 1
       : 0;
   };
@@ -257,7 +260,20 @@ export async function loadCommandPaletteCatalogItems(params: {
       : null;
   const [agents, automations, skills, plugins] = await Promise.all([
     params.agents().catch(() => null),
-    params.methodAvailable("cron.list") ? loadCronCatalog(params.client).catch(() => null) : null,
+    params.methodAvailable("cron.list")
+      ? readCronInventory(
+          params.client,
+          {
+            includeDisabled: true,
+            compact: true,
+            limit: 200,
+            offset: 0,
+            sortBy: "name",
+            sortDir: "asc",
+          },
+          { legacyCache: true },
+        ).catch(() => null)
+      : null,
     requestIfAvailable<SkillStatusReport>("skills.status", { agentId: params.agentId }),
     requestIfAvailable<PluginListResult>("plugins.list", {}),
   ]);

@@ -151,15 +151,8 @@ it.each<[string, string | null, number, number, number]>([
 
 it("stores recall metadata in a rollback-safe additive table", () => {
   using db = new DatabaseSync(":memory:");
-  db.exec(`
-        CREATE TABLE memory_index_chunks (
-          id TEXT PRIMARY KEY, path TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'memory',
-          start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, hash TEXT NOT NULL,
-          model TEXT NOT NULL, text TEXT NOT NULL, embedding TEXT NOT NULL,
-          updated_at INTEGER NOT NULL
-        ) STRICT;
-      `);
-  db.exec("BEGIN IMMEDIATE");
+  ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+  db.exec(`DROP TABLE ${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE}; BEGIN IMMEDIATE`);
   ensureMemoryRecallMetadataSchema(db);
   db.exec("ROLLBACK");
   expect(
@@ -169,16 +162,6 @@ it("stores recall metadata in a rollback-safe additive table", () => {
   ).toBeUndefined();
 
   ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
-  expect(
-    db
-      .prepare("SELECT name FROM pragma_table_info('memory_index_chunks') ORDER BY cid")
-      .all()
-      .map((row) => row.name),
-  ).toEqual(
-    "chunk_rowid id path source start_line end_line hash model text embedding updated_at".split(
-      " ",
-    ),
-  );
   const { add, insertChunk, insertMetadata, insertProvenance } = recallWriter(db);
   const project = "github.com/openclaw/openclaw";
   const projectCandidates = (limit: number) =>

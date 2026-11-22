@@ -11,6 +11,7 @@ import {
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
 } from "../../media-understanding/defaults.js";
+import { decodeDataUrl } from "../../media/image-data-url.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -30,7 +31,6 @@ import { sanitizeContentBlocksImages } from "../tool-images.js";
 import { readPositiveIntegerParam, type AnyAgentTool } from "./common.js";
 import {
   coerceImageModelConfig,
-  decodeDataUrl,
   type ImageModelConfig,
   resolveConfiguredImageModelRefs,
   resolveProviderVisionModelFromConfig,
@@ -63,6 +63,20 @@ import { textResult } from "./tool-results.js";
 const DEFAULT_PROMPT = "Describe the image.";
 const DEFAULT_MAX_IMAGES = 20;
 
+const ImageToolSchema = Type.Object({
+  prompt: Type.Optional(Type.String()),
+  path: Type.Optional(Type.String({ description: "One local image path or permitted URL." })),
+  paths: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "Local image paths or permitted URLs; maxImages default 20.",
+    }),
+  ),
+  model: Type.Optional(Type.String()),
+  maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
+  maxImages: optionalPositiveIntegerSchema(),
+});
+const NativeVisionImageToolSchema = Type.Omit(ImageToolSchema, ["model"]);
+
 type LoadedImageForTool = {
   buffer: Buffer;
   mimeType: string;
@@ -92,7 +106,6 @@ function isExecutionAliasCandidateForProvider(
 
 function resolveImageModelConfigForTool(params: {
   cfg?: OpenClawConfig;
-  agentDir: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
@@ -139,7 +152,6 @@ function resolveImageModelConfigForTool(params: {
     const decision = resolveOpenAiImageMediaCandidate({
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
       authStore: params.authStore,
       openAiModel,
       resolveCodexMediaRoute,
@@ -151,21 +163,27 @@ function resolveImageModelConfigForTool(params: {
     return decision.kind === "keep" ? decision.ref : null;
   };
 
-  const providerVisionFromConfig = resolveProviderVisionModelFromConfig({
-    cfg: params.cfg,
-    provider: primary.provider,
-  });
-  const primaryModelId = providerVisionFromConfig
-    ? providerVisionFromConfig.slice(providerVisionFromConfig.indexOf("/") + 1)
-    : resolveDefaultMediaModel({
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        providerId: primary.provider,
-        capability: "image",
-        includeConfiguredImageModels: !isMinimaxVlmProvider(primary.provider),
-      });
-  const primaryCandidates =
-    providerVisionFromConfig || primaryModelId
+  // No configured model contributes no primary-provider candidates.
+  const providerVisionFromConfig =
+    primary &&
+    resolveProviderVisionModelFromConfig({
+      cfg: params.cfg,
+      provider: primary.provider,
+    });
+  const primaryModelId = !primary
+    ? undefined
+    : providerVisionFromConfig
+      ? providerVisionFromConfig.slice(providerVisionFromConfig.indexOf("/") + 1)
+      : resolveDefaultMediaModel({
+          cfg: params.cfg,
+          workspaceDir: params.workspaceDir,
+          providerId: primary.provider,
+          capability: "image",
+          includeConfiguredImageModels: !isMinimaxVlmProvider(primary.provider),
+        });
+  const primaryCandidates = !primary
+    ? []
+    : providerVisionFromConfig || primaryModelId
       ? [
           primary.provider === "openai"
             ? resolveImplicitOpenAiImageCandidate(primaryModelId ?? "")
@@ -207,11 +225,12 @@ function resolveImageModelConfigForTool(params: {
   const defaultPrimaryIsImplicit = !resolveAgentModelPrimaryValue(
     params.cfg?.agents?.defaults?.model,
   );
-  const primaryAliasCandidates = defaultPrimaryIsImplicit
-    ? autoCandidates.filter((candidate) =>
-        isExecutionAliasCandidateForProvider(candidate, primary.provider),
-      )
-    : [];
+  const primaryAliasCandidates =
+    defaultPrimaryIsImplicit && primary
+      ? autoCandidates.filter((candidate) =>
+          isExecutionAliasCandidateForProvider(candidate, primary.provider),
+        )
+      : [];
   const remainingAutoCandidates =
     primaryAliasCandidates.length === 0
       ? autoCandidates
@@ -221,7 +240,6 @@ function resolveImageModelConfigForTool(params: {
     explicit,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
     authStore: params.authStore,
     candidates: [...primaryAliasCandidates, ...primaryCandidates, ...remainingAutoCandidates],
     isProviderConfigured: (provider) =>
@@ -234,7 +252,6 @@ export function createImageTool(options?: {
   agentId?: string;
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   sandbox?: MediaToolSandbox;
@@ -275,18 +292,7 @@ export function createImageTool(options?: {
     name: "view_image",
     description,
     ...(modelHasVision ? { catalogMode: "direct-only" as const } : {}),
-    parameters: Type.Object({
-      prompt: Type.Optional(Type.String()),
-      path: Type.Optional(Type.String({ description: "One local image path or permitted URL." })),
-      paths: Type.Optional(
-        Type.Array(Type.String(), {
-          description: "Local image paths or permitted URLs; maxImages default 20.",
-        }),
-      ),
-      ...(modelHasVision ? {} : { model: Type.Optional(Type.String()) }),
-      maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
-      maxImages: optionalPositiveIntegerSchema(),
-    }),
+    parameters: modelHasVision ? NativeVisionImageToolSchema : ImageToolSchema,
     execute: async (_toolCallId, args, suppliedSignal) =>
       runWithAsyncWorkResources(async (onAcquired) => {
         const record = asRecord(args);
@@ -356,7 +362,6 @@ export function createImageTool(options?: {
             assertCurrent();
             imageModelConfig = resolveImageModelConfigForTool({
               cfg: options?.config,
-              agentDir,
               workspaceDir: options?.workspaceDir,
               authStore,
               preparedModelRuntime: options?.preparedModelRuntime,

@@ -209,6 +209,10 @@ describe("runStatusJsonCommand", () => {
     expect(result).toEqual({
       ...runtimeSnapshot,
       ok: true,
+      recoveryCopies: expect.objectContaining({
+        scope: "local",
+        total: expect.objectContaining({ count: 0, logicalBytes: 0 }),
+      }),
       os: { platform: "linux" },
       update,
       updateChannel: "stable",

@@ -132,6 +132,7 @@ export function insertOperatorApprovalInDatabase(params: {
           kind: input.kind,
           status: "pending",
           presentation_json: presentationJson,
+          requested_by_profile_id: normalizeNullableString(input.requester?.profileId),
           requested_by_device_id: normalizeNullableString(input.requester?.deviceId),
           requested_by_client_id: normalizeNullableString(input.requester?.clientId),
           requested_by_device_token_auth: input.requester?.deviceTokenAuth === true ? 1 : 0,
@@ -257,6 +258,34 @@ type PendingApprovalInput = {
   limit?: number;
   nowMs?: number;
 };
+
+/** Seed the receipt-maintained view once; replay ordering belongs to its session buckets. */
+export function readOperatorApprovalPendingSnapshotInDatabase(
+  params: { cursor?: string },
+  db: EngineConnection,
+) {
+  let query = getNodeSqliteKysely<OperatorApprovalDatabase>(db)
+    .selectFrom("operator_approvals")
+    .selectAll()
+    .where("status", "=", "pending")
+    .orderBy("approval_id", "asc")
+    .limit(256);
+  if (params.cursor !== undefined) {
+    query = query.where("approval_id", ">", params.cursor);
+  }
+  const { rows } = executeSqliteQuerySync(db, query);
+  const records: OperatorApprovalRecord[] = [];
+  const corrupt: { id: string; createdAtMs: number }[] = [];
+  for (const row of rows) {
+    const record = decodeOperatorApprovalRow(row);
+    if (record) {
+      records.push(record);
+    } else {
+      corrupt.push({ id: row.approval_id, createdAtMs: row.created_at_ms });
+    }
+  }
+  return { records, corrupt, cursor: rows.length === 256 ? rows.at(-1)!.approval_id : undefined };
+}
 
 export function readPendingOperatorApprovalsInDatabase(
   params: PendingApprovalInput,

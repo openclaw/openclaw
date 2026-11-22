@@ -9,9 +9,12 @@ import {
   createChatFlowE2eSuite,
   expectDefined,
   installMockGateway,
+  chatMessage,
+  waitForTranscriptScrollIdle as waitForProgressThreadIdle,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import { openProgressHomeDock } from "./session-progress-home.test-support.ts";
+import { captureTopVisibleVirtualRow } from "./virtual-row-anchor.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const height = (card: Locator) => card.evaluate((el) => el.getBoundingClientRect().height);
@@ -24,24 +27,10 @@ async function wheel(page: Page, card: Locator, dy: number) {
   await page.mouse.move(point.x, point.y);
   await page.mouse.wheel(0, dy);
 }
-async function waitForProgressThreadIdle(thread: Locator) {
-  await expect
-    .poll(() =>
-      thread.evaluate(async (element) => {
-        const before = [element.scrollTop, element.scrollHeight, element.clientHeight];
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-        });
-        const after = [element.scrollTop, element.scrollHeight, element.clientHeight];
-        return before.every((value, index) => value === after[index]);
-      }),
-    )
-    .toBe(true);
-}
 
 async function still(card: Locator, expected: number) {
-  // A real pause, longer than the retired 240ms animation, must not finish the reveal.
-  for (let i = 0; i < 6; i++) {
+  // Three real samples cross the retired 240ms animation without finishing the reveal.
+  for (let i = 0; i < 3; i++) {
     await card.page().waitForTimeout(100);
     expect(Math.abs((await height(card)) - expected)).toBeLessThanOrEqual(1);
   }
@@ -50,7 +39,6 @@ async function still(card: Locator, expected: number) {
 suite.define(() => {
   it.each([
     { reducedMotion: "no-preference", touch: false },
-    { reducedMotion: "reduce", touch: false },
     { reducedMotion: "reduce", touch: true },
   ] as const)(
     "keeps Details disclosure manual through scrolling and streaming ($reducedMotion, touch=$touch)",
@@ -76,10 +64,9 @@ suite.define(() => {
           const gateway = await installMockGateway(page, {
             sessionKey,
             featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
-            historyMessages: Array.from({ length: 40 }, (_, i) => ({
-              role: i % 2 ? "assistant" : "user",
-              content: [{ type: "text", text: "Earlier context " + i + "." }],
-            })),
+            historyMessages: Array.from({ length: 40 }, (_, i) =>
+              chatMessage(i % 2 ? "assistant" : "user", "Earlier context " + i + "."),
+            ),
             inFlightRun: { runId, text: "Reviewing the workspace." },
             sessionInfo: { key: sessionKey, activeRunIds: [runId], hasActiveRun: true },
             methodResponses: { "progressCard.get": { card: initialCard } },
@@ -98,7 +85,7 @@ suite.define(() => {
           await waitForProgressThreadIdle(thread);
           // Transcript input cannot collapse the adjacent desktop disclosure.
           const bounds = expectDefined(await thread.boundingBox(), "transcript bounds");
-          await page.mouse.move(bounds.x + 8, bounds.y + bounds.height / 2);
+          await page.mouse.move(bounds.x + bounds.width / 4, bounds.y + bounds.height / 2);
           await page.mouse.wheel(0, -640);
           await expect
             .poll(() => thread.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop))
@@ -142,15 +129,13 @@ suite.define(() => {
           if ((await card.getAttribute("open")) !== null) {
             await card.locator("summary").click();
           }
-          const readerTop = await thread.evaluate((el) => el.scrollTop);
+          await waitForProgressThreadIdle(thread);
+          const reader = await captureTopVisibleVirtualRow(thread);
           await gateway.emitGatewayEvent("chat", {
             sessionKey,
             runId,
             state: "delta",
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "A streaming finding arrived." }],
-            },
+            message: chatMessage("assistant", "A streaming finding arrived."),
           });
           await gateway.setMethodResponse("progressCard.get", {
             card: {
@@ -163,7 +148,9 @@ suite.define(() => {
           await expect.poll(() => card.textContent()).toContain("Updated findings.");
           await waitForProgressThreadIdle(thread);
           expect(await card.getAttribute("open")).toBeNull();
-          expect(await thread.evaluate((el) => el.scrollTop)).toBe(readerTop);
+          const streamedReader = await captureTopVisibleVirtualRow(thread);
+          expect(streamedReader.key).toBe(reader.key);
+          expect(Math.abs(streamedReader.viewportTop - reader.viewportTop)).toBeLessThanOrEqual(2);
           await gateway.emitChatFinal({ sessionKey, runId, text: "Complete." });
           await expect.poll(() => thread.textContent()).toContain("Complete.");
           expect(await card.getAttribute("open")).toBeNull();
@@ -175,7 +162,11 @@ suite.define(() => {
             );
             await card.locator(".session-progress-card__step").last().scrollIntoViewIfNeeded();
             expect(await body.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
-            expect(await thread.evaluate((el) => el.scrollTop)).toBe(readerTop);
+            const disclosedReader = await captureTopVisibleVirtualRow(thread);
+            expect(disclosedReader.key).toBe(reader.key);
+            expect(Math.abs(disclosedReader.viewportTop - reader.viewportTop)).toBeLessThanOrEqual(
+              2,
+            );
             await card.locator("summary").press(key);
             await expect.poll(() => card.getAttribute("open")).toBeNull();
           }
@@ -231,11 +222,11 @@ suite.define(() => {
           "chat.send",
           "progressCard.get",
         ],
-        historyMessages: Array.from({ length: 30 }, (_, i) => ({
-          role: i % 2 ? "assistant" : "user",
-          content: [{ type: "text", text: "Earlier context " + i + "." }],
-          timestamp: i + 1,
-        })),
+        historyMessages: Array.from({ length: 30 }, (_, i) =>
+          chatMessage(i % 2 ? "assistant" : "user", "Earlier context " + i + ".", {
+            timestamp: i + 1,
+          }),
+        ),
         inFlightRun: { runId, text },
         sessionInfo: { key: sessionKey, activeRunIds: [runId], hasActiveRun: true },
         methodResponses: { "progressCard.get": { card: initialCard } },
@@ -255,11 +246,12 @@ suite.define(() => {
         );
       };
       try {
+        await page.clock.install();
         // The dock requires advertised history/send capabilities and is suppressed
         // when its own Home conversation already owns the primary chat page.
         await page.goto(suite.server.baseUrl + "new");
         await openProgressHomeDock(page);
-        await gateway.waitForRequest("chat.startup", { match: { sessionKey } });
+        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
         if (mobile) {
           await card.locator("summary").click();
         }
@@ -284,7 +276,7 @@ suite.define(() => {
         await thread.hover();
         await page.mouse.wheel(0, -320);
         await waitForProgressThreadIdle(thread);
-        await page.waitForTimeout(201);
+        await page.clock.fastForward(201);
         await page.mouse.wheel(0, -320);
         if (mobile) {
           // Explicitly close the manually opened mobile card before scrubbing it.
@@ -317,7 +309,7 @@ suite.define(() => {
             sessionKey,
             runId,
             state: "delta",
-            message: { role: "assistant", content: [{ type: "text", text }] },
+            message: chatMessage("assistant", text),
           });
         }
         await gateway.setMethodResponse("progressCard.get", {

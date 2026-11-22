@@ -3,10 +3,6 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 
-type ProviderReplaySanitizeMode = "full" | "images-only";
-
-type ProviderReplayToolCallIdMode = "strict" | "strict9";
-
 export type ProviderReasoningOutputMode = "native" | "tagged";
 
 /**
@@ -17,9 +13,9 @@ export type ProviderReasoningOutputMode = "native" | "tagged";
  * with its default policy.
  */
 export type ProviderReplayPolicy = {
-  sanitizeMode?: ProviderReplaySanitizeMode;
+  sanitizeMode?: "full" | "images-only";
   sanitizeToolCallIds?: boolean;
-  toolCallIdMode?: ProviderReplayToolCallIdMode;
+  toolCallIdMode?: "strict" | "strict9";
   duplicateToolCallIdStyle?: "openai";
   preserveNativeAnthropicToolUseIds?: boolean;
   preserveSignatures?: boolean;

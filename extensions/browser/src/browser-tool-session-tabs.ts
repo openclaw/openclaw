@@ -13,12 +13,7 @@ type SessionTabRegistry = Pick<
   "trackSessionBrowserTab" | "touchSessionBrowserTab" | "untrackSessionBrowserTab"
 >;
 
-function readOpenedTab(result: unknown): {
-  targetId?: string;
-  aliases: string[];
-  profile?: string;
-  ownership?: BrowserTabOwnership;
-} {
+function readOpenedTab(result: unknown) {
   const opened = asNullableRecord(result);
   if (!opened) {
     return { aliases: [] };

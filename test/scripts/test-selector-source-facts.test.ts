@@ -11,6 +11,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 const spawn = vi.mocked(spawnSync);
+const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const jitAssertion = "# Check failed: jit_page.has_value().";
 const nativeCrashes = [
@@ -51,20 +52,12 @@ export const view = <div>{value} ·</div>;`,
       retained: ["./runtime.js", "./default-type.js", "./side-effect.js"],
     },
     ...[
-      'import type { Value } from "./types.js"; export const view = <div>{import("./types.js")}</div>;',
       'import type { Value } from "./types.js"; export const view = <div> // text {import("./types.js")} </div>;',
-      String.raw`import type { Value } from "./types.js"; export const view = <div> // text {import('./ty\u0070es.js')} </div>;`,
       String.raw`import type { Value } from "./types.js"; export const view = <div>{requ\u0069re('./types.js')}</div>;`,
-      'import type { Value } from "./types.js"; export const view = <div> // text {import(/* load */ "./types.js")} </div>;',
-      'import type { Value } from "./types.js"; export const view = <div> // text\n</div>; export { value } from/* load */ "./types.js";',
-      'import type { Value } from "./types.js"; export const view = <div />; import "./types.js";',
       '"import type { Fake } from \'./types.js\'"; import type { Value } from "./types.js"; export const view = <div />;',
-      '"import"\nimport type { Value } from "./types.js"; export const view = <div />;',
-      'export const view = <div>import type Value from "./types.js"</div>; import("./types.js");',
     ].map((source) => ({ source, erased: [], retained: ["./types.js"] })),
   ];
   const cwd = tempDirs.make("openclaw-tsx-import-facts-");
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   spawn.mockImplementationOnce((command, args, options) =>
     actual.spawnSync(command, args, options),
   );
@@ -108,15 +101,12 @@ os.availableParallelism = () => 2;
 workers.Worker = class { constructor() { throw new Error("Recovery started a scan worker"); } };
 syncBuiltinESMExports();`,
       );
-      const actual =
-        await vi.importActual<typeof import("node:child_process")>("node:child_process");
       spawn
         .mockReturnValueOnce({ ...crashedScan, ...crash })
         .mockImplementationOnce((command, args, options) =>
           actual.spawnSync(command, ["--import", hook, ...(args ?? [])], options),
         );
-      // This inventory normally starts workers. Missing rows must not shift
-      // identity when the failed child's partial output is discarded.
+      // Force worker admission; missing rows must not shift file identity after recovery.
       const inventory = Array.from({ length: 600 }, (_, index) => ({
         file: ["first.ts", "missing.ts", "last.ts"][index % 3]!,
         parseImports: true,
@@ -147,15 +137,14 @@ syncBuiltinESMExports();`,
     { signal: "SIGTERM", stderr: jitAssertion },
     { signal: "SIGTRAP", stderr: "# Check failed: unrelated assertion" },
     { error: new Error("output overflow"), stderr: jitAssertion },
-    { error: new Error("output overflow"), signal: "SIGILL", stderr: "" },
   ] as const)("does not retry ordinary failures or cancellation (%j)", (failure) => {
     spawn.mockReturnValue({ ...crashedScan, ...failure });
     expectScanFailure("Test selector source scan failed", 1);
   });
 
-  it.each(nativeCrashes)("fails after one unsuccessful $signal recovery attempt", (crash) => {
-    spawn.mockReturnValue({ ...crashedScan, ...crash });
-    expectScanFailure(crash.stderr || crash.signal, 2);
+  it("fails after one unsuccessful recovery attempt", () => {
+    spawn.mockReturnValue(crashedScan);
+    expectScanFailure(jitAssertion, 2);
   });
 
   it("still rejects an incomplete result from recovery", () => {

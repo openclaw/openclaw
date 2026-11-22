@@ -17,6 +17,7 @@ import {
   detachPluginConversationBinding,
   requestPluginConversationBinding,
 } from "./conversation-binding.js";
+import { createTelegramCodexBindRequest } from "./conversation-binding.test-fixtures.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import {
@@ -46,19 +47,12 @@ type TelegramFacade = {
 };
 
 const telegramConfig = { channels: { telegram: { botToken: "test-token" } } };
-const conversation = {
-  channel: "telegram",
-  accountId: "default",
-  conversationId: "-10099:topic:42",
-  parentConversationId: "-10099",
-  threadId: "42",
-};
-const codexIdentity = {
-  pluginId: "codex",
+const bindingTarget = {
+  ...createTelegramCodexBindRequest("-10099:topic:42", "42", "refreshed"),
   pluginName: "Codex",
-  pluginRoot: "/plugins/codex-a",
+  requestedBySenderId: undefined,
 };
-const bindingTarget = { ...codexIdentity, conversation };
+const { conversation } = bindingTarget;
 let facade: TelegramFacade;
 
 beforeAll(async () => {
@@ -140,7 +134,7 @@ async function createRegistryRuntimeFixture() {
   });
   onTestFinished(() => manager.stop());
   await telegram.run(() =>
-    bindConversationNow({ identity: codexIdentity, conversation, summary: "original" }),
+    bindConversationNow({ identity: bindingTarget, conversation, summary: "original" }),
   );
 
   const observer = createPluginStateKeyedStoreV2ForTests<StoredBinding>(
@@ -157,13 +151,7 @@ async function createRegistryRuntimeFixture() {
     record,
     snapshot,
     read: () => readStoredTarget(observer),
-    refresh: () =>
-      codex.run(() =>
-        requestPluginConversationBinding({
-          ...bindingTarget,
-          binding: { summary: "refreshed" },
-        }),
-      ),
+    refresh: () => codex.run(() => requestPluginConversationBinding(bindingTarget)),
     detach: () => codex.run(() => detachPluginConversationBinding(bindingTarget)),
   };
 }

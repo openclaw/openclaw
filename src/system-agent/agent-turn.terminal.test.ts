@@ -10,6 +10,7 @@ import {
   AGENT_RUN_SUPERSEDED_STOP_REASON,
   createAgentRunSupersededAbortError,
 } from "../agents/run-termination.js";
+import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import * as configModule from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
@@ -211,19 +212,10 @@ describe("system-agent terminal failure cleanup", () => {
       return runEmbeddedAgent();
     });
     vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(async () => ({
-      exists: true,
-      valid: true,
-      path: "/tmp/openclaw.json",
+      ...createTestConfigSnapshot(config),
       hash: "hash",
-      config,
-      runtimeConfig: config,
-      sourceConfig: config,
       raw: null,
       parsed: config,
-      resolved: config,
-      issues: [],
-      warnings: [],
-      legacyIssues: [],
     }));
     const failure = runSystemAgentTurn({
       input: "hello",

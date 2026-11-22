@@ -126,7 +126,7 @@ export function resolveActivatedPluginBackupInventory(params: {
         if (!activated && !postgresFamilies.has(resource.databaseFamily ?? plugin.id)) {
           continue;
         }
-        const key = `${plugin.id}\0${resource.scope}\0${resource.relativePath}\0${resource.disposition}\0${resource.databaseFamily ?? ""}`;
+        const key = `${plugin.id}\0${resource.scope}\0${resource.relativePath}\0${resource.disposition}\0${resource.databaseFamily ?? ""}\0${resource.profile ?? ""}`;
         if (!resources.has(key)) {
           resources.set(key, { pluginId: plugin.id, ...resource });
         }

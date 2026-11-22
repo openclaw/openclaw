@@ -28,23 +28,6 @@ afterEach(async () => {
   state = undefined;
 });
 
-function askOffCase(
-  name: string,
-  cfg: OpenClawConfig,
-  security: ExecSecurity,
-  expected: SessionEntry["permissionMode"],
-  scope: { host?: SessionEntry["execHost"]; sandbox?: SessionEntry["sandbox"] } = {},
-) {
-  return {
-    name,
-    cfg,
-    legacy: { execAsk: "off" },
-    oldPolicy: { security, ask: "off" as const },
-    expected,
-    ...scope,
-  };
-}
-
 const execConfig = (mode: ExecSecurity): OpenClawConfig => ({ tools: { exec: { mode } } });
 const denyConfig = execConfig("deny");
 const fullConfig = execConfig("full");
@@ -58,80 +41,72 @@ async function setup(cfg: OpenClawConfig = {}) {
 }
 
 describe("doctor legacy session exec policy", () => {
-  it.each<{
-    name: string;
-    cfg: OpenClawConfig;
-    legacy: { execSecurity?: string; execAsk?: string };
-    host?: SessionEntry["execHost"];
-    sandbox?: SessionEntry["sandbox"];
-    oldPolicy: { security: ExecSecurity; ask: ExecAsk };
-    expected: SessionEntry["permissionMode"];
-  }>([
-    askOffCase("partial ask under global deny", denyConfig, "deny", "read-only"),
-    askOffCase(
-      "partial ask under agent deny overriding global full",
-      {
-        ...fullConfig,
-        agents: { entries: { worker: { tools: { exec: { mode: "deny" } } } } },
-      },
-      "deny",
-      "read-only",
-    ),
-    askOffCase("partial ask under allowlist config", allowlistConfig, "allowlist", "guarded"),
-    askOffCase("partial ask under full config", fullConfig, "full", undefined),
-    {
-      name: "partial security inherits global ask always",
-      cfg: { tools: { exec: { security: "full", ask: "always" } } },
-      legacy: { execSecurity: "allowlist" },
-      oldPolicy: { security: "allowlist", ask: "always" },
-      expected: "read-only",
-    },
-    {
-      name: "partial security inherits agent ask always",
-      cfg: {
-        ...fullConfig,
-        agents: { entries: { worker: { tools: { exec: { ask: "always" } } } } },
-      },
-      legacy: { execSecurity: "full" },
-      oldPolicy: { security: "full", ask: "always" },
-      expected: "read-only",
-    },
-    askOffCase("partial ask in a required sandbox", {}, "deny", "read-only", {
-      sandbox: "required",
-    }),
-    askOffCase("partial ask with unknown auto sandbox availability", {}, "deny", "read-only", {
-      host: "auto",
-    }),
-    askOffCase("partial ask with explicit gateway and no config policy", {}, "full", undefined),
-  ])("does not broaden $name", async ({ cfg, legacy, host, sandbox, oldPolicy, expected }) => {
-    const { config, env } = await setup(cfg);
-    const scope = { agentId: "worker", env, sessionKey: "agent:worker:exec-policy" };
-    await replaceSessionEntry(scope, {
-      sessionId: "legacy-policy",
-      updatedAt: Date.now(),
-      execHost: host ?? "gateway",
-      ...(sandbox ? { sandbox } : {}),
-      ...legacy,
-    });
-    await noteSessionTranscriptHealth({ cfg: config, env, shouldRepair: true });
-    closeOpenClawAgentDatabasesForTest();
-    const migrated = listSessionEntriesCore(scope)[0]?.entry;
-    expect(migrated?.permissionMode).toBe(expected);
-    expect(migrated).not.toHaveProperty("execSecurity");
-    expect(migrated).not.toHaveProperty("execAsk");
-    // Resolve the stored policy without a sandbox or approval floor masking a
-    // broadened migration. These fixtures state the old effective pair explicitly.
-    const resolved = resolveExecDefaults({
-      cfg,
-      agentId: scope.agentId,
-      execApprovals: { version: 1 },
-      sessionEntry: { execHost: "gateway", permissionMode: migrated?.permissionMode },
-    });
-    expect(minSecurity(resolved.security, oldPolicy.security)).toBe(resolved.security);
-    if (resolved.security !== "deny") {
-      expect(maxAsk(resolved.ask, oldPolicy.ask)).toBe(resolved.ask);
-    }
+  type PolicyCase = [
+    name: string,
+    cfg: OpenClawConfig,
+    security: ExecSecurity,
+    ask: ExecAsk,
+    expected: SessionEntry["permissionMode"],
+    scope?: Pick<SessionEntry, "execHost" | "sandbox">,
+  ];
+  const agentConfig = (exec: { mode?: ExecSecurity; ask?: ExecAsk }): OpenClawConfig => ({
+    ...fullConfig,
+    agents: { entries: { worker: { tools: { exec } } } },
   });
+  it.each<PolicyCase>([
+    ["global deny", denyConfig, "deny", "off", "read-only"],
+    [
+      "agent deny overriding global full",
+      agentConfig({ mode: "deny" }),
+      "deny",
+      "off",
+      "read-only",
+    ],
+    ["allowlist config", allowlistConfig, "allowlist", "off", "guarded"],
+    ["full config", fullConfig, "full", "off", undefined],
+    [
+      "global ask always",
+      { tools: { exec: { security: "full", ask: "always" } } },
+      "allowlist",
+      "always",
+      "read-only",
+    ],
+    ["agent ask always", agentConfig({ ask: "always" }), "full", "always", "read-only"],
+    ["required sandbox", {}, "deny", "off", "read-only", { sandbox: "required" }],
+    ["unknown auto sandbox", {}, "deny", "off", "read-only", { execHost: "auto" }],
+    ["explicit gateway without config", {}, "full", "off", undefined],
+  ])(
+    "does not broaden partial policy under %s",
+    async (_name, cfg, security, ask, expected, scopeOverrides) => {
+      const { config, env } = await setup(cfg);
+      const scope = { agentId: "worker", env, sessionKey: "agent:worker:exec-policy" };
+      await replaceSessionEntry(scope, {
+        sessionId: "legacy-policy",
+        updatedAt: Date.now(),
+        execHost: "gateway",
+        ...scopeOverrides,
+        ...(ask === "always" ? { execSecurity: security } : { execAsk: "off" }),
+      });
+      await noteSessionTranscriptHealth({ cfg: config, env, shouldRepair: true });
+      closeOpenClawAgentDatabasesForTest();
+      const migrated = listSessionEntriesCore(scope)[0]?.entry;
+      expect(migrated?.permissionMode).toBe(expected);
+      expect(migrated).not.toHaveProperty("execSecurity");
+      expect(migrated).not.toHaveProperty("execAsk");
+      // Resolve the stored policy without a sandbox or approval floor masking a
+      // broadened migration. These fixtures state the old effective pair explicitly.
+      const resolved = resolveExecDefaults({
+        cfg,
+        agentId: scope.agentId,
+        execApprovals: { version: 1 },
+        sessionEntry: { execHost: "gateway", permissionMode: migrated?.permissionMode },
+      });
+      expect(minSecurity(resolved.security, security)).toBe(resolved.security);
+      if (resolved.security !== "deny") {
+        expect(maxAsk(resolved.ask, ask)).toBe(resolved.ask);
+      }
+    },
+  );
 
   it("migrates persisted restrictions without granting full access and reports each session once", async () => {
     const { config, env } = await setup();

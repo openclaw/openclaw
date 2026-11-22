@@ -18,7 +18,6 @@ import {
 } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { createSubagentSessionStore } from "./subagent-session-store.js";
-import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -32,21 +31,12 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
     throw new Error("Memory subagent capability lookup allocated a database worker");
   }),
 }));
-// mock-isolation: Exercise memory session creation without loading the spawn barrel's Gateway/channel runtime.
-vi.mock("./subagent-spawn.runtime.js", async () => ({
-  upsertSessionEntryCore: (
-    await import("../../../config/sessions/session-accessor.sqlite-entry.js")
-  ).upsertSessionEntryCore,
-}));
 
 const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
 type MemoryOwner = ReturnType<typeof memorySessionActorOwners.get>;
 let parent: MemoryOwner;
 let sibling: MemoryOwner;
-const skillLibrarySelections = [
-  { skillId: "spawn-skill", revision: "revision-one", name: "spawn-skill", ownerProfileId: null },
-];
 
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/subagent-capabilities");
@@ -117,50 +107,17 @@ it.each([
   { bound: true, crossAgent: false },
   { bound: true, crossAgent: true },
 ])(
-  "inherits current memory capabilities (bound=$bound, crossAgent=$crossAgent)",
+  "reads current memory capabilities (bound=$bound, crossAgent=$crossAgent)",
   async ({ bound, crossAgent }) => {
-    const parentKey = await create(parent, "capability-parent", {
-      spawnDepth: 2,
-      skillLibrarySelections,
-    });
+    const parentKey = await create(parent, "capability-parent", { spawnDepth: 2 });
     const childOwner = crossAgent ? sibling : parent;
-    const childKey = `agent:${childOwner.agentId}:dashboard:incognito-child`;
-    const parentEntry = expectDefined(
-      parent.readSession(parentKey, authority)?.entry,
-      "parent entry",
-    );
-    const result = await withMemorySource(parent, parentKey, () =>
-      createInitialSubagentSession({
-        cfg: {},
-        requesterAgentId: parent.agentId,
-        targetAgentId: childOwner.agentId,
-        requesterInternalKey: parentKey,
-        parentTarget: {
-          agentId: parent.agentId,
-          storePath: parent.path,
-          canonicalKey: parentKey,
-          storeKeys: [parentKey],
-          store: { [parentKey]: parentEntry },
-        },
-        childSessionKey: childKey,
-        incognito: true,
-        expectedParentSessionId: "capability-parent",
-        senderIsOwner: true,
-        creationPolicy: { actor: { type: "agent", id: parent.agentId } },
-        completionOwnerSessionKey: parentKey,
-        inheritedToolAllowlist: ["read"],
-        inheritedToolDenylist: ["exec"],
-        modelPatch: {},
-        collect: false,
-      }),
-    );
-    expect(result).toMatchObject({ status: "ok" });
-    await patchMemory(childOwner, childKey, { spawnDepth: 3 });
-    const child = expectDefined(childOwner.readSession(childKey, authority)?.entry, "child entry");
-    expect(child).toMatchObject({
-      spawnedBySessionId: "capability-parent",
-      parentSessionLifecycleRevision: "original",
-      skillLibrarySelections,
+    // Creation/lineage and inherited policy are owned by memory, session-patch and workspace tests.
+    const childKey = await create(childOwner, "child", {
+      spawnDepth: 3,
+      spawnedBy: parentKey,
+      inheritedToolPolicyVersion: 1,
+      inheritedToolAllow: ["read"],
+      inheritedToolDeny: ["exec"],
     });
     const read = async () => {
       const store = resolveSubagentCapabilityStore(childKey, { cfg: {} });
@@ -177,8 +134,8 @@ it.each([
       expect(policy()).toBeUndefined();
       expect(getSubagentDepthFromSessionStore(childKey, { cfg: {} })).toBe(3);
       const explicitStore = createSubagentSessionStore(childOwner.path, childOwner.agentId);
-      expect(explicitStore.getById(child.sessionId)).toMatchObject({
-        sessionId: child.sessionId,
+      expect(explicitStore.getById("child")).toMatchObject({
+        sessionId: "child",
         inheritedToolAllow: ["read"],
       });
       if (crossAgent) {

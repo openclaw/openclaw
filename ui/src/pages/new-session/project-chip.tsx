@@ -1,33 +1,68 @@
-import { lazy } from "solid-js";
+import { Errored, lazy, Loading, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { pathDisplayName } from "../../lib/path-display.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ProjectBrowserFocus } from "./draft-place-browser.ts";
 import { SessionPicker } from "./picker.tsx";
 import type { resolveProjectChip } from "./project-chip.ts";
+import { ProjectFolderIcon } from "./project-folder-icon.tsx";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
 const ProjectPickerContent = lazy(() => import("./project-picker-content.tsx"), {
   export: "ProjectPickerContent",
 });
 
+const ProjectIcon = lazy(() => import("./project-icon.tsx"), { export: "ProjectIcon" });
+
 export type ProjectChipProps = {
   params: NewSessionPlaceControlsOptions;
   state: ReturnType<typeof resolveProjectChip>;
   nativeTerminal: boolean;
+  labelPending?: boolean;
   focus?: ProjectBrowserFocus;
 };
 
 export function ProjectChip(props: ProjectChipProps) {
-  const label = () =>
-    props.params.place.deviceFolder ? t("newSession.deviceFolder") : props.state.label;
+  // A chosen device folder shows its own name; an empty path shows the choice.
+  const fallback = () => <ProjectFolderIcon />;
+  const label = () => {
+    const deviceFolder = props.params.place.deviceFolder;
+    if (!deviceFolder) {
+      return props.state.label;
+    }
+    return pathDisplayName(deviceFolder.path.trim()) || t("newSession.deviceFolder");
+  };
+  const folderWarning = () =>
+    props.params.place.deviceFolder
+      ? props.params.place.deviceFolderRuntimeUnsupportedReason
+      : undefined;
   return (
     <SessionPicker
       lazy
       kind="project"
-      label={`${t("newSession.what")}: ${label()}`}
-      value={label()}
-      icon={<Icon name={props.params.place.browser.projectId ? "gitBranch" : "folder"} />}
-      triggerAttributes={{ "data-project-id": props.params.place.browser.projectId || undefined }}
+      label={props.labelPending ? t("newSession.what") : `${t("newSession.what")}: ${label()}`}
+      value={props.labelPending ? undefined : label()}
+      icon={
+        <Show
+          when={props.params.place.browser.projectId}
+          fallback={props.params.place.browser.remoteProject ? <Icon name="github" /> : fallback()}
+        >
+          <Errored fallback={fallback}>
+            <Loading fallback={fallback()}>
+              <ProjectIcon
+                context={props.params.context}
+                projectId={props.params.place.browser.projectId}
+              />
+            </Loading>
+          </Errored>
+        </Show>
+      }
+      summary={folderWarning() ? t("newSession.deviceFolderModelUnsupported") : undefined}
+      triggerAttributes={{
+        "data-project-id": props.params.place.browser.projectId || undefined,
+        title: props.params.place.deviceFolder?.path,
+        "aria-description": folderWarning() ?? props.params.place.deviceFolder?.path,
+      }}
       params={props.params}
     >
       <ProjectPickerContent

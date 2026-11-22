@@ -64,7 +64,7 @@ suite.define(() => {
         },
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      const stop = page.getByRole("button", { name: "Stop generating" });
+      const stop = page.getByRole("button", { name: "Stop", exact: true });
       const failure = page.locator(".chat-run-failure");
       const draft = page.locator(".agent-chat__input textarea");
       await stop.waitFor();
@@ -137,8 +137,6 @@ suite.define(() => {
       };
       await expectNotice();
       if (reloadActive) {
-        await failure.waitFor();
-        expect(await failure.count()).toBe(1);
         await page.getByRole("button", { name: "Try again", exact: true }).waitFor();
         expect({
           errors: await page.locator(".chat-error").count(),

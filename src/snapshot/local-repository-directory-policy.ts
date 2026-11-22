@@ -58,11 +58,7 @@ const WINDOWS_KNOWN_FILE_RIGHTS_MASK = WINDOWS_FILE_RIGHTS.reduce(
   (mask, [right]) => mask | right,
   0,
 );
-// Older fs-safe helpers omit this fact; only an explicit native observation
-// may exempt DELETE-self. Remove the extension when the dependency pin exposes it.
-type WindowsStagingSecurity = Extract<OwnerAndDaclResult, { status: "supported" }> & {
-  isVolumeRoot?: boolean;
-};
+type WindowsStagingSecurity = Extract<OwnerAndDaclResult, { status: "supported" }>;
 let macosTrustedAclPrincipalsPromise: Promise<ReadonlySet<string>> | undefined;
 
 export function assertDirectory(

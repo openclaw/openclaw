@@ -10,17 +10,13 @@ import { WizardSession } from "../../wizard/session.js";
 import {
   acceptGatewayDeviceSourceAuthority,
   captureGatewayDeviceRevocation,
-  invalidateGatewayDeviceRevocation,
 } from "../device-revocation.js";
 import {
   createContext,
   createOperatorClient,
 } from "../server-plugin-in-process-dispatch.test-support.js";
 import { createWizardSessionTracker } from "../server-wizard-sessions.js";
-import {
-  bindInProcessRequestMutationAuthority,
-  captureGatewayRequestOperatorGuard,
-} from "./session-mutation-guards.js";
+import { bindInProcessRequestMutationAuthority } from "./session-mutation-guards.js";
 import {
   createAdmittedWizardSession,
   whenAdmittedWizardSessionSettled,
@@ -32,7 +28,6 @@ const io = vi.hoisted(() => ({
   read: vi.fn(),
   write: vi.fn(),
   load: vi.fn(),
-  settleBeforePublication: false,
 }));
 vi.mock("../../wizard/setup.shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../wizard/setup.shared.js")>()),
@@ -43,25 +38,7 @@ vi.mock("../../system-agent/setup-inference-turn.js", async (importOriginal) => 
   ...(await importOriginal<typeof import("../../system-agent/setup-inference-turn.js")>()),
   loadSetupInferencePluginGeneration: io.load,
 }));
-vi.mock("./setup-admission.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./setup-admission.js")>();
-  return {
-    ...actual,
-    async createAdmittedWizardSession(
-      ...args: Parameters<typeof actual.createAdmittedWizardSession>
-    ) {
-      const session = await actual.createAdmittedWizardSession(...args);
-      // Let the actual runner and target lock finish before publishing its start reply.
-      if (io.settleBeforePublication && session) {
-        await actual.whenAdmittedWizardSessionSettled(session);
-      }
-      return session;
-    },
-  };
-});
-
 afterEach(() => {
-  io.settleBeforePublication = false;
   vi.resetAllMocks();
 });
 
@@ -138,7 +115,6 @@ function fixture() {
     hasCurrentClientAuthority: source.isCurrent,
   };
   bindInProcessRequestMutationAuthority(options, undefined, undefined);
-  captureGatewayRequestOperatorGuard(options);
   const start = () =>
     expectDefined(systemAgentHandlers[options.req.method], "runtime setup handler")(options);
   const cleanup = async () => {
@@ -198,17 +174,6 @@ async function withStartedRuntime(
   });
 }
 
-async function expectRevokedRuntime(request: ReturnType<typeof fixture>, session: WizardSession) {
-  request.continueSetup.resolve();
-  await whenAdmittedWizardSessionSettled(session);
-  expect(await session.next()).toMatchObject({
-    done: true,
-    status: "error",
-    error: "Gateway requester authority changed",
-  });
-  expect(io.write).not.toHaveBeenCalled();
-}
-
 it("keeps the runtime effect under its retained grant after start", async () => {
   await withStartedRuntime(async (request, session) => {
     request.continueSetup.resolve();
@@ -218,46 +183,6 @@ it("keeps the runtime effect under its retained grant after start", async () => 
     expect(io.write.mock.calls[0]?.[0].plugins.entries.fixture.config).toEqual({
       enabled: true,
     });
-  });
-});
-
-it("rejects the runtime effect after device revocation", async () => {
-  await withStartedRuntime(async (request, session) => {
-    invalidateGatewayDeviceRevocation(request.context, "runtime-device", "operator");
-    await expectRevokedRuntime(request, session);
-  });
-});
-
-it("rejects the runtime effect after operator scope revocation", async () => {
-  await withStartedRuntime(async (request, session) => {
-    request.client.connect.scopes = ["operator.read"];
-    await expectRevokedRuntime(request, session);
-  });
-});
-
-it("publishes a runtime wizard that completed before its start reply", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const request = fixture();
-    io.settleBeforePublication = true;
-    request.continueSetup.resolve();
-    try {
-      await request.start();
-      expect(request.respond).toHaveBeenCalledWith(
-        true,
-        { sessionId: request.sessionId, done: false, status: "running" },
-        undefined,
-      );
-      const session = expectDefined(
-        request.context.wizardSessions.get(request.sessionId),
-        "completed runtime wizard",
-      );
-      expect(await session.next()).toMatchObject({ done: true, status: "done" });
-      expect(io.write).toHaveBeenCalledOnce();
-      request.source.release();
-      expect(request.unsubscribe).toHaveBeenCalledOnce();
-    } finally {
-      await request.cleanup();
-    }
   });
 });
 

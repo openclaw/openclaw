@@ -1,18 +1,8 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { requestProviderUsage } from "../../lib/provider-usage-request.ts";
-import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
+import type { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import type { ModelProvidersData } from "./load.ts";
-
-type SupplementalOptions = {
-  isCoreLoading: () => boolean;
-  getGateway: () => Pick<GatewayPageBinding, "connected" | "client" | "epoch" | "isCurrent">;
-  getData: () => ModelProvidersData | null;
-  getDataClient: () => GatewayBrowserClient | null;
-  setData: (data: ModelProvidersData) => void;
-  setDataClient: (client: GatewayBrowserClient | null) => void;
-  refreshPolicy: UsageRefreshPolicy;
-};
 
 /** Loads provider usage after the provider controls have their required data. */
 export class ModelProviderSupplementalLoader {
@@ -21,7 +11,15 @@ export class ModelProviderSupplementalLoader {
 
   constructor(
     private readonly notify: () => void,
-    private readonly options: SupplementalOptions,
+    private readonly options: {
+      isCoreLoading: () => boolean;
+      getGateway: () => Pick<GatewayPageBinding, "connected" | "client" | "epoch" | "isCurrent">;
+      getData: () => ModelProvidersData | null;
+      getDataClient: () => GatewayBrowserClient | null;
+      setData: (data: ModelProvidersData) => void;
+      setDataClient: (client: GatewayBrowserClient | null) => void;
+      refreshPolicy: UsageRefreshPolicy;
+    },
   ) {}
 
   get loading(): boolean {
@@ -37,17 +35,12 @@ export class ModelProviderSupplementalLoader {
       providerUsageFailed: previous?.providerUsageFailed ?? data.providerUsageFailed,
     });
     this.options.setDataClient(client);
-    if (data.providerUsageFailed) {
-      this.options.refreshPolicy.markProviderUsage(
-        { ok: false },
-        data.updatedAt,
-        this.options.getGateway().epoch,
-      );
-    } else if (data.providerUsage !== null) {
-      this.options.refreshPolicy.markProviderUsage(
-        { ok: true, value: data.providerUsage },
-        data.updatedAt,
-        this.options.getGateway().epoch,
+    if (data.providerUsageFailed || data.providerUsage !== null) {
+      this.forceReload = false;
+      this.options.refreshPolicy.markProviderLoaded(
+        data.providerUsageFailed || data.providerUsage?.refreshing === true
+          ? null
+          : (data.updatedAt ?? Date.now()),
       );
     }
     // Cached core data stays visible during route reloads; only the settled
@@ -60,7 +53,6 @@ export class ModelProviderSupplementalLoader {
       data.providerUsage === null &&
       !data.providerUsageFailed
     ) {
-      this.forceReload = false;
       void this.loadUsage(client);
     }
   }
@@ -68,14 +60,20 @@ export class ModelProviderSupplementalLoader {
   resume(): void {
     const data = this.options.getData();
     const client = this.options.getDataClient();
-    if (data?.providerUsage === null && !data.providerUsageFailed && client) {
-      this.adoptCoreData(client, data);
+    if (
+      data &&
+      client &&
+      !this.options.isCoreLoading() &&
+      !this.loading &&
+      (this.forceReload || (data.providerUsage === null && !data.providerUsageFailed))
+    ) {
+      void this.loadUsage(client);
     }
   }
 
   invalidate(): void {
     this.forceReload = true;
-    this.options.refreshPolicy.interrupt();
+    this.options.refreshPolicy.resetPayload();
     this.cancelGeneration();
   }
 
@@ -96,11 +94,10 @@ export class ModelProviderSupplementalLoader {
   async loadUsage(explicitClient?: GatewayBrowserClient): Promise<void> {
     const gateway = this.options.getGateway();
     const client = explicitClient ?? gateway.client;
-    if (!gateway.connected || !client) {
-      this.options.refreshPolicy.markLoadDeferred();
+    if (!gateway.connected || !client || client !== this.options.getDataClient()) {
       return;
     }
-    this.options.refreshPolicy.beginLoad();
+    this.forceReload = false;
     const epoch = gateway.epoch;
     this.request?.abort();
     const request = new AbortController();
@@ -122,14 +119,16 @@ export class ModelProviderSupplementalLoader {
           providerUsage: providerUsage.ok ? providerUsage.value : current.providerUsage,
           providerUsageFailed: !providerUsage.ok,
         });
-        this.options.refreshPolicy.markProviderUsage(providerUsage, Date.now(), epoch);
+        this.options.refreshPolicy.markProviderLoaded(
+          providerUsage.ok && providerUsage.value.refreshing !== true ? Date.now() : null,
+        );
       }
     } catch {
       // Supplemental failures leave the previous snapshot visible.
     } finally {
       if (this.request === request) {
         this.request = null;
-        this.options.refreshPolicy.flushPending();
+        void this.options.refreshPolicy.flushPending();
         this.notify();
       }
     }

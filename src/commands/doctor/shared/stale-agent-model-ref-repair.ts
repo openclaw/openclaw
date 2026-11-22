@@ -7,8 +7,12 @@ import {
   resolveAgentWorkspaceDir,
   tryResolveDefaultAgentId,
 } from "../../../agents/agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
+import { isCliRuntimeModelBackendForProvider } from "../../../agents/cli-backends.js";
+import { DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { parseModelCatalogJson } from "../../../agents/model-catalog-json.js";
+import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
+import { resolveModelRuntimePolicy } from "../../../agents/model-runtime-policy.js";
+import { isCliProvider } from "../../../agents/model-selection-cli.js";
 import { normalizeProviderId } from "../../../agents/model-selection.js";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -18,6 +22,7 @@ import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-sn
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import { collectConfiguredProviderSelectionIds } from "./configured-provider-selection-ids.js";
+import { prepareModelReplacementConfig } from "./model-replacement-config.js";
 import {
   createRetiredModelRefRepairResolver,
   repairRetiredConfigModelRefs,
@@ -33,9 +38,8 @@ type StaleAgentModelRefRepair = {
 type RepairOptions = {
   env?: NodeJS.ProcessEnv;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  modelReplacements?: readonly import("./model-replacement.js").DoctorModelReplacement[];
 };
-
-const DEFAULT_MODEL_REF = `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`;
 
 function providerFromModelRef(ref: string): string | undefined {
   const trimmed = ref.trim();
@@ -275,9 +279,27 @@ export function repairStaleAgentModelRefs(
       aggregation,
     );
   };
-  const makeStaleChecker = (available: ReadonlySet<string>) => (ref: string) => {
+  // Shared defaults must not pick up the compatibility agent's runtime overrides.
+  const defaultRuntimeConfig: OpenClawConfig = {
+    ...cfg,
+    agents: { defaults: asOptionalRecord(asOptionalRecord(cfg.agents)?.defaults) },
+  };
+  const makeStaleChecker = (available: ReadonlySet<string>, agentId?: string) => (ref: string) => {
     const provider = providerFromModelRef(ref);
-    return provider && !available.has(provider) ? provider : undefined;
+    if (!provider || available.has(provider)) {
+      return undefined;
+    }
+    const runtime = resolveModelRuntimePolicy({
+      config: agentId === undefined ? defaultRuntimeConfig : cfg,
+      provider,
+      modelId: splitTrailingAuthProfile(ref).model,
+      agentId,
+    }).policy?.id;
+    return runtime &&
+      isCliProvider(runtime, cfg, options.pluginMetadataSnapshot) &&
+      isCliRuntimeModelBackendForProvider({ provider, runtime, config: cfg })
+      ? undefined
+      : provider;
   };
 
   const defaults = asOptionalRecord(asOptionalRecord(config.agents)?.defaults);
@@ -290,13 +312,14 @@ export function repairStaleAgentModelRefs(
       return agent.id;
     }
     const agentAvailability = availabilityForAgent(agent.id);
-    const provider = providerFromModelRef(explicitPrimary);
     // This stale override will be removed or replaced later in the same repair.
-    return agentAvailability && provider && !agentAvailability.has(provider) ? agent.id : undefined;
+    return agentAvailability && makeStaleChecker(agentAvailability, agent.id)(explicitPrimary)
+      ? agent.id
+      : undefined;
   });
   const configuredDefaultPrimary = modelPrimaryRef(defaults?.model);
   let repairedDefaultPrimary =
-    configuredDefaultPrimary ?? (replaceMode ? firstExplicitModelRef(cfg) : DEFAULT_MODEL_REF);
+    configuredDefaultPrimary ?? (replaceMode ? firstExplicitModelRef(cfg) : undefined);
   const repairModel = (
     owner: Record<string, unknown>,
     modelPath: string,
@@ -334,23 +357,21 @@ export function repairStaleAgentModelRefs(
         const configuredReplacement = isDefault
           ? replaceMode
             ? firstExplicitModelRef(cfg)
-            : DEFAULT_MODEL_REF
+            : undefined
           : availableDefault;
         const fallbacks: unknown[] = Array.isArray(selector?.fallbacks) ? selector.fallbacks : [];
+        // No implicit model remains to fall back to, so a live fallback becomes the primary.
         replacement =
-          isDefault && !replaceMode
-            ? configuredReplacement
-            : (fallbacks.find(
-                (fallback): fallback is string =>
-                  typeof fallback === "string" && !isStale(fallback),
-              ) ?? configuredReplacement);
+          fallbacks.find(
+            (fallback): fallback is string => typeof fallback === "string" && !isStale(fallback),
+          ) ?? configuredReplacement;
         if (replacement) {
           container[key] = replacement;
           changed = true;
           changes.push(
             `Replaced stale ${primaryPath} "${primary}" with ${isDefault ? "default " : ""}"${replacement}" (provider "${provider}" is unavailable).`,
           );
-        } else if (isDefault) {
+        } else if (isDefault && replaceMode) {
           delete container[key];
           changed = true;
           changes.push(
@@ -406,8 +427,7 @@ export function repairStaleAgentModelRefs(
       makeStaleChecker(defaultAvailability),
     );
     repairedDefaultPrimary =
-      modelPrimaryRef(defaults.model) ??
-      (replaceMode ? firstExplicitModelRef(cfg) : DEFAULT_MODEL_REF);
+      modelPrimaryRef(defaults.model) ?? (replaceMode ? firstExplicitModelRef(cfg) : undefined);
     const modelMapAvailability = availabilityForDefaults("union", (agent) =>
       isRecord(agent) && typeof agent.id === "string" && !isRecord(agent.models)
         ? agent.id
@@ -432,7 +452,7 @@ export function repairStaleAgentModelRefs(
     if (!available) {
       continue;
     }
-    const isStale = makeStaleChecker(available);
+    const isStale = makeStaleChecker(available, entry.agentId);
     const agentPrimaryChanged = repairModel(agent, `${entry.path}.model`, isStale, entry.agentId);
     const effectiveAgentPrimary = modelPrimaryRef(agent.model) ?? repairedDefaultPrimary;
     repairModelMap({
@@ -450,10 +470,14 @@ export function repairStaleAgentModelRefs(
     });
   }
 
+  const prepared = prepareModelReplacementConfig(config, options.modelReplacements ?? []);
+  changes.push(...prepared.changes);
   const retired = repairRetiredConfigModelRefs(
-    config,
+    prepared.config,
     createRetiredModelRefRepairResolver({
-      cfg: config,
+      modelReplacements: options.modelReplacements,
+      cfg: prepared.config,
+      retiredModelRefConfig: config,
       env,
       metadataSnapshot: options.pluginMetadataSnapshot,
       warnings,
@@ -465,7 +489,7 @@ export function repairStaleAgentModelRefs(
     config: changes.length > 0 ? retired.config : cfg,
     changes,
     warnings,
-    ...(retired.changes.length > 0
+    ...(retired.changes.length > 0 || prepared.changes.length > 0
       ? { retiredModelRefConfig: { agents: config.agents, models: config.models } }
       : {}),
   };

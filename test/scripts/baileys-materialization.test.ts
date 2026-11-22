@@ -17,35 +17,30 @@ const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 it("materializes patched Baileys with its own long edge and refreshes final dist imports", async () => {
   // Reuse the installed CAFS packages offline, never its mutable graph/payloads.
   const root = fs.realpathSync(createTempDir("openclaw-baileys-materialization-"));
-  const workspace = parse(fs.readFileSync(path.join(repoRoot, "pnpm-workspace.yaml"), "utf8"));
-  const documents = pnpmLockfileDocuments(
-    fs.readFileSync(path.join(repoRoot, "pnpm-lock.yaml"), "utf8"),
-  );
+  const read = (file: string) => fs.readFileSync(path.join(repoRoot, file), "utf8");
+  const write = (file: string, contents: string) =>
+    fs.writeFileSync(path.join(root, file), contents);
+  const json = (file: string, value: unknown) => write(file, JSON.stringify(value));
+  const workspace = parse(read("pnpm-workspace.yaml"));
+  const documents = pnpmLockfileDocuments(read("pnpm-lock.yaml"));
   const lock = parse(documents.dependencies);
-  const installed = parse(
-    fs.readFileSync(path.join(repoRoot, "node_modules/.modules.yaml"), "utf8"),
-  );
-  const packageManager = JSON.parse(
-    fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"),
-  ).packageManager;
+  const installed = parse(read("node_modules/.modules.yaml"));
+  const { packageManager } = JSON.parse(read("package.json"));
   const whatsapp = lock.importers["extensions/whatsapp"].dependencies;
   const dependencies: Record<string, { specifier: string; version: string }> = {
     baileys: whatsapp.baileys,
     "audio-decode": whatsapp["audio-decode"],
   };
-  fs.writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify({
-      private: true,
-      type: "module",
-      packageManager,
-      dependencies: Object.fromEntries(
-        Object.entries(dependencies).map(([name, entry]) => [name, entry.specifier]),
-      ),
-    }),
-  );
-  fs.writeFileSync(
-    path.join(root, "pnpm-lock.yaml"),
+  json("package.json", {
+    private: true,
+    type: "module",
+    packageManager,
+    dependencies: Object.fromEntries(
+      Object.entries(dependencies).map(([name, entry]) => [name, entry.specifier]),
+    ),
+  });
+  write(
+    "pnpm-lock.yaml",
     "---\n" +
       documents.environment +
       "\n---\n" +
@@ -88,33 +83,30 @@ it("materializes patched Baileys with its own long edge and refreshes final dist
   };
   const plugin = path.join(root, "extensions/whatsapp");
   fs.mkdirSync(path.join(plugin, "node_modules"), { recursive: true });
-  fs.writeFileSync(path.join(plugin, "index.ts"), "export {};\n");
-  fs.writeFileSync(
-    path.join(plugin, "package.json"),
-    JSON.stringify({
-      name: "@openclaw/whatsapp",
-      type: "module",
-      dependencies: { baileys: "7.0.0-rc14" },
-      openclaw: {
-        extensions: ["./index.ts"],
-        build: { bundledDist: false },
-        release: { publishToNpm: true },
-      },
-    }),
-  );
-  fs.writeFileSync(
-    path.join(plugin, "openclaw.plugin.json"),
-    JSON.stringify({ id: "whatsapp", configSchema: { type: "object" } }),
-  );
+  write("extensions/whatsapp/index.ts", "export {};\n");
+  json("extensions/whatsapp/package.json", {
+    name: "@openclaw/whatsapp",
+    type: "module",
+    dependencies: { baileys: "7.0.0-rc14" },
+    openclaw: {
+      extensions: ["./index.ts"],
+      build: { bundledDist: false },
+      release: { publishToNpm: true },
+    },
+  });
+  json("extensions/whatsapp/openclaw.plugin.json", {
+    id: "whatsapp",
+    configSchema: { type: "object" },
+  });
   const distPlugin = path.join(root, "dist/extensions/whatsapp");
   const sibling = path.join(root, "dist/extensions/sibling/index.js");
   fs.mkdirSync(path.dirname(sibling), { recursive: true });
-  fs.writeFileSync(sibling, "preserve sibling");
+  write("dist/extensions/sibling/index.js", "preserve sibling");
   let previousTarget: string | undefined;
   for (const nodeLinker of ["isolated", "hoisted"]) {
     workspace.nodeLinker = nodeLinker;
     const original = stringify(workspace);
-    fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), original);
+    write("pnpm-workspace.yaml", original);
     const prepared = await prepareCandidateCommandEnv("pnpm", env, root, command, 30_000);
     try {
       const install = await command(
@@ -157,13 +149,11 @@ it("materializes patched Baileys with its own long edge and refreshes final dist
          assert.ok([...waveform].some(value => value > 0));
          assert.equal(await getAudioWaveform(Buffer.from("not audio")), undefined);
          const manifest = JSON.parse(fs.readFileSync(new URL("../package.json", pathToFileURL(entry))));
-         assert.equal(manifest.peerDependencies["audio-decode"], "^3.12.0");
-         console.log("patched waveform: 64 samples; invalid audio: best-effort undefined");`,
+         assert.equal(manifest.peerDependencies["audio-decode"], "^3.12.0");`,
         ],
         { cwd: distPlugin, env: prepared.env },
       );
       expect(probe.code, probe.stderr + probe.stdout).toBe(0);
-      expect(probe.stdout).toContain("patched waveform: 64 samples");
       expect(fs.readFileSync(sibling, "utf8")).toBe("preserve sibling");
       previousTarget = source;
     } finally {

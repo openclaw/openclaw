@@ -77,7 +77,7 @@ function readCurrentWorktreeRunState(db: EngineConnection, worktreeId: string) {
   const state = collectLiveRunLeases(db, k, worktreeRunLeaseScope(worktreeId));
   const { removingToken } = state;
   if (removingToken !== undefined) {
-    throw new Error(`managed worktree was removed: ${worktreePath}`);
+    throw new Error(`managed worktree removal is in progress: ${worktreePath}`);
   }
   return state;
 }

@@ -28,7 +28,7 @@ const readyRuntime: FaceTimeRuntimeStatus = {
     statusClassifier: "explicit-ended-tu-call-status-v1",
     transportClassifier: "tu-provider-v1",
   },
-  helperTargets: (["FaceTime", "Phone"] as const).map((target) => ({
+  helperTargets: (["FaceTime"] as const).map((target) => ({
     target,
     connected: true,
     attempts: 0,

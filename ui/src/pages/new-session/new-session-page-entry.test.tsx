@@ -10,17 +10,11 @@ import {
   retainInstantThreadRestore,
   takeInstantThreadRestore,
 } from "./instant-thread-restore.ts";
+import { createNewSessionRouteData as routeData } from "./location.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { renderSolid as Route } from "./new-session-page-entry.ts";
 import type { PageHost } from "./new-session-page-owner.ts";
 
-const routeData = (agentId = "main"): NewSessionRouteData => ({
-  agentId,
-  requestedAgentId: agentId,
-  catalogId: "",
-  catalogLabel: "",
-  startTerminal: false,
-});
 const pageHost = (container: Element) =>
   container.querySelector<PageHost>("openclaw-new-session-page");
 
@@ -109,8 +103,12 @@ it("offers an in-page retry after a native draft render fails", async () => {
 });
 
 it("initializes the composer and retains it while loader data updates", async () => {
+  const previousUrl = window.location.href;
+  window.history.replaceState({}, "", "/new?agent=research");
+  onTestFinished(() => window.history.replaceState({}, "", previousUrl));
   const initial = routeData("research");
-  const resolved = routeData("main");
+  // A loader refresh retains this draft; another requested agent owns a new draft.
+  const resolved = routeData("research");
   const { container, setData } = mountRoute(initial);
   await waitForSolid(() => expect(pageHost(container)?.data).toBe(initial));
   const page = pageHost(container);

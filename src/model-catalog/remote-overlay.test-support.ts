@@ -21,15 +21,9 @@ export function setRemoteModelCatalogOverlaySourcesForTest(sources?: {
   }
   const readStoredCatalog = sources?.readStoredCatalog;
   if (readStoredCatalog) {
-    const read = vi
-      .spyOn(remoteStore, "readRemoteModelCatalog")
-      .mockImplementation(readStoredCatalog);
     const readAsync = vi
       .spyOn(remoteStore, "readRemoteModelCatalogAsync")
       .mockImplementation(async () => readStoredCatalog());
-    restoreMocks.push(
-      () => read.mockRestore(),
-      () => readAsync.mockRestore(),
-    );
+    restoreMocks.push(() => readAsync.mockRestore());
   }
 }

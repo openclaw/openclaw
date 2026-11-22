@@ -1,10 +1,13 @@
-import type { ModelsListResult } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  ModelsListParams,
+  ModelsListResult,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import type { UtilityCompletionRuntimeParams } from "../../agents/utility-completion.js";
 import { readUtilityModelSetting } from "../../agents/utility-model-setting.js";
 import {
   resolveAutomaticUtilityModelRef,
-  resolveUtilityModelRefForAgent,
+  resolveUtilityModelSelectionForAgent,
 } from "../../agents/utility-model.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
@@ -14,20 +17,56 @@ import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
  * model in effect (automatic or explicit) runs on.
  */
 export async function resolveDefaultModelsPreview(
-  params: UtilityCompletionRuntimeParams,
-): Promise<NonNullable<ModelsListResult["defaultModels"]>> {
-  const { cfg, metadataSnapshot } = params;
-  const automaticUtilityModel =
-    resolveAutomaticUtilityModelRef({
+  params: UtilityCompletionRuntimeParams & {
+    request: ModelsListParams;
+    view: NonNullable<ModelsListParams["view"]>;
+  },
+): Promise<
+  | {
+      defaultModels: NonNullable<ModelsListResult["defaultModels"]>;
+      utilityModel?: NonNullable<ModelsListResult["utilityModel"]>;
+    }
+  | undefined
+> {
+  const { request, view } = params;
+  if (
+    !(
+      request.includeDefaultModels ??
+      (view === "configured" && !request.sessionKey && !request.authProfileId)
+    )
+  ) {
+    return undefined;
+  }
+  const includeAgentUtilityModel =
+    request.includeDefaultModels === true && !request.sessionKey && !request.authProfileId;
+  const { cfg, metadataSnapshot, snapshot: catalog } = params;
+  const utilityModel: NonNullable<ModelsListResult["utilityModel"]> =
+    resolveUtilityModelSelectionForAgent({
       cfg,
-      primaryProvider: resolveDefaultModelForAgent({
-        cfg,
-        manifestPlugins: metadataSnapshot,
-        allowPluginNormalization: false,
-      }).provider,
-      primaryModelRef: resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
+      agentId: params.agentId,
+      catalog,
       metadataSnapshot,
-    }) ?? null;
+    }) ?? {
+      modelRef: null,
+      source:
+        readUtilityModelSetting(cfg, params.agentId).kind === "disabled" ? "disabled" : "none",
+    };
+  const primary = resolveDefaultModelForAgent({
+    cfg,
+    manifestPlugins: metadataSnapshot,
+    allowPluginNormalization: false,
+  });
+  const automaticUtilityModel =
+    (primary &&
+      resolveAutomaticUtilityModelRef({
+        cfg,
+        primaryProvider: primary.provider,
+        primaryModelRef: resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
+        primaryModelId: primary.model,
+        catalog,
+        metadataSnapshot,
+      })) ??
+    null;
   // The picker shows the defaults for all agents, so report a route only for a sole
   // agent that runs exactly that setting: its own override would describe another model.
   const agentId = tryResolveLegacyCompatibilityAgentId(cfg);
@@ -43,11 +82,12 @@ export async function resolveDefaultModelsPreview(
       defaults.kind === "explicit" &&
       effective.modelRef !== defaults.modelRef) ||
     (effective.kind === "auto" &&
-      (!automaticUtilityModel ||
-        resolveUtilityModelRefForAgent({ cfg, agentId, metadataSnapshot }) !==
-          automaticUtilityModel))
+      (!automaticUtilityModel || utilityModel.modelRef !== automaticUtilityModel))
   ) {
-    return { automaticUtilityModel };
+    return {
+      defaultModels: { automaticUtilityModel },
+      ...(includeAgentUtilityModel ? { utilityModel } : {}),
+    };
   }
   const { resolveUtilityCompletionRuntimeForAgent } =
     await import("../../agents/utility-completion.js");
@@ -55,5 +95,8 @@ export async function resolveDefaultModelsPreview(
     ...params,
     agentId,
   });
-  return { automaticUtilityModel, ...(utilityRuntime ? { utilityRuntime } : {}) };
+  return {
+    defaultModels: { automaticUtilityModel, ...(utilityRuntime ? { utilityRuntime } : {}) },
+    ...(includeAgentUtilityModel ? { utilityModel } : {}),
+  };
 }

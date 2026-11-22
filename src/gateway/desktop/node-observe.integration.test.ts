@@ -4,10 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { rawDataToString } from "../../../packages/gateway-client/src/websocket-data.js";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { NODE_WORKER_DESKTOP_STREAM_COMMAND } from "../../infra/node-commands.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import {
   invokeNodeDesktopStream,
   invokeNodeWorkerDesktopStream,
@@ -20,6 +18,7 @@ import type {
 import type { NodeRegistry } from "../node-registry.js";
 import { environmentsHandlers } from "../server-methods/environments.js";
 import { createWorkerNodeDesktopCarrier } from "../worker-environments/node-desktop-carrier.js";
+import { createNodeWorkerBundleTestNode } from "../worker-environments/node-worker-bundle.test-support.js";
 import * as workerSupport from "../worker-environments/service.test-support.js";
 import {
   handlePeerTeardownError,
@@ -106,17 +105,13 @@ async function trackInvocation<T>(results: boolean[], invoke: () => Promise<T>) 
 }
 
 function workerNodeProof(nodeId: string): NodeWorkerSupervisorNodeProof {
-  return {
+  return createNodeWorkerBundleTestNode({
     nodeId,
     connId: "worker-conn-1",
     pairingIdentity: "worker-identity-1",
     pairingGeneration: "worker-generation-1",
-    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-    clientMode: "node",
-    protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
     workerHost: { enabled: true, capacity: { total: 1, available: 0 } },
-    commands: [],
-  };
+  });
 }
 
 async function observeEnvironmentDesktop(

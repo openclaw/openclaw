@@ -40,6 +40,24 @@ const advisory = {
       "canonical paths for that account home and profile to manage the gateway service during update.",
   },
 };
+const cleanup = {
+  name: "recovery-artifact-cleanup",
+  command: "openclaw update cleanup",
+  cwd: "",
+  durationMs: 12,
+  exitCode: 0,
+  diagnostics: [
+    "Update backup cleanup removed 1 item (400 logical bytes, 0 MiB).",
+    "Removed /fixture/state/state/openclaw.sqlite.pre-startup-migration-1.bak (400 logical bytes, 0 MiB).",
+  ],
+};
+// Releases before per-item reporting summarized cleanup in one sentence.
+const legacyCleanup = {
+  ...cleanup,
+  diagnostics: [
+    "Recovery cleanup removed 2 files (400 logical bytes); protected recovery artifacts were retained.",
+  ],
+};
 const noop = {
   status: "skipped",
   reason: "already-current",
@@ -123,6 +141,31 @@ assert_legacy_operator_doctor_clean
 describe("legacy-operator already-current update", () => {
   it.each([
     { name: "accepts no steps", report: noop, accepted: true },
+    {
+      name: "accepts verified recovery cleanup",
+      report: { ...noop, steps: [cleanup] },
+      accepted: true,
+    },
+    {
+      name: "accepts the earlier one-sentence cleanup summary",
+      report: { ...noop, steps: [legacyCleanup] },
+      accepted: true,
+    },
+    {
+      name: "accepts cleanup after service guidance",
+      report: { ...noop, steps: [advisory, cleanup] },
+      accepted: true,
+    },
+    { name: "rejects duplicate cleanup", report: { ...noop, steps: [cleanup, cleanup] } },
+    { name: "rejects failed cleanup", report: { ...noop, steps: [{ ...cleanup, exitCode: 1 }] } },
+    {
+      name: "rejects unexplained cleanup",
+      report: { ...noop, steps: [{ ...cleanup, diagnostics: [] }] },
+    },
+    {
+      name: "rejects unrelated cleanup commands",
+      report: { ...noop, steps: [{ ...cleanup, command: "openclaw gateway restart" }] },
+    },
     {
       name: "accepts the non-default service advisory",
       report: { ...noop, steps: [advisory] },

@@ -727,7 +727,6 @@ describe("qa confidence report", () => {
   it("emits confidence self-test canaries for every drift class we need to catch", async () => {
     const { summary, summaryPath, reportPath } = await writeQaConfidenceSelfTestArtifacts({
       outputDir: tempRoot,
-      generatedAt: "2026-05-12T00:00:00.000Z",
     });
 
     expect(JSON.parse(await fs.readFile(summaryPath, "utf8"))).toEqual(summary);

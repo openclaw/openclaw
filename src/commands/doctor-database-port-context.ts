@@ -7,9 +7,13 @@ import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { readConfigFileSnapshotForWrite } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveStateClientCredentialEnvironment } from "../infra/client-credential-paths.js";
-import { rebindPortedClientCredentials } from "../infra/client-credential-restore.js";
+import {
+  PortClientCredentialMismatchError,
+  rebindPortedClientCredentials,
+} from "../infra/client-credential-restore.js";
 import { DatabasePortError } from "../infra/database-engine/port-command.worker.js";
 import type { PortVerification } from "../infra/database-engine/port.worker.js";
+import type { PostgresPlannerStatistics } from "../infra/database-engine/postgres-planner-statistics.js";
 import {
   resolveDatabaseFamilyEngines,
   listDatabaseEngineStores,
@@ -45,6 +49,11 @@ export function assertPortSelection(
   family?: DatabasePortFamily,
 ) {
   try {
+    if (to === "sqlite" && config.database?.postgres?.ownership === "installation") {
+      throw new Error(
+        'Database port to SQLite is incompatible with database.postgres.ownership "installation". Stop all writers. If a previous attempt left an active manifest, run --rollback <manifest> first. Then set ownership to "state-directory" or unset it before retrying.',
+      );
+    }
     const engines = resolveDatabaseFamilyEngines(config);
     if (
       !family &&
@@ -109,6 +118,7 @@ export const inputsSchema = z.object({
   ),
 });
 export type Context = {
+  plannerStatistics?: Array<{ path: string; result: PostgresPlannerStatistics }>;
   family?: DatabasePortFamily;
   stateDir: string;
   configPath: string;
@@ -134,6 +144,23 @@ export type Context = {
 export function refuse(ctx: Context, observed: string, required: string): never {
   throw new DatabasePortError(
     `Database port ${ctx.phase}: ${ctx.target}; observed ${observed}; required ${required}. Stop the Gateway first; correct this fact and retry, or use --resume/--rollback with ${databasePortManifestPath(ctx.stateDir)}.`,
+  );
+}
+export function refuseFailure(ctx: Context, error: unknown): never {
+  if (error instanceof PortClientCredentialMismatchError) {
+    throw new DatabasePortError(
+      `Database port ${ctx.phase}: ${ctx.target}; ${error.message} Restore the archive with openclaw backup restore before retrying.`,
+    );
+  }
+  if (error instanceof DatabasePortError) {
+    throw error;
+  }
+  // Untrusted driver/config messages may contain a DSN or row payload.
+  const parsed = z.object({ code: z.string().regex(/^[A-Z0-9_]+$/) }).safeParse(error);
+  return refuse(
+    ctx,
+    parsed.success ? parsed.data.code : "validation or I/O failure",
+    "successful verified phase; preserve the recovery directory",
   );
 }
 export const digest = (value: unknown) =>
@@ -284,6 +311,7 @@ export function finalize(ctx: Context, outcome: "ported" | "rolled-back") {
     phase: "complete",
     engine: outcome === "ported" ? current.direction.to : current.direction.from,
     stores: current.targets.map(livePath),
+    plannerStatistics: ctx.plannerStatistics ?? [],
     backup: ctx.directory,
     remainingSqlite:
       ctx.inputs?.outOfScope

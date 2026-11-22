@@ -17,12 +17,10 @@ const COMPLETION_TARGET_CHAT_TYPES = new Map<string, CompletionChatType>([
   ["user:", "direct"],
 ]);
 
-type CompletionDeliverySessionEntry = Pick<SessionEntry, "chatType" | "delivery">;
-
 function resolveCompletionChatType(params: {
   requesterSessionKey?: string | null;
   targetRequesterSessionKey?: string | null;
-  requesterEntry?: CompletionDeliverySessionEntry;
+  requesterEntry?: Pick<SessionEntry, "chatType" | "delivery">;
   directOrigin?: DeliveryContext;
   requesterSessionOrigin?: DeliveryContext;
 }): CompletionChatType {

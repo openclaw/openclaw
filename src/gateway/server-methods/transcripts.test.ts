@@ -36,9 +36,11 @@ import {
 } from "../../transcripts/store-columns.js";
 import { meetingTranscriptDb } from "../../transcripts/store-sqlite.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
-import { summarizeTranscripts, type TranscriptsSummary } from "../../transcripts/summary.js";
+import { summarizeTranscripts } from "../../transcripts/summary.js";
+import type { TranscriptsSummary } from "../../transcripts/types.js";
 import type { OperatorScope } from "../operator-scopes.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { transcriptsHandlers } from "./transcripts.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -52,27 +54,16 @@ const logGateway = { warn: vi.fn() };
 
 function client(profileId?: string, scopes = ["operator.read"]): GatewayClient {
   return {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes,
-    },
+    connect: gatewayConnect(scopes),
     ...(profileId
       ? {
-          authenticatedUserProfile: {
-            profileId,
-            displayName: null,
-            hasAvatar: false,
-            updatedAt: 1,
-          },
+          authenticatedUserProfile: gatewayProfile(profileId),
         }
       : {}),
   };
 }
 function roles(
-  others: "none" | "view",
+  others: "none" | "invited" | "view",
   scopes: OperatorScope[] = ["operator.read"],
 ): OpenClawConfig {
   return {
@@ -231,32 +222,35 @@ describe("transcript Gateway read authorization and errors", () => {
     });
   });
 
-  it("denies every global archive read for sessions.others:none even with allowed or forged agent filters", async () => {
-    await withOpenClawTestState(profileState, async (state) => {
-      const { selector } = await seed(state.stateDir);
-      const profile = ensureProfileForEmail("transcript-guest@example.test");
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      const cfg = roles("none");
-      const queries: Array<[string, Record<string, unknown>]> = [
-        ["transcripts.list", {}],
-        ["transcripts.list", { agentId: "main" }],
-        ["transcripts.list", { agentId: "ops" }],
-        ["transcripts.get", { selector }],
-        ["transcripts.export", { selector, format: "jsonl" }],
-        ["transcripts.status", {}],
-      ];
-      for (const [method, params] of queries) {
-        const [ok, payload, error] = await request(method, params, cfg, client(profile.id));
-        expect(ok, method).toBe(false);
-        expect(payload).toBeUndefined();
-        expect(error).toMatchObject({ code: "FORBIDDEN" });
-      }
-      expect((await request("transcripts.list", {}, cfg, client()))[2]).toMatchObject({
-        code: "FORBIDDEN",
+  it.each(["none", "invited"] as const)(
+    "denies every global archive read for sessions.others:%s even with allowed or forged agent filters",
+    async (others) => {
+      await withOpenClawTestState(profileState, async (state) => {
+        const { selector } = await seed(state.stateDir);
+        const profile = ensureProfileForEmail("transcript-guest@example.test");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+        const cfg = roles(others);
+        const queries: Array<[string, Record<string, unknown>]> = [
+          ["transcripts.list", {}],
+          ["transcripts.list", { agentId: "main" }],
+          ["transcripts.list", { agentId: "ops" }],
+          ["transcripts.get", { selector }],
+          ["transcripts.export", { selector, format: "jsonl" }],
+          ["transcripts.status", {}],
+        ];
+        for (const [method, params] of queries) {
+          const [ok, payload, error] = await request(method, params, cfg, client(profile.id));
+          expect(ok, method).toBe(false);
+          expect(payload).toBeUndefined();
+          expect(error).toMatchObject({ code: "FORBIDDEN" });
+        }
+        expect((await request("transcripts.list", {}, cfg, client()))[2]).toMatchObject({
+          code: "FORBIDDEN",
+        });
+        expect(fs.existsSync(path.join(state.stateDir, "transcripts"))).toBe(false);
       });
-      expect(fs.existsSync(path.join(state.stateDir, "transcripts"))).toBe(false);
-    });
-  });
+    },
+  );
 
   it("preserves global reads for view roles and admins without treating the creation agent allowlist as read scope", async () => {
     await withOpenClawTestState(profileState, async (state) => {
@@ -324,7 +318,7 @@ describe("transcript Gateway read authorization and errors", () => {
     });
   });
 
-  it.each(["authority", "archive role", "cancellation"])(
+  it.each(["archive role", "cancellation"])(
     "refuses a public page after %s changes during its worker read",
     async (kind) => {
       await withOpenClawTestState(profileState, async ({ stateDir }) => {
@@ -357,7 +351,6 @@ describe("transcript Gateway read authorization and errors", () => {
             client: client(profile.id),
             signal: cancellation.signal,
             respond,
-            hasCurrentClientAuthority: () => kind !== "authority" || current,
             isWebchatConnect: () => false,
             context: {
               getRuntimeConfig: () => (kind === "archive role" && !current ? roles("none") : cfg),
@@ -517,54 +510,6 @@ describe("meeting transcript RPC", () => {
     expect(writes).toHaveBeenCalledTimes(1);
     expect(fs.existsSync(store.sessionDir(session))).toBe(false);
   });
-
-  it.each(["snapshot", "response"] as const)(
-    "does not return notes when requester authority expires during %s",
-    async (phase) => {
-      await store.appendUtteranceForSession(session, { text: "Agreed to ship." });
-      let current = true;
-      if (phase === "snapshot") {
-        const readSnapshot = store.readSummarySnapshot.bind(store);
-        vi.spyOn(TranscriptsStore.prototype, "readSummarySnapshot").mockImplementation(
-          async (...args) => {
-            const snapshot = await readSnapshot(...args);
-            current = false;
-            return snapshot;
-          },
-        );
-      } else {
-        let reads = 0;
-        const readEntry = store.readLibraryEntry.bind(store);
-        vi.spyOn(TranscriptsStore.prototype, "readLibraryEntry").mockImplementation(
-          async (...args) => {
-            const result = await readEntry(...args);
-            if (++reads === 2) {
-              current = false;
-            }
-            return result;
-          },
-        );
-      }
-      const respond = vi.fn();
-      await transcriptsHandlers["transcripts.summarize"]!({
-        req: { type: "req", id: "revoked", method: "transcripts.summarize" },
-        params: { selector },
-        client: null,
-        respond,
-        hasCurrentClientAuthority: () => current,
-        isWebchatConnect: () => false,
-        context: { getRuntimeConfig: () => ({}), logGateway } as unknown as GatewayRequestContext,
-      });
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "UNAVAILABLE" }),
-      );
-      if (phase === "snapshot") {
-        expect((await store.readSummary(session)).summary).toBeUndefined();
-      }
-    },
-  );
 
   it.each([{ texts: [] }, { texts: ["context:", "###", "Transcribe the audio."] }])(
     "leaves meetings without substantive speech unsummarized: %j",

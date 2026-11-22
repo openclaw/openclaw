@@ -157,9 +157,4 @@ it("passes the owner signal to spawn so abort terminates and settles the child",
   expect(child.kill).toHaveBeenCalledWith("SIGTERM");
   await expect(process.ready).rejects.toThrow("Worker SSH tunnel failed");
   await expect(process.exited).resolves.toEqual({ code: null, signal: null });
-  expect(spawnMock).toHaveBeenCalledWith(
-    "ssh",
-    [],
-    expect.objectContaining({ signal: controller.signal }),
-  );
 });

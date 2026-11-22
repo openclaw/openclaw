@@ -87,7 +87,7 @@ const config = {
 };
 
 const coldStorageMode = process.env.OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE ?? "required";
-if (coldStorageMode === "required") {
+if (coldStorageMode === "required" || coldStorageMode === "legacy") {
   config.session = {
     maintenance: {
       mode: "warn",

@@ -21,7 +21,20 @@ export type SessionUsageCreator = {
   /** Opaque, namespace-qualified identity used by the creator filter. */
   key: string;
   actor?: SessionCreatedActor;
+  /** Visible sessions in range started by this identity, before the creator filter. */
+  sessionCount?: number;
 };
+
+/** Report-calendar hour facets folded in the usage worker instead of per-quarter rows. */
+type UsageLocalHours = {
+  /** Tokens per hour (0-23), tokens per weekday (24-30), messages (31-54) and errors (55-78) per hour. */
+  values: Float64Array;
+  /** At least one quarter had tokens; otherwise charts spread totals over the active span. */
+  precise: boolean;
+};
+
+/** Overview rows carry hour facets instead of UTC quarter arrays; compact output drops both. */
+export type UsageOverviewSessionSummary = SessionCostSummary & { localHours?: UsageLocalHours };
 
 export type SessionUsageEntry = {
   /** Stable row key for UI diffing; may be a session id or family key. */
@@ -57,7 +70,7 @@ export type SessionUsageEntry = {
   providerOverride?: string;
   modelProvider?: string;
   model?: string;
-  usage: SessionCostSummary | null;
+  usage: UsageOverviewSessionSummary | null;
   computing?: boolean;
   /** Context availability without transferring the full report in overview queries. */
   hasContextWeight?: boolean;
@@ -92,7 +105,6 @@ export type SessionsUsageAggregates = {
   modelDaily?: SessionDailyModelUsage[];
   daily: Array<{
     date: string;
-    usageReport?: CostUsageSummary["totals"]["usageReport"];
     tokens: number;
     cost: number;
     messages: number;
@@ -115,7 +127,7 @@ export type SessionsUsageResult = {
   creatorOptions?: SessionUsageCreator[];
   cacheStatus?: CostUsageSummary["cacheStatus"];
   overview?: SessionsUsageOverview;
-  partial?: { reason: "time-budget" | "aggregate-boundary"; message: string };
+  partial?: { reason: "time-budget" | "aggregate-boundary" | "summarizing"; message: string };
 };
 
 export type UsageOverviewOptions = {
@@ -131,8 +143,6 @@ export type UsageOverviewOptions = {
 };
 
 export type SessionsUsageOverview = {
-  /** Completeness of full-session chart sources before selected-day totals. */
-  usageReport?: CostUsageSummary["totals"]["usageReport"];
   total: number;
   unfilteredSessionCount: number;
   /** Sessions with activity in the selected population; empty comparison rows do not count. */
@@ -149,7 +159,6 @@ export type SessionsUsageOverview = {
     tokens: number;
     cost: number;
     errors: number;
-    usageReport?: CostUsageSummary["totals"]["usageReport"];
   };
   offset: number;
   limit: number;
@@ -162,7 +171,14 @@ export type SessionsUsageOverview = {
   hourlyMessages: number[];
   hourlyErrors: number[];
   filterOptions: Record<"agent" | "channel" | "provider" | "model" | "tool", string[]>;
+  /** Sessions in range carrying each filter option; absent from older Gateways. */
+  filterOptionCounts?: UsageFilterOptionCounts;
 };
+
+export type UsageFilterOptionCounts = Record<
+  "agent" | "channel" | "provider" | "model" | "tool",
+  Record<string, number>
+>;
 
 /** Aggregated report with one final, bounded comparison page. */
 export type UsageOverviewSlice = Pick<SessionsUsageResult, "sessions" | "totals" | "aggregates"> & {

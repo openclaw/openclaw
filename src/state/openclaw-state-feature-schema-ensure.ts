@@ -8,6 +8,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { getOpenClawStateFeatureSchemaSql } from "./openclaw-state-feature-schema.js";
+import { withPostgresSchemaAdmissionRetry } from "./openclaw-state-postgres-admission.js";
 
 /** Prepare canonical DDL without opening a database; admission owns schema presence. */
 export function createOpenClawStateSchemaEnsurer(params: {
@@ -40,7 +41,8 @@ export function createOpenClawStateSchemaEnsurer(params: {
         { operationLabel: params.operationLabel },
       );
     if (isPostgresSqlConnection(db)) {
-      runWrite(ensure);
+      // This transaction owns only schema installation, so rollback makes replay safe.
+      withPostgresSchemaAdmissionRetry(db, () => runWrite(ensure));
     } else {
       ensure(db, runWrite);
     }

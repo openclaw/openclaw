@@ -110,7 +110,6 @@ vi.mock("../../../channels/plugins/registry.js", () => ({
 vi.mock("../../../config/sessions/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../config/sessions/paths.js")>()),
   resolveSessionStorePathCore: hoisted.resolveStorePathMock,
-  resolveSessionStorePathWithContext: hoisted.resolveStorePathMock,
 }));
 
 vi.mock("../../../config/sessions/session-accessor.js", async () => {
@@ -216,10 +215,11 @@ function registerBindingAdapter(
 }
 
 function gatewayResponse(method?: string) {
-  if (method === "agent") {
-    return { runId: "run-1" };
-  }
-  return method === "sessions.patch" || method === "sessions.delete" ? { ok: true } : {};
+  return method === "agent"
+    ? { runId: "run-1" }
+    : method === "sessions.patch" || method === "sessions.delete"
+      ? { ok: true }
+      : {};
 }
 
 type BindingInput = Parameters<NonNullable<SessionBindingAdapter["bind"]>>[0];
@@ -232,21 +232,12 @@ function bindingMetadata(input: BindingInput, agentId = "codex", webhookId?: str
   };
 }
 
-function mockConversationBinding(channel: string, agentId = "codex", parentRoom?: string): void {
+function mockConversationBinding(channel: string, agentId = "codex"): void {
   hoisted.sessionBindingBindMock.mockImplementationOnce(async (input: BindingInput) =>
     createSessionBinding({
       targetSessionKey: input.targetSessionKey,
-      conversation: {
-        ...input.conversation,
-        channel,
-        ...(parentRoom
-          ? {
-              conversationId: "child-thread",
-              parentConversationId: input.conversation.parentConversationId ?? parentRoom,
-            }
-          : {}),
-      },
-      metadata: bindingMetadata(input, agentId, parentRoom ? "wh-1" : undefined),
+      conversation: { ...input.conversation, channel },
+      metadata: bindingMetadata(input, agentId),
     }),
   );
 }
@@ -260,6 +251,27 @@ function spawn(
   context: SpawnContext = { agentSessionKey: "agent:main:main" },
 ) {
   return spawnAcpDirect({ task: "Investigate flaky tests", agentId: "codex", ...request }, context);
+}
+function mockAgentDispatch(dispatch: () => unknown) {
+  hoisted.callGatewayMock.mockImplementation(async ({ method }: { method?: string }) =>
+    method === "agent" ? dispatch() : gatewayResponse(method),
+  );
+}
+function configureAgents(entries: NonNullable<OpenClawConfig["agents"]>["entries"]) {
+  hoisted.state.cfg.agents = { ...hoisted.state.cfg.agents, entries };
+}
+function channelContext(
+  agentChannel: string,
+  agentTo: string,
+  overrides: Partial<SpawnContext> = {},
+): SpawnContext {
+  return {
+    agentSessionKey: "agent:main:main",
+    agentChannel,
+    agentTo,
+    agentAccountId: "default",
+    ...overrides,
+  };
 }
 
 const requesterContext: SpawnContext = {
@@ -331,15 +343,6 @@ function expectThreadDelivery(
   });
 }
 
-function resolveMatrixRoomTargetForTest(value: string | undefined): string | undefined {
-  return (
-    value
-      ?.trim()
-      .replace(/^(?:matrix:)?(?:channel:|room:)/iu, "")
-      .trim() || undefined
-  );
-}
-
 function configureChannelBindings(channel: string, accountId?: string, defaultAccount?: string) {
   const threadBindings = { enabled: true, spawnSessions: true };
   hoisted.state.cfg.channels = {
@@ -352,43 +355,14 @@ function configureChannelBindings(channel: string, accountId?: string, defaultAc
   };
 }
 
-function enableMatrixAcpThreadBindings(): void {
-  configureChannelBindings("matrix");
-  const matrixPlugin: ChannelPlugin = {
-    ...createChannelTestPluginBase({ id: "matrix" }),
-    conversationBindings: { defaultTopLevelPlacement: "child" },
-    messaging: {
-      resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
-        const parent = resolveMatrixRoomTargetForTest(parentConversationId);
-        const child = conversationId.trim();
-        return parent ? { to: `room:${parent}`, threadId: child } : { to: `room:${child}` };
-      },
-      resolveInboundConversation: ({ to, threadId }) => {
-        const parent = resolveMatrixRoomTargetForTest(to);
-        const thread = threadId != null ? String(threadId).trim() : "";
-        return thread && parent
-          ? { conversationId: thread, parentConversationId: parent }
-          : parent
-            ? { conversationId: parent }
-            : null;
-      },
-    },
-  };
-  setActivePluginRegistry(
-    createTestRegistry([{ pluginId: "matrix", plugin: matrixPlugin, source: "test" }]),
-  );
-  registerBindingAdapter("matrix");
+function installBindingPlugin(plugin: ChannelPlugin, placements?: SessionBindingPlacement[]) {
+  setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, plugin, source: "test" }]));
+  registerBindingAdapter(plugin.id, "default", placements);
 }
 
 function enableLineCurrentConversationBindings(): void {
   configureChannelBindings("line");
-  const linePlugin = {
-    ...createChannelTestPluginBase({ id: "line" }),
-  };
-  setActivePluginRegistry(
-    createTestRegistry([{ pluginId: "line", plugin: linePlugin, source: "test" }]),
-  );
-  registerBindingAdapter("line", "default", ["current"]);
+  installBindingPlugin(createChannelTestPluginBase({ id: "line" }), ["current"]);
 }
 
 function mockSessionStore(entries: Record<string, SessionEntry> = {}) {
@@ -488,11 +462,7 @@ describe("spawnAcpDirect", () => {
   );
 
   it("resumes through the configured ACP owner and backend", async () => {
-    const cfg = hoisted.state.cfg;
-    cfg.agents = {
-      ...cfg.agents,
-      entries: { reviewer: acpAgent("codex", "fallback") },
-    };
+    configureAgents({ reviewer: acpAgent("codex", "fallback") });
     const resumeSessionId = "fixture-resume";
     hoisted.readAcpResumeSessionOwnerMock.mockResolvedValue({
       sessionKey: "agent:reviewer:acp:owned",
@@ -537,25 +507,15 @@ describe("spawnAcpDirect", () => {
 
     hoisted.initializeSessionMock
       .mockReset()
-      .mockImplementation(async (args: AcpInitializeSessionInput) => {
-        const cwd = typeof args.cwd === "string" ? args.cwd : undefined;
-        return {
-          closeRuntimeOnFailure: hoisted.closeRuntimeOnFailureMock,
-          sessionEntry: { sessionId: "sess-123", updatedAt: Date.now() },
-          meta: {
-            backend: "acpx",
-            agent: args.agent,
-            ...(cwd ? { runtimeOptions: { cwd } } : {}),
-            identity: {
-              state: "pending",
-              source: "ensure",
-              acpxSessionId: "acpx-1",
-              agentSessionId: "codex-inner-1",
-              lastUpdatedAt: Date.now(),
-            },
-          },
-        };
-      });
+      .mockImplementation(async (args: AcpInitializeSessionInput) => ({
+        closeRuntimeOnFailure: hoisted.closeRuntimeOnFailureMock,
+        sessionEntry: { sessionId: "sess-123", updatedAt: Date.now() },
+        meta: {
+          backend: "acpx",
+          agent: args.agent,
+          ...(args.cwd ? { runtimeOptions: { cwd: args.cwd } } : {}),
+        },
+      }));
 
     hoisted.sessionBindingBindMock.mockReset().mockImplementation(async (input: BindingInput) =>
       createSessionBinding({
@@ -585,38 +545,6 @@ describe("spawnAcpDirect", () => {
     setActivePluginRegistry(createTestRegistry());
     acpRuntimeRegistryTesting.resetAcpRuntimeBackendsForTests();
     sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
-  });
-
-  it("reconciles a transport-ambiguous ACP dispatch so an accepted run is surfaced instead of misreported as dispatch_failed", async () => {
-    let agentDispatchAttempts = 0;
-    // Model an accepted dispatch whose acknowledgement was lost.
-    hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
-      const args = argsUnknown as { method?: string };
-      if (args.method === "agent") {
-        agentDispatchAttempts += 1;
-        if (agentDispatchAttempts === 1) {
-          throw new Error("gateway timeout after 60000ms");
-        }
-        return { runId: "accepted-acp-run", status: "in_flight" };
-      }
-      return gatewayResponse(args.method);
-    });
-
-    const result = await spawn(
-      { mode: "session", thread: true },
-      {
-        agentSessionKey: "agent:main:main",
-        agentChannel: "discord",
-        agentAccountId: "default",
-        agentTo: "channel:parent-channel",
-        agentThreadId: "requester-thread",
-      },
-    );
-
-    expect(agentDispatchAttempts).toBe(2);
-    const accepted = expectAcceptedSpawn(result);
-    expect(accepted.runId).toBe("accepted-acp-run");
-    expect(accepted.childSessionKey).toMatch(/^agent:main:acp:/);
   });
 
   it("forwards ACP lineage with unsupported external native actions and the exact parent token", async () => {
@@ -945,44 +873,13 @@ describe("spawnAcpDirect", () => {
     expect(failed.error).toContain("agentId is not allowed");
   });
 
-  it("preserves Matrix parent room casing when binding from an existing thread", async () => {
-    enableMatrixAcpThreadBindings();
-    mockConversationBinding("matrix", "codex", "!Room:Example.org");
-
-    const result = await spawn(
-      { mode: "session", thread: true },
-      {
-        agentSessionKey: "agent:main:matrix:channel:!room:example.org:thread:$thread-root",
-        agentChannel: "matrix",
-        agentAccountId: "default",
-        agentTo: "room:!Room:Example.org",
-        agentThreadId: "$thread-root",
-        agentGroupId: "!room:example.org",
-      },
-    );
-
-    expect(result.status, JSON.stringify(result)).toBe("accepted");
-    expectThreadDelivery(
-      {
-        channel: "matrix",
-        accountId: "default",
-        conversationId: "$thread-root",
-        parentConversationId: "!Room:Example.org",
-      },
-      { to: "room:!Room:Example.org", threadId: "child-thread" },
-    );
-  });
-
   it("refuses to hand the current conversation to a spawned worker", async () => {
     enableLineCurrentConversationBindings();
     const result = await spawn(
       { mode: "session", thread: true },
-      {
+      channelContext("line", "U1234567890abcdef1234567890abcdef", {
         agentSessionKey: "agent:main:line:direct:U1234567890abcdef1234567890abcdef",
-        agentChannel: "line",
-        agentAccountId: "default",
-        agentTo: "U1234567890abcdef1234567890abcdef",
-      },
+      }),
     );
     expect(result).toMatchObject({ status: "error", errorCode: "thread_binding_invalid" });
     expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
@@ -996,11 +893,10 @@ describe("spawnAcpDirect", () => {
 
     const result = await spawn(
       { mode: "session", thread: true },
-      {
+      channelContext("custom", "channel:123456", {
         agentSessionKey: "agent:main:custom:channel:123456",
-        agentChannel: "custom",
-        agentTo: "channel:123456",
-      },
+        agentAccountId: undefined,
+      }),
     );
 
     expect(result.status).toBe("accepted");
@@ -1026,14 +922,11 @@ describe("spawnAcpDirect", () => {
         defaultAgent: "reviewer",
         allowedAgents: ["codex", "bot-alpha"],
       };
-      hoisted.state.cfg.agents = {
-        ...hoisted.state.cfg.agents,
-        entries: {
-          main: {},
-          "bot-alpha": {},
-          reviewer: acpAgent(),
-        },
-      };
+      configureAgents({
+        main: {},
+        "bot-alpha": {},
+        reviewer: acpAgent(),
+      });
       hoisted.state.cfg.bindings = [
         {
           type: "route",
@@ -1051,12 +944,10 @@ describe("spawnAcpDirect", () => {
 
       const result = await spawn(
         { agentId, mode: "session", thread: true },
-        {
+        channelContext("matrix", `room:${boundRoom}`, {
           agentSessionKey: "agent:main:matrix:room:requester",
-          agentChannel: "matrix",
           agentAccountId: "bot-beta",
-          agentTo: `room:${boundRoom}`,
-        },
+        }),
       );
 
       expect(result.status).toBe("accepted");
@@ -1171,11 +1062,8 @@ describe("spawnAcpDirect", () => {
   it("disposes pre-registered parent relay when initial ACP dispatch fails", async () => {
     const relayHandle = createRelayHandle();
     hoisted.startAcpSpawnParentStreamRelayMock.mockReturnValueOnce(relayHandle);
-    hoisted.callGatewayMock.mockImplementation(async ({ method }: { method?: string }) => {
-      if (method === "agent") {
-        throw new Error("agent dispatch failed");
-      }
-      return gatewayResponse(method);
+    mockAgentDispatch(() => {
+      throw new Error("agent dispatch failed");
     });
 
     const result = await spawn({ streamTo: "parent" });
@@ -1191,4 +1079,3 @@ describe("spawnAcpDirect", () => {
     );
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

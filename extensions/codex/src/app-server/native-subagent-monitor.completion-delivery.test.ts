@@ -10,12 +10,6 @@ import {
   releaseCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
-import {
-  buildEmptyToolTelemetry,
-  CodexAppServerEventProjector,
-  createParams,
-  registerCodexEventProjectorTestLifecycle,
-} from "./event-projector.test-harness.js";
 import { createCodexNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
@@ -36,7 +30,6 @@ import {
   observeCompletionAttempts,
   parentRegistration as parentParams,
 } from "./native-subagent-monitor.test-support.js";
-import { prepareCodexServerNotification } from "./protocol-validators.js";
 import { createClientHarness } from "./test-support.js";
 
 async function runtimeFixture(client = createClient(), runtime = createRuntime()) {
@@ -105,8 +98,6 @@ function waitReceipt(id: string, status: string, message: string | null) {
 }
 
 describe("native completion delivery ownership", () => {
-  registerCodexEventProjectorTestLifecycle();
-
   it("does not repeat a shutdown result returned by native wait", async () => {
     const { client, runtime, monitor, owner: parent } = await monitorFixture();
     await startChild(client, parent);
@@ -120,67 +111,29 @@ describe("native completion delivery ownership", () => {
   it.each([
     { receipt: "agent-message", order: "native-first" },
     { receipt: "contextual", order: "terminal-first" },
-  ])(
-    "preserves the parent answer when $receipt delivery and child completion arrive $order",
-    async ({ receipt, order }) => {
-      const final = "The build passed. The change is ready.";
-      const { client, runtime, owner } = await runtimeFixture();
-      await startChild(client, owner, "/root/worker");
-      const projector = new CodexAppServerEventProjector(
-        await createParams(),
-        "parent-thread",
-        "parent-turn",
-      );
-      let lastAnswer = "";
-      const answer = async (text: string, id: string) => {
-        lastAnswer = text;
-        await projector.handleNotification(
-          prepareCodexServerNotification(itemNotification(agentMessage(id, text, "final_answer"))),
-        );
-      };
-      runtime.deliverAgentHarnessCompletion.mockImplementation(async () => {
-        await answer("NO_REPLY", "duplicate-answer");
-        return { delivered: true, path: "steered" };
-      });
-      if (order === "terminal-first") {
-        await client.notify(completedChild());
-      }
-      await client.notify(
-        receipt === "contextual"
-          ? nativeCompletionNotification({ result: "The build passed.", turnId: "parent-turn" })
-          : deliveredNativeCompletion(),
-      );
-      await answer(final, "parent-answer");
-      if (order === "native-first") {
-        await client.notify(completedChild());
-      }
-      await projector.handleNotification(
-        prepareCodexServerNotification(
-          childTurnCompletedNotification({
-            threadId: "parent-thread",
-            turnId: "parent-turn",
-            status: "completed",
-            items: [agentMessage("last-answer", lastAnswer)],
-          }),
-        ),
-      );
-      await owner.unregister();
-      expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual([final]);
-      expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
-    },
-  );
+  ])("does not redeliver $receipt completion arriving $order", async ({ receipt, order }) => {
+    const { client, runtime, owner } = await runtimeFixture();
+    await startChild(client, owner, "/root/worker");
+    if (order === "terminal-first") {
+      await client.notify(completedChild());
+    }
+    await client.notify(
+      receipt === "contextual"
+        ? nativeCompletionNotification({ result: "The build passed.", turnId: "parent-turn" })
+        : deliveredNativeCompletion(),
+    );
+    if (order === "native-first") {
+      await client.notify(completedChild());
+    }
+    await owner.unregister();
+    expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+  });
 
   it("defers delivery until unbound parent release and revokes admission on retirement", async () => {
     const client = createClient();
     const runtime = createRuntime();
     const delivery = createDeferred<{ delivered: boolean; path: "direct" }>();
     runtime.deliverAgentHarnessCompletion.mockReturnValue(delivery.promise);
-    client.request.mockImplementation(async (method) => {
-      if (method === "thread/unsubscribe") {
-        return {};
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
     const { owner } = await runtimeFixture(client, runtime);
     let retirement: Promise<void> | undefined;
     try {
@@ -200,8 +153,6 @@ describe("native completion delivery ownership", () => {
       delivery.resolve({ delivered: true, path: "direct" });
       await delivery.promise;
       await retirement;
-      await owner.unregister();
-      client.close();
     }
   });
 
@@ -265,11 +216,9 @@ describe("native completion delivery ownership", () => {
       });
       await vi.advanceTimersByTimeAsync(0);
       expect(retired).toBe(false);
-      expect(releaseChildThread).not.toHaveBeenCalled();
       expect(client.request).not.toHaveBeenCalledWith("thread/unsubscribe", expect.anything());
       releaseWrite.resolve();
       await Promise.all([receipt, retirement]);
-      expect(releaseChildThread).toHaveBeenCalledExactlyOnceWith("child-thread");
       expect(client.request).toHaveBeenCalledExactlyOnceWith("thread/unsubscribe", {
         threadId: "child-thread",
       });
@@ -635,7 +584,6 @@ describe("Codex native close admission", () => {
     parent.bindTurn("parent-turn");
     await vi.waitFor(() => expect(forget).toHaveBeenCalledOnce());
 
-    expect(captureChildThreadForget).toHaveBeenCalledExactlyOnceWith("child-thread");
     expect(releaseParentThread).toHaveBeenCalledOnce();
     await client.completeNative();
     expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();

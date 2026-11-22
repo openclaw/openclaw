@@ -8,6 +8,7 @@ import { icons } from "../../components/icons.tsx";
 import { WorkboardBoardGlyph } from "../../components/workboard-board-glyph.tsx";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { listen } from "../../lib/listener.ts";
 import { workboardCardBoardId } from "../../lib/workboard/board-filter.ts";
 import { workboardBoardName } from "../../lib/workboard/board-presentation.ts";
 import type { WorkboardCapability } from "../../lib/workboard/capability.ts";
@@ -77,6 +78,8 @@ export function createWorkboardPage(
     let context = initialContext;
     let disposed = false;
     let boardDraft: BoardDraft | null = null;
+    let focusTarget: HTMLElement | undefined;
+    let heading: HTMLElement | undefined;
     const automations = new Map<string, BoardAutomationState>();
     type PagePresentation = {
       workboardProps: WorkboardProps & { onRefresh: () => void };
@@ -99,7 +102,7 @@ export function createWorkboardPage(
     let redirectedBoard = "";
     const client = host;
     const state = workboard.state;
-    const requestUpdate = () => {
+    const publishPresentation = () => {
       if (disposed || queued) {
         return;
       }
@@ -111,8 +114,8 @@ export function createWorkboardPage(
         }
       });
     };
-    const sessionResolver = createWorkboardSessionResolver(host, requestUpdate);
-    const sessionsBoard = createSessionsBoardController(host, requestUpdate);
+    const sessionResolver = createWorkboardSessionResolver(host, publishPresentation);
+    const sessionsBoard = createSessionsBoardController(host, publishPresentation);
     const stop = () => {
       // A paused page no longer owns shared loads started by session actions.
       if (!refreshActive) {
@@ -137,14 +140,14 @@ export function createWorkboardPage(
             return;
           }
           metadataError = null;
-          requestUpdate();
+          publishPresentation();
         })
         .catch((error: unknown) => {
           if (disposed || generation !== metadataGeneration) {
             return;
           }
           metadataError = formatUiError(error);
-          requestUpdate();
+          publishPresentation();
         })
         .finally(() => {
           if (metadataLoad === load) {
@@ -220,14 +223,12 @@ export function createWorkboardPage(
         const force = configureWorkboardLiveRefresh({
           host: workboard,
           client,
-          requestUpdate,
           shouldDefer: () => Boolean(boardDraft || sessionsBoard.busy || sessionsBoard.draggedKey),
           refresh: selectedBoard?.kind === "sessions" ? sessionsBoard.read : undefined,
         });
         void loadWorkboard({
           host: workboard,
           client,
-          requestUpdate,
           force,
           refreshDiagnostics: host.connection.canWrite && selectedBoard?.kind !== "sessions",
         });
@@ -261,7 +262,7 @@ export function createWorkboardPage(
             return;
           }
           automations.set(jobId, automation);
-          requestUpdate();
+          publishPresentation();
         });
       }
       const focusedCard = state.draftOpen
@@ -288,7 +289,7 @@ export function createWorkboardPage(
       ];
       const onNewBoard = () => {
         boardDraft = createNewBoardDraft();
-        requestUpdate();
+        publishPresentation();
       };
       const onBoardChange = (boardFilter: string) =>
         host.navigation.openPage(workboardPageTarget(boardFilter), {
@@ -321,14 +322,13 @@ export function createWorkboardPage(
           void refreshWorkboard({
             host: workboard,
             client: connected ? client : null,
-            requestUpdate,
             source: "manual",
             refreshDiagnostics: host.connection.canWrite,
           });
         },
         onBoardFilterChange: onBoardChange,
         onNewBoard,
-        onRequestUpdate: requestUpdate,
+        onRequestUpdate: publishPresentation,
       };
       state.agentFilter = normalizeActiveAgentFilter(
         buildAgentFilterOptions(agentsList, state.cards),
@@ -346,7 +346,13 @@ export function createWorkboardPage(
     function PageHeading() {
       const board = () => presentation()?.selectedBoard;
       return (
-        <div class="workboard-heading__identity">
+        <div
+          class="workboard-heading__identity"
+          tabindex="-1"
+          ref={(element) => {
+            heading = element;
+          }}
+        >
           <div class="page-title workboard-page-title">
             <Show when={board()}>
               {(selected) => (
@@ -377,7 +383,7 @@ export function createWorkboardPage(
                       ? sessionsBoard.snapshot.board
                       : {}),
                   });
-                  requestUpdate();
+                  publishPresentation();
                 }}
               >
                 {icons.penLine}
@@ -449,6 +455,9 @@ export function createWorkboardPage(
                     revision={current().revision}
                     heading={<PageHeading />}
                     scopeControl={() => <ScopeControl />}
+                    onFocusTarget={(element) => {
+                      focusTarget = element;
+                    }}
                   />
                 }
               >
@@ -464,7 +473,7 @@ export function createWorkboardPage(
                   overlayOpen={Boolean(current().boardDraft)}
                   onNewBoard={() => {
                     boardDraft = createNewBoardDraft();
-                    requestUpdate();
+                    publishPresentation();
                   }}
                   onBoardChange={(boardFilter) =>
                     host.navigation.openPage(workboardPageTarget(boardFilter), {
@@ -483,10 +492,10 @@ export function createWorkboardPage(
                     pageError={workboardErrorMessage(state, current().workboardProps.pageError)}
                     client={liveClient()}
                     canWrite={canWrite()}
-                    requestUpdate={requestUpdate}
+                    onChange={publishPresentation}
                     onCancel={() => {
                       boardDraft = null;
-                      requestUpdate();
+                      publishPresentation();
                     }}
                     onSaved={(board) => {
                       if (disposed) {
@@ -503,7 +512,6 @@ export function createWorkboardPage(
                       void refreshWorkboard({
                         host: workboard,
                         client,
-                        requestUpdate,
                         source: "manual",
                       }).then(() => {
                         if (
@@ -525,7 +533,7 @@ export function createWorkboardPage(
                           void sessionsBoard.read();
                         }
                       });
-                      requestUpdate();
+                      publishPresentation();
                     }}
                   />
                 )}
@@ -545,9 +553,9 @@ export function createWorkboardPage(
         return;
       }
       synchronizeConnection();
-      requestUpdate();
+      publishPresentation();
     });
-    const unsubscribeState = workboard.subscribe(requestUpdate);
+    const unsubscribeState = workboard.subscribe(publishPresentation);
     const unsubscribeEvents = host.onEvent(WORKBOARD_CHANGED_EVENT, (payload) => {
       if (!disposed && connected && context.presented && !sessionsBoard.hasCurrent(payload)) {
         handleWorkboardChanged(workboard, payload);
@@ -562,13 +570,18 @@ export function createWorkboardPage(
         typeof payload.jobId === "string" &&
         automations.delete(payload.jobId)
       ) {
-        requestUpdate();
+        publishPresentation();
       }
     });
-    document.addEventListener("visibilitychange", onVisibilityChange);
+    const stopVisibility = listen(document, "visibilitychange", onVisibilityChange);
     update();
     const disposeRoot = render(() => <Page />, container);
     return {
+      focus() {
+        if (!disposed && context.presented) {
+          (focusTarget?.isConnected ? focusTarget : heading)?.focus();
+        }
+      },
       update(next) {
         if (
           context.presented !== next.presented ||
@@ -578,7 +591,7 @@ export function createWorkboardPage(
           navigationGeneration += 1;
         }
         context = next;
-        requestUpdate();
+        publishPresentation();
       },
       dispose() {
         disposed = true;
@@ -589,7 +602,7 @@ export function createWorkboardPage(
         unsubscribeCron();
         sessionsBoard.dispose();
         sessionResolver.dispose();
-        document.removeEventListener("visibilitychange", onVisibilityChange);
+        stopVisibility();
         stop();
         disposeRoot();
       },

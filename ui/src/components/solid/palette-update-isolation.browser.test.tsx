@@ -6,10 +6,12 @@ import "../command-palette.tsx";
 import "../../styles.css";
 
 function shortcut() {
+  const mac = navigator.platform.includes("Mac");
   const event = new KeyboardEvent("keydown", {
     key: "k",
     code: "KeyK",
-    ctrlKey: true,
+    ctrlKey: !mac,
+    metaKey: mac,
     bubbles: true,
     cancelable: true,
   });
@@ -70,7 +72,8 @@ it("keeps palette keyboard editing and catalog work scoped across result navigat
   await palette.updateComplete;
   const input = palette.querySelector<HTMLTextAreaElement>("textarea")!;
   input.focus();
-  await userEvent.keyboard("{End}e");
+  // Move to the end of this word with the platform's native editing shortcut.
+  await userEvent.keyboard("{ControlOrMeta>}{ArrowRight}{/ControlOrMeta}e");
   expect(input.value).toBe("needle");
   await expect.poll(() => palette.textContent).toContain("Needle 0 model 000");
   // Rows can be stale during debounce; wait for keyboard navigation admission.
@@ -106,7 +109,7 @@ it("keeps palette keyboard editing and catalog work scoped across result navigat
   expect(nativeWrites).not.toHaveBeenCalled();
   input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
   nativeWrites.mockRestore();
-  await userEvent.keyboard("{Control>}z{/Control}");
+  await userEvent.keyboard("{ControlOrMeta>}z{/ControlOrMeta}");
   expect(input.value).toBe("needl");
   palette.remove();
   expect(shortcut().defaultPrevented).toBe(false);

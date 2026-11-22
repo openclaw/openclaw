@@ -7,6 +7,7 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import { createShellOwner } from "./app-host-solid.test-support.ts";
 import type { ShellGatewayOwner } from "./app-shell-gateway.ts";
 import type { ApplicationContext } from "./context.ts";
+import type { RequestMock } from "./server-prefs.test-support.ts";
 import { resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
 
@@ -129,14 +130,39 @@ async function loadPreferenceRealm(scope: string) {
   };
 }
 
+function holdWrite(request: RequestMock, afterCommit = true) {
+  const started = createDeferred();
+  const reply = createDeferred();
+  return {
+    started: started.promise,
+    release: () => reply.resolve(),
+    request: vi.fn(async (method: string, params?: unknown) => {
+      if (method !== "users.prefs.set") {
+        return request(method, params);
+      }
+      const result = afterCommit ? await request(method, params) : undefined;
+      started.resolve();
+      await reply.promise;
+      return afterCommit ? result : request(method, params);
+    }),
+  };
+}
+
 describe("profile preference ACK publication across browser realms", () => {
-  const publicationCases = ["settled", "published-read", "published-identical", "cancelled"];
+  const publicationCases = [
+    "settled",
+    "published-read",
+    "published-identical",
+    "cancelled",
+    "before-commit",
+  ];
   it.each(publicationCases)(
     "keeps B's newer publication when A's older ACK arrives (%s)",
     async (mode) => {
       const cancelled = mode === "cancelled";
+      const beforeCommit = mode === "before-commit";
       const identical = mode === "published-identical";
-      const observed = mode === "published-read" || identical;
+      const observed = mode === "published-read" || identical || beforeCommit;
       const scope = "ws://ack-publication";
       const pinsKey = "ui.railShortcuts";
       const pendingKey = `openclaw.control.serverPrefs.pending.v1:${scope}:profile:profile-a`;
@@ -145,33 +171,19 @@ describe("profile preference ACK publication across browser realms", () => {
       const a = await loadPreferenceRealm(scope);
       const serverFixture = a.server({ "profile-a": { [pinsKey]: ["route:usage"] } }, scope);
       const server = serverFixture.profiles["profile-a"]!;
-      const aCommitted = createDeferred();
-      const aReply = createDeferred<unknown>();
-      const requestFor = (holdReply: boolean) => {
-        const { request } = serverFixture.connect("profile-a");
-        return vi.fn(async (method: string, params?: unknown) => {
-          const result = await request(method, params);
-          if (holdReply && method === "users.prefs.set") {
-            aCommitted.resolve();
-            await aReply.promise;
-          }
-          return result;
-        });
-      };
-      const aRequest = requestFor(true);
-      const aWriter = a.writer(aRequest);
+      const held = holdWrite(serverFixture.connect("profile-a").request, !beforeCommit);
+      const aWriter = a.writer(held.request);
       let b: Awaited<ReturnType<typeof loadPreferenceRealm>> | undefined;
       try {
         a.settings.patchSettings({ gatewayUrl: scope });
         await a.refresh(aWriter);
-        const aAfterCommit = vi.fn(() => a.apply());
+        const aAfterCommit = vi.fn(beforeCommit ? undefined : () => a.apply());
         const wantedA = a.publish(aWriter, ["route:usage", "route:cron"], true, aAfterCommit);
-        await aCommitted.promise;
+        await held.started;
         b = await loadPreferenceRealm(scope);
-        const bRequest = requestFor(false);
-        const bWriter = b.writer(bRequest);
-        const wantedB = identical ? wantedA : cancelled ? [] : ["route:plugins"];
-        if (observed && !identical) {
+        const bWriter = b.writer(serverFixture.connect("profile-a").request);
+        const wantedB = identical || beforeCommit ? wantedA : cancelled ? [] : ["route:plugins"];
+        if (mode === "published-read") {
           // A different writer can publish a confirmed read without settling A's outbox.
           await bWriter.state.client!.request("users.prefs.set", {
             entries: { [pinsKey]: wantedB },
@@ -186,18 +198,23 @@ describe("profile preference ACK publication across browser realms", () => {
           b.publish(bWriter, wantedB, !cancelled);
         }
         await vi.dynamicImportSettled();
-        const expectedServer = cancelled ? wantedA : wantedB;
+        const expectedServer = beforeCommit ? ["route:usage"] : cancelled ? wantedA : wantedB;
         expect(server[pinsKey]).toEqual(expectedServer);
         expect(localStorage.getItem(pendingKey) === null).toBe(!observed);
-        if (observed && !identical) {
+        if (mode === "published-read") {
           const confirmed = lastSeenPins();
           a.apply({ ui: { prefs: { locale: "de" } } });
           expect(lastSeenPins()).toEqual(confirmed);
         }
         const newestLastSeen = localStorage.getItem(lastSeenKey);
         expect(lastSeenPins()).toEqual(expectedServer);
-        aReply.resolve({ status: "ok" });
+        held.release();
         await vi.dynamicImportSettled();
+        if (beforeCommit) {
+          expect([a.read(), server[pinsKey]]).toEqual([wantedA, wantedA]);
+          expect(aAfterCommit).toHaveBeenCalledOnce();
+          return;
+        }
         expect([a.read(), b.read()]).toEqual([wantedB, wantedB]);
         if (identical) {
           expect(aAfterCommit).toHaveBeenCalledOnce();
@@ -211,59 +228,12 @@ describe("profile preference ACK publication across browser realms", () => {
         a.apply();
         expect(a.read()).toEqual(wantedB);
         expect(lastSeenPins()).toEqual(expectedServer);
-        expect(
-          [aRequest, bRequest].map(
-            (request) =>
-              request.mock.calls.filter(([method]) => method === "users.prefs.set").length,
-          ),
-        ).toEqual([1, cancelled || identical ? 0 : 1]);
       } finally {
-        aReply.resolve({ status: "ok" });
+        held.release();
         a.prefs.resetServerUiPrefsSync();
         b?.prefs.resetServerUiPrefsSync();
         await vi.dynamicImportSettled();
       }
     },
   );
-  it("accepts a successful write after an identical read published before the commit", async () => {
-    const scope = "ws://ack-before-commit";
-    const a = await loadPreferenceRealm(scope);
-    const server = { "ui.railShortcuts": ["route:usage"] };
-    const dispatched = createDeferred();
-    const commit = createDeferred();
-    const request = vi.fn(async (method: string, params?: unknown): Promise<unknown> => {
-      if (method === "users.prefs.get") {
-        return { status: "ok", entries: structuredClone(server) };
-      }
-      dispatched.resolve();
-      await commit.promise;
-      Object.assign(server, (params as { entries: Record<string, unknown> }).entries);
-      return { status: "ok" };
-    });
-    const writer = a.writer(request);
-    let b: Awaited<ReturnType<typeof loadPreferenceRealm>> | undefined;
-    try {
-      a.settings.patchSettings({ gatewayUrl: scope });
-      await a.refresh(writer);
-      const afterCommit = vi.fn();
-      const desired = a.publish(writer, ["route:usage", "route:cron"], true, afterCommit);
-      await dispatched.promise;
-      b = await loadPreferenceRealm(scope);
-      const bRequest = vi.fn(async (): Promise<unknown> => ({
-        status: "ok",
-        entries: structuredClone(server),
-      }));
-      const bWriter = b.writer(bRequest);
-      await b.refresh(bWriter);
-      commit.resolve();
-      await vi.dynamicImportSettled();
-      expect([a.read(), server["ui.railShortcuts"]]).toEqual([desired, desired]);
-      expect(afterCommit).toHaveBeenCalledOnce();
-    } finally {
-      commit.resolve();
-      a.prefs.resetServerUiPrefsSync();
-      b?.prefs.resetServerUiPrefsSync();
-      await vi.dynamicImportSettled();
-    }
-  });
 });

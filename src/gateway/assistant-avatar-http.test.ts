@@ -11,8 +11,8 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readImageMetadataFromHeader } from "../media/image-header-metadata.js";
 import * as imageOps from "../media/image-ops.js";
-import { readImageMetadataFromHeader } from "../media/image-ops.js";
 import { encodePngRgba } from "../media/png-encode.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-limits.js";
 import {
@@ -295,6 +295,19 @@ it.each([
   if (sourceKind !== "local") {
     expect(response.setHeader).toHaveBeenCalledWith("content-type", mime);
   }
+});
+
+it("serves an unversioned data avatar thumbnail", async () => {
+  const fixture = avatarFixture("/control");
+  fixture.setAvatar(encodeDataUrl(APNG_BYTES));
+
+  const response = await fixture.request("/control/avatar/main");
+
+  expect(response.res.statusCode).toBe(200);
+  expect(response.setHeader).toHaveBeenCalledWith("content-type", "image/png");
+  expect(response.setHeader).toHaveBeenCalledWith("cache-control", "private, no-cache");
+  expect(response.setHeader).toHaveBeenCalledWith("vary", "Authorization, Cookie");
+  expect(response.end).toHaveBeenCalledWith(expect.any(Buffer));
 });
 
 it.each(["local", "data"])(

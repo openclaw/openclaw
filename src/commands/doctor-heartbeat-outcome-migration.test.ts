@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Compilable } from "kysely";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
@@ -19,7 +20,9 @@ import {
   cleanupSessionStateForTest,
   useSessionStoreTempDirs,
 } from "../test-utils/session-state-cleanup.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { migrateHeartbeatOutcomes } from "./doctor-heartbeat-outcome-migration.js";
+import { insertLegacySession } from "./doctor-session-canonical-keys.test-support.js";
 
 const roots = useSessionStoreTempDirs(afterEach, "doctor-outcomes-");
 afterEach(() => vi.restoreAllMocks());
@@ -49,6 +52,9 @@ async function fixture(store: "canonical" | "shared" | "partitioned" = "canonica
   });
   const options = toDatabaseOptions(resolveSqliteScope(scope));
   const database = () => openOpenClawAgentDatabase(options).db;
+  const query = getNodeSqliteKysely<Pick<DB, "heartbeat_outcomes">>(database());
+  const execute = <Row>(statement: Compilable<Row>) =>
+    executeSqliteQuerySync(database(), statement);
   const row = {
     session_key: scope.sessionKey,
     run_session_key: scope.sessionKey,
@@ -66,24 +72,12 @@ async function fixture(store: "canonical" | "shared" | "partitioned" = "canonica
     updated_at: now,
   };
   const insert = (value: typeof row) =>
-    executeSqliteQuerySync(
-      database(),
-      getNodeSqliteKysely<Pick<DB, "heartbeat_outcomes">>(database())
-        .insertInto("heartbeat_outcomes")
-        .values(value),
-    );
+    execute(query.insertInto("heartbeat_outcomes").values(value));
   insert(row);
-  const pending = () =>
-    executeSqliteQuerySync(
-      database(),
-      getNodeSqliteKysely<Pick<DB, "heartbeat_outcomes">>(database())
-        .selectFrom("heartbeat_outcomes")
-        .selectAll(),
-    ).rows;
+  const pending = () => execute(query.selectFrom("heartbeat_outcomes").selectAll()).rows;
   const update = (values: Partial<typeof row>) =>
-    executeSqliteQuerySync(
-      database(),
-      getNodeSqliteKysely<Pick<DB, "heartbeat_outcomes">>(database())
+    execute(
+      query
         .updateTable("heartbeat_outcomes")
         .set(values)
         .where("session_key", "=", scope.sessionKey),
@@ -235,6 +229,35 @@ describe("Doctor pending heartbeat context", () => {
     expect(
       JSON.stringify(loadTranscriptEventsSync({ ...f.scope, sessionId: "replacement" })),
     ).not.toContain(f.row.summary);
+  });
+
+  it("rekeys a lowercased Matrix room alias before importing its outcome", async () => {
+    const f = await fixture();
+    const room = "!MixedCase:example.org";
+    const canonicalKey = `agent:main:matrix:channel:${room}`;
+    const legacyKey = canonicalKey.toLowerCase();
+    insertLegacySession({
+      ...f.scope,
+      sessionKey: legacyKey,
+      entry: {
+        sessionId: "matrix-session",
+        updatedAt: f.now,
+        sessionStartedAt: f.now - 2000,
+        chatType: "channel",
+        delivery: normalizeSessionDeliveryState({ context: { channel: "matrix", to: room } }),
+      },
+    });
+    const roomRow = { ...f.row, session_key: legacyKey, run_session_key: legacyKey };
+    f.insert(roomRow);
+
+    await migrateHeartbeatOutcomes(f.cfg, f.env);
+
+    expect(f.pending()).toEqual([]);
+    expect(loadSessionEntryReadOnly({ ...f.scope, sessionKey: legacyKey })).toBeUndefined();
+    const roomScope = { ...f.scope, sessionKey: canonicalKey, sessionId: "matrix-session" };
+    expect(loadSessionEntryReadOnly(roomScope)?.sessionId).toBe("matrix-session");
+    expect(JSON.stringify(loadTranscriptEventsSync(roomScope))).toContain(roomRow.summary);
+    expect(JSON.stringify(f.events())).toContain(f.row.summary);
   });
 
   it.each(["before-generation", "expired-session"] as const)(

@@ -84,29 +84,22 @@ describe("standing-intent schema admission", () => {
     (owner) => {
       using db = open();
       const failure = new Error("rollback the schema owner");
-      const rolledBack = () =>
-        expect(() =>
-          managed(db, () => {
-            ensure(db);
-            throw failure;
-          }),
-        ).toThrow(failure);
-      if (owner === "supplied owner") {
-        expect(() =>
-          ensure(db, (run) =>
-            managed(db, () => {
-              run();
-              throw failure;
-            }),
-          ),
-        ).toThrow(failure);
-      } else if (owner === "native DDL conflict") {
+      const abort = (run = () => ensure(db)) =>
+        managed(db, () => {
+          run();
+          throw failure;
+        });
+      if (owner === "native DDL conflict") {
         db.exec("CREATE TABLE idx_standing_intents_scope (id INTEGER)");
         expect(() => managed(db, () => ensure(db))).toThrow(/idx_standing_intents_scope/u);
-      } else if (owner === "outer") {
-        rolledBack();
       } else {
-        managed(db, rolledBack);
+        const rolledBack = () =>
+          expect(() => (owner === "supplied owner" ? ensure(db, abort) : abort())).toThrow(failure);
+        if (owner === "savepoint") {
+          managed(db, rolledBack);
+        } else {
+          rolledBack();
+        }
       }
       expect(
         db.prepare("SELECT name FROM sqlite_schema WHERE name = 'standing_intents'").get(),

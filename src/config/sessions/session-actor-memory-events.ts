@@ -1,12 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
+import { readBackgroundResultPlacement } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
-import {
-  advanceCliHistoryBoundary,
-  cliHistoryOwnerHolds,
-  getCliHistoryWriter,
-} from "./cli-history-boundary.js";
 import type { TranscriptEventAppendOptions } from "./session-accessor.sqlite-contract.js";
 import { pruneSessionActorMemoryReactions } from "./session-actor-memory-reactions.js";
 import type { SessionActorMemoryState } from "./session-actor-memory-state.js";
@@ -125,27 +121,6 @@ export function createSessionActorMemoryEvents(options: {
       updatedAt: Math.max(Date.now(), (state.hot.transcript.version.updatedAt ?? -1) + 1),
     };
     state.hot.transcript.watermark = { generation, maxSeq: rawSeq };
-    const writer = getCliHistoryWriter({
-      agentId,
-      storePath: path,
-      sessionId: requireEntry().sessionId,
-      sessionKey: state.hot.target.sessionKey,
-    });
-    if (writer) {
-      const next = advanceCliHistoryBoundary(
-        state.hot.entry,
-        requireEntry().sessionId,
-        generation,
-        { first: rawSeq, last: rawSeq },
-        writer,
-      );
-      if (next) {
-        writer.assertCurrent();
-        if (cliHistoryOwnerHolds(writer, writer.confirmsOwner)) {
-          state.hot.entry = next;
-        }
-      }
-    }
     if (isRecord(event) && typeof event.id === "string" && event.type === "message") {
       const key = readMessageIdempotencyKey(event.message);
       if (
@@ -184,7 +159,7 @@ export function createSessionActorMemoryEvents(options: {
   const parent = (input: { parentId?: string | null; appendIntent?: "active-branch" }) =>
     resolveTranscriptAppendParent({
       ...input,
-      tailId: tree().appendParentId,
+      readTailId: () => tree().appendParentId,
       parentId: input.parentId,
       isAncestor,
     });
@@ -235,6 +210,7 @@ export function createSessionActorMemoryEvents(options: {
             message_role: message.role,
             context_free_command:
               message.excludeFromContext === true && internal?.contextFreeCommand === true ? 1 : 0,
+            human_addressed: internal?.humanAddressed === true ? 1 : 0,
             provenance_kind: provenance?.kind,
             provenance_source_channel: provenance?.sourceChannel,
           },
@@ -246,12 +222,16 @@ export function createSessionActorMemoryEvents(options: {
   };
   const appendRaw = (event: unknown, input: TranscriptEventAppendOptions = {}, bytes?: string) => {
     checkMutation(input.expectedMutationAt);
-    const resolved =
+    let resolved =
       isRecord(event) &&
       (event.parentId === null || typeof event.parentId === "string") &&
       input.appendIntent === "active-branch"
         ? { ...event, parentId: parent({ ...input, parentId: event.parentId }) }
         : event;
+    const placement = readBackgroundResultPlacement(resolved);
+    if (placement && isRecord(resolved)) {
+      resolved = { ...resolved, data: { ...placement, afterEntryId: resolved.parentId } };
+    }
     const appended = writeEvent(resolved, resolved === event ? bytes : undefined);
     return appended
       ? {
@@ -262,6 +242,22 @@ export function createSessionActorMemoryEvents(options: {
             : {}),
         }
       : { appended: false as const };
+  };
+  /**
+   * Append a navigation control under a rotated transcript generation.
+   *
+   * An in-place rewind or branch switch keeps the session id, so the rotated
+   * generation is what retires pre-cut readers: a raw-delta cursor captured
+   * before the cut must fail with `generation_mismatch`, exactly as it does on
+   * the SQLite path. `writeEvent` carries the rotated token into the version and
+   * the watermark together.
+   */
+  const appendNavigationControl = (event: unknown) => {
+    state.hot.transcript.version = {
+      ...state.hot.transcript.version,
+      generation: randomUUID(),
+    };
+    return appendRaw(event);
   };
   const replaceRows = (
     rows: SessionActorMemoryState["events"],
@@ -320,6 +316,7 @@ export function createSessionActorMemoryEvents(options: {
     checkMutation,
     rebasePrepared,
     appendRaw,
+    appendNavigationControl,
     replaceRows,
   };
 }

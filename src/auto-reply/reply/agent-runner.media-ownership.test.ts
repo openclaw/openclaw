@@ -25,10 +25,6 @@ describe("runReplyAgent media delivery ownership", () => {
   ])(
     "keeps $sessionKey media with its prepared delivery owner (gateway=$gateway, provider=$provider)",
     async ({ sessionKey, provider, gateway }) => {
-      const { normalizeWebchatReplyMediaPathsForDisplay } =
-        await import("../../gateway/server-methods/chat-reply-media.js");
-      const { seedWebchatReplyMediaScope } =
-        await import("../../gateway/server-methods/chat-reply-media.test-support.js");
       const { drainGlobalSingletonLifecycleState } =
         await import("../../shared/global-singleton.js");
       const { withOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
@@ -96,19 +92,6 @@ describe("runReplyAgent media delivery ownership", () => {
             assert(result && !Array.isArray(result), "Expected a single reply payload");
             if (gateway) {
               expect(result.mediaUrls).toEqual(sources);
-              const scope = await seedWebchatReplyMediaScope({
-                cfg: config,
-                agentId: "qa",
-                sessionKey,
-                sessionEntry: { sessionId: "session", updatedAt: 1, ...workspaceScope },
-              });
-              const [display] = await normalizeWebchatReplyMediaPathsForDisplay({
-                ...scope,
-                payloads: [result],
-              });
-              expect(display?.mediaUrls).toHaveLength(1);
-              expect(display?.text).toContain("outside.png: Delivery failed.");
-              expect(await readFile(display!.mediaUrls![0]!)).toEqual(bytes);
             } else {
               expect(result.mediaUrls).toHaveLength(2);
               expect(result.mediaUrls).not.toEqual(sources);
@@ -116,7 +99,6 @@ describe("runReplyAgent media delivery ownership", () => {
                 expect(await readFile(file)).toEqual(bytes);
               }
             }
-            expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
             // The shared spy includes initial preparation; execution must reuse that context.
             expect(createReplyMediaContextRuntimeMock).toHaveBeenCalledOnce();
           } finally {

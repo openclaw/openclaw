@@ -13,6 +13,7 @@ import { persistInterruptedUpdateObservation } from "../update-run-interruption-
 import { readUpdateRunRecord } from "../update-run-read.kernel.js";
 import { withEngineStoreAdmission as admit } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
+import { createSqlStatementObserver } from "./sql-statement-observer.test-support.js";
 
 const engines = mixedAgentConnection ? (["sqlite", "postgres"] as const) : (["sqlite"] as const);
 describe.each(engines)("%s interrupted update cleanup", (engine) => {
@@ -55,17 +56,9 @@ describe.each(engines)("%s interrupted update cleanup", (engine) => {
       let reads = 0;
       const isRunRead = (sql: string) => /^select .* from "update_runs"/iu.test(sql);
       const observation = channel("openclaw.database.statement");
-      const observer = (event: unknown) => {
-        if (
-          event &&
-          typeof event === "object" &&
-          "sql" in event &&
-          typeof event.sql === "string" &&
-          isRunRead(event.sql)
-        ) {
-          reads += 1;
-        }
-      };
+      const observer = createSqlStatementObserver(isRunRead, () => {
+        reads += 1;
+      });
       const authority: string[] = [];
       let result: ReturnType<typeof persistInterruptedUpdateObservation>;
       const sqlite =

@@ -20,6 +20,7 @@ import { formatTokenCount } from "../utils/token-format.js";
 import { VERSION } from "../version.js";
 import { buildBackupStatusValue } from "./backup-health.js";
 import type { HealthSummary } from "./health.js";
+import { formatRecoveryDiskUsage } from "./recovery-disk-usage.js";
 import { buildStatusOverviewSurfaceRows } from "./status-all/format.js";
 import { buildStatusDatabaseStoreRows } from "./status-database-engines.js";
 import type { StatusOverviewSurface } from "./status-overview-surface.ts";
@@ -28,6 +29,7 @@ import {
   countActiveStatusAgents,
   formatHostDesktopStatus,
 } from "./status-overview-values.ts";
+import { buildStatusResourceRows } from "./status-resources.js";
 import type { AgentLocalStatus } from "./status.agent-local.js";
 import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
 
@@ -35,14 +37,15 @@ type StatusDegradationSummary = Pick<
   StatusSummary,
   | "degradedSecretOwners"
   | "degradedPlugins"
+  | "failedPlugins"
   | "startupMigrationWarning"
-  | "startupRecoveryWarning"
   | "modelReasoningWarning"
   | "installationReplacementWarning"
   | "utilityModelWarnings"
   | "childRuntime"
   | "secretEgressProxy"
   | "pluginReload"
+  | "resources"
 >;
 
 function buildStatusDegradationRows(
@@ -56,7 +59,6 @@ function buildStatusDegradationRows(
     }
   };
   addWarning("Startup migrations", summary.startupMigrationWarning);
-  addWarning("Session recovery", summary.startupRecoveryWarning);
   addWarning("Model reasoning", summary.modelReasoningWarning);
   addWarning(
     "Gateway runtime",
@@ -88,6 +90,13 @@ function buildStatusDegradationRows(
     addWarning(
       "Degraded plugins",
       `${plugins.length} configured-unavailable · ${plugins.map((plugin) => plugin.pluginId).join(", ")}`,
+    );
+  }
+  const failed = summary.failedPlugins ?? [];
+  if (failed.length > 0) {
+    addWarning(
+      "Plugins not loaded",
+      `${failed.join(", ")} · data kept; retried on next start · run ${formatCliCommand("openclaw doctor")}`,
     );
   }
   const reload = summary.pluginReload;
@@ -135,9 +144,14 @@ export function buildStatusCommandOverviewRows(params: {
     params.summary.queuedSystemEvents.length > 0
       ? `${params.summary.queuedSystemEvents.length} queued`
       : "none";
+  const startupPhase = params.surface.gatewayProbe?.startupPhase;
+  const startupDeferredValue =
+    params.opts.deep && startupPhase
+      ? theme.muted(`not checked (gateway still starting; phase ${startupPhase})`)
+      : undefined;
   const probesValue = params.health
     ? theme.success("enabled")
-    : theme.muted("skipped (use --deep)");
+    : (startupDeferredValue ?? theme.muted("skipped (use --deep)"));
   const heartbeatParts = params.summary.heartbeat.agents.map((agent) => {
     if (!agent.enabled) {
       return `disabled (${agent.agentId})`;
@@ -152,10 +166,8 @@ export function buildStatusCommandOverviewRows(params: {
   if (!params.opts.deep) {
     // Fast status omits the row entirely instead of implying heartbeat is missing.
     lastHeartbeatValue = null;
-  } else if (params.surface.gatewayProbe?.startupPhase) {
-    lastHeartbeatValue = theme.muted(
-      `not checked (gateway still starting; phase ${params.surface.gatewayProbe.startupPhase})`,
-    );
+  } else if (startupDeferredValue) {
+    lastHeartbeatValue = startupDeferredValue;
   } else if (!params.surface.gatewayReachable) {
     lastHeartbeatValue = theme.warn("unavailable");
   } else if (!params.lastHeartbeat) {
@@ -264,6 +276,7 @@ export function buildStatusCommandOverviewRows(params: {
     updateValue: params.updateValue,
     agentsValue,
     suffixRows: [
+      ...buildStatusResourceRows(params.summary.resources),
       ...(params.updateRows ?? []),
       ...((params.surface.cfg.database || params.surface.databaseEngines?.stores.length) &&
       params.surface.databaseEngines?.source !== "unavailable"
@@ -278,6 +291,14 @@ export function buildStatusCommandOverviewRows(params: {
           ]
         : []),
       ...buildStatusDatabaseStoreRows(params.surface.databaseEngines),
+      ...(params.surface.recoveryCopies
+        ? [
+            {
+              Item: "Recovery copies (local)",
+              Value: formatRecoveryDiskUsage(params.surface.recoveryCopies),
+            },
+          ]
+        : []),
       { Item: "Telemetry", Value: telemetryValue },
       { Item: "Memory", Value: memoryValue },
       {
@@ -357,6 +378,7 @@ export function buildStatusAllOverviewRows(params: {
     ],
     agentsValue: `${params.agentStatus.agents.length} total · ${params.agentStatus.bootstrapPendingCount} bootstrapping · ${countActiveStatusAgents({ agentStatus: params.agentStatus })} active · ${params.agentStatus.totalSessions} sessions`,
     suffixRows: [
+      ...buildStatusResourceRows(params.summary.resources),
       ...(params.surface.databaseEngines?.source !== "unavailable"
         ? [
             {
@@ -369,6 +391,14 @@ export function buildStatusAllOverviewRows(params: {
           ]
         : []),
       ...buildStatusDatabaseStoreRows(params.surface.databaseEngines),
+      ...(params.surface.recoveryCopies
+        ? [
+            {
+              Item: "Recovery copies (local)",
+              Value: formatRecoveryDiskUsage(params.surface.recoveryCopies),
+            },
+          ]
+        : []),
       {
         Item: "Secrets",
         Value:

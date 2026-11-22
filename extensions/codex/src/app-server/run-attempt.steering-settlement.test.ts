@@ -19,7 +19,6 @@ import type { CodexSteeringQueueOptions } from "./attempt-steering.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS } from "./attempt-timeouts.js";
 import { nativeCommandItem } from "./codex-app-server.test-fixtures.js";
-import { prepareCodexServerNotification } from "./protocol-validators.js";
 import { isJsonObject, type CodexServerNotification, type JsonObject } from "./protocol.js";
 import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import {
@@ -81,16 +80,12 @@ async function createFixture() {
     },
     () => persisted,
   );
-  const started = createDeferred<void>();
   const prefixCompleted = createDeferred<void>();
   const abort = new AbortController();
   const onAttemptTimeout = vi.fn();
   params.abortSignal = abort.signal;
   params.onAttemptTimeout = onAttemptTimeout;
   params.onAgentEvent = (event) => {
-    if (event.stream === "lifecycle" && event.data.phase === "start") {
-      started.resolve();
-    }
     if (
       event.stream === "codex_app_server.item" &&
       event.data.phase === "completed" &&
@@ -140,22 +135,14 @@ async function createFixture() {
     run,
     accepted,
     start: async () => {
-      await started.promise;
-      await notify(itemNotification("item/started", { ...prefix, text: "" }));
-      await notify({
-        method: "item/agentMessage/delta",
-        params: { threadId: "thread-1", turnId: "turn-1", itemId: prefix.id, delta: prefixText },
-      });
+      await run.waitForTurnAccepted();
       await notify(itemNotification("item/completed", prefix));
       // Wait for projection, not merely a buffered wire receipt, before steering.
       await prefixCompleted.promise;
     },
     item: (item: JsonObject) => notify(itemNotification("item/completed", item)),
-    complete: (items: JsonObject[]) => {
-      const notification = turnCompleted({ id: "turn-1", status: "completed", items });
-      expect(prepareCodexServerNotification(notification).completedTurn).toBeDefined();
-      return notify(notification);
-    },
+    complete: (items: JsonObject[]) =>
+      notify(turnCompleted({ id: "turn-1", status: "completed", items })),
     hold: async () => {
       lock = holdTranscript(target);
       await lock.acquired;
@@ -222,6 +209,22 @@ function messageText({ content }: Record<string, unknown>): string {
       : "";
 }
 
+function nativeSteer() {
+  const steer = expectDefined(
+    f.harness.requests.find((request) => request.method === "turn/steer"),
+    "native steer",
+  );
+  const params = expectDefined(
+    isJsonObject(steer.params) ? steer.params : undefined,
+    "steer params",
+  );
+  const clientId = expectDefined(
+    typeof params.clientUserMessageId === "string" ? params.clientUserMessageId : undefined,
+    "native steer correlation",
+  );
+  return { params, clientId };
+}
+
 it("seals native steering when terminal receipt arrives behind its queued prefix write", async () => {
   const lock = await f.hold();
   const mirror = vi.spyOn(codexTranscriptMirrorRuntime, "mirror");
@@ -248,22 +251,11 @@ it("seals native steering when terminal receipt arrives behind its queued prefix
 it("keeps one steering prefix and source through degraded tainted native completion", async () => {
   expect(f.queue()).toBe(true);
   await vi.waitFor(() => expect(f.accepted).toHaveBeenCalledExactlyOnceWith(true), fastWait);
-  const steer = expectDefined(
-    f.harness.requests.find((request) => request.method === "turn/steer"),
-    "native steer",
-  );
+  const { params, clientId } = nativeSteer();
   expect(f.recorder.persistApproved).toHaveBeenCalledOnce();
-  expect(steer.params).toMatchObject({
+  expect(params).toMatchObject({
     input: [{ type: "text", text: steerText, text_elements: [] }],
   });
-  const native = expectDefined(
-    isJsonObject(steer.params) ? steer.params : undefined,
-    "native steer parameters",
-  );
-  const clientId = expectDefined(
-    typeof native.clientUserMessageId === "string" ? native.clientUserMessageId : undefined,
-    "native steer correlation",
-  );
   await f.item({
     id: "steered-user",
     type: "userMessage",
@@ -355,16 +347,7 @@ it("persists a controller-adapted human steer before native dispatch", async () 
     await vi.waitFor(() => expect(f.accepted).toHaveBeenCalledExactlyOnceWith(true), fastWait);
     expect(f.harness.requests.filter((request) => request.method === "turn/steer")).toHaveLength(1);
     expect(f.recorder.hasPersisted()).toBe(true);
-    const steer = expectDefined(
-      f.harness.requests.find((request) => request.method === "turn/steer"),
-      "native steer",
-    );
-    const clientId = expectDefined(
-      isJsonObject(steer.params) && typeof steer.params.clientUserMessageId === "string"
-        ? steer.params.clientUserMessageId
-        : undefined,
-      "native steer correlation",
-    );
+    const { clientId } = nativeSteer();
     const userItem = {
       id: "adapted-human",
       type: "userMessage",
@@ -376,19 +359,18 @@ it("persists a controller-adapted human steer before native dispatch", async () 
     expect(
       (await f.readMessages()).filter((message) => messageText(message) === steerText),
     ).toHaveLength(1);
-    const finalItem = f.item({
+    const final = {
       id: "adapted-human-final",
       type: "agentMessage",
       phase: "final_answer",
       text: codaText,
-    });
-    await f.complete([
-      prefix,
-      userItem,
-      { id: "adapted-human-final", type: "agentMessage", phase: "final_answer", text: codaText },
-    ]);
+    };
+    const finalItem = f.item(final);
+    await f.complete([prefix, userItem, final]);
     await finalItem;
-    expect(readAttemptTerminal(await f.run)).toMatchObject(successfulTerminal);
+    const result = await f.run;
+    expect(readAttemptTerminal(result)).toMatchObject(successfulTerminal);
+    expect(result.sourceReplyDeliveryState).toBe("missing");
     expect(f.recorder.persistApproved).toHaveBeenCalledOnce();
     expect(
       (await f.readMessages()).filter((message) => messageText(message) === steerText),

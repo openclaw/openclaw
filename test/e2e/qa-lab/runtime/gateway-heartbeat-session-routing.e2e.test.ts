@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { getRuntimeConfigSnapshot } from "../../../../src/config/config.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
@@ -174,7 +173,7 @@ describe("Gateway automation session routing", () => {
       const pluginDir = path.join(workspaceDir, "plugins", PROOF_CHANNEL_ID);
       const deliveryTracePath = path.join(tempHome, "heartbeat-deliveries.jsonl");
       const cronReadyEvent = nextId("cron-reconciled");
-      const cronReconciled = createDeferred<unknown>();
+      let cronReconciled = createDeferred<unknown>();
       const onCronReconciled = (event: unknown) => cronReconciled.resolve(event);
       await writeRouteCapturePlugin({ pluginDir, tracePath: deliveryTracePath, cronReadyEvent });
 
@@ -286,6 +285,7 @@ describe("Gateway automation session routing", () => {
         });
         await disconnectGatewayClient(gateway.client);
         await gateway.server.close({ reason: "heartbeat catalog-owner restart proof" });
+        cronReconciled = createDeferred<unknown>();
         gateway = await startGatewayWithClient({
           cfg: config,
           configPath,
@@ -293,10 +293,6 @@ describe("Gateway automation session routing", () => {
           clientDisplayName: "vitest-gateway-heartbeat-session-routing-restarted",
         });
         await gateway.server.startupSettled;
-        const runtimeConfig = getRuntimeConfigSnapshot();
-        if (!runtimeConfig) {
-          throw new Error("gateway runtime config snapshot was not initialized");
-        }
         const client = gateway.client;
         const queueEvent = async (sessionKey: string, text: string) => {
           await expect(

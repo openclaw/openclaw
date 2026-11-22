@@ -7,6 +7,7 @@ import { subscribeBrowserAuthRestored } from "../app/browser-http.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { resolveProfileAppearancePrefs } from "../app/server-prefs-profile.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
+import { observeDocumentRootAttributes } from "../lib/reactive/document-root-attributes.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import "../styles/session-background.css";
@@ -17,7 +18,73 @@ import type {
   SessionBackgroundSurface,
 } from "./session-background-host.tsx";
 import { backgroundImageReadIdentity, readBackgroundImage } from "./session-background-image.ts";
-import { createBackgroundFadeLayout } from "./session-background-layout.ts";
+import type { SessionBackgroundLayoutTarget } from "./session-background-layout-context.tsx";
+
+/** Observe layout changes, never scrolling or animation frames. */
+function createBackgroundFadeLayout(host: HTMLElement) {
+  let observer: ResizeObserver | null = null;
+  let targets: Element[] = [];
+  let layoutTargets: readonly SessionBackgroundLayoutTarget[] = [];
+  onSettled(() => {
+    observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    targets.forEach((node) => observer?.observe(node));
+    return disconnect;
+  });
+
+  function findTarget(kind: SessionBackgroundLayoutTarget["kind"]) {
+    let first: HTMLElement | undefined;
+    for (const target of layoutTargets) {
+      if (target.kind !== kind || !host.parentElement?.contains(target.element)) {
+        continue;
+      }
+      if (
+        !first ||
+        first.compareDocumentPosition(target.element) & Node.DOCUMENT_POSITION_PRECEDING
+      ) {
+        first = target.element;
+      }
+    }
+    return first;
+  }
+
+  function update(enabled: boolean, registered: readonly SessionBackgroundLayoutTarget[] = []) {
+    layoutTargets = registered;
+    if (!enabled) {
+      disconnect();
+      return;
+    }
+    const parent = host.parentElement;
+    const composer = findTarget("composer");
+    const welcome = findTarget("welcome");
+    const next = [parent, composer, welcome].filter((node): node is HTMLElement => Boolean(node));
+    if (next.length !== targets.length || next.some((node, index) => node !== targets[index])) {
+      disconnect();
+      targets = next;
+      targets.forEach((node) => observer?.observe(node));
+    }
+    measure();
+  }
+
+  function measure() {
+    const composer = findTarget("composer");
+    const origin = host.getBoundingClientRect();
+    const box = composer?.getBoundingClientRect();
+    const scroll = findTarget("scroll")?.scrollTop ?? 0;
+    const end = box
+      ? Math.max(0, box.top - origin.top + scroll + box.height / 2)
+      : origin.height * 0.55;
+    const value = Math.round(end) + "px";
+    if (host.style.getPropertyValue("--session-background-fade-end") !== value) {
+      host.style.setProperty("--session-background-fade-end", value);
+    }
+  }
+
+  function disconnect() {
+    observer?.disconnect();
+    targets = [];
+  }
+  return { update };
+}
 
 type BackgroundImageRequest = {
   identity: string;
@@ -25,7 +92,24 @@ type BackgroundImageRequest = {
   client: ApplicationContext["gateway"]["snapshot"]["client"];
   controller: AbortController;
   url: string | null;
+  panes: number;
 };
+
+// Only completed, still-owned photos can be handed to another pane. Pending reads stay pane-local.
+const loadedPhotos = new WeakMap<ApplicationContext, BackgroundImageRequest>();
+
+function releasePanePhoto(photo: BackgroundImageRequest | null) {
+  if (!photo || --photo.panes > 0) {
+    return;
+  }
+  photo.controller.abort();
+  if (photo.url) {
+    URL.revokeObjectURL(photo.url);
+  }
+  if (loadedPhotos.get(photo.context) === photo) {
+    loadedPhotos.delete(photo.context);
+  }
+}
 
 const FULL_BLEED_MAX_OPACITY = 0.7;
 
@@ -84,7 +168,11 @@ export function SessionBackgroundContent(
   };
   const currentIdentity = () => {
     const source = currentSource();
-    return context() && props.presented && !accessibility?.matches && source?.kind === "custom"
+    // A parked pane may keep a finished photo, never an in-flight or unauthorized read.
+    return context() &&
+      (props.presented || request?.url) &&
+      !accessibility?.matches &&
+      source?.kind === "custom"
       ? backgroundImageReadIdentity(context()!, source.assetId)
       : null;
   };
@@ -104,15 +192,14 @@ export function SessionBackgroundContent(
   const releaseImage = (surface = props.surface) => {
     const prior = request;
     request = null;
-    prior?.controller.abort();
     setImage(undefined);
     if (prior?.url) {
       // Clear private pixels in the owner notification, before deferred DOM work.
       imageElement?.removeAttribute("src");
       host.removeAttribute("data-painted");
       syncSurface(surface);
-      URL.revokeObjectURL(prior.url);
     }
+    releasePanePhoto(prior);
   };
   const retireChangedImage = (
     application: ApplicationContext | undefined,
@@ -155,11 +242,11 @@ export function SessionBackgroundContent(
     }),
   );
   onSettled(() => {
-    const observer = new MutationObserver(notify);
-    observer.observe(host.ownerDocument.documentElement, {
-      attributes: true,
-      attributeFilter: ["data-theme", "data-theme-mode", "data-theme-background"],
-    });
+    const stopTheme = observeDocumentRootAttributes(
+      host.ownerDocument,
+      ["data-theme", "data-theme-mode", "data-theme-background"],
+      notify,
+    );
     const stopAccessibility =
       accessibility &&
       listen(accessibility, "change", () => {
@@ -173,12 +260,9 @@ export function SessionBackgroundContent(
       }
     });
     return () => {
-      observer.disconnect();
+      stopTheme();
       stopAccessibility?.();
-      request?.controller.abort();
-      if (request?.url) {
-        URL.revokeObjectURL(request.url);
-      }
+      releasePanePhoto(request);
       request = null;
       surfaceElement?.removeAttribute("data-background-custom");
       surfaceElement?.removeAttribute("data-background-painted");
@@ -255,12 +339,24 @@ export function SessionBackgroundContent(
       ) {
         return;
       }
+      const loaded = loadedPhotos.get(state.context);
+      if (
+        loaded?.url &&
+        loaded.identity === state.identity &&
+        loaded.client === state.context.gateway.snapshot.client
+      ) {
+        loaded.panes++;
+        request = loaded;
+        setImage(loaded.url);
+        return;
+      }
       const pending: BackgroundImageRequest = {
         identity: state.identity,
         context: state.context,
         client: state.context.gateway.snapshot.client,
         controller: new AbortController(),
         url: null,
+        panes: 1,
       };
       request = pending;
       void readBackgroundImage(state.context, state.source.assetId, {
@@ -274,6 +370,7 @@ export function SessionBackgroundContent(
             return;
           }
           pending.url = url;
+          loadedPhotos.set(pending.context, pending);
           setImage(url);
         })
         .catch(() => {
@@ -296,7 +393,7 @@ export function SessionBackgroundContent(
             style={{ opacity: String(view().opacity) }}
             src={image()}
             alt=""
-            decoding="async"
+            decoding="auto"
             draggable="false"
             onError={() => {
               failedIdentity = request?.identity ?? null;

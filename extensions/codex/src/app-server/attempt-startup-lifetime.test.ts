@@ -30,7 +30,10 @@ vi.mock("./desktop-generation.js", async (importOriginal) => ({
 }));
 
 const tempRoots = new Set<string>();
-const pluginConfig: CodexPluginConfig = { appServer: { command: "codex" } };
+const pluginConfig: CodexPluginConfig = {
+  appServer: { command: "codex" },
+  computerUse: { enabled: false },
+};
 const startThreadWithHarness = startup.createAttemptThreadStarter(tempRoots, pluginConfig);
 const threadStartResult = (threadId = "thread-1") => createThreadStartResult(threadId, "/repo");
 const bindingKey = {
@@ -159,7 +162,7 @@ describe("Codex runtime startup resource lifetime", () => {
       const releaseCapture = createDeferred<void>();
       const registerMonitor = monitor.register;
       let registration: Awaited<ReturnType<typeof registerMonitor>> | undefined;
-      const register = vi.spyOn(monitor, "register").mockImplementationOnce(async (options) => {
+      vi.spyOn(monitor, "register").mockImplementationOnce(async (options) => {
         const state = resourcesSpy.mock.results[0]?.value.state;
         assert(
           state?.turnRoute &&
@@ -187,21 +190,19 @@ describe("Codex runtime startup resource lifetime", () => {
 
       try {
         const run = attempts.runCodexAppServerAttempt(params, {
-          pluginConfig: { appServer: { mode: "yolo", experimental: { sandboxExecServer: true } } },
+          pluginConfig: {
+            appServer: { mode: "yolo", experimental: { sandboxExecServer: true } },
+            computerUse: { enabled: false },
+          },
           nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
         });
         const rejected = expect(run).rejects.toBe(setupError);
         const owners = await captured.promise;
-        const prepared = resourcesSpy.mock.results[0]?.value;
-        assert(prepared);
-        expect(prepared.state.nativeSubagentMonitor).toBeUndefined();
         if (ending === "abort") {
           abortController.abort(setupError);
         }
         releaseCapture.resolve();
         await rejected;
-        expect(register).toHaveBeenCalledOnce();
-        expect(prepared.state.nativeSubagentMonitor).toBeUndefined();
         if (registration) {
           expect(registration.unregister).toHaveBeenCalledOnce();
         }

@@ -19,7 +19,6 @@ import {
   createSdkHost,
   expectBytes,
   readText,
-  writeTree,
   type Artifact,
 } from "./plugin-generation-capture.test-support.js";
 import {
@@ -28,6 +27,7 @@ import {
 } from "./plugin-native-admission-state.js";
 import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -124,7 +124,7 @@ it("records a native host mismatch while preserving unrelated channel accounts",
   });
 });
 
-it("validates overlapping hardlinked companion placements once per member, including recovery", async () => {
+it.each(["hardlink", "copy"] as const)("validates %s placements through recovery", async (kind) => {
   await withOpenClawTestState({ label: "native-reference-verdict" }, async (state) => {
     const root = state.path("plugin");
     writeTree(root, {
@@ -144,6 +144,9 @@ it("validates overlapping hardlinked companion placements once per member, inclu
       }
       symlink(target, link, type);
     });
+    if (kind === "copy") {
+      vi.spyOn(fs, "linkSync").mockImplementation((from, to) => fs.copyFileSync(from, to));
+    }
     const paths = vi.spyOn(fs, "realpathSync");
     const walks = (directory: string) =>
       paths.mock.calls.filter(
@@ -171,7 +174,7 @@ it("validates overlapping hardlinked companion placements once per member, inclu
       expect.soft(walks(first.rootDir)).toBe(1);
       const successor = capture();
       expect.soft(walks(successor.rootDir)).toBe(1);
-      expect(nativeInode(successor, root)).toBe(nativeInode(first, root));
+      expect(nativeInode(successor, root) === nativeInode(first, root)).toBe(kind === "hardlink");
       paths.mockClear();
       successor.linkHost(hosts[1]!);
       expect.soft(walks(successor.rootDir)).toBe(1);
@@ -188,6 +191,9 @@ it("validates overlapping hardlinked companion placements once per member, inclu
       expect(readText(path.join(replacement.rootDir, "helper.dat"))).toBe("replacement companion");
       expect(readText(path.join(first.rootDir, "helper.dat"))).toBe("original companion");
       writeTree(replacement.rootDir, { "helper.dat": "damaged capture" });
+      expect(() => resources.keep(replacement.captureRecoverySource())).toThrow(
+        "Native plugin companions cannot be preserved",
+      );
       expect(() => replacement.linkHost(hosts[0]!)).toThrow(
         "Native plugin companions cannot be preserved",
       );

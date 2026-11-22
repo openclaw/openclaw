@@ -20,7 +20,7 @@ import {
   supportsMcpAppInteraction,
   withMcpAppActiveView,
 } from "./mcp-app-operations.js";
-import { runStandaloneMcpAppHost } from "./mcp-app-standalone-host.js";
+import { MCP_APP_STANDALONE_HOST_SOURCE } from "./mcp-app-standalone-host.generated.js";
 
 const MCP_APP_STANDALONE_TICKET_SCOPE = "mcp-app-standalone-view";
 const MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS = 30_000;
@@ -217,7 +217,7 @@ function standaloneHostHtml(): { html: string; scriptHash: string } {
     viewPath: MCP_APP_STANDALONE_VIEW_PATH,
     initialLoadTimeoutMs: MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS,
   });
-  const clientSource = `;(() => { const __name = (target) => target; (${runStandaloneMcpAppHost.toString()})(${serializedConfig}); })();`;
+  const clientSource = `;(${MCP_APP_STANDALONE_HOST_SOURCE})(${serializedConfig});`;
   const escapedSource = clientSource.replaceAll("</script", "<\\/script");
   return {
     html: `<!doctype html>

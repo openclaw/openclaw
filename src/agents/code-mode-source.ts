@@ -1,5 +1,4 @@
 /** Validate guest JavaScript before execution. */
-import { Script } from "node:vm";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseCodeModeScriptSyntax } from "./code-mode-script-syntax.js";
 import { ToolInputError } from "./tool-input-error.js";
@@ -24,14 +23,6 @@ const SHELL_CONTROL =
 const SHELL_REDIRECTION = /^(?:\d*(?:>>?|<<?)|&>>?)/u;
 const LEADING_SOURCE_COMMENTS =
   /^(?:(?:\/\/[^\r\n]*(?:\r?\n|$)|\/\*[\s\S]*?\*\/|#[^\r\n]*(?:\r?\n|$))[\t \r\n]*)+/u;
-
-function parsesAsGuestJavaScript(source: string, declaration = ""): boolean {
-  try {
-    return new Script(`(async () => {\n${declaration}${source}\n})`) instanceof Script;
-  } catch {
-    return false;
-  }
-}
 
 function stripShellEnvAssignments(source: string): string {
   const name = /[A-Za-z_]\w*=/uy;
@@ -95,7 +86,7 @@ function stripShellEnvAssignments(source: string): string {
 }
 
 /** Reject recognizable shell commands without guessing at JavaScript expressions. */
-function isShellLikeCodeModeSource(source: string): boolean {
+function isShellLikeCodeModeSource(source: string, validJavaScript: boolean): boolean {
   const trimmed = source.trim();
   if (trimmed.startsWith("#!")) {
     return true;
@@ -132,7 +123,7 @@ function isShellLikeCodeModeSource(source: string): boolean {
   }
 
   // A binding only matters when the actual guest program parses.
-  if (!parsesAsGuestJavaScript(source)) {
+  if (!validJavaScript) {
     return true;
   }
 
@@ -141,8 +132,8 @@ function isShellLikeCodeModeSource(source: string): boolean {
   // matching var probe succeeds only when that declaration is hoisted.
   if (
     commandName &&
-    !parsesAsGuestJavaScript(source, `let ${commandName};\n`) &&
-    parsesAsGuestJavaScript(source, `var ${commandName};\n`)
+    !parseCodeModeScriptSyntax(`let ${commandName};\n${source}`).ok &&
+    parseCodeModeScriptSyntax(`var ${commandName};\n${source}`).ok
   ) {
     return false;
   }
@@ -216,7 +207,7 @@ export const CODE_MODE_MODULE_ACCESS_ERROR =
 
 export function prepareSource(code: string): string {
   const parsed = parseCodeModeScriptSyntax(code);
-  if (isShellLikeCodeModeSource(code)) {
+  if (isShellLikeCodeModeSource(code, parsed.ok)) {
     throw new ToolInputError(CODE_MODE_SHELL_SOURCE_ERROR);
   }
   if (!parsed.ok) {

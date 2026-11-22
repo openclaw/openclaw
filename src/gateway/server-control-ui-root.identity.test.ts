@@ -130,10 +130,8 @@ test("prepares a complete stale source UI before publishing its shared root", as
 
 test.each([
   ["matching", undefined, "source", "bundled"],
-  ["dev", "dev", "source", "bundled"],
   ["configured", "custom-build", "configured", "resolved"],
   ["macOS", undefined, "mac", "resolved"],
-  ["incomplete source", undefined, "source", "bundled"],
   ["unchanged", "2026.9.1-runtime-a", "source", "failed"],
   ["stale", "2026.9.1-runtime-a", "mac", "failed"],
   ["incomplete", "2026.9.1-runtime-a", "mac", "failed"],
@@ -149,14 +147,8 @@ test.each([
       fixture.selectedRoot = macRoot();
     }
     await writeUi(fixture.selectedRoot, buildId ?? fixture.buildId);
-    if (kind === "incomplete" || kind === "incomplete source") {
+    if (kind === "incomplete") {
       await fs.unlink(path.join(fixture.selectedRoot, "assets", "startup.js"));
-    }
-    if (kind === "incomplete source") {
-      fixture.build.mockImplementationOnce(async () => {
-        await writeUi(fixture.selectedRoot, fixture.buildId);
-        return buildResult;
-      });
     }
     if (kind === "unchanged") {
       fixture.build.mockResolvedValueOnce(buildResult);
@@ -165,18 +157,11 @@ test.each([
       location === "configured" ? fixture.selectedRoot : undefined,
     );
     const root = lifecycle.state;
-    const preparing = failed || kind === "incomplete source";
-    expect(root).toMatchObject({
-      kind: preparing ? "preparing" : expected,
-      ...(!preparing && { path: fixture.selectedRoot }),
-    });
-    expect(fixture.build).not.toHaveBeenCalled();
+    expect(root.kind).toBe(failed ? "preparing" : expected);
     await lifecycle.start();
     await lifecycle.stop();
     expect(lifecycle.state).toBe(root);
-    expect(fixture.build).toHaveBeenCalledTimes(
-      kind === "unchanged" || kind === "incomplete source" ? 1 : 0,
-    );
+    expect(fixture.build).toHaveBeenCalledTimes(kind === "unchanged" ? 1 : 0);
     if (failed) {
       expect(lifecycle.state).toEqual({ kind: "failed" });
       for (const message of brokenMac

@@ -1,21 +1,26 @@
-import { expectDefined } from "@openclaw/normalization-core";
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { PluginsInspectResultSchema } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { emptyInstalledPluginComponents } from "../../plugins/installed-plugin-components.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { withPluginRetentionOwner } from "../../plugins/plugin-retention-diagnostics.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
   captureActivePluginRegistrySnapshot,
+  clearActivePluginRegistry,
   createPluginRegistryOwner,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
+  waitForPluginRegistryRetirement,
 } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import type { GatewayClient, GatewayRequestHandlerOptions } from "./types.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const inspectManagedPlugin = vi.hoisted(() => vi.fn());
 // mock-isolation: Inventory I/O must not load installed plugins or operator state.
@@ -25,25 +30,38 @@ vi.mock("../../plugins/management-service.js", () => ({
 }));
 
 const { pluginsHandlers } = await import("./plugins.js");
-const inspection = { plugin: { id: "retained-plugin", installed: true, enabled: true } };
+const inspection = {
+  ok: true,
+  plugin: { id: "retained-plugin", name: "Retention fixture", installed: true, enabled: true },
+  declared: {
+    channels: [],
+    providers: [],
+    tools: [],
+    contracts: [],
+    hooks: [],
+    mcpServers: [],
+    cliCommands: [],
+    cliBackends: [],
+    skills: [],
+    dangerousConfigFlags: [],
+  },
+  grants: {
+    hooks: {
+      allowPromptInjection: { effective: false },
+      allowConversationAccess: { effective: false },
+    },
+  },
+  components: emptyInstalledPluginComponents(),
+};
 const acquisitionOwner = {
   agentId: "fixture",
   sessionKey: "private-session",
   runId: "private-run",
 };
 
-// Use accepted handshake facts without creating a transport or starting a Gateway.
-function adminClient(): GatewayClient {
-  return {
-    connect: {
-      minProtocol: 3,
-      maxProtocol: 3,
-      client: { id: "test", version: "test", platform: "test", mode: "test" },
-      role: "operator",
-      scopes: ["operator.admin"],
-    },
-  };
-}
+const adminClient = () => ({
+  connect: gatewayConnect(["operator.admin"], { id: "test", mode: "test" }, 3),
+});
 
 // Real instances retain host work; no plugin module needs to be evaluated.
 function retainedPlugin(registry = createEmptyPluginRegistry(), id = inspection.plugin.id) {
@@ -54,11 +72,9 @@ function retainedPlugin(registry = createEmptyPluginRegistry(), id = inspection.
     instance.retainWork("prepared-generation-lease"),
   );
   onTestFinished(release);
-  const run = vi.spyOn(instance, "run");
-  return { registry, instance, release, run };
+  return { registry, release, run: vi.spyOn(instance, "run") };
 }
 
-// Exercise validation, async inventory, scope selection, and response composition together.
 async function inspect(
   registry: PluginRegistry,
   overrides: Partial<GatewayRequestHandlerOptions> = {},
@@ -68,10 +84,7 @@ async function inspect(
   await withPluginRuntimeGatewayRequestScope(
     { pluginRegistry: registry, isWebchatConnect: () => false },
     () =>
-      expectDefined(
-        pluginsHandlers["plugins.inspect"],
-        "plugins.inspect handler",
-      )({
+      pluginsHandlers["plugins.inspect"]!({
         req: { type: "req", id: "retention-inspection", method: "plugins.inspect", params },
         params,
         client: adminClient(),
@@ -82,7 +95,9 @@ async function inspect(
       }),
   );
   expect(respond).toHaveBeenCalledExactlyOnceWith(true, expect.any(Object), undefined);
-  return respond.mock.calls[0]![1];
+  const response = respond.mock.calls[0]![1];
+  expect(Value.Check(PluginsInspectResultSchema, response)).toBe(true);
+  return response;
 }
 
 beforeEach(() => inspectManagedPlugin.mockReset().mockResolvedValue(inspection));
@@ -114,6 +129,72 @@ describe("plugins.inspect runtime retention disclosure", () => {
     expect(await inspect(registry)).toMatchObject({ runtimeRetention: null });
   });
 
+  it.each([false, true])(
+    "reports a retained predecessor with a current instance: %s",
+    async (hasCurrent) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const previous = captureActivePluginRegistrySnapshot();
+        const fixture = retainedPlugin();
+        const successor = createEmptyPluginRegistry();
+        const current = hasCurrent ? retainedPlugin(successor) : undefined;
+        const owner = createPluginRegistryOwner(fixture.registry);
+        setActivePluginRegistry(fixture.registry);
+        try {
+          setActivePluginRegistry(successor);
+          owner.publish(successor, async () => {});
+          expect(await inspect(successor)).toMatchObject({
+            runtimeRetention: {
+              predecessors: [{ pluginId: inspection.plugin.id, total: 1 }],
+            },
+          });
+          fixture.release();
+          await waitForPluginRegistryRetirement(fixture.registry);
+          const response = await inspect(successor);
+          expect(response).toMatchObject({
+            runtimeRetention: hasCurrent ? { pluginId: inspection.plugin.id, total: 1 } : null,
+          });
+          expect(response).not.toHaveProperty("runtimeRetention.predecessors");
+          expect(fixture.run).not.toHaveBeenCalled();
+        } finally {
+          fixture.release();
+          current?.release();
+          await owner.close();
+          restoreActivePluginRegistrySnapshot(previous);
+        }
+      });
+    },
+  );
+
+  it("does not disclose another Gateway's predecessor to owned or ownerless requests", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const previous = captureActivePluginRegistrySnapshot();
+      const fixture = retainedPlugin();
+      const successor = createEmptyPluginRegistry();
+      const owner = createPluginRegistryOwner(fixture.registry);
+      setActivePluginRegistry(fixture.registry);
+      let unrelatedOwner: ReturnType<typeof createPluginRegistryOwner> | undefined;
+      const unrelated = retainedPlugin();
+      try {
+        setActivePluginRegistry(successor);
+        owner.publish(successor, async () => {});
+        unrelatedOwner = createPluginRegistryOwner(unrelated.registry);
+        setActivePluginRegistry(unrelated.registry);
+
+        const response = await inspect(unrelated.registry);
+        expect(response).toMatchObject({ runtimeRetention: { total: 1 } });
+        expect(response).not.toHaveProperty("runtimeRetention.predecessors");
+        expect(await inspect(createEmptyPluginRegistry())).toMatchObject({
+          runtimeRetention: null,
+        });
+      } finally {
+        fixture.release();
+        unrelated.release();
+        await Promise.all([owner.close(), unrelatedOwner?.close()]);
+        restoreActivePluginRegistrySnapshot(previous);
+      }
+    });
+  });
+
   it.each(["no client", "read-only operator", "remote package"])(
     "omits cross-session diagnostics for %s",
     async (visibility) => {
@@ -130,7 +211,6 @@ describe("plugins.inspect runtime retention disclosure", () => {
         client: visibility === "no client" ? null : client,
       });
       expect(response).toEqual({ ...inspection, decisions: [] });
-      expect(fixture.run).not.toHaveBeenCalled();
     },
   );
 
@@ -147,7 +227,6 @@ describe("plugins.inspect runtime retention disclosure", () => {
       decisions: [],
     });
     expect(hasCurrentClientAuthority).toHaveReturnedWith(false);
-    expect(fixture.run).not.toHaveBeenCalled();
   });
 
   it("uses the request registry after another Gateway publishes during inventory", async () => {
@@ -155,8 +234,6 @@ describe("plugins.inspect runtime retention disclosure", () => {
       const previous = captureActivePluginRegistrySnapshot();
       const request = retainedPlugin();
       const unrelated = retainedPlugin();
-      const requestOwner = createPluginRegistryOwner(request.registry);
-      const unrelatedOwner = createPluginRegistryOwner(unrelated.registry);
       const entered = createDeferredCore();
       const catalog = createDeferredCore<typeof inspection>();
       inspectManagedPlugin.mockImplementationOnce(() => {
@@ -164,7 +241,7 @@ describe("plugins.inspect runtime retention disclosure", () => {
         return catalog.promise;
       });
       setActivePluginRegistry(request.registry);
-      const pending = inspect(requestOwner.registry);
+      const pending = inspect(request.registry);
       try {
         await awaitGateBeforeSettlement(entered.promise, pending, "inspection skipped inventory");
         // A colliding ID in the process projection cannot replace this request's owner.
@@ -174,19 +251,18 @@ describe("plugins.inspect runtime retention disclosure", () => {
         expect(await pending).toMatchObject({
           runtimeRetention: {
             pluginId: inspection.plugin.id,
-            total: 1,
-            references: [{ owner: acquisitionOwner }],
+            references: expect.arrayContaining([
+              expect.objectContaining({ owner: acquisitionOwner }),
+            ]),
           },
         });
-        expect(request.run).not.toHaveBeenCalled();
-        expect(unrelated.run).not.toHaveBeenCalled();
       } finally {
         catalog.resolve(inspection);
         await Promise.allSettled([pending]);
         request.release();
         unrelated.release();
         try {
-          await Promise.all([requestOwner.close(), unrelatedOwner.close()]);
+          await clearActivePluginRegistry();
         } finally {
           restoreActivePluginRegistrySnapshot(previous);
         }

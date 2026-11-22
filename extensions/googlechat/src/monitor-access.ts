@@ -44,22 +44,25 @@ function extractMentionInfo(annotations: GoogleChatAnnotation[], botUser?: strin
 const warnedDeprecatedUsersEmailAllowFrom = new Set<string>();
 const warnedMutableGroupKeys = new Set<string>();
 
-function warnDeprecatedUsersEmailEntries(logVerbose: (message: string) => void, entries: string[]) {
-  const deprecated = normalizeTrimmedStringList(entries).filter((v) => /^users\/.+@.+/i.test(v));
-  if (deprecated.length === 0) {
-    return;
-  }
-  const key = deprecated
-    .map((v) => normalizeLowercaseStringOrEmpty(v))
+function markDeprecatedEntriesWarning(entries: string[], warned: Set<string>): boolean {
+  const key = entries
+    .map((entry) => normalizeLowercaseStringOrEmpty(entry))
     .toSorted((a, b) => a.localeCompare(b))
     .join(",");
-  if (warnedDeprecatedUsersEmailAllowFrom.has(key)) {
-    return;
+  if (entries.length === 0 || warned.has(key)) {
+    return false;
   }
-  warnedDeprecatedUsersEmailAllowFrom.add(key);
-  logVerbose(
-    `Deprecated allowFrom entry detected: "users/<email>" is no longer treated as an email allowlist. Use raw email (alice@example.com) or immutable user id (users/<id>). entries=${deprecated.join(", ")}`,
-  );
+  warned.add(key);
+  return true;
+}
+
+function warnDeprecatedUsersEmailEntries(logVerbose: (message: string) => void, entries: string[]) {
+  const deprecated = normalizeTrimmedStringList(entries).filter((v) => /^users\/.+@.+/i.test(v));
+  if (markDeprecatedEntriesWarning(deprecated, warnedDeprecatedUsersEmailAllowFrom)) {
+    logVerbose(
+      `Deprecated allowFrom entry detected: "users/<email>" is no longer treated as an email allowlist. Use raw email (alice@example.com) or immutable user id (users/<id>). entries=${deprecated.join(", ")}`,
+    );
+  }
 }
 
 export async function applyGoogleChatInboundAccessPolicy(params: {
@@ -113,26 +116,14 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
     blockedLabel: GROUP_POLICY_BLOCKED_LABEL.space,
     log: logVerbose,
   });
-  const mutableGroups = account.config.groups;
-  (() => {
-    const mutableKeys = Object.keys(mutableGroups ?? {})
-      .map((key) => key.trim())
-      .filter((key) => key && key !== "*" && !/^spaces\//i.test(key));
-    if (mutableKeys.length === 0) {
-      return;
-    }
-    const warningKey = mutableKeys
-      .map((key) => normalizeLowercaseStringOrEmpty(key))
-      .toSorted((a, b) => a.localeCompare(b))
-      .join(",");
-    if (warnedMutableGroupKeys.has(warningKey)) {
-      return;
-    }
-    warnedMutableGroupKeys.add(warningKey);
+  const mutableKeys = Object.keys(account.config.groups ?? {})
+    .map((key) => key.trim())
+    .filter((key) => key && key !== "*" && !/^spaces\//i.test(key));
+  if (markDeprecatedEntriesWarning(mutableKeys, warnedMutableGroupKeys)) {
     logVerbose(
       `Deprecated Google Chat group key detected: group routing now requires stable space ids (spaces/<spaceId>). Update channels.googlechat.groups keys: ${mutableKeys.join(", ")}`,
     );
-  })();
+  }
   const groupName = space.displayName ?? null;
   const groups = account.config.groups;
   const groupConfigResolved = (() => {

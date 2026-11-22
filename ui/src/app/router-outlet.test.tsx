@@ -32,6 +32,7 @@ afterEach(() => {
   disposeRouterOutlets();
   disposeRouters();
   document.body.replaceChildren();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -180,10 +181,13 @@ describe("openclaw-router-outlet", () => {
 
     const loadingState = outlet.querySelector('[role="status"]');
     expect(loadingState?.getAttribute("aria-label")).toBe("Loading…");
-    expect(loadingState?.querySelector(".loading-skeleton")?.getAttribute("aria-hidden")).toBe(
-      "true",
-    );
+    const skeletons = [...(loadingState?.querySelectorAll(".skeleton") ?? [])];
+    expect(skeletons.length).toBeGreaterThan(0);
+    for (const skeleton of skeletons) {
+      expect(skeleton.closest("[aria-hidden='true']")).not.toBeNull();
+    }
     expect(loadingState?.getAttribute("aria-busy")).toBeNull();
+    // Screen readers get the status label; the skeleton shows no visible "Loading…" text.
     expect(loadingState?.textContent?.trim()).toBe("");
     expect(outlet.textContent).not.toContain("Loading panel");
 
@@ -298,6 +302,50 @@ describe("openclaw-router-outlet", () => {
     expect(outlet.querySelector('[role="alert"]')).toBeNull();
     outlet.dispose();
     router.stop();
+  });
+
+  it("shows one failure when a page throws because its loader failed, and recovers on retry", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let loadCount = 0;
+    const context = { label: "page" };
+    const router = testRouter(
+      page(
+        "page",
+        {
+          renderSolid: (props) => {
+            // The body read is deliberately untracked: only the boundary can render this page again.
+            // oxlint-disable-next-line solid/reactivity
+            if (!props.data) {
+              throw new TypeError("Render exception");
+            }
+            return <div data-testid="route-page">{props.data.label}</div>;
+          },
+        },
+        (loadContext) => {
+          loadCount += 1;
+          if (loadCount === 1) {
+            throw new Error("load failed");
+          }
+          return { label: loadContext.label };
+        },
+      ),
+    );
+    const outlet = createOutlet(router, context);
+    try {
+      await expect(router.navigate("page", context)).rejects.toThrow("load failed");
+      await settleOutlet(outlet);
+      expect(outlet.querySelectorAll('[role="alert"]')).toHaveLength(1);
+      expect(outlet.textContent).not.toContain("Render exception");
+
+      outlet.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
+      await expect
+        .poll(() => outlet.querySelector('[data-testid="route-page"]')?.textContent)
+        .toBe("page");
+      expect(outlet.querySelector('[role="alert"]')).toBeNull();
+    } finally {
+      outlet.dispose();
+      router.stop();
+    }
   });
 
   it("keeps asset recovery retryable after the reachability wait expires", async () => {

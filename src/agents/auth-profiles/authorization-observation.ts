@@ -150,10 +150,8 @@ export function retainAuthProfileAuthorizationObservation(inputPath: string, pro
           throw new AuthProfileAuthorizationError("unavailable");
         }
         const fact = projectAuthProfileAuthorization(raw, profileId);
-        if (!isDeepStrictEqual(retained.fact, fact)) {
-          retained.fact = fact;
-          retained.revision = {};
-        }
+        // Only credential writers invalidate concurrent reads.
+        retained.fact = fact;
         return fact;
       };
     },

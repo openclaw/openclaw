@@ -58,7 +58,7 @@ import { resolveStatusDatabaseEngines } from "./status-database-engines.js";
 import { buildStatusAllOverviewRows } from "./status-overview-rows.ts";
 import { buildStatusSecretDiagnostics, countActiveStatusAgents } from "./status-overview-values.js";
 import {
-  reportStatusScanFailure,
+  reportStatusScanFailureUnlessInterrupted,
   resolveStatusServiceSummaries,
   resolveStatusUsageSummary,
   resolveStatusGatewayDiagnosticsSafe,
@@ -140,27 +140,24 @@ function latestDeliveryEventAgeMs(snapshot: DeliveryDiagnosticsLike): number | n
 }
 
 async function readStatusAllLogTails() {
-  const logPaths = (() => {
-    try {
-      // macOS supervised installs write stdout/stderr differently than node-managed gateway logs.
-      return process.platform === "darwin"
+  let logPaths;
+  try {
+    // macOS supervised installs write stdout/stderr differently than node-managed gateway logs.
+    logPaths =
+      process.platform === "darwin"
         ? resolveGatewaySupervisorLogPaths(process.env)
         : resolveGatewayLogPaths(process.env);
-    } catch {
-      return null;
-    }
-  })();
-  if (logPaths) {
-    const restartLogPath = resolveGatewayRestartLogPath(process.env);
-    const readStderr = process.platform !== "darwin";
-    const [stderrTail, stdoutTail, restartTail] = await Promise.all([
-      readStderr ? readFileTailLines(logPaths.stderrPath, 40) : [],
-      readFileTailLines(logPaths.stdoutPath, 40),
-      readFileTailLines(restartLogPath, 30),
-    ]);
-    return { logPaths, restartLogPath, readStderr, stderrTail, stdoutTail, restartTail };
+  } catch {
+    return null;
   }
-  return null;
+  const restartLogPath = resolveGatewayRestartLogPath(process.env);
+  const readStderr = process.platform !== "darwin";
+  const [stderrTail, stdoutTail, restartTail] = await Promise.all([
+    readStderr ? readFileTailLines(logPaths.stderrPath, 40) : [],
+    readFileTailLines(logPaths.stdoutPath, 40),
+    readFileTailLines(restartLogPath, 30),
+  ]);
+  return { logPaths, restartLogPath, readStderr, stderrTail, stdoutTail, restartTail };
 }
 
 async function resolveStatusAllLocalDiagnosis(params: {
@@ -302,7 +299,7 @@ export async function statusAllCommand(
         queryingChannelStatus: "Querying gateway…",
         summarizingChannels: "Summarizing channels…",
       },
-    }).catch((error: unknown) => reportStatusScanFailure(error, runtime, opts?.timeoutMs));
+    });
     progress.setLabel("Checking services…");
     const [daemon, nodeService] = await resolveStatusServiceSummaries(opts.timeoutMs);
     const nodeOnlyGateway = await resolveNodeOnlyGatewayInfo({
@@ -396,7 +393,6 @@ export async function statusAllCommand(
     }
     lines.push(heading("OpenClaw status --all"));
     const report = { lines, heading, width: tableWidth };
-    const overviewColumns = [...statusOverviewTableColumns];
     // Prepare every styled row before table rendering so callbacks retain their existing order.
     const channelColumns = statusChannelsTableColumns.map((column) =>
       column.key === "Detail" ? Object.assign({}, column, { minWidth: 28 }) : column,
@@ -418,7 +414,7 @@ export async function statusAllCommand(
     const agentColumns = [...statusAgentsTableColumns];
     const agentRows = buildStatusAgentTableRows({ agentStatus, ok, warn });
 
-    appendStatusReportTable(report, "Overview", overviewColumns, overviewRows);
+    appendStatusReportTable(report, "Overview", [...statusOverviewTableColumns], overviewRows);
     appendStatusReportTable(report, "Channels", channelColumns, channelRows);
     for (const detail of details) {
       appendStatusReportTable(report, detail.title, detail.columns, detail.rows);
@@ -502,7 +498,7 @@ export async function statusAllCommand(
       if (updateRestartValue) {
         emitDetail(`Update restart: ${updateRestartValue}`);
       }
-      for (const line of formatUpdateRestartActionLines(diagnosis.sentinel.payload)) {
+      for (const line of formatUpdateRestartActionLines(diagnosis.sentinel.payload, diagnosis)) {
         emitDetail(line);
       }
     } else {
@@ -696,8 +692,9 @@ export async function statusAllCommand(
         diagnosis.channelIssues.length === 0 ? "ok" : "warn",
       );
       emitLimited(diagnosis.channelIssues, 12, (issue) => {
-        const fixText = issue.fix ? ` · fix: ${issue.fix}` : "";
-        return `  - ${issue.channel}[${issue.accountId}] ${issue.kind}: ${issue.message}${fixText}`;
+        return sanitizeTerminalText(
+          `  - ${issue.channel}[${issue.accountId}] ${issue.kind}: ${issue.message}${issue.fix ? ` · fix: ${issue.fix}` : ""}`,
+        );
       });
     } else if (diagnosis.nodeOnlyGateway) {
       emitCheck(
@@ -744,5 +741,7 @@ export async function statusAllCommand(
     progress.setLabel("Rendering…");
     runtime.log(lines.join("\n"));
     progress.tick();
-  });
+  }).catch((error: unknown) =>
+    reportStatusScanFailureUnlessInterrupted(error, runtime, opts.timeoutMs),
+  );
 }

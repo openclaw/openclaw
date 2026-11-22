@@ -4,13 +4,10 @@ type ResolveProviderInstallCatalogEntries =
   typeof import("../plugins/provider-install-catalog.js").resolveProviderInstallCatalogEntries;
 type ResolveManifestProviderAuthChoices =
   typeof import("../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoices;
-type ResolvePluginProviders =
-  typeof import("../plugins/providers.runtime.js").resolvePluginProvidersCore;
 
-const { catalogChoices, manifestChoices, runtimeProviders } = vi.hoisted(() => ({
+const { catalogChoices, manifestChoices } = vi.hoisted(() => ({
   catalogChoices: vi.fn<ResolveProviderInstallCatalogEntries>(() => []),
   manifestChoices: vi.fn<ResolveManifestProviderAuthChoices>(() => []),
-  runtimeProviders: vi.fn<ResolvePluginProviders>(() => []),
 }));
 // mock-isolation: Keep install discovery limited to this test's synthetic catalog.
 vi.mock("../plugins/provider-install-catalog.js", () => ({
@@ -21,9 +18,9 @@ vi.mock("../plugins/provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoices: manifestChoices,
 }));
 // mock-isolation: Exercise setup flow selection without loading provider runtimes.
-vi.mock("../plugins/providers.runtime.js", () => ({
-  resolvePluginProvidersCore: runtimeProviders,
-}));
+vi.mock("../plugins/providers.runtime.js", () => {
+  throw new Error("Provider setup must not load provider runtimes");
+});
 
 let resolve: typeof import("./provider-flow.js").resolveProviderSetupFlowContributions;
 
@@ -45,12 +42,12 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  for (const mock of [manifestChoices, catalogChoices, runtimeProviders]) {
+  for (const mock of [manifestChoices, catalogChoices]) {
     mock.mockReset().mockReturnValue([]);
   }
 });
 
-it("surfaces manifest provider auth choices before setup runtime loads", () => {
+it.each([undefined, "all"] as const)("resolves metadata-only setup choices (scope=%s)", (scope) => {
   manifestChoices.mockReturnValue([
     {
       ...choice("openai-compatible", "OpenAI-compatible API key"),
@@ -62,9 +59,16 @@ it("surfaces manifest provider auth choices before setup runtime loads", () => {
       groupHint: "Self-hosted and compatible providers",
       onboardingScopes: ["text-inference"],
     },
+    { ...choice("fal", "fal API key"), onboardingScopes: ["image-generation", "music-generation"] },
   ]);
-
-  expect(resolve()).toEqual([
+  catalogChoices.mockReturnValue([
+    {
+      ...catalog("vydra", "Vydra", "bundled", "@openclaw/vydra-provider"),
+      onboardingScopes: ["image-generation"],
+    },
+  ]);
+  const resolved = resolve({ scope });
+  expect(resolved.filter(({ providerId }) => providerId === "openai-compatible")).toEqual([
     {
       providerId: "openai-compatible",
       option: {
@@ -84,30 +88,11 @@ it("surfaces manifest provider auth choices before setup runtime loads", () => {
   expect(manifestChoices).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ includeUntrustedWorkspacePlugins: false }),
   );
-  expect(runtimeProviders).not.toHaveBeenCalled();
-});
-
-it("resolves text and media setup choices in one metadata-only pass", () => {
-  manifestChoices.mockReturnValue([
-    {
-      ...choice("fal", "fal API key"),
-      onboardingScopes: ["image-generation", "music-generation"],
-    },
-    choice("openai", "OpenAI API key"),
-  ]);
-  catalogChoices.mockReturnValue([
-    {
-      ...catalog("vydra", "Vydra", "bundled", "@openclaw/vydra-provider"),
-      onboardingScopes: ["image-generation"],
-    },
-  ]);
-
-  expect(resolve({ scope: "all" }).map(({ option }) => option.value)).toEqual(
-    expect.arrayContaining(["fal-api-key", "openai-api-key", "vydra-api-key"]),
+  expect(resolved.map(({ option }) => option.value)).toEqual(
+    scope
+      ? ["fal-api-key", "openai-compatible-api-key", "vydra-api-key"]
+      : ["openai-compatible-api-key"],
   );
-  expect(manifestChoices).toHaveBeenCalledOnce();
-  expect(catalogChoices).toHaveBeenCalledOnce();
-  expect(runtimeProviders).not.toHaveBeenCalled();
 });
 
 it("hides install-catalog choices that cannot be enabled", () => {

@@ -591,6 +591,24 @@ describe("subagent progress drafts", () => {
   type TestDraft = { push: Mock; retire: Mock };
   const newDraft = (): TestDraft => ({ push: vi.fn(), retire: vi.fn() });
 
+  it("keeps child labels and distinct short references without changing full identities", async () => {
+    const first = "00000000-0000-4000-8000-000000002633";
+    const second = "00000000-0000-4000-8000-00000000a4f0";
+    const spawns = await yieldCohort("parent-turn", [first, second], undefined, {
+      [first]: "Check streaming",
+    });
+    const draft = newDraft();
+    expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
+    expect(draft.push.mock.calls.map(([item]) => [item.itemId, item.title])).toEqual([
+      [first, "Check streaming …2633"],
+      [second, "Subagent …a4f0"],
+    ]);
+    expect(spawns.map((spawn) => spawn.childSessionKey)).toEqual([
+      childKey(first),
+      childKey(second),
+    ]);
+  });
+
   it("keeps progress titles whole at the 120-unit UTF-16 bound", async () => {
     const prefix = "a".repeat(119);
     const spawns = await yieldCohort("parent-turn", ["a"], undefined, { a: `${prefix}😀tail` });
@@ -618,14 +636,15 @@ describe("subagent progress drafts", () => {
   }
 
   it.each([
-    ["a visible answer", [DONE], true],
-    ["intentional external silence", ["NO_REPLY"], true],
-    ["required internal result", ["NO_REPLY"], false],
-  ] as const)("settles the progress card according to %s", async (name, replies, retired) => {
-    const requesterOrigin =
-      name === "intentional external silence"
-        ? { channel: "telegram", to: "12345", accountId: "default" }
-        : undefined;
+    ["a visible answer", DONE, false],
+    ["external NO_REPLY", "NO_REPLY", true],
+    ["internal NO_REPLY", "NO_REPLY", false],
+    ["external empty reply", "", true],
+    ["internal empty reply", "", false],
+  ] as const)("settles the progress card once after %s", async (_name, reply, external) => {
+    const requesterOrigin = external
+      ? { channel: "telegram", to: "12345", accountId: "default" }
+      : undefined;
     if (requesterOrigin) {
       const { channel, to, accountId } = requesterOrigin;
       await sessions.upsertSessionEntryCore(
@@ -641,18 +660,38 @@ describe("subagent progress drafts", () => {
       );
     }
     const draft = await adoptCohort(["a", "b"], requesterOrigin);
-    const wakes = answerWakes(draft, replies);
+    const wakes = answerWakes(draft, [reply, reply]);
 
+    // Each result wakes the requester; the card stays while a sibling still owes one.
     await endRun("a");
-    expect(wakes).toEqual([]);
+    expect(wakes).toEqual([{ runId: expect.any(String), retiredBefore: 0 }]);
     expect(draft.retire).not.toHaveBeenCalled();
 
     await endRun("b");
-    expect(wakes.map(({ retiredBefore }) => retiredBefore)).toEqual(replies.map(() => 0));
-    expectCard(draft, retired ? 1 : 0);
+    expect(wakes).toEqual([
+      { runId: expect.any(String), retiredBefore: 0 },
+      { runId: expect.any(String), retiredBefore: 0 },
+    ]);
+    expect(wakes[1]!.runId).not.toBe(wakes[0]!.runId);
+    expectCard(draft);
+    const persisted = loadSubagentRegistryFromSqlite();
+    for (const runId of ["a", "b"]) {
+      const entry = persisted.get(runId);
+      expect(entry?.requesterSettleWake).toBeUndefined();
+      expect(entry).toMatchObject({
+        delivery: { status: "delivered" },
+        completion: { resultText: CHILD_RESULT },
+      });
+    }
     expect(draft.push).toHaveBeenCalledWith(
       expect.objectContaining({ itemId: "b", kind: "subagent", status: "completed" }),
     );
+    using clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(Date.now() + 120_000);
+    await registryTesting.sweepOnceForTests();
+    await fixture.settle();
+    expect(wakes).toHaveLength(2);
+    expectCard(draft);
   });
 
   it("rejects a delivered cohort without any prior card", async () => {
@@ -665,44 +704,6 @@ describe("subagent progress drafts", () => {
     expect(adoptSubagentProgressDraft(spawns, stale)).toBe(false);
     expect(stale.push).not.toHaveBeenCalled();
   });
-
-  it.each(["visible result", "exhausted"] as const)(
-    "recovers a known missing required result through periodic admission: %s",
-    async (outcome) => {
-      const draft = await adoptCohort(["a"]);
-      const wakes = answerWakes(draft, [
-        "NO_REPLY",
-        outcome === "visible result" ? DONE : "NO_REPLY",
-        "NO_REPLY",
-      ]);
-      await endRun("a");
-      expect(wakes).toHaveLength(1);
-      expect(draft.retire).not.toHaveBeenCalled();
-      expect(subagentRuns.get("a")?.requesterSettleWake).toMatchObject({
-        status: "pending",
-        attemptCount: 1,
-      });
-      await registryTesting.sweepOnceForTests();
-      await fixture.settle();
-      expect(wakes).toHaveLength(1);
-
-      using clock = vi.spyOn(Date, "now");
-      for (let attempt = 1; attempt < (outcome === "visible result" ? 2 : 3); attempt++) {
-        const due = subagentRuns.get("a")?.requesterSettleWake?.nextAttemptAt;
-        expect(due).toBeTypeOf("number");
-        clock.mockReturnValue(due!);
-        await registryTesting.sweepOnceForTests();
-        await fixture.settle();
-        expect(wakes).toHaveLength(attempt + 1);
-        expect(wakes[attempt]?.runId).toBe(`${wakes[0]!.runId}:retry-${attempt}`);
-      }
-      expect(draft.retire).toHaveBeenCalledOnce();
-      expect(subagentRuns.get("a")?.requesterSettleWake).toBeUndefined();
-      await registryTesting.sweepOnceForTests();
-      await fixture.settle();
-      expect(wakes).toHaveLength(outcome === "visible result" ? 2 : 3);
-    },
-  );
 
   it.each([
     ["killSessionSubagentRuns", "running", "committed"],
@@ -759,7 +760,7 @@ describe("subagent progress drafts", () => {
 
   it("follows replacement execution until it settles", async () => {
     const draft = await adoptCohort();
-    const wakes = answerWakes(draft, [DONE]);
+    const wakes = answerWakes(draft, [DONE, DONE]);
 
     await endRun("a", { yielded: true, terminalReply: undefined });
     expect(
@@ -790,7 +791,10 @@ describe("subagent progress drafts", () => {
 
     await endRun("a-resumed");
     await endRun("b");
-    expect(wakes).toEqual([{ runId: expect.any(String), retiredBefore: 0 }]);
+    expect(wakes).toEqual([
+      { runId: expect.any(String), retiredBefore: 0 },
+      { runId: expect.any(String), retiredBefore: 0 },
+    ]);
     expectCard(draft);
   });
 
@@ -798,7 +802,12 @@ describe("subagent progress drafts", () => {
     const draft = await adoptCohort();
     const wakes = answerWakes(
       draft,
-      ["Waiting for the follow-up checks.", "Everything is verified."],
+      [
+        "Waiting for the follow-up checks.",
+        "Still waiting for the follow-up checks.",
+        "One check is verified.",
+        "Everything is verified.",
+      ],
       async (params) => {
         await yieldCohort(String(params?.idempotencyKey), ["c", "d"]);
       },
@@ -806,7 +815,7 @@ describe("subagent progress drafts", () => {
 
     await endRun("a");
     await endRun("b");
-    expect(wakes).toHaveLength(1);
+    expect(wakes).toHaveLength(2);
     expect(draft.retire).not.toHaveBeenCalled();
     for (const itemId of ["c", "d"]) {
       expect(draft.push).toHaveBeenCalledWith(
@@ -816,9 +825,9 @@ describe("subagent progress drafts", () => {
 
     await endRun("c");
     await endRun("d");
-    expect(wakes).toHaveLength(2);
-    expect(wakes[1]).toEqual({ runId: expect.any(String), retiredBefore: 0 });
-    expect(wakes[1]!.runId).not.toBe(wakes[0]!.runId);
+    expect(wakes).toHaveLength(4);
+    expect(wakes.every((wake) => wake.retiredBefore === 0)).toBe(true);
+    expect(new Set(wakes.map((wake) => wake.runId)).size).toBe(4);
     expectCard(draft);
   });
 });

@@ -40,7 +40,6 @@ const expectOutput = (
   expect(text(result)).toContain(output);
 };
 
-const optionalRuntimeImports = vi.hoisted(() => ({ reviewer: 0, followup: 0 }));
 const reviewerRuntime = vi.hoisted(() => ({
   prepare:
     vi.fn<typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent>(),
@@ -56,12 +55,10 @@ vi.mock("./simple-completion-runtime.js", () => ({
 }));
 
 vi.mock("./exec-auto-reviewer.js", async (importOriginal) => {
-  optionalRuntimeImports.reviewer += 1;
   return importOriginal<typeof import("./exec-auto-reviewer.js")>();
 });
 
 vi.mock("./bash-tools.exec-approval-followup.js", async (importOriginal) => {
-  optionalRuntimeImports.followup += 1;
   return importOriginal<typeof import("./bash-tools.exec-approval-followup.js")>();
 });
 
@@ -148,26 +145,17 @@ afterEach(() => {
   }
 });
 
-it("does not load optional review or delivery runtimes for full/off execution", async () => {
-  const result = await run({ host: "gateway", mode: "full" }, "echo hello");
-  expect(result.details.status).toBe("completed");
-  expect(optionalRuntimeImports).toEqual({ reviewer: 0, followup: 0 });
-});
-
 it("records elevated execution without logging the command payload", async () => {
-  const logInfo = vi.spyOn(logger, "logInfo").mockImplementation(() => {});
-  try {
-    const result = await run(
-      { host: "gateway", mode: "full", elevated },
-      "echo private-elevated-payload",
-      { elevated: true },
-    );
-    expectOutput(result, "private-elevated-payload");
-    expect(logInfo).toHaveBeenCalledWith("exec: elevated command");
-    expect(JSON.stringify(logInfo.mock.calls)).not.toContain("private-elevated-payload");
-  } finally {
-    logInfo.mockRestore();
-  }
+  using logInfo = vi.spyOn(logger, "logInfo").mockImplementation(() => {});
+
+  const result = await run(
+    { host: "gateway", mode: "full", elevated },
+    "echo private-elevated-payload",
+    { elevated: true },
+  );
+  expectOutput(result, "private-elevated-payload");
+  expect(logInfo).toHaveBeenCalledWith("exec: elevated command");
+  expect(JSON.stringify(logInfo.mock.calls)).not.toContain("private-elevated-payload");
 });
 
 it.each([false, true])("honors ask overrides only for trusted callers (%s)", async (trusted) => {
@@ -369,7 +357,7 @@ it.each(process.platform === "win32" ? [true] : [false, true])(
       approvalReviews: [
         { id: "guardian:tool-guardian-script", label: "Guardian", status: "approved" },
       ],
-      aggregated: mutate ? expect.stringContaining(output) : "approved\nscript.sh",
+      aggregated: mutate ? expect.stringContaining(output) : "approved\nscript.sh\n",
     });
   },
 );

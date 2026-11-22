@@ -1,4 +1,3 @@
-// Control UI tests cover LM Studio setup against a mocked Gateway.
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -31,6 +30,7 @@ suite.define(() => {
       async ({ page }) => {
         const initialDetection = makeDetection({ prepareOptions });
         const modelRef = "lmstudio/qwen3-8b-instruct";
+        const unreachable = "LM Studio could not be reached at http://localhost:1234/v1.";
         const gateway = await installLocalSetupGateway(page, initialDetection, "lmstudio", [
           runningStep("lmstudio-base-url", "text", "LM Studio base URL", {
             initialValue: "http://localhost:1234/v1",
@@ -42,10 +42,7 @@ suite.define(() => {
           runningStep(
             "lmstudio-retry",
             "note",
-            [
-              "LM Studio could not be reached at http://localhost:1234/v1.",
-              "Start LM Studio (or run lms server start), then continue to retry.",
-            ].join("\n"),
+            `${unreachable}\nStart LM Studio (or run lms server start), then continue to retry.`,
             { title: "LM Studio" },
           ),
           runningStep("lmstudio-retry-confirm", "confirm", "Retry this LM Studio connection now?", {
@@ -70,9 +67,7 @@ suite.define(() => {
         await page.getByRole("button", { name: "Submit" }).click();
         await page.getByLabel("LM Studio API key").fill("");
         await page.getByRole("button", { name: "Submit" }).click();
-        await page
-          .getByText("LM Studio could not be reached at http://localhost:1234/v1.")
-          .waitFor();
+        await page.getByText(unreachable).waitFor();
 
         await page.getByRole("button", { name: "Continue" }).click();
         await page.getByText("Retry this LM Studio connection now?").waitFor();
@@ -87,8 +82,6 @@ suite.define(() => {
         });
         await page.getByRole("button", { name: "Continue" }).click();
         await expectLocalActivation(page, gateway, "lmstudio", modelRef);
-
-        await page.setViewportSize({ height: 844, width: 390 });
 
         await returnToLocalModelSettings(page, gateway, {
           provider: "lmstudio",

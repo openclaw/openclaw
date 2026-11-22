@@ -1,7 +1,7 @@
-import type { Locator, Page } from "playwright";
-import { expect } from "vitest";
-import type { ControlUiSessionPullRequestsChanged } from "../../../src/gateway/control-ui-contract.js";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import {
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+  type ControlUiSessionPullRequestsChanged,
+} from "../../../src/gateway/control-ui-contract.js";
 import {
   defaultControlUiFeatureMethods,
   type ControlUiMockGatewayScenario,
@@ -67,7 +67,6 @@ export function activityPolishFixture(now = Date.now()) {
     methodResponses: {
       "sessions.list": list,
       [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
-      "artifacts.list": { artifacts: [] },
     },
   };
   const pullRequests: ControlUiSessionPullRequestsChanged = {
@@ -80,47 +79,4 @@ export function activityPolishFixture(now = Date.now()) {
     },
   };
   return { list, scenario, pullRequests };
-}
-
-export async function activityPolishImages(page: Page) {
-  const titles = ["Reconnect check", "Delivery timeline", "Keyboard review", "Preview cache"];
-  const urls = await page.evaluate((captions) => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 800;
-    canvas.height = 450;
-    const context = canvas.getContext("2d")!;
-    return captions.map((title, index) => {
-      context.fillStyle = `hsl(${index * 90} 40% 95%)`;
-      context.fillRect(0, 0, 800, 450);
-      context.fillStyle = "#172033";
-      context.fillText(title, 40, 65);
-      return canvas.toDataURL("image/png");
-    });
-  }, titles);
-  return {
-    artifacts: titles.map((title, index) => ({
-      id: `screenshot-${index + 1}`,
-      type: "image",
-      title,
-      mimeType: "image/png",
-      sessionKey: activityPolishKeys.current,
-      image: { url: urls[index]! },
-      download: { mode: "url" },
-    })),
-  };
-}
-
-export async function expectActivityImagesLoaded(images: Locator) {
-  await expect
-    .poll(() =>
-      images.evaluateAll(
-        (elements) =>
-          elements.length > 0 &&
-          elements.every(
-            (element) =>
-              element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0,
-          ),
-      ),
-    )
-    .toBe(true);
 }

@@ -25,11 +25,13 @@ import {
 import { markIosResourcePhase } from "../ios-resource-timeline.mjs";
 import {
   collectGatewayProcessDiagnostics,
+  parseIOSSimulatorTiming,
   summarizeGatewayLanes,
   summarizeGatewayLogs,
   summarizeIOSBuildTiming,
 } from "./ios-release-e2e-diagnostics.js";
 import { prepareIOSReleaseGateway } from "./ios-release-gateway.js";
+import { waitForIOSSimulatorHeadroom } from "./ios-simulator-headroom.js";
 import { hasUnjoinedWork, runManagedCommand } from "./managed-child-process.mjs";
 
 const DEVICE_TYPE = "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro";
@@ -73,6 +75,7 @@ export async function createNativeDependencies(options: {
     status: "running" | "passed" | "failed";
     ms: number;
     checkpoint?: string;
+    preparationTimings?: NonNullable<ReturnType<typeof parseIOSSimulatorTiming>>[];
   }[] = [];
   options.proof.phases = phases;
   let currentTrial: number | undefined;
@@ -120,6 +123,12 @@ export async function createNativeDependencies(options: {
     phase(operation, async () => {
       let stdout = "";
       let stderr = "";
+      let timingTail = "";
+      const preparationPhase = operation === "simulator-slim" ? phases.at(-1) : undefined;
+      if (preparationPhase) {
+        preparationPhase.preparationTimings = [];
+      }
+      const preparationTimings = preparationPhase?.preparationTimings;
       const started = performance.now();
       let failureContext: Promise<string[]> | undefined;
       const observeChatFailure = () => {
@@ -169,6 +178,16 @@ export async function createNativeDependencies(options: {
             });
             child.stderr?.on("data", (chunk: Buffer) => {
               stderr = (stderr + chunk.toString()).slice(-4096);
+              if (preparationTimings) {
+                const lines = (timingTail + chunk.toString()).split("\n");
+                timingTail = lines.pop()!.slice(-256);
+                for (const line of lines) {
+                  const timing = parseIOSSimulatorTiming(line);
+                  if (timing && preparationTimings.length < 4) {
+                    preparationTimings.push(timing);
+                  }
+                }
+              }
               observeChatFailure();
             });
           },
@@ -342,6 +361,8 @@ export async function createNativeDependencies(options: {
       "-configuration",
       "Debug",
       "-showBuildTimingSummary",
+      `ARCHS=${process.arch}`,
+      "COMPILER_INDEX_STORE_ENABLE=NO",
       // Simulator Keychain access needs entitlements, but no signing certificate.
       "CODE_SIGNING_ALLOWED=YES",
       "CODE_SIGN_IDENTITY=-",
@@ -832,6 +853,17 @@ export async function createNativeDependencies(options: {
                       },
                     );
                   }
+                  await phase("simulator-headroom", async () => {
+                    const readiness = await waitForIOSSimulatorHeadroom(fixtureSignal).catch(
+                      (error: unknown) => {
+                        throw operationError("simulator-headroom", error);
+                      },
+                    );
+                    fixtureEvidence.simulatorHeadroom = readiness;
+                    if (readiness.status !== "ready") {
+                      throw new OperationError("simulator-headroom", "timeout");
+                    }
+                  });
                 }
               } catch (error) {
                 if (!options.signal.aborted) {

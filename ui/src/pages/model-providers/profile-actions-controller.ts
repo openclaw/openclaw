@@ -1,3 +1,8 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  collectBaseArrayPaths,
+  formatConfigPatchPath,
+} from "../../../../src/config/patch-replace-paths.js";
 import type {
   ModelAuthLogoutResult,
   ModelAuthOrderSetResult,
@@ -19,7 +24,11 @@ import type {
   ModelProviderRemovalTarget,
 } from "./data.ts";
 import type { ModelProvidersData } from "./load.ts";
-import { showProfileActionError, showProfileLogoutSuccess } from "./profiles-view.tsx";
+import {
+  showProfileActionError,
+  showProfileActionWarning,
+  showProfileLogoutSuccess,
+} from "./profiles-view.tsx";
 import { updateRecordEntry } from "./record-state.ts";
 
 type PendingProfileOrder = {
@@ -27,7 +36,7 @@ type PendingProfileOrder = {
   optimisticOrder: string[];
 };
 
-type ProfileActionsOptions = {
+export function createModelProviderProfileActions(options: {
   getAgentEpoch: () => number;
   getAgentId: () => string;
   getClient: () => GatewayBrowserClient | null;
@@ -41,133 +50,29 @@ type ProfileActionsOptions = {
   isBusy: (key: string) => boolean;
   setBusy: (key: string, value: boolean) => void;
   setProbeResult: (cardId: string, result: ModelsProbeResult | null) => void;
-  setProbeError: (cardId: string, message: string) => void;
   clearMessage: (cardId: string) => void;
   cancelRefresh: () => void;
   refresh: () => Promise<void>;
   getConfig: () => RuntimeConfigCapability;
   isCurrentClient: (client: GatewayBrowserClient, epoch: number) => boolean;
   onLogoutStarted: (receipt: { cardId: string; completion: Promise<void> }) => void;
-};
-
-export function createModelProviderProfileActions(options: ProfileActionsOptions) {
+}) {
   let logoutConfirmation: AbortController | null = null;
   let probeEpochs = new Map<string, number>();
   const pendingOrders = new Map<string, PendingProfileOrder>();
   const activeOrderProviders = new Set<string>();
 
-  function resetProbes(): void {
-    probeEpochs = new Map();
+  function beginProbe(cardId: string): () => boolean {
+    const epoch = (probeEpochs.get(cardId) ?? 0) + 1;
+    probeEpochs.set(cardId, epoch);
+    return () => probeEpochs.get(cardId) === epoch;
   }
 
-  function clearProbe(cardId: string): void {
-    probeEpochs.set(cardId, (probeEpochs.get(cardId) ?? 0) + 1);
+  function clearProbe(cardId: string): () => boolean {
+    const isLatest = beginProbe(cardId);
     options.setBusy("probe:" + cardId, false);
     options.setProbeResult(cardId, null);
-  }
-
-  async function probe(cardId: string, providers: string[]) {
-    const client = options.getClient();
-    const key = `probe:${cardId}`;
-    if (!client || !options.canMutate() || options.isBusy(key)) {
-      return;
-    }
-    const { agentId, isCurrent } = captureScope(client);
-    const probeEpoch = (probeEpochs.get(cardId) ?? 0) + 1;
-    probeEpochs.set(cardId, probeEpoch);
-    const ownsProbe = () => isCurrent() && probeEpochs.get(cardId) === probeEpoch;
-    options.setBusy(key, true);
-    options.clearMessage(cardId);
-    try {
-      const results: ModelsProbeResult[] = [];
-      for (const provider of providers) {
-        if (!ownsProbe()) {
-          return;
-        }
-        results.push(
-          await client.request<ModelsProbeResult>("models.probe", { provider, agentId }),
-        );
-      }
-      if (ownsProbe()) {
-        options.setProbeResult(cardId, mergeProbeResults(cardId, results));
-      }
-    } catch (error) {
-      if (!ownsProbe()) {
-        return;
-      }
-      options.setProbeError(cardId, modelProviderErrorMessage(error));
-    } finally {
-      if (ownsProbe()) {
-        options.setBusy(key, false);
-      }
-    }
-  }
-
-  function resetOrders(): void {
-    pendingOrders.clear();
-    options.setOrders({});
-  }
-
-  function setOrder(cardId: string, provider: string, profileIds: string[] | null): void {
-    const providerStatus = options
-      .getData()
-      ?.authStatus?.providers.find((candidate) => candidate.provider === provider);
-    const optimisticOrder =
-      profileIds ?? providerStatus?.profiles.map((profile) => profile.profileId) ?? [];
-    options.setOrders({ ...options.getOrders(), [provider]: optimisticOrder });
-    pendingOrders.set(provider, { profileIds, optimisticOrder });
-    options.clearMessage(cardId);
-    void flushOrder(provider);
-  }
-
-  function flushPendingOrders(): void {
-    if (!options.canMutate()) {
-      return;
-    }
-    for (const provider of pendingOrders.keys()) {
-      void flushOrder(provider);
-    }
-  }
-
-  function cancelLogout(): void {
-    logoutConfirmation?.abort();
-  }
-
-  async function requestLogout(pending: ModelProviderPendingLogout): Promise<void> {
-    if (logoutConfirmation || !options.canMutate() || options.isBusy(`logout:${pending.cardId}`)) {
-      return;
-    }
-    // Agent changes, reconnects and navigation abort this decision before it can
-    // authorize a logout under a different scope.
-    const controller = new AbortController();
-    logoutConfirmation = controller;
-    const removing = "removeTargets" in pending;
-    const confirmed = await showConfirmDialog({
-      title: removing
-        ? t("modelProviders.remove.title", { provider: pending.label })
-        : t("modelProviders.logout.actionFor", { account: pending.label }),
-      message: removing
-        ? [
-            pending.removeTargets.some((target) => !target.credentialType)
-              ? t("modelProviders.remove.accounts", { provider: pending.label })
-              : "",
-            pending.configKey ? t("modelProviders.remove.keys", { key: pending.configKey }) : "",
-            pending.keptSource
-              ? t("modelProviders.remove.kept", { source: pending.keptSource })
-              : "",
-          ]
-            .filter(Boolean)
-            .join(" ")
-        : t("modelProviders.logout.confirm", { provider: pending.label }),
-      confirmLabel: t(removing ? "modelProviders.remove.action" : "modelProviders.logout.action"),
-      danger: true,
-      signal: controller.signal,
-    }).finally(() => {
-      logoutConfirmation = null;
-    });
-    if (confirmed && !controller.signal.aborted && options.canMutate()) {
-      await logout(pending.cardId, removing ? pending.removeTargets : [pending.target]);
-    }
+    return isLatest;
   }
 
   /** Account targets sign out their profiles; removal targets clear a provider or its API key. */
@@ -305,7 +210,7 @@ export function createModelProviderProfileActions(options: ProfileActionsOptions
             }
           }
           if (clearOptimisticOrder(provider, pending.optimisticOrder) && result.warning) {
-            showProfileActionError(result.warning);
+            showProfileActionWarning(result.warning);
           }
         } catch (error) {
           if (!isCurrent()) {
@@ -367,14 +272,198 @@ export function createModelProviderProfileActions(options: ProfileActionsOptions
     options.setData({ ...data, authStatus: { ...authStatus, providers } });
   }
   return {
-    resetProbes,
+    resetProbes(): void {
+      probeEpochs = new Map();
+    },
     clearProbe,
-    probe,
-    resetOrders,
-    setOrder,
-    flushPendingOrders,
-    cancelLogout,
-    requestLogout,
+    async probe(cardId: string, providers: string[]) {
+      const client = options.getClient();
+      const key = `probe:${cardId}`;
+      if (!client || !options.canMutate() || options.isBusy(key)) {
+        return;
+      }
+      const { agentId, isCurrent } = captureScope(client);
+      const isLatest = beginProbe(cardId);
+      const ownsProbe = () => isCurrent() && isLatest();
+      options.setBusy(key, true);
+      options.clearMessage(cardId);
+      try {
+        const results: ModelsProbeResult[] = [];
+        for (const provider of providers) {
+          if (!ownsProbe()) {
+            return;
+          }
+          results.push(
+            await client.request<ModelsProbeResult>("models.probe", { provider, agentId }),
+          );
+        }
+        if (ownsProbe()) {
+          options.setProbeResult(cardId, mergeProbeResults(cardId, results));
+        }
+      } catch (error) {
+        if (!ownsProbe()) {
+          return;
+        }
+        options.setProbeResult(cardId, {
+          provider: cardId,
+          status: "unknown",
+          error: modelProviderErrorMessage(error),
+          results: [],
+        });
+      } finally {
+        if (ownsProbe()) {
+          options.setBusy(key, false);
+        }
+      }
+    },
+    resetOrders(): void {
+      // Retire queued intent, but keep the active slot until the accepted save's
+      // finally releases it and drains any newer scope's order.
+      pendingOrders.clear();
+      options.setOrders({});
+    },
+    setOrder: (cardId: string, provider: string, profileIds: string[] | null): void => {
+      const providerStatus = options
+        .getData()
+        ?.authStatus?.providers.find((candidate) => candidate.provider === provider);
+      const optimisticOrder =
+        profileIds ?? providerStatus?.profiles.map((profile) => profile.profileId) ?? [];
+      options.setOrders({ ...options.getOrders(), [provider]: optimisticOrder });
+      pendingOrders.set(provider, { profileIds, optimisticOrder });
+      options.clearMessage(cardId);
+      void flushOrder(provider);
+    },
+    flushPendingOrders(): void {
+      if (!options.canMutate()) {
+        return;
+      }
+      for (const provider of pendingOrders.keys()) {
+        void flushOrder(provider);
+      }
+    },
+    cancelLogout(): void {
+      logoutConfirmation?.abort();
+    },
+    async requestLogout(pending: ModelProviderPendingLogout): Promise<void> {
+      const client = options.getClient();
+      if (
+        !client ||
+        logoutConfirmation ||
+        !options.canMutate() ||
+        options.isBusy(`logout:${pending.cardId}`)
+      ) {
+        return;
+      }
+      // Agent changes, reconnects and navigation abort this decision before it can
+      // authorize a logout under a different scope.
+      const controller = new AbortController();
+      logoutConfirmation = controller;
+      const { isCurrent } = captureScope(client);
+      const config = options.getConfig();
+      const configHash = config.state.configSnapshot?.hash;
+      const removingConfig = "removeConfigKey" in pending;
+      const removing = "removeTargets" in pending;
+      const defaults =
+        "defaultModels" in pending && pending.defaultModels
+          ? t("modelProviders.remove.defaults", { models: pending.defaultModels })
+          : "";
+      const confirmed = await showConfirmDialog({
+        title: removingConfig
+          ? t("modelProviders.remove.title", { provider: pending.label })
+          : removing
+            ? t("modelProviders.remove.accessTitle", { provider: pending.label })
+            : t("modelProviders.logout.title", { account: pending.label }),
+        message: removingConfig
+          ? [t("modelProviders.remove.config", { key: pending.removeConfigKey }), defaults]
+              .filter(Boolean)
+              .join(" ")
+          : removing
+            ? [
+                pending.removeTargets.some((target) => !target.credentialType)
+                  ? t("modelProviders.remove.accounts", { provider: pending.label })
+                  : "",
+                pending.configKey
+                  ? t("modelProviders.remove.keys", { key: pending.configKey })
+                  : "",
+                pending.keptSource
+                  ? t("modelProviders.remove.kept", { source: pending.keptSource })
+                  : "",
+                defaults,
+              ]
+                .filter(Boolean)
+                .join(" ")
+            : t("modelProviders.logout.confirm", { provider: pending.label }),
+        confirmLabel: t(
+          removingConfig
+            ? "modelProviders.remove.action"
+            : removing
+              ? "modelProviders.remove.accessAction"
+              : "modelProviders.logout.action",
+        ),
+        danger: true,
+        signal: controller.signal,
+      }).finally(() => {
+        logoutConfirmation = null;
+      });
+      if (!confirmed || controller.signal.aborted || !isCurrent() || !options.canMutate()) {
+        return;
+      }
+      if (!removingConfig) {
+        await logout(pending.cardId, removing ? pending.removeTargets : [pending.target]);
+        return;
+      }
+      const provider = pending.removeConfigKey;
+      const busyKey = "logout:" + pending.cardId;
+      options.setBusy(busyKey, true);
+      options.clearMessage(pending.cardId);
+      clearProbe(pending.cardId);
+      try {
+        const patched = await config.patchFromSnapshot((snapshot) => {
+          const providers = asNullableRecord(asNullableRecord(snapshot.models)?.providers);
+          if (
+            config.state.configSnapshot?.hash !== configHash ||
+            !providers ||
+            !Object.hasOwn(providers, provider)
+          ) {
+            return { error: t("modelProviders.remove.configChanged") };
+          }
+          return {
+            options: {
+              raw: { models: { providers: { [provider]: null } } },
+              note: t("modelProviders.remove.configNote", { key: provider }),
+              replacePaths: collectBaseArrayPaths(
+                providers[provider],
+                formatConfigPatchPath("models.providers", provider),
+              ),
+              canDispatch: () => isCurrent() && options.hasMutationAccess(),
+            },
+          };
+        });
+        if (isCurrent()) {
+          if (patched) {
+            invalidateModelAuthStatusRequests(client);
+            await options.refresh();
+          } else if (config.state.configAutoSaveStatus === "conflict") {
+            await config.refresh();
+            if (isCurrent()) {
+              showProfileActionError(
+                config.state.lastError ?? t("modelProviders.remove.configChanged"),
+              );
+            }
+          } else {
+            showProfileActionError(config.state.lastError ?? t("modelProviders.configUnavailable"));
+          }
+        }
+      } catch (error) {
+        if (isCurrent()) {
+          showProfileActionError(error);
+        }
+      } finally {
+        if (isCurrent()) {
+          options.setBusy(busyKey, false);
+        }
+      }
+    },
     logout,
   };
 }

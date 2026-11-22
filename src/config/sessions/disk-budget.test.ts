@@ -65,7 +65,8 @@ const writeStore = (storePath: string, store: Record<string, SessionEntry>) =>
 const commitStore = (storePath: string, store: Record<string, SessionEntry>) => ({
   commitEvictedIndex: () => writeStore(storePath, store),
 });
-const it = baseIt.extend<{ dir: string; storePath: string }>({
+type DiskFixture = { dir: string; storePath: string };
+const it = baseIt.extend<DiskFixture>({
   dir: async ({ task: _task }, use) => withTestDir({ prefix: "openclaw-disk-budget-" }, use),
   storePath: async ({ dir }, use) => use(path.join(dir, "sessions.json")),
 });
@@ -106,6 +107,27 @@ async function expectPathExists(...targetPaths: string[]): Promise<void> {
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
+async function verifyCleanup(
+  { dir, storePath }: DiskFixture,
+  keep: Record<string, number>,
+  remove: Record<string, number>,
+  max: number,
+  high: number,
+  store: Record<string, SessionEntry> = activeStore(),
+  stale: string[] = [],
+) {
+  await writeStore(storePath, store);
+  await writeArtifacts(dir, { ...keep, ...remove });
+  for (const name of stale) {
+    await ageFile(path.join(dir, name));
+  }
+  await enforceBudget(storePath, store, max, high);
+  await expectPathExists(...Object.keys(keep).map((name) => path.join(dir, name)));
+  for (const name of Object.keys(remove)) {
+    await expectPathMissing(path.join(dir, name));
+  }
 }
 
 function refreshPathBeforeSecondStat(targetPath: string): ReturnType<typeof vi.spyOn> {
@@ -164,43 +186,29 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("removes archives, not referenced primary transcripts", async ({ dir, storePath }) => {
-    const sessionId = "keep.deleted.keep";
-    const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
-    const archivePath = path.join(
-      dir,
-      `old-session.jsonl.deleted.${formatSessionArchiveTimestamp(Date.now() - 24 * 60 * 60 * 1000)}`,
+    const archive = `old-session.jsonl.deleted.${formatSessionArchiveTimestamp(Date.now() - 86_400_000)}`;
+    await verifyCleanup(
+      { dir, storePath },
+      { "keep.deleted.keep.jsonl": 80 },
+      { [archive]: 260 },
+      300,
+      220,
+      activeStore("keep.deleted.keep"),
     );
-    const store = activeStore(sessionId);
-    await writeStore(storePath, store);
-    await writeArtifacts(dir, {
-      [path.basename(transcriptPath)]: 80,
-      [path.basename(archivePath)]: 260,
-    });
-
-    await enforceBudget(storePath, store, 300, 220);
-
-    await expectPathExists(transcriptPath);
-    await expectPathMissing(archivePath);
   });
 
   it("reclaims stale store temps, not in-flight ones (#56827)", async ({ dir, storePath }) => {
-    const sessionId = "keep";
-    const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
-    const staleTemp = path.join(dir, "sessions.json.111.0f9c1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b.tmp");
-    const freshTemp = path.join(dir, "sessions.json.222.1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d.tmp");
-    const store = activeStore(sessionId);
-    await writeStore(storePath, store);
-    await writeArtifacts(dir, {
-      [path.basename(transcriptPath)]: 80,
-      [path.basename(staleTemp)]: 300,
-      [path.basename(freshTemp)]: 300,
-    });
-    await ageFile(staleTemp);
-
-    await enforceBudget(storePath, store, 750, 600);
-
-    await expectPathMissing(staleTemp);
-    await expectPathExists(freshTemp, transcriptPath);
+    const stale = "sessions.json.111.0f9c1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b.tmp";
+    const fresh = "sessions.json.222.1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d.tmp";
+    await verifyCleanup(
+      { dir, storePath },
+      { "keep.jsonl": 80, [fresh]: 300 },
+      { [stale]: 300 },
+      750,
+      600,
+      activeStore(),
+      [stale],
+    );
   });
 
   it("excludes runtime-only skills from budget", async ({ storePath }) => {
@@ -303,29 +311,14 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("reclaims stale skills prompt blob temps under pressure", async ({ dir, storePath }) => {
-    const store = activeStore();
-    const hash = "a".repeat(64);
-    const tempPath = `${promptBlob(dir, hash)}.123.11111111-1111-4111-8111-111111111111.tmp`;
-    await writeStore(storePath, store);
-    await writeArtifact(tempPath, "t".repeat(2000), true);
-
-    await enforceBudget(storePath, store, 1000, 500);
-
-    await expectPathMissing(tempPath);
+    const temp = `skills-prompts/sha256/aa/${"a".repeat(64)}.txt.123.11111111-1111-4111-8111-111111111111.tmp`;
+    await verifyCleanup({ dir, storePath }, {}, { [temp]: 2000 }, 1000, 500, activeStore(), [temp]);
   });
 
   it("preserves referenced legacy checkpoints", async ({ dir, storePath }) => {
     const sessionId = "keep";
-    const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
-    const checkpointPath = path.join(
-      dir,
-      "keep.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
-    );
-    const referencedCheckpointPath = path.join(
-      dir,
-      "..keep.checkpoint.22222222-2222-4222-8222-222222222222.jsonl",
-    );
-    const referencedPostCompactionPath = path.join(dir, "keep-compacted.jsonl");
+    const checkpoint = "keep.checkpoint.11111111-1111-4111-8111-111111111111.jsonl";
+    const referenced = "..keep.checkpoint.22222222-2222-4222-8222-222222222222.jsonl";
     // Historical metadata is deliberately outside the current session model.
     const store = {
       "agent:main:main": {
@@ -333,47 +326,32 @@ describe("enforceSessionDiskBudget", () => {
         updatedAt: Date.now(),
         compactionCheckpoints: [
           {
-            preCompaction: { sessionFile: referencedCheckpointPath },
-            postCompaction: { sessionFile: referencedPostCompactionPath },
+            preCompaction: { sessionFile: path.join(dir, referenced) },
+            postCompaction: { sessionFile: path.join(dir, "keep-compacted.jsonl") },
           },
         ],
       },
     };
-    await writeStore(storePath, store);
-    await fs.writeFile(transcriptPath, "k".repeat(80), "utf-8");
-    await fs.writeFile(checkpointPath, "c".repeat(5000), "utf-8");
-    await fs.writeFile(referencedCheckpointPath, "r".repeat(260), "utf-8");
-    await fs.utimes(referencedCheckpointPath, new Date(0), new Date(0));
-    await fs.writeFile(referencedPostCompactionPath, "p".repeat(260), "utf-8");
-
-    await enforceBudget(storePath, store, 4000, 3000);
-
-    await expectPathMissing(checkpointPath);
-    await expectPathExists(transcriptPath, referencedCheckpointPath, referencedPostCompactionPath);
+    await verifyCleanup(
+      { dir, storePath },
+      { "keep.jsonl": 80, [referenced]: 260, "keep-compacted.jsonl": 260 },
+      { [checkpoint]: 5000 },
+      4000,
+      3000,
+      store,
+      [referenced],
+    );
   });
 
   it("preserves custom transcript sidecars, not orphans", async ({ dir, storePath }) => {
-    const sessionId = "keep";
-    const transcriptPath = path.join(dir, "keep.log");
-    const referencedRuntime = path.join(dir, "keep.log.trajectory.jsonl");
-    const referencedPointer = path.join(dir, "keep.log.trajectory-path.json");
-    const orphanRuntime = path.join(dir, "old.trajectory.jsonl");
-    const orphanPointer = path.join(dir, "old.trajectory-path.json");
-    const store = activeStore(sessionId, { sessionFile: transcriptPath });
-    await writeStore(storePath, store);
-    await writeArtifacts(dir, {
-      "keep.log": 80,
-      "keep.log.trajectory.jsonl": 80,
-      "keep.log.trajectory-path.json": 80,
-      "old.trajectory.jsonl": 5000,
-      "old.trajectory-path.json": 5000,
-    });
-
-    await enforceBudget(storePath, store, 7000, 2000);
-
-    await expectPathExists(transcriptPath, referencedRuntime, referencedPointer);
-    await expectPathMissing(orphanRuntime);
-    await expectPathMissing(orphanPointer);
+    await verifyCleanup(
+      { dir, storePath },
+      { "keep.log": 80, "keep.log.trajectory.jsonl": 80, "keep.log.trajectory-path.json": 80 },
+      { "old.trajectory.jsonl": 5000, "old.trajectory-path.json": 5000 },
+      7000,
+      2000,
+      activeStore("keep", { sessionFile: path.join(dir, "keep.log") }),
+    );
   });
 
   it("retains the evicted transcript when the index commit fails", async ({ dir }) => {

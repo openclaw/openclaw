@@ -124,3 +124,54 @@ it.each<Overrides>([
 ])("preserves the unmediated ordinary CLI surface: %j", async (overrides) => {
   await expectPolicy(makeInput(overrides, ordinary), overrides.params?.cliToolAvailability);
 });
+
+const managedNative = ["Agent", "Workflow"];
+const completion: Partial<RunCliAgentParams> = {
+  trustedInternalHandoff: {
+    kind: "subagent-completion",
+    sourceSessionKey: "agent:coder:subagent:child",
+    targetSessionKey: "agent:coder:dashboard:coding",
+    targetSessionId: "coding",
+    provider: "claude-cli",
+    model: "fixture",
+  },
+};
+function withManagedNative(overrides: Overrides, defaults = ordinary): Input {
+  return makeInput(
+    {
+      // Resolve by the policy agent, so per-agent selections follow the turn's owner.
+      resolveManagedNativeTools: ({ agentId }) => (agentId === "coder" ? managedNative : []),
+      ...overrides,
+    },
+    defaults,
+  );
+}
+
+it.each([{}, { params: completion }])(
+  "keeps the operator's managed native tools on ordinary and completion turns: %j",
+  async (overrides) => {
+    await expectPolicy(withManagedNative(overrides), { native: managedNative, openClaw: [] }, [
+      "*",
+    ]);
+    // Prepare reads this list to know the selection confers no file capability.
+    const result = await resolveCliRuntimeToolPolicy(withManagedNative(overrides));
+    expect(result.managedNativeTools).toEqual(managedNative);
+  },
+);
+
+it.each<[string, Overrides, Input]>([
+  ["delegated execution", {}, base],
+  ["workspace-only", { params: { config: { tools: { fs: { workspaceOnly: true } } } } }, ordinary],
+  ["a caller tool cap", { params: { ...completion, toolsAllow: ["read"] } }, ordinary],
+])("drops managed native tools for %s", async (_name, overrides, defaults) => {
+  const result = await resolveCliRuntimeToolPolicy(withManagedNative(overrides, defaults));
+  expect(result.params.cliToolAvailability?.native).toEqual([]);
+  expect(result.managedNativeTools).toEqual([]);
+});
+
+it("leaves node-placed Claude turns on their unmediated native surface", async () => {
+  await expectPolicy(
+    withManagedNative({ params: { sessionEntry: { ...session, execHost: "node" } } }),
+    undefined,
+  );
+});

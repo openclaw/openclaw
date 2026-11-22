@@ -1,4 +1,4 @@
-import { MessageChannel } from "node:worker_threads";
+import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
@@ -27,24 +27,14 @@ vi.mock("node:worker_threads", async (importOriginal) => {
 afterEach(() => {
   workerExit.notify = () => {};
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
-
-async function nextMessageTurn() {
-  await new Promise<void>((resolve) => {
-    const { port1, port2 } = new MessageChannel();
-    port1.once("message", () => {
-      port1.close();
-      port2.close();
-      resolve();
-    });
-    port2.postMessage(null);
-  });
-}
 
 it.each([
   ["completion", new URL("./run-worker.test-support.ts", import.meta.url)],
   ["sqlite", new URL("./run-worker.collection.test-support.ts", import.meta.url)],
-] as const)("joins accepted %s settlement after worker exit", (kind, workerUrl) =>
+  ["clock step", new URL("./run-worker.test-support.ts", import.meta.url)],
+] as const)("settles accepted %s work across its lifecycle boundary", (kind, workerUrl) =>
   withTempDir("team-reports-worker-settlement-", async (directory) => {
     const sqlite = kind === "sqlite";
     const entered = createDeferred<void>();
@@ -113,6 +103,15 @@ it.each([
       llm: { complete },
     });
     try {
+      if (kind === "clock step") {
+        await entered.promise;
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        vi.spyOn(Date, "now").mockReturnValue(Date.now() + 2 * 60 * 60_000);
+        released.resolve();
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(pending).resolves.toEqual({});
+        return;
+      }
       const rejected = expect(
         pending.finally(() => {
           runSettled = true;
@@ -125,11 +124,8 @@ it.each([
       });
       await Promise.all([cancelled.promise, exited.promise]);
       // Drain native-exit cleanup without a timer or polling.
-      await nextMessageTurn();
+      await setImmediate();
       expect([runSettled, closeSettled]).toEqual([false, false]);
-      if (sqlite) {
-        expect(complete).not.toHaveBeenCalled();
-      }
       released.resolve();
       await Promise.all([rejected, closing]);
       expect([runSettled, closeSettled]).toEqual([true, true]);

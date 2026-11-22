@@ -3,6 +3,11 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import {
+  closeHttpServer,
+  listenLoopback,
+  readRequestText,
+} from "../../test/helpers/gateway-integration-fixtures.js";
+import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.js";
@@ -33,7 +38,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolvePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextLifetime,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   activateTestChannelRegistry,
@@ -42,10 +50,11 @@ import {
 } from "../test-utils/channel-plugins.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
-import { closeGatewayDeviceRevocation } from "./device-revocation.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 import { captureOperatorToolGatewayContinuationContext } from "./server-plugin-in-process-authority.js";
+import { subagentToolCallEvents } from "./server.subagent-stop-settlement.product.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { createGatewayBackgroundTestEnv } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 for (const scenario of [
@@ -65,16 +74,7 @@ for (const scenario of [
       const token = "conflict-fixture-token";
       const state = await createOpenClawTestState({
         label: "completion-conflict",
-        env: {
-          OPENCLAW_GATEWAY_TOKEN: token,
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        },
+        env: createGatewayBackgroundTestEnv(token),
       });
       const sessionKey = "agent:main:main",
         sessionId = "conflict-parent-" + scenario,
@@ -86,7 +86,7 @@ for (const scenario of [
       let started = createDeferred(),
         release = createDeferred();
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-      let gatewayContext: GatewayRequestContext | undefined;
+      let resolveGatewayContext: GatewayContextResolver | undefined;
       let execution: Awaited<ReturnType<typeof observeGatewayRunExecution>> | undefined;
       let wake: Promise<boolean> | undefined;
       let originalSource: Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>;
@@ -98,25 +98,19 @@ for (const scenario of [
       const sentTexts: string[] = [];
       const providerServer = createServer((req, res) => {
         void (async () => {
-          const chunks: Buffer[] = [];
-          for await (const c of req) {
-            chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
-          }
+          const body = await readRequestText(req);
           if (req.method !== "POST" || req.url !== "/v1/responses") {
             res.writeHead(404).end();
             return;
           }
-          const body = Buffer.concat(chunks).toString("utf8");
           const synthesis = expectSynthesis && body.includes(childText);
           let synthesisIndex = 0;
           if (synthesis && (scenario === "effect" || scenario === "send") && effectCalls === 0) {
             effectCalls++;
-            const item = {
-              type: "function_call",
-              id: "private-write",
-              call_id: "private-write",
-              name: scenario === "send" ? "message" : "write",
-              arguments: JSON.stringify(
+            writeOpenAiResponsesSse(
+              res,
+              subagentToolCallEvents(
+                scenario === "send" ? "message" : "write",
                 scenario === "send"
                   ? {
                       action: "send",
@@ -128,30 +122,9 @@ for (const scenario of [
                       path: path.join(state.workspaceDir, "effect.txt"),
                       content: "One committed private effect.",
                     },
+                1,
               ),
-            };
-            writeOpenAiResponsesSse(res, [
-              {
-                type: "response.output_item.added",
-                output_index: 0,
-                item: { ...item, arguments: "" },
-              },
-              {
-                type: "response.function_call_arguments.delta",
-                output_index: 0,
-                delta: item.arguments,
-              },
-              { type: "response.output_item.done", output_index: 0, item },
-              {
-                type: "response.completed",
-                response: {
-                  id: "private-write-response",
-                  status: "completed",
-                  output: [item],
-                  usage: { input_tokens: 21, output_tokens: 4, total_tokens: 25 },
-                },
-              },
-            ]);
+            );
             return;
           }
           if (synthesis) {
@@ -173,16 +146,8 @@ for (const scenario of [
         const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
         const scope = { agentId: "main", storePath, sessionKey, sessionId };
         await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now(), status: "done" });
-        await new Promise<void>((resolve, reject) => {
-          providerServer.once("error", reject);
-          providerServer.listen(0, "127.0.0.1", resolve);
-        });
-        const address = providerServer.address();
-        if (!address || typeof address === "string") {
-          throw new Error("Provider missing");
-        }
         const provider = buildMockOpenAiResponsesProvider(
-          "http://127.0.0.1:" + address.port + "/v1",
+          (await listenLoopback(providerServer)) + "/v1",
           "fixture-model",
         );
         const cfg = {
@@ -209,7 +174,7 @@ for (const scenario of [
           .spyOn(kernelModule, "createGatewayKernel")
           .mockImplementation(async (...args) => {
             const kernel = await createKernel(...args);
-            gatewayContext = kernel.gatewayRequestContext;
+            resolveGatewayContext = kernel.resolvePluginGatewayContext;
             return kernel;
           });
         try {
@@ -295,7 +260,7 @@ for (const scenario of [
         };
         await registry.resetSubagentRegistryForTests({ persist: false });
         const parent = loadSessionEntryReadOnly(scope);
-        if (!parent || !gatewayContext) {
+        if (!parent || !resolveGatewayContext) {
           throw new Error("Missing requester");
         }
         const child = createSubagentRunRecord({
@@ -362,7 +327,7 @@ for (const scenario of [
         if (!saved) {
           throw new Error("Missing durable child");
         }
-        bindGatewayContextResolver(saved, () => gatewayContext);
+        bindGatewayContextResolver(saved, resolveGatewayContext);
         if (!originalSource) {
           throw new Error("Original requester authority was not captured");
         }
@@ -433,23 +398,18 @@ for (const scenario of [
         const completedChildTranscript = childTranscript();
         expect(completedChildTranscript.split(childText)).toHaveLength(2);
         const readChild = () => loadSubagentRegistryFromSqlite().get(childId);
-        const makeRetryDue = async () => {
-          const current = subagentRuns.get(childId);
-          if (!current?.requesterSettleWake) {
-            throw new Error("Missing pending completion");
+        const expectDelivery = (status: "delivered" | "failed") => {
+          const persisted = readChild();
+          expect(persisted?.requesterSettleWake).toBeUndefined();
+          expect(persisted?.delivery?.status).toBe(status);
+          if (status === "failed") {
+            expect(persisted?.suppressCompletionDelivery).toBe(true);
           }
-          const result = await mutateRequesterCompletionBatch({
-            entries: [current],
-            operation: {
-              kind: "transition",
-              state: { ...current.requesterSettleWake, nextAttemptAt: 0 },
-            },
-            assertCurrent: () => {
-              currentBatch([current]);
-            },
-          });
-          expect(result.publication).toBe("published");
-          return subagentRuns.get(childId)!;
+        };
+        const expectNoRetry = async (count: number) => {
+          expect(synthesisCount).toBe(count);
+          expect(await wakeSavedBatch(subagentRuns.get(childId)!)).toBe(false);
+          expect(synthesisCount).toBe(count);
         };
         const startSynthesis = async (entry: SubagentRunRecord) => {
           started = createDeferred();
@@ -504,22 +464,19 @@ for (const scenario of [
           expect(await wake).toBe(false);
           expect(transcriptText()).not.toContain("Requester synthesis 1.");
           expect(childTranscript()).toBe(completedChildTranscript);
-          expect(synthesisCount).toBe(1);
           expect(readChild()?.requesterSettleWake).toBeUndefined();
-          expect(await wakeSavedBatch(subagentRuns.get(childId)!)).toBe(false);
-          expect(synthesisCount).toBe(1);
+          await expectNoRetry(1);
           return;
         }
         if (scenario === "revoked") {
-          // Retire the actual Gateway source owner, including grants retained by the run.
-          closeGatewayDeviceRevocation(gatewayContext);
+          // Retire the Gateway lifetime that owns the retained continuation.
+          getGatewayContextLifetime(resolveGatewayContext).abort(new Error("Gateway closed"));
           release.resolve();
           expect(await wake).toBe(false);
           expect(transcriptText()).not.toContain("Requester synthesis ");
           expect(childTranscript()).toBe(completedChildTranscript);
           expect(readChild()?.delivery?.status).not.toBe("delivered");
-          expect(await wakeSavedBatch(subagentRuns.get(childId)!)).toBe(false);
-          expect(synthesisCount).toBe(1);
+          await expectNoRetry(1);
           return;
         }
         if (scenario === "effect") {
@@ -563,53 +520,38 @@ for (const scenario of [
           if (!conflict) {
             expect(delivered).toBe(true);
             expect(transcriptText().split("Requester synthesis 1.")).toHaveLength(2);
-            expect(readChild()?.requesterSettleWake).toBeUndefined();
-            expect(readChild()?.delivery?.status).toBe("delivered");
+            expectDelivery("delivered");
             return;
           }
           expect(delivered).toBe(false);
           expect(transcriptText()).toContain(concurrentText + index);
           expect(transcriptText()).not.toContain("Requester synthesis ");
           if (scenario === "effect" || scenario === "send") {
-            expect(readChild()?.requesterSettleWake).toBeUndefined();
-            expect(readChild()?.delivery?.status).toBe("failed");
-            expect(readChild()?.suppressCompletionDelivery).toBe(true);
+            expectDelivery("failed");
             expect(effectCalls).toBe(1);
             expect(sentTexts).toEqual(scenario === "send" ? ["One committed message."] : []);
-            expect(synthesisCount).toBe(1);
-            expect(await wakeSavedBatch(subagentRuns.get(childId)!)).toBe(false);
-            expect(synthesisCount).toBe(1);
+            await expectNoRetry(1);
             return;
           }
-          if (index === 3) {
-            expect(readChild()?.requesterSettleWake).toBeUndefined();
-            expect(readChild()?.delivery).toMatchObject({
-              status: "failed",
-              lastError: "requester_transcript_conflict",
-            });
-            expect(readChild()?.suppressCompletionDelivery).toBe(true);
-            expect(synthesisCount).toBe(3);
-            return;
-          }
+          // An uncommitted result stays owed and is due at once: no ladder, no attempt limit.
           expect(readChild()?.requesterSettleWake).toMatchObject({
             status: "pending",
             attemptCount: index,
+            lastError: `SQLite transcript changed while preparing rewrite for ${sessionId}`,
           });
-          expect(readChild()?.requesterSettleWake?.nextAttemptAt).toBeGreaterThan(Date.now());
-          await startSynthesis(await makeRetryDue());
+          expect(readChild()?.requesterSettleWake?.nextAttemptAt).toBeLessThanOrEqual(Date.now());
+          await startSynthesis(subagentRuns.get(childId)!);
         }
         // A fresh admission observes the newer human input; the rejected answer is never rebased.
         expect(synthesisBodies[1]).toContain(humanText + 1);
         release.resolve();
         expect(await wake).toBe(true);
-        expect(transcriptText()).not.toContain("Requester synthesis 1.");
-        expect(transcriptText().split("Requester synthesis 2.")).toHaveLength(2);
-        expect(readChild()?.requesterSettleWake).toBeUndefined();
-        expect(readChild()?.delivery?.status).toBe("delivered");
+        const delivering = conflictCount + 1;
+        expect(transcriptText()).not.toContain(`Requester synthesis ${conflictCount}.`);
+        expect(transcriptText().split(`Requester synthesis ${delivering}.`)).toHaveLength(2);
+        expectDelivery("delivered");
         expect(childTranscript()).toBe(completedChildTranscript);
-        expect(synthesisCount).toBe(2);
-        expect(await wakeSavedBatch(subagentRuns.get(childId)!)).toBe(false);
-        expect(synthesisCount).toBe(2);
+        await expectNoRetry(delivering);
       } finally {
         release.resolve();
         if (wake) {
@@ -622,10 +564,7 @@ for (const scenario of [
           await gateway.server.close().catch(() => undefined);
         }
         if (providerServer.listening) {
-          providerServer.closeAllConnections();
-          await new Promise<void>((resolve) => {
-            providerServer.close(() => resolve());
-          });
+          await closeHttpServer(providerServer);
         }
         await execution?.restore();
         subagentRuns.delete(childId);

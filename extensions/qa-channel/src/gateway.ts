@@ -1,6 +1,7 @@
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { pollQaBus } from "./bus-client.js";
 import { handleQaInbound } from "./inbound.js";
@@ -26,17 +27,65 @@ export async function startQaGatewayAccount(
     baseUrl: account.baseUrl,
   });
   let cursor = 0;
-  let acknowledgedCursor = 0;
-  let committedAcknowledgedCursor = 0;
-  let queuedAcknowledgedCursor = 0;
+  let queuedCursor = 0;
   let acknowledgementStopped = false;
   let ready = false;
   let inboundError: Error | undefined;
   let queuedInbound = Promise.resolve();
   let queuedAcknowledgements = Promise.resolve();
-  const controlTasks = new Set<Promise<boolean>>();
-  const handleMessage = (message: Parameters<typeof handleQaInbound>[0]["message"]) =>
-    handleQaInbound({
+  const inboundAbort = new AbortController();
+  const inboundTasks = new Set<Promise<void>>();
+  type PendingEvent = {
+    cursor: number;
+    state: "pending" | "adopted" | "abandoned";
+  };
+  const adoptedEventCursors = new Set<number>();
+  const completedEventCursors = new Set<number>();
+  const captureInboundError = (error: unknown) => {
+    inboundError ??= error instanceof Error ? error : new Error(String(error));
+    // Fatal account failure must retire retained followups before joining them.
+    // Ordinary external shutdown still drains their full delivery lifetime.
+    inboundAbort.abort(inboundError);
+  };
+  const flushAcknowledgements = () => {
+    const flush = queuedAcknowledgements.then(async () => {
+      if (acknowledgementStopped) {
+        throw inboundError ?? new Error("QA channel acknowledgement owner stopped");
+      }
+      const adopted = [...adoptedEventCursors];
+      const completed = [...completedEventCursors];
+      if (adopted.length === 0 && completed.length === 0) {
+        return;
+      }
+      // Adoption must confirm transport custody before execution can continue.
+      // Only the main poll consumes events; this response cannot advance fetch progress.
+      await pollQaBus({
+        baseUrl: account.baseUrl,
+        accountId: account.accountId,
+        cursor,
+        adoptedEventCursors: adopted,
+        completedEventCursors: completed,
+        timeoutMs: 0,
+      });
+      for (const eventCursor of adopted) {
+        adoptedEventCursors.delete(eventCursor);
+      }
+      for (const eventCursor of completed) {
+        completedEventCursors.delete(eventCursor);
+      }
+    });
+    queuedAcknowledgements = flush.catch((error: unknown) => {
+      acknowledgementStopped = true;
+      captureInboundError(error);
+    });
+    return flush;
+  };
+  const handleMessage = async (
+    message: Parameters<typeof handleQaInbound>[0]["message"],
+    event: PendingEvent,
+    onFollowupQueued?: () => void,
+  ) => {
+    await handleQaInbound({
       channelId,
       channelLabel,
       account,
@@ -44,117 +93,126 @@ export async function startQaGatewayAccount(
       message,
       buildContext,
       ...(channelRuntime ? { channelRuntime } : {}),
-    });
-  const captureInboundError = (error: unknown) => {
-    inboundError ??= error instanceof Error ? error : new Error(String(error));
-  };
-  const dispatchControl = (message: Parameters<typeof handleQaInbound>[0]["message"]) => {
-    const task = handleMessage(message)
-      .then(
-        () => true,
-        (error: unknown) => {
-          captureInboundError(error);
-          return false;
+      onFollowupQueued,
+      // Keep QA collect batching; core awaits adoption for every collected source.
+      turnAdoptionLifecycle: {
+        abortSignal: inboundAbort.signal,
+        onAdopted: async () => {
+          if (acknowledgementStopped || event.state === "abandoned") {
+            throw inboundError ?? new Error("QA input adoption is no longer available");
+          }
+          event.state = "adopted";
+          adoptedEventCursors.add(event.cursor);
+          // Native controls can overtake an unadopted input. Confirm this
+          // exact input before execution without waiting for its predecessor.
+          await flushAcknowledgements();
         },
-      )
-      .finally(() => controlTasks.delete(task));
-    controlTasks.add(task);
+        onAbandoned: () => {
+          if (event.state !== "adopted") {
+            event.state = "abandoned";
+            captureInboundError(new Error("QA input abandoned before adoption"));
+          }
+        },
+      },
+    });
+    // Policy refusals and terminal no-turn handlers still consume their event.
+    // handleQaInbound also joins deferred delivery and preview cleanup.
+    if (event.state === "pending" || event.state === "adopted") {
+      event.state = "adopted";
+      completedEventCursors.add(event.cursor);
+      await flushAcknowledgements();
+    }
+  };
+  const startMessage = (
+    message: Parameters<typeof handleQaInbound>[0]["message"],
+    event: PendingEvent,
+    onFollowupQueued?: () => void,
+  ) => {
+    const task = handleMessage(message, event, onFollowupQueued)
+      .catch(captureInboundError)
+      .finally(() => inboundTasks.delete(task));
+    inboundTasks.add(task);
     return task;
   };
-  const enqueueInbound = (message: Parameters<typeof handleQaInbound>[0]["message"]) => {
-    let handled = false;
+  const enqueueInbound = (
+    message: Parameters<typeof handleQaInbound>[0]["message"],
+    event: PendingEvent,
+  ) => {
     queuedInbound = queuedInbound
       .then(async () => {
         if (inboundError) {
           return;
         }
-        await handleMessage(message);
-        handled = true;
+        const followupQueued = createDeferred();
+        const task = startMessage(message, event, followupQueued.resolve);
+        // Confirmed followups release intake for collect batching while their
+        // full tasks retain delivery, completion receipts and shutdown custody.
+        await Promise.race([followupQueued.promise, task]);
       })
       .catch(captureInboundError);
-    return queuedInbound.then(() => handled);
-  };
-  const acknowledgeProcessedEvent = (eventCursor: number, task?: Promise<boolean>) => {
-    if (eventCursor <= queuedAcknowledgedCursor) {
-      return;
-    }
-    queuedAcknowledgedCursor = eventCursor;
-    // Dispatch may run ahead for native controls, but restart recovery can
-    // advance only through the contiguous successfully handled prefix.
-    queuedAcknowledgements = queuedAcknowledgements.then(async () => {
-      if (acknowledgementStopped) {
-        return;
-      }
-      if (task && !(await task)) {
-        acknowledgementStopped = true;
-        return;
-      }
-      acknowledgedCursor = eventCursor;
-    });
   };
   try {
     while (!ctx.abortSignal.aborted) {
       if (inboundError) {
         throw inboundError;
       }
-      const pollAcknowledgedCursor = acknowledgedCursor;
       const result = await pollQaBus({
         baseUrl: account.baseUrl,
         accountId: account.accountId,
         cursor,
-        acknowledgedCursor: pollAcknowledgedCursor,
         timeoutMs: account.pollTimeoutMs,
         signal: ctx.abortSignal,
       });
-      committedAcknowledgedCursor = Math.max(committedAcknowledgedCursor, pollAcknowledgedCursor);
       if (!ready) {
         ready = true;
         ctx.setStatus(channelReadyPatch({ accountId: account.accountId }));
       }
       cursor = result.cursor;
       for (const event of result.events) {
-        if (event.kind !== "inbound-message") {
-          acknowledgeProcessedEvent(event.cursor);
+        if (event.cursor <= queuedCursor) {
           continue;
         }
+        queuedCursor = event.cursor;
+        if (event.kind !== "inbound-message") {
+          continue;
+        }
+        const acknowledgement: PendingEvent = { cursor: event.cursor, state: "pending" };
         if (event.message.nativeCommand) {
-          acknowledgeProcessedEvent(event.cursor, dispatchControl(event.message));
+          void startMessage(event.message, acknowledgement);
         } else {
-          acknowledgeProcessedEvent(event.cursor, enqueueInbound(event.message));
+          enqueueInbound(event.message, acknowledgement);
         }
       }
-      acknowledgeProcessedEvent(cursor);
+      queuedCursor = Math.max(queuedCursor, cursor);
     }
     if (inboundError) {
       throw inboundError;
     }
   } catch (error) {
-    if (!(error instanceof Error) || error.name !== "AbortError") {
+    if (
+      !(error instanceof Error && error.name === "AbortError" && ctx.abortSignal.aborted) ||
+      inboundError
+    ) {
+      captureInboundError(error);
       ctx.setStatus({
         accountId: account.accountId,
         connected: false,
         lifecycle: "recovering",
-        lastError: error instanceof Error ? error.message : String(error),
+        lastError: inboundError!.message,
       });
-      throw error;
     }
   } finally {
     try {
-      await Promise.all([queuedInbound, queuedAcknowledgements, ...controlTasks]);
-      if (acknowledgedCursor > committedAcknowledgedCursor) {
-        // The aborted poll cannot carry work completed during shutdown. Flush
-        // that fact without its cancelled signal before publishing stopped.
-        await pollQaBus({
-          baseUrl: account.baseUrl,
-          accountId: account.accountId,
-          cursor,
-          acknowledgedCursor,
-          timeoutMs: 0,
-        });
-      }
+      // Intake can start more full tasks while draining. Snapshot only afterward.
+      await queuedInbound;
+      await Promise.all(inboundTasks);
+      // Join started writes and flush completed handlers without the cancelled
+      // poll signal. Only successful handlers publish exact completion receipts.
+      await flushAcknowledgements();
     } catch (error) {
       captureInboundError(error);
     } finally {
+      acknowledgementStopped = true;
       ctx.setStatus(channelStoppedPatch({ accountId: account.accountId }));
     }
   }

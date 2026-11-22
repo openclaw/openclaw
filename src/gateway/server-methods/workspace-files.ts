@@ -13,6 +13,8 @@ import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { BROWSER_IMAGE_MIME_TYPES } from "../../shared/browser-image-mime-types.js";
+import { isWorkspaceScratchPath, SCRATCH_EXPIRED_MESSAGE } from "../../shared/scratch-expiry.js";
+import { foldSearchCase } from "../../shared/search-case.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import { resolveSessionFileReadTarget, type SessionFileReadBoundary } from "./session-file-read.js";
 import {
@@ -161,14 +163,17 @@ async function toSessionFileEntry(
   fileRoot: string | undefined,
   opts: {
     includeContent?: boolean;
+    /** Without content, still open the file so the reader's admission rules decide "missing". */
+    admitRead?: boolean;
     workspaceRoot?: WorkspaceRoot;
+    readRoot?: string;
     assertCurrent?: () => void;
     authorizeHostRead?: () => Promise<boolean>;
     onOutsideBoundary?: () => void;
   } = {},
-): Promise<SessionFileEntry> {
+): Promise<SessionFileEntry | undefined> {
   const target = await resolveSessionFileReadTarget(
-    { root, fileRoot, authorizeHostRead: opts.authorizeHostRead },
+    { root, fileRoot, readRoot: opts.readRoot, authorizeHostRead: opts.authorizeHostRead },
     touched.path,
   );
   const base = {
@@ -185,8 +190,19 @@ async function toSessionFileEntry(
   const browserPath = target.path;
   const readRoot = target.outside ? target.root : (opts.workspaceRoot ?? target.root);
   const stat = await statWorkspacePath(readRoot, browserPath, opts.assertCurrent);
+  // Confirmed directories belong to the browser, not file-only activity.
+  if (stat?.isDirectory && !opts.includeContent) {
+    return undefined;
+  }
   if (!stat?.isFile) {
-    return { ...base, missing: true };
+    return {
+      ...base,
+      name:
+        !stat && isWorkspaceScratchPath(target.absolutePath)
+          ? `${SCRATCH_EXPIRED_MESSAGE}: ${base.name}`
+          : base.name,
+      missing: true,
+    };
   }
   const entry: SessionFileEntry = {
     ...base,
@@ -197,6 +213,9 @@ async function toSessionFileEntry(
     updatedAtMs: toUpdatedAtMs(stat.mtimeMs),
   };
   if (!opts.includeContent) {
+    if (opts.admitRead && !(await readWorkspaceFilePrefix(readRoot, browserPath, 1))) {
+      return { ...base, missing: true };
+    }
     return entry;
   }
   const inline = stat.size <= WORKSPACE_PREVIEW_MAX_BYTES;
@@ -243,25 +262,95 @@ function resolveSessionFileCandidates(params: {
   });
 }
 
+/**
+ * Runs Files searches over one ordered workspace walk. Each search stops, incomplete, where it
+ * would alone: before its next entry once it holds MAX_SEARCH_ENTRIES matches or the walk has
+ * visited MAX_SEARCH_VISITED_ENTRIES. Results keep the order of `searches`.
+ */
+export async function searchWorkspaceEntries(
+  readRoot: string | WorkspaceRoot,
+  searches: readonly string[],
+  relevance?: ReadonlyMap<string, SessionFileRelevance>,
+  assertCurrent?: () => void,
+) {
+  // Normalize comparison text only; on-disk filenames stay original.
+  const results = searches.map((search) => ({
+    query: foldSearchCase(search).normalize("NFC"),
+    // SAFETY: each search starts with an empty list populated only with browser entries.
+    entries: [] as SessionFileBrowserEntry[],
+    truncated: false,
+    open: true,
+  }));
+  let visited = 0;
+  const shouldStop = () => {
+    let open = false;
+    for (const result of results) {
+      if (
+        result.open &&
+        (result.entries.length >= MAX_SEARCH_ENTRIES || visited >= MAX_SEARCH_VISITED_ENTRIES)
+      ) {
+        result.open = false;
+        result.truncated = true;
+      }
+      open ||= result.open;
+    }
+    return !open;
+  };
+  const visit = async (dir: string): Promise<void> => {
+    if (shouldStop()) {
+      return;
+    }
+    const dirents = await listWorkspacePath(readRoot, dir, assertCurrent);
+    if (!dirents) {
+      return;
+    }
+    for (const dirent of sortDirents(dirents)) {
+      if (shouldStop()) {
+        return;
+      }
+      visited += 1;
+      const browserPath = dir ? `${dir}/${dirent.name}` : dirent.name;
+      const folded = foldSearchCase(browserPath).normalize("NFC");
+      for (const result of results) {
+        if (result.open && folded.includes(result.query)) {
+          const entry = toWorkspaceBrowserEntry(browserPath, dirent, relevance);
+          if (entry) {
+            result.entries.push(entry);
+          }
+        }
+      }
+      if (dirent.isDirectory) {
+        if (SEARCH_INCOMPLETE_DIRS.has(dirent.name)) {
+          // The public result only has a boolean completeness signal. A skipped
+          // directory can contain another filename match, so searches that saw
+          // one must not be presented as workspace-wide unique.
+          for (const result of results) {
+            result.truncated ||= result.open;
+          }
+        } else if (!SEARCH_IGNORED_DIRS.has(dirent.name)) {
+          await visit(browserPath);
+        }
+      }
+    }
+  };
+  await visit("");
+  return results.map(({ entries, truncated }) => ({ entries, truncated }));
+}
+
 export async function listSessionWorkspaceFiles(
   params: LoadedSessionFiles & {
     path?: string;
     search?: string;
     assertCurrent?: () => void;
   },
-): Promise<{
-  root?: string;
-  gitCheckout?: boolean;
-  files: SessionFileEntry[];
-  browser?: SessionFileBrowserResult;
-}> {
+) {
   const root = params.root;
-  const workspaceRoot = root ? await openWorkspaceRoot(root) : undefined;
+  const workspaceRoot = root ? await openWorkspaceRoot(params.readRoot ?? root) : undefined;
   const gitCheckout =
     workspaceRoot && "access" in workspaceRoot
       ? undefined
       : params.diffCwd
-        ? insideGitCheckout(params.diffCwd)
+        ? await insideGitCheckout(params.diffCwd)
         : undefined;
   const allowOutside =
     root &&
@@ -293,50 +382,9 @@ export async function listSessionWorkspaceFiles(
     const relevance = buildSessionRelevanceMap(workspaceFiles, root, fileRoot);
     const readRoot = workspaceRoot ?? root;
     if (search) {
-      const entries: SessionFileBrowserEntry[] = [];
-      const query = search.toLowerCase();
-      let visitedEntries = 0;
-      let truncated = false;
-      const shouldStop = (): boolean => {
-        if (entries.length >= MAX_SEARCH_ENTRIES || visitedEntries >= MAX_SEARCH_VISITED_ENTRIES) {
-          truncated = true;
-          return true;
-        }
-        return false;
-      };
-      const visit = async (dir: string): Promise<void> => {
-        if (shouldStop()) {
-          return;
-        }
-        const dirents = await listWorkspacePath(readRoot, dir, assertCurrent);
-        if (!dirents) {
-          return;
-        }
-        for (const dirent of sortDirents(dirents)) {
-          if (shouldStop()) {
-            return;
-          }
-          visitedEntries += 1;
-          const browserPath = dir ? `${dir}/${dirent.name}` : dirent.name;
-          if (browserPath.toLowerCase().includes(query)) {
-            const entry = toWorkspaceBrowserEntry(browserPath, dirent, relevance);
-            if (entry) {
-              entries.push(entry);
-            }
-          }
-          if (dirent.isDirectory) {
-            if (SEARCH_INCOMPLETE_DIRS.has(dirent.name)) {
-              // The public result only has a boolean completeness signal. A skipped
-              // directory can contain another filename match, so searches that saw
-              // one must not be presented as workspace-wide unique.
-              truncated = true;
-            } else if (!SEARCH_IGNORED_DIRS.has(dirent.name)) {
-              await visit(browserPath);
-            }
-          }
-        }
-      };
-      await visit("");
+      const { entries, truncated } = (
+        await searchWorkspaceEntries(readRoot, [search], relevance, assertCurrent)
+      )[0]!;
       return {
         path: "",
         search,
@@ -349,8 +397,11 @@ export async function listSessionWorkspaceFiles(
     if (!resolved) {
       return undefined;
     }
-    const stat = await statWorkspacePath(readRoot, browserPath, assertCurrent);
-    if (!stat?.isDirectory) {
+    // Local roots are admitted directories; listing rechecks their identity.
+    if (
+      (browserPath || !workspaceRoot || "access" in workspaceRoot) &&
+      !(await statWorkspacePath(readRoot, browserPath, assertCurrent))?.isDirectory
+    ) {
       return undefined;
     }
     const dirents = await listWorkspacePath(readRoot, browserPath, assertCurrent);
@@ -375,7 +426,7 @@ export async function listSessionWorkspaceFiles(
   return {
     ...(root ? { root } : {}),
     ...(gitCheckout === undefined ? {} : { gitCheckout }),
-    files,
+    files: files.filter((file) => file !== undefined),
     ...(browser ? { browser } : {}),
   };
 }
@@ -385,11 +436,14 @@ export async function getSessionWorkspaceFile(
     path: string;
     assertCurrent?: () => void;
     includeContent?: boolean;
+    admitRead?: boolean;
   },
 ): Promise<{ root?: string; file?: SessionFileEntry; reason?: "outside_session_boundary" }> {
   let outsideBoundary = false;
   const options = {
+    readRoot: params.readRoot,
     includeContent: params.includeContent !== false,
+    admitRead: params.admitRead,
     assertCurrent: params.assertCurrent,
     authorizeHostRead: params.authorizeHostRead,
     onOutsideBoundary: () => {
@@ -428,7 +482,7 @@ export async function getSessionWorkspaceFile(
           params.root,
           options,
         );
-        if (!file.missing) {
+        if (file && !file.missing) {
           return { root: params.root, file };
         }
       }
@@ -444,13 +498,6 @@ export async function getSessionWorkspaceFile(
   };
 }
 
-export type SessionWorkspaceWriteResult =
-  | { status: "updated"; root: string; file: SessionFileEntry }
-  | { status: "conflict"; currentHash: string }
-  | { status: "unsafe" }
-  | { status: "missing" }
-  | { status: "too-large"; size: number };
-
 export async function setSessionWorkspaceFile(params: {
   root?: string;
   fileRoot?: string;
@@ -458,20 +505,20 @@ export async function setSessionWorkspaceFile(params: {
   content: string;
   expectedHash: string;
   assertCurrent?: () => void;
-}): Promise<SessionWorkspaceWriteResult> {
+}) {
   // Reject content the preview cannot round-trip, before encoding oversized input.
   if (params.content.includes("\0")) {
-    return { status: "unsafe" };
+    return { status: "unsafe" as const };
   }
   const size = Buffer.byteLength(params.content, "utf8");
   if (size > WORKSPACE_PREVIEW_MAX_BYTES) {
-    return { status: "too-large", size };
+    return { status: "too-large" as const, size };
   }
   if (Buffer.from(params.content, "utf8").toString("utf8") !== params.content) {
-    return { status: "unsafe" };
+    return { status: "unsafe" as const };
   }
   if (!params.root) {
-    return { status: "missing" };
+    return { status: "missing" as const };
   }
   const candidates = resolveSessionFileCandidates({
     root: params.root,
@@ -488,7 +535,7 @@ export async function setSessionWorkspaceFile(params: {
     }
   }
   if (!browserPath) {
-    return { status: "missing" };
+    return { status: "missing" as const };
   }
   let update: WorkspaceFileUpdateResult;
   try {
@@ -503,19 +550,19 @@ export async function setSessionWorkspaceFile(params: {
     if (!(error instanceof FsSafeError)) {
       throw error;
     }
-    return { status: "unsafe" };
+    return { status: "unsafe" as const };
   }
   if (update.status !== "updated") {
     return update;
   }
   return {
-    status: "updated",
+    status: "updated" as const,
     root: params.root,
     file: {
       path: params.path,
       workspacePath: update.canonicalPath,
       name: displayNameForPath(update.canonicalPath),
-      kind: "modified",
+      kind: "modified" as const,
       missing: false,
       size: update.stat.size,
       updatedAtMs: toUpdatedAtMs(update.stat.mtimeMs),

@@ -7,6 +7,7 @@ import {
   userMessage as user,
 } from "./provider-transport-parity.test-support.js";
 import type { ProviderContext, ProviderModel } from "./provider-types.js";
+import { makeProviderModel } from "./providers/provider-model.test-support.js";
 import { resolveOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
 import type { AssistantMessage, Context, Model } from "./types.js";
 import {
@@ -14,18 +15,17 @@ import {
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "./utils/system-prompt-cache-boundary.js";
 
-const model: Model<"openai-completions"> = {
-  id: "test-model",
-  name: "Test model",
-  api: "openai-completions",
-  provider: "custom-openai-compatible",
-  baseUrl: "https://proxy.example/v1",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
-  maxTokens: 4_096,
-};
+const model: Model<"openai-completions"> = makeProviderModel(
+  "openai-completions",
+  "custom-openai-compatible",
+  "test-model",
+  {
+    name: "Test model",
+    baseUrl: "https://proxy.example/v1",
+    reasoning: false,
+    maxTokens: 4_096,
+  },
+);
 
 const imageModel: Model<"openai-completions"> = { ...model, input: ["text", "image"] };
 const image = (data = "aW1n") => ({ type: "image" as const, mimeType: "image/png", data });

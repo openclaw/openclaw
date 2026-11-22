@@ -32,12 +32,7 @@ import type { ManagedProcess } from "./sandbox-exec-server/types.js";
 
 function createFixture(overrides: Parameters<typeof createSandboxContext>[0] = {}) {
   const child = createSandboxChild();
-  let current = true;
-  const assertCurrent = () => {
-    if (!current) {
-      throw new Error("workspace revoked");
-    }
-  };
+  const assertCurrent = vi.fn<() => void>();
   spawnMock.mockReturnValue(child);
   const sandbox = createSandboxContext({
     buildExecSpec: async () => ({
@@ -62,7 +57,9 @@ function createFixture(overrides: Parameters<typeof createSandboxContext>[0] = {
       };
     },
     revoke: () => {
-      current = false;
+      assertCurrent.mockImplementation(() => {
+        throw new Error("workspace revoked");
+      });
     },
     start: (params: { tty?: boolean; pipeStdin?: boolean } = {}) =>
       startProcess(server, processes, vi.fn<ManagedProcess["emitNotification"]>(), {
@@ -128,9 +125,13 @@ it.each([false, true])(
       chunk: Buffer.from(text).toString("base64"),
     });
     try {
-      expect(writeProcess(processes, input("accepted"))).toEqual({ status: "accepted" });
+      await expect(writeProcess(processes, input("accepted"))).resolves.toEqual({
+        status: "accepted",
+      });
       revoke();
-      expect(() => writeProcess(processes, input("forbidden"))).toThrow("workspace revoked");
+      await expect(writeProcess(processes, input("forbidden"))).rejects.toThrow(
+        "workspace revoked",
+      );
       expect(writes).toEqual(["accepted"]);
     } finally {
       await terminate();

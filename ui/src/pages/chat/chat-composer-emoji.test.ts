@@ -13,6 +13,17 @@ import { renderComposerFixture, resetComposerFixture } from "./chat-composer.tes
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
 const createIdleImport = idleImport.createIdleImport;
+const inputEvent = (data: string | undefined, type = "input") =>
+  new InputEvent(type, {
+    bubbles: true,
+    cancelable: type === "beforeinput",
+    inputType: "insertText",
+    data,
+  });
+async function settleImports() {
+  await vi.dynamicImportSettled();
+  flush();
+}
 const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
 afterEach(async () => {
   if (originalExecCommand) {
@@ -40,9 +51,7 @@ beforeEach(() => {
         throw new Error("Expected focused composer");
       }
       textarea.setRangeText(text, textarea.selectionStart, textarea.selectionEnd, "end");
-      textarea.dispatchEvent(
-        new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }),
-      );
+      textarea.dispatchEvent(inputEvent(text));
       return true;
     }),
   });
@@ -81,6 +90,7 @@ async function fixture(
         }).container;
   document.body.append(container);
   const textarea = container.querySelector("textarea")!;
+  const menu = () => container.querySelector('[aria-label="Emoji suggestions"]');
   textarea.focus();
   const dispatch = <T extends Event>(event: T) => {
     textarea.dispatchEvent(event);
@@ -89,39 +99,27 @@ async function fixture(
   };
   const closed = (value: string) => {
     expect(draft).toBe(value);
-    expect(container.querySelector('[aria-label="Emoji suggestions"]')).toBeNull();
+    expect(menu()).toBeNull();
     expect(send).not.toHaveBeenCalled();
   };
   const input = (value: string, caret = value.length) => {
     textarea.value = value;
     textarea.setSelectionRange(caret, caret);
-    dispatch(
-      new InputEvent("input", { bubbles: true, inputType: "insertText", data: value.at(-1) }),
-    );
+    dispatch(inputEvent(value.at(-1)));
   };
   const key = (keyName: string, extra: KeyboardEventInit = {}) =>
     dispatch(
       new KeyboardEvent("keydown", { key: keyName, bubbles: true, cancelable: true, ...extra }),
     );
-  const colon = () =>
-    dispatch(
-      new InputEvent("beforeinput", {
-        bubbles: true,
-        cancelable: true,
-        inputType: "insertText",
-        data: ":",
-      }),
-    );
+  const colon = () => dispatch(inputEvent(":", "beforeinput"));
   if (initial && !restored) {
     input(initial);
-  }
-  if (initial && !restored) {
-    await vi.dynamicImportSettled();
-    flush();
+    await settleImports();
   }
   return {
     container,
     textarea,
+    menu,
     input,
     key,
     colon,
@@ -158,13 +156,14 @@ it("keeps native editing while cold and converts closing colons once ready", asy
   expect(imports.started).not.toHaveBeenCalled();
   f.input(":smile");
   expect(imports.started).toHaveBeenCalledTimes(1);
+  expect(textareaAnchor.createTextareaTokenAnchor).not.toHaveBeenCalled();
   expect(f.key("Tab").defaultPrevented).toBe(false);
   expect(f.colon().defaultPrevented).toBe(false);
   f.input(":smile:");
   imports.release();
-  await vi.dynamicImportSettled();
-  flush();
+  await settleImports();
   f.closed(":smile:");
+  expect(textareaAnchor.createTextareaTokenAnchor).toHaveBeenCalledTimes(1);
   f.input(":smile");
   expect(f.colon().defaultPrevented).toBe(true);
   f.closed("😄");
@@ -176,13 +175,9 @@ it("discovers suggestions at the current draft and caret when cold data arrives"
   f.input(":smi");
   f.input("New :hea suffix", 8);
   imports.release();
-  await vi.dynamicImportSettled();
-  flush();
-  expect(f.textarea.value).toBe("New :hea suffix");
-  expect(f.textarea.selectionStart).toBe(8);
-  expect(f.container.querySelector('[aria-label="Emoji suggestions"]')?.textContent).toContain(
-    ":heart:",
-  );
+  await settleImports();
+  expect(f.textarea).toMatchObject({ value: "New :hea suffix", selectionStart: 8 });
+  expect(f.menu()?.textContent).toContain(":heart:");
   expect(f.key("Tab").defaultPrevented).toBe(true);
   f.closed("New 🎧 suffix");
 });
@@ -197,17 +192,15 @@ it.each(["blur", "detach"])("does not reopen cold suggestions after %s", async (
     f.container.remove();
   }
   imports.release();
-  await vi.dynamicImportSettled();
-  flush();
+  await settleImports();
   f.closed(":smi");
 });
 
 it.each(["chat", "new"] as const)("discovers a restored %s draft on focus", async (kind) => {
   const f = await fixture(kind, ":smi", false, false, true);
-  await vi.dynamicImportSettled();
-  flush();
+  await settleImports();
   expect(f.draft()).toBe(":smi");
-  expect(f.container.querySelector('[aria-label="Emoji suggestions"]')).not.toBeNull();
+  expect(f.menu()).not.toBeNull();
   expect(f.key("Tab").defaultPrevented).toBe(true);
   f.closed("😄");
 });
@@ -247,8 +240,7 @@ describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
     });
     const f = await fixture(kind);
     f.input("Before :smi after", 11);
-    await vi.dynamicImportSettled();
-    flush();
+    await settleImports();
     expect(overlay).toBeDefined();
     const list = f.container.querySelector('[role="listbox"]')!;
     expect(list.getAttribute("aria-label")).toBe("Emoji suggestions");
@@ -284,7 +276,7 @@ describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
     expect(f.send).not.toHaveBeenCalled();
     const locked = await fixture(kind, ":smile", true);
     expect(locked.colon().defaultPrevented).toBe(false);
-    expect(locked.container.querySelector('[aria-label="Emoji suggestions"]')).toBeNull();
+    expect(locked.menu()).toBeNull();
   });
 });
 
@@ -312,15 +304,14 @@ it("avoids Markdown work for ordinary typing and reuses an unchanged shortcode c
   f.input(":zzzzunknown");
   expect(parse).not.toHaveBeenCalled();
   f.input("Nice :s");
-  await vi.dynamicImportSettled();
-  flush();
+  await settleImports();
   f.input("Nice :sm");
   f.input("Nice :smi");
   f.textarea.dispatchEvent(new Event("select"));
   expect(parse).toHaveBeenCalledTimes(1);
   f.input("`Nice :smi");
-  expect(f.container.querySelector('[aria-label="Emoji suggestions"]')).toBeNull();
+  expect(f.menu()).toBeNull();
   f.input("Nice :smi");
-  expect(f.container.querySelector('[aria-label="Emoji suggestions"]')).not.toBeNull();
+  expect(f.menu()).not.toBeNull();
   expect(parse).toHaveBeenCalledTimes(3);
 });

@@ -246,30 +246,37 @@ describe("CLI execution cancellation", () => {
     expect(resolveApproval).not.toHaveBeenCalled();
   });
 
-  it("rejects expired authority after preparation before plugin execution", async () => {
-    const entered = createDeferred();
-    const prepared = createDeferred();
-    context.preparedBackend.beforeExecution = async () => {
-      entered.resolve();
-      await prepared.promise;
-    };
-    const expire = expiringAuthority(context);
-    const pluginExecute = vi.fn(async function* () {
-      yield { type: "result", result: "unexpected" };
-    });
-    context.preparedBackend.backend.command = process.execPath;
-    context.executionTarget = { kind: "plugin", execute: pluginExecute };
+  it.each([false, true])(
+    "finishes started execution unless cancelled (cancelled=%s)",
+    async (cancelled) => {
+      const entered = createDeferred();
+      const prepared = createDeferred();
+      context.preparedBackend.beforeExecution = async () => {
+        entered.resolve();
+        await prepared.promise;
+      };
+      const revoke = cancelled ? () => controller.abort() : expiringAuthority(context);
+      const pluginExecute = vi.fn(async function* () {
+        yield { type: "result", result: "completed" };
+      });
+      if (!cancelled) {
+        configurePlugin(context, pluginExecute, process.execPath);
+      }
 
-    const run = executePreparedCliRun(context);
-    const rejected = expect(run).rejects.toThrow("Completion authority expired");
-    await entered.promise;
-    expire();
-    prepared.resolve();
+      const run = executePreparedCliRun(context);
+      const outcome = cancelled
+        ? expect(run).rejects.toMatchObject({ name: "AbortError" })
+        : expect(run).resolves.toMatchObject({ text: "completed" });
+      await entered.promise;
+      revoke();
+      prepared.resolve();
 
-    await rejected;
-    expect(createChildAdapterMock).not.toHaveBeenCalled();
-    expect(pluginExecute).not.toHaveBeenCalled();
-  });
+      await outcome;
+      expect(spawn).not.toHaveBeenCalled();
+      expect(createChildAdapterMock).not.toHaveBeenCalled();
+      expect(pluginExecute).toHaveBeenCalledTimes(cancelled ? 0 : 1);
+    },
+  );
 
   it("cancels a child adapter that is still starting by the caller run id", async () => {
     const startup = createDeferred<ChildAdapter>();
@@ -291,28 +298,10 @@ describe("CLI execution cancellation", () => {
     expect(managed.activity.resultSettled).toBe(true);
   });
 
-  it("rejects expired authority behind a supervisor scope fence without replacing its process", async () => {
-    const expire = expiringAuthority(context);
+  it("keeps the fenced process when its replacement is cancelled", async () => {
     const { startup, adapter, first } = startFencedProcess(supervisor, context);
     const replacement = executePreparedCliRun(context, "resume-1");
-    const rejected = expect(replacement).rejects.toThrow("Completion authority expired");
-    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
-    expire();
-    startup.resolve(adapter);
-    const firstRun = await first;
-    try {
-      await rejected;
-      expect(createChildAdapterMock).toHaveBeenCalledOnce();
-      expect(adapter.kill).not.toHaveBeenCalled();
-    } finally {
-      firstRun.cancel();
-      await firstRun.wait();
-    }
-  });
-
-  it("never starts a resumed replacement cancelled behind a real supervisor scope fence", async () => {
-    const { startup, adapter, first } = startFencedProcess(supervisor, context);
-    const replacement = executePreparedCliRun(context, "resume-1");
+    const rejected = expect(replacement).rejects.toMatchObject({ name: "AbortError" });
     await vi.waitFor(() => {
       expect(spawn).toHaveBeenCalledTimes(2);
       expect(createChildAdapterMock).toHaveBeenCalledOnce();
@@ -323,14 +312,17 @@ describe("CLI execution cancellation", () => {
     expect(cancel).toHaveBeenCalledWith("cli-run", "manual-cancel");
     startup.resolve(adapter);
     const firstRun = await first;
-    await expect(replacement).rejects.toMatchObject({ name: "AbortError" });
-    expect(createChildAdapterMock).toHaveBeenCalledOnce();
-    expect(adapter.kill).not.toHaveBeenCalled();
-    const replacementRun = await spawn.mock.results[1]!.value;
-    await expect(replacementRun.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
-    expect(replacementRun.activity.resultSettled).toBe(true);
-    firstRun.cancel();
-    await expect(firstRun.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
+    try {
+      await rejected;
+      expect(createChildAdapterMock).toHaveBeenCalledOnce();
+      expect(adapter.kill).not.toHaveBeenCalled();
+      const replacementRun = await spawn.mock.results[1]!.value;
+      await expect(replacementRun.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
+      expect(replacementRun.activity.resultSettled).toBe(true);
+    } finally {
+      firstRun.cancel();
+      await expect(firstRun.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
+    }
   });
 
   it("leaves no system prompt workspace when structured image preparation fails", async () => {
@@ -393,19 +385,6 @@ describe("CLI execution cancellation", () => {
     expect(executionContext?.args).not.toContain("--append-system-prompt-file");
     expect(executionContext?.args).not.toContain("--append-system-prompt");
     expect(writeCliSystemPromptFile).not.toHaveBeenCalled();
-    expect(createChildAdapterMock).not.toHaveBeenCalled();
-  });
-
-  it("does not spawn when aborted during backend preparation", async () => {
-    const preparation = createDeferred();
-    const beforeExecution = vi.fn(async () => await preparation.promise);
-    context.preparedBackend.beforeExecution = beforeExecution;
-    const run = executePreparedCliRun(context);
-    await vi.waitFor(() => expect(beforeExecution).toHaveBeenCalledOnce());
-    controller.abort();
-    preparation.resolve();
-    await expect(run).rejects.toMatchObject({ name: "AbortError" });
-    expect(spawn).not.toHaveBeenCalled();
     expect(createChildAdapterMock).not.toHaveBeenCalled();
   });
 

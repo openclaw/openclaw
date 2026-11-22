@@ -6,7 +6,6 @@ import {
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import {
   jsonArrayElements,
-  jsonArrayValue,
   jsonObjectValue,
   jsonOrderedArray,
   jsonPathValue,
@@ -26,33 +25,19 @@ export function legacyModelContextEventSql(
   db: EngineConnection,
   event: Expression<string | Uint8Array>,
   omitCheckpoint: Expression<number>,
-  toolResultOmission?: Expression<string | null>,
-  role: Expression<unknown> = jsonPathValue(db, event, sql.lit("$.message.role")),
 ): RawBuilder<string> {
-  const paths = MODEL_CONTEXT_PRIVATE_METADATA_KEYS.map((key) => `$.message.__openclaw.${key}`);
+  const role = jsonPathValue(db, event, sql.lit("$.message.role"));
   const projected = jsonRemovePaths(
     db,
     event,
-    paths.map((path) => sql.val(path)),
+    MODEL_CONTEXT_PRIVATE_METADATA_KEYS.map((key) => sql.val(`$.message.__openclaw.${key}`)),
   );
   const modelEvent = /* kysely-allow-raw: tool result details are not model input; other details can be runtime context. */ sql<string>`CASE WHEN ${role} = 'toolResult'
     THEN ${jsonRemovePaths(db, projected, [sql.lit("$.message.details")])} ELSE ${projected} END`;
-  const boundedEvent = toolResultOmission
-    ? /* kysely-allow-raw: omit only selected result bodies before hydration; durable rows remain unchanged. */ sql<string>`CASE WHEN ${toolResultOmission} IS NOT NULL AND ${role} = 'toolResult'
-      THEN ${jsonSetPath(
-        db,
-        modelEvent,
-        sql.lit("$.message.content"),
-        jsonArrayValue(db, [
-          jsonObjectValue(db, { type: sql.lit("text"), text: toolResultOmission }),
-        ]),
-        true,
-      )} ELSE ${modelEvent} END`
-    : modelEvent;
   // The context owner classifies invalidated prefix checkpoints using the transport
   // contract. Other replay state must survive, including checkpoints after the cut.
   return /* kysely-allow-raw: exclude invalidated replay before hydrating a retained prefix. */ sql<string>`CASE WHEN ${omitCheckpoint} = 1
-    THEN ${jsonRemovePaths(db, boundedEvent, [sql.lit("$.message.providerReplay")])} ELSE ${boundedEvent} END`;
+    THEN ${jsonRemovePaths(db, modelEvent, [sql.lit("$.message.providerReplay")])} ELSE ${modelEvent} END`;
 }
 
 function systemUpdateKindSql(

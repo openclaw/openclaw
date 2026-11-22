@@ -99,6 +99,9 @@ it.each([false, true])("validates complete inventory=%s against UI survival", (s
         for (const file of [
           "scripts/postinstall-bundled-plugins.mjs",
           "scripts/lib/fs-safe-prebuild.mjs",
+          "scripts/lib/fs-safe-npm-cli-preload.generated.mjs",
+          "scripts/lib/fs-safe-npm-cli-protocol.mjs",
+          "runtime-process-bootstrap.generated.mjs",
           "scripts/windows-cmd-helpers.mjs",
           "scripts/lib/package-lifecycle-marker.mjs",
         ]) {

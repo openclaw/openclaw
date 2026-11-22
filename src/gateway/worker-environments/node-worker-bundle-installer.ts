@@ -1,6 +1,7 @@
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { NODE_WORKER_BUNDLE_INSTALL_COMMAND } from "../../infra/node-commands.js";
+import { NODE_WORKER_BUNDLE_PREFETCH_VERSION } from "../../infra/node-runner-inventory.js";
 import { notifyListeners } from "../../shared/listeners.js";
 import {
   parseNodeWorkerBundleInstallResult,
@@ -26,20 +27,22 @@ export type GatewayNodeWorkerBundleInstallObservation = {
   updatedAtMs: number;
 };
 
-export type GatewayNodeWorkerBundleInstall = (params: {
-  deviceId: string;
-  environmentId: string;
-  artifact: Extract<WorkerInstallationArtifact, { install: "bundle" }>;
-  prewarm: boolean;
-  reason: "provision" | "refresh";
-  signal?: AbortSignal;
-  assertCurrent?: () => void;
-  onProgress?: () => void;
-}) => Promise<NodeWorkerBundleInstallResult>;
+export type GatewayNodeWorkerBundleInstall = (
+  params: {
+    deviceId: string;
+    artifact: Extract<WorkerInstallationArtifact, { install: "bundle" }>;
+    signal?: AbortSignal;
+    assertCurrent?: () => void;
+    onProgress?: () => void;
+  } & (
+    | { reason: "prefetch"; environmentId?: never; prewarm?: never }
+    | { reason: "provision" | "refresh"; environmentId: string; prewarm: boolean }
+  ),
+) => Promise<NodeWorkerBundleInstallResult>;
 
 type ActiveInstall = {
   observation: GatewayNodeWorkerBundleInstallObservation;
-  environmentReferences: Map<string, number>;
+  environmentReferences: Map<string | undefined, number>;
   // Callers share one node download, so every joined caller hears its progress.
   progressListeners: Set<() => void>;
   lastProgressLogAtMs: number;
@@ -102,6 +105,12 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
       if (!node) {
         throw new Error("Device worker node is not connected with the installer dialect");
       }
+      if (
+        params.reason === "prefetch" &&
+        node.workerHost.bundlePrefetch !== NODE_WORKER_BUNDLE_PREFETCH_VERSION
+      ) {
+        throw new Error("Device worker node does not support bundle prefetch");
+      }
       const { artifact } = params;
       const isAuthorized = () => {
         params.assertCurrent?.();
@@ -153,7 +162,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
       if (environmentReferences === 0) {
         entry.observation = {
           ...entry.observation,
-          environmentIds: [...entry.environmentReferences.keys()],
+          environmentIds: [...entry.environmentReferences.keys()].filter((id) => id !== undefined),
         };
         version++;
         publish(entry);
@@ -170,6 +179,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
           gatewayNamespace: options.gatewayNamespace,
           artifact,
           ...(bundlePrewarm ? { bundlePrewarm } : {}),
+          ...(params.reason === "prefetch" ? { prefetch: 1 } : {}),
           isAuthorized,
           signal: params.signal,
           onProgress: (servedBytes) => {
@@ -291,7 +301,9 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
           currentEntry.environmentReferences.size === 1 &&
           currentEntry.environmentReferences.get(params.environmentId) === 1
         ) {
-          options.log.info(`${prefix} installed in ${elapsedSeconds().toFixed(1)}s`);
+          options.log.info(
+            `${prefix} ${params.reason === "prefetch" ? "prefetched" : "installed"} in ${elapsedSeconds().toFixed(1)}s`,
+          );
         }
         return receipt;
       } finally {
@@ -306,14 +318,21 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
           currentEntry.environmentReferences.delete(params.environmentId);
           currentEntry.observation = {
             ...currentEntry.observation,
-            environmentIds: [...currentEntry.environmentReferences.keys()],
+            environmentIds: [...currentEntry.environmentReferences.keys()].filter(
+              (id) => id !== undefined,
+            ),
           };
           if (currentEntry.environmentReferences.size === 0) {
             active.delete(key);
           }
           version++;
           // The released environment may have no node binding yet; name it so its projection clears.
-          publish(currentEntry, [...currentEntry.observation.environmentIds, params.environmentId]);
+          publish(
+            currentEntry,
+            params.environmentId === undefined
+              ? currentEntry.observation.environmentIds
+              : [...currentEntry.observation.environmentIds, params.environmentId],
+          );
         } else {
           currentEntry.environmentReferences.set(params.environmentId, remaining);
         }

@@ -8,13 +8,13 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../gateway/agent-runtime-approval-authority.js";
 import { createPreparedTestApprovalManager } from "../gateway/exec-approval-manager.test-support.js";
 import { createChatRunState } from "../gateway/server-chat-state.js";
+import { waitForApprovalAccepted } from "../gateway/server-methods/approval-request.test-support.js";
 import { createExecApprovalHandlers } from "../gateway/server-methods/exec-approval.js";
 import {
   createApprovalRuntimeClient,
   requestExecApproval,
   resolveExecApproval,
 } from "../gateway/server-methods/exec-approval.test-support.js";
-import type { RespondFn } from "../gateway/server-methods/response-types.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -441,28 +441,18 @@ for (const { policyState, shouldExecute } of [
         rpc.mockImplementation(async (method, options, params) => {
           if (method === "exec.approval.request") {
             approvalId = params.id;
-            const firstResponse = createDeferred<Parameters<RespondFn>>();
-            const pending = approvalFixture.track(
-              requestExecApproval({
-                handlers: approvalHandlers,
-                respond: (...response) => {
-                  firstResponse.resolve(response);
-                },
-                context: approvalContext,
-                params,
-                client: runtimeClient,
-              }),
+            const { response } = await waitForApprovalAccepted(vi.fn(), (respond) =>
+              approvalFixture.track(
+                requestExecApproval({
+                  handlers: approvalHandlers,
+                  respond,
+                  context: approvalContext,
+                  params,
+                  client: runtimeClient,
+                }),
+              ),
             );
-            const [ok, payload, error] = await Promise.race([
-              firstResponse.promise,
-              pending.then(() => {
-                throw new Error("Exec approval request ended before acceptance");
-              }),
-            ]);
-            if (!ok) {
-              throw new Error(error?.message ?? "Exec approval registration failed");
-            }
-            return payload;
+            return response[1];
           }
           if (method === "exec.approval.resolve") {
             const respond = vi.fn();
@@ -632,6 +622,32 @@ it("collects live conversation context only when the node exec tool reaches revi
   );
   expect(result.details).toMatchObject({ status: "failed", approvalReviewOutcome: "denied" });
   expect(invokeCount).toBe(0);
+});
+
+it("keeps ordinary node timeouts when background is requested", async () => {
+  // host=node ignores background and runs synchronously, so it is not a service.
+  const tool = createExecTool({
+    host: "node",
+    node: "node-1",
+    security: "full",
+    ask: "off",
+    notifyOnExit: false,
+    nodeCwd: request.workdir,
+    agentId: request.agentId,
+    sessionKey: request.sessionKey,
+  });
+
+  const result = await tool.execute("node-background", {
+    command: request.command,
+    background: true,
+  });
+
+  expect(result.details).toMatchObject({ status: "completed", aggregated: "node-policy-proof" });
+  const run = rpc.mock.calls.find(
+    ([method, , invoke]) => method === "node.invoke" && invoke.command === "system.run",
+  );
+  expect(run?.[2].params.timeoutMs).toBe(1_800_000);
+  expect(run?.[2].timeoutMs).toBe(1_805_000);
 });
 
 it("denies caller allowlist/off misses before dispatch to a permissive node", async () => {
