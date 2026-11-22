@@ -10,7 +10,7 @@ import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { FailoverError } from "./failover-error.js";
 import { isFallbackSummaryError } from "./model-fallback-attempt.js";
 import {
-  markProbeAttempt,
+  reserveProbeAttempt,
   resolveCooldownDecision,
   resolveProbeThrottleKey,
 } from "./model-fallback-cooldown.js";
@@ -126,7 +126,7 @@ describe("fallback probe and deferred suspension guards", () => {
       });
     await action(suspend);
   }
-  it("re-probes a single-provider primary blocked by a far-future subscription_limit (#90702)", () => {
+  it("keeps the current recovery probe when an older reservation is released at the same timestamp (#90702)", () => {
     const now = 1700000000000,
       soonest = now + 6 * 24 * 60 * 60 * 1000,
       throttleKey = resolveProbeThrottleKey("openai", `probe-${crypto.randomUUID()}`);
@@ -156,8 +156,36 @@ describe("fallback probe and deferred suspension guards", () => {
         profileIds: ["openai-profile-1"],
       });
     expect(decision()).toEqual({ type: "attempt", reason: "rate_limit", markProbe: true });
-    markProbeAttempt(now - 10000, throttleKey);
+    const releaseEarlier = reserveProbeAttempt(now, throttleKey);
+    const releaseCurrent = reserveProbeAttempt(now, throttleKey);
+    releaseEarlier();
     expect(decision()).toEqual({ type: "suspend_session", reason: "rate_limit" });
+    releaseCurrent();
+    expect(decision()).toEqual({ type: "attempt", reason: "rate_limit", markProbe: true });
+  });
+  it("keeps the recovery probe charged when a returned result reports missing tool output", async () => {
+    await withOpenClawTestState({ label: "probe-missing-tool-result" }, async (state) => {
+      await state.writeAuthProfiles({
+        version: 1,
+        profiles: { primary: { type: "api_key", provider: "openai", key: "fixture-key" } },
+        usageStats: {
+          primary: { cooldownUntil: Date.now() + 60_000, cooldownReason: "overloaded" },
+        },
+      });
+      const missing = { reason: "missing_tool_result" };
+      const run = vi.fn(async () => missing);
+      const candidate = {
+        agentDir: state.agentDir(),
+        skipAuthProfileRuntime: false,
+        fallbacksOverride: [],
+        run,
+      };
+      await expect(
+        runProbe({ ...candidate, classifyResult: ({ result }) => ({ error: result }) }),
+      ).rejects.toBe(missing);
+      await expect(runProbe(candidate)).rejects.toMatchObject({ code: "MODEL_FALLBACK_SKIPPED" });
+      expect(run).toHaveBeenCalledOnce();
+    });
   });
   it.each(["caller abort", "terminal classified result"])(
     "settles deferred suspension for %s",

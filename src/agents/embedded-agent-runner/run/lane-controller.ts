@@ -52,17 +52,17 @@ import {
 } from "../../session-placement-forced-terminal-settlement.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 import { withReleasableExecutionCapacity } from "./execution-capacity.js";
+import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js";
 import {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
   resolveEmbeddedRunLaneTimeoutMs,
   resolveEmbeddedRunSessionLanePolicy,
 } from "./lane-runtime.js";
-import type { RunEmbeddedAgentParams } from "./params.js";
 import { claimAgentSessionWriter } from "./session-bootstrap.js";
 
-type LaneParams = RunEmbeddedAgentParams & { sessionFile: string };
-
-export function createEmbeddedRunLaneController<TParams extends LaneParams>(options: {
+export function createEmbeddedRunLaneController<
+  TParams extends RunEmbeddedAgentParamsWithSessionFile,
+>(options: {
   getLifecycleGeneration: () => string;
   getParams: () => TParams;
   globalLane: string;
@@ -152,6 +152,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   const noteLaneTaskProgress = () => {
     laneTaskProgressAtMs = Date.now();
   };
+  let placementAdmitted = false;
   let assertPlacementCurrent: (() => void) | undefined;
   let activeAttemptOwner: object | undefined;
   let recoverAttemptDeadline: (() => Promise<boolean>) | undefined;
@@ -165,7 +166,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     return false;
   };
   const createAttemptControls = (input: {
-    admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
+    admittedRunContext: NonNullable<TParams["admittedRunContext"]>;
     abortSignal?: AbortSignal;
     initialTimeoutMs?: number;
     onAbort?: () => void;
@@ -426,6 +427,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
             });
           },
           () => {
+            placementAdmitted = true;
             throwIfAborted();
             assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
             releaseQueuedContext("admitted");
@@ -670,6 +672,11 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
           }
         },
       );
+    } catch (error) {
+      if (!placementAdmitted) {
+        params.releaseUnstartedProbe?.();
+      }
+      throw error;
     } finally {
       releaseQueuedContext("abandoned");
     }

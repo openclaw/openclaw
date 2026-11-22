@@ -693,6 +693,7 @@ export function createCronPromptExecutor(
           disableMessageTool: !sourceDelivery.messageTool.enabled,
           forceMessageTool: sourceDelivery.messageTool.force,
           allowTransientCooldownProbe: runOptions.allowTransientCooldownProbe,
+          releaseUnstartedProbe: runOptions.releaseUnstartedProbe,
           assistantErrorTranscript: runOptions.assistantErrorTranscript,
           abortSignal: params.abortSignal,
           onLaneWait: params.onLaneWait,
@@ -710,9 +711,7 @@ export function createCronPromptExecutor(
         params.lifecycle.capture("error", error);
         throw error;
       })
-      .finally(() => {
-        cronRunExecSource.dispose();
-      });
+      .finally(() => cronRunExecSource.dispose());
     const terminal = resolveDeferredLifecycleTerminal(
       fallbackResult.result,
       params.lifecycle.getDeferredError(),

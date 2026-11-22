@@ -35,6 +35,7 @@ import { isAgentHarnessPreflightError, isMissingAgentHarnessError } from "./harn
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   appendFailedCandidateAttempt,
+  canDispatchFallbackCandidate,
   hasDifferentLiveSessionRuntimeSelection,
   isTranscriptNotContinuableError,
   type ModelFallbackAuthRuntime,
@@ -43,7 +44,7 @@ import {
   type ModelFallbackExhaustionResult,
   type ModelFallbackResultClassifier,
   type ModelFallbackRunFn,
-  type ModelFallbackRunOptions,
+  type ModelFallbackProbeOptions,
   type ModelFallbackRunResult,
   type ModelFallbackRuntimeContext,
   type ModelFallbackStepHandler,
@@ -63,7 +64,7 @@ import {
   resolveModelCandidateChain,
 } from "./model-fallback-candidates.js";
 import {
-  markProbeAttempt,
+  reserveProbeAttempt,
   resolveCooldownDecision,
   resolveProbeThrottleKey,
 } from "./model-fallback-cooldown.js";
@@ -277,8 +278,7 @@ async function runWithModelFallbackInternal<T>(
       continue;
     }
     const candidateRef = { provider: candidate.provider, model: candidate.model };
-    operatorAuthority?.assertCurrent();
-    if (operatorAuthority?.modelPolicy?.allows(candidateRef) === false) {
+    if (!canDispatchFallbackCandidate(operatorAuthority, candidateRef)) {
       continue;
     }
     const nextCandidateIndex = resolveNextFallbackCandidateIndex({
@@ -398,7 +398,7 @@ async function runWithModelFallbackInternal<T>(
       }
     }
 
-    let runOptions: Pick<ModelFallbackRunOptions, "allowTransientCooldownProbe"> | undefined;
+    const runOptions: ModelFallbackProbeOptions = {};
     let attemptedDuringCooldown = false;
     let transientProbeProviderForAttempt: string | null = null;
     if (
@@ -475,9 +475,6 @@ async function runWithModelFallbackInternal<T>(
           continue;
         }
 
-        if (decision.markProbe) {
-          markProbeAttempt(now, probeThrottleKey);
-        }
         if (shouldAllowCooldownProbeForReason(decision.reason)) {
           // Same-provider siblings share one transient cooldown probe per run.
           const isTransientCooldownReason = shouldUseTransientCooldownProbeSlot(decision.reason);
@@ -491,22 +488,24 @@ async function runWithModelFallbackInternal<T>(
             });
             continue;
           }
-          runOptions = { allowTransientCooldownProbe: true };
+          runOptions.allowTransientCooldownProbe = true;
           if (isTransientCooldownReason) {
             transientProbeProviderForAttempt = candidate.provider;
           }
         }
+        if (decision.markProbe) {
+          runOptions.releaseUnstartedProbe = reserveProbeAttempt(now, probeThrottleKey);
+        }
         attemptedDuringCooldown = true;
         await observeCandidateDecision("probe_cooldown_candidate", {
           reason: decision.reason,
-          allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+          allowTransientCooldownProbe: runOptions.allowTransientCooldownProbe,
           profileCount: profileIds.length,
         });
       }
     }
 
-    operatorAuthority?.assertCurrent();
-    if (operatorAuthority?.modelPolicy?.allows(candidateRef) === false) {
+    if (!canDispatchFallbackCandidate(operatorAuthority, candidateRef, runOptions)) {
       continue;
     }
     const attemptRun = await runFallbackAttempt({

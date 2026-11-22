@@ -458,6 +458,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
                 : {}),
               classifyResult,
               allowTransientCooldownProbe: options.allowTransientCooldownProbe,
+              releaseUnstartedProbe: options.releaseUnstartedProbe,
               isFinalFallbackAttempt: options.isFinalFallbackAttempt,
               isFallbackRetry,
               modelRoutingProvenance: runOptions.forceFallbackRetry

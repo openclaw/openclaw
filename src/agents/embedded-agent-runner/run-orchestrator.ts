@@ -357,6 +357,7 @@ async function runEmbeddedAgentForSession(
                 error instanceof PreparedModelRuntimeOwnerNotPublishedError &&
                 error.admissionBlocked
               ) {
+                params.releaseUnstartedProbe?.();
                 throw new PreparedModelRuntimeInitialRunAdmissionError(error);
               }
               throw error;
