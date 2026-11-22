@@ -77,6 +77,8 @@ export async function sendCronAnnouncePayloadStrict(params: {
   onPayloadDelivered?: () => void;
   /** Fires once the queue executor has durably marked the send dispatched. */
   onTransportDispatched?: () => void;
+  /** Fires when an attempt is proven not to have reached the recipient. */
+  onTransportDispatchCleared?: () => void;
 }): Promise<CronAnnounceResult> {
   const delivery = params.target;
   params.abortSignal.throwIfAborted();
@@ -143,12 +145,19 @@ export async function sendCronAnnouncePayloadStrict(params: {
   });
   const identity = resolveAgentOutboundIdentity(params.cfg, params.agentId);
   let recipientReached = false;
+  /** Whether the current attempt's durable dispatch was reported (per-attempt evidence). */
+  let attemptDispatched = false;
   return await retryTransientDirectCronDelivery({
     jobId: params.jobId,
     signal: params.abortSignal,
     shouldRetryError: () => !recipientReached,
     run: async () => {
       const deliveredPayloads: ReplyPayload[] = [];
+      // Each attempt carries its own evidence: a proven non-delivery from an
+      // earlier attempt must not keep a later attempt's deadline from proving
+      // non-delivery again. The observer only reports the current attempt's
+      // durable dispatch.
+      attemptDispatched = false;
       await fence?.beforeAttempt();
       params.abortSignal.throwIfAborted();
       fence?.assertCurrent();
@@ -188,9 +197,16 @@ export async function sendCronAnnouncePayloadStrict(params: {
           signal: params.abortSignal,
           assertDirectAdapterHandoff: fence?.assertCurrent,
           // Forwarded into the durable batch so the queue executor reports it from
-          // its post-mark dispatch point, not from a receipt callback here.
+          // its post-mark dispatch point, not from a receipt callback here. The
+          // report is scoped to this attempt: a proven non-delivery on a later
+          // attempt must not keep a prior attempt's dispatch alive.
           ...(params.onTransportDispatched
-            ? { onTransportDispatched: async () => params.onTransportDispatched?.() }
+            ? {
+                onTransportDispatched: async () => {
+                  attemptDispatched = true;
+                  params.onTransportDispatched?.();
+                },
+              }
             : {}),
           onDeliveredPayload: ({ hookContent, ...payload }) => {
             deliveredPayloads.push({ ...payload, spokenText: hookContent });
@@ -228,6 +244,12 @@ export async function sendCronAnnouncePayloadStrict(params: {
       if (!recipientReached) {
         recipientReached = durableMessageBatchMayHaveReachedRecipient(result);
         params.onDeliveryAttempt?.(recipientReached);
+        // A proven non-delivery invalidates this attempt's dispatch evidence: the
+        // caller's deadline classifier must not treat the attempt as in flight.
+        if (!recipientReached) {
+          params.onTransportDispatchCleared?.();
+          attemptDispatched = false;
+        }
       }
       if (
         result.status === "failed" &&

@@ -564,6 +564,11 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           onTransportDispatched: () => {
             transportDispatched = true;
           },
+          onTransportDispatchCleared: () => {
+            // The attempt was proven not to reach the recipient, so a later
+            // deadline may again prove non-delivery for the retry.
+            transportDispatched = false;
+          },
           onPayloadDelivered: () => {
             payloadDelivered = true;
           },
