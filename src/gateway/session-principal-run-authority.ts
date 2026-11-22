@@ -5,6 +5,8 @@ import {
 import { intersectOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import {
   intersectParticipationCeilings,
+  DEFAULT_PARTICIPATION_TOOLS,
+  participationPermission,
   sessionParticipationCeiling,
   type ParticipationCeiling,
 } from "../agents/participation-ceiling.js";
@@ -14,6 +16,25 @@ import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js"
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { isParticipantPublicationMethod } from "./session-method-policy.js";
 import type { SessionMutationAuthorizationParams } from "./session-sharing-authorization.js";
+
+/** An explicit non-human assignment must not fall back to a former human creator. */
+export function resolveSessionSystemTurnProfileId(
+  entry: Pick<SessionEntry, "owner" | "createdActor"> | undefined,
+): string | undefined {
+  const actor = entry?.owner
+    ? entry.owner.actor
+    : entry?.createdActor?.type === "human" && entry.createdActor.source === "profile"
+      ? entry.createdActor
+      : undefined;
+  if (actor?.type !== "human") {
+    return undefined;
+  }
+  const profileId = actor.id?.trim();
+  if (!profileId) {
+    throw new Error("Session owner has no current profile identity");
+  }
+  return profileId;
+}
 
 export async function prepareSessionParticipationRun(params: {
   context: GatewayRequestContext;
@@ -81,14 +102,19 @@ export async function prepareSessionPrincipalRunAuthority(
       });
     }
     if (params.participationCeiling) {
-      if (!source.participationCeiling) {
+      if (!source.participationCeiling || !params.participationCeiling.source) {
         throw new Error("The original invitation no longer permits participation.");
       }
       const current = admitted.authority;
       admitted.authority = createAdmittedRunOperatorAuthority({
         ...current,
         participationCeiling: intersectParticipationCeilings(
-          params.participationCeiling,
+          {
+            ...params.participationCeiling,
+            source: params.participationCeiling.source,
+            tools: params.participationCeiling.tools ?? DEFAULT_PARTICIPATION_TOOLS,
+            permission: participationPermission(params.participationCeiling),
+          },
           source.participationCeiling,
         ),
         get modelPolicy() {

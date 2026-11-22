@@ -9,6 +9,7 @@ import {
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
@@ -268,7 +269,11 @@ it("binds inherited participant callers and task handoffs to their exact target"
   onTestFinished(source.release);
   const authority = createAdmittedRunOperatorAuthority({
     ...source.authority,
-    participationCeiling: participation.ceiling,
+    participationCeiling: {
+      ...participation.ceiling,
+      tools: expectDefined(participation.ceiling.tools, "captured tools"),
+      permission: expectDefined(participation.ceiling.permission, "captured permission"),
+    },
   });
   const child = { agentId: "main", sessionKey: "agent:main:subagent:publication-participant" };
   await upsertSessionEntryCore(child, {
@@ -348,7 +353,17 @@ it.each([false, true])(
     onTestFinished(source.release);
     const operatorAuthority = createAdmittedRunOperatorAuthority({
       ...source.authority,
-      participationCeiling: f.captured.requester.snapshot.participation!.ceiling,
+      participationCeiling: {
+        ...f.captured.requester.snapshot.participation!.ceiling,
+        tools: expectDefined(
+          f.captured.requester.snapshot.participation!.ceiling.tools,
+          "captured tools",
+        ),
+        permission: expectDefined(
+          f.captured.requester.snapshot.participation!.ceiling.permission,
+          "captured permission",
+        ),
+      },
     });
     const client = createSyntheticPluginRuntimeClient({
       operatorRoleActor: { kind: "operator", profileId: f.guestProfile },

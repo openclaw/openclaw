@@ -18,10 +18,6 @@ import type {
   ChatSendParamsSchema,
   QueueMode,
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import {
-  intersectParticipationCeilings,
-  type ParticipationCeiling,
-} from "../../agents/participation-ceiling.js";
 import { isAbortRequestText } from "../../auto-reply/reply/abort-primitives.js";
 import { isBtwRequestText } from "../../auto-reply/reply/btw-command.js";
 import {
@@ -73,7 +69,7 @@ type ChatSendRequestParams = Omit<
 
 export type NormalizedChatSendRequest = {
   activeSteer?: { runId: string; profileId: string };
-  participationCeiling?: ParticipationCeiling;
+  participating?: true;
   normalizeThinkingLevelOverride?: boolean;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalOperation?: SessionGoalOperation & { action: "start" | "resume" };
@@ -118,9 +114,8 @@ type NormalizeChatSendRequestResult =
   | { ok: false; error: string; reason?: string };
 
 /** Attach host-admitted participation after wire normalization, before session preparation. */
-export function attachChatSendParticipationCeiling(
+export function applyChatSendParticipation(
   request: NormalizedChatSendRequest,
-  ceiling: ParticipationCeiling,
 ): NormalizeChatSendRequestResult {
   const { p } = request;
   if (
@@ -145,13 +140,7 @@ export function attachChatSendParticipationCeiling(
         "Participating inputs cannot change goals, delivery routes, tool bindings, or runtime settings.",
     };
   }
-  // Recovery re-admits current role authority, but cannot widen the accepted input's tools.
-  const retained = request.participationCeiling;
-  try {
-    request.participationCeiling = intersectParticipationCeilings(retained, ceiling);
-  } catch {
-    return { ok: false, error: "Participation input does not match its original invitation." };
-  }
+  request.participating = true;
   request.suppressCommandInterpretation = true;
   request.stopCommand = false;
   request.turnKind = "main";
@@ -405,9 +394,8 @@ export function normalizeChatSendRequest(params: {
     ...(mentions.value ? { mentions: mentions.value } : {}),
     reconnectResumeRequested: controlUiReconnectResume.resumeRequested,
   };
-  const participationCeiling = recoveredInput?.participationCeiling;
-  if (participationCeiling) {
-    const attached = attachChatSendParticipationCeiling(value, participationCeiling);
+  if (recoveredInput?.participationCeiling) {
+    const attached = applyChatSendParticipation(value);
     if (!attached.ok) {
       return attached;
     }

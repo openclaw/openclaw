@@ -221,7 +221,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       cfg,
       channel: originatingRoute.originatingChannel,
       sessionEntry: entry,
-      inlineMode: request.participationCeiling ? "followup" : p.queueMode,
+      inlineMode: request.participating ? "followup" : p.queueMode,
     }),
     authority: { assertCurrent: () => assertSourceAuthority?.() },
     runId: clientRunId,
@@ -368,7 +368,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
           // A message to people never steers the active run.
           messageInjectionTarget = request.activeSteer
             ? steer.target
-            : p.queueMode === "steer" && !request.humanAddressed && !request.participationCeiling
+            : p.queueMode === "steer" && !request.humanAddressed && !request.participating
               ? captureCurrentReplyMessageInjectionTarget(
                   admittedRunAbort.entry?.input.mailbox.owner.id ?? activeRunScopeKey,
                 )

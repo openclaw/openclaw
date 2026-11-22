@@ -7,6 +7,28 @@ import { openClawIdRecoveryPrincipalSchema } from "./openclaw-id/tunnel-principa
 
 const MAX_RECOVERY_SOURCE_BYTES = 65_536;
 const boundedString = z.string().min(1).max(4096);
+const boundParticipationCeilingSchema = z.strictObject({
+  kind: z.literal("send"),
+  profileId: boundedString,
+  sessionKey: boundedString,
+  tools: z.array(boundedString).max(256),
+  toolConstraints: z.array(z.array(boundedString).max(256)).max(32).optional(),
+  permission: z.enum(["read-only", "guarded", "workspace", "full"]),
+  execPolicy: z
+    .strictObject({
+      security: z.enum(["deny", "allowlist", "full"]),
+      ask: z.enum(["off", "on-miss", "always"]),
+      denyMisses: z.literal(true).optional(),
+    })
+    .optional(),
+  source: z.strictObject({
+    agentId: boundedString,
+    sessionId: boundedString,
+    lifecycleRevision: boundedString.nullable(),
+    creatorProfileId: boundedString,
+    root: boundedString,
+  }),
+});
 const refs = z.strictObject({
   exact: z.array(boundedString).max(4096),
   wildcards: z.array(boundedString).max(256),
@@ -16,6 +38,7 @@ const recoveryRolePolicySchema: z.ZodType<RecoveryRolePolicy, RecoveryRolePolicy
   GatewayOperatorRoleDefinitionSchema.omit({ modelPolicy: true });
 const handshakeRecoverySnapshotSchema = z.strictObject({
   profileId: boundedString,
+  participationCeiling: boundParticipationCeilingSchema.optional(),
   openclawIdPrincipal: openClawIdRecoveryPrincipalSchema.optional(),
   scopes: z.array(boundedString).max(64),
   assignedRole: boundedString.nullable(),

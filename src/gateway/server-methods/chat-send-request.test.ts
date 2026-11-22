@@ -1,11 +1,7 @@
 import { createHmac } from "node:crypto";
 import { expect, it, vi } from "vitest";
-import { filterParticipationTools } from "../../agents/participation-ceiling.js";
 import { loadChatRequestIdentityKeyAsync } from "../../infra/device-identity-async.js";
-import {
-  attachChatSendParticipationCeiling,
-  normalizeChatSendRequest,
-} from "./chat-send-request.js";
+import { applyChatSendParticipation, normalizeChatSendRequest } from "./chat-send-request.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type Client = GatewayRequestHandlerOptions["client"];
@@ -63,34 +59,14 @@ const participationCeiling = {
   profileId: "guest",
   sessionKey: "agent:main:main",
 };
-it.each([
-  { accepted: ["read"], current: ["read", "message"], expected: ["read"] },
-  { accepted: ["read", "message"], current: ["read"], expected: ["read"] },
-  { accepted: ["read"], current: [], expected: [] },
-  { accepted: [], current: ["read"], expected: [] },
-  { accepted: undefined, current: ["read", "message"], expected: ["read"] },
-])(
-  "never widens recovered participant tools: $accepted -> $current",
-  async ({ accepted, current, expected }) => {
-    const request = await normalizeValue();
-    attachChatSendParticipationCeiling(request, { ...participationCeiling, tools: accepted });
-    attachChatSendParticipationCeiling(request, { ...participationCeiling, tools: current });
-    expect(
-      filterParticipationTools(
-        ["read", "message"].map((name) => ({ name })),
-        request.participationCeiling,
-      ).map((tool) => tool.name),
-    ).toEqual(expected);
-  },
-);
 it.each(["/stop", "/btw hello", "/model other/model", "/queue steer"])(
   "attaches host participation to literal %s without accepting a public ceiling",
   async (message) => {
     const request = await normalizeValue({ message, queueMode: "steer" });
-    expect(attachChatSendParticipationCeiling(request, participationCeiling)).toMatchObject({
+    expect(applyChatSendParticipation(request)).toMatchObject({
       ok: true,
       value: {
-        participationCeiling,
+        participating: true,
         suppressCommandInterpretation: true,
         stopCommand: false,
         turnKind: "main",
@@ -111,17 +87,17 @@ it.each([
   const client = humanClient();
   client.connect.scopes = ["operator.admin"];
   const request = await normalizeValue(overrides, client);
-  expect(attachChatSendParticipationCeiling(request, participationCeiling)).toMatchObject({
+  expect(applyChatSendParticipation(request)).toMatchObject({
     ok: false,
   });
-  expect(request.participationCeiling).toBeUndefined();
+  expect(request.participating).toBeUndefined();
 });
 it("rejects participating tool bindings and public model overrides", async () => {
   const request = await normalizeValue(
     { toolBindings: { browser: {} } },
     copilotClient(["run-tool-bindings"]),
   );
-  expect(attachChatSendParticipationCeiling(request, participationCeiling)).toMatchObject({
+  expect(applyChatSendParticipation(request)).toMatchObject({
     ok: false,
   });
   expect(await normalize({ model: "other/model" })).toMatchObject({ ok: false });
@@ -429,20 +405,5 @@ it.each([
     if (result.ok) {
       expect(result.value.normalizeThinkingLevelOverride).toBe(expected);
     }
-  },
-);
-
-it.each([
-  ["guarded", "full", "guarded"],
-  ["full", "read-only", "read-only"],
-  ["workspace", "full", "workspace"],
-  [undefined, "full", "guarded"],
-] as const)(
-  "never widens retained participant permission %s to %s",
-  async (accepted, current, expected) => {
-    const request = await normalizeValue();
-    attachChatSendParticipationCeiling(request, { ...participationCeiling, permission: accepted });
-    attachChatSendParticipationCeiling(request, { ...participationCeiling, permission: current });
-    expect(request.participationCeiling?.permission).toBe(expected);
   },
 );

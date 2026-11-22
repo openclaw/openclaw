@@ -8,6 +8,7 @@ import { composeSessionSourceAssertion } from "../config/sessions/session-source
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { bindGatewayDeviceRevocation } from "./device-revocation.js";
 import type { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { normalizeGatewayOperatorRecoverySnapshot } from "./operator-run-recovery-source.codec.js";
 
 /** Retain a recovered source and its new exact invocation restriction as one producer. */
 export function retainGatewayOperatorInvocation(
@@ -48,16 +49,32 @@ export function retainGatewayOperatorInvocation(
   const signals = [captured.authority.signal, invocation.signal].filter(
     (signal): signal is AbortSignal => signal !== undefined,
   );
+  const source = invocation.participationAuthority ?? captured.authority;
+  const scopes = invocation.participationAuthority
+    ? intersectOperatorScopes(captured.authority.scopes, source.scopes)
+    : source.scopes;
+  const participationCeiling = intersectParticipationCeilings(
+    source.participationCeiling,
+    invocation.participationCeiling,
+  );
+  const recoverySnapshot =
+    participationCeiling && source.recoverySnapshot
+      ? normalizeGatewayOperatorRecoverySnapshot({
+          ...source.recoverySnapshot,
+          scopes,
+          participationCeiling,
+        })
+      : source.recoverySnapshot;
   const authority = createAdmittedRunOperatorAuthority({
-    ...captured.authority,
+    ...source,
     invocation,
-    scopes: invocation.participationAuthority
-      ? intersectOperatorScopes(captured.authority.scopes, invocation.participationAuthority.scopes)
-      : captured.authority.scopes,
-    participationCeiling: intersectParticipationCeilings(
-      captured.authority.participationCeiling,
-      invocation.participationAuthority?.participationCeiling,
-    ),
+    scopes,
+    participationCeiling,
+    recoverySnapshot,
+    recoverySnapshotUnavailableReason:
+      source.recoverySnapshot && !recoverySnapshot
+        ? "decode-failed"
+        : source.recoverySnapshotUnavailableReason,
     assertCurrent,
     signal: AbortSignal.any(signals),
     get modelPolicy() {

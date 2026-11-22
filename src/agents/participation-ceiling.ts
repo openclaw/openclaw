@@ -33,6 +33,13 @@ export type ParticipationCeiling = {
   };
 };
 
+/** A run restriction is bound to its original invitation before it can be retained. */
+export type BoundParticipationCeiling = ParticipationCeiling & {
+  readonly tools: readonly string[];
+  readonly permission: SessionPermissionMode;
+  readonly source: NonNullable<ParticipationCeiling["source"]>;
+};
+
 /** Participation defaults live here; other policy layers may only narrow these capabilities. */
 export function participationPermission(ceiling: ParticipationCeiling): SessionPermissionMode {
   return ceiling.permission ?? "guarded";
@@ -111,6 +118,22 @@ export function participationAllowsTool(ceiling: ParticipationCeiling, name: str
 }
 
 /** A continuation retains one original invitation, never a union of different participants. */
+export function intersectParticipationCeilings(
+  retained: BoundParticipationCeiling | undefined,
+  current: BoundParticipationCeiling | undefined,
+): BoundParticipationCeiling | undefined;
+export function intersectParticipationCeilings(
+  retained: BoundParticipationCeiling,
+  current: ParticipationCeiling | undefined,
+): BoundParticipationCeiling;
+export function intersectParticipationCeilings(
+  retained: ParticipationCeiling | undefined,
+  current: BoundParticipationCeiling,
+): BoundParticipationCeiling;
+export function intersectParticipationCeilings(
+  retained: ParticipationCeiling | undefined,
+  current: ParticipationCeiling | undefined,
+): ParticipationCeiling | undefined;
 export function intersectParticipationCeilings(
   retained: ParticipationCeiling | undefined,
   current: ParticipationCeiling | undefined,

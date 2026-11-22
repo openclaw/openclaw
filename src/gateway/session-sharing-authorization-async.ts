@@ -20,7 +20,6 @@ import {
   releaseSessionSourceAuthorities,
 } from "../config/sessions/session-source-authority.js";
 import { sameSessionTranscriptStorePath } from "../config/sessions/transcript-store-identity.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { resolveMissingOperatorScope } from "../shared/operator-scope-compat.js";
@@ -41,7 +40,11 @@ import type { GatewayClient, GatewayRequestContext } from "./server-methods/shar
 import { sessionMethodDatabaseAdmission, isSessionTargetMethod } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { restoreSessionOperatorSource } from "./session-operator-sources.js";
-import { prepareSessionParticipationRun } from "./session-principal-run-authority.js";
+import { bindSessionParticipationSource } from "./session-participation-authorization.js";
+import {
+  prepareSessionParticipationRun,
+  resolveSessionSystemTurnProfileId,
+} from "./session-principal-run-authority.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -63,24 +66,7 @@ import {
 import { resolveSessionMutationAuthorization } from "./session-sharing.js";
 import { prepareTalkSessionTarget } from "./talk/session-target.js";
 
-/** An explicit non-human assignment must not fall back to a former human creator. */
-export function resolveSessionSystemTurnProfileId(
-  entry: Pick<SessionEntry, "owner" | "createdActor"> | undefined,
-): string | undefined {
-  const actor = entry?.owner
-    ? entry.owner.actor
-    : entry?.createdActor?.type === "human" && entry.createdActor.source === "profile"
-      ? entry.createdActor
-      : undefined;
-  if (actor?.type !== "human") {
-    return undefined;
-  }
-  const profileId = actor.id?.trim();
-  if (!profileId) {
-    throw new Error("Session owner has no current profile identity");
-  }
-  return profileId;
-}
+
 
 /** Resolve a recorded person against current grants and an existing exact session. */
 export async function prepareSessionPrincipalRunAccess(params: {
@@ -582,8 +568,13 @@ export async function resolveSessionMutationAuthorizationAsync(
         retain,
         retainForRun: () => ({
           signal: authorization.participationSignal,
+          participationCeiling: bindSessionParticipationSource(
+            authorization.participationCeiling,
+            () => preparedTargets[0]?.read().target,
+            params.context.getRuntimeConfig,
+            authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent,
+          ),
           participationAuthority: childParticipation?.authority,
-          // Published facts stay live without repeating history preparation or transport admission.
           assertCurrent: () =>
             (authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent)(),
           release: retain(),

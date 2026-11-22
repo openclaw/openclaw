@@ -3,12 +3,18 @@ import {
   errorShape,
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   DEFAULT_PARTICIPATION_TOOLS,
+  participationPermission,
+  type BoundParticipationCeiling,
   participationAllowsTool,
   type ParticipationCeiling,
 } from "../agents/participation-ceiling.js";
 import { intersectSessionPermissionModes } from "../agents/session-permission-mode.js";
+import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveUserPath } from "../utils.js";
 import { readParticipantPublicationAuthority } from "./github-publication-participation.js";
 import { requiresSessionParticipation } from "./method-scopes.js";
 import { readQueuedParticipationProfile } from "./queued-chat-input-admission.js";
@@ -128,5 +134,43 @@ export function createSessionParticipationAuthorization(
       };
       return { error: null };
     },
+  };
+}
+
+/** Bind after input preparation follows any legitimate initial incarnation transition. */
+export function bindSessionParticipationSource(
+  ceiling: ParticipationCeiling | undefined,
+  readTarget: () => SessionSharingTarget | null | undefined,
+  getConfig: () => OpenClawConfig,
+  assertCurrent: () => void,
+): BoundParticipationCeiling | undefined {
+  if (!ceiling) {
+    return undefined;
+  }
+  assertCurrent();
+  let source = ceiling.source;
+  if (!source) {
+    const target = readTarget();
+    const creatorProfileId = sessionCreatorProfileId(target?.entry.createdActor);
+    if (!target || !creatorProfileId || target.canonicalKey !== ceiling.sessionKey) {
+      throw new Error("Participation requires its original session incarnation and creator.");
+    }
+    source = {
+      agentId: target.agentId,
+      sessionId: target.entry.sessionId,
+      lifecycleRevision: target.entry.lifecycleRevision ?? null,
+      creatorProfileId,
+      root: resolveUserPath(
+        target.entry.sessionRoot ??
+          target.entry.spawnedWorkspaceDir ??
+          resolveAgentWorkspaceDir(getConfig(), target.agentId),
+      ),
+    };
+  }
+  return {
+    ...ceiling,
+    tools: ceiling.tools ?? DEFAULT_PARTICIPATION_TOOLS,
+    permission: participationPermission(ceiling),
+    source,
   };
 }

@@ -45,7 +45,9 @@ export async function prepareExecApprovalParticipation(
     const participantId = readResidentUserProfileId(captured.ceiling.profileId);
     return Object.freeze({
       creatorProfileId: sessionCreatorProfileId(target.entry.createdActor),
-      ...(captured.ceiling.source ? { creatorOnly: true as const } : {}),
+      ...(identity.sessionKey !== captured.ceiling.sessionKey
+        ? { creatorOnly: true as const }
+        : {}),
       participantProfileId: captured.ceiling.profileId,
       participantLabel:
         (participantId ? getResidentUserProfileDisplay(participantId).displayName : undefined) ||

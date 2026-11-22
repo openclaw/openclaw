@@ -20,6 +20,14 @@ it("retains participant identity for delegated reads but refuses authority mutat
       profileId,
       sessionKey: "agent:main:invited",
       tools: ["*"],
+      permission: "workspace",
+      source: {
+        agentId: "main",
+        sessionId: "invited-session",
+        lifecycleRevision: null,
+        creatorProfileId: "creator",
+        root: "/invited",
+      },
     },
   });
   const handler = vi.fn(({ client, respond }: GatewayRequestHandlerOptions) => {

@@ -7,7 +7,7 @@ import { admitChatSend } from "./chat-send-admission.js";
 import type { ChatSendDiagnostics } from "./chat-send-diagnostics.js";
 import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
 import {
-  attachChatSendParticipationCeiling,
+  applyChatSendParticipation,
   normalizeChatSendRequest,
   type NormalizedChatSendRequest,
 } from "./chat-send-request.js";
@@ -85,10 +85,7 @@ export async function prepareAndAdmitChatSend(
     }
   }
   if (sessionMutationAuthorization?.participationCeiling) {
-    const attached = attachChatSendParticipationCeiling(
-      normalizedRequest.value,
-      sessionMutationAuthorization.participationCeiling,
-    );
+    const attached = applyChatSendParticipation(normalizedRequest.value);
     if (!attached.ok) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, attached.error));
       return undefined;

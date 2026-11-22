@@ -522,6 +522,7 @@ export type SessionMutationAuthorization = {
     signal?: AbortSignal;
     release: () => void;
     participationAuthority?: import("../../agents/admitted-run-context.js").AdmittedRunOperatorAuthority;
+    participationCeiling?: import("../../agents/participation-ceiling.js").BoundParticipationCeiling;
   };
   /** Transfer retained facts to admitted work; request cleanup then leaves them with that owner. */
   takeRelease?: () => () => void;

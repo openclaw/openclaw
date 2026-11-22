@@ -1,20 +1,38 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
+import * as admittedContext from "../agents/admitted-run-context.js";
 import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
 import { withInvitedGuestGateway } from "./guest-session-access.test-support.js";
 
 it("adds a configured plugin to participant defaults and denies openclaw exact-id dispatch", async ({
   signal,
 }) => {
+  const authorityReads = vi.spyOn(admittedContext, "readAdmittedRunOperatorAuthority");
   await withInvitedGuestGateway(
     signal,
-    async ({ sender, invited, carol, providerReplies }) => {
-      const { key } = await sender.request<{ key: string }>(
+    async ({ sender, invited, carol, alice, providerReplies, state }) => {
+      const { key, sessionId } = await sender.request<{ key: string; sessionId: string }>(
         "sessions.create",
         { agentId: "main", label: "Configured participation", visibility: "shared" },
         { signal },
       );
       const target = { agentId: "main", sessionKey: key };
+      await sender.request(
+        "chat.send",
+        { ...target, message: "Ordinary owner control", idempotencyKey: "ordinary-owner-control" },
+        { signal },
+      );
+      await expect(
+        sender.request("agent.wait", { runId: "ordinary-owner-control" }, { signal }),
+      ).resolves.toMatchObject({ status: "ok" });
+      const ownerReads = authorityReads.mock.results.flatMap((result) =>
+        result.type === "return" && result.value?.profileId === alice.id ? [result.value] : [],
+      );
+      expect(ownerReads.length).toBeGreaterThan(0);
+      expect(ownerReads.every((authority) => authority.participationCeiling === undefined)).toBe(
+        true,
+      );
+      authorityReads.mockClear();
       await sender.request(
         "session.members.add",
         { ...target, identityId: carol.id, access: "send" },
@@ -63,6 +81,29 @@ it("adds a configured plugin to participant defaults and denies openclaw exact-i
       await expect(sender.request("agent.wait", { runId }, { signal })).resolves.toMatchObject({
         status: "ok",
       });
+      const participantReads = authorityReads.mock.results.flatMap((result) =>
+        result.type === "return" && result.value?.profileId === carol.id ? [result.value] : [],
+      );
+      expect(participantReads.length).toBeGreaterThan(0);
+      for (const authority of participantReads) {
+        expect(authority.participationCeiling).toMatchObject({
+          kind: "send",
+          profileId: carol.id,
+          sessionKey: key,
+          tools: expect.arrayContaining(["participant-proof"]),
+          permission: "workspace",
+          source: {
+            agentId: "main",
+            sessionId,
+            creatorProfileId: alice.id,
+            root: state.workspaceDir,
+          },
+        });
+        expect(authority.recoverySnapshot).toMatchObject({
+          profileId: carol.id,
+          participationCeiling: authority.participationCeiling,
+        });
+      }
       expect(outputs).toHaveLength(3);
       expect(outputs[0]).toContain("participant_probe");
       const executed = JSON.parse(outputs[1]!) as { result: { content: Array<{ text: string }> } };

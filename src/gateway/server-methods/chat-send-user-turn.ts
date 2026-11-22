@@ -159,7 +159,7 @@ export function prepareChatSendUserTurn(params: {
   request: Pick<
     NormalizedChatSendRequest,
     | "clientInfo"
-    | "participationCeiling"
+    | "participating"
     | "inboundMessage"
     | "suppressCommandInterpretation"
     | "systemInputProvenance"
@@ -223,8 +223,7 @@ export function prepareChatSendUserTurn(params: {
   void pluginBoundMediaPromise.catch(() => undefined);
   // Generated media hints belong to the prompt and reset payload, not command arguments.
   const commandBody = request.inboundMessage;
-  const suppressCommands =
-    request.suppressCommandInterpretation || Boolean(request.participationCeiling);
+  const suppressCommands = request.suppressCommandInterpretation || Boolean(request.participating);
   const commandSource =
     !suppressCommands && commandBody.trim().startsWith("/") ? "text" : undefined;
   const buildTextContext = (text: string) => {
@@ -293,7 +292,7 @@ export function prepareChatSendUserTurn(params: {
     GatewayRunToolBindings: request.toolBindings,
     GatewayUiCommandTarget: gatewayUiCommandTarget,
   };
-  if (request.participationCeiling) {
+  if (request.participating) {
     delete ctx.ApprovalReviewerDeviceId;
   }
   const recoveredRequester = readQueuedChatInputAdmission(session.clientRunId)?.requesterProfile;

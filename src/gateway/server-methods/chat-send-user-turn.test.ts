@@ -84,7 +84,7 @@ describe("prepareChatSendUserTurn", () => {
         inputText: text,
         request: {
           inboundMessage: text,
-          participationCeiling: { kind: "send", profileId: "guest", sessionKey: "agent:main:main" },
+          participating: true,
         },
         attachments: { parsedMessage: text },
         client: {
