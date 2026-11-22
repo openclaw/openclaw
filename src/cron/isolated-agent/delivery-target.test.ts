@@ -3,6 +3,7 @@ import { parseTelegramTargetForTest } from "../../../test/helpers/infra/telegram
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { resolveMessageChannelSelection as selectConfiguredMessageChannel } from "../../infra/outbound/channel-selection.js";
 import {
   createTargetsTestRegistry,
   forumMessagingForTest,
@@ -155,6 +156,7 @@ function expectTargetError(
 }
 
 const AGENT_ID = "agent-b";
+const NAMESPACE_SESSION_KEY = `agent:${AGENT_ID}:namespace`;
 const DEFAULT_TARGET = { channel: "forum" as const, to: "room:default" };
 
 function setSessionEntry(sessionKey: string, context: DeliveryContext) {
@@ -448,4 +450,139 @@ describe("resolveDeliveryTarget", () => {
 
     expect(result).toMatchObject({ ok: true, to: "63448508", threadId: "42" });
   });
+
+  it("preserves a namespace directory identity through cron session routing", async () => {
+    setSessionEntry(NAMESPACE_SESSION_KEY, { channel: "alpha", to: "alpha" });
+    setPlugins(
+      plugin(
+        "alpha",
+        {
+          capabilities: { chatTypes: ["direct", "group"] },
+          messaging: {
+            targetResolver: { looksLikeId: (raw) => /^C\d+$/.test(raw) },
+            resolveOutboundSessionRoute: ({ cfg, agentId, target, resolvedTarget }) =>
+              buildChannelOutboundSessionRoute({
+                cfg,
+                agentId,
+                channel: "alpha",
+                peer: { kind: resolvedTarget?.kind === "user" ? "direct" : "channel", id: target },
+                chatType: resolvedTarget?.kind === "user" ? "direct" : "channel",
+                from: `alpha:${target}`,
+                to: `channel:${target.replace(/^channel:/, "")}`,
+              }),
+          },
+        },
+        {
+          directory: {
+            listGroups: async () => [{ kind: "group", id: "C12345678", name: "alpha" }],
+          },
+        },
+      ),
+    );
+    const result = await resolveTarget(
+      { channel: "last", sessionKey: NAMESPACE_SESSION_KEY },
+      makeCfg({ channels: { alpha: {} } }),
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      to: "channel:C12345678",
+      sessionRoute: { to: "channel:C12345678", peer: { kind: "channel", id: "C12345678" } },
+    });
+  });
+
+  it.each([
+    { channel: "last", expected: "missing" },
+    { channel: "last", destination: "allowed-room", expected: "allowed-room" },
+    {
+      channel: "last",
+      destination: "allowed-room",
+      ambiguous: true,
+      expected: "ambiguous",
+    },
+    { channel: "last", explicitTo: true, expected: "@alpha" },
+    { channel: "last", destination: "denied-room", denied: true, expected: "@operator" },
+    {
+      channel: "last",
+      explicitTo: "@denied-room",
+      destination: "denied-room",
+      denied: true,
+      expected: "denied",
+    },
+    { channel: "alpha", destination: "allowed-room", expected: "@alpha" },
+    {
+      channel: "last",
+      explicitTo: true,
+      noSource: true,
+      expected: "missing",
+    },
+  ])(
+    "resolves cron namespace with $channel channel ($expected)",
+    async ({ channel, explicitTo, noSource, destination, ambiguous, denied, expected }) => {
+      const normalizeTarget = vi.fn((raw: string) => (raw.startsWith("@") ? raw : `@${raw}`));
+      const resolveNative = vi.fn(({ to, allowFrom }: { to?: string; allowFrom?: string[] }) =>
+        denied && to === "@denied-room" && allowFrom?.includes("operator")
+          ? { ok: false as const, error: new Error("cron target denied") }
+          : { ok: true as const, to: to ?? "" },
+      );
+      setPlugins(
+        plugin(
+          "alpha",
+          {
+            outbound: { deliveryMode: "direct", resolveTarget: resolveNative },
+            messaging: { normalizeTarget, targetResolver: { looksLikeId: () => true } },
+          },
+          {
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({}),
+              isConfigured: () => true,
+              resolveAllowFrom: () => ["operator"],
+            },
+            directory: {
+              listGroups: async () =>
+                [destination, ...(ambiguous ? ["other-room"] : [])].flatMap((id) =>
+                  id ? [{ kind: "group" as const, id, name: "alpha" }] : [],
+                ),
+            },
+          },
+        ),
+      );
+      if (noSource) {
+        vi.mocked(resolveMessageChannelSelection).mockImplementationOnce(
+          selectConfiguredMessageChannel,
+        );
+      } else {
+        setSessionEntry(NAMESPACE_SESSION_KEY, { channel: "alpha", to: "alpha" });
+      }
+      const result = await resolveTarget(
+        {
+          channel,
+          sessionKey: NAMESPACE_SESSION_KEY,
+          ...(explicitTo ? { to: typeof explicitTo === "string" ? explicitTo : "alpha" } : {}),
+        },
+        makeCfg({ channels: { alpha: {} } }),
+      );
+      if (expected === "ambiguous") {
+        expect(result).toMatchObject({
+          ok: false,
+          error: { reasonCode: "message_target_ambiguous" },
+        });
+        expect(resolveNative).not.toHaveBeenCalled();
+      } else if (expected === "missing" || expected === "denied") {
+        expectTargetError(
+          result,
+          expected === "missing" ? "does not specify a destination" : "cron target denied",
+        );
+        if (expected === "missing") {
+          expect(normalizeTarget).not.toHaveBeenCalled();
+          expect(resolveNative).not.toHaveBeenCalled();
+        }
+      } else {
+        expect(result).toMatchObject({
+          ok: true,
+          to: expected.startsWith("@") ? expected : `@${expected}`,
+        });
+      }
+    },
+  );
 });

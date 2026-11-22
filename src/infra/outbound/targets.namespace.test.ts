@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { ChannelDirectoryEntry, ChannelPlugin } from "../../channels/plugins/types.public.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { resetDirectoryCache } from "./target-resolver.js";
@@ -9,9 +9,13 @@ import {
   createTargetsTestRegistry,
 } from "./targets.test-helpers.js";
 
+let plugin: ChannelPlugin;
+
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
   resetDirectoryCache();
+  plugin = createGenericTargetTestPlugin("alpha");
+  setActivePluginRegistry(createTargetsTestRegistry([plugin]));
 });
 afterEach(() => resetPluginRuntimeStateForTest());
 
@@ -29,7 +33,6 @@ it.each([
   ["alpha:123456789", "123456789"],
   ["conversation:ref-1", "conversation:ref-1"],
 ])("preserves explicit destination %s", async (to, expected) => {
-  setActivePluginRegistry(createTargetsTestRegistry());
   expect(await resolveOutboundTarget({ channel: "alpha", to, mode: "explicit" })).toMatchObject({
     ok: true,
     to: expected,
@@ -45,16 +48,8 @@ it.each([
   async ({ target, explicitTo }) => {
     const normalizeTarget = vi.fn((raw: string) => `@${raw}`);
     const resolveTarget = vi.fn(({ to }: { to?: string }) => ({ ok: true as const, to: to ?? "" }));
-    const plugin: ChannelPlugin = {
-      ...createGenericTargetTestPlugin("alpha"),
-      messaging: { normalizeTarget, targetResolver: { looksLikeId: () => true } },
-      outbound: {
-        deliveryMode: "direct",
-        resolveTarget,
-        sendText: async () => ({ channel: "alpha", messageId: "sent-1" }),
-      },
-    };
-    setActivePluginRegistry(createTargetsTestRegistry([plugin]));
+    plugin.messaging = { normalizeTarget, targetResolver: { looksLikeId: () => true } };
+    plugin.outbound = { deliveryMode: "direct", resolveTarget };
 
     const result = await resolveProactiveDeliveryTarget({
       cfg: {},
@@ -92,25 +87,17 @@ it.each([
         ? { ok: false as const, error: new Error("recipient not allowed") }
         : { ok: true as const, to: to === id ? rewritten : (to ?? "") },
     );
-    const plugin: ChannelPlugin = {
-      ...createGenericTargetTestPlugin("alpha"),
-      messaging: {
-        targetPrefixes: ["alpha"],
-        inferTargetChatType: ({ to }) =>
-          to === "42" ? "direct" : to.startsWith("alpha:") ? "group" : undefined,
-      },
-      outbound: {
-        deliveryMode: "direct",
-        resolveTarget,
-        sendText: async () => ({ channel: "alpha", messageId: "sent-1" }),
-      },
+    plugin.messaging = {
+      targetPrefixes: ["alpha"],
+      inferTargetChatType: ({ to }) =>
+        to === "42" ? "direct" : to.startsWith("alpha:") ? "group" : undefined,
     };
+    plugin.outbound = { deliveryMode: "direct", resolveTarget };
     plugin.directory = {
       listGroups: async () => (kind === "group" ? [{ kind, id, name: "alpha" }] : []),
       listPeers: async () => (kind === "user" ? [{ kind, id, name: "alpha" }] : []),
     };
     plugin.config = { ...plugin.config, resolveAllowFromAsync: async () => ["operator"] };
-    setActivePluginRegistry(createTargetsTestRegistry([plugin]));
 
     const result = await resolveProactiveDeliveryTarget({
       cfg: {},
@@ -132,19 +119,11 @@ it.each([
 );
 
 it("fails closed when namespace directory lookup fails", async () => {
-  const plugin: ChannelPlugin = {
-    ...createGenericTargetTestPlugin("alpha"),
-    outbound: {
-      deliveryMode: "direct",
-      sendText: async () => ({ channel: "alpha", messageId: "sent-1" }),
-    },
-  };
   plugin.directory = {
-    listGroups: async (): Promise<ChannelDirectoryEntry[]> => {
+    listGroups: async () => {
       throw new Error("directory unavailable");
     },
   };
-  setActivePluginRegistry(createTargetsTestRegistry([plugin]));
 
   expect(
     await resolveProactiveDeliveryTarget({ cfg: {}, entry, policy: { target: "last" } }),

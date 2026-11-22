@@ -69,21 +69,20 @@ export function resolveTargetPrefixedChannel(raw?: string | null): string | unde
 }
 
 /** Finds a bare target that names the selected channel instead of a destination. */
-export function resolveBareTargetChannelNamespace(params: {
-  raw?: string | null;
-  plugin?: ChannelPlugin;
-}): string | undefined {
-  const raw = normalizeOptionalLowercaseString(params.raw);
-  const plugin = params.plugin;
-  if (!raw || !plugin) {
+export function resolveBareTargetChannelNamespace(
+  raw: unknown,
+  plugin?: ChannelPlugin,
+): string | undefined {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  if (!normalized || !plugin) {
     return undefined;
   }
   return [
     plugin.id,
     ...(plugin.meta?.aliases ?? []),
     ...(plugin.messaging?.targetPrefixes ?? []),
-  ].some((candidate) => normalizeOptionalLowercaseString(candidate) === raw)
-    ? raw
+  ].some((candidate) => normalizeOptionalLowercaseString(candidate) === normalized)
+    ? normalized
     : undefined;
 }
 

@@ -225,10 +225,7 @@ export async function executeGatewayAction(
       ...(conversationReadOrigin === "direct-operator" ? { conversationReadOrigin } : {}),
       ...(ctx.input.channelInferred &&
       ["to", "channelId"].some((key) =>
-        resolveBareTargetChannelNamespace({
-          raw: normalizeOptionalString(ctx.params[key]),
-          plugin: channelPlugin,
-        }),
+        resolveBareTargetChannelNamespace(ctx.params[key], channelPlugin),
       )
         ? { channelInferred: true }
         : {}),

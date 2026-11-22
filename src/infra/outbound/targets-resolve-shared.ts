@@ -86,10 +86,7 @@ export async function resolveOutboundTargetWithPlugin(params: {
     return { ok: false, error: targetPrefixError };
   }
   let namespaceTarget: ResolvedMessagingTarget | undefined;
-  if (
-    params.target.channelInferred &&
-    resolveBareTargetChannelNamespace({ raw: effectiveTo, plugin })
-  ) {
+  if (params.target.channelInferred && resolveBareTargetChannelNamespace(effectiveTo, plugin)) {
     const { resolveChannelTarget } = await import("./target-resolver.js");
     const namespaceResolution = await resolveChannelTarget({
       cfg: params.target.cfg ?? {},

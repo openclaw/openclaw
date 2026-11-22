@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
+import { resolveBareTargetChannelNamespace } from "../../infra/outbound/channel-target-prefix.js";
 import { assertOutboundHandoffCurrent } from "../../infra/outbound/deliver-handoff.js";
 import { validateExplicitMessageAccountSelection } from "../../infra/outbound/message-account-selection.js";
 import { enforceMessageActionAllowlist } from "../../infra/outbound/outbound-policy.js";
@@ -83,6 +84,8 @@ type ServerOwnedConversationReadOrigin = ReturnType<
 
 type ChannelMessageActionDispatchContext = Omit<ChannelMessageActionContext, "action"> & {
   action: unknown;
+  /** Host-only route provenance, removed before invoking any plugin callback. */
+  channelInferred?: true;
   /** Host-only authority, removed before invoking any plugin callback. */
   messageActionAuthorization?: MessageActionAuthorization;
 };
@@ -313,7 +316,11 @@ function prepareMessageActionReadContext(
         : "delegated"
       : normalizeConversationReadInvocationOrigin(ctx.conversationReadOrigin)
   ) as ServerOwnedConversationReadOrigin;
-  const { messageActionAuthorization: _authorization, ...pluginContext } = ctx;
+  const {
+    messageActionAuthorization: _authorization,
+    channelInferred: _channelInferred,
+    ...pluginContext
+  } = ctx;
   const actionContext: ChannelMessageActionContext = {
     ...pluginContext,
     action,
@@ -616,6 +623,31 @@ export async function dispatchChannelMessageAction(
         ctx: authorizedActionContext,
         ...prepared,
       };
+      if (
+        ctx.channelInferred &&
+        ["to", "channelId"].some((key) =>
+          resolveBareTargetChannelNamespace(authorizedActionContext.params[key], plugin),
+        )
+      ) {
+        if (prepared.assertReadAuthorityCurrent || isExternalDelegatedMessageActionRead(prepared)) {
+          enforceMessageActionConversationReadGate(gateParams);
+        }
+        const { resolveMessageTarget } =
+          await import("../../infra/outbound/message-action-routing.js");
+        // Fenced reads already own this scope; other actions lend their admitted handoff guard.
+        await withChannelReadAuthority(
+          prepared.assertReadAuthorityCurrent
+            ? undefined
+            : authorizedActionContext.assertDirectAdapterHandoff,
+          () =>
+            resolveMessageTarget({
+              ...authorizedActionContext,
+              args: authorizedActionContext.params,
+              channelInferred: true,
+              plugin,
+            }),
+        );
+      }
       // This writer passed the private job/account gate and declared provider target checks.
       const match =
         scheduledWrite &&

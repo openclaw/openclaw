@@ -227,6 +227,30 @@ describe("official plugin read-only authority", () => {
     expect(fixture.handleAction).toHaveBeenCalledOnce();
   });
 
+  it("admits inferred namespace reads before directory I/O and dispatches the canonical recipient", async () => {
+    const fixture = registerOfficial();
+    const listGroups = vi.fn(async () => [
+      { kind: "group" as const, id: "channel:resolved", name: fixture.plugin.id },
+    ]);
+    fixture.plugin.directory = { listGroups };
+    const context: Context = {
+      ...fixture.context,
+      params: { channelId: fixture.plugin.id },
+      channelInferred: true,
+    };
+    await expect(
+      dispatchChannelMessageAction({ ...context, requesterAccountId: "another-account" }),
+    ).rejects.toThrow("requires current provider and account context");
+    expect(listGroups).not.toHaveBeenCalled();
+    expect(fixture.handleAction).not.toHaveBeenCalled();
+    await expect(dispatchChannelMessageAction(context)).resolves.toBe(receipt);
+    expect(fixture.handleAction).toHaveBeenCalledWith(
+      expect.objectContaining({ params: expect.objectContaining({ channelId: "resolved" }) }),
+    );
+    expect(fixture.handleAction.mock.calls[0]?.[0]).not.toHaveProperty("channelInferred");
+    expect(listGroups).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { trusted: false },
     { fenced: false },

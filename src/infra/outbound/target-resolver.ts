@@ -237,7 +237,7 @@ export async function resolveChannelTarget(params: {
     };
   }
   const channelNamespace = params.channelInferred
-    ? resolveBareTargetChannelNamespace({ raw, plugin })
+    ? resolveBareTargetChannelNamespace(raw, plugin)
     : undefined;
   const kind = detectTargetKind(params.channel, raw, params.preferredKind, plugin);
   const normalizedInput = channelNamespace

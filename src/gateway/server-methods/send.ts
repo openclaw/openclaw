@@ -286,6 +286,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                 request.inboundTurnKind === "room_event" ? "room_event" : "user_request";
               const actionContext = {
                 channel,
+                channelInferred: request.channelInferred,
                 action: request.action as never,
                 cfg,
                 params: request.params,
