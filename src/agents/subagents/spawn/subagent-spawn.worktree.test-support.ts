@@ -13,6 +13,7 @@ import {
 import {
   listSessionEntryKeysReadOnly,
   loadSessionEntry,
+  upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { registerProjectRegistry } from "../../../projects/project-registry.js";
@@ -50,9 +51,12 @@ export function registerManagedWorktreeSpawnCases(
       dispose = async () => {};
       await cleanup();
     });
-    it.for(["keep", "delete"] as const)(
-      "runs a hidden managed worktree with cleanup=%s",
-      async (cleanup, { signal }) => {
+    it.for([
+      { source: "parent folder", cleanup: "keep" },
+      { source: "explicit project", cleanup: "delete" },
+    ] as const)(
+      "runs a hidden managed worktree from $source with cleanup=$cleanup",
+      async ({ source, cleanup }, { signal }) => {
         const repository = path.join(options.stateDir(), "source");
         let projectId = "";
         const git = (...args: string[]) => gitAt(repository, ...args);
@@ -125,6 +129,13 @@ export function registerManagedWorktreeSpawnCases(
             .id;
           signal.throwIfAborted();
           ownedBound = await createBoundParent();
+          if (source === "parent folder") {
+            // Model an existing session opened on a registered checkout as a plain folder.
+            await upsertSessionEntryCore(
+              { storePath: ownedBound.storePath, sessionKey: ownedBound.parentSessionKey },
+              { sessionRoot: repository, spawnedCwd: repository },
+            );
+          }
           signal.throwIfAborted();
           ownedGateway = await createBoundGateway(ownedBound);
           vi.mocked(ownedGateway.runtime.lifecycle.waitForAgent).mockRestore();
@@ -174,7 +185,7 @@ export function registerManagedWorktreeSpawnCases(
         spawn = createBoundSpawnInvocation(bound, {
           visible: false,
           context: "isolated",
-          projectId,
+          ...(source === "explicit project" ? { projectId } : {}),
           worktree: true,
           worktreeName: `hidden-${cleanup}`,
           worktreeBaseRef: "main",
@@ -197,8 +208,12 @@ export function registerManagedWorktreeSpawnCases(
         childSessionKey = details.childSessionKey;
         const childScope = { storePath: bound.storePath, sessionKey: childSessionKey };
         expect(loadSessionEntry(childScope)).toMatchObject({
-          projectId,
-          pendingWorktree: { name: `hidden-${cleanup}`, baseRef: "main" },
+          ...(source === "explicit project" ? { projectId } : {}),
+          pendingWorktree: {
+            name: `hidden-${cleanup}`,
+            baseRef: "main",
+            ...(source === "parent folder" ? { source: { kind: "project", id: projectId } } : {}),
+          },
           spawnDepth: 2,
         });
         expect(runEmbeddedAgent).not.toHaveBeenCalled();

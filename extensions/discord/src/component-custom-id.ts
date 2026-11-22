@@ -126,3 +126,34 @@ export function parseDiscordComponentCustomIdForInteraction(id: string): Compone
 export function parseDiscordModalCustomIdForInteraction(id: string): ComponentParserResult {
   return parseDiscordCustomIdForInteraction(id, DISCORD_MODAL_CUSTOM_ID_KEY);
 }
+
+// Agent-authored presentation controls are stateless: a button carries its core-marked
+// value in the id and a select carries it in the option values, so a tap needs no
+// registry entry and survives restarts. The index keeps ids unique per message.
+const DISCORD_AGENT_BUTTON_CUSTOM_ID_KEY = "agent";
+const DISCORD_AGENT_SELECT_CUSTOM_ID_KEY = "agentsel";
+const DISCORD_CUSTOM_ID_MAX_LENGTH = 100;
+
+export function buildDiscordAgentButtonCustomId(
+  index: number,
+  value: string,
+  reusable = false,
+): string | undefined {
+  const customId = `${DISCORD_AGENT_BUTTON_CUSTOM_ID_KEY}:${index}${reusable ? "r" : ""}:${value}`;
+  return customId.length <= DISCORD_CUSTOM_ID_MAX_LENGTH ? customId : undefined;
+}
+
+export function buildDiscordAgentSelectCustomId(index: number): string {
+  return `${DISCORD_AGENT_SELECT_CUSTOM_ID_KEY}:${index}`;
+}
+
+export function parseDiscordAgentButtonCustomId(
+  customId: string | undefined,
+): { value: string; reusable: boolean } | undefined {
+  const [, reusable, value] = customId?.match(/^agent:\d+(r?):(.+)$/su) ?? [];
+  return value === undefined ? undefined : { value, reusable: reusable === "r" };
+}
+
+export function isDiscordAgentControlCustomId(customId: string | undefined): boolean {
+  return /^agent(?:sel)?:\d/u.test(customId ?? "");
+}

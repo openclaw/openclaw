@@ -13,6 +13,7 @@ import type {
 import type { GcSample } from "./gc-observer.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
 import * as sqliteReaderMetrics from "./sqlite-reader-metrics.js";
+import { buildWorkerCensus, type WorkerPoolPolicy } from "./worker-census.js";
 import { MAX_DIAGNOSTIC_WORKER_SLOTS, workerScriptName } from "./worker-diagnostic-script.js";
 import {
   canObserveWorkerMessages,
@@ -52,8 +53,11 @@ type WorkerSource = {
   requestClass?: () => string | undefined;
   lifecycleMessages?: boolean;
   poolId?: number;
+  policy?: WorkerPoolPolicy;
   taskMetrics?: NonNullable<DiagnosticMemoryUsage["workerTaskMetrics"]>[number];
   workerSlot?: number;
+  /** Live logical endpoints served by this one physical shared worker host. */
+  hostedEndpoints?: () => number;
   started?: boolean;
   retirementReason?: WorkerRetirementReason;
   cpuUsage: () => Promise<NodeJS.CpuUsage | undefined>;
@@ -187,22 +191,43 @@ function receivePostgresBridgeCounters(source: WorkerSource, value: unknown): vo
   publishPostgresBridgeCounters();
 }
 
-/** Pool identity follows its live Workers without retaining the pool itself. */
-export function attributeWorkerToPool(
-  worker: WorkerCpuHandle,
-  pool: object,
-  workerClass?: WorkerPoolClass,
-): void {
+/** The shared worker host stays one physical worker; its endpoints add no isolates. */
+export function setTrackedWorkerHostedEndpoints(worker: WorkerCpuHandle, count: () => number) {
   const source = trackedWorkers.workers.get(worker);
-  if (!source) {
-    return;
+  if (source) {
+    source.hostedEndpoints = count;
   }
+}
+
+/** Stable census identity for a pool, assigned on first use. */
+export function getWorkerPoolId(pool: object): number {
   let poolId = trackedWorkers.poolIds.get(pool);
   if (poolId === undefined) {
     poolId = ++trackedWorkers.nextPoolId;
     trackedWorkers.poolIds.set(pool, poolId);
   }
-  source.poolId = poolId;
+  return poolId;
+}
+
+/** Visit live native workers, including pending retirement. */
+export function forEachTrackedWorker(visit: (script: string, poolId?: number) => void): void {
+  pruneExitedWorkers();
+  trackedWorkers.workers.forEach((source) => visit(source.script, source.poolId));
+}
+
+/** Pool identity follows its live Workers without retaining the pool itself. */
+export function attributeWorkerToPool(
+  worker: WorkerCpuHandle,
+  pool: object,
+  workerClass?: WorkerPoolClass,
+  policy?: WorkerPoolPolicy,
+): void {
+  const source = trackedWorkers.workers.get(worker);
+  if (!source) {
+    return;
+  }
+  source.poolId = getWorkerPoolId(pool);
+  source.policy = policy;
   attributeWorkerMetrics(source, workerClass, 0);
 }
 
@@ -238,25 +263,9 @@ function attributeWorkerMetrics(
 /** A bounded census of live pools, including Workers whose retirement is pending. */
 export function getTrackedWorkerPoolSnapshot() {
   pruneExitedWorkers();
-  const pools = new Map<number, { poolId: number; script: string; workerCount: number }>();
-  for (const source of trackedWorkers.workers.values()) {
-    if (source.poolId === undefined) {
-      continue;
-    }
-    const pool = pools.get(source.poolId);
-    if (pool) {
-      pool.workerCount++;
-    } else {
-      pools.set(source.poolId, { poolId: source.poolId, script: source.script, workerCount: 1 });
-    }
-  }
   return {
-    workerCount: trackedWorkers.workers.size,
+    ...buildWorkerCensus(trackedWorkers.workers.values()),
     ...summarizePostgresBridgeCounters(getTrackedPostgresBridgeCounters()),
-    workerPoolCount: pools.size,
-    workerPools: [...pools.values()]
-      .toSorted((a, b) => b.workerCount - a.workerCount || a.poolId - b.poolId)
-      .slice(0, 100),
   };
 }
 

@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile, rm, rename, symlink } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
+import { getResourceProfile } from "openclaw/plugin-sdk/resource-profile";
 import { expect, it, vi } from "vitest";
 import { LiveState } from "./live-state.js";
 import { createKnowledgeService } from "./service.js";
+import { StorageClient } from "./storage-client.js";
 import {
   afterTest,
   apiFor,
@@ -12,6 +14,11 @@ import {
   toolContext,
   useTestTempDirs,
 } from "./test-support.js";
+
+vi.mock("openclaw/plugin-sdk/resource-profile", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/resource-profile")>()),
+  getResourceProfile: vi.fn(() => "standard"),
+}));
 
 const tempDirs = useTestTempDirs();
 
@@ -36,9 +43,18 @@ async function until(fn: any) {
 }
 
 it("external changes invalidate; events contain no data; authorized reads reconcile edits/renames/deletions", async () => {
+  vi.mocked(getResourceProfile).mockReturnValue("lean");
+  afterTest(() => {
+    vi.useRealTimers();
+    vi.mocked(getResourceProfile).mockReturnValue("standard");
+  });
   const f = await fixture();
-  const watch = vi.spyOn(LiveState.prototype, "start");
-  afterTest(() => watch.mockRestore());
+  const watch = vi.spyOn(LiveState.prototype, "start"),
+    calls = vi.spyOn(StorageClient.prototype, "call");
+  afterTest(() => {
+    watch.mockRestore();
+    calls.mockRestore();
+  });
   f.services[0].start();
   const r = await f.service.save_page(
     { requestId: randomUUID(), title: "Live fixture", type: "note", body: "Original" },
@@ -51,8 +67,19 @@ it("external changes invalidate; events contain no data; authorized reads reconc
   f.service = createKnowledgeService(f.context.api, { emit: (...args) => f.emitted.push(args) });
   f.services[1].start();
   f.emitted.length = 0;
+  // Only the host's idle clock advances; native watchers still run in the worker.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const original = (await f.service.record_detail({ id: r.id, view: "raw" }, f.context)).record!
     .raw;
+  const client = calls.mock.contexts.at(-1);
+  if (!(client instanceof StorageClient)) {
+    throw new Error("Expected the real storage client");
+  }
+  const worker = Reflect.get(client, "worker");
+  await vi.advanceTimersByTimeAsync(60_001);
+  expect(Reflect.get(client, "worker"), "watch intent pins the idle worker").toBe(worker);
+  expect(worker.threadId).toBeGreaterThan(0);
+  vi.useRealTimers();
   const file = f.root + "/private/" + r.path;
   await writeFile(file, original!.replace("Original", "External edit"));
   await until(() => f.emitted.length);

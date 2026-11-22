@@ -16,7 +16,6 @@ import {
   rewrapToolWithBeforeToolCallHook,
   type HookContext,
 } from "../agents/agent-tools.before-tool-call.js";
-import { hasAnyAuthProfileStoreSourceAsync } from "../agents/auth-profiles/source-check.js";
 import { createHeadlessDeadlineScope } from "../agents/code-mode-headless.js";
 import type {
   CodeModeNamespaceDescriptor,
@@ -61,6 +60,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { restoreCronScriptOperatorSource } from "../gateway/cron-operator-source.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { logWarn } from "../logger.js";
 import {
   capturePluginLifecycleAuthority,
@@ -239,8 +239,6 @@ async function prepareTriggerRuntime(
         toolsEnabled: true,
         toolsAllow: params.toolsAllow,
       });
-      const authProfileStoreSource =
-        toolPlan.constructTools && (await hasAnyAuthProfileStoreSourceAsync(agentDir));
       preparationSignal?.throwIfAborted();
       const scheduledToolPolicy = resolveScheduledToolPolicyContext({
         toolsAllow: params.toolsAllow,
@@ -279,6 +277,7 @@ async function prepareTriggerRuntime(
         signal,
         messageActionTurnCapability,
       ) => {
+        const assertSource = resolveAdmittedRunActiveAssertion(admitted, signal);
         const allTools = toolPlan.constructTools
           ? await createOpenClawCodingToolsInternalAsync({
               agentId,
@@ -286,13 +285,13 @@ async function prepareTriggerRuntime(
               operationalRunInstance: admitted.operationalRunInstance,
               messageActionTurnCapability,
               abortSignal: signal,
+              prepareHostFileMutation: assertSource?.prepareSessionSourceStorageEffect,
               exec: { config },
               sandbox,
               sessionKey,
               trigger: "cron",
               jobId: params.jobId,
               agentDir,
-              authProfileStoreSource,
               cwd: effectiveWorkspace,
               workspaceDir: effectiveWorkspace,
               spawnWorkspaceDir: workspaceDir,
@@ -539,7 +538,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       });
       releaseRuntime = release;
       admission = prepareCronRunAdmission({
-        scheduledExecution: params.occurrence.mint({
+        scheduledExecution: await params.occurrence.mint({
           cfg: runtime.context.config,
           agentId: runtime.context.agentId,
           runId,
@@ -662,6 +661,9 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         return { kind: "completed" as const, result };
       });
     } catch (error) {
+      if (isOperatorAuthorityUnavailable(error)) {
+        throw error;
+      }
       return scriptFailure(
         formatErrorMessageWithCode(error),
         error instanceof CodeModeHeadlessTimeoutError

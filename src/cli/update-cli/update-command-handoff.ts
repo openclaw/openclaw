@@ -200,6 +200,9 @@ export async function handoffUpdateFromGateway(params: {
       "Cannot locate the installed updater; run `openclaw doctor` before retrying.",
     );
   }
+  // The handed-off update changes state in a process that cannot capture; copy the
+  // originals once the handoff is certain, while this updater still holds its executor.
+  await params.opts.run?.captureOriginal?.();
   if (params.opts.run?.executorFence) {
     releaseUpdateCommandPreflightForHandoff(params.opts.run.executorFence);
     delete params.opts.run.executorFence;

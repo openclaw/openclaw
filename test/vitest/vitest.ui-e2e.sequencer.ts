@@ -107,9 +107,12 @@ const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const UI_E2E_SHARED_WORKER_FILES = new Set([
   "ui/src/e2e/guest-person-identities.e2e.test.ts",
   "ui/src/e2e/model-providers-profile-outcomes.e2e.test.ts",
+  "ui/src/e2e/plugin-panel-icons.e2e.test.ts",
   "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
   "ui/src/e2e/question-guest.e2e.test.ts",
+  "ui/src/e2e/route-asset-requests.e2e.test.ts",
   "ui/src/e2e/screen-requester-routing.e2e.test.ts",
+  "ui/src/e2e/team-scale-cold-load.e2e.test.ts",
 ]);
 
 function estimateFileSeconds(moduleId: string): number {

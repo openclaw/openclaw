@@ -11,6 +11,34 @@ import {
 } from "./roster.test-support.ts";
 
 describe("AppSidebar main-chat metadata", () => {
+  it("admits reply-only roster changes without remounting a pinned card", async () => {
+    const { sidebar, context } = await mountRoster(roster, [session("working", 30)]);
+    context.navigation.update({ pinnedAgentIds: ["working"] });
+    sidebar.sidebarAgentsMode = "roster";
+    const store = rosterActivityStore(context);
+    const preview = () =>
+      sidebar.querySelector('[data-pinned-agent="working"] .sidebar-pinned-agent__preview');
+    await vi.waitFor(() => {
+      expect(store.snapshot.membershipReady && !store.snapshot.loading).toBe(true);
+      expect(preview()?.textContent).toBe("No agent reply yet");
+    });
+    const element = preview();
+    const settled = store.snapshot;
+    // A fast background receipt can arrive between two frames with no change
+    // to loading flags or to any visible session row. Only the card text differs.
+    sidebar.shouldPublishSessionData();
+    expect(sidebar.shouldPublishSessionData()).toBe(false);
+    const working = settled.cards.find((card) => card.id === "working")!;
+    const replied = { ...working, assistantPreview: "The notes are ready." };
+    vi.spyOn(store, "snapshot", "get").mockReturnValue({
+      ...settled,
+      cards: settled.cards.map((card) => (card === working ? replied : card)),
+    });
+    sidebar.sessionData.requestSessionDataUpdate();
+    await vi.waitFor(() => expect(preview()?.textContent).toBe("The notes are ready."));
+    expect(preview()).toBe(element);
+  });
+
   it("updates the assistant preview and removes its line when the session is replaced", async () => {
     const { sidebar, context, result } = await mountRoster(roster, [
       session("working", 10, {

@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import {
   withGatewayToolCallerIdentity,
   withGatewayPersonalToolUser,
@@ -24,11 +24,8 @@ import type {
   UserProfileIdentity,
 } from "../../state/user-profiles.types.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
-import {
-  openclawIdTunnelRolePolicy,
-  setOpenClawIdTunnelPrincipalLookup,
-} from "../openclaw-id/tunnel-principal.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { setOpenClawIdTunnelPrincipalLookup } from "../openclaw-id/tunnel-principal.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import type { GatewayClient } from "./client-types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -197,13 +194,11 @@ describe("personal USER.md self-service", () => {
     const sessionKey = "agent:main:dashboard:someone-elses-project";
     let active = true;
     const principal = client.internal?.openclawIdPrincipal;
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "alice-alias",
       scopes,
       openclawIdPrincipal: principal,
-      readCurrentRoleFacts: principal
-        ? () => ({ assignedRole: state.role, policy: openclawIdTunnelRolePolicy(principal) })
-        : undefined,
+      readCurrentRoleFacts: principal ? () => ({ assignedRole: state.role }) : undefined,
       assertCurrent: () => {
         if (!active) {
           throw new Error("requester revoked");
@@ -250,11 +245,12 @@ describe("personal USER.md self-service", () => {
     "routes the %s requester's chat tool from a foreign session to their canonical file",
     async (scope) => {
       if (scope === "operator.admin") {
+        state.role = "admin";
         const principal = {
           kind: "member" as const,
           peerKey: "admin-member",
           accountId: "alice",
-          role: "admin",
+          role: "reader",
         };
         client.internal = { openclawIdPrincipal: principal };
         config.gateway = {
@@ -397,7 +393,7 @@ describe("personal USER.md self-service", () => {
           ...(kind === "shared-secret" ? { operatorRoleActor: { kind: "system" as const } } : {}),
         },
       };
-      const preparation = captureGatewayOperatorRunAuthority({
+      const preparation = prepareGatewayOperatorRunAuthority({
         client: ingress,
         context: identity.gatewayContextResolver(),
         hasCurrentClientAuthority: () => true,
@@ -499,7 +495,7 @@ describe("personal USER.md self-service", () => {
         ingress.invalidated = true;
       }
       expect(
-        await captureGatewayOperatorRunAuthority({
+        await prepareGatewayOperatorRunAuthority({
           client: ingress,
           context: identity.gatewayContextResolver(),
         }),
@@ -512,7 +508,7 @@ describe("personal USER.md self-service", () => {
     async (kind) => {
       const { identity } = toolTurn();
       if (kind === "different source") {
-        client.internal!.operatorRunAuthority = createAdmittedRunOperatorAuthority({
+        client.internal!.operatorRunAuthority = createTestOperatorAuthority({
           profileId: identity.operatorAuthority.profileId,
           scopes: ["operator.read"],
           assertCurrent: () => {},

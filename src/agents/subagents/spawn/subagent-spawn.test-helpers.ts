@@ -141,7 +141,7 @@ export async function supportedSpawnModelChoice(
   const selection = {
     cfg: params.cfg,
     agentId: params.agentId,
-    defaultProvider: defaults.provider,
+    defaultProvider: defaults?.provider ?? "openai",
   };
   const selected = params.resolvedRef
     ? { ref: params.resolvedRef }
@@ -227,7 +227,7 @@ export function createSubagentSpawnTestConfig(
   workspaceDir = os.tmpdir(),
   overrides?: Record<string, unknown>,
 ): OpenClawConfig {
-  return {
+  const config: OpenClawConfig = {
     session: { mainKey: "main", scope: "per-sender" },
     tools: {
       sessions_spawn: {
@@ -241,6 +241,16 @@ export function createSubagentSpawnTestConfig(
     },
     agents: { defaults: { workspace: workspaceDir } },
     ...overrides,
+  };
+  return withSpawnTestModel(config);
+}
+
+/** Spawn fixtures need a configured model; an explicit `defaults.model` still wins. */
+export function withSpawnTestModel(config: OpenClawConfig = {}): OpenClawConfig {
+  const model = { primary: "openai/gpt-6-astra" };
+  return {
+    ...config,
+    agents: { ...config.agents, defaults: { model, ...config.agents?.defaults } },
   };
 }
 
