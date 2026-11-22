@@ -1274,10 +1274,15 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
     if (optOut) {
       expect(published.openclaw.release.bundleRuntimeDependencies).toBe(false);
     }
+    // Optional dependencies stay install-time: npm selects the platform-matching variant,
+    // so the automatic bundle list must not pin the build host's copy (memory-lancedb).
+    const optionalOnly = bundling === "optional-direct" || bundling === "skipped-optional";
     expect(published.bundledDependencies).toEqual(
       ["partial", "all", "explicit-all"].includes(bundling) || bundling.startsWith("nested-")
         ? ["local-runtime-dep", "unpatched-sibling"]
-        : ["local-runtime-dep"],
+        : optionalOnly
+          ? []
+          : ["local-runtime-dep"],
     );
     expect(packResult.files.some(({ path }) => path.endsWith(".tgz"))).toBe(false);
     expect(readText(installedDir, "index.js")).toBe(installedSource);

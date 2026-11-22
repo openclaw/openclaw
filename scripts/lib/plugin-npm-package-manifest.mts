@@ -216,6 +216,22 @@ function listAutoBundledDependencyNames(packageJson: PluginPackageJson) {
   return listPackageRuntimeDependencyNames(packageJson).filter((name) => !optional.has(name));
 }
 
+/** The published bundled list: explicit bundles first, then the automatic closure. */
+function listPackagedBundledDependencyNames(params: {
+  packageJson: PluginPackageJson;
+  includeRuntimeDependencies: boolean;
+  patchedDependencies?: readonly { name: string }[];
+}) {
+  return [
+    ...new Set([
+      ...listConfiguredBundledDependencyNames(params.packageJson),
+      ...(params.includeRuntimeDependencies
+        ? listAutoBundledDependencyNames(params.packageJson)
+        : (params.patchedDependencies ?? []).map(({ name }) => name)),
+    ]),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
 function listConfiguredBundledDependencyNames(packageJson: PluginPackageJson) {
   const configured = packageJson.bundleDependencies ?? packageJson.bundledDependencies;
   if (Array.isArray(configured)) {
@@ -897,14 +913,14 @@ export function resolveAugmentedPluginNpmPackageJson(params: PluginPackageParams
     params.patchedDependencies,
   );
   if (bundleDependencies) {
-    packageJson.bundledDependencies = [
-      ...new Set([
-        ...listConfiguredBundledDependencyNames(packageJson),
-        ...(shouldBundleDependencies(params.bundleDependencies, plan.packageJson)
-          ? listAutoBundledDependencyNames(packageJson)
-          : (params.patchedDependencies ?? []).map(({ name }) => name)),
-      ]),
-    ].toSorted((left, right) => left.localeCompare(right));
+    packageJson.bundledDependencies = listPackagedBundledDependencyNames({
+      packageJson,
+      includeRuntimeDependencies: shouldBundleDependencies(
+        params.bundleDependencies,
+        plan.packageJson,
+      ),
+      patchedDependencies: params.patchedDependencies,
+    });
     delete packageJson.bundleDependencies;
     delete packageJson.devDependencies;
   }
