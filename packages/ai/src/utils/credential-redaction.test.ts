@@ -194,6 +194,8 @@ it("keeps oversized and unparsed JSON text whole when unbounded without leaking 
     '{\\"name\\":\\"token\\",\\"value\\":\\"opaque-nested\\"',
     '{"type":"image","data":"QUJDRA=="',
     '{"mimeType":"audio/wav","payload":"QUJDRA=="',
+    '{"image_data":"QUJDRA=="',
+    '{"rows":[1],"b64_json":"QUJDRA=="',
   ]) {
     expect(project(record, { unbounded: true })).toBe(malformed);
   }

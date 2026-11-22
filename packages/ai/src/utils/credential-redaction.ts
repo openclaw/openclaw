@@ -69,15 +69,28 @@ const MALFORMED_JSON_RE =
 // JSON.parse. Unbounded callers keep unparsed JSON-like text (clipped output, scripts) whole
 // unless it carries one of those markers in any field order; then the value is still dropped.
 const UNPARSED_DISCRIMINATOR_RE = /\\*"(?:name|key)\\*"\s*:\s*\\*"([^"\\]{1,128})/giu;
-const UNPARSED_MEDIA_RE =
-  /\\*"(?:type|mime_?type|media_?type|content_?type)\\*"\s*:\s*\\*"(?:input_?|output_?)?(?:audio|image|video)|b64_json/iu;
+const UNPARSED_MEDIA_TYPE_RE =
+  /\\*"(?:type|mime_?type|media_?type|content_?type)\\*"\s*:\s*\\*"(?:input_?|output_?)?(?:audio|image|video)/iu;
+const UNPARSED_FIELD_NAME_RE = /\\*"([^"\\]{1,128})\\*"\s*:/gu;
 
 function hasUnparsedSensitiveRecord(text: string): boolean {
-  if (UNPARSED_MEDIA_RE.test(text)) {
+  if (UNPARSED_MEDIA_TYPE_RE.test(text)) {
     return true;
   }
   for (const match of text.matchAll(UNPARSED_DISCRIMINATOR_RE)) {
     if (isCredentialFieldName(expectDefined(match[1], "record discriminator"))) {
+      return true;
+    }
+  }
+  // Standalone media payload keys use the same names projection redacts (b64_json, image_data...).
+  for (const match of text.matchAll(UNPARSED_FIELD_NAME_RE)) {
+    const key = expectDefined(match[1], "record field");
+    const normalized = normalizeDiagnosticFieldName(key);
+    if (
+      normalized === "b64json" ||
+      MEDIA_FIELD_NAME_RE.test(normalized) ||
+      MEDIA_WRAPPER_NAME_RE.test(key)
+    ) {
       return true;
     }
   }

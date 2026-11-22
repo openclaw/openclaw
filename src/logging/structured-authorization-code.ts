@@ -7,12 +7,15 @@ export function shouldRedactStructuredAuthorizationCode(
   value?: string,
   objectPath = true,
 ): boolean {
-  // An OAuth code is one URL-safe token; text with whitespace is source, such as a Code Mode script.
-  if (normalizedKey !== "code" || (value !== undefined && /\s/u.test(value))) {
+  if (normalizedKey !== "code") {
     return false;
   }
   const transportCode = objectPath ? value : undefined;
   const normalizedPath = path.map((part) => part.toLowerCase());
+  // A tool call's multi-word `code` argument is source, such as a Code Mode script.
+  if (normalizedPath.at(-2) === "arguments" && value !== undefined && /\s/u.test(value)) {
+    return false;
+  }
   if (
     normalizedPath.length === 1 ||
     (normalizedPath.at(-1) === "code" &&
