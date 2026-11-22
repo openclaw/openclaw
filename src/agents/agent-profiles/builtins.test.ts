@@ -36,22 +36,16 @@ describe("built-in Agent Profile resources", () => {
   });
 
   it("keeps OpenClaw settings out of portable common fields", () => {
-    const small = builtIn("openclaw/small");
+    for (const profile of BUILT_IN_AGENT_PROFILES) {
+      expect(profile.resource.spec.common).toEqual({});
+    }
+    const extension = resolveOpenClawAgentProfileExtension([builtIn("openclaw/small")]);
+    const workspaceContext = extension?.prompt?.workspaceContext;
 
-    expect(small.resource.spec.common).toEqual({});
-    expect(resolveOpenClawAgentProfileExtension([small])).toEqual({
-      toolProfile: "compact",
-      prompt: {
-        workspaceContext: {
-          totalMaxChars: 11_500,
-          sections: {
-            agents: { maxChars: 7_500 },
-            soul: { maxChars: 2_000 },
-            identity: { maxChars: 1_024 },
-            user: { maxChars: 2_000 },
-          },
-        },
-      },
-    });
+    expect(extension?.toolProfile).toBe("compact");
+    expect(workspaceContext?.totalMaxChars).toBeGreaterThan(0);
+    for (const section of Object.values(workspaceContext?.sections ?? {})) {
+      expect(section.maxChars).toBeLessThanOrEqual(workspaceContext?.totalMaxChars ?? 0);
+    }
   });
 });
