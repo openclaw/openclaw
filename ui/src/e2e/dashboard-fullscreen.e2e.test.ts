@@ -851,6 +851,39 @@ suite.define(() => {
     });
   });
 
+  it("keeps the bounded session chooser and its exit reachable on a phone", async () => {
+    await suite.withPage(
+      { serviceWorkers: "block", viewport: { width: 390, height: 844 }, hasTouch: true },
+      async ({ page }) => {
+        const candidates = Array.from({ length: 10 }, (_, index) => ({
+          key: `agent:main:dashboard:12345678-${index}123-4567-89ab-0123456789ab`,
+          agentId: "main",
+          displayName: `Review board ${index + 1}`,
+          boardFace: "dashboard",
+        }));
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["board.get"],
+          methodResponses: { "sessions.resolve": { ok: false, candidates } },
+        });
+        await openFocusFromDashboards(page, initialFocusPath);
+        const exit = page.getByRole("button", { name: "Close dashboard", exact: true });
+        await exit.waitFor();
+        expect(await page.getByRole("link").count()).toBe(10);
+        // Locator clicks scroll even clipped ancestors. Test the untouched touch target instead.
+        const center = await exit.evaluate((button) => {
+          const bounds = button.getBoundingClientRect();
+          const x = bounds.left + bounds.width / 2;
+          const y = bounds.top + bounds.height / 2;
+          return { x, y, hittable: button.contains(document.elementFromPoint(x, y)) };
+        });
+        expect(center.hittable).toBe(true);
+        expect(await gateway.getRequests("board.get")).toHaveLength(0);
+        await page.touchscreen.tap(center.x, center.y);
+        await page.waitForURL(`${suite.server.baseUrl}dashboards`);
+      },
+    );
+  });
+
   it("shows a clear outcome when the requested session does not exist", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {

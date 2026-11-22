@@ -52,6 +52,27 @@ openclaw-board-document {
   text-align: center;
 }
 
+/* Keep a short list together; a taller list scrolls from its first choice to its exit. */
+.board-document__choices {
+  grid-template-columns: fit-content(28rem);
+  place-content: safe center;
+  justify-items: start;
+  gap: var(--space-3);
+  overflow: auto;
+  overflow-wrap: anywhere;
+  text-align: start;
+}
+
+.board-document__choices > h2,
+.board-document__choices > p {
+  margin: 0;
+}
+
+/* The ghost button's label, not its invisible 14px padding and 1px border, shares the text guide. */
+.board-document__choices > .btn--ghost {
+  margin-inline-start: -15px;
+}
+
 .board-document__state--error {
   color: var(--danger);
 }

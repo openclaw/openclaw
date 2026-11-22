@@ -67,7 +67,7 @@ export function FocusDashboard(props: FocusDashboardProps): SolidJSX.Element {
             <Match when={ambiguous()}>
               {(data) => (
                 <main class="board-document">
-                  <section class="card board-document__state">
+                  <section class="card board-document__state board-document__choices">
                     <h2>{t("chat.sessionRoute.chooseTitle")}</h2>
                     <p>
                       {data().candidates.length > 1
