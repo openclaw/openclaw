@@ -38,10 +38,8 @@ vi.mock("../../infra/update-install-status.js", async (importOriginal) => ({
     installReceipt: null,
   }),
 }));
-// mock-isolation: admission reads the real install owner and process root; this test starts after it.
-vi.mock("./update-admission.js", () => ({
-  admitGatewayUpdateRequest: async (request: { params: unknown }) => request.params,
-}));
+// mock-isolation: no OCM manager owns this host's updates; admission otherwise runs for real.
+vi.mock("../../infra/ocm-update-client.js", () => ({ resolveOcmUpdateManager: async () => null }));
 
 let lifecycle: UpdateCheckLifecycle;
 let home: TempHomeEnv;
@@ -99,39 +97,42 @@ it("shows a Control UI update in the app instead of the conversation", async () 
   );
 });
 
-it.each(["git", "package"])("applies the %s target a scheduled campaign pinned", async (kind) => {
-  install.kind = kind;
-  const sha = "c".repeat(40);
-  const version = "2026.11.6";
-  const target =
-    kind === "git"
-      ? { kind: "git", upstreamRef: "origin/main", upstreamSha: sha, commitsBehind: 1 }
-      : { kind: "package", version };
-  const bindRun = vi.fn();
-  lifecycle.campaign = {
-    adopt: () => ({
-      status: "adopted",
-      campaignId: "campaign-1",
-      target,
-    }),
-    bindRun,
-    clear: vi.fn(),
-  } as unknown as NonNullable<UpdateCheckLifecycle["campaign"]>;
-  const { payload } = await invoke({});
-  expect(payload).toMatchObject({ ok: true });
-  const run = await getUpdateRunAsync(payload.runId);
-  expect(run).toMatchObject({
-    trigger: "campaign",
-    origin: { campaignId: "campaign-1" },
-    target: kind === "git" ? { sha } : { version },
-  });
-  expect(bindRun).toHaveBeenCalledWith("campaign-1", payload.runId);
-  await vi.waitFor(() =>
-    expect(prepareUpdate).toHaveBeenCalledWith(
-      expect.objectContaining(kind === "git" ? { sha } : { tag: version }),
-    ),
-  );
-});
+it.each(["git", "package"] as const)(
+  "applies the %s target a scheduled campaign pinned",
+  async (kind) => {
+    install.kind = kind;
+    const sha = "c".repeat(40);
+    const version = "2026.11.6";
+    const target =
+      kind === "git"
+        ? { kind: "git", upstreamRef: "origin/main", upstreamSha: sha, commitsBehind: 1 }
+        : { kind: "package", version };
+    const bindRun = vi.fn();
+    lifecycle.campaign = {
+      adopt: () => ({
+        status: "adopted",
+        campaignId: "campaign-1",
+        target,
+      }),
+      bindRun,
+      clear: vi.fn(),
+    } as unknown as NonNullable<UpdateCheckLifecycle["campaign"]>;
+    const { payload } = await invoke({});
+    expect(payload).toMatchObject({ ok: true });
+    const run = await getUpdateRunAsync(payload.runId);
+    expect(run).toMatchObject({
+      trigger: "campaign",
+      origin: { campaignId: "campaign-1" },
+      target: kind === "git" ? { sha } : { version },
+    });
+    expect(bindRun).toHaveBeenCalledWith("campaign-1", payload.runId);
+    await vi.waitFor(() =>
+      expect(prepareUpdate).toHaveBeenCalledWith(
+        expect.objectContaining(kind === "git" ? { sha } : { tag: version }),
+      ),
+    );
+  },
+);
 
 it("restarts into the prepared release after the requested delay", async () => {
   prepareUpdate.mockResolvedValueOnce({

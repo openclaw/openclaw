@@ -25,7 +25,6 @@ import {
   recordUpdateRunPhaseAsync,
 } from "../../infra/update-run-write.async.js";
 import { resolveUnmanagedUpdateInstallReason } from "../../infra/update-runner-install-surface.js";
-import { updateInstallationMismatch } from "../../update/installation-identity.js";
 import { prepareUpdate } from "../../update/run.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -43,7 +42,7 @@ import { updateHandlers as legacyUpdateHandlers } from "./update.js";
 export const updateRunHandler: GatewayRequestHandler = async (request) => {
   const { respond, client, context } = request;
   const installed = await readInstallStatus();
-  const params = await admitGatewayUpdateRequest(request);
+  const params = await admitGatewayUpdateRequest(request, installed.root ?? installed.status.root);
   if (!params) {
     return;
   }
@@ -72,19 +71,6 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
       result: { status: "skipped", reason },
     });
     return;
-  }
-  if (params.checkout) {
-    const mismatch = await updateInstallationMismatch(params.checkout, root);
-    if (mismatch) {
-      respond(true, {
-        runId: null,
-        ok: false,
-        code: "installation-mismatch",
-        message: mismatch,
-        result: { status: "skipped", reason: "installation-mismatch" },
-      });
-      return;
-    }
   }
   const config = context.getRuntimeConfig();
   const requester = params.requester;
