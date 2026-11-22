@@ -167,7 +167,7 @@ it.for([
         expect(nativeEntered).toHaveBeenCalledTimes(older ? 0 : 1);
         expect.soft(enqueued).not.toHaveBeenCalled();
         const errorMessage = expect.stringContaining(
-          boundary === "mailbox"
+          boundary === "mailbox" || change === "profile merge"
             ? "Authenticated profile verification is unavailable"
             : "authority is no longer current",
         );
@@ -205,19 +205,15 @@ it.for([
           .toEqual(fixture.activeTranscript);
         const appended = transcript.slice(fixture.activeTranscript.length);
         expect.soft(appended).toMatchObject([
-          ...(change === "profile merge" && boundary === "native"
-            ? []
-            : [
-                {
-                  type: "message",
-                  message: {
-                    role: "user",
-                    content: fixture.approvedContent,
-                    idempotencyKey: `${fixture.params.idempotencyKey}:user`,
-                    __openclaw: { requesterOrigin: { operatorProfileId: profile.id } },
-                  },
-                },
-              ]),
+          {
+            type: "message",
+            message: {
+              role: "user",
+              content: fixture.approvedContent,
+              idempotencyKey: `${fixture.params.idempotencyKey}:user`,
+              __openclaw: { requesterOrigin: { operatorProfileId: profile.id } },
+            },
+          },
           {
             type: "custom_message",
             customType: "run-failed-before-reply",
