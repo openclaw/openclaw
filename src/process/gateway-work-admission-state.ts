@@ -70,12 +70,21 @@ export const GATEWAY_WORK_ADMISSION_STATE = resolveGlobalSingleton(
   }),
 );
 
+type ActiveRootWorkFilter = {
+  excludeCurrent?: boolean;
+  /** Roots the caller knows are waiting on it, so they cannot hold it busy. */
+  exclude?: { has(admission: GatewayRootWorkAdmission): boolean };
+};
+
 function isActiveRootWork(
   admission: GatewayRootWorkAdmission,
-  opts: { excludeCurrent?: boolean } | undefined,
+  opts: ActiveRootWorkFilter | undefined,
 ): boolean {
   // An open subscription is not pending work until drain retires it; its close then is.
   if (admission.subscription && GATEWAY_WORK_ADMISSION_STATE.restartDrainReason === undefined) {
+    return false;
+  }
+  if (opts?.exclude?.has(admission)) {
     return false;
   }
   return (
@@ -85,7 +94,7 @@ function isActiveRootWork(
 }
 
 /** Active root requests/ticks, optionally excluding the caller running prepare. */
-export function getActiveGatewayRootWorkCount(opts?: { excludeCurrent?: boolean }): number {
+export function getActiveGatewayRootWorkCount(opts?: ActiveRootWorkFilter): number {
   let count = 0;
   for (const admission of GATEWAY_WORK_ADMISSION_STATE.activeRootWork) {
     if (isActiveRootWork(admission, opts)) {

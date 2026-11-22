@@ -213,20 +213,17 @@ async function startGatewayServerWithRuntime(
     { startGatewaySpawnBroker, runWithSpawnBroker },
     { shutdownProcessSupervisor },
     { closeSqliteReadOnlyWorkersForBroker },
-    { getGatewayResourceProfile, predictGatewayResourceProfile },
+    { predictGatewayStartupResourceProfile },
   ] = await Promise.all([
     import("../process/spawn-broker/context.js"),
     import("../process/supervisor/index.js"),
     import("../infra/sqlite-readonly-worker.js"),
-    import("../infra/gateway-resource-profile.js"),
+    import("./server-startup-resource-profile.js"),
   ]);
   let logger: { info: (message: string) => void } | undefined;
   const broker = await startGatewaySpawnBroker({
-    // Bootstrap resolves the profile later; an in-process restart reuses the last setting.
-    profile: predictGatewayResourceProfile(
-      opts.startupConfigSnapshotRead?.snapshot.config.gateway?.resources?.profile ??
-        getGatewayResourceProfile()?.configured,
-    ),
+    // Bootstrap resolves the profile later; the broker must be placed before it.
+    profile: await predictGatewayStartupResourceProfile(opts.startupConfigSnapshotRead),
     onReady(pid, restarted) {
       if (restarted) {
         logger?.info(`spawn broker restarted pid=${pid}`);
