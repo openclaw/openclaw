@@ -83,6 +83,19 @@ describe.runIf(browserMode)("Review layout", () => {
     }
     await waitForSolid(() => expect(panel.querySelector(".session-diff-split")).not.toBeNull());
     const split = panel.querySelector<HTMLElement>(".session-diff-split")!;
+    if (mobile) {
+      const style = document.documentElement.style;
+      const previousScale = style.getPropertyValue("--control-ui-text-scale");
+      onTestFinished(() => style.setProperty("--control-ui-text-scale", previousScale));
+      const heading = panel.querySelector<HTMLElement>(".session-diff__filename")!;
+      const code = split.querySelector<HTMLElement>(".session-diff-split__text")!;
+      for (const scale of [1, 1.4]) {
+        style.setProperty("--control-ui-text-scale", String(scale));
+        expect(parseFloat(getComputedStyle(heading).fontSize)).toBeCloseTo(14 * scale);
+        expect(parseFloat(getComputedStyle(code).fontSize)).toBeCloseTo(12 * scale);
+        expect(parseFloat(getComputedStyle(split).lineHeight)).toBeCloseTo(20 * scale);
+      }
+    }
     for (const wrap of [false, true]) {
       if (Boolean(panel.querySelector(".session-diff--wrap")) !== wrap) {
         if (mobile) {
