@@ -1258,6 +1258,15 @@ changes nothing. The saved report keeps the details.
   cache). Registries that omit `dist.unpackedSize` skip this check. The state
   snapshot has its own measured check.
 
+Updates stop Gateways, not node services. The update Doctor needs exclusive
+access to `state/openclaw.sqlite`, and a running node host service using the
+same state directory keeps that database open. The update then refuses before
+it stops the Gateway or changes anything, naming the database and the node
+service PID. Run `openclaw node stop`, rerun `openclaw update`, then run
+`openclaw node start`. The installed updater must contain this check. Older
+updaters fail in Doctor with `database is locked` and refuse rollback; run
+`openclaw node stop`, then `openclaw update repair`, then `openclaw node start`.
+
 Every attempt ends with one update run record. Its `cause` is one of `none`,
 `node-unsupported`, `git-unsupported`, `disk-full`, `permission-denied`,
 `network`, `config-invalid`, `install-failed`, `state-migration-failed`,

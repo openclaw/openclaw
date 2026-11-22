@@ -55,7 +55,10 @@ import {
   resolveMutableUpdateFailure,
   type MutableUpdateExecutionResult,
 } from "./update-command-result.js";
-import { captureUpdateActivationSchemas } from "./update-command-schema.js";
+import {
+  assertNodeServiceReleasesUpdateState,
+  captureUpdateActivationSchemas,
+} from "./update-command-schema.js";
 import {
   collectServiceInspectionFailureFacts,
   GatewayServiceUpdateOwnershipError,
@@ -448,6 +451,10 @@ export async function executeMutableUpdate(
       gatewayRestartCompletion,
       timeoutMs: params.updateStepTimeoutMs,
     }));
+    if (!mutationStarted) {
+      // Doctor cannot take the state from a node service the updater leaves running.
+      await assertNodeServiceReleasesUpdateState({ env, timeoutMs: updateStepTimeoutMs });
+    }
     if (
       preManagedServiceStop?.running &&
       !servicePrepared &&
