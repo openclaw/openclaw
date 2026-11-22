@@ -344,12 +344,12 @@ describe("update.run acknowledgement", () => {
         undefined,
         {},
         {
-          client: { connect: { client: { id, mode } } } as Parameters<
-            typeof invokeUpdateRun
-          >[4]["client"],
+          client: { connect: { client: { id, mode } } } as NonNullable<
+            Parameters<typeof invokeUpdateRun>[4]
+          >["client"],
         },
       );
-      const [run] = listUpdateRuns();
+      const run = expectDefined(listUpdateRuns()[0], "update run receipt");
       expect(respond).toHaveBeenCalledWith(
         true,
         expect.objectContaining({ runId: run.runId }),
@@ -361,7 +361,13 @@ describe("update.run acknowledgement", () => {
         sessionKey,
         storePath,
       });
-      const messages = events.filter((event) => event.type === "message");
+      const messages = events.filter(
+        (event) =>
+          event !== null &&
+          typeof event === "object" &&
+          "type" in event &&
+          event.type === "message",
+      );
       if (inApp) {
         expect(messages).toEqual([]);
         expect(run.origin.noticeSurface).toBe("app");

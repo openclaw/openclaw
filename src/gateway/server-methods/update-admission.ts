@@ -139,15 +139,18 @@ export async function reportImmutableGatewayUpdateRefusal(
   runId: string,
   installSurface: Extract<UpdateInstallSurface, { kind: "immutable" }>,
   respond: GatewayRequestHandlerOptions["respond"],
+  publishAppUpdate?: (run: UpdateRunRecord) => void,
 ): Promise<void> {
   const reason = "immutable-native-updater-required";
   await recordUpdateRunPhase(runId, "requested", {
     origin: { nextAction: IMMUTABLE_UPDATE_GUIDANCE },
   });
-  await finishUpdateRun(runId, { status: "skipped", reason });
+  const run = await finishUpdateRun(runId, { status: "skipped", reason });
+  publishAppUpdate?.(run);
   respond(true, {
     runId,
     ok: false,
+    ...(publishAppUpdate ? { noticeInApp: true } : {}),
     message: IMMUTABLE_UPDATE_GUIDANCE,
     result: {
       status: "skipped",

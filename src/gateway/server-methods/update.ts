@@ -293,7 +293,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       result.root = installRoot;
       const refusedUpdate = makeUpdateRefusal(installSurface);
       if (installSurface.kind === "immutable") {
-        await reportImmutableGatewayUpdateRefusal(runId, installSurface, respond);
+        await reportImmutableGatewayUpdateRefusal(runId, installSurface, respond, publishAppUpdate);
         return;
       }
       const effectiveChannel = resolveEffectiveUpdateChannel({
