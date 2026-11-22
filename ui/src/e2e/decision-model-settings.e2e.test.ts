@@ -13,7 +13,7 @@ function configResponse(config: Record<string, unknown>, hash: string) {
   return { ...configSnapshot(config, hash), sourceConfig: config };
 }
 suite.define(() => {
-  it("persists and clears a global decision model", async () => {
+  it("persists and clears a global decision model without a chat model", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       let config: unknown = {
         agents: {
@@ -35,8 +35,7 @@ suite.define(() => {
         methodResponses: {
           "agents.list": agentRoster({ main: "Main" }, "main", "per-sender"),
           "models.list": {
-            // Defaults show once a chat model can be chosen; the decision model sits in More settings.
-            models: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5", available: true }],
+            models: [],
             decisionModels: [
               { provider: "typesafe", id: "jev-latest", name: "Jev", pluginId: "typesafe" },
             ],

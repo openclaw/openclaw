@@ -1116,7 +1116,7 @@ const enSettings = {
         "This sign-in session ended. Close this dialog and refresh Models to check the result.",
     },
     accessTitle: "Providers",
-    accessDescription: "Accounts for {agent}. Defaults above apply to all agents.",
+    accessDescription: "Accounts for {agent}. Model defaults apply to all agents.",
     search: "Search providers…",
     searchConnected: "Filter providers…",
     catalog: {

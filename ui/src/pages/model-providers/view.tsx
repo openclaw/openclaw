@@ -159,18 +159,42 @@ export function ModelProviders(props: ModelProvidersViewProps) {
   // heading, with Retry) matter; before that the defaults are empty controls.
   const providerSetUp = () =>
     props.cards.some((card) => isProviderUsable(card) || card.profiles.length > 0);
-  const hasDefaults = () => {
+  const savedDefaults = () => {
     const saved = props.defaultModels;
     return (
       Boolean(
         saved.primary || saved.fallbacks.length || saved.utilityModel || saved.decisionModel,
       ) ||
       props.thinkingOverridden ||
-      props.fastModeOverridden ||
-      props.configuredModels.some(available) ||
-      providerSetUp()
+      props.fastModeOverridden
     );
   };
+  // A decision model works without a chat model, so its choices alone keep the defaults reachable.
+  const hasDefaults = () =>
+    savedDefaults() ||
+    props.configuredModels.some(available) ||
+    providerSetUp() ||
+    props.decisionModels.length > 0;
+  // A new user's first action is the catalog; unset defaults wait below it. Saved defaults and
+  // returning users keep them on top, where data arriving later never pushes them down.
+  const defaultsBelow = () => first() === true && !savedDefaults();
+  const defaults = () => (
+    <div id={MODEL_SETTINGS_TARGET_IDS.behavior}>
+      <DefaultModels
+        {...props}
+        models={props.configuredModels}
+        selection={props.defaultModels}
+        canMutate={props.defaultsMutationBlockedReason === null && !props.configBusy}
+        mutationBlockedReason={props.defaultsMutationBlockedReason}
+        message={props.messages.defaults}
+        // Before any provider or default is set up, providers can't list models and the
+        // catalog is the call to action; a listing failure isn't news then.
+        catalogDiscoveryError={
+          !props.defaultModels.primary && !providerSetUp() ? null : props.catalogDiscoveryError
+        }
+      />
+    </div>
+  );
   const signedInNoModels = () =>
     props.modelRequired &&
     props.cards.some(hasVerifiedProvider) &&
@@ -199,27 +223,7 @@ export function ModelProviders(props: ModelProvidersViewProps) {
             {t("modelProviders.readiness.signedInNoModels")}
           </InlineAlert>
         </Show>
-        {/* Defaults render as soon as config loads; provider sections load below them, so data
-            arriving later never pushes the open defaults down. */}
-        <Show when={hasDefaults()}>
-          <div id={MODEL_SETTINGS_TARGET_IDS.behavior}>
-            <DefaultModels
-              {...props}
-              models={props.configuredModels}
-              selection={props.defaultModels}
-              canMutate={props.defaultsMutationBlockedReason === null && !props.configBusy}
-              mutationBlockedReason={props.defaultsMutationBlockedReason}
-              message={props.messages.defaults}
-              // Before any provider or default is set up, providers can't list models and the
-              // catalog is the call to action; a listing failure isn't news then.
-              catalogDiscoveryError={
-                !props.defaultModels.primary && !providerSetUp()
-                  ? null
-                  : props.catalogDiscoveryError
-              }
-            />
-          </div>
-        </Show>
+        <Show when={hasDefaults() && (first() === false || savedDefaults())}>{defaults()}</Show>
         <Show
           when={first() !== undefined}
           fallback={
@@ -244,6 +248,7 @@ export function ModelProviders(props: ModelProvidersViewProps) {
             <ProviderAccess {...props} />
           </Show>
           {props.installedAgents}
+          <Show when={hasDefaults() && defaultsBelow()}>{defaults()}</Show>
           <Show when={first() === false}>{catalog()}</Show>
           {props.providerUsageStalled ? (
             <InlineAlert tone="warning" role="status">

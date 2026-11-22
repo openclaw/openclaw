@@ -204,3 +204,29 @@ it("names agents with their own utility settings and opens their Overview", asyn
   link.click();
   expect(onOpenAgent).toHaveBeenCalledWith("forge");
 });
+
+it("keeps the global decision model reachable for a new user without a chat model", () => {
+  const container = mount(
+    props({
+      cards: [],
+      configuredModels: [],
+      decisionModels: [
+        { provider: "typesafe", id: "jev-latest", name: "Jev", pluginId: "typesafe" },
+      ],
+      defaultModels: { primary: "", fallbacks: [], utilityModel: null },
+      thinkingOverridden: false,
+      fastModeOverridden: false,
+      catalogProviders: [{ id: "openai", label: "OpenAI", choices: [], authProviders: ["openai"] }],
+    }),
+  );
+  // The catalog stays the first action; the defaults wait below it.
+  const sections = [
+    ...container.querySelectorAll("[data-models-catalog], .model-providers__defaults"),
+  ];
+  expect(sections.map((section) => section.matches("[data-models-catalog]"))).toEqual([
+    true,
+    false,
+  ]);
+  openMoreSettings(container);
+  expect(trigger(container, "decision")).not.toBeNull();
+});
