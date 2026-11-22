@@ -6,7 +6,7 @@ import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycl
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import {
   createManagedUpdateRequesterAuthority,
-  prepareManagedUpdateRequesterIdentity,
+  prepareUpdateRequesterIdentity,
   type UpdateRequester,
 } from "../../infra/update-requester-authority.js";
 import { ignoreNonCleanupCommandError } from "../../process/exec-result.js";
@@ -107,6 +107,6 @@ export async function isManagedUpdateRequesterOwner(requester: UpdateRequester) 
   );
 }
 
-export async function prepareManagedUpdateHelperRequesterIdentity(requester: UpdateRequester) {
-  return await releasingHelperStateReaders(() => prepareManagedUpdateRequesterIdentity(requester));
+export async function prepareManagedUpdateRequesterIdentity(requester: UpdateRequester) {
+  return await releasingHelperStateReaders(() => prepareUpdateRequesterIdentity(requester));
 }

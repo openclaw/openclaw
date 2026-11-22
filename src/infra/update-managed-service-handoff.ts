@@ -398,10 +398,10 @@ async function assertUpdateRequester() {
     if (!transferred || updateCancelled || !ownsManagedUpdateLease())
       throw new Error("Profile requester requires its current transferred update owner");
     if (!updateRequesterIdentity) {
-      const { prepareManagedUpdateHelperRequesterIdentity } = await import(pathToFileURL(params.recoveryModulePath).href);
+      const { prepareManagedUpdateRequesterIdentity } = await import(pathToFileURL(params.recoveryModulePath).href);
       if (!transferred || updateCancelled || !ownsManagedUpdateLease())
         throw new Error("Profile update owner changed during requester preparation");
-      updateRequesterIdentity = await prepareManagedUpdateHelperRequesterIdentity(params.requester);
+      updateRequesterIdentity = await prepareManagedUpdateRequesterIdentity(params.requester);
     }
     if (updateCancelled || !ownsManagedUpdateLease()) throw new Error("Profile update owner changed");
     assertPreparedProfileRequester();

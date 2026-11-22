@@ -23,7 +23,7 @@ import { updateRepairParentMessageSchema } from "./update-repair-protocol.js";
 import {
   createManagedUpdateRequesterAuthority,
   createManagedUpdateRequesterContinuationAuthority,
-  prepareManagedUpdateRequesterIdentity,
+  prepareUpdateRequesterIdentity,
   type UpdateRequester,
   UpdateRequesterRevokedError,
 } from "./update-requester-authority.js";
@@ -189,7 +189,7 @@ it.each(["profile", "configured-owner"])(
     if (source === "configured-owner") {
       await writeConfig(allowed);
     }
-    const identity = await prepareManagedUpdateRequesterIdentity(
+    const identity = await prepareUpdateRequesterIdentity(
       source === "profile" ? fixture.requester : requester,
       env,
     );
@@ -322,9 +322,9 @@ it.each(["owner check", "identity preparation"] as const)(
     if (entry === "owner check") {
       expect(await helper.isManagedUpdateRequesterOwner(requester)).toBe(true);
     } else {
-      expect(
-        (await helper.prepareManagedUpdateHelperRequesterIdentity(requester)).requester,
-      ).toEqual(requester);
+      expect((await helper.prepareManagedUpdateRequesterIdentity(requester)).requester).toEqual(
+        requester,
+      );
     }
     const exclusive = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"));
     try {
