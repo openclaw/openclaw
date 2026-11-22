@@ -1,4 +1,5 @@
 import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
+import { detectMime } from "@openclaw/media-core/mime";
 import pLimit from "p-limit";
 import type { openLocalFileSafely } from "../infra/fs-safe.js";
 import { LruCache } from "../infra/lru-cache.js";
@@ -15,25 +16,34 @@ import {
 } from "../shared/chat-image-renditions.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 
+export type ManagedImageThumbnail = {
+  data: Buffer;
+  extension: ".jpg" | ".webp";
+  mimeType: "image/jpeg" | "image/webp";
+};
+
 export async function encodeImageThumbnail(
   source: Uint8Array,
   width: ChatImageRenditionWidth = DEFAULT_CHAT_IMAGE_RENDITION_WIDTH,
-): Promise<Buffer> {
+): Promise<ManagedImageThumbnail> {
   const buffer = Buffer.from(source.buffer, source.byteOffset, source.byteLength);
   const format = readImageProbeFromHeader(buffer)?.format;
-  // A single-frame transform must not silently discard GIF/APNG/WebP animation.
+  const heifMime = format === "heif" ? await detectMime({ buffer }) : undefined;
+  const stillHeif = heifMime === "image/heic" || heifMime === "image/heif";
+  // A single-frame transform must not silently discard animation or HEIF sequences.
   const still =
     (format === "png" && isStillPngBuffer(buffer)) ||
     format === "jpeg" ||
+    stillHeif ||
     (format === "webp" && !isAnimatedWebpBuffer(buffer));
   if (!still) {
     throw new Error("Managed image thumbnail is unavailable for this image format");
   }
   const maxBytes = CHAT_IMAGE_RENDITION_MAX_BYTES[width];
   const thumbnail = await createImageProcessor().encode(source, {
-    // Photon supports portable fixed-quality WebP with alpha; specifying quality
-    // would require an external codec. Auto-orientation remains enabled.
-    format: "webp",
+    // macOS sips can decode HEIF to JPEG without an additional WebP codec.
+    // Photon handles portable fixed-quality WebP for the other supported formats.
+    format: stillHeif ? "jpeg" : "webp",
     resize: { maxSide: width, enlarge: false },
     maxBytes,
     // Bound work to three candidates, reducing resolution only to meet the budget.
@@ -43,23 +53,29 @@ export async function encodeImageThumbnail(
   if (thumbnail.data.byteLength > maxBytes) {
     throw new Error("Managed image thumbnail exceeds the preview byte limit");
   }
-  return thumbnail.data;
+  // Rastermill emits exactly the requested format.
+  return stillHeif
+    ? { data: thumbnail.data, extension: ".jpg", mimeType: "image/jpeg" }
+    : { data: thumbnail.data, extension: ".webp", mimeType: "image/webp" };
 }
 
 const MANAGED_IMAGE_THUMBNAIL_CACHE_MAX_ENTRIES = 128;
 const MANAGED_IMAGE_THUMBNAIL_CACHE_MAX_BYTES = 16 * 1024 * 1024;
 const MANAGED_IMAGE_THUMBNAIL_MAX_PENDING = 128;
-const managedImageThumbnailCache = new LruCache<Buffer>(MANAGED_IMAGE_THUMBNAIL_CACHE_MAX_ENTRIES, {
-  maxBytes: MANAGED_IMAGE_THUMBNAIL_CACHE_MAX_BYTES,
-  sizeOf: (thumbnail) => thumbnail.byteLength,
-});
-const managedImageThumbnailJobs = new Map<string, Promise<Buffer>>();
+const managedImageThumbnailCache = new LruCache<ManagedImageThumbnail>(
+  MANAGED_IMAGE_THUMBNAIL_CACHE_MAX_ENTRIES,
+  {
+    maxBytes: MANAGED_IMAGE_THUMBNAIL_CACHE_MAX_BYTES,
+    sizeOf: (thumbnail) => thumbnail.data.byteLength,
+  },
+);
+const managedImageThumbnailJobs = new Map<string, Promise<ManagedImageThumbnail>>();
 const limitManagedImageThumbnails = pLimit(4);
 
 export async function resolveManagedImageThumbnail(
   cacheKey: string,
-  create: () => Promise<Buffer>,
-): Promise<Buffer> {
+  create: () => Promise<ManagedImageThumbnail>,
+): Promise<ManagedImageThumbnail> {
   const cached = managedImageThumbnailCache.get(cacheKey);
   if (cached) {
     return cached;
@@ -84,7 +100,7 @@ export async function readImageThumbnailFromFile(
   opened: Awaited<ReturnType<typeof openLocalFileSafely>>,
   maxBytes?: number,
   width: ChatImageRenditionWidth = DEFAULT_CHAT_IMAGE_RENDITION_WIDTH,
-): Promise<Buffer> {
+): Promise<ManagedImageThumbnail> {
   if (maxBytes !== undefined && opened.stat.size > maxBytes) {
     throw new Error("Managed image exceeds the preview byte limit");
   }

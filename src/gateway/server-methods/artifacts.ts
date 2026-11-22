@@ -43,6 +43,7 @@ import {
 import {
   encodeImageThumbnail,
   resolveManagedImageThumbnail,
+  type ManagedImageThumbnail,
 } from "../managed-image-thumbnail-cache.js";
 import { MAX_PAYLOAD_BYTES } from "../payload-limits.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
@@ -616,7 +617,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       }
     }
     if (query.previewWidth !== undefined && !managedUrl) {
-      let preview: Buffer | undefined;
+      let preview: ManagedImageThumbnail | undefined;
       if (
         artifact.type === "image" &&
         artifact.download.mode === "bytes" &&
@@ -650,9 +651,9 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       artifact = {
         ...artifact,
         image: undefined,
-        mimeType: "image/webp",
-        sizeBytes: preview.byteLength,
-        data: preview.toString("base64"),
+        mimeType: preview.mimeType,
+        sizeBytes: preview.data.byteLength,
+        data: preview.data.toString("base64"),
       };
     }
     const payload = {
