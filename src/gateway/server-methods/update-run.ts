@@ -8,7 +8,7 @@ import {
   EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
   isGatewayExternallySupervised,
 } from "../../infra/gateway-supervision.js";
-import { resolveGatewayRestartDecision } from "../../infra/process-respawn.js";
+import { describeUpdateRestartUnavailable } from "../../infra/process-respawn.js";
 import { normalizeGatewayRestartDelayMs, scheduleGatewayRestart } from "../../infra/restart.js";
 import {
   normalizeUpdateChannel,
@@ -86,14 +86,13 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
     return;
   }
   // The prepared release starts only in a new process; refuse before anything changes.
-  const restart = resolveGatewayRestartDecision();
-  if (restart.mode === "disabled" && restart.reason === "no-respawn") {
+  const restartUnavailable = describeUpdateRestartUnavailable();
+  if (restartUnavailable) {
     respond(true, {
       runId: null,
       ok: false,
       code: "restart-unavailable",
-      message:
-        "This Gateway cannot restart because OPENCLAW_NO_RESPAWN is enabled. Stop the Gateway, run openclaw update, then start it again. To allow updates from the Gateway, relaunch it without OPENCLAW_NO_RESPAWN.",
+      message: restartUnavailable,
       result: { status: "skipped", reason: "restart-unavailable" },
     });
     return;

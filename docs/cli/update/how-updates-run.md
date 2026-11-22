@@ -1612,7 +1612,11 @@ A checkout inside a container that OpenClaw detects (for example Docker or Podma
 same way. The update records a `warning:preflight` step, which `openclaw update` prints: whatever is not on a mounted
 volume is reset when the container is recreated from its image, so keep the checkout and the state
 directory on volumes. With only the state directory on a volume, the image's original build may
-refuse the upgraded state after a recreate; build the new version into the image first. OpenClaw's own image installs a
+refuse the upgraded state after a recreate; build the new version into the image first. A Gateway
+that is the container's main process, with no service manager or launcher above it, cannot start
+the new release without stopping the container, so `update.run` and automatic updates refuse with
+`restart-unavailable`. Run `openclaw update --no-restart` in the container, then restart the
+container; the new release starts then. OpenClaw's own image installs a
 package, not a checkout; `openclaw update` skips it with `container-image-install`.
 
 The launcher knows only its own state directory. A Gateway run for another profile started

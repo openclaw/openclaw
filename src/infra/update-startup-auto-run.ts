@@ -91,10 +91,16 @@ export async function runAutoUpdateCommand(
   }
   // Git installs prepare a release and restart into the launcher's trial; no handoff helper.
   if (params.mode === "git" && params.root) {
-    const [{ prepareUpdate }, { scheduleGatewayRestart }] = await Promise.all([
-      import("../update/run.js"),
-      import("./restart.js"),
-    ]);
+    const [{ prepareUpdate }, { scheduleGatewayRestart }, { describeUpdateRestartUnavailable }] =
+      await Promise.all([
+        import("../update/run.js"),
+        import("./restart.js"),
+        import("./process-respawn.js"),
+      ]);
+    const restartUnavailable = describeUpdateRestartUnavailable();
+    if (restartUnavailable) {
+      return failure("restart-unavailable", restartUnavailable, "skipped");
+    }
     // prepareUpdate settles the run itself unless a trial is pending; later writes are no-ops.
     const outcome = await prepareUpdate({
       runId: params.runId,

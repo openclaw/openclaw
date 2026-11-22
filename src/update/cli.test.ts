@@ -129,9 +129,10 @@ it("says the update is still running when the --timeout budget ends first", asyn
   const { defaultRuntime } = await import("../runtime.js");
   const { runReleaseUpdateCli } = await import("./cli.js");
   const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-  vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+  const warning = { step: "warning:preflight", status: "completed", detail: "In a container." };
   runsGet.push(() => ({
-    run: { status: "running", phase: "staging", steps: [], after: {}, origin: {} },
+    run: { status: "running", phase: "staging", steps: [warning], after: {}, origin: {} },
   }));
   await runReleaseUpdateCli({
     json: false,
@@ -142,5 +143,7 @@ it("says the update is still running when the --timeout budget ends first", asyn
   expect(error.mock.calls.map(([message]) => message)).toEqual([
     "The update did not finish in time. Run `openclaw update status` to see it.",
   ]);
+  // The update goes on, so its recorded warning still reaches the operator.
+  expect(log).toHaveBeenCalledWith("Note: In a container.");
   expect(process.exitCode).toBe(1);
 });

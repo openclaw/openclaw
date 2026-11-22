@@ -12,6 +12,12 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 
+// The host's container facts would otherwise decide every case's restart path.
+const host = vi.hoisted(() => ({ container: false }));
+vi.mock("../../infra/container-environment.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/container-environment.js")>()),
+  isContainerEnvironment: () => host.container,
+}));
 const prepareUpdate = vi.hoisted(() => vi.fn(async () => ({ status: "failed" })));
 vi.mock("../../update/run.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../update/run.js")>()),
@@ -46,6 +52,7 @@ afterEach(async () => {
   await home.restore();
   vi.unstubAllEnvs();
   prepareUpdate.mockClear();
+  host.container = false;
 });
 
 async function invoke(params: object, client: unknown = null) {
@@ -69,6 +76,23 @@ it("refuses before preparing a release when the Gateway may not replace its proc
   const { payload } = await invoke({});
   expect(payload).toMatchObject({ runId: null, ok: false, code: "restart-unavailable" });
   expect(prepareUpdate).not.toHaveBeenCalled();
+});
+
+it("refuses before preparing a release when the Gateway is a container's main process", async () => {
+  host.container = true;
+  const { payload } = await invoke({});
+  expect(payload).toMatchObject({ runId: null, ok: false, code: "restart-unavailable" });
+  expect(payload.message).toContain("openclaw update --no-restart");
+  expect(prepareUpdate).not.toHaveBeenCalled();
+});
+
+it("updates a Gateway inside a container that its supervisor restarts", async () => {
+  host.container = true;
+  // The release launcher restarts its child, as a service manager would.
+  vi.stubEnv("OPENCLAW_LAUNCHER_IPC", "1");
+  const { payload } = await invoke({});
+  expect(payload).toMatchObject({ ok: true });
+  await vi.waitFor(() => expect(prepareUpdate).toHaveBeenCalled());
 });
 
 it("leaves an externally supervised Gateway's update to its supervisor", async () => {

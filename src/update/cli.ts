@@ -185,16 +185,16 @@ function report(record: UpdateRunRecord | undefined, json: boolean) {
     defaultRuntime.writeJson(record ?? { status: "unknown" });
     return;
   }
+  const preflight = record?.steps.find(({ step }) => step === "warning:preflight")?.detail;
+  if (preflight) {
+    defaultRuntime.log(`Note: ${preflight}`);
+  }
   // The CLI stopped following before the run finished (its --timeout budget); the run goes on.
   if (!record || (record.status === "running" && !isPendingActivation(record))) {
     defaultRuntime.error(
       "The update did not finish in time. Run `openclaw update status` to see it.",
     );
     return;
-  }
-  const preflight = record.steps.find(({ step }) => step === "warning:preflight")?.detail;
-  if (preflight) {
-    defaultRuntime.log(`Note: ${preflight}`);
   }
   const plugins = record.steps.find(({ step }) => step === "plugins");
   if (plugins?.status === "failed") {
