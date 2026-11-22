@@ -36,7 +36,10 @@ export function resolveToolExecutionRecoveryDeadlineAtMs(
 }
 
 // Default quiet-run reclaim window for steer/takeover. Evidence clocks stay local.
-export const RUN_STALE_TAKEOVER_MS = 10 * 60_000;
+// Iterative agent turns with long silent tool chains (batch renders, long compiles)
+// routinely exceed 10 minutes without progress events and were being interrupted
+// mid-work; 30 minutes matches observed healthy long-tool runtimes.
+export const RUN_STALE_TAKEOVER_MS = 30 * 60_000;
 
 // Quiet-but-alive tool phases get the blocked-tool floor so a human message
 // cannot reclaim a healthy long tool that stuck recovery would not touch yet.
