@@ -211,7 +211,12 @@ async function requestGatewayUpdate(
   };
   let supportsConsent = false;
   try {
-    const response = await callGateway<{ runId: string | null; ok: boolean; message?: string }>({
+    const response = await callGateway<{
+      runId: string | null;
+      ok: boolean;
+      code?: string;
+      message?: string;
+    }>({
       method: "update.run",
       params,
       onHelloOk: (hello) => {
@@ -233,7 +238,12 @@ async function requestGatewayUpdate(
       timeoutMs: 30_000,
     });
     if (!response.runId) {
-      throw new Error(response.message ?? "The Gateway refused the update.");
+      // update.run reads the saved channel, so --channel was written before the Gateway refused.
+      const savedChannel =
+        response.code === "installation-mismatch" && opts.channel
+          ? ` Only the requested update channel was saved: update.channel is now "${opts.channel}" for this state directory. Run \`openclaw config set update.channel <previous channel>\` to restore it.`
+          : "";
+      throw new Error(`${response.message ?? "The Gateway refused the update."}${savedChannel}`);
     }
     return { runId: response.runId, supportsConsent };
   } catch (error) {

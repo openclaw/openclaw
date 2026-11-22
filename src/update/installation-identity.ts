@@ -31,6 +31,7 @@ export async function resolveUpdateInstallationIdentity(root: string): Promise<C
   // Package releases and their original forwarding installation share the launcher's slot.
   const launcher = await fs
     .readFile(path.join(root, ".openclaw-launcher"), "utf8")
+    .then((marker) => fs.realpath(path.resolve(marker.trim())))
     .catch((error: unknown) => {
       if (!hasErrnoCode(error, "ENOENT")) {
         throw error;
@@ -40,8 +41,7 @@ export async function resolveUpdateInstallationIdentity(root: string): Promise<C
   const release = path.relative(path.join(prefix, "releases"), canonicalRoot).split(path.sep);
   const managed =
     (release.length === 2 && release[0] !== ".." && release[1] === "openclaw") ||
-    (launcher !== undefined &&
-      path.resolve(launcher.trim()) === path.join(prefix, "openclaw-launcher.mjs"));
+    launcher === path.join(prefix, "openclaw-launcher.mjs");
   return { packageRoot: managed ? path.join(prefix, "openclaw") : canonicalRoot };
 }
 

@@ -224,6 +224,27 @@ it("retains package identity across release roots and forwards consent", async (
     ),
   );
 });
+
+it("matches a forwarding installation whose launcher marker names a symlinked state path", async () => {
+  const prefix = await fs.realpath(
+    await fs.mkdir(resolvePrefix(), { recursive: true }).then(() => resolvePrefix()),
+  );
+  await fs.writeFile(path.join(prefix, "openclaw-launcher.mjs"), "");
+  const alias = path.join(home.home, "state-alias");
+  await fs.symlink(path.dirname(prefix), alias);
+  install.kind = "package";
+  install.root = path.join(home.home, "global", "openclaw");
+  await fs.mkdir(install.root, { recursive: true });
+  await fs.writeFile(
+    path.join(install.root, ".openclaw-launcher"),
+    path.join(alias, path.basename(prefix), "openclaw-launcher.mjs"),
+  );
+  const { payload } = await invoke({
+    checkout: { packageRoot: path.join(prefix, "openclaw") },
+    acceptCapabilities: true,
+  });
+  expect(payload).toMatchObject({ ok: true });
+});
 it("prepares package installs through the release path on the stable channel", async () => {
   install.kind = "package";
   const { payload } = await invoke({});
