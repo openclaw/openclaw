@@ -67,6 +67,7 @@ export type ModelSetupWizardRecovery = {
   sessionId: string;
   authChoice: string;
   authKind?: ProviderLoginOption["kind"];
+  selectModel?: boolean;
 };
 
 type ModelSetupWizardPhase =
