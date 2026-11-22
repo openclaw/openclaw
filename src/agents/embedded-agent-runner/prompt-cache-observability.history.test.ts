@@ -25,6 +25,7 @@ import {
   completePromptCacheObservation,
   declarePromptHistoryRewrite,
   declarePromptToolPin,
+  recordRuntimeContextProjection,
 } from "./prompt-cache-observability.js";
 import { beginOpenAIObservation } from "./prompt-cache-observability.test-support.js";
 import { createPromptCacheRequestObserver } from "./prompt-cache-request-observer.js";
@@ -864,6 +865,47 @@ describe("prompt cache history fingerprints", () => {
       });
     },
   );
+
+  it("keeps runtime-context projections with their exact baseline identity and cleanup", () => {
+    withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
+      const identity = { sessionId: scopedKey("projection"), sessionKey: scopedKey("primary") };
+      const carrier: Message = {
+        role: "user",
+        content: "runtime",
+        timestamp: 2,
+        runtimeContextCarrier: true,
+      };
+      const user: Message = { role: "user", content: "before", timestamp: 1 };
+      const before = [user, carrier];
+      const after = [user, { role: "user" as const, content: "next", timestamp: 3 }, carrier];
+      const affinities = ["first", "second"];
+      for (const promptCacheKey of affinities) {
+        beginOpenAIObservation({ ...identity, promptCacheKey, messages: before });
+      }
+      const unrelated = {
+        ...identity,
+        sessionKey: scopedKey("unrelated"),
+        promptCacheKey: "other",
+      };
+      beginOpenAIObservation({ ...unrelated, messages: before });
+      recordRuntimeContextProjection(identity, undefined, after);
+      for (const promptCacheKey of affinities) {
+        expect(
+          beginOpenAIObservation({ ...identity, promptCacheKey, messages: after }).changes,
+        ).toEqual([expect.objectContaining({ code: "runtimeContextCarrier" })]);
+      }
+      expect(() => beginOpenAIObservation({ ...unrelated, messages: after })).toThrow(
+        "message 1 (user)",
+      );
+      clearPromptCacheObservations(identity.sessionId);
+      beginOpenAIObservation({ ...identity, messages: [user] });
+      const rewritten: Message[] = [{ ...user, content: "not a runtime-context change" }];
+      recordRuntimeContextProjection(identity, undefined, rewritten);
+      expect(() => beginOpenAIObservation({ ...identity, messages: rewritten })).toThrow(
+        "message 0 (user)",
+      );
+    });
+  });
 
   it.each([
     { modelId: "other" },

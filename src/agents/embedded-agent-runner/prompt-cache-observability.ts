@@ -10,6 +10,7 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { ContextEnginePromptCacheObservationChange as PromptCacheChange } from "../../context-engine/types.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import type { Message } from "../../llm/types.js";
+import type { AgentMessage } from "../runtime/index.js";
 import type { NormalizedUsage } from "../usage.js";
 import { log } from "./logger.js";
 import {
@@ -61,6 +62,8 @@ type PromptCacheTracker = {
   sessionKey?: string;
   history: PromptHistoryFingerprint[];
   historyBytes: number;
+  runtimeContextCarrierPositions: number[];
+  removedRuntimeContextKeys?: Set<string>;
   declaredRewrites?: Set<PromptHistoryRewriteReason>;
   snapshot: PromptCacheSnapshot;
   lastCacheRead: number | null;
@@ -450,6 +453,11 @@ export function beginPromptCacheObservation(
     sessionKey: params.sessionKey?.trim(),
     history,
     historyBytes,
+    // Projection facts follow this exact baseline through attempt teardown and eviction.
+    runtimeContextCarrierPositions: params.messages.flatMap((message, index) =>
+      message.role === "user" && message.runtimeContextCarrier ? [index] : [],
+    ),
+    removedRuntimeContextKeys: previous?.removedRuntimeContextKeys,
     snapshot,
     lastCacheRead: previous?.lastCacheRead ?? null,
     lastCacheReadSnapshot: previous?.lastCacheReadSnapshot,
@@ -524,6 +532,31 @@ export function declarePromptHistoryRewrite(
 ): void {
   markSessionTrackers(params, (tracker) => {
     (tracker.declaredRewrites ??= new Set()).add(params.reason);
+  });
+}
+
+/** Transient carrier movement is declared against each retained request baseline. */
+export function recordRuntimeContextProjection(
+  params: PromptCacheIdentity,
+  removed: readonly AgentMessage[] | undefined,
+  converted: readonly Message[],
+): void {
+  const keys = removed?.map((message, index) => `${index}:${message.timestamp}`);
+  const positions = converted.flatMap((message, index) =>
+    message.role === "user" && message.runtimeContextCarrier ? [index] : [],
+  );
+  markSessionTrackers(params, (tracker) => {
+    if (
+      keys?.some((key) => !tracker.removedRuntimeContextKeys?.has(key)) ||
+      tracker.runtimeContextCarrierPositions.some(
+        (position, index) => positions[index] !== position,
+      )
+    ) {
+      (tracker.declaredRewrites ??= new Set()).add("runtimeContextCarrier");
+    }
+    if (keys) {
+      tracker.removedRuntimeContextKeys = new Set(keys);
+    }
   });
 }
 
