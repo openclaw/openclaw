@@ -1,5 +1,7 @@
 import path from "node:path";
 import { prepareMemorySystemPromptAddition } from "../../context-engine/delegate.js";
+import { resolveAgentProfile } from "../agent-profiles.js";
+import { prepareAgentProfileWorkspaceContext } from "../agent-profiles/workspace-context.js";
 import { resolveBootstrapFilesForRun } from "../bootstrap-files.js";
 import { buildBootstrapContextForFiles } from "../embedded-agent-helpers/bootstrap.js";
 import type { EmbeddedContextFile } from "../embedded-agent-helpers/context-file.js";
@@ -17,6 +19,9 @@ type BootstrapFile = Awaited<ReturnType<typeof resolveBootstrapFilesForRun>>[num
 
 export type AgentWorkspaceContextParams = Parameters<typeof resolveBootstrapFilesForRun>[0] & {
   scope: "full" | "instructions-only";
+  /** Model the turn actually runs (after fallback); selects the Agent Profile budget. */
+  modelProvider?: string;
+  modelId?: string;
   memoryToolRouted?: boolean;
   memoryTools?: {
     /** Complete policy-admitted tool set available to the active memory prompt builder. */
@@ -44,6 +49,10 @@ export type AgentWorkspaceContext = {
   memoryToolRoutedBootstrapFiles: BootstrapFile[];
   memoryRecallInstructions?: string;
 };
+
+function shouldApplyAgentProfile(params: { modelProvider?: string; modelId?: string }): boolean {
+  return Boolean(params.modelProvider || params.modelId);
+}
 
 /** Prepares Gateway workspace facts; the harness owns their native carriers and lifetime. */
 export async function prepareAgentWorkspaceContext(
@@ -73,7 +82,22 @@ export async function prepareAgentWorkspaceContext(
       ? bootstrapFiles.filter((file) => !isRootMemoryPath(file.path, params.workspaceDir))
       : bootstrapFiles;
   const instructionFiles: EmbeddedContextFile[] = [];
-  const contextFiles = buildBootstrapContextForFiles(budgetFiles, params).map((file) => {
+  const profileContext = shouldApplyAgentProfile(params)
+    ? await prepareAgentProfileWorkspaceContext({
+        resolvedProfile: resolveAgentProfile({
+          config: params.config,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+        }),
+        bootstrapFiles: budgetFiles,
+        config: params.config,
+        agentId: params.agentId,
+        warn: params.warn,
+      })
+    : undefined;
+  const budgetedContextFiles =
+    profileContext?.contextFiles ?? buildBootstrapContextForFiles(budgetFiles, params);
+  const contextFiles = budgetedContextFiles.map((file) => {
     const projected = projectContextFile(file, params.projectPath);
     // Select against source paths; sandbox paths do not belong to the configured workspace.
     if (selectAgentWorkspaceInstructionFiles([file], params.workspaceDir).length > 0) {

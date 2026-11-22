@@ -107,8 +107,12 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       workspaceDir: promptWorkspace,
       toolNames: availableToolNames,
     });
+    // A native-owned thread runs the model of its binding, which can differ from the attempt's.
+    const nativeModelRef = params.params.expectedSessionRuntimeOwnership?.modelRef;
     const prepared = await prepareAgentWorkspaceContext({
       scope: "full",
+      modelProvider: nativeModelRef?.provider ?? params.params.provider,
+      modelId: nativeModelRef?.model ?? params.params.modelId,
       workspaceDir: params.resolvedWorkspace,
       config: params.params.config,
       sessionKey: params.sessionKey,
