@@ -91,6 +91,73 @@ describe.runIf(browserMode)("skill page layout", () => {
     },
   );
 
+  it.each([390, 1440])(
+    "shows a long homepage and its arrow inside the fact column at %ipx",
+    async (width) => {
+      const { page } = await import("vitest/browser");
+      await page.viewport(width, 844);
+      createContainer();
+      const homepage =
+        "https://example.test/skills/international-research-operations-weekly-regulatory-reporting-and-validation";
+      showInstalled({ homepage });
+      const link = query(".skill-page__facts a[href]", await renderedPage());
+      expect(link.getAttribute("href")).toBe(homepage);
+      const arrow = query("svg", link).getBoundingClientRect();
+      expect(arrow.width).toBeGreaterThan(0);
+      const label = document.createRange();
+      label.selectNodeContents(link.firstElementChild!);
+      for (const line of label.getClientRects())
+        expect(line.right).toBeLessThanOrEqual(arrow.left + 1);
+      expect(link.scrollWidth).toBeLessThanOrEqual(link.clientWidth + 1);
+      link.focus();
+      const labelText = document.createRange();
+      labelText.selectNodeContents(link.closest("dd")!.previousElementSibling!);
+      const style = getComputedStyle(link);
+      const outlineTop =
+        link.getBoundingClientRect().top -
+        parseFloat(style.outlineWidth) -
+        parseFloat(style.outlineOffset);
+      expect(outlineTop).toBeGreaterThanOrEqual(labelText.getBoundingClientRect().bottom);
+    },
+  );
+
+  it("keeps the publisher name and handle readable beside Import", async () => {
+    const { page } = await import("vitest/browser");
+    await page.viewport(390, 844);
+    createContainer();
+    const owner = {
+      displayName: "InternationalResearchOperationsAndRegulatoryReporting",
+      handle: "international-research-operations-team",
+    };
+    renderSkills(
+      createProps({
+        clawhubDetailRef: "@" + owner.handle + "/field-notebook",
+        clawhubDetail: {
+          skill: {
+            slug: "field-notebook",
+            displayName: "Field Notebook",
+            createdAt: 1,
+            updatedAt: 2,
+          },
+          owner,
+        },
+      }),
+      container!,
+    );
+    const detail = await renderedPage();
+    const byline = query(".skill-page__byline", detail);
+    const action = query(".plugin-catalog-detail__actions", detail).getBoundingClientRect();
+    for (const child of byline.children) {
+      expect(child.clientWidth).toBeGreaterThan(0);
+      expect(child.scrollWidth).toBeLessThanOrEqual(child.clientWidth + 1);
+      const range = document.createRange();
+      range.selectNodeContents(child);
+      for (const line of range.getClientRects())
+        expect(line.right).toBeLessThanOrEqual(action.left);
+    }
+    expect(byline.textContent).toBe(owner.displayName + "@" + owner.handle);
+  });
+
   it.each(["success", "error"] as const)(
     "shows %s install feedback in the reading column under the header's action",
     async (kind) => {

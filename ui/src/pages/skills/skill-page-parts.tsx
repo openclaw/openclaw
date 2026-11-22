@@ -112,7 +112,7 @@ export function SkillLinkFact(props: { href: string }) {
   return (
     <dd class="plugin-metadata__link-value">
       <a class="plugin-metadata__link" href={props.href} target="_blank" rel="noopener noreferrer">
-        <MiddleTruncated {...splitTail(text())} />
+        <span>{text()}</span>
         <Icon name="arrowUpRight" />
       </a>
     </dd>
