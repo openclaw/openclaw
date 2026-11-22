@@ -117,8 +117,10 @@ function createWorktreesPage(request?: Request, initial: ModelState = {}) {
         (button) => button.textContent?.trim() === label,
       )!;
     },
-    inputs: () => [
-      ...element.querySelectorAll<HTMLInputElement>('input.settings-input[type="text"]'),
+    draftControls: () => [
+      ...element.querySelectorAll<HTMLInputElement | HTMLButtonElement>(
+        'input.settings-input[type="text"], button#worktrees-create-repo, button#worktrees-base-ref',
+      ),
     ],
     async ready() {
       page.mount();
@@ -171,6 +173,17 @@ function settle() {
   return Promise.resolve();
 }
 
+async function selectReferenceOption(label: string) {
+  let option: HTMLElement | undefined;
+  await waitForSolid(() => {
+    option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
+      (node) => node.textContent?.trim() === label,
+    );
+    expect(option).toBeDefined();
+  });
+  option!.click();
+}
+
 function waitForRead(request: Request, method = "worktrees.list", params: object = {}) {
   return waitForCall(
     request,
@@ -192,6 +205,65 @@ afterEach(() => {
 });
 
 describe("WorktreesPage lifecycle", () => {
+  it("chooses a known repository and branch without typing paths and keeps the explicit creation boundary", async () => {
+    const previous = [worktree(), worktree("other", { repoRoot: "/srv/other" })];
+    const created = worktree("new-work", {
+      repoRoot: "/srv/other",
+      name: "Keep name",
+      branch: "openclaw/new-work",
+      baseRef: "release",
+    });
+    let saved = false;
+    const request = vi.fn(async (method: string) => {
+      if (method === "worktrees.list") {
+        return { worktrees: saved ? [...previous, created] : previous };
+      }
+      if (method === "worktrees.branches") {
+        return { branches: [{ name: "main" }, { name: "release" }], headBranch: "main" };
+      }
+      if (method === "worktrees.create") {
+        saved = true;
+        return created;
+      }
+      return {};
+    });
+    const page = await createWorktreesPage(request, {
+      createOpen: true,
+      createRepoRoot: "/tmp/repo",
+      createName: "Keep name",
+    }).ready();
+    const choose = async (triggerId: string, value: string) => {
+      const trigger = page.query<HTMLButtonElement>("#" + triggerId);
+      expect(trigger).not.toBeNull();
+      trigger!.click();
+      let option: HTMLElement | null = null;
+      await waitForSolid(() => {
+        option = document.querySelector<HTMLElement>('[role="option"][data-value="' + value + '"]');
+        expect(option).not.toBeNull();
+      });
+      option!.click();
+    };
+    await choose("worktrees-create-repo", "/srv/other");
+    await waitForRead(request, "worktrees.branches", { repoRoot: "/srv/other" });
+    await waitForSolid(() => expect(page.model.createBranches).toEqual(["main", "release"]));
+    await choose("worktrees-base-ref", "release");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("worktrees.create");
+    page.button("Create").click();
+    await waitForCall(request, "worktrees.create", {
+      repoRoot: "/srv/other",
+      name: "Keep name",
+      baseRef: "release",
+    });
+    await waitForSolid(() => expect(page.model.records).toContainEqual(created));
+    expect(page.model.createOpen).toBe(false);
+    page.button("New worktree").click();
+    await waitForSolid(() =>
+      expect(page.query("#worktrees-base-ref")?.textContent).toContain("release"),
+    );
+    await choose("worktrees-base-ref", "");
+    expect(page.model.createBaseRef).toBe("");
+  });
+
   it("shows pending list readiness and retries a failed first read", async () => {
     const first = deferred<{ worktrees: WorktreeRecord[] }>();
     const request = listRequest([worktree()]).mockReturnValueOnce(first.promise);
@@ -228,7 +300,9 @@ describe("WorktreesPage lifecycle", () => {
       repoRoot: "/tmp/repo",
       name: "retained draft",
     });
-    await waitForSolid(() => expect(page.inputs().every((input) => input.disabled)).toBe(true));
+    await waitForSolid(() =>
+      expect(page.draftControls().every((input) => input.disabled)).toBe(true),
+    );
     created.reject(new Error("Creation unavailable"));
     await waitForSolid(() => expect(page.button("Create")?.disabled).toBe(false));
     expect(page.query<HTMLInputElement>('input[aria-label="Name"]')?.value).toBe("retained draft");
@@ -300,13 +374,13 @@ describe("WorktreesPage lifecycle", () => {
     expect(newWorktreeButton?.getAttribute("aria-expanded")).toBe("false");
     newWorktreeButton?.click();
     await settle();
-    expect(page.inputs()).toHaveLength(3);
+    expect(page.draftControls()).toHaveLength(3);
     expect(newWorktreeButton?.getAttribute("aria-expanded")).toBe("true");
 
     source.setScopes(["operator.read"]);
     await settle();
     expect(page.model.createOpen).toBe(false);
-    expect(page.inputs()).toHaveLength(0);
+    expect(page.draftControls()).toHaveLength(0);
     expect(newWorktreeButton?.disabled).toBe(true);
     expect(newWorktreeButton?.getAttribute("aria-expanded")).toBe("false");
     newWorktreeButton?.click();
@@ -612,7 +686,14 @@ describe("WorktreesPage lifecycle", () => {
     const page = createWorktreesPage(request, { createOpen: true }).mount();
     await waitForRead(request);
 
-    const repository = page.query<HTMLInputElement>('input[aria-label="Repository"]')!;
+    page.query<HTMLButtonElement>("#worktrees-create-repo")!.click();
+    await selectReferenceOption("Enter another repository path…");
+    await waitForSolid(() =>
+      expect(page.query('input[aria-label="Enter another repository path…"]')).not.toBeNull(),
+    );
+    const repository = page.query<HTMLInputElement>(
+      'input[aria-label="Enter another repository path…"]',
+    )!;
     repository.value = "/tmp/new-repo";
     repository.dispatchEvent(new Event("input", { bubbles: true }));
     pendingList.resolve({ worktrees: [] });
@@ -645,7 +726,7 @@ describe("WorktreesPage lifecycle", () => {
     });
     await settle();
     const createButton = page.query<HTMLButtonElement>(".settings-row button.btn--sm");
-    expect(page.inputs().map((input) => input.disabled)).toEqual([true, true, true]);
+    expect(page.draftControls().map((input) => input.disabled)).toEqual([true, true, true]);
     expect([createButton?.disabled, toggleButton?.disabled]).toEqual([true, true]);
 
     toggleButton?.click();
@@ -658,7 +739,7 @@ describe("WorktreesPage lifecycle", () => {
 
     toggleButton?.click();
     await settle();
-    expect(page.inputs().map((input) => input.disabled)).toEqual([false, false, false]);
+    expect(page.draftControls().map((input) => input.disabled)).toEqual([false, false, false]);
   });
 
   it.each([undefined, "main"])(
@@ -681,6 +762,52 @@ describe("WorktreesPage lifecycle", () => {
       expect(request).toHaveBeenCalledWith("worktrees.create", { repoRoot: "/tmp/repo" });
     },
   );
+
+  it("retires old-repository branches and preserves an unlisted explicit ref after discovery and creation fail", async () => {
+    const old = deferred<unknown>();
+    const request = vi.fn((method: string, params?: { repoRoot?: string }) => {
+      if (method === "worktrees.branches") {
+        return params?.repoRoot === "/tmp/repo"
+          ? old.promise
+          : Promise.reject(new Error("No branch catalog"));
+      }
+      if (method === "worktrees.create") {
+        return Promise.reject(new Error("Creation unavailable"));
+      }
+      return Promise.resolve({ worktrees: [] });
+    });
+    const page = await createWorktreesPage(request, {
+      createOpen: true,
+      createRepoRoot: "/tmp/repo",
+      createBaseRef: "old-branch",
+      createBranches: ["old-branch"],
+    }).ready();
+    void page.model.loadCreateBranches();
+    await waitForRead(request, "worktrees.branches", { repoRoot: "/tmp/repo" });
+    page.model.setCreateRepository("/srv/custom");
+    expect(page.model.createBaseRef).toBe("");
+    expect(page.model.createBranches).toEqual([]);
+    old.resolve({ branches: [{ name: "old-branch" }] });
+    await page.model.loadCreateBranches();
+    expect(page.model.createBranches).toEqual([]);
+    page.query<HTMLButtonElement>("#worktrees-base-ref")!.click();
+    await selectReferenceOption("Enter a branch, tag, or commit…");
+    await waitForSolid(() =>
+      expect(page.query('input[aria-label="Enter a branch, tag, or commit…"]')).not.toBeNull(),
+    );
+    const ref = page.query<HTMLInputElement>(
+      'input[aria-label="Enter a branch, tag, or commit…"]',
+    )!;
+    ref.value = "v1.2.3";
+    ref.dispatchEvent(new Event("input", { bubbles: true }));
+    page.button("Create").click();
+    await waitForCall(request, "worktrees.create", { repoRoot: "/srv/custom", baseRef: "v1.2.3" });
+    await waitForSolid(() =>
+      expect(page.query('[role="alert"]')?.textContent).toContain("Creation unavailable"),
+    );
+    expect(page.query('input[aria-label="Enter a branch, tag, or commit…"]')).toBe(ref);
+    expect(ref.value).toBe("v1.2.3");
+  });
 
   it("ignores a stale branch failure after a newer request succeeds", async () => {
     const firstBranches = deferred<unknown>();

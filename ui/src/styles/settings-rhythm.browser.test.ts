@@ -20,12 +20,12 @@ const svg = '<svg viewBox="0 0 24 24"></svg>';
 const markup = `<div class="shell shell--settings">
   <aside class="settings-sidebar" style="width: 309px">
     <header class="settings-sidebar__header">
-      <button type="button" class="settings-sidebar__back"><span class="settings-sidebar__back-icon">${svg}</span>Back to app</button>
+      <button type="button" class="oc-icon-button oc-icon-button--32 settings-sidebar__back" aria-label="Back to app">${svg}</button>
       <h1 class="settings-sidebar__title">Settings</h1>
+      <div class="settings-sidebar__agent settings-sidebar__agent--header"><openclaw-agent-select class="agent-select">
+        <button type="button" class="agent-select__trigger"><span class="agent-select__avatar"></span><span class="agent-select__label">Molty</span><span class="agent-select__chevron">${svg}</span></button>
+      </openclaw-agent-select></div>
     </header>
-    <div class="settings-sidebar__agent"><openclaw-agent-select class="agent-select">
-      <button type="button" class="agent-select__trigger"><span class="agent-select__avatar"></span><span class="agent-select__label">Molty</span></button>
-    </openclaw-agent-select></div>
     <div class="settings-sidebar__search" role="search">
       <span class="settings-sidebar__search-icon">${svg}</span>
       <input class="settings-sidebar__search-input" type="search" placeholder="Search settings" />
@@ -53,7 +53,6 @@ const markup = `<div class="shell shell--settings">
 
 const SELECTORS = {
   back: ".settings-sidebar__back",
-  backIcon: ".settings-sidebar__back-icon",
   title: ".settings-sidebar__title",
   agentTrigger: ".settings-sidebar__agent .agent-select__trigger",
   avatar: ".settings-sidebar__agent .agent-select__avatar",
@@ -103,23 +102,31 @@ function readGeometry(page: Page) {
 const fixtureHtml = styleDocument(css, markup, 'data-theme-mode="dark"');
 
 fixture.describe("Settings rhythm", () => {
-  it("keeps one control height, radius and left inset through the sidebar header stack", async () => {
+  it("keeps one control height, radius and left inset through the sidebar stack", async () => {
     const g = await fixture.withPage("sidebar", fixtureHtml, readGeometry);
-    const stack = [g.back, g.agentTrigger, g.searchInput, g.item];
-    expect(stack.map((control) => control.height)).toEqual([32, 32, 32, 32]);
+    const stack = [g.searchInput, g.item];
+    expect(stack.map((control) => control.height)).toEqual([32, 32]);
     expect(new Set(stack.map((control) => control.radius)).size).toBe(1);
     // Glyphs and text start on the nav rows' edge: 12px panel inset + 1px border + 9px padding.
     const edge = g.itemIcon.x;
     expect(edge).toBe(22);
-    expect([
-      g.backIcon.x,
-      g.title.textStart,
-      g.avatar.x,
-      g.searchIcon.x,
-      g.groupLabel.textStart,
-    ]).toEqual(Array(5).fill(edge));
+    expect([g.searchIcon.x, g.groupLabel.textStart]).toEqual(Array(2).fill(edge));
     // Typed search text lines up with the nav labels.
     expect(g.searchInput.textStart).toBe(g.itemLabel.x);
+  });
+
+  it("puts back, title and the agent avatar on one header row within the panel insets", async () => {
+    const g = await fixture.withPage("header", fixtureHtml, readGeometry);
+    expect([g.back.width, g.back.height, g.agentTrigger.height, g.avatar.width]).toEqual([
+      32, 32, 32, 24,
+    ]);
+    const center = (box: Box) => box.y + box.height / 2;
+    expect(center(g.title)).toBeCloseTo(center(g.back), 0);
+    expect(center(g.agentTrigger)).toBeCloseTo(center(g.back), 0);
+    // The row's controls share the search field's 12px panel insets.
+    expect(g.back.x).toBe(g.searchInput.x);
+    expect(g.agentTrigger.x + g.agentTrigger.width).toBe(g.searchInput.x + g.searchInput.width);
+    expect(g.title.x).toBeGreaterThan(g.back.x + g.back.width);
   });
 
   it("gives the Agents toolbar one control height and radius, and nests the emoji trigger concentrically", async () => {

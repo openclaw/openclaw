@@ -18,6 +18,7 @@ export async function refreshCostUsageCacheForAgent(params: {
   agentId: string;
   agentDir?: string;
   databasePath?: string;
+  background?: true;
   maxFiles?: number;
   onRemaining?: (files: UsageCostPendingFile[]) => void;
   storePath?: string;
@@ -32,6 +33,7 @@ export async function refreshCostUsageCacheForAgent(params: {
   try {
     const operation = {
       kind: "refresh",
+      background: params.background,
       maxFiles: params.maxFiles,
       sessionFiles: params.sessionFiles,
       startMs: params.startMs,

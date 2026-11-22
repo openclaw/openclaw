@@ -24,12 +24,14 @@ export function formatDockerDaemonUnavailableError(stderr: string): string {
     .join(" ");
 }
 
-async function inspectContainerImage(
+export async function inspectContainerImage(
   engine: SandboxContainerEngine,
   image: string,
+  signal?: AbortSignal,
 ): Promise<"exists" | "missing"> {
   const result = await execContainer(engine, ["image", "inspect", image], {
     allowFailure: true,
+    signal,
   });
   if (result.code === 0) {
     return "exists";

@@ -76,10 +76,12 @@ import {
   admitGatewayUpdateRequest,
   retainUpdateRequesterAuthority,
   createUnexpectedUpdateFailureResult,
+  makeUpdateRefusal,
   recordHandoffFailure,
   resolveGatewayUpdateAdmission,
   reportImmutableGatewayUpdateRefusal,
 } from "./update-admission.js";
+import { appUpdateNoticePublisher } from "./update-app-notice.js";
 import { updateRecoveryCleanupHandler } from "./update-cleanup.js";
 import { recordGatewayUpdateOutcome } from "./update-outcome-observation.js";
 import { updateReportHandler } from "./update-report.js";
@@ -162,7 +164,12 @@ export const updateHandlers: GatewayRequestHandlers = {
     if (noticeTarget.kind === "internal") {
       deliveryContext = { channel: INTERNAL_MESSAGE_CHANNEL };
     }
+    const publishAppUpdate =
+      noticeTarget.kind === "internal"
+        ? appUpdateNoticePublisher(request, requesterChannel)
+        : undefined;
     const origin = {
+      ...(publishAppUpdate ? { noticeSurface: "app" as const } : {}),
       doctorHint: formatDoctorNonInteractiveHint(),
       ...(requester ? { requester } : {}),
       ...(sessionKey ? { sessionKey } : {}),
@@ -186,6 +193,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       ...(params.target ? { target: { kind: "git", sha: params.target.upstreamSha } } : {}),
     });
     const runId = run.runId;
+    publishAppUpdate?.(run);
     const warn = (message: string) => context?.logGateway?.warn(message);
     await recordUpdateRunVerification(runId, {
       runningVersion: VERSION,
@@ -283,21 +291,9 @@ export const updateHandlers: GatewayRequestHandlers = {
       const installRoot = installSurface.root;
       result.mode = installSurface.mode;
       result.root = installRoot;
-      const refusedUpdate = (
-        outcome: "error" | "skipped",
-        reason: string,
-        beforeVersion?: string | null,
-      ): UpdateRunResult => ({
-        status: outcome,
-        mode: installSurface.mode,
-        ...(installRoot ? { root: installRoot } : {}),
-        ...(beforeVersion ? { before: { version: beforeVersion } } : {}),
-        reason,
-        steps: [],
-        durationMs: 0,
-      });
+      const refusedUpdate = makeUpdateRefusal(installSurface);
       if (installSurface.kind === "immutable") {
-        await reportImmutableGatewayUpdateRefusal(runId, installSurface, respond);
+        await reportImmutableGatewayUpdateRefusal(runId, installSurface, respond, publishAppUpdate);
         return;
       }
       const effectiveChannel = resolveEffectiveUpdateChannel({
@@ -367,6 +363,9 @@ export const updateHandlers: GatewayRequestHandlers = {
           before: { version: beforeVersion ?? VERSION },
           ...(targetVersion ? { target: { version: targetVersion } } : {}),
         });
+        if (publishAppUpdate) {
+          return true;
+        }
         acknowledgement = renderUpdateRunNotice(acknowledgedRun, "ack") ?? undefined;
         const ack = await notify(acknowledgedRun, "ack");
         ackDelivered = ack.delivered;
@@ -698,6 +697,9 @@ export const updateHandlers: GatewayRequestHandlers = {
     if ((ackDelivered || ackQueued) && handoff?.status !== "started") {
       await notify(outcomeRun, "finished");
     }
+    if (outcomeRun.status !== "running") {
+      publishAppUpdate?.(outcomeRun);
+    }
     recordGatewayUpdateOutcome(result, actor, context?.logGateway);
     respond(
       true,
@@ -707,6 +709,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         ackDelivered,
         ackQueued,
         acknowledgement,
+        ...(publishAppUpdate ? { noticeInApp: true } : {}),
         ...(outcomeMessage ? { message: outcomeMessage } : {}),
         result,
         ...(handoff ? { handoff } : {}),

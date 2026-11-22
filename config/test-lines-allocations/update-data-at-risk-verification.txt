@@ -1,0 +1,12 @@
+# Recorded data-at-risk marks: one new verification owner proved against real SQLite
+# (consistent beside a live writer without a copy, newer, behind, unfinished recovery,
+# interrupted restore, unreadable, live Doctor writers before and after Doctor holds the
+# state, rollback leftovers beside shared and agent databases found before any other
+# check, an unreadable agent registry kept beside a schema finding, and files a completed
+# rollback keeps on purpose, also after ledger compaction), its readers (repair before
+# and after Doctor, including refusals on unchecked leftovers and after Doctor; the next
+# plain update, including already-current and its refusal on unchecked leftovers; the
+# interrupted managed handoff past an earlier verified mark) with exact rendered text per
+# outcome, the Git release-launcher refusal message, and Doctor's skipped and unconfirmed
+# stale-Gateway stops, an inaccessible leftover path and an unreadable database beside a deferrable one. Exact net growth.
+523

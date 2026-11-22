@@ -55,7 +55,7 @@ import {
   listUpdateRuns,
   replaceConfigFile,
   updateCommand,
-  updateGitCheckout,
+  updateGitRelease,
   resolveGatewayInstallEntrypoint,
   runCommandWithTimeout,
 } from "./update-cli-modules.test-support.js";
@@ -148,7 +148,7 @@ describe("update-cli", () => {
       ],
     });
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
-    expectNoSideEffects(resolveGlobalManager, replaceConfigFile, updateGitCheckout);
+    expectNoSideEffects(resolveGlobalManager, replaceConfigFile, updateGitRelease);
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(getErrorOutput()).toContain("openclaw update --channel dev");
   });

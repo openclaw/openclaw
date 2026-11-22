@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { JSX } from "@solidjs/web";
 import { createSignal, Show } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -9,7 +9,7 @@ import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { PluginsHubHeader } from "./plugins-hub-header.tsx";
 import type { PluginsHubTab } from "./plugins-hub.ts";
 
-function templatesFlag(templates: boolean) {
+function templatesFlag(templates?: boolean) {
   const context = {
     runtimeConfig: {
       state: {
@@ -26,8 +26,26 @@ function templatesFlag(templates: boolean) {
   };
 }
 
-it("lists Templates as a Customize tab only while its experimental flag is on", () => {
-  const tabs = (templates: boolean) =>
+// The tabs show only in the native apps, which have no Customize sidebar.
+beforeEach(() => {
+  Object.assign(window, { __OPENCLAW_NATIVE_EMBED__: { platform: "ios", formFactor: "phone" } });
+});
+afterEach(() => {
+  Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_EMBED__");
+});
+
+it("leaves the Customize pages to the sidebar outside the native apps", () => {
+  Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_EMBED__");
+  const view = mountSolid(
+    () => <PluginsHubHeader active="plugins" onSelect={() => {}} />,
+    templatesFlag(true),
+  );
+  expect(view.getByRole("heading", { level: 1 }).textContent).toBe("Plugins");
+  expect(view.queryAllByRole("tab")).toEqual([]);
+});
+
+it("lists Templates by default unless explicitly disabled", () => {
+  const tabs = (templates?: boolean) =>
     mountSolid(
       () => <PluginsHubHeader active="plugins" onSelect={() => {}} />,
       templatesFlag(templates),
@@ -35,6 +53,7 @@ it("lists Templates as a Customize tab only while its experimental flag is on", 
       .getAllByRole("tab")
       .map((tab) => tab.textContent);
   expect(tabs(true)).toEqual(["Plugins", "Skills", "Skill workshop", "Templates"]);
+  expect(tabs()).toEqual(["Plugins", "Skills", "Skill workshop", "Templates"]);
   expect(tabs(false)).toEqual(["Plugins", "Skills", "Skill workshop"]);
 });
 

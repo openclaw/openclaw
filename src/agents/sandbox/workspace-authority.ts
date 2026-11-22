@@ -9,6 +9,7 @@ import {
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "../agent-tools.policy.js";
+import { DEFAULT_PROVIDER } from "../defaults.js";
 import { buildModelAliasIndex, resolveModelRefFromString } from "../model-selection.js";
 import { resolveSessionModelRef } from "../session-model-ref.js";
 import { isToolAllowedByPolicies } from "../tool-policy-match.js";
@@ -138,9 +139,12 @@ export function resolveSandboxWorkspaceAuthority(params: {
       const selected = resolveSessionModelRef(params.config, params.sessionEntry, runtime.agentId);
       const explicitProvider = params.modelProvider?.trim();
       const explicitModel = params.modelId?.trim();
-      let model = { provider: explicitProvider ?? selected.provider, model: selected.model };
+      let model = selected && {
+        provider: explicitProvider ?? selected.provider,
+        model: selected.model,
+      };
       if (explicitModel) {
-        const defaultProvider = explicitProvider ?? selected.provider;
+        const defaultProvider = explicitProvider ?? selected?.provider ?? DEFAULT_PROVIDER;
         const raw =
           explicitProvider && !explicitModel.includes("/")
             ? `${explicitProvider}/${explicitModel}`
@@ -156,8 +160,8 @@ export function resolveSandboxWorkspaceAuthority(params: {
         config: params.config,
         agentId: runtime.agentId,
         sessionKey: params.sessionKey,
-        modelProvider: model.provider,
-        modelId: model.model,
+        modelProvider: model?.provider,
+        modelId: model?.model,
       });
       const policies = [
         mergeAlsoAllowPolicy(

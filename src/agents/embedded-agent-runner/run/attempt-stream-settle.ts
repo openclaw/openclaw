@@ -1,4 +1,8 @@
-import { PROVIDER_MODEL_INPUT } from "@openclaw/ai/provider-types";
+import {
+  PROVIDER_DEFERRED_TOOL_NAMES,
+  PROVIDER_MODEL_INPUT,
+  PROVIDER_STATE_SCOPE,
+} from "@openclaw/ai/provider-types";
 import {
   isAnthropicServerToolClearingEnabled,
   isCompactionReplayCheckpoint,
@@ -37,6 +41,7 @@ import {
   resolvePreparedExtraParams,
 } from "../extra-params.js";
 import { log } from "../logger.js";
+import { createAttemptModelRequestTransformer } from "../model-request-hook.js";
 import type { PromptCacheRequestObservation } from "../prompt-cache-request-observer.js";
 import { resolveCacheRetention } from "../prompt-cache-retention.js";
 import {
@@ -356,6 +361,8 @@ export async function prepareEmbeddedAttemptTransport(input: {
   sandboxSessionKey: string;
   sandbox?: SandboxContext | null;
   codeModeControlsEnabled: boolean;
+  /** Hidden Tool Search directory entries that a direct call hydrates in this run. */
+  getDeferredToolEntries?: () => readonly { name: string }[] | undefined;
   providerPromptState: {
     state: ProviderPromptState;
     effectiveContextTokenBudget: number;
@@ -525,13 +532,22 @@ export async function prepareEmbeddedAttemptTransport(input: {
   })
     ? [...attempt.model.input, "video" as const]
     : undefined;
+  let deferredToolEntries: readonly { name: string }[] | undefined;
+  let deferredToolNames: ReadonlySet<string> | undefined;
   // A direct provider transport replaces the session SDK stream, so attach
   // turn-owned thinking provenance to the selected transport as well.
   session.agent.streamFn = (model, context, options) => {
+    const entries = input.getDeferredToolEntries?.();
+    if (entries !== deferredToolEntries) {
+      deferredToolEntries = entries;
+      deferredToolNames = entries && new Set(entries.map((entry) => entry.name));
+    }
     const providerOptions = {
       ...options,
       openclawThinkingExplicit: attempt.thinkingExplicit,
       ...(providerInput ? { [PROVIDER_MODEL_INPUT]: providerInput } : {}),
+      ...(deferredToolNames ? { [PROVIDER_DEFERRED_TOOL_NAMES]: deferredToolNames } : {}),
+      ...(attempt.providerStateScope ? { [PROVIDER_STATE_SCOPE]: attempt.providerStateScope } : {}),
     };
     // Async payload preparation outlives stream admission; managed fetch rechecks Access at egress.
     return withGuardedFetchBeforeRequest(assertAccessCurrent, () =>
@@ -544,6 +560,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
   session.agent.streamFn = wrapStreamFnWithProviderPromptState({
     streamFn: session.agent.streamFn,
     ...input.providerPromptState,
+    transformPayload: createAttemptModelRequestTransformer(attempt, input.sessionAgentId),
     ...(sessionFork
       ? {
           finalizePayload: (payload: Record<string, unknown>) =>

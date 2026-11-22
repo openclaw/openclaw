@@ -14,6 +14,7 @@ import { logWarn } from "../logger.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isOneShotRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import {
+  listFinishedSessions,
   listRunningSessions,
   processSessionInstanceId,
   recordNotifyOnExitRemoval,
@@ -100,6 +101,8 @@ const execYieldResumes = new Map<string, ExecYieldResume>();
 
 /** A chat is its agent plus session key; a raw key such as `global` is shared across agents. */
 type ExecChat = { agentId: string; sessionKey: string };
+// Completion admission can outlive process retention and its start-time routing fields.
+const pendingExitWakes = new Set<ExecChat>();
 const execChatKey = (chat: ExecChat) => `${chat.agentId}\0${chat.sessionKey}`;
 const processChat = (session: ProcessSession) =>
   session.sessionKey && session.agentId
@@ -122,6 +125,22 @@ export function listYieldAwaitableExecs(chat: ExecChat | undefined): ProcessSess
   }
   return listChatRunningSessions(chat).filter(
     (session) => !session.cancellationRequested && hasExitWake(session),
+  );
+}
+
+/** The notification owner keeps a wake alive through finalization and receipt settlement. */
+export function hasExecYieldWake(chat: ExecChat): boolean {
+  if (listYieldAwaitableExecs(chat).length > 0) {
+    return true;
+  }
+  for (const wake of pendingExitWakes) {
+    if (wake.agentId === chat.agentId && wake.sessionKey === chat.sessionKey) {
+      return true;
+    }
+  }
+  const key = execChatKey(chat);
+  return listFinishedSessions().some(
+    (session) => session.finalizing && session.resumesYieldedRun && processChat(session) === key,
   );
 }
 
@@ -281,7 +300,10 @@ async function notifyOnExit(
         { ...eventOptions, sourceRunId: session.startedByRunId },
       );
       recordNotifyOnExitRemoval(session, receipt.cancel);
-      void receipt.settled.then(async (outcome) => {
+      const wake = { agentId, sessionKey: eventSessionKey };
+      pendingExitWakes.add(wake);
+      void receipt.settled.then((outcome) => {
+        pendingExitWakes.delete(wake);
         if (outcome.status === "failed") {
           logWarn(
             `exec: completion delivery failed (${outcome.error}); inspect the process result.`,

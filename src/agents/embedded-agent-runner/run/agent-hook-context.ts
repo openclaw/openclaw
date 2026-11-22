@@ -16,6 +16,7 @@ type EmbeddedAgentHookRun = Pick<
   | "trigger"
   | "memoryAudience"
   | "sandbox"
+  | "isTurnTainted"
 > &
   Parameters<typeof buildAgentHookContextChannelFields>[0] &
   Parameters<typeof buildAgentHookContextIdentityFields>[0];
@@ -36,6 +37,7 @@ export function buildEmbeddedAgentHookContext(
     sandboxed: run.sandbox?.enabled === true,
     workspaceDir: run.workspaceDir,
     trigger: run.trigger,
+    ...(run.isTurnTainted ? { turnTainted: run.isTurnTainted() } : {}),
     ...buildAgentHookContextChannelFields(run),
     ...buildAgentHookContextIdentityFields(run),
   };

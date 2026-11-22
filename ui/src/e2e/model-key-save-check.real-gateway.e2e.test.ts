@@ -1,4 +1,6 @@
+import { writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import path from "node:path";
 import { buffer } from "node:stream/consumers";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
@@ -7,7 +9,9 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.js";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.js";
 import { expandProvider } from "./model-providers.test-support.ts";
 import { respondAsReasoningModel } from "./reasoning-upstream.test-support.js";
@@ -16,8 +20,13 @@ const STATUS_BY_KEY: Record<string, [number, string]> = {
   "sk-synthetic-revoked": [401, "Incorrect API key provided"],
   "sk-synthetic-noaccess": [403, "This key has no access to the requested model"],
   "sk-synthetic-servererror": [500, "Internal server error"],
+  "sk-synthetic-quota": [
+    429,
+    "You exceeded your current quota, please check your plan and billing details.",
+  ],
 };
 let instance: OpenClawTestInstance;
+const tempDirs = createTempDirTracker();
 const suite = createControlUiE2eSuite({
   name: "Saving an API key checks it against the provider",
   startServerBeforeBrowser: true,
@@ -29,7 +38,11 @@ const suite = createControlUiE2eSuite({
           if (request.url === "/v1/models") {
             request.resume();
             response.writeHead(200, { "content-type": "application/json" });
-            response.end(JSON.stringify({ data: [{ id: "hy4-preview" }, { id: "current" }] }));
+            response.end(
+              JSON.stringify({
+                data: [{ id: "hy4-preview" }, { id: "current" }, { id: "gpt-4o-mini" }],
+              }),
+            );
             return;
           }
           void buffer(request).then((raw) => {
@@ -37,7 +50,14 @@ const suite = createControlUiE2eSuite({
             const failure = STATUS_BY_KEY[key];
             if (failure) {
               response.writeHead(failure[0], { "content-type": "application/json" });
-              response.end(JSON.stringify({ error: { message: failure[1], code: failure[0] } }));
+              response.end(
+                JSON.stringify({
+                  error: {
+                    message: failure[1],
+                    code: key === "sk-synthetic-quota" ? "insufficient_quota" : failure[0],
+                  },
+                }),
+              );
               return;
             }
             const body = JSON.parse(raw.toString() || "{}");
@@ -48,6 +68,26 @@ const suite = createControlUiE2eSuite({
         }),
     });
     const baseUrl = `http://127.0.0.1:${upstream.claim.port}/v1`;
+    const providerTransport = path.join(tempDirs.make("model-key-provider-"), "transport.mjs");
+    await writeFile(
+      providerTransport,
+      `
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (input, init) => {
+        const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+        if (url.hostname === "api.openai.com") {
+          const { dispatcher, ...options } = init ?? {};
+          return originalFetch(new Request(${JSON.stringify(baseUrl)} + url.pathname.slice(3) + url.search, input instanceof Request ? input : undefined), options);
+        }
+        if (url.hostname === "127.0.0.1" || url.hostname === "localhost") {
+          return originalFetch(input, init);
+        }
+        throw new Error("Unexpected external request in provider fixture");
+      };
+      // The guarded-fetch test contract preserves an explicitly installed HTTP stub.
+      globalThis.fetch.mock = {};
+    `,
+    );
     instance = await createOpenClawTestInstance({
       name: "model-key-save-check",
       reserveIdlePort: false,
@@ -55,6 +95,7 @@ const suite = createControlUiE2eSuite({
         OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
         VITEST: undefined,
         NODE_ENV: undefined,
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${providerTransport}`,
         ...Object.fromEntries(
           Object.keys(process.env)
             .filter((key) => key.endsWith("_API_KEY"))
@@ -63,10 +104,16 @@ const suite = createControlUiE2eSuite({
       },
       config: {
         gateway: { controlUi: { enabled: true } },
-        agents: { entries: { main: {} }, defaults: { model: "fixture/current" } },
-        plugins: { allow: ["tencent"] },
+        agents: { entries: { main: {} }, defaults: { model: "openai/gpt-4o-mini" } },
+        plugins: {
+          allow: ["tencent", "openai"],
+          entries: { openai: { enabled: true }, tencent: { enabled: true } },
+        },
         models: {
           providers: {
+            openai: {
+              apiKey: "sk-synthetic-original",
+            },
             fixture: {
               api: "openai-completions",
               apiKey: "sk-synthetic-original",
@@ -90,6 +137,7 @@ const suite = createControlUiE2eSuite({
         upstream.listener.closeAllConnections();
         await upstream.releaseListener();
         await upstream.claim.release();
+        tempDirs.cleanup();
       }
     };
     await instance.startGateway().catch(async (error: unknown) => {
@@ -125,6 +173,65 @@ async function saveAndRead(scope: Locator, save: () => Promise<void>) {
 }
 
 suite.define(() => {
+  it("shows failed inference instead of catalog Ready and recovers after replacing the key", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
+      async ({ page }) => {
+        await page.goto(await open("settings/model-providers"));
+        await waitForControlUiGatewayReady(page);
+        await page.getByRole("button", { name: "Refresh", exact: true }).click();
+        const row = await expandProvider(page, "openai");
+        const status = row.locator(".provider-row__status");
+        const replace = async (key: string) => {
+          const button = row.getByRole("button", { name: "Replace API key: OpenAI", exact: true });
+          if (await button.count()) {
+            await button.click();
+          }
+          await row.getByLabel("API key", { exact: true }).fill(key);
+          return saveAndRead(row, () =>
+            row.getByRole("button", { name: "Save", exact: true }).click(),
+          );
+        };
+        await expect.poll(() => status.textContent()).toBe("Ready");
+        const failed = await replace("sk-synthetic-quota");
+        expect(failed.text).toContain("rate limit");
+        expect.soft(await status.textContent()).toBe("Rate limited");
+        await row.getByRole("button", { name: "Test access: OpenAI", exact: true }).click();
+        await expect
+          .poll(() => row.locator(".model-providers__probe-summary").textContent())
+          .toBe("Rate limited");
+        await expect
+          .poll(() =>
+            row.getByRole("button", { name: "Test access: OpenAI", exact: true }).isEnabled(),
+          )
+          .toBe(true);
+        if (process.env.OPENCLAW_UI_E2E_RECORD === "1") {
+          const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [row], {
+            elements: [status],
+            animations: "disabled",
+          });
+          await writeFile(path.join(suite.artifactDir, "provider-check-clean.png"), frame.png);
+          await writeFile(
+            path.join(suite.artifactDir, "provider-check-bounds.json"),
+            JSON.stringify({
+              viewport: page.viewportSize(),
+              scale: await page.evaluate(() => window.devicePixelRatio),
+              bounds: frame.elements[0]!.bounds,
+            }),
+          );
+        }
+        expect.soft(await status.textContent()).toBe("Rate limited");
+        await row.locator("button.provider-row__summary").click();
+        expect(await row.locator(".provider-row__detail").count()).toBe(0);
+        expect.soft(await status.textContent()).toBe("Rate limited");
+        await expandProvider(page, "openai");
+        const recovered = await replace("sk-synthetic-good");
+        expect(recovered.text).toContain("API key saved and verified.");
+        await expect.poll(() => status.textContent()).toBe("Ready");
+      },
+    );
+  });
+
   it("reports a rejected key where it was entered and keeps the field editable", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },

@@ -29,6 +29,7 @@ import {
   type SqliteDatabaseAdmissionCursor,
 } from "./sqlite-database-admission.js";
 import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "./worker-cpu.js";
+import { captureWorkerMemoryBudgetEnvironmentData } from "./worker-memory-budget.js";
 import { observeWorkerMessage, workerMessagePayloadBytes } from "./worker-message-metrics.js";
 import { NativeWorker } from "./worker-native-handle.js";
 import {
@@ -77,11 +78,14 @@ export type RetainedNativeWorkerSource = {
   retain(owner: object, closeOwner: () => Promise<void>): void;
   /** Join an idle broker without closing registered domains or their independent work. */
   retireIdleBroker(): Promise<boolean>;
+  /** Let successive native captures reuse the broker before attempting to join it. */
+  scheduleIdleBrokerRetirement(): void;
 };
 
 type NativeBrokerLifetime = {
   host?: SpawnBrokerHost;
   closing?: Promise<void>;
+  idleTimer?: ReturnType<typeof setTimeout>;
   retainedUntilProcessExit?: boolean;
 };
 
@@ -129,7 +133,11 @@ function nativeCleanupFailures(results: PromiseSettledResult<unknown>[]): unknow
   return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
 }
 
+const NATIVE_BROKER_IDLE_MS = 60_000;
+
 function nativeResourceBroker(source: NativeSource): SpawnBrokerHost {
+  clearTimeout(source.broker.idleTimer);
+  source.broker.idleTimer = undefined;
   return (source.broker.host ??= runInDetachedAsyncContext(() =>
     createSpawnBrokerHost({ nativeResources: true, workerUrl: source.brokerModuleUrl }),
   ));
@@ -137,7 +145,12 @@ function nativeResourceBroker(source: NativeSource): SpawnBrokerHost {
 
 async function retireNativeResourceBroker(source: NativeSource): Promise<boolean> {
   const brokerLifetime = source.broker;
-  await brokerLifetime.closing;
+  clearTimeout(brokerLifetime.idleTimer);
+  brokerLifetime.idleTimer = undefined;
+  // Publish each join before yielding so concurrent release hooks cannot replace it.
+  while (brokerLifetime.closing) {
+    await brokerLifetime.closing;
+  }
   if (
     source.hasActiveWorkers ||
     brokerLifetime.retainedUntilProcessExit ||
@@ -146,8 +159,11 @@ async function retireNativeResourceBroker(source: NativeSource): Promise<boolean
     return false;
   }
   const broker = brokerLifetime.host;
+  if (!broker) {
+    return true;
+  }
   brokerLifetime.host = undefined;
-  await (brokerLifetime.closing = broker?.close());
+  await (brokerLifetime.closing = broker.close());
   brokerLifetime.closing = undefined;
   return true;
 }
@@ -348,6 +364,25 @@ export function captureRetainedNativeWorkerSource(options?: {
     retireIdleBroker() {
       return retireNativeResourceBroker(source);
     },
+    scheduleIdleBrokerRetirement() {
+      const broker = source.broker;
+      if (
+        broker.idleTimer ||
+        !broker.host ||
+        broker.retainedUntilProcessExit ||
+        broker.host.hasOpenNativeResourceClaims
+      ) {
+        return;
+      }
+      broker.idleTimer = runInDetachedAsyncContext(() =>
+        setTimeout(function retireNativeBrokerAfterIdle() {
+          broker.idleTimer = undefined;
+          void retireNativeResourceBroker(source).catch((error: unknown) =>
+            process.emitWarning(`Native resource broker retirement failed: ${String(error)}`),
+          );
+        }, NATIVE_BROKER_IDLE_MS).unref(),
+      );
+    },
     close() {
       return (closingOwners ??= Promise.resolve().then(async () => {
         try {
@@ -437,13 +472,18 @@ export function captureRetainedNativeWorkerSource(options?: {
           if (closed) {
             return;
           }
-          await attachment.close();
-          await lease.close();
-          lease.release();
+          if (!attachment.dispatched) {
+            lease.abandonUnattached();
+          } else {
+            await attachment.close();
+            await lease.close();
+            lease.release();
+          }
           attachment.dispose();
           port1.close();
           port2.close();
           closed = true;
+          owners.delete(resource);
           if (source.closing) {
             await retireNativeResourceBroker(source);
           }
@@ -456,6 +496,8 @@ export function captureRetainedNativeWorkerSource(options?: {
         try {
           await resource.close();
         } catch (cleanupError) {
+          // A failed constructor cannot return its close obligation to the caller.
+          source.retain(resource, () => resource.close());
           throw new AggregateError(
             [error, cleanupError],
             "Native resource creation cleanup failed",
@@ -553,7 +595,10 @@ function startNativeWorker(
         type: "create",
         id,
         filename: { kind: filename instanceof URL ? "url" : "path", value: String(filename) },
-        environmentData: captureSqliteWorkerEnvironmentData(databaseAdmissions),
+        environmentData: [
+          ...captureSqliteWorkerEnvironmentData(databaseAdmissions),
+          captureWorkerMemoryBudgetEnvironmentData(),
+        ],
         options: {
           ...captured,
           environment: { ...(env === SHARE_ENV ? process.env : (env ?? process.env)) },

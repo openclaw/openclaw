@@ -61,12 +61,12 @@ export async function collectRecoveryDiskUsage(params: {
       continue;
     }
     const kind =
-      item.kind !== "update-capture"
+      item.kind !== "update-capture" && item.kind !== "database-snapshot"
         ? "migrationOriginals"
         : item.captureSource === "doctor"
           ? "doctorCaptures"
           : "updateCaptures";
-    const category = /^(?:unmanifested-|orphan-)/u.test(item.reason)
+    const category = /^(?:unmanifested-|unreceipted-|orphan-)/u.test(item.reason)
       ? "unmanifestedOrOrphan"
       : item.outcome === "candidate"
         ? "retirable"

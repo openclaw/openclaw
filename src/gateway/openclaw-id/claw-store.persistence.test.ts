@@ -259,6 +259,74 @@ it("moves prior rows without losing bindings and refuses an incomplete partition
   await expect(readStoredClaw()).rejects.toThrow("missing token-bindings");
 });
 
+it("unlinks a claw stored before unlinking existed and keeps its pending unlink across reopen", async ({
+  state,
+}) => {
+  state.applyEnv();
+  const claw = await linkedClaw();
+  const { authority, invite_reports, member_approved_at, token_bindings, ...core } =
+    claw.authority.current()!;
+  const { owner_devices, members, invites, ...anchor } = authority!;
+  const { registration_unsent: _unsent, ...discovery } = core.discovery;
+  core.discovery = discovery;
+  // The v2 rows a Gateway wrote before unlinking existed: no pending_unlinks, and no record of
+  // whether a registration was ever sent.
+  const priorRows = {
+    current: { ...core, v: 2, authority: anchor },
+    "owner-devices": owner_devices,
+    members,
+    invites,
+    "invite-reports": invite_reports ?? {},
+    "member-approvals": member_approved_at ?? {},
+    "token-bindings": { v: 1, bindings: token_bindings ?? [] },
+  };
+  expect(JSON.stringify(priorRows)).not.toMatch(/pending_unlinks|registration_unsent/);
+  const store = createCorePluginStateKeyedStore<unknown>({
+    ownerId: "core:openclaw-id",
+    namespace: "claw",
+    retention: "retained",
+  });
+  for (const [key, value] of Object.entries(priorRows)) {
+    await store.register(key, value);
+  }
+  await closeOpenClawStateDatabaseAsync();
+  const upgraded = createOpenClawIdAuthority();
+  await upgraded.load();
+  const config = { enabled: true, discoveryUrl: "https://discovery.example.test" };
+  const { service } = serviceFor(upgraded, config, claw.stateDir);
+  let up = false;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+    if (!up) {
+      throw new TypeError("fetch failed");
+    }
+    return Response.json({ claw_id: claw.clawId, hostname: "h", unlinked_at: 1 });
+  });
+  try {
+    expect(await service.unlink.preview("local_operator")).toMatchObject({
+      claw_id: claw.clawId,
+      ownerDevices: 1,
+    });
+    // Unknown registration: Discovery may hold the claw, so the unlink waits for it.
+    expect(await service.unlink.run("local_operator", claw.clawId)).toMatchObject({
+      ok: true,
+      discovery: "pending",
+    });
+  } finally {
+    await service.stop();
+  }
+  await closeOpenClawStateDatabaseAsync();
+  const reopened = await readStoredClaw();
+  expect(reopened).toMatchObject({ authority: null, binding: null, hostname: null });
+  expect(reopened?.pending_unlinks).toEqual([
+    expect.objectContaining({ hostname: claw.authority.current()!.hostname }),
+  ]);
+  up = true;
+  const restarted = serviceFor(createOpenClawIdAuthority(), config, claw.stateDir);
+  await restarted.service.reconcileRuntimePolicy();
+  await vi.waitFor(async () => expect((await readStoredClaw())?.pending_unlinks).toBeUndefined());
+  await restarted.service.stop();
+});
+
 it("settles a durably committed removal after its write acknowledgement is lost", async ({
   state,
 }) => {

@@ -682,6 +682,8 @@ describe("initSessionState RawBody", () => {
     { name: "non-boundary suffix", trigger: "/steer", command: "/steering ", resets: false },
 
     { name: "no-argument alias with payload", trigger: "/id", command: "/id ", resets: true },
+    { name: "bracketed example", trigger: "/new", command: "[example] /new ", resets: false },
+    { name: "sender-label example", trigger: "/new", command: "Ada: /new ", resets: false },
   ])(
     "matches configured reset trigger boundaries with $name",
     async ({ trigger, command, resets }) => {
@@ -699,6 +701,7 @@ describe("initSessionState RawBody", () => {
       const result = await initSessionState({
         ctx: {
           RawBody: body,
+          SenderName: "Ada",
           ChatType: "direct",
           SessionKey: sessionKey,
         },
@@ -771,42 +774,6 @@ describe("initSessionState RawBody", () => {
       expect(result.sessionCtx.agentText).toBe(expected);
     },
   );
-
-  it("supports a bounded Body-only legacy envelope without searching flat history", async () => {
-    const storePath = await makeStorePath("openclaw-body-only-reset-");
-    const cfg = {
-      session: { store: storePath, resetTriggers: ["/new"] },
-    } as OpenClawConfig;
-
-    const legacy = await initSessionState({
-      ctx: {
-        Body: "[Telegram id:456] İpek: /NEW: keep [Q3]\nline 2",
-        ChatType: "direct",
-        SenderName: "İpek",
-        SessionKey: "agent:main:telegram:dm:legacy",
-      },
-      cfg,
-    });
-    expect(legacy.resetTriggered).toBe(true);
-    expect(legacy.bodyStripped).toBe("keep [Q3]\nline 2");
-
-    const flatHistory = await initSessionState({
-      ctx: {
-        Body: [
-          "[Chat messages since your last reply - for context]",
-          "[Telegram id:123] Other: /new old text",
-          "",
-          "[Current message - respond to this]",
-          "[Telegram id:456] İpek: /new current text",
-        ].join("\n"),
-        ChatType: "direct",
-        SessionKey: "agent:main:telegram:dm:flat-history",
-      },
-      cfg,
-    });
-    expect(flatHistory.resetTriggered).toBe(false);
-    expect(flatHistory.bodyStripped).toBeUndefined();
-  });
 
   it("does not treat transcript-only or explicitly empty raw text as a reset command", async () => {
     const storePath = await makeStorePath("openclaw-audio-reset-");

@@ -1,0 +1,2 @@
+# Category discovery spans two independent boundaries: real registry HTTP through the Gateway (ordering, identity, cursor and old-registry refusal) and Chromium navigation (keyboard focus, narrow layout, retry and stale-page rejection). Retain both after removing duplicate fixtures and assertions.
+71

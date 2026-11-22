@@ -240,6 +240,7 @@ describe("private subagent completion processing receipts", () => {
         return { payloads: [{ text: "Synthetic successor answer" }], meta: { durationMs: 0 } };
       });
       gatewayReplyMock.mockImplementation(getReplyFromConfig);
+      await prepareGatewayReplyRuntimeForTest();
       const { ws } = await harness.openClient({
         browserOrigin: "http://private-completion.test",
         client: {

@@ -37,6 +37,8 @@ export async function provePublishedDriverScopedRestore({
     const database = new DatabaseSync(pathname);
     try {
       database.exec(schema);
+      // Model a store that has not used pending input; its AUTOINCREMENT table needs full backups.
+      database.exec("DROP TABLE session_pending_inputs;");
       database.exec("PRAGMA user_version = 26;");
       database
         .prepare(`INSERT INTO schema_meta

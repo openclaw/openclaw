@@ -21,7 +21,7 @@ import {
   invalidateGatewayDeviceRevocation,
 } from "../../gateway/device-revocation.js";
 import { errorShapeFromError } from "../../gateway/error-shape.js";
-import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import {
   createContext,
   createOperatorClient,
@@ -659,7 +659,7 @@ it.each([false, true])(
             undefined,
             { isCurrent: () => true, subscribe: () => () => {} },
           );
-          const source = await captureGatewayOperatorRunAuthority({
+          const source = await prepareGatewayOperatorRunAuthority({
             client,
             context,
             hasCurrentClientAuthority: device.isCurrent,
@@ -669,7 +669,7 @@ it.each([false, true])(
             sessionKey,
             operatorProfileId: source.authority.profileId,
           });
-          return { source, device, origin };
+          return { client, source, device, origin };
         }),
       );
       const [alice, bob] = people;
@@ -766,14 +766,21 @@ it.each([false, true])(
         );
         expect(handoffs).toHaveBeenCalledOnce();
         invalidateGatewayDeviceRevocation(context, "bob", "operator");
-        expect(() => bob.source.authority.assertCurrent()).toThrow();
+        expect(() => bob.source.authority.assertCurrent()).not.toThrow();
+        await expect(
+          prepareGatewayOperatorRunAuthority({
+            client: bob.client,
+            context,
+            hasCurrentClientAuthority: bob.device.isCurrent,
+          }),
+        ).rejects.toThrow("Gateway caller authority is no longer active.");
         expect(() => alice.source.authority.assertCurrent()).not.toThrow();
         release();
         consumer.release();
         settled.resolve({ kind: "applied", committed: true, unavailablePluginIds: [] });
         assert(work?.run && selected);
-        // Handoff is a port here, not a full Gateway authorization proof. Its captured
-        // participant source is real and still fences the actual retainer replay.
+        // Handoff is a port here, not a full Gateway authorization proof. Replay
+        // retains the admitted participant rather than widening to another user.
         const replayResult = await work.run({
           signal: new AbortController().signal,
           assertCurrent: selected.assertCurrent,

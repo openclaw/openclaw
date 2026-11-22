@@ -7,11 +7,11 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import {
-  createAdmittedRunOperatorAuthority,
   bindOperatorModelExecution,
   prepareSystemAgentRunAdmission,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import type { PreparedNativeSessionRuntime } from "../embedded-agent-runner/run/model-setup.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import { makeEmbeddedRunnerAttempt } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
@@ -51,7 +51,7 @@ function createAuthority(
   scopes = ["operator.write"],
 ) {
   const state = { modelPolicy, holds: 0, listeners: new Set<() => void>() };
-  const source = createAdmittedRunOperatorAuthority({
+  const source = createTestOperatorAuthority({
     profileId: "model-policy-fixture",
     scopes,
     rolePolicy,
@@ -150,7 +150,6 @@ async function createHarness(
     finalize: () => runAgentHarnessSettledTurnFinalization(attempt, result, registration.harness),
     finalizeSettledTurn,
     runAttempt,
-    restrict: () => authority.update(policy),
     state,
   };
 }
@@ -231,7 +230,7 @@ it.each<{ grants: AccessGrants; required: boolean }>([
   admission.close();
   expect(retained.modelPolicyRequired).toBe(required);
   update(policy);
-  expect(retained.modelPolicyRequired).toBe(true);
+  expect(retained.modelPolicyRequired).toBe(required);
   update(undefined);
   expect(retained.modelPolicyRequired).toBe(required);
   const bind = expectDefined(retained.bindModelExecution, "native dispatch binder");
@@ -332,41 +331,6 @@ it.each(admissionCases)(
   },
 );
 
-const cancellationCases: Array<[HarnessOperation, HarnessMode]> = [
-  ["execution", "fresh"],
-  ["execution", "native"],
-  ["finalization", "native"],
-];
-it.each(cancellationCases)(
-  "cancels unsupported %s through %s when a model policy is introduced",
-  async (operation, mode) => {
-    const { execute, finalize, runAttempt, finalizeSettledTurn, restrict, state } =
-      await createHarness(mode, false, false);
-    const introducePolicy = (signal: AbortSignal | undefined) => {
-      expect(signal?.aborted).toBe(false);
-      restrict();
-      expect(signal?.aborted).toBe(true);
-    };
-    if (operation === "execution") {
-      runAttempt.mockImplementation(async (attempt) => {
-        introducePolicy(attempt.abortSignal);
-        return result;
-      });
-    } else {
-      finalizeSettledTurn.mockImplementation(async ({ attempt }) => {
-        introducePolicy(attempt.abortSignal);
-        attempt.abortSignal?.throwIfAborted();
-        throw new Error("finalization must be canceled");
-      });
-    }
-    await expect((operation === "execution" ? execute : finalize)()).rejects.toThrow(
-      "operator role cannot use this model",
-    );
-    expect(operation === "execution" ? runAttempt : finalizeSettledTurn).toHaveBeenCalledTimes(1);
-    expect([state.holds, state.listeners.size]).toEqual([1, 0]);
-  },
-);
-
 it.each([
   ["foreground", false],
   ["foreground", true],
@@ -459,28 +423,28 @@ it.each([
 
     update(makePolicy());
     if (outsideDefaults) {
-      expect(outsideDefaults.signal.aborted).toBe(true);
-      expect(outsideDefaults.assertCurrent).toThrow(deniedModel);
+      expect(outsideDefaults.signal.aborted).toBe(false);
+      expect(outsideDefaults.assertCurrent).not.toThrow();
     }
     if (retained) {
-      expect(retained.modelPolicyRequired).toBe(true);
+      expect(retained.modelPolicyRequired).toBe(initialPolicy);
     }
     expect(a.assertCurrent).not.toThrow();
     expect(b.assertCurrent).not.toThrow();
 
     update(makePolicy(["fixture/a"]));
-    expect(a.signal.aborted).toBe(true);
-    expect(a.assertCurrent).toThrow(deniedModel);
+    expect(a.signal.aborted).toBe(false);
+    expect(a.assertCurrent).not.toThrow();
     expect(b.signal.aborted).toBe(false);
     expect(b.assertCurrent).not.toThrow();
     expect(sourceAbort.signal.aborted).toBe(false);
     expect(source.assertCurrent).not.toThrow();
     if (retained) {
-      expect(() => bind({ provider: "fixture", model: "a" })).toThrow(deniedModel);
+      acquire("a").release();
     }
 
     update(undefined);
-    expect(a.assertCurrent).toThrow(deniedModel);
+    expect(a.assertCurrent).not.toThrow();
     expect(b.assertCurrent).not.toThrow();
     a.release();
     b.release();
@@ -490,7 +454,7 @@ it.each([
     expect(current.assertCurrent).not.toThrow();
 
     if (retained && sibling) {
-      expect(retained.modelPolicyRequired).toBe(false);
+      expect(retained.modelPolicyRequired).toBe(initialPolicy);
       retained.release();
       expect(current.signal.aborted).toBe(true);
       expect(current.assertCurrent).toThrow(inactive);

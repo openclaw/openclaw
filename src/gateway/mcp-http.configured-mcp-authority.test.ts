@@ -8,6 +8,7 @@ import {
   readRequestText,
   respondJson,
 } from "../../test/helpers/gateway-integration-fixtures.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
@@ -131,8 +132,6 @@ async function startProbeServer() {
       } else if (message.method === "tools/list") {
         const hook = state.onToolsList;
         state.onToolsList = undefined;
-        // Runs while OpenClaw awaits the catalog refresh, after the loopback
-        // handler already admitted the call.
         await hook?.();
       }
       respondJson(response, { jsonrpc: "2.0", id: message.id, result: probeResult(message) });
@@ -144,7 +143,7 @@ async function startProbeServer() {
     counts,
     state,
     /**
-     * Server-initiated tools/list_changed: OpenClaw refreshes before the next call.
+     * Server-initiated tools/list_changed: the next call starts background refresh.
      * A ping follows on each stream; a client handles stream messages in order,
      * so every ping reply proves that client consumed the notification.
      */
@@ -409,7 +408,7 @@ it.for(
     { ...operation, change: "reassigned completion lineage", completion: true },
   ]),
 )(
-  "refuses $tool before server I/O after a $change during a catalog refresh",
+  "calls known $tool during refresh and refuses the next call after a $change",
   async (operation, { signal }) => {
     const turn = await prepareTurn(
       operation.tool + (operation.completion ? "-lineage" : "-revoked"),
@@ -420,17 +419,35 @@ it.for(
       isError: false,
       text: expect.stringContaining(operation.text),
     });
-    // The next call now waits on a catalog refresh from the server.
+    const refreshStarted = createDeferred();
+    const releaseRefresh = createDeferred();
+    const changed = createDeferred();
     await probe.notifyToolsChanged();
     const before = { ...probe.counts };
-    probe.state.onToolsList = operation.completion ? turn.reassign : turn.revoke;
-    expect(await turn.call(operation.tool, operation.args)).toEqual({
-      isError: true,
-      text: expect.stringContaining("Tool call authorization expired"),
-    });
-    // The refresh ran; the refused request never reached the server.
-    expect(probe.counts["tools/list"]).toBe((before["tools/list"] ?? 0) + 1);
-    expect(probe.counts[operation.method]).toBe(before[operation.method]);
+    probe.state.onToolsList = async () => {
+      refreshStarted.resolve();
+      await releaseRefresh.promise;
+      await (operation.completion ? turn.reassign() : turn.revoke());
+      changed.resolve();
+    };
+    try {
+      expect(await turn.call(operation.tool, operation.args)).toEqual({
+        isError: false,
+        text: expect.stringContaining(operation.text),
+      });
+      await withinTest(refreshStarted.promise, signal);
+      releaseRefresh.resolve();
+      await withinTest(changed.promise, signal);
+      const denied = await turn.rpc("tools/call", {
+        name: operation.tool,
+        arguments: operation.args,
+      });
+      expect(denied.status).toBe(operation.completion ? 500 : 401);
+      expect(probe.counts["tools/list"]).toBe((before["tools/list"] ?? 0) + 1);
+      expect(probe.counts[operation.method]).toBe((before[operation.method] ?? 0) + 1);
+    } finally {
+      releaseRefresh.resolve();
+    }
   },
 );
 

@@ -26,7 +26,7 @@ import {
 import { onWorkerRequestMetrics } from "../../src/infra/worker-request-diagnostics.js";
 import { createPluginStateKeyedStoreV2 } from "../../src/plugin-state/plugin-state-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../../src/state/openclaw-state-db.js";
-import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -84,12 +84,7 @@ try {
   }
   global.gc();
   if (values.allocation) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   const hostLoad = loadavg();
   const beforeMemory = process.memoryUsage();

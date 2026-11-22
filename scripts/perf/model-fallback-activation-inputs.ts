@@ -3,8 +3,10 @@
  * ClickClack needs auto-enable to fill its missing enabled flag; one other plugin
  * is explicitly disabled. The same authored config is reused for every turn.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/model-fallback-activation-inputs.ts \
- *   --iterations 1000 [--flow runner|activation] [--allocation | --counts]
+ *   --iterations 1000 [--flow runner|prepared-runner|registry-runner|activation] [--allocation | --counts]
  *   [--config published|frozen] [--warmup 100] [--profile <output.cpuprofile>]
+ * registry-runner uses 48 entries, one channel, three executable provider plugins,
+ * and six candidates without a borrowed model-runtime snapshot.
  * Run separate processes in A/A controls and five alternating AB/BA pairs. Accept
  * unchanged model selection, one materialization per config/metadata generation,
  * lower CPU/allocation beyond A/A spread, and no 20% worsening. Published mode
@@ -23,6 +25,8 @@ import { loadavg } from "node:os";
 import { setImmediate } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { runWithModelFallback } from "../../src/agents/model-fallback-runner.js";
+import { withPreparedModelRuntimePluginGenerationScope } from "../../src/agents/prepared-model-runtime-generation-scope.js";
+import { createFallbackRateLimitFixture } from "../../src/agents/test-helpers/fallback-rate-limit-fixture.js";
 import {
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -31,7 +35,13 @@ import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { resolveBundledCompatActivationInputs } from "../../src/plugins/activation-context.js";
 import { prepareRuntimePluginsConfig } from "../../src/plugins/config-state.js";
 import { withPluginMetadataSnapshotScope } from "../../src/plugins/current-plugin-metadata-snapshot.js";
+import {
+  cleanupPluginLoaderFixturesForTest,
+  clearPluginLoaderCache,
+} from "../../src/plugins/loader.test-fixtures.js";
 import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
+import { withPluginRuntimeRegistryScope } from "../../src/plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../../src/plugins/runtime/generation-scope.js";
 import { freezeJsonSnapshot } from "../../src/shared/immutable-data.js";
 
 const { values } = parseArgs({
@@ -51,7 +61,7 @@ assert(Number.isSafeInteger(warmup) && warmup >= 0);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
 const gc = globalThis.gc;
 assert(gc, "Use --expose-gc");
-assert(["runner", "activation"].includes(values.flow));
+assert(["runner", "prepared-runner", "registry-runner", "activation"].includes(values.flow));
 assert(["published", "frozen"].includes(values.config));
 assert(!(values.allocation && values.counts), "Measure allocation and coverage separately");
 const channels = ["clickclack", "discord", "nextcloud-talk", "reef", "slack", "x"];
@@ -61,7 +71,18 @@ const ids = [
   "synthetic-disabled",
   ...Array.from({ length: 32 }, (_, index) => `synthetic-plugin-${index}`),
 ];
-const config: OpenClawConfig = {
+const preparedFixture =
+  values.flow === "prepared-runner" || values.flow === "registry-runner"
+    ? createFallbackRateLimitFixture(undefined, values.flow === "registry-runner")
+    : undefined;
+if (values.flow === "registry-runner") {
+  assert.equal(preparedFixture?.generation.pluginRegistry?.providers.length, 3);
+}
+const config: OpenClawConfig = (preparedFixture
+  ? values.config === "published" && values.flow === "registry-runner"
+    ? structuredClone(preparedFixture.config)
+    : preparedFixture.config
+  : undefined) ?? {
   agents: {
     defaults: {
       model: {
@@ -106,7 +127,7 @@ const config: OpenClawConfig = {
     ),
   },
 };
-if (values.config === "published") {
+if (values.config === "published" && values.flow !== "prepared-runner") {
   setRuntimeConfigSnapshot(config);
   assert.equal(getRuntimeConfigSnapshot(), config);
   assert.equal(Object.isFrozen(config), false);
@@ -114,19 +135,29 @@ if (values.config === "published") {
   freezeJsonSnapshot(config);
   prepareRuntimePluginsConfig(config);
 }
-const snapshot = createPluginMetadataSnapshotFixture({
-  plugins: ids.map((id) => ({
-    id,
-    origin: "config",
-    rootDir: `/synthetic/${id}`,
-    channels: channels.includes(id) ? [id] : [],
-    channelCatalogMeta: { id, preferOver: ["unused-synthetic-predecessor"] },
-  })),
-});
-snapshot.discovery = { candidates: [], diagnostics: [] };
+const snapshot =
+  preparedFixture?.metadata ??
+  createPluginMetadataSnapshotFixture({
+    plugins: ids.map((id) => ({
+      id,
+      origin: "config",
+      rootDir: `/synthetic/${id}`,
+      channels: channels.includes(id) ? [id] : [],
+      channelCatalogMeta: { id, preferOver: ["unused-synthetic-predecessor"] },
+    })),
+  });
+if (!preparedFixture) {
+  snapshot.discovery = { candidates: [], diagnostics: [] };
+}
+const preparationCpu = process.cpuUsage();
+const preparationStart = performance.now();
+const preparedSnapshot = values.flow === "prepared-runner" ? preparedFixture?.publish() : undefined;
+const preparationWallMs = performance.now() - preparationStart;
+const preparationCpuDelta = process.cpuUsage(preparationCpu);
 const params = {
   cfg: config,
-  provider: "synthetic-provider",
+  provider: preparedFixture ? "synthetic-first" : "synthetic-provider",
+  manifestPlugins: snapshot,
   model: "primary",
   skipAuthProfileRuntime: true,
   run: async (_provider: string, model: string) => model,
@@ -142,17 +173,32 @@ const activationParams = {
 };
 let activation: ReturnType<typeof resolveBundledCompatActivationInputs> | undefined;
 let ownerWallMs = 0;
+let ownerSamples: number[] = [];
 async function run(count: number) {
   for (let iteration = 0; iteration < count; iteration++) {
     // Separate turns must not reuse the pre-existing same-turn auto-enable memo.
     await setImmediate();
     const ownerStart = performance.now();
-    if (values.flow === "runner") {
+    if (preparedFixture && preparedSnapshot) {
+      result = await withPreparedModelRuntimePluginGenerationScope(
+        preparedFixture.generation,
+        () =>
+          withPluginRuntimeGenerationScope(preparedSnapshot, () => runWithModelFallback(params)),
+        () => preparedSnapshot,
+      );
+    } else if (preparedFixture) {
+      result = await withPluginRuntimeRegistryScope(
+        preparedFixture.generation.pluginRegistry!,
+        () => runWithModelFallback(params),
+      );
+    } else if (values.flow === "runner") {
       result = await runWithModelFallback(params);
     } else {
       activation = resolveBundledCompatActivationInputs(activationParams);
     }
-    ownerWallMs += performance.now() - ownerStart;
+    const elapsed = performance.now() - ownerStart;
+    ownerWallMs += elapsed;
+    ownerSamples.push(elapsed);
   }
 }
 const inspector = new Session();
@@ -160,9 +206,13 @@ inspector.connect();
 await withPluginMetadataSnapshotScope(
   snapshot,
   async () => {
-    if (!values.counts) {
-      await run(warmup);
+    const coldCpu = process.threadCpuUsage();
+    if (values.flow === "registry-runner") {
+      await run(1);
     }
+    const coldWallMs = ownerWallMs;
+    const coldCpuDelta = process.threadCpuUsage(coldCpu);
+    await run(warmup);
     gc();
     if (values.counts) {
       await inspector.post("Profiler.enable");
@@ -180,6 +230,7 @@ await withPluginMetadataSnapshotScope(
       await inspector.post("Profiler.start");
     }
     ownerWallMs = 0;
+    ownerSamples = [];
     const hostLoadBefore = loadavg();
     const cpuBefore = process.cpuUsage();
     const threadBefore = process.threadCpuUsage();
@@ -225,6 +276,10 @@ await withPluginMetadataSnapshotScope(
               "applyPluginAutoEnable",
               "materializePluginAutoEnableCandidatesInternal",
               "normalizePluginEntries",
+              "normalizePluginsConfig",
+              "normalizeConfiguredProviderModel",
+              "resolveProviderRuntimePluginLookup",
+              "resolvePluginRegistrationConfigKey",
             ].includes(fn.functionName)
           ) {
             const range = fn.ranges[0];
@@ -239,19 +294,30 @@ await withPluginMetadataSnapshotScope(
       const { profile } = await inspector.post("Profiler.stop");
       writeFileSync(values.profile, JSON.stringify(profile));
     }
-    if (values.flow === "runner") {
+    if (values.flow !== "activation") {
       assert.equal(result?.result, "primary");
       assert.equal(result?.model, "primary");
     } else {
       assert.equal(activation?.config?.plugins?.entries?.["synthetic-disabled"]?.enabled, false);
       assert.equal(activation?.config?.plugins?.entries?.clickclack?.enabled, true);
     }
-    assert.equal(config.plugins?.entries?.["synthetic-disabled"]?.enabled, false);
-    assert.equal(config.plugins?.entries?.clickclack?.enabled, undefined);
+    if (!preparedFixture) {
+      assert.equal(config.plugins?.entries?.["synthetic-disabled"]?.enabled, false);
+      assert.equal(config.plugins?.entries?.clickclack?.enabled, undefined);
+    }
     console.log(
       JSON.stringify({
         ownerSha256: Object.fromEntries(
-          ["plugins/activation-context.ts", "config/plugin-auto-enable.apply.ts"].map((file) => [
+          [
+            "plugins/activation-context.ts",
+            "config/plugin-auto-enable.apply.ts",
+            "agents/model-fallback-rate-limit.ts",
+            "agents/model-fallback-rate-limit-model.ts",
+            "plugins/runtime/load-context.ts",
+            "agents/embedded-agent-runner/model.registry-resolution.ts",
+            "agents/prepared-model-runtime.full-catalog.ts",
+            "plugins/provider-model-normalization.ts",
+          ].map((file) => [
             file,
             hash("sha256", readFileSync(new URL(`../../src/${file}`, import.meta.url))),
           ]),
@@ -260,12 +326,19 @@ await withPluginMetadataSnapshotScope(
         flow: values.flow,
         configMode: values.config,
         mode: values.counts ? "counts" : values.allocation ? "allocation" : "timing",
-        entries: ids.length,
-        configuredChannels: channels.length,
-        activationRewrites: 1,
-        candidates: 2,
+        entries: Object.keys(config.plugins?.entries ?? {}).length,
+        preparationWallMs,
+        preparationCpuMs: (preparationCpuDelta.user + preparationCpuDelta.system) / 1000,
+        configuredChannels: Object.keys(config.channels ?? {}).length,
+        activationRewrites: values.flow === "registry-runner" ? 3 : preparedFixture ? 0 : 1,
+        candidates: preparedFixture ? 6 : 2,
+        coldWallMs,
+        coldMainThreadCpuMs: (coldCpuDelta.user + coldCpuDelta.system) / 1000,
         iterations,
         warmup,
+        ownerMedianUs: ownerSamples.toSorted((a, b) => a - b)[Math.floor(iterations / 2)]! * 1000,
+        ownerP95Us:
+          ownerSamples.toSorted((a, b) => a - b)[Math.ceil(iterations * 0.95) - 1]! * 1000,
         ownerWallUsPerRun: (ownerWallMs * 1000) / iterations,
         wallMs,
         wallUsPerRun: (wallMs * 1000) / iterations,
@@ -291,3 +364,6 @@ await withPluginMetadataSnapshotScope(
   { config, trustConfigIdentity: true },
 );
 inspector.disconnect();
+
+clearPluginLoaderCache();
+cleanupPluginLoaderFixturesForTest();

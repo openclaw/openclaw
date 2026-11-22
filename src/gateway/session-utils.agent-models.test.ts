@@ -24,11 +24,31 @@ beforeEach(() => {
 
 afterAll(closeSessionSqliteDatabasesForTest);
 
+test("projects welcome metadata only for its configured agent", async () => {
+  const { agents } = await listAgentsForGateway({
+    agents: {
+      entries: {
+        briefing: {
+          description: " Follows your repositories. ",
+          recommendedPrompts: ["Set up a repository", "Brief me"],
+        },
+        plain: {},
+      },
+    },
+  });
+  expect(agents.find((agent) => agent.id === "briefing")).toMatchObject({
+    description: "Follows your repositories.",
+    recommendedPrompts: ["Set up a repository", "Brief me"],
+  });
+  const plain = agents.find((agent) => agent.id === "plain");
+  expect(plain).not.toHaveProperty("description");
+  expect(plain).not.toHaveProperty("recommendedPrompts");
+});
+
 type ModelCase = {
   name: string;
   cfg: OpenClawConfig;
   expected: { id: string; primary?: string; utility?: string; fallbacks?: string[] }[];
-  ready?: string;
 };
 
 describe("listAgentsForGateway model identity", () => {
@@ -52,7 +72,7 @@ describe("listAgentsForGateway model identity", () => {
               utilityModel: "helper@local-utility:ops",
               models: { "local-utility/ops": { alias: "helper" } },
             },
-            disabled: { utilityModel: "" },
+            disabled: { utilityModel: "", model: "openai/gpt-6-astra" },
           },
         },
       },
@@ -64,9 +84,8 @@ describe("listAgentsForGateway model identity", () => {
           fallbacks: ["openai/gpt-5.4"],
           utility: "local-utility/ops",
         },
-        { id: "disabled" },
+        { id: "disabled", primary: "openai/gpt-6-astra" },
       ],
-      ready: "disabled",
     },
     {
       name: "model-owned suffix",
@@ -78,20 +97,16 @@ describe("listAgentsForGateway model identity", () => {
       },
       expected: [{ id: "main", primary: "lmstudio/gemma-4-31b-it@q8_0" }],
     },
-  ])("projects $name without mutating config", async ({ cfg, expected, ready }) => {
+  ])("projects $name without mutating config", async ({ cfg, expected }) => {
     const original = structuredClone(cfg);
     const { agents } = await listAgentsForGateway(cfg);
     for (const { id, primary, utility, fallbacks } of expected) {
       const agent = agents.find((row) => row.id === id);
       expect(agent?.utilityModel).toBe(utility);
-      if (id === ready) {
-        expect(agent?.model?.primary).toBeTruthy();
-      } else {
-        expect(agent?.model).toEqual({
-          ...(primary ? { primary } : {}),
-          ...(fallbacks ? { fallbacks } : {}),
-        });
-      }
+      expect(agent?.model).toEqual({
+        ...(primary ? { primary } : {}),
+        ...(fallbacks ? { fallbacks } : {}),
+      });
     }
     expect(cfg).toEqual(original);
   });

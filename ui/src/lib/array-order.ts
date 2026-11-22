@@ -1,11 +1,11 @@
 export type ArrayDropPosition = "before" | "after";
 
-/** Move one entry relative to another while preserving every other entry. */
+/** Move one entry into the target slot, or explicitly before/after the target. */
 export function moveArrayEntry<T>(
   order: readonly T[],
   source: T,
   target: T,
-  position: ArrayDropPosition,
+  position?: ArrayDropPosition,
 ): T[] {
   const ordered = [...order];
   const sourceIndex = ordered.indexOf(source);
@@ -14,7 +14,9 @@ export function moveArrayEntry<T>(
     return ordered;
   }
   ordered.splice(sourceIndex, 1);
-  const insertionIndex = ordered.indexOf(target) + (position === "after" ? 1 : 0);
+  const insertionIndex = position
+    ? ordered.indexOf(target) + (position === "after" ? 1 : 0)
+    : targetIndex;
   ordered.splice(insertionIndex, 0, source);
   return ordered;
 }

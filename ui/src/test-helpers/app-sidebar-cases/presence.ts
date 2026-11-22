@@ -249,6 +249,8 @@ describe("AppSidebar viewer presence", () => {
     expect(sidebar.querySelectorAll(".sidebar-online__person")).toHaveLength(0);
     await selectSidebarView(sidebar, "online");
     expect(sidebar.querySelectorAll(".sidebar-online__person")).toHaveLength(4);
+    // People opens Activity beside its list; count only the rows' navigation below.
+    expect(onNavigate).toHaveBeenCalledWith("activity");
     onNavigate.mockClear();
 
     const aliceRow = sidebar.querySelector<HTMLAnchorElement>('[data-online-user-id="alice"]')!;

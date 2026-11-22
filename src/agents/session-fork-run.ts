@@ -1,5 +1,6 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isTranscriptArtifactProvider } from "../../packages/agent-core/src/harness/session/transcript-model.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import { retainPreparedSessionEntryPredicate } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
@@ -45,12 +46,14 @@ import {
 import { parseSystemPromptRouteKey } from "./embedded-agent-runner/session-prompt-state.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { emitInternalRunUsageDiagnostic } from "./internal-run-usage.js";
+import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import {
   readSessionForkRequesterFromTurn,
   type SessionForkRequester,
 } from "./session-fork-requester.js";
 import { assertSessionForkRunSucceeded } from "./session-fork-result.js";
 import { SessionManager } from "./sessions/session-manager.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "./spawned-context.js";
 
 /**
  * A background agent run on a copy of one session's conversation, through one completed
@@ -103,7 +106,7 @@ type SessionForkTurn = {
 
 /**
  * Facts of the turn a fork reads through: the requester its initiating user message recorded and
- * the model its last assistant message ran on. The search stops at that turn's initiating input,
+ * the model its last provider response ran on. The search stops at that turn's initiating input,
  * within a bounded window. Returns undefined when that window no longer holds the input
  * (too large or compacted mid-turn), so callers refuse instead of guessing the requester.
  */
@@ -122,13 +125,16 @@ export async function readSessionForkTurn(
       continue;
     }
     const message: { role?: unknown; provider?: unknown; model?: unknown } = entry.message;
+    // Delivery mirrors and other OpenClaw-authored rows are assistant messages no provider
+    // answered; taking their marker as the model sends the fork to a model that does not exist.
     if (
       !model &&
       message.role === "assistant" &&
       typeof message.provider === "string" &&
       typeof message.model === "string" &&
       message.provider &&
-      message.model
+      message.model &&
+      !isTranscriptArtifactProvider(message.provider)
     ) {
       model = { provider: message.provider, model: message.model };
     }
@@ -511,6 +517,21 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
     projection: "list",
   });
   const agentDir = resolveAgentDir(config, agentId);
+  // Keep the transcript's durable cwd, but prepare sandbox execution exactly as a parent turn.
+  const executionWorkspaceDir =
+    entry?.worktree &&
+    resolveSandboxRuntimeStatus({
+      cfg: config,
+      agentId,
+      sessionKey,
+      preparedSessionEntry: entry,
+    }).sandboxed
+      ? (resolveIngressWorkspaceOverrideForSessionRun({
+          spawnedBy: entry.spawnedBy,
+          workspaceDir: entry.spawnedWorkspaceDir,
+          cwd: entry.spawnedCwd,
+        }) ?? workspaceDir)
+      : workspaceDir;
 
   const live = readLiveSessionForkRequest({ sessionKey, model: params.model });
   // A live parent's request is replayed byte for byte; the pin makes the fork's own rebuilt
@@ -552,7 +573,7 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
         runId,
       },
       sessionManager,
-      workspaceDir,
+      workspaceDir: executionWorkspaceDir,
       permissionMode: sourceEntry.permissionMode,
       abortSignal,
       prompt: params.prompt,
@@ -571,6 +592,8 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
       retryTransientErrors: false,
       allowAuthProfileFallback: false,
       authProfileFailurePolicy: "local_transient",
+      // A subscription login runs on its own CLI, within plan limits; API keys keep the replay.
+      cliBackendDispatch: "subscription-auth",
       requestedRouteResolution: "resolved",
       sessionPersistence: "detached",
       // Every session tool stays listed for the provider's cached prefix; the run gates execution.

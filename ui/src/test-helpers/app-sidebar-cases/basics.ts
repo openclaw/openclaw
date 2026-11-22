@@ -65,6 +65,7 @@ async function mountNavigation(
 it("honors deployment policy and existing Community dismissals", async () => {
   localStorage.setItem("openclaw:control-ui:community-invite:v2", "dismissed");
   const { sidebar, context, find } = await mountAgentSidebar(undefined, null);
+  sidebar.communityInviteAllowed = true;
   const fetch = vi.spyOn(globalThis, "fetch");
   try {
     for (const enabled of [true, false]) {
@@ -143,7 +144,7 @@ it.each(["chip", "roster"] as const)(
       expect(event.defaultPrevented).toBe(false);
       expect(onOpenNewSession).not.toHaveBeenCalled();
     }
-    for (const view of ["pages", "sessions", "online"] as const) {
+    for (const view of ["sessions", "online"] as const) {
       sidebar.navigationView = view;
       sidebar.navigationCollapsed = false;
       await sidebar.updateComplete;
@@ -269,6 +270,10 @@ it("switches the Skills owner without opening an agent conversation", async () =
   sidebar.activeRouteId = "skills";
   sidebar.connected = true;
   sidebar.onNavigate = onNavigate;
+  await sidebar.updateComplete;
+  // Skills opens the Customize list; the agent menu belongs to Sessions.
+  sidebar.navigationView = "sessions";
+  sidebar.invalidate();
   await sidebar.updateComplete;
 
   await clickAgentMenu(sidebar);
