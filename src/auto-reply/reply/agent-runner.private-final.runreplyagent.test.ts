@@ -98,6 +98,7 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
     transcriptPrompt?: string;
     summaryLine?: string;
     strandedReplyRetry?: boolean;
+    strandedReplyRecovery?: "retry" | "off";
     sendPolicyDenied?: boolean;
     chatType?: "direct" | "group";
     terminalReplyExpectation?: "required" | "optional";
@@ -168,7 +169,13 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
         workspaceDir: tmp,
         // Carry the canonical tool-only run fact and keep downstream policy aligned,
         // so the private final is never eligible for automatic source delivery.
-        config: { session: { store: storePath }, messages: { visibleReplies: "message_tool" } },
+        config: {
+          session: { store: storePath },
+          messages: {
+            visibleReplies: "message_tool",
+            strandedReplyRecovery: params.strandedReplyRecovery,
+          },
+        },
         thinkingCatalog: [{ provider: "anthropic", id: "claude", input: ["text"] }],
         thinkLevel: "low",
         reasoningLevel: "on",
@@ -550,6 +557,33 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
       true,
     );
   });
+
+  it.each([false, true])(
+    "keeps the final private with no retry or notice when recovery is off (retry=%s)",
+    async (strandedReplyRetry) => {
+      vi.mocked(routeReply).mockClear();
+      const privateFinal = "Private note: customer looks annoyed, escalate later.";
+      const { result, terminalEvent } = await runPrivateFinalCase({
+        strandedReplyRecovery: "off",
+        strandedReplyRetry,
+        summaryLine: strandedReplyRetry ? "stranded-reply-retry" : undefined,
+        finalAssistantText: privateFinal,
+      });
+      expect(terminalEvent?.data.terminalReply).toMatchObject({
+        code: "message-tool-not-called",
+      });
+      expect(warnPrivateFinalSpy).toHaveBeenCalledOnce();
+      expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+      const payloads = normalizeReplyPayloads(result);
+      expect(payloads.some((payload) => payload.text === MISSING_REPLY_NOTICE_TEXT)).toBe(false);
+      expect(
+        payloads.some(
+          (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression,
+        ),
+      ).toBe(false);
+      expect(routeReply).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([false, true])(
     "diagnoses empty retry output only without source delivery (delivered=%s)",

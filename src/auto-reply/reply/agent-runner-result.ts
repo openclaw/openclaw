@@ -222,6 +222,7 @@ export async function finalizeReplyAgentRun(
           prepared.replyCompletion.outcome === "pending"
             ? { kind: "none" as const }
             : resolveStrandedReplyRecovery({
+                cfg,
                 base: followupRun,
                 payloads: finalPayloads,
                 finalText: assistantFinalText,
@@ -231,7 +232,7 @@ export async function finalizeReplyAgentRun(
                 successfulSourceReplyDelivery: completedSourceReplyDelivery,
                 isRoomEvent: sessionCtx.InboundEventKind === "room_event",
               });
-        if (recovery.kind === "retry") {
+        if (recovery.kind === "retry" || recovery.kind === "kept-private") {
           warnPrivateMessageToolFinal({
             sessionKey,
             channel:

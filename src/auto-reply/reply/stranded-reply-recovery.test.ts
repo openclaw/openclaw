@@ -8,6 +8,7 @@ import { createMockFollowupRun } from "./test-helpers.js";
 
 function recover(overrides: Partial<Parameters<typeof resolveStrandedReplyRecovery>[0]> = {}) {
   return resolveStrandedReplyRecovery({
+    cfg: {},
     base: createMockFollowupRun({ prompt: "question" }),
     payloads: [],
     finalText: "The answer is ready.",

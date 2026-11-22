@@ -102,6 +102,7 @@ Batching is a bounded timing heuristic, not a guarantee that every part of a lon
 
 - `channels.whatsapp.responsePrefix`: outbound WhatsApp reply prefix. Doctor moves the retired inbound `messagePrefix` value here only when this current value is unset.
 - `messages.visibleReplies`: controls visible source replies across direct, group, and channel conversations (`"message_tool"` requires `message(action=send)` for visible output; `"automatic"` posts normal replies as before).
+- `messages.strandedReplyRecovery`: what happens when a `"message_tool"` run ends with final text but never calls `message(action=send)`. `"retry"` (default) runs one recovery turn and posts the missing-answer notice if that also fails; `"off"` keeps the final private with no retry and no chat notice. See [mention gating and history](/gateway/config-channels/mention-gating-and-history).
 - `messages.usageTemplate` / `messages.responseUsage`: custom `/usage` footer template and default per-reply usage mode (`off | tokens | full`, plus legacy `on` alias for `tokens`).
 - `messages.groupChat.mentionPatterns` / `historyLimit`: group-message mention triggers and history window sizing.
 

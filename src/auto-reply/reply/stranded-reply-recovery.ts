@@ -4,6 +4,7 @@ import {
   resolveReplyExpectation,
 } from "../../agents/reply-completion.js";
 import { isRuntimeToolAllowed } from "../../agents/tool-policy-match.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { getReplyPayloadMetadata, isReplyPayloadTerminalContent } from "../reply-payload.js";
@@ -16,11 +17,13 @@ const STRANDED_REPLY_RETRY_MARKER = "stranded-reply-retry";
 
 type StrandedReplyRecovery =
   | { kind: "none" }
+  | { kind: "kept-private" }
   | { kind: "retry"; run: FollowupRun }
   | { kind: "diagnostic"; payload: ReplyPayload };
 
 /** Resolve the one allowed recovery action for a final that missed source delivery. */
 export function resolveStrandedReplyRecovery(params: {
+  cfg: OpenClawConfig;
   base: FollowupRun;
   payloads: readonly ReplyPayload[];
   finalText: string;
@@ -46,6 +49,10 @@ export function resolveStrandedReplyRecovery(params: {
     )
   ) {
     return { kind: "none" };
+  }
+  // Operator opted out: the final stays private, with no recovery turn or chat notice.
+  if (params.cfg.messages?.strandedReplyRecovery === "off") {
+    return { kind: "kept-private" };
   }
   if (params.base.strandedReplyRetry === true) {
     return {

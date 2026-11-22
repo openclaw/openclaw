@@ -355,6 +355,7 @@ describe("followup queue authority", () => {
         },
       };
       const recovery = resolveStrandedReplyRecovery({
+        cfg: {},
         base: compacted ? createOverflowSummaryRetrySource(parent) : parent,
         payloads: [],
         finalText: "The answer is ready.",

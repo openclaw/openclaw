@@ -73,6 +73,7 @@ const ResponseUsageModeSchema = z.enum(["on", "off", "tokens", "full"]);
 export const MessagesSchema = z
   .strictObject({
     visibleReplies: VisibleRepliesSchema.optional(),
+    strandedReplyRecovery: z.enum(["retry", "off"]).optional(),
     responsePrefix: z.string().optional(),
     usageTemplate: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
     responseUsage: z

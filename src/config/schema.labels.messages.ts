@@ -1,6 +1,7 @@
 export const MESSAGE_FIELD_LABELS: Record<string, string> = {
   messages: "Messages",
   "messages.visibleReplies": "Visible Replies",
+  "messages.strandedReplyRecovery": "Stranded Reply Recovery",
   "messages.responsePrefix": "Outbound Response Prefix",
   "messages.usageTemplate": "Usage Footer Template",
   "messages.responseUsage": "Default Usage Footer Mode",
