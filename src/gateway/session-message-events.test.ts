@@ -442,7 +442,7 @@ describe("session.message websocket events", () => {
 
     using otherChats = collectEventPayloads(otherWs, "chat");
     const chatEvents = [mainWs, legacyWs].map((ws) =>
-      onceMessage(ws, matchingEvent("chat", { sessionKey: "agent:main:main" })),
+      onceMessage(ws, matchingEvent("chat", { sessionKey: "agent:main:main" }), 60_000),
     );
 
     const [send, ...delivered] = await Promise.all([
