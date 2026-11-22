@@ -10,12 +10,13 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
 import { pathEntryExists } from "../../infra/path-existence.js";
 import { inspectSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
-import { isUpdateAdmissionAuthorityEnvKey } from "../../infra/update-admission-contract.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import { listActivePnpmIsolatedGlobalPackages } from "../../infra/update-global.js";
 import { inspectUpdateRunDriver, type UpdateRunDriver } from "../../infra/update-run-driver.js";
 import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import { listUpdateRunsAsync } from "../../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
+import { formatCliCommand } from "../command-format.js";
 import {
   GatewayServiceUpdateOwnershipError,
   inspectManagedGatewayServiceBeforeUpdate,
@@ -38,13 +39,26 @@ import {
  */
 
 // Verified in this state: `gateway restart` alone fails while the unit names the old package.
-export const REFUSED_RESTART_RECOVERY =
-  "Run `openclaw gateway install --force`, then `openclaw gateway restart`.";
-// Doctor prints this during the update, before the updater decides; it promises nothing more.
-export const REFUSED_RESTART_NOTICE =
-  "If this updater leaves the Gateway stopped, run `openclaw gateway install --force` and then `openclaw gateway restart`.";
+// Both commands carry the profile and container the reader runs under.
+function recoveryCommands(env: NodeJS.ProcessEnv) {
+  return [
+    formatCliCommand("openclaw gateway install --force", env),
+    formatCliCommand("openclaw gateway restart", env),
+  ] as const;
+}
 
-type ServiceFacts = { packageRoot?: string; owned: boolean; writable: boolean };
+export function formatRefusedRestartRecovery(env: NodeJS.ProcessEnv = process.env): string {
+  const [install, restart] = recoveryCommands(env);
+  return `Run \`${install}\`, then \`${restart}\`.`;
+}
+
+// Doctor reports this during the update, before the updater decides; it promises nothing more.
+export function formatRefusedRestartNotice(env: NodeJS.ProcessEnv = process.env): string {
+  const [install, restart] = recoveryCommands(env);
+  return `If this updater leaves the Gateway stopped, run \`${install}\` and then \`${restart}\`.`;
+}
+
+type ServiceFacts = { packageRoot?: string; owned: boolean; writable: boolean; running: boolean };
 type InspectService = (root: string) => Promise<ServiceFacts | undefined>;
 
 /**
@@ -89,6 +103,16 @@ async function inspectPnpmSwitch(
     return {
       skip: `the service runs ${service?.packageRoot ?? "no readable package"}, not another version in ${running.home}`,
     };
+  }
+  // Another global project in the same home can still own that version; only a package no
+  // active project resolves to is this installation's previous generation.
+  const active = await listActivePnpmIsolatedGlobalPackages({
+    globalRoot: path.join(running.home, "global", running.layout),
+  });
+  for (const { packageRoot } of active) {
+    if ((await fs.realpath(packageRoot).catch(() => undefined)) === service.packageRoot) {
+      return { skip: `another pnpm global project still uses ${service.packageRoot}` };
+    }
   }
   return { service };
 }
@@ -172,10 +196,16 @@ function isLiveDriverAncestor(driver: UpdateRunDriver): boolean {
 }
 
 // The service is read as the user's own CLI would, without the updater's continuation markers.
-function withoutUpdaterAuthority(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+// Service selectors (OPENCLAW_SYSTEMD_UNIT, OPENCLAW_LAUNCHD_LABEL, the profile) stay, so the
+// inspected service is the one the named commands act on.
+function withoutUpdaterMarkers(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(
     Object.entries(env).filter(
-      ([key]) => !isUpdateAdmissionAuthorityEnvKey(key) && key !== "OPENCLAW_SERVICE_REPAIR_POLICY",
+      ([key]) =>
+        !key.startsWith("OPENCLAW_UPDATE_") &&
+        key !== "OPENCLAW_SERVICE_REPAIR_POLICY" &&
+        key !== "OPENCLAW_COMPATIBILITY_HOST_VERSION" &&
+        key !== "OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META",
     ),
   );
 }
@@ -186,7 +216,7 @@ async function inspectGatewayServiceFacts(
 ): Promise<ServiceFacts | undefined> {
   const state = await readGatewayServiceStateForUpdate(
     resolveGatewayService(),
-    withoutUpdaterAuthority(env),
+    withoutUpdaterMarkers(env),
   );
   if (!state.command) {
     return undefined;
@@ -211,7 +241,7 @@ async function inspectGatewayServiceFacts(
     throw error;
   });
   if (!verdict) {
-    return { packageRoot, owned: false, writable: false };
+    return { packageRoot, owned: false, writable: false, running: state.running };
   }
   return {
     packageRoot,
@@ -223,23 +253,24 @@ async function inspectGatewayServiceFacts(
       verdict.root === packageRoot,
     // An absent capability is writable to the existing owners as well (service-layout.ts).
     writable: (state.definitionMutationCapability?.kind ?? "writable") === "writable",
+    running: state.running,
   };
 }
 
 /**
- * Doctor step after its launcher repair: print the verified recovery once when a shipped
- * updater (the launcher it published still named its stage) is about to refuse this pnpm
- * Gateway's restart. Skips are silent: the updater's own outcome and guidance stand.
+ * Doctor step after its launcher repair: the verified recovery, once, when a shipped updater
+ * (the launcher it published still named its stage) is about to refuse this pnpm Gateway's
+ * restart. Doctor returns it as an update warning, which shipped updaters render in their
+ * final report and record for `openclaw update status`. Skips are silent.
  */
-export async function noteShippedRestartRecovery(params: {
+export async function resolveShippedRestartNotice(params: {
   root: string;
-  log: (message: string) => void;
   /** Inspection errors only; the updater captures this Doctor's stderr. */
   diagnose: (message: string) => void;
   env?: NodeJS.ProcessEnv;
   inspectService?: InspectService;
   isDriverAncestor?: (driver: UpdateRunDriver) => boolean;
-}): Promise<void> {
+}): Promise<string | undefined> {
   const env = params.env ?? process.env;
   try {
     const gate = await inspectShippedRestartGate({
@@ -248,11 +279,12 @@ export async function noteShippedRestartRecovery(params: {
       isDriverAncestor: params.isDriverAncestor ?? isLiveDriverAncestor,
       inspectService: params.inspectService ?? ((root) => inspectGatewayServiceFacts(root, env)),
     });
-    if (gate && !("skip" in gate)) {
-      params.log(REFUSED_RESTART_NOTICE);
-    }
+    return gate && !("skip" in gate)
+      ? formatRefusedRestartNotice(withoutUpdaterMarkers(env))
+      : undefined;
   } catch (error) {
     params.diagnose(`Gateway restart recovery note skipped: ${formatErrorMessage(error)}.`);
+    return undefined;
   }
 }
 
@@ -276,7 +308,10 @@ export async function resolveRefusedRestartRecovery(params: {
     activeRoot,
     params.inspectService ?? ((root) => inspectGatewayServiceFacts(root, env)),
   );
-  return "skip" in service ? undefined : REFUSED_RESTART_RECOVERY;
+  // A Gateway someone has since brought back needs no reinstall.
+  return "skip" in service || service.service.running
+    ? undefined
+    : formatRefusedRestartRecovery(env);
 }
 
 /** The same decision for the latest recorded update run, for readers without a run at hand. */

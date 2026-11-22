@@ -11,9 +11,9 @@ import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import * as state from "../../state/openclaw-state-db.js";
 import { formatGatewayServiceInstallationDrift } from "../daemon-cli/shared.js";
 import {
-  noteShippedRestartRecovery,
   readRefusedRestartRecovery,
   resolveRefusedRestartRecovery,
+  resolveShippedRestartNotice,
 } from "./update-refused-restart-recovery.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -66,11 +66,25 @@ function pnpmSwitch(candidate: "registry" | "tarball" | "pnpm11-group" = "regist
     npm: writePackage(path.join(base, "npm", "lib", "node_modules", "openclaw"), "2026.11.6"),
   };
   const env = { OPENCLAW_STATE_DIR: path.join(base, "state") };
-  return { entry, paths, env };
+  // Another global project in the same home that still runs the previous version.
+  const keepPreviousActive = () => {
+    const other = path.join(home, "global", "v11", "9a0-other-project");
+    fs.mkdirSync(path.join(other, "node_modules"), { recursive: true });
+    fs.writeFileSync(path.join(other, "package.json"), '{"dependencies":{"openclaw":"2026.11.5"}}');
+    fs.symlinkSync(paths.previous, path.join(other, "node_modules", "openclaw"), "dir");
+    fs.symlinkSync(other, path.join(home, "global", "v11", "5e7c0d1a"), "dir");
+  };
+  return { entry, paths, env, keepPreviousActive };
 }
 
 type Fixture = ReturnType<typeof pnpmSwitch>;
-type ServiceVariant = { service?: string; owned?: boolean; writable?: boolean };
+type ServiceVariant = {
+  service?: string;
+  owned?: boolean;
+  writable?: boolean;
+  running?: boolean;
+  otherProject?: boolean;
+};
 
 /** The live service read, as the injected seam sees it: the unit's package and its verdict. */
 function serviceReader(fixture: Fixture, variant: ServiceVariant) {
@@ -81,6 +95,7 @@ function serviceReader(fixture: Fixture, variant: ServiceVariant) {
     packageRoot,
     owned: variant.owned ?? true,
     writable: variant.writable ?? true,
+    running: variant.running ?? false,
   });
 }
 
@@ -120,10 +135,14 @@ describe.skipIf(process.platform === "win32")("refused pnpm Gateway restart reco
     { name: "a service of another pnpm home", service: "foreign" },
     { name: "a service already on this package", service: "current" },
     { name: "a service this installation does not own", owned: false },
+    { name: "a version another pnpm project still uses", otherProject: true },
     { name: "an unwritable definition", writable: false },
     { name: "a Doctor the updater lets repair services", repair: "1" },
   ])("Doctor names the recovery during the update only for $name", async (variant) => {
     const fixture = pnpmSwitch(variant.candidate);
+    if (variant.otherProject) {
+      fixture.keepPreviousActive();
+    }
     const noRunId = variant.ancestor || variant.unrelated;
     const pid = variant.ancestor ? grandparent() : noRunId ? await liveChild() : undefined;
     const driver = pid ? readUpdateRunDriver(pid)! : liveDriver;
@@ -135,9 +154,8 @@ describe.skipIf(process.platform === "win32")("refused pnpm Gateway restart reco
       },
       { env: fixture.env },
     );
-    const logged: string[] = [];
     const diagnosed: string[] = [];
-    await noteShippedRestartRecovery({
+    const notice = await resolveShippedRestartNotice({
       root: variant.root === "npm" ? fixture.paths.npm : fixture.entry,
       env: {
         ...fixture.env,
@@ -146,11 +164,10 @@ describe.skipIf(process.platform === "win32")("refused pnpm Gateway restart reco
         OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
         ...(noRunId ? {} : { OPENCLAW_UPDATE_RUN_ID: runId }),
       },
-      log: (message) => logged.push(message),
       diagnose: (message) => diagnosed.push(message),
       inspectService: serviceReader(fixture, variant),
     });
-    expect(logged).toEqual(variant.notice ? [NOTICE] : []);
+    expect(notice).toBe(variant.notice ? NOTICE : undefined);
     expect(diagnosed).toEqual([]);
   });
 
@@ -160,9 +177,8 @@ describe.skipIf(process.platform === "win32")("refused pnpm Gateway restart reco
       { trigger: "cli", origin: { driver: liveDriver }, before: { version: "2026.11.5" } },
       { env: fixture.env },
     );
-    const logged: string[] = [];
     const diagnosed: string[] = [];
-    await noteShippedRestartRecovery({
+    const notice = await resolveShippedRestartNotice({
       root: fixture.entry,
       env: {
         ...fixture.env,
@@ -171,13 +187,12 @@ describe.skipIf(process.platform === "win32")("refused pnpm Gateway restart reco
         OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
         OPENCLAW_UPDATE_RUN_ID: runId,
       },
-      log: (message) => logged.push(message),
       diagnose: (message) => diagnosed.push(message),
       inspectService: async () => {
         throw new Error("systemctl is unavailable");
       },
     });
-    expect(logged).toEqual([]);
+    expect(notice).toBeUndefined();
     expect(diagnosed).toEqual(["Gateway restart recovery note skipped: systemctl is unavailable."]);
   });
 
@@ -203,9 +218,15 @@ describe.skipIf(process.platform === "win32")("refused pnpm Gateway restart reco
     { name: "a service already on this package", service: "current" },
     { name: "a service of another pnpm home", service: "foreign" },
     { name: "a service this installation does not own", owned: false },
+    { name: "a version another pnpm project still uses", otherProject: true },
+    // Someone brought the previous Gateway back; it needs no reinstall.
+    { name: "a service running again", running: true },
     { name: "an npm install", root: "npm" },
   ])("update status and gateway status name the recovery only for $name", async (variant) => {
     const fixture = pnpmSwitch();
+    if (variant.otherProject) {
+      fixture.keepPreviousActive();
+    }
     const run = refusedRun(fixture, variant.reason ?? "service-revalidation-failed");
     const params = {
       activeRoot: variant.root === "npm" ? fixture.paths.npm : fixture.entry,
@@ -225,6 +246,20 @@ describe.skipIf(process.platform === "win32")("refused pnpm Gateway restart reco
     expect(report.markdown.includes("openclaw triage")).toBe(!variant.recovery);
     // `openclaw gateway status --deep` reads the latest run from the same ledger.
     expect(await readRefusedRestartRecovery(params)).toBe(recovery);
+  });
+
+  it("names the commands for the profile the reader runs under", async () => {
+    const fixture = pnpmSwitch();
+    const run = refusedRun(fixture, "service-revalidation-failed");
+    const recovery = await resolveRefusedRestartRecovery({
+      run,
+      activeRoot: fixture.entry,
+      env: { ...fixture.env, OPENCLAW_PROFILE: "work" },
+      inspectService: serviceReader(fixture, {}),
+    });
+    expect(recovery).toBe(
+      "Run `openclaw --profile work gateway install --force`, then `openclaw --profile work gateway restart`.",
+    );
   });
 
   it("gateway status replaces the generic drift advice only when a verified step is known", () => {

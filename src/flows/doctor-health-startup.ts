@@ -380,6 +380,7 @@ export async function prepareDoctorRuntimeChecks(
   const { noteStartupOptimizationHints } = await import("../commands/doctor-platform-notes.js");
   await measure("UI protocol", () => maybeRepairUiProtocolFreshness(runtime, prompter));
   await measure("Source install", () => noteSourceInstallIssues(root));
+  let restartNotice: string | undefined;
   await measure("CLI launcher", async () => {
     await noteBunCliLauncherIssues({ root, prompter });
     // Earlier updaters can publish a pnpm launcher that still names their removed stage.
@@ -397,13 +398,12 @@ export async function prepareDoctorRuntimeChecks(
           `The openclaw launcher ${file} still points at a removed update stage and could not be repaired (${formatErrorMessage(error)}). Recreate it with \`pnpm add -g --allow-build=openclaw openclaw@<installed-version>\` as the account that owns the pnpm install.`,
         );
       }
-      // A shipped updater published that staged launcher; name the Gateway recovery it needs.
+      // A shipped updater published that staged launcher; report the Gateway recovery it needs.
       if (repaired.length > 0 && isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS)) {
-        const { noteShippedRestartRecovery } =
+        const { resolveShippedRestartNotice } =
           await import("../cli/update-cli/update-refused-restart-recovery.js");
-        await noteShippedRestartRecovery({
+        restartNotice = await resolveShippedRestartNotice({
           root,
-          log: (message) => runtime.log(message),
           diagnose: (message) => runtime.error(message),
         });
       }
@@ -411,5 +411,11 @@ export async function prepareDoctorRuntimeChecks(
   });
   await measure("Plugin runtime links", () => noteStalePluginRuntimeSymlinks(root));
   noteStartupOptimizationHints();
-  return { schemas, nocowPaths: nocow.paths, warnings: deletionJournal.warnings };
+  return {
+    schemas,
+    nocowPaths: nocow.paths,
+    warnings: restartNotice
+      ? [...deletionJournal.warnings, restartNotice]
+      : deletionJournal.warnings,
+  };
 }
