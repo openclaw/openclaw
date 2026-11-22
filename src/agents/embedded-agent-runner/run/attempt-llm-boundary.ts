@@ -583,7 +583,7 @@ export function installModelPromptProjection(params: {
                 modelPromptProjection: { version: 1, text },
               },
             };
-            promptMessages = messages.map((message) =>
+            promptMessages = promptMessages.map((message) =>
               message === target ? projectedTarget : message,
             );
             if (agent.state) {
