@@ -209,13 +209,9 @@ describe("package update entry point", () => {
     vi.spyOn(databaseContext, "inspectUpdateDatabaseContexts").mockImplementation((params) =>
       withMockedPlatform(platform, () => inspect(params)),
     );
-    const native = unavailableService(
-      platform === "win32" ? "windows-task-inspection-failed" : "service-manager-unavailable",
-    );
+    const native = unavailableService("service-manager-unavailable");
     const live = withMockedPlatform(platform, () => gatewayOwner());
-    vi.spyOn(processes, "readGatewayLockProcessCmdline").mockReturnValue(
-      platform === "win32" ? null : ["openclaw-gateway"],
-    );
+    vi.spyOn(processes, "readGatewayLockProcessCmdline").mockReturnValue(["openclaw-gateway"]);
     const backup = vi.spyOn(packageFilesystem, "backupNpmPackageRoot");
     const snapshot = () =>
       listDirectoryTreeStrictSync(process.env.HOME!).map(({ relativePath }) => relativePath);
