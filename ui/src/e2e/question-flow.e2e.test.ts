@@ -6,6 +6,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
+  controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
   type MockGatewayControls,
@@ -828,9 +829,21 @@ suite.define(() => {
         description: "Drains the writers, applies the migration and waits for the health check.",
       })),
     });
+    await page.addInitScript(
+      ({ key }) => {
+        localStorage.setItem(key, JSON.stringify({ textScale: 140 }));
+      },
+      { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl) },
+    );
     await installMockGateway(page, {
       featureMethods: ["question.get", "question.resolve"],
-      methodResponses: { "question.get": { question: request } },
+      methodResponses: {
+        "question.get": { question: request },
+        "question.resolve": {
+          status: "answered",
+          answers: { answers: { deploy_target: ["Rollout option 1"] } },
+        },
+      },
     });
     await page.goto(new URL(`ask/${request.id}`, suite.server.baseUrl).toString());
     const document = page.locator("openclaw-question-page");
@@ -856,6 +869,12 @@ suite.define(() => {
     const submit = button(panel, "Submit");
     await submit.scrollIntoViewIfNeeded();
     expect(await submit.isEnabled()).toBe(true);
+    const questionSize = (label: Locator) =>
+      label.evaluate((node) => getComputedStyle(node).fontSize);
+    expect(await questionSize(panel.locator(".chat-question-panel__prompt"))).toBe("22.4px");
+    await submit.tap();
+    await document.getByRole("heading", { name: "Answered", exact: true }).waitFor();
+    expect(await questionSize(document.locator(".chat-question-summary__prompt"))).toBe("22.4px");
   });
 
   it.each([

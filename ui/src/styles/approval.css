@@ -545,7 +545,7 @@
   }
 
   .question-page .chat-question-panel__prompt {
-    font-size: 16px;
+    font-size: var(--control-ui-text-lg);
     line-height: 1.35;
   }
 
@@ -642,7 +642,7 @@
 
   .question-page .chat-question-summary__prompt {
     color: var(--text-strong);
-    font-size: 16px;
+    font-size: var(--control-ui-text-lg);
     font-weight: 600;
     line-height: 1.35;
   }
