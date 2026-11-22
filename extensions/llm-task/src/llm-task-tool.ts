@@ -44,10 +44,10 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       const hasModelOverride = Boolean(
         requestProvider || configuredProvider || requestModel || configuredModel,
       );
-      // A qualified override names its own provider; parsing needs no global primary.
+      // Parsing only: the provider assumed for a bare id or alias target. It selects no model.
       const defaultProvider =
         normalizeOptionalString(requestedProvider) ??
-        (rawModel?.includes("/") ? normalizeOptionalString(rawModel.split("/")[0]) : undefined);
+        normalizeOptionalString(api.runtime.agent.defaults.provider);
       const normalizedModel = normalizeOptionalString(rawModel);
       const providerPrefix = requestedProvider?.trim();
       let selectedModelRef = {

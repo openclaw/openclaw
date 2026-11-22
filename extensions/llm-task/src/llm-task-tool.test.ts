@@ -123,6 +123,16 @@ it("resolves a qualified model override with only a per-agent model configured",
   expect(isolatedCompletionCall().model).toBe("anthropic/claude-sonnet-4-6");
 });
 
+it("resolves a configured alias with only a per-agent model configured", async () => {
+  await createTool({
+    agents: {
+      defaults: { models: { "anthropic/claude-sonnet-4-6": { alias: "Sonnet" } } },
+      entries: { chat: { model: "openai/gpt-5.5" } },
+    },
+  }).execute("id", { prompt: "x", model: "Sonnet" });
+  expect(isolatedCompletionCall().model).toBe("anthropic/claude-sonnet-4-6");
+});
+
 it("throws on invalid thinking level", async () => {
   await expect(tool.execute("id", { prompt: "x", thinking: "banana" })).rejects.toThrow(
     /invalid thinking level/i,
