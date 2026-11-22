@@ -114,7 +114,7 @@ describe("native collector requester ownership", () => {
 });
 
 describe("agents_wait collection receipts", () => {
-  it("records done collection on the admitted run's receipts for every harness", async () => {
+  it("settles done collection on the admitted run's receipts for every harness", async () => {
     await withOpenClawTestState(
       {
         label: "native-collector-receipts",
@@ -136,9 +136,13 @@ describe("agents_wait collection receipts", () => {
           ),
         );
         const run = createOperationalRunInstanceRef("parent-run");
-        const receipt = (runId: string, expectsCompletionMessage = false) => ({
+        const settledReceipt = (runId: string) => ({
           runId,
           childSessionKey: `agent:worker:subagent:${runId}`,
+          expectsCompletionMessage: false,
+        });
+        const receipt = (runId: string, expectsCompletionMessage = false) => ({
+          ...settledReceipt(runId),
           expectsCompletionMessage,
           collector: true as const,
         });
@@ -155,8 +159,8 @@ describe("agents_wait collection receipts", () => {
         // Harnesses that only project sessions_spawn receipts (Copilot) settle through the run.
         const settled = mergeAcceptedSessionSpawnsForRun(run, [receipt("done")]);
         expect(settled).toEqual([
-          { ...receipt("done"), collected: true },
-          { ...receipt("cancelled"), collected: true },
+          settledReceipt("done"),
+          settledReceipt("cancelled"),
           receipt("failed"),
         ]);
         expect(hasOwedSessionSpawn(settled.filter((spawn) => spawn.runId !== "failed"))).toBe(
