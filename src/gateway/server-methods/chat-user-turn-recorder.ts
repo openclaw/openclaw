@@ -299,7 +299,6 @@ export function createGatewayChatUserTurnController(params: {
         const userMessage: PersistedUserTurnMessage = next;
         const metadata = { ...asOptionalRecord(Reflect.get(next, "__openclaw")) };
         delete metadata.activeSteer;
-        delete metadata.participationCeiling;
         delete metadata.chatRequestIdentity;
         delete metadata.suppressCommandInterpretation;
         delete metadata.chatSendDelivery;

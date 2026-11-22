@@ -1,4 +1,3 @@
-import { prepareParticipationTestRun } from "../../participation-ceiling.test-support.js";
 import "./subagent-spawn-model.mocks.shared.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
@@ -10,27 +9,27 @@ import {
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
-import { readInProcessParticipationRun } from "../../../gateway/in-process-session-run.js";
+import { normalizeGatewayOperatorRecoverySnapshot } from "../../../gateway/operator-run-recovery-source.codec.js";
+import { captureQueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
-import { projectAgentToolsExecPolicy } from "../../agent-tools.execution-policy.js";
 import { testing as cliBackendsTesting } from "../../cli-backends.test-support.js";
 import { buildDefaultTestCliBackend } from "../../cli-runner.test-helpers.js";
-import { resolveExecToolConfig } from "../../lazy-exec-tool.js";
 import { harnessRegistry } from "../../model-catalog-fixtures.test-support.js";
 import type { ParticipationCeiling } from "../../participation-ceiling.js";
+import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
-import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
+import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
 const fixture = installSpawnAuthorityFixture();
-const ceiling: ParticipationCeiling = {
+const ceiling = {
   kind: "send",
   profileId: "invited-profile",
   sessionKey: fixture.parentSessionKey,
   permission: "read-only",
   tools: ["read"],
-};
+} satisfies Omit<ParticipationCeiling, "source">;
 
 async function prepareParent() {
   await upsertSessionEntryCore(
@@ -44,31 +43,79 @@ async function prepareParent() {
   return {
     agentSessionKey: fixture.parentSessionKey,
     expectedParentSessionId: "source-session",
-    participationCeiling: ceiling,
+    operatorAuthority: participantAuthority(),
     sessionPermissionPolicy: { root: fixture.stateDir, mode: "read-only" as const },
     workspaceDir: fixture.stateDir,
     assertActive: vi.fn(),
   };
 }
 
+function participantAuthority(permission: "read-only" | "workspace" = "read-only") {
+  const participationCeiling = {
+    ...ceiling,
+    permission,
+    tools: ["read"],
+    source: {
+      agentId: "main",
+      sessionId: "source-session",
+      lifecycleRevision: "source-life",
+      creatorProfileId: "source-creator",
+      root: fixture.stateDir,
+    },
+  };
+  const recoverySnapshot = normalizeGatewayOperatorRecoverySnapshot({
+    version: 2,
+    participationCeiling,
+    profileId: ceiling.profileId,
+    scopes: ["operator.write"],
+    assignedRole: null,
+    githubLogin: null,
+    grant: null,
+    aliasBindingIds: [],
+    authPolicy: {
+      generation: "",
+      grantGeneration: "test-grant",
+      role: "operator",
+      authMethod: "token",
+    },
+    controlUiAdmin: false,
+    localOperator: false,
+    sourceIngress: "internal",
+  });
+  if (!recoverySnapshot) {
+    throw new Error("Participant recovery fixture failed shared source admission");
+  }
+  return createAdmittedRunOperatorAuthority({
+    profileId: ceiling.profileId,
+    scopes: ["operator.write"],
+    participationCeiling,
+    recoverySnapshot,
+    assertCurrent() {},
+  });
+}
+
+function runAsParticipant<T>(
+  context: Pick<Awaited<ReturnType<typeof prepareParent>>, "agentSessionKey" | "operatorAuthority">,
+  run: () => Promise<T>,
+): Promise<T> {
+  return withGatewayToolCallerIdentity(
+    {
+      agentId: "main",
+      sessionKey: context.agentSessionKey,
+      operatorAuthority: context.operatorAuthority,
+    },
+    run,
+  );
+}
+
 function useInProcessSpawns() {
   const dispatch = vi.fn(async (method: string, params: Record<string, unknown>) => {
-    if (method !== "agent") {
-      throw new Error(`Unexpected spawn RPC ${method}`);
-    }
-    const child = loadSessionEntryReadOnly({
-      agentId: "main",
-      sessionKey: String(params.sessionKey),
-    });
-    expect(readInProcessParticipationRun(method, params)).toEqual(child?.participationCeiling);
-    expect(params.participationCeiling).toBeUndefined();
-    return { runId: params.idempotencyKey, status: "accepted" };
+    throw new Error(`Unexpected participant dispatch ${method}: ${String(params.sessionKey)}`);
   });
   spawnTesting.setDepsForTest({
     hasInProcessGatewayContext: () => true,
     resolveContextEngine: async () => new LegacyContextEngine(),
-    dispatchGatewayMethodInProcess: async <T>(method: string, params: Record<string, unknown>) =>
-      (await dispatch(method, params)) as T,
+    dispatchGatewayMethodInProcess: dispatch,
   });
   return dispatch;
 }
@@ -79,7 +126,8 @@ it("rejects participant tool routes before creating or dispatching a child", asy
   const callGateway = vi.fn(async () => {
     throw new Error("visible creation reached");
   });
-  const tool = createSessionsSpawnTool({ ...context, config: getRuntimeConfig(), callGateway });
+  const { operatorAuthority: _authority, ...options } = context;
+  const tool = createSessionsSpawnTool({ ...options, config: getRuntimeConfig(), callGateway });
   for (const invalid of [
     { runtime: "acp" },
     { visible: true },
@@ -91,7 +139,9 @@ it("rejects participant tool routes before creating or dispatching a child", asy
     { cwd: `${fixture.stateDir}/elsewhere` },
     { agentId: "other" },
   ]) {
-    const result = await tool.execute("restricted-spawn", { task: "bounded helper", ...invalid });
+    const result = await runAsParticipant(context, () =>
+      tool.execute("restricted-spawn", { task: "bounded helper", ...invalid }),
+    );
     expect(result.details, JSON.stringify(invalid)).toMatchObject({ status: "forbidden" });
   }
   expect(dispatch).not.toHaveBeenCalled();
@@ -117,9 +167,11 @@ it("rejects a foreign swarm default and a resolved CLI before admission effects"
       },
     },
   });
-  const foreign = await spawnSubagentDirect(
-    { task: "bounded collector", collect: true, groupId: "participant-group" },
-    { ...context, onSpawnEffectsStart },
+  const foreign = await runAsParticipant(context, () =>
+    spawnSubagentDirect(
+      { task: "bounded collector", collect: true, groupId: "participant-group" },
+      { ...context, onSpawnEffectsStart },
+    ),
   );
   expect(foreign).toMatchObject({ status: "forbidden" });
   expect(onSpawnEffectsStart).not.toHaveBeenCalled();
@@ -127,9 +179,11 @@ it("rejects a foreign swarm default and a resolved CLI before admission effects"
     resolveRuntimeCliBackends: (() => [buildDefaultTestCliBackend()]) as never,
   });
   try {
-    const cli = await spawnSubagentDirect(
-      { task: "bounded helper", model: "test-cli/haiku" },
-      { ...context, onSpawnEffectsStart },
+    const cli = await runAsParticipant(context, () =>
+      spawnSubagentDirect(
+        { task: "bounded helper", model: "test-cli/haiku" },
+        { ...context, onSpawnEffectsStart },
+      ),
     );
     expect(cli).toMatchObject({ status: "forbidden", error: expect.stringContaining("OpenClaw") });
     expect(onSpawnEffectsStart).not.toHaveBeenCalled();
@@ -139,98 +193,49 @@ it("rejects a foreign swarm default and a resolved CLI before admission effects"
   }
 });
 
-it.each(["ask", "allowlist"] as const)(
-  "retains %s execution policy after default reset and nested spawn",
-  async (mode) => {
-    const context = await prepareParent();
-    const dispatch = useInProcessSpawns();
-    await fixture.configure({ ...getRuntimeConfig(), tools: { exec: { mode } } });
-    const currentCeiling = { ...ceiling, permission: "workspace" as const };
-    using workspace = await resolveAttemptWorkspaceSandbox({
-      workspaceDir: fixture.stateDir,
-      sessionRoot: fixture.stateDir,
-      sessionId: "source-session",
-      sessionKey: fixture.parentSessionKey,
-      config: getRuntimeConfig(),
-      ...prepareParticipationTestRun(currentCeiling),
-    });
-    const tool = createSessionsSpawnTool({
-      ...context,
-      participationCeiling: currentCeiling,
-      sessionPermissionPolicy: workspace.sessionPermissionPolicy,
-      config: getRuntimeConfig(),
-    });
-    const first = await tool.execute("local-child", {
-      task: "bounded helper",
-      placement: { kind: "local" },
-      context: "isolated",
-      lightContext: true,
-    });
-    expect(first.details).toMatchObject({ status: "accepted" });
-    const firstKey = (first.details as { childSessionKey: string }).childSessionKey;
-    const child = loadSessionEntryReadOnly({ agentId: "main", sessionKey: firstKey });
-    const source = {
-      agentId: "main",
-      sessionId: "source-session",
-      lifecycleRevision: "source-life",
-      creatorProfileId: "source-creator",
-      root: fixture.stateDir,
-    };
-    expect(child).toMatchObject({
-      inheritedToolPolicySource: "participant",
-      sessionRoot: fixture.stateDir,
-      spawnedCwd: fixture.stateDir,
-    });
-    expect(child?.participationCeiling).toEqual({
-      ...currentCeiling,
-      permission: "guarded",
-      source,
-      execPolicy: { security: "allowlist", ask: mode === "ask" ? "on-miss" : "off" },
-    });
-    await fixture.configure({ ...getRuntimeConfig(), tools: { exec: { mode: "auto" } } });
-    using reopened = await resolveAttemptWorkspaceSandbox({
-      workspaceDir: fixture.stateDir,
-      sessionRoot: child?.sessionRoot,
-      sessionId: child!.sessionId,
-      sessionKey: firstKey,
-      permissionMode: undefined,
-      ...prepareParticipationTestRun(child!.participationCeiling!),
-      config: getRuntimeConfig(),
-    });
-    expect(
-      projectAgentToolsExecPolicy({
-        options: {
-          ...prepareParticipationTestRun(child!.participationCeiling!),
-          sessionPermissionPolicy: reopened.sessionPermissionPolicy,
-        },
-        execConfig: resolveExecToolConfig({}),
-        model: {},
-      }),
-    ).toMatchObject({
-      mode: mode === "ask" ? "ask" : undefined,
-      security: "allowlist",
-      ask: mode === "ask" ? "on-miss" : "off",
-      participationDenyMisses: mode === "allowlist",
-    });
-    const nestedCeiling: ParticipationCeiling = { ...child!.participationCeiling!, tools: [] };
-    const nested = await spawnSubagentDirect(
-      { task: "narrower nested helper", context: "isolated", lightContext: true },
-      {
-        ...context,
-        agentSessionKey: firstKey,
-        expectedParentSessionId: child?.sessionId,
-        participationCeiling: nestedCeiling,
-        sessionPermissionPolicy: reopened.sessionPermissionPolicy,
+it.each(["on-miss", "off"] as const)(
+  "derives matching admitted and recovery restrictions before reserving a %s helper",
+  async (ask) => {
+    const context = {
+      ...(await prepareParent()),
+      operatorAuthority: participantAuthority("workspace"),
+      sessionPermissionPolicy: {
+        root: fixture.stateDir,
+        mode: "guarded" as const,
+        execPolicy: { security: "allowlist" as const, ask },
       },
+    };
+    useInProcessSpawns();
+    const result = await runAsParticipant(context, () =>
+      resolveSubagentSpawnRequest(
+        { task: "bounded helper", context: "isolated", lightContext: true },
+        context,
+      ),
     );
-    expect(nested).toMatchObject({ status: "accepted" });
-    const grandchild = loadSessionEntryReadOnly({
-      agentId: "main",
-      sessionKey: nested.childSessionKey!,
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.result.error);
+    }
+    // Release the request's unlaunched admission; this boundary proof never dispatches a model.
+    result.resolved.admissionReservation?.release();
+    const authority = result.resolved.gateway.operatorAuthority!;
+    expect(authority.participationCeiling).toMatchObject({
+      permission: "guarded",
+      execPolicy: { security: "allowlist", ask },
+      source: { root: fixture.stateDir },
     });
-    expect(grandchild?.participationCeiling).toEqual(nestedCeiling);
-    expect(grandchild?.sessionRoot).toBe(fixture.stateDir);
-    expect(dispatch).toHaveBeenCalledTimes(2);
+    const captured = captureQueuedOperatorRecoverySource(authority);
+    expect(captured?.kind).toBe("gateway");
+    expect(
+      captured?.kind === "gateway" ? captured.snapshot.participationCeiling : undefined,
+    ).toEqual(authority.participationCeiling);
+    expect(context.operatorAuthority.participationCeiling?.permission).toBe("workspace");
+    expect(
+      loadSessionEntryReadOnly({
+        agentId: "main",
+        sessionKey: result.resolved.participationChildPlan!.resolved.childSessionKey,
+      }),
+    ).toBeUndefined();
   },
 );
 
@@ -251,9 +256,8 @@ it("rejects a resolved native harness before any child admission", async () => {
     },
   });
   setActivePluginRegistry(harnessRegistry("codex"), "participation-spawn-native", "default");
-  const result = await spawnSubagentDirect(
-    { task: "bounded native helper" },
-    { ...context, onSpawnEffectsStart },
+  const result = await runAsParticipant(context, () =>
+    spawnSubagentDirect({ task: "bounded native helper" }, { ...context, onSpawnEffectsStart }),
   );
   expect(result).toMatchObject({ status: "forbidden", error: expect.stringContaining("OpenClaw") });
   expect(onSpawnEffectsStart).not.toHaveBeenCalled();

@@ -16,6 +16,11 @@ import { addSessionMember } from "../../config/sessions/session-sharing-store.na
 import * as transcript from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareGitHubPublicationRequesterV2 } from "../../gateway/github-publication-requester.js";
+import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import {
+  createOperatorRecoveryFixture,
+  pairedOperator,
+} from "../../gateway/operator-run-recovery.test-support.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../../gateway/server-methods/types.js";
 import * as gatewayContinuation from "../../gateway/server-plugin-in-process-dispatch.js";
@@ -23,7 +28,7 @@ import {
   createContext,
   createOperatorClient,
 } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
-import { prepareSessionParticipationRun } from "../../gateway/session-principal-run-authority.js";
+import { resolveSessionMutationAuthorizationAsync } from "../../gateway/session-sharing-authorization-async.js";
 import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import * as exec from "../../infra/exec-request-context.js";
 import {
@@ -277,26 +282,37 @@ it.for([
           () => config,
         );
         context.resolveGatewayContext = () => context;
-        const participant = participantPublication
-          ? await prepareSessionParticipationRun({
+        let participant: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+        if (participantPublication) {
+          const original = await createOperatorRecoveryFixture({
+            stateDir: state.stateDir,
+            context,
+            config,
+            profileId,
+            scopes,
+            device: pairedOperator(),
+            sessionKey: "agent:main:handoff-source",
+          });
+          Object.assign(client, original.client);
+          const invitation = await resolveSessionMutationAuthorizationAsync({
+            client,
+            context,
+            method: "chat.send",
+            requestParams: { sessionKey },
+            participationRequired: true,
+          });
+          const grant = expectDefined(invitation.authorization, "participant invitation");
+          try {
+            participant = await captureGatewayOperatorRunAuthority({
+              client,
               context,
-              agentId: "main",
-              turnCeiling: {
-                kind: "send",
-                profileId,
-                sessionKey,
-                tools: ["github_publish", "read"],
-                permission: "guarded",
-                source: {
-                  agentId: "main",
-                  sessionId,
-                  lifecycleRevision: null,
-                  creatorProfileId: creatorId,
-                  root: state.workspaceDir,
-                },
-              },
-            })
-          : undefined;
+              sourceAuthority: null,
+              invocationAuthority: grant.retainForRun?.(),
+            });
+          } finally {
+            grant.release?.();
+          }
+        }
         let resumedContext: string | undefined;
         runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
           resumedContext = params.currentInboundContext?.text;
@@ -328,7 +344,11 @@ it.for([
             }
             await expect(
               callAgentToolGatewayRequest({ method: "plugins.reload", params: {} }),
-            ).rejects.toThrow("operator.admin");
+            ).rejects.toThrow(
+              participantPublication
+                ? "Participating tools cannot change Gateway authority"
+                : "operator.admin",
+            );
           });
           return { payloads: [{ text: "Guest publication admitted" }], meta: { durationMs: 1 } };
         });

@@ -1,6 +1,4 @@
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
-import { sessionParticipationCeiling } from "../../agents/participation-ceiling.js";
-import type { ParticipationCeiling } from "../../agents/participation-ceiling.js";
 import { captureRequesterCronAuthorityAdmissionAssertion } from "../../agents/subagents/requester-cron-authority.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
@@ -17,12 +15,10 @@ import {
 import { recordGatewaySessionRunFailure } from "../../sessions/session-run-error.js";
 import { AGENT_SESSION_RESET_COMMAND_RE } from "../agent-command-policy.js";
 import { registerChatAbortController } from "../chat-abort.js";
-import { readInProcessParticipationRun } from "../in-process-session-run.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import { resolveAuthenticatedPersonalGatewayProfileId } from "../server-methods/gateway-personal-caller.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import { prepareSessionParticipationRun } from "../session-principal-run-authority.js";
 import { readSessionSendDeliveryAdmission } from "../session-send-delivery.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { authorizeResolvedSessionMutationAsync } from "../session-sharing.js";
@@ -49,48 +45,33 @@ export async function authorizeAgentTurnSession({
   agentId,
   sessionKey,
   entry,
-  participationCeiling,
 }: {
   cfg: OpenClawConfig;
   principal: AgentTurnPrincipal | null;
   agentId: string;
   sessionKey: string;
   entry?: SessionEntry;
-  participationCeiling?: ParticipationCeiling;
 }) {
-  if (sessionParticipationCeiling(entry) || participationCeiling?.source) {
+  if (
+    entry?.delegatedOperatorSource ||
+    principal?.internal?.operatorRunAuthority?.participationCeiling
+  ) {
     const scope = getPluginRuntimeGatewayRequestScope();
     const context = scope?.resolveGatewayContext?.() ?? scope?.context;
     if (!context) {
       throw new Error("Participant source Gateway is unavailable.");
     }
-    if (!participationCeiling || participationCeiling.sessionKey !== sessionKey) {
-      const access = await resolveSessionMutationAuthorizationAsync({
-        context,
-        client: principal,
-        method: "agent",
-        requestParams: { sessionKey, agentId },
-      });
-      try {
-        if (access.error) {
-          return access.error;
-        }
-        access.authorization?.assertCurrent();
-      } finally {
-        access.authorization?.release?.();
-      }
-    }
-    const source = await prepareSessionParticipationRun({
+    const access = await resolveSessionMutationAuthorizationAsync({
       context,
-      agentId,
-      entry,
-      turnCeiling: participationCeiling,
+      client: principal,
+      method: "agent",
+      requestParams: { sessionKey, agentId },
     });
     try {
-      source?.authority.assertCurrent();
-      return undefined;
+      access.authorization?.assertCurrent();
+      return access.error ?? undefined;
     } finally {
-      source?.release();
+      access.authorization?.release?.();
     }
   }
   return (
@@ -331,7 +312,6 @@ export async function registerAgentTurnSourceAdmission({
     sessionKey: loaded.canonicalKey,
     agentId: sourceAgentId,
     entry: loaded.entry,
-    participationCeiling: readInProcessParticipationRun("agent", source.preflight.request),
   });
   if (authorizationError) {
     source.io.emitAcceptance([false, undefined, authorizationError]);

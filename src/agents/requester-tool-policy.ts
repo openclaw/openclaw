@@ -55,7 +55,7 @@ type RequesterToolPolicyResolution = {
   /** Full ancestor ceiling retained by descendants and completion, even when execution differs. */
   inheritedToolPolicyForSpawn?: SandboxToolPolicy;
   delegatedToolPolicy?: DelegatedToolPolicy;
-  inheritedToolPolicySource?: "sender" | "participant";
+  inheritedToolPolicySource?: "sender";
 };
 
 type SenderPolicyMode = "always" | "when-sender-id" | "never";
@@ -144,7 +144,7 @@ function resolveDelegatedPolicy(
       sessionPolicy?: SandboxToolPolicy;
       policyForSpawn?: SandboxToolPolicy;
       delegatedToolPolicy?: DelegatedToolPolicy;
-      inheritedToolPolicySource?: "sender" | "participant";
+      inheritedToolPolicySource?: "sender";
     } {
   const provenance = normalizeInputProvenance(params.inputProvenance);
   const hasExternalRequester =
@@ -409,11 +409,9 @@ export function resolveRequesterToolPolicies(
       inheritedToolPolicyForSpawn: delegatedPolicy.policyForSpawn ?? delegatedPolicy.policy,
       delegatedToolPolicy: delegatedPolicy.delegatedToolPolicy,
       inheritedToolPolicySource:
-        delegatedPolicy.inheritedToolPolicySource === "participant"
-          ? "participant"
-          : toolPolicyRestrictsTools(groupPolicy) || toolPolicyRestrictsTools(senderPolicy)
-            ? "sender"
-            : delegatedPolicy.inheritedToolPolicySource,
+        toolPolicyRestrictsTools(groupPolicy) || toolPolicyRestrictsTools(senderPolicy)
+          ? "sender"
+          : delegatedPolicy.inheritedToolPolicySource,
     };
   }
   const inheritedEnvelope = resolvePersistedSubagentToolPolicyEnvelope(subagentSessionKey, {

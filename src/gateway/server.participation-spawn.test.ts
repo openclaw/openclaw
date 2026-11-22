@@ -182,10 +182,10 @@ it("carries a real invitee's native child and grandchild ceiling through yielded
       );
       const [child, grandchild] = await withinTest(receipts, signal);
       const heldResponse = await withinTest(grandchildStarted.promise, signal);
-      const wait = (runId: string) =>
-        expect(sender.request("agent.wait", { runId }, { signal })).resolves.toMatchObject({
-          status: "ok",
-        });
+      const wait = async (runId: string) => {
+        const result = await sender.request("agent.wait", { runId }, { signal });
+        expect(result, JSON.stringify(result)).toMatchObject({ status: "ok" });
+      };
       try {
         await wait(initialRunId);
         const expectedCeiling = {
@@ -223,8 +223,10 @@ it("carries a real invitee's native child and grandchild ceiling through yielded
             spawnedBy: parentKey,
             spawnDepth: depth,
             sessionRoot: expectedCeiling.source.root,
-            inheritedToolPolicySource: "participant",
-            participationCeiling: expectedCeiling,
+            delegatedOperatorSource: {
+              kind: "gateway",
+              snapshot: { version: 2, participationCeiling: expectedCeiling },
+            },
           });
           expect(entry?.subagentRole).toBe("orchestrator");
           expect(entry?.sidebarRoot).not.toBe(true);
@@ -270,7 +272,9 @@ it("carries a real invitee's native child and grandchild ceiling through yielded
         }
         expect(requests.some((request) => request.phase === "unexpected")).toBe(false);
         for (const request of requests) {
-          expect(request.tools, request.phase).toEqual(participantTools);
+          expect(request.tools, request.phase).toEqual(
+            [...participantTools, "skills_read"].toSorted(),
+          );
         }
         for (const [sessionKey, receipt, privateResult] of [
           [parent.key, child, childResult],
@@ -341,9 +345,9 @@ it("carries a real invitee's native child and grandchild ceiling through yielded
         }
         expect(
           requests.findLast((request) => request.phase === "parent-completion")?.tools,
-        ).toEqual(participantTools);
+        ).toEqual([...participantTools, "skills_read"].toSorted());
         expect(requests.filter((request) => request.phase === "child-reset")).toEqual([
-          { phase: "child-reset", tools: participantTools },
+          { phase: "child-reset", tools: [...participantTools, "skills_read"].toSorted() },
         ]);
         await invited.request(
           "chat.send",
@@ -361,7 +365,7 @@ it("carries a real invitee's native child and grandchild ceiling through yielded
         expect(listSubagentRunsForRequester(parent.key)).toContainEqual(
           expect.objectContaining({
             runId: revoked.runId,
-            participationCeiling: expectedCeiling,
+            requiresCompletionAuthority: true,
             requesterSettleWake: expect.objectContaining({ requesterYieldBatch: true }),
           }),
         );
@@ -426,7 +430,7 @@ it("carries a real invitee's native child and grandchild ceiling through yielded
         expect(listSubagentRunsForRequester(parent.key)).toContainEqual(
           expect.objectContaining({
             childSessionKey: child.childSessionKey,
-            participationCeiling: expectedCeiling,
+            requiresCompletionAuthority: true,
           }),
         );
         for (const method of ["chat.send", "agent"] as const) {
@@ -456,14 +460,16 @@ it("carries a real invitee's native child and grandchild ceiling through yielded
         );
         await wait("native-owner");
         expect(requests.filter((request) => request.phase === "owner")).toEqual([
-          { phase: "owner", tools: ["exec", "read", "sessions_spawn", "sessions_yield"] },
+          {
+            phase: "owner",
+            tools: ["exec", "read", "sessions_spawn", "sessions_yield"],
+          },
         ]);
         const parentAfter = await readSessionEntryReadOnlyInWorker({
           agentId: "main",
           sessionKey: parent.key,
         });
-        expect(parentAfter?.participationCeiling).toBeUndefined();
-        expect(parentAfter?.inheritedToolPolicySource).not.toBe("participant");
+        expect(parentAfter?.delegatedOperatorSource).toBeUndefined();
       } finally {
         if (!heldResponse.writableEnded) {
           reply(heldResponse, "NO_REPLY");

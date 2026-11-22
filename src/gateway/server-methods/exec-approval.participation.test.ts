@@ -18,6 +18,7 @@ import {
   sessionKey,
 } from "../../agents/harness/tool-authority.runtime.test-support.js";
 import type { ParticipationCeiling } from "../../agents/participation-ceiling.js";
+import { createParticipationTestAuthority } from "../../agents/participation-ceiling.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { ExecApprovalRequestPayload } from "../../infra/exec-approvals.js";
@@ -39,6 +40,7 @@ import {
   canResolveParticipationExecApproval,
   prepareExecApprovalParticipation,
 } from "../exec-approval-participation.js";
+import { captureQueuedOperatorRecoverySource } from "../operator-run-recovery-source.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { waitForApprovalRequested } from "./approval-request.test-support.js";
 import { createApprovalHandlers } from "./approval.js";
@@ -243,18 +245,15 @@ it.for(["direct", "child"] as const)(
           kind: "send",
           profileId: participant.id,
           sessionKey,
-          ...(kind === "child"
-            ? {
-                source: {
-                  agentId: "main",
-                  sessionId,
-                  lifecycleRevision: null,
-                  creatorProfileId: creatorProfile.id,
-                  root: state.workspaceDir,
-                },
-              }
-            : {}),
+          source: {
+            agentId: "main",
+            sessionId,
+            lifecycleRevision: null,
+            creatorProfileId: creatorProfile.id,
+            root: state.workspaceDir,
+          },
         };
+        const authority = createParticipationTestAuthority(ceiling);
         const expectedBinding = {
           ...binding,
           creatorProfileId: creatorProfile.id,
@@ -296,8 +295,7 @@ it.for(["direct", "child"] as const)(
               updatedAt: 1,
               parentSessionKey: sessionKey,
               createdActor: { type: "human", source: "profile", id: participant.id },
-              inheritedToolPolicySource: "participant",
-              participationCeiling: ceiling,
+              delegatedOperatorSource: captureQueuedOperatorRecoverySource(authority),
             },
           );
         }
@@ -332,7 +330,6 @@ it.for(["direct", "child"] as const)(
               ...attempt,
               sessionId: runSessionId,
               sessionKey: runSessionKey,
-              participationCeiling: ceiling,
             },
             undefined,
             async (prepared) => {
@@ -353,7 +350,7 @@ it.for(["direct", "child"] as const)(
                   captureActiveEmbeddedRunParticipation(identity),
                   "host capture",
                 );
-                expect(capture.ceiling).toEqual(ceiling);
+                expect(capture.ceiling).toEqual(authority.participationCeiling);
                 expect(() =>
                   captureActiveEmbeddedRunParticipation({
                     ...identity,
@@ -491,7 +488,7 @@ it.for(["direct", "child"] as const)(
               }
             },
           );
-        });
+        }, authority);
       }),
     );
   },

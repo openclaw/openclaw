@@ -1,3 +1,4 @@
+import type { SessionPermissionMode } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
@@ -5,6 +6,7 @@ import {
 import { intersectOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { intersectParticipationCeilings } from "../agents/participation-ceiling.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import type { ExecPolicyCeiling } from "../infra/exec-policy.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { bindGatewayDeviceRevocation } from "./device-revocation.js";
 import type { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
@@ -82,4 +84,26 @@ export function retainGatewayOperatorInvocation(
   });
   bindGatewayDeviceRevocation(authority.assertCurrent, captured.authority.assertCurrent);
   return { authority, release: releaseHold() };
+}
+
+/** Child execution restrictions produce one live authority and matching durable source. */
+export function deriveGatewayOperatorAuthorityForDelegation(
+  authority: AdmittedRunOperatorAuthority,
+  restrictions: { permission?: SessionPermissionMode; execPolicy?: ExecPolicyCeiling },
+): AdmittedRunOperatorAuthority {
+  authority.assertCurrent();
+  const ceiling = authority.participationCeiling;
+  if (!ceiling) {
+    return authority;
+  }
+  const participationCeiling = intersectParticipationCeilings(ceiling, {
+    ...ceiling,
+    permission: restrictions.permission ?? ceiling.permission,
+    execPolicy: restrictions.execPolicy ?? ceiling.execPolicy,
+  });
+  const derived = createAdmittedRunOperatorAuthority({ ...authority, participationCeiling });
+  if (!derived.recoverySnapshot) {
+    throw new Error("Delegated participation requires a bounded retained source.");
+  }
+  return derived;
 }

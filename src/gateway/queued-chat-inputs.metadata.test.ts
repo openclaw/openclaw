@@ -15,6 +15,7 @@ import {
   captureSessionQueuedInputsForRestart,
   readSessionQueuedInputPage,
 } from "../config/sessions/session-pending-input-history.js";
+import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
@@ -43,7 +44,6 @@ import {
   setClientProfile,
   useBrowserFollowupFixture,
 } from "./server-methods/chat-send-pending-inputs.test-support.js";
-import * as chatRequest from "./server-methods/chat-send-request.js";
 import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
 import {
   persistRunningSessionsForRestart,
@@ -67,11 +67,12 @@ function expectStarted(response: Awaited<ReturnType<Fixture["send"]>>) {
   );
 }
 
-async function createFixture() {
+async function createFixture(sessionKey?: string) {
   const profile = ensureProfileForEmail("queued-metadata-author@example.test");
   setDisplayName(profile.id, "Queued author");
   const fixture = await createBrowserFollowupFixture({
     preserveContent: true,
+    sessionKey,
     createdActor: { type: "human", source: "profile", id: profile.id },
   });
   setClientProfile(fixture.client, { ...profile, updatedAt: 1 }, "Queued author");
@@ -127,35 +128,60 @@ async function retireOriginalInputs(fixture: Fixture) {
 }
 
 it("restores participation and literal commands from durable restart custody", async () => {
-  const created = await createFixture();
+  const created = await createFixture("agent:main:dashboard:participation-queue");
   await using fixture = created.fixture;
-  const ceiling = {
-    kind: "send" as const,
-    profileId: created.profile.id,
-    sessionKey: fixture.scope.sessionKey,
-    tools: ["read", "sessions_list"],
+  const cfg = structuredClone(getRuntimeConfig());
+  cfg.gateway!.roles!.definitions.participant = {
+    agents: "*",
+    scopes: ["operator.sessions.read"],
+    sessions: {
+      others: "invited",
+      maxInvitedAccess: "send",
+      invitedTools: ["read", "sessions_list"],
+      invitedPermission: "guarded",
+    },
   };
-  const normalize = chatRequest.normalizeChatSendRequest;
-  const stamp = vi
-    .spyOn(chatRequest, "normalizeChatSendRequest")
-    .mockImplementation(async (params) => {
-      const result = await normalize(params);
-      return result.ok
-        ? chatRequest.attachChatSendParticipationCeiling(result.value, ceiling)
-        : result;
-    });
+  setRuntimeConfigSnapshot(cfg);
+  fixture.context.getRuntimeConfig = () => cfg;
+  const participant = ensureProfileForEmail("queued-participant@example.test");
+  setUserProfileRole(participant.id, "participant");
+  const principal = await createOperatorRecoveryFixture({
+    stateDir: resolveStateDir(),
+    context: fixture.context,
+    profileId: participant.id,
+    config: cfg,
+    sessionKey: "agent:main:unrelated-principal",
+    scopes: ["operator.sessions.read"],
+    device: pairedOperator(),
+  });
+  Object.assign(fixture.client, principal.client);
+  fixture.client.internal!.operatorAccessAuthority = null;
+  await addSessionMember(fixture.scope, {
+    identityId: participant.id,
+    addedBy: created.profile.id,
+    access: "send",
+  });
   fixture.params.message = "/stop";
   expectStarted(await fixture.send(undefined, {}));
-  stamp.mockRestore();
   const retained = await retireOriginalInputs(fixture);
   const rows = (await readSessionQueuedInputPage(retained.target)).rows;
   expect(rows).toHaveLength(1);
-  expect(JSON.parse(rows[0]!.message_json)).toMatchObject({
-    __openclaw: { participationCeiling: ceiling },
+  expect(JSON.parse(rows[0]!.message_json)["__openclaw"]?.participationCeiling).toBeUndefined();
+  const source = decodeQueuedOperatorRecoverySource(JSON.parse(rows[0]!.origin_source_json!));
+  expect(source).toMatchObject({
+    kind: "gateway",
+    snapshot: {
+      version: 2,
+      participationCeiling: { profileId: participant.id, tools: ["read", "sessions_list"] },
+    },
   });
+  if (source.kind !== "gateway") {
+    throw new Error("expected retained gateway source");
+  }
+  const ceiling = source.snapshot.participationCeiling;
   dispatchInboundMessageMock.mockImplementation(async (input) => {
     expect(input.replyOptions).toMatchObject({
-      participationCeiling: ceiling,
+      operatorAuthority: { participationCeiling: ceiling },
       queueModeOverride: "followup",
     });
     expect(input.ctx).toMatchObject({
@@ -169,9 +195,7 @@ it("restores participation and literal commands from durable restart custody", a
   await continueSessionQueuedInputs(fixture.context, retained.target, retained);
   await fixture.finishDispatch();
   expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-  expect(fixture.readTranscript().at(-1)).toMatchObject({
-    message: { __openclaw: { participationCeiling: ceiling } },
-  });
+  expect(JSON.stringify(fixture.readTranscript())).not.toContain("participationCeiling");
 });
 
 it("retains each accepted input's scope ceiling when the same person sends through another source", async () => {

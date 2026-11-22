@@ -7,13 +7,11 @@ import {
   intersectParticipationCeilings,
   DEFAULT_PARTICIPATION_TOOLS,
   participationPermission,
-  sessionParticipationCeiling,
-  type ParticipationCeiling,
 } from "../agents/participation-ceiling.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
+import { readSessionDelegatedParticipation } from "./session-delegated-operator-source.js";
 import { isParticipantPublicationMethod } from "./session-method-policy.js";
 import type { SessionMutationAuthorizationParams } from "./session-sharing-authorization.js";
 
@@ -34,38 +32,6 @@ export function resolveSessionSystemTurnProfileId(
     throw new Error("Session owner has no current profile identity");
   }
   return profileId;
-}
-
-export async function prepareSessionParticipationRun(params: {
-  context: GatewayRequestContext;
-  agentId: string;
-  entry?: SessionEntry;
-  turnCeiling?: ParticipationCeiling;
-  preserveRecordedSource?: true;
-  recoveredOperatorAuthority?: AdmittedRunOperatorAuthority;
-  assertCurrent?: () => void;
-}) {
-  const ceiling = intersectParticipationCeilings(
-    sessionParticipationCeiling(params.entry),
-    params.turnCeiling,
-  );
-  if (!ceiling?.source) {
-    return undefined;
-  }
-  if (ceiling.source.agentId !== params.agentId) {
-    throw new Error("Participant children must stay with the original agent.");
-  }
-  return prepareSessionPrincipalRunAuthority({
-    context: params.context,
-    profileId: ceiling.profileId,
-    participationCeiling: ceiling,
-    preserveRecordedSource: params.preserveRecordedSource,
-    recoveredOperatorAuthority: params.recoveredOperatorAuthority,
-    agentId: ceiling.source.agentId,
-    sessionKey: ceiling.sessionKey,
-    sessionId: ceiling.source.sessionId,
-    assertCurrent: params.assertCurrent,
-  });
 }
 
 /** Admit a new input as a recorded person using only that person's current grants. */
@@ -153,7 +119,7 @@ export function resolveParticipantRunTarget(
   ) {
     return "source";
   }
-  const child = sessionParticipationCeiling(target.entry);
+  const child = readSessionDelegatedParticipation(target.entry);
   if (child) {
     intersectParticipationCeilings(child, ceiling);
     return isParticipantPublicationMethod(params.method, params.requestParams)

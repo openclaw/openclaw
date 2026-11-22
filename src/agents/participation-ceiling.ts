@@ -1,5 +1,4 @@
 import type { SessionPermissionMode } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import { intersectExecPolicyCeilings, type ExecPolicyCeiling } from "../infra/exec-policy.js";
 import { AgentHarnessPreflightError } from "./harness/errors.js";
 import { intersectSessionPermissionModes } from "./session-permission-mode.js";
@@ -205,21 +204,4 @@ export function assertParticipationWorkerExecution(
       userMessage: PARTICIPATION_WORKER_ERROR,
     });
   }
-}
-
-/** Stored constraints are not a grant. Every new child turn acquires current source authority. */
-export function sessionParticipationCeiling(
-  entry: SessionEntry | undefined,
-  recorded?: ParticipationCeiling,
-): ParticipationCeiling | undefined {
-  const ceiling = entry?.participationCeiling;
-  if (
-    (recorded || entry?.inheritedToolPolicySource === "participant" || ceiling) &&
-    !ceiling?.source
-  ) {
-    throw new Error(
-      "Participant child authority is missing; start a new child from the invited session.",
-    );
-  }
-  return intersectParticipationCeilings(recorded, ceiling);
 }

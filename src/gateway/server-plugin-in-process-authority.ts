@@ -478,6 +478,7 @@ export function resolveInProcessGatewayDispatch(
     method,
     params,
     operatorScopes,
+    operatorAuthority: operatorRunAuthority,
     options,
     registeredScope: context.getGatewayMethodRegistry?.().getScope(method),
     allowOwnSessionScope: context.getGatewayMethodRegistry?.().getSessionAccess?.(method)

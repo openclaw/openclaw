@@ -4,7 +4,6 @@ import {
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
-import { resolveSubagentCompletionParticipation } from "./subagent-child-owner-match.js";
 import {
   findAuthorizedSwarmCollectorRequest,
   compactSubagentRunForMemory,
@@ -452,57 +451,20 @@ describe("subagent run memory indexes", () => {
 it.each([false, true])(
   "never gives a restored participant completion owner authority without custody (collector=%s)",
   (collect) => {
-    const record = Object.assign(
-      createRun("participant-source-loss", {
-        collect,
-        completion: { required: true },
-        delivery: { status: "pending" },
-      }),
-      {
-        participationCeiling: {
-          kind: "send" as const,
-          permission: "guarded" as const,
-          profileId: "participant",
-          sessionKey: "agent:main:main",
-          tools: ["read"],
-          source: {
-            agentId: "main",
-            sessionId: "original",
-            lifecycleRevision: null,
-            creatorProfileId: "creator",
-            root: "/synthetic/root",
-          },
-        },
-      },
-    );
-    const entry = {
-      sessionId: "child",
-      lifecycleRevision: "current",
-      updatedAt: 1,
-      inheritedToolPolicySource: "participant" as const,
-      participationCeiling: record.participationCeiling,
-    };
-    const previous = {
-      ...record,
-      childSessionIdentity: { sessionId: "child", lifecycleRevision: "old" },
-    };
-    const current = {
-      ...record,
-      runId: "current",
-      childSessionIdentity: { sessionId: "child", lifecycleRevision: "current" },
-    };
-    expect(() => resolveSubagentCompletionParticipation([previous], entry)).toThrow(/incarnation/);
-    expect(resolveSubagentCompletionParticipation([previous, current], entry)).toEqual(
-      record.participationCeiling,
-    );
+    const record = createRun("participant-source-loss", {
+      collect,
+      completion: { required: true },
+      delivery: { status: "pending" },
+      requiresCompletionAuthority: true,
+    });
     const restored = rowToSubagentRunRecord(bindSubagentRunRecord(record))!;
     subagentRuns.set(restored.runId, restored);
     const ownerEffect = vi.fn();
     expect(() => subagentRuns.runWithCompletionAuthority(restored, ownerEffect)).toThrow(
-      /Participant/,
+      /Constrained/,
     );
     expect(() => subagentRuns.runWithCompletionBatchAuthority([restored], ownerEffect)).toThrow(
-      /Participant/,
+      /Constrained/,
     );
     expect(ownerEffect).not.toHaveBeenCalled();
   },

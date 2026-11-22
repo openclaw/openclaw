@@ -1,6 +1,7 @@
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { readParticipantPublicationAuthority } from "./github-publication-participation.js";
-import { isInProcessSessionRun, readInProcessParticipationRun } from "./in-process-session-run.js";
+import { isInProcessSessionRun } from "./in-process-session-run.js";
 import { projectOperatorScopesForMethod, resolveAgentRuntimeCronScope } from "./method-scopes.js";
 import {
   ADMIN_SCOPE,
@@ -17,6 +18,7 @@ export function resolveInProcessSyntheticScopes({
   method,
   params,
   operatorScopes,
+  operatorAuthority,
   options,
   registeredScope,
   allowOwnSessionScope,
@@ -26,6 +28,7 @@ export function resolveInProcessSyntheticScopes({
   method: string;
   params: unknown;
   operatorScopes?: readonly string[];
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   options?: DispatchGatewayMethodInProcessOptions;
   registeredScope?: string;
   allowOwnSessionScope?: boolean;
@@ -63,7 +66,8 @@ export function resolveInProcessSyntheticScopes({
   // and Talk, including tools called by a synthetic continuation.
   const participantPublication = readParticipantPublicationAuthority(method, params);
   const participantLaunch = Boolean(
-    readInProcessParticipationRun(method, params)?.source || participantPublication,
+    (isInProcessSessionRun(method, params) && operatorAuthority?.participationCeiling) ||
+    participantPublication,
   );
   const syntheticScopes = operatorScopes
     ? syntheticScopeMode === "exact"

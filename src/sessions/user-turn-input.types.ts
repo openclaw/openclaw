@@ -2,7 +2,6 @@ import type { HumanMention } from "@openclaw/gateway-protocol";
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { ChatAppContextAttachment } from "../../packages/gateway-protocol/src/chat-app-context.js";
-import type { ParticipationCeiling } from "../agents/participation-ceiling.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
 import type { MessageClientSource } from "../chat/message-client-source.js";
 import type { TranscriptSenderIdentity } from "../chat/sender-identity.js";
@@ -37,8 +36,6 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> &
   idempotencyKey?: string;
   provenance?: InputProvenance;
   __openclaw?: Record<string, unknown> & {
-    /** Host-captured input ceiling; recovery still re-admits the sender. */
-    participationCeiling?: ParticipationCeiling;
     humanMentions?: readonly HumanMention[];
     /** Addressed to the selected people: no agent turn, and transparent to an active turn. */
     humanAddressed?: true;

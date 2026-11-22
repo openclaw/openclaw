@@ -29,7 +29,7 @@ export type RegisterSubagentRunParams = {
   runId: string;
   requesterTurnRunId?: string;
   nativePluginOwner?: SubagentRunRecord["nativePluginOwner"];
-  participationCeiling?: SubagentRunRecord["participationCeiling"];
+  requiresCompletionAuthority?: SubagentRunRecord["requiresCompletionAuthority"];
   subagentProfile?: SubagentRunRecord["subagentProfile"];
   childSessionKey: string;
   childAgentId: string;
@@ -87,7 +87,7 @@ export function createSubagentRegistrationRecord(
   return normalizeSubagentRunState({
     runId,
     taskRunId: runId,
-    participationCeiling: registerParams.participationCeiling,
+    requiresCompletionAuthority: registerParams.requiresCompletionAuthority,
     ...(requesterTurnRunId ? { requesterTurnRunId } : {}),
     ...(registerParams.nativePluginOwner
       ? { nativePluginOwner: { ...registerParams.nativePluginOwner } }

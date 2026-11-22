@@ -103,5 +103,4 @@ export type OperatorToolGatewayAuthority = {
 /** Private continuation constraints captured by the accepting host owner. */
 export type OperatorContinuationOptions = {
   retainRequester?: true;
-  participationCeiling?: import("../agents/participation-ceiling.js").ParticipationCeiling;
 };

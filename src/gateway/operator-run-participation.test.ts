@@ -15,6 +15,7 @@ import { normalizeGatewayOperatorRecoverySnapshot } from "./operator-run-recover
 import { captureGatewayOperatorRecoverySnapshot } from "./operator-run-recovery-source.js";
 import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import { withRecovery } from "./operator-run-recovery.test-support.js";
+import { prepareSessionDelegatedOperatorAuthority } from "./session-delegated-operator-source.js";
 
 const bound: BoundParticipationCeiling = {
   kind: "send",
@@ -183,6 +184,26 @@ it("narrows same-role invitation fields on recovery without widening retained wo
         });
       const original = await restore();
       try {
+        const child = await prepareSessionDelegatedOperatorAuthority({
+          context: fixture.context,
+          agentId: "main",
+          entry: {
+            sessionId: "delegated-child",
+            updatedAt: 1,
+            delegatedOperatorSource: { kind: "gateway", snapshot },
+          },
+          authority: createAdmittedRunOperatorAuthority({
+            profileId: "different-admin",
+            scopes: ["operator.admin"],
+            assertCurrent() {},
+          }),
+        });
+        expect(child?.authority.profileId).toBe(fixture.snapshot.profileId);
+        expect(child?.authority.recoverySnapshot?.profileId).toBe(fixture.snapshot.profileId);
+        expect(child?.authority.participationCeiling).toEqual(
+          original.authority.participationCeiling,
+        );
+        child?.release();
         const narrow = structuredClone(fixture.context.getRuntimeConfig());
         narrow.gateway!.roles!.definitions.invited!.sessions = {
           others: "invited",

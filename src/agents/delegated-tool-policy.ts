@@ -21,7 +21,7 @@ export type DelegatedToolPolicyContext = {
   /** A mediated producer cannot export its active native delegation exception. */
   delegatedToolPolicyUnavailable?: boolean;
   /** Restrictive requester policy originated at trusted sender/channel ingress. */
-  inheritedToolPolicySource?: "sender" | "participant";
+  inheritedToolPolicySource?: "sender";
 };
 
 export type DelegatedToolDenyFloor = {
@@ -80,7 +80,7 @@ export function selectDelegatedToolPolicy(params: {
   floor?: DelegatedToolDenyFloor;
   requesterToolDenylist?: readonly string[];
   inheritedToolAllowlist?: readonly string[];
-  inheritedToolPolicySource?: "sender" | "participant";
+  inheritedToolPolicySource?: "sender";
 }): DelegatedToolPolicy | undefined {
   const continuation = params.floor?.continuation;
   const requesterSessionKey = continuation?.requesterSessionKey ?? params.requesterSessionKey;
@@ -169,7 +169,7 @@ export function resolveDelegatedExecutionToolPolicy(params: {
   config?: OpenClawConfig;
   sessionKey: string;
   inheritedToolAllow: string[];
-  inheritedToolPolicySource?: "sender" | "participant";
+  inheritedToolPolicySource?: "sender";
   delegatedToolPolicy?: DelegatedToolPolicy;
 }): { allow?: string[]; deny: string[] } | undefined {
   const floor = params.delegatedToolPolicy;

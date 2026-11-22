@@ -10,6 +10,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { assertAgentInitializationCompleteInWorker } from "../../config/sessions/agent-initialization.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { prepareSessionDelegatedOperatorAuthority } from "../../gateway/session-delegated-operator-source.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent-delivery.js";
@@ -62,7 +63,6 @@ import { resolveAgentTimeoutMs } from "../timeout.js";
 import { ensureAgentWorkspace } from "../workspace.js";
 import { acquireWorktreeRunLease, resolveWorktreeForPath } from "../worktrees/run-lease.js";
 import { resolveSessionWorktree } from "../worktrees/session-lifecycle.js";
-import { prepareCommandParticipation } from "./participation.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
 import { resolveSession } from "./session.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -258,11 +258,9 @@ export async function prepareAgentCommandExecution(
     persistedThinking,
     persistedVerbose,
   } = sessionResolution;
-  const participation = await prepareCommandParticipation({
-    opts: commandOpts,
+  const participation = await prepareSessionDelegatedOperatorAuthority({
+    authority: commandOpts.operatorAuthority,
     agentId: sessionAgentId,
-    sessionKey,
-    sessionId,
     entry: sessionEntryRaw,
     assertCurrent: assertInitialPreparationCurrent,
   });

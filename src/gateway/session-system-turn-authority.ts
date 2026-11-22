@@ -4,9 +4,9 @@ import { getSessionControllerEntryForOperation } from "../sessions/session-contr
 import type { QueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
+import { prepareSessionDelegatedOperatorAuthority } from "./session-delegated-operator-source.js";
 import {
   prepareSessionPrincipalRunAuthority,
-  prepareSessionParticipationRun,
   resolveSessionSystemTurnProfileId,
 } from "./session-principal-run-authority.js";
 
@@ -63,17 +63,22 @@ export async function prepareSessionSystemTurnAuthority(
       })
     : undefined;
   try {
-    const participation = await prepareSessionParticipationRun({
+    const delegated = await prepareSessionDelegatedOperatorAuthority({
       context: params.context,
       agentId: params.agentId,
       entry,
-      turnCeiling: params.participationCeiling,
-      preserveRecordedSource: params.preserveRecordedSource,
-      recoveredOperatorAuthority: restored?.authority,
+      authority: restored?.authority,
       assertCurrent: params.assertCurrent,
     });
-    if (participation) {
-      return participation;
+    if (delegated) {
+      return delegated;
+    }
+    if (restored?.authority.participationCeiling) {
+      const release = restored.authority.retain?.();
+      if (!release) {
+        throw new Error("Participant restart requires retained authority.");
+      }
+      return { authority: restored.authority, release };
     }
     if (restored) {
       return await prepareSessionPrincipalRunAuthority({

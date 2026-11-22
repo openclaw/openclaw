@@ -1,14 +1,16 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { withInvitedGuestGateway } from "./guest-session-access.test-support.js";
+import { normalizeGatewayOperatorRecoverySnapshot } from "./operator-run-recovery-source.codec.js";
 
 it("keeps a hidden child's original invitation ceiling on admin chat, direct agent, reset, and reinvitation", async ({
   signal,
 }) => {
   await withInvitedGuestGateway(
     signal,
-    async ({ sender, carol, alice, providerRequests, state, model }) => {
+    async ({ sender, invited, carol, alice, providerRequests, state, model }) => {
       const parent = await sender.request<{ key: string; sessionId: string }>(
         "sessions.create",
         {
@@ -40,6 +42,19 @@ it("keeps a hidden child's original invitation ceiling on admin chat, direct age
         },
         { signal },
       );
+      await invited.request(
+        "chat.send",
+        {
+          agentId: "main",
+          sessionKey: parent.key,
+          message: "retain source",
+          idempotencyKey: "retain-participant-source",
+        },
+        { signal },
+      );
+      await expect(
+        sender.request("agent.wait", { runId: "retain-participant-source" }, { signal }),
+      ).resolves.toMatchObject({ status: "ok" });
       const source = (await readSessionEntryReadOnlyInWorker({
         agentId: "main",
         sessionKey: parent.key,
@@ -71,10 +86,19 @@ it("keeps a hidden child's original invitation ceiling on admin chat, direct age
         sessionRoot: state.workspaceDir,
         modelProvider: model.providerId,
         model: model.modelId,
-        inheritedToolPolicySource: "participant",
         inheritedToolPolicyVersion: 1,
         inheritedToolAllow: ["read"],
-        participationCeiling: ceiling,
+        delegatedOperatorSource: {
+          kind: "gateway",
+          snapshot: expectDefined(
+            normalizeGatewayOperatorRecoverySnapshot({
+              ...source.operatorSources?.[carol.id],
+              version: 2,
+              participationCeiling: ceiling,
+            }),
+            "retained participant source",
+          ),
+        },
       });
       const turn = async (method: "chat.send" | "agent", key: string, runId: string) => {
         const before = providerRequests.length;
@@ -93,14 +117,18 @@ it("keeps a hidden child's original invitation ceiling on admin chat, direct age
         );
       };
       for (const method of ["chat.send", "agent"] as const) {
-        expect(await turn(method, child.sessionKey, `child-${method}`)).toEqual([["read"]]);
+        expect(await turn(method, child.sessionKey, `child-${method}`)).toEqual([
+          ["read", "skills_read"],
+        ]);
       }
       await sender.request(
         "sessions.reset",
         { key: child.sessionKey, agentId: "main" },
         { signal },
       );
-      expect(await turn("chat.send", child.sessionKey, "child-reset")).toEqual([["read"]]);
+      expect(await turn("chat.send", child.sessionKey, "child-reset")).toEqual([
+        ["read", "skills_read"],
+      ]);
       await access("read");
       const beforeRevoked = providerRequests.length;
       await expect(
@@ -116,11 +144,13 @@ it("keeps a hidden child's original invitation ceiling on admin chat, direct age
       ).rejects.toThrow();
       expect(providerRequests).toHaveLength(beforeRevoked);
       await access("send");
-      expect(await turn("chat.send", child.sessionKey, "child-reinvited")).toEqual([["read"]]);
+      expect(await turn("chat.send", child.sessionKey, "child-reinvited")).toEqual([
+        ["read", "skills_read"],
+      ]);
       expect((await turn("chat.send", parent.key, "parent-owner"))[0]).toContain("exec");
       expect(
         (await readSessionEntryReadOnlyInWorker({ agentId: "main", sessionKey: parent.key }))
-          ?.participationCeiling,
+          ?.delegatedOperatorSource,
       ).toBeUndefined();
     },
     {

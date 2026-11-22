@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
+import { deriveGatewayOperatorAuthorityForDelegation } from "../../../gateway/operator-run-invocation.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId } from "../../../routing/session-key.js";
 import { waitForSessionParticipantRecording } from "../../../sessions/session-participant-recording.js";
@@ -26,10 +27,7 @@ import {
 } from "./subagent-spawn-contract.js";
 import { captureSubagentSpawnGatewayContext } from "./subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
-import {
-  captureParticipationSpawnCeiling,
-  resolveParticipationSpawnError,
-} from "./subagent-spawn-participation.js";
+import { resolveParticipationSpawnError } from "./subagent-spawn-participation.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
 import {
   getGlobalHookRunner,
@@ -44,11 +42,21 @@ const BLIND_FORK_ERROR =
 
 export async function resolveSubagentSpawnRequest(
   params: SpawnSubagentParams,
-  ctx: SpawnSubagentContext,
+  inputContext: SpawnSubagentContext,
 ) {
   const gateway = captureSubagentSpawnGatewayContext();
+  if (gateway.operatorAuthority?.participationCeiling) {
+    gateway.operatorAuthority = deriveGatewayOperatorAuthorityForDelegation(
+      gateway.operatorAuthority,
+      {
+        permission: inputContext.sessionPermissionPolicy?.mode,
+        execPolicy: inputContext.sessionPermissionPolicy?.execPolicy,
+      },
+    );
+  }
+  const ctx = inputContext;
   if (
-    ctx.participationCeiling &&
+    gateway.operatorAuthority?.participationCeiling &&
     (!ctx.assertActive || (!gateway.gatewayContextResolver && !hasInProcessGatewayContext()))
   ) {
     return rejectSubagentSpawnRequest(
@@ -190,18 +198,6 @@ export async function resolveSubagentSpawnRequest(
         ok: true as const,
         requesterTarget,
         requesterEntry,
-        participationCeiling: ctx.participationCeiling
-          ? captureParticipationSpawnCeiling({
-              ceiling: ctx.participationCeiling,
-              requesterAgentId,
-              requesterKey: requesterTarget.canonicalKey,
-              requesterEntry,
-              expectedParentSessionId: ctx.expectedParentSessionId,
-              root: ctx.sessionPermissionPolicy?.root ?? "",
-              execPolicy: ctx.sessionPermissionPolicy?.execPolicy,
-              permission: ctx.sessionPermissionPolicy?.mode,
-            })
-          : undefined,
         completionRequesterSessionId: completionEntry?.sessionId,
         completionRequesterLifecycleRevision: completionEntry?.lifecycleRevision,
       };
@@ -213,7 +209,9 @@ export async function resolveSubagentSpawnRequest(
     }
   };
   const earlyRequester =
-    !params.collect || ctx.participationCeiling ? await captureRequester() : undefined;
+    !params.collect || gateway.operatorAuthority?.participationCeiling
+      ? await captureRequester()
+      : undefined;
   if (earlyRequester && !earlyRequester.ok) {
     return earlyRequester;
   }
@@ -275,10 +273,11 @@ export async function resolveSubagentSpawnRequest(
   }
   // Participant runtime selection must finish before either admission owner reserves work.
   const participationChildPlan =
-    ctx.participationCeiling && earlyRequester
+    gateway.operatorAuthority?.participationCeiling && earlyRequester
       ? await resolveSubagentChildPlan({
           request: { ...params, context: contextMode },
-          ctx: { ...ctx, participationCeiling: earlyRequester.participationCeiling },
+          ctx,
+          operatorAuthority: gateway.operatorAuthority,
           cfg,
           requesterInternalKey,
           requesterAgentId,
@@ -449,7 +448,6 @@ export async function resolveSubagentSpawnRequest(
           ownership,
           requesterEntry: requester.requesterEntry,
           requesterTarget: requester.requesterTarget,
-          participationCeiling: requester.participationCeiling,
           participationChildPlan,
           // Descendants of a blind requester stay blind; their prompts would otherwise name the route.
           blind: params.blind === true || requester.requesterEntry?.blindPrompt === true,

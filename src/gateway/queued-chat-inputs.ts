@@ -130,17 +130,6 @@ export async function continueSessionQueuedInputs(
       if (authority.profileId !== sender.id) {
         throw new Error("Queued input operator source does not match its sender.");
       }
-      const participationCeiling = message["__openclaw"]?.participationCeiling;
-      if (
-        participationCeiling &&
-        (participationCeiling.kind !== "send" ||
-          (participationCeiling.source
-            ? participationCeiling.source.agentId !== target.agentId
-            : participationCeiling.profileId !== authority.profileId ||
-              participationCeiling.sessionKey !== target.sessionKey))
-      ) {
-        throw new Error("Queued participation input does not match its sender and session.");
-      }
       const profile = getResidentUserProfileDisplay(authority.profileId);
       const client = createSyntheticPluginRuntimeClient({
         authenticatedUserProfile: admitted.authenticatedUserProfile,
@@ -163,7 +152,7 @@ export async function continueSessionQueuedInputs(
             requestFingerprint: row.request_hash.startsWith("request:")
               ? row.request_hash.slice(8)
               : row.request_hash,
-            participationCeiling,
+            operatorAuthority: authority,
             requesterProfile: {
               id: authority.profileId,
               displayName: profile.displayName,

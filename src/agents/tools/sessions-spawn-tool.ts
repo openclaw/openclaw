@@ -461,7 +461,6 @@ export function createSessionsSpawnTool(
           inheritedToolPolicySource: opts?.inheritedToolPolicySource,
           workspaceDir: opts?.workspaceDir,
           sessionPermissionPolicy: opts?.sessionPermissionPolicy,
-          participationCeiling: opts?.participationCeiling,
         });
 
         if (runtime === "acp") {

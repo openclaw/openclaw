@@ -21,7 +21,7 @@ export function buildSubagentLaunchRequest(params: {
   spawnedWorkspaceDir?: string;
   childSessionKey: string;
   childSession: {
-    entry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "participationCeiling">;
+    entry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
     freshChild?: FreshChildSession;
   };
   childSessionOrigin?: DeliveryContext;
@@ -103,7 +103,6 @@ export function buildSubagentLaunchRequest(params: {
             lifecycleRevision: childEntry.lifecycleRevision,
             runId: params.childIdem,
             freshChild: params.childSession.freshChild,
-            participationCeiling: childEntry.participationCeiling,
           }
         : undefined,
     progressOrigin: {

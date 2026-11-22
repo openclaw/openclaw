@@ -5,6 +5,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vi
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as sessionReads from "../config/sessions/session-entry-read-runtime.js";
+import { captureQueuedOperatorRecoverySource } from "../gateway/operator-run-recovery-source.js";
+import { readSessionDelegatedParticipation } from "../gateway/session-delegated-operator-source.js";
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -15,7 +17,10 @@ import { createExecTool } from "./bash-tools.exec-run.js";
 import { completionConfig } from "./bash-tools.lifecycle.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import type { ParticipationCeiling } from "./participation-ceiling.js";
-import { prepareParticipationTestRun } from "./participation-ceiling.test-support.js";
+import {
+  prepareParticipationTestRun,
+  createParticipationTestAuthority,
+} from "./participation-ceiling.test-support.js";
 import { getTextContent } from "./test-helpers/agent-tools-fs-helpers.js";
 
 // mock-isolation: Each test owns the supervisor; subprocesses and cleanup are real.
@@ -155,7 +160,11 @@ test.skipIf(process.platform === "win32")(
           updatedAt: 1,
           parentSessionKey: parent,
           ...(sessionKey === child
-            ? { inheritedToolPolicySource: "participant", participationCeiling: ceiling }
+            ? {
+                delegatedOperatorSource: captureQueuedOperatorRecoverySource(
+                  createParticipationTestAuthority(ceiling),
+                ),
+              }
             : {}),
         },
       );
@@ -184,11 +193,12 @@ test.skipIf(process.platform === "win32")(
     const siblingId = await start(sibling, "SENSITIVE_SIBLING_OUTPUT");
     const childId = await start(child, "INVITED_CHILD_OUTPUT");
     const recorded = expectDefined(
-      (await sessionReads.readSessionEntryReadOnlyInWorker({ agentId: "main", sessionKey: child }))
-        ?.participationCeiling,
+      readSessionDelegatedParticipation(
+        await sessionReads.readSessionEntryReadOnlyInWorker({ agentId: "main", sessionKey: child }),
+      ),
       "recorded child ceiling",
     );
-    expect(recorded).toEqual(ceiling);
+    expect(recorded).toMatchObject(ceiling);
     const recordedRoot = expectDefined(recorded.source, "original source").root;
     for (const permission of ["read-only", "workspace"] as const) {
       const tools = await createOpenClawCodingToolsInternalAsync({

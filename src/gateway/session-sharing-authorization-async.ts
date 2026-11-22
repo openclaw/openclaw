@@ -32,19 +32,16 @@ import {
 import { resolveUserPath } from "../utils.js";
 import { sanitizeChatSendMessageInput } from "./chat-input-sanitize.js";
 import { errorShapeFromError } from "./error-shape.js";
-import { readInProcessParticipationRun } from "./in-process-session-run.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
 import { isOperatorRoleEnforcedFor, operatorRoleSubject } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
+import { prepareSessionDelegatedOperatorAuthority } from "./session-delegated-operator-source.js";
 import { sessionMethodDatabaseAdmission, isSessionTargetMethod } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { restoreSessionOperatorSource } from "./session-operator-sources.js";
 import { bindSessionParticipationSource } from "./session-participation-authorization.js";
-import {
-  prepareSessionParticipationRun,
-  resolveSessionSystemTurnProfileId,
-} from "./session-principal-run-authority.js";
+import { resolveSessionSystemTurnProfileId } from "./session-principal-run-authority.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -361,7 +358,7 @@ export async function resolveSessionMutationAuthorizationAsync(
     }
   };
   let references = 0;
-  let childParticipation: Awaited<ReturnType<typeof prepareSessionParticipationRun>>;
+  let childParticipation: Awaited<ReturnType<typeof prepareSessionDelegatedOperatorAuthority>>;
   const retain = () => {
     if (!active) {
       throw new Error("Session authorization has been released");
@@ -424,38 +421,47 @@ export async function resolveSessionMutationAuthorizationAsync(
       });
       reads.push(retained);
       const initialFacts = retained.readCurrent(cfg);
-      const launchCeiling = readInProcessParticipationRun(params.method, params.requestParams);
-      let childCeiling;
-      if (params.method === "chat.send" || params.method === "agent") {
+      if (!initialFacts.target && (params.method === "chat.send" || params.method === "agent")) {
         const { getSubagentRunsForChildSession } =
           await import("../agents/subagents/registry/subagent-registry-memory.js");
-        const { resolveSubagentChildParticipation } =
-          await import("../agents/subagents/registry/subagent-child-owner-match.js");
-        childCeiling = resolveSubagentChildParticipation(
-          getSubagentRunsForChildSession(target.sessionKey, input.agentId),
-          initialFacts.target?.entry,
-        );
+        // An indexed custody requirement can refuse recreation, never reconstruct authority.
+        for (const run of getSubagentRunsForChildSession(target.sessionKey, input.agentId)) {
+          if (run.requiresCompletionAuthority) {
+            throw new Error("Constrained child requires its original session source.");
+          }
+        }
       }
-      if (childCeiling || launchCeiling) {
-        childParticipation = await prepareSessionParticipationRun({
+      const inherited = params.client?.internal?.operatorRunAuthority;
+      if (
+        (params.method === "chat.send" || params.method === "agent") &&
+        initialFacts.target?.entry.delegatedOperatorSource
+      ) {
+        childParticipation = await prepareSessionDelegatedOperatorAuthority({
           context: params.context,
           agentId: input.agentId,
-          entry: initialFacts.target?.entry,
-          turnCeiling: launchCeiling,
+          entry: initialFacts.target.entry,
+          authority: inherited,
           assertCurrent: params.assertInvocationCurrent,
         });
         if (childParticipation) {
           creationReleases.push(childParticipation.release);
-          params = {
-            ...params,
-            participantRunAuthority: childParticipation.authority,
-            participationRequired: undefined,
-            assertInvocationCurrent: composeSessionSourceAssertion([
-              params.assertInvocationCurrent,
-              childParticipation.authority.assertCurrent,
-            ]),
-          };
         }
+      }
+      const participantRunAuthority =
+        params.method === "chat.send" || params.method === "agent"
+          ? (childParticipation?.authority ??
+            (inherited?.participationCeiling ? inherited : undefined))
+          : undefined;
+      if (participantRunAuthority) {
+        params = {
+          ...params,
+          participantRunAuthority,
+          participationRequired: undefined,
+          assertInvocationCurrent: composeSessionSourceAssertion([
+            params.assertInvocationCurrent,
+            participantRunAuthority.assertCurrent,
+          ]),
+        };
       }
       const readCurrent = () => {
         try {

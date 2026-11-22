@@ -44,6 +44,7 @@ import {
   resumePublicationFixture,
 } from "./github-publication-requester.test-support.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
@@ -281,8 +282,7 @@ it("binds inherited participant callers and task handoffs to their exact target"
     updatedAt: 1,
     parentSessionKey: session.sessionKey,
     createdActor: { type: "human", source: "profile", id: f.guestProfile },
-    inheritedToolPolicySource: "participant",
-    participationCeiling: participation.ceiling,
+    delegatedOperatorSource: captureQueuedOperatorRecoverySource(authority),
   });
   for (const target of [session, child]) {
     const client = createSyntheticPluginRuntimeClient({

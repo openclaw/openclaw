@@ -16,7 +16,6 @@ import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js
 import { registerChatAbortController } from "../chat-abort.js";
 import type { OffloadedRef } from "../chat-attachments.js";
 import { errorShapeFromError } from "../error-shape.js";
-import { readInProcessParticipationRun } from "../in-process-session-run.js";
 import { readInProcessSubagentResume } from "../in-process-subagent-resume.js";
 import { runAgentResetPhase } from "../server-methods/agent-reset-phase.js";
 import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js";
@@ -378,7 +377,6 @@ export function createAgentTurnService(
             sessionKey: canonicalSessionKey,
             agentId: sessionAgentId,
             entry,
-            participationCeiling: readInProcessParticipationRun("agent", request),
           });
           if (sessionAuthorizationError) {
             io.emitAcceptance([false, undefined, sessionAuthorizationError]);

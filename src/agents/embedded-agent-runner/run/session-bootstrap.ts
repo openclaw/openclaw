@@ -36,6 +36,7 @@ import {
 } from "../../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
+import { readSessionDelegatedParticipation } from "../../../gateway/session-delegated-operator-source.js";
 import {
   emitAgentEventIfCurrent,
   getAgentEventLifecycleGeneration,
@@ -506,15 +507,16 @@ export async function assertAgentHarnessRunAdmission(
     runtimeTarget?: SessionTranscriptRuntimeTarget,
   ) => {
     assertCurrent();
-    if (entry?.inheritedToolPolicySource === "participant" || entry?.participationCeiling) {
+    const childCeiling = readSessionDelegatedParticipation(entry);
+    if (childCeiling) {
       const authority =
         readAdmittedRunOperatorAuthority(params.admittedRunContext) ??
         readPreparedRunOperatorAuthority(params.preparedRunAdmission);
-      if (!entry.participationCeiling?.source || !authority?.participationCeiling?.source) {
+      if (!authority?.participationCeiling?.source) {
         throw new Error("Participant child requires current original-source admission.");
       }
       authority.assertCurrent();
-      intersectParticipationCeilings(entry.participationCeiling, authority.participationCeiling);
+      intersectParticipationCeilings(childCeiling, authority.participationCeiling);
     }
     const admissionError = resolveAgentHarnessRunAdmissionError({
       agentHarnessId: params.agentHarnessId,

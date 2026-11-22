@@ -426,8 +426,7 @@ type SessionEntryCore = SessionEntryProvenance &
     /** Version of the requester tool-policy snapshot captured when this child was spawned. */
     inheritedToolPolicyVersion?: 1;
     /** Restriction provenance for ordinary sender-delegated tool policy. */
-    inheritedToolPolicySource?: "sender" | "participant";
-    participationCeiling?: import("../../agents/participation-ceiling.js").ParticipationCeiling;
+    inheritedToolPolicySource?: "sender";
     /** Immutable original execution source required by a constrained delegated session. */
     delegatedOperatorSource?: QueuedOperatorRecoverySource;
     /** Session-scoped tool deny entries inherited from the caller that created this session. */

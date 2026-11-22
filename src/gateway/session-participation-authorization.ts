@@ -17,7 +17,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 import { readParticipantPublicationAuthority } from "./github-publication-participation.js";
 import { requiresSessionParticipation } from "./method-scopes.js";
-import { readQueuedParticipationProfile } from "./queued-chat-input-admission.js";
 import { resolveAuthenticatedPersonalGatewayProfileId } from "./server-methods/gateway-personal-caller.js";
 import { isParticipantPublicationMethod } from "./session-method-policy.js";
 import { retainSessionParticipation } from "./session-participation-lifetime.js";
@@ -101,8 +100,8 @@ export function createSessionParticipationAuthorization(
       const profileId =
         personalProfileId ??
         readParticipantPublicationAuthority(params.method, params.requestParams)?.profileId ??
-        (params.method === "chat.send"
-          ? readQueuedParticipationProfile(params.requestParams)
+        (params.client?.internal?.operatorRunAuthority?.participationCeiling
+          ? params.client.internal.operatorRunAuthority.profileId
           : undefined) ??
         (params.assertPrincipalTargetCurrent ? policy?.identity?.id : undefined);
       if (

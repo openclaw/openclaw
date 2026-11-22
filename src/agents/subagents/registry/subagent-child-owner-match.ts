@@ -1,11 +1,5 @@
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
-import type { SessionEntry } from "../../../config/sessions/types.js";
 import { isValidAgentId, normalizeAgentIdStrict } from "../../../routing/session-key.js";
-import {
-  intersectParticipationCeilings,
-  sessionParticipationCeiling,
-  type ParticipationCeiling,
-} from "../../participation-ceiling.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function resolveSubagentChildAgentId(entry: {
@@ -123,35 +117,4 @@ export function matchesSubagentChildSessionOwner(
   return (
     owner !== undefined && owner === resolveSubagentChildAgentId({ childSessionKey, childAgentId })
   );
-}
-
-/** The registry's captured source outlives child deletion and is a restriction, not a grant. */
-export function resolveSubagentChildParticipation(
-  records: Iterable<SubagentRunRecord>,
-  entry: SessionEntry | undefined,
-  captured?: ParticipationCeiling,
-): ParticipationCeiling | undefined {
-  let recorded = captured;
-  for (const record of records) {
-    recorded = intersectParticipationCeilings(recorded, record.participationCeiling);
-  }
-  return sessionParticipationCeiling(entry, recorded);
-}
-
-/** Owed completions additionally belong to the exact child execution incarnation. */
-export function resolveSubagentCompletionParticipation(
-  records: Iterable<SubagentRunRecord>,
-  entry: SessionEntry | undefined,
-  captured?: ParticipationCeiling,
-): ParticipationCeiling | undefined {
-  const retained = [...records];
-  const ceiling = resolveSubagentChildParticipation(retained, entry, captured);
-  const participants = retained.filter((record) => record.participationCeiling);
-  if (
-    participants.length &&
-    !participants.some((record) => matchesSubagentChildSessionIdentity(record, entry ?? null))
-  ) {
-    throw new Error("Participant completion child incarnation changed.");
-  }
-  return ceiling;
 }

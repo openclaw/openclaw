@@ -12,6 +12,7 @@ import {
   bindInProcessSessionRun,
   type PreparedSessionRun,
 } from "../../../gateway/in-process-session-run.js";
+import { runWithOperatorToolGatewayAuthority } from "../../../gateway/operator-tool-gateway-authority.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { isGatewayRpcUnavailableError } from "../../../gateway/transport-error.js";
 import type { WorkerTurnExecutionIdentity } from "../../../gateway/worker-environments/placement-turn-claim-events.js";
@@ -19,15 +20,18 @@ import { getActiveAgentRunDelegatedAuthority } from "../../../infra/agent-run-re
 import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { monotonicNow } from "../../../shared/monotonic-time.js";
 import { captureRequesterOrigin, requesterCreatorProfileId } from "../../requester-origin.js";
+import { summarizeSpawnError, type runSpawnPipeline } from "../../spawn-pipeline.js";
 import {
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
+  withGatewayToolOperatorContinuation,
 } from "../../tools/gateway-caller-context.js";
 import { runWithGatewaySessionSpawnContext } from "../../tools/gateway-session-spawn-context.js";
 import { runWithGatewaySessionSpawnParentExecutionIdentity } from "../../tools/gateway-session-spawn-execution-identity.js";
 import { callGatewayTool } from "../../tools/gateway.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import { applySubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
+import type { SpawnSubagentResult } from "./subagent-spawn-contract.js";
 import { readSubagentGatewayExecutionIdentity } from "./subagent-spawn-execution-identity.js";
 import {
   ADMIN_SCOPE,
@@ -75,6 +79,54 @@ export function captureSubagentSpawnGatewayContext() {
     requester,
     // Personal-tool selection changes authority, not who caused this delegation.
     creatorProfileId: requesterCreatorProfileId(gatewayCaller?.requesterOrigin),
+  };
+}
+
+/** Keep the derived source on initial registration and delayed child dispatch alike. */
+export function bindSubagentSpawnOperatorAuthority({
+  operatorAuthority,
+  requester,
+}: ReturnType<typeof captureSubagentSpawnGatewayContext>) {
+  return <T>(run: () => T): T =>
+    operatorAuthority?.participationCeiling
+      ? runWithOperatorToolGatewayAuthority(
+          {
+            operatorRunAuthority: operatorAuthority,
+            scopes: operatorAuthority.scopes,
+            signal: operatorAuthority.signal ?? AbortSignal.any([]),
+            assertCurrent: operatorAuthority.assertCurrent,
+          },
+          () =>
+            withGatewayToolOperatorContinuation(
+              { operatorAuthority, requesterOrigin: requester?.requesterOrigin },
+              run,
+            ),
+        )
+      : run();
+}
+
+/** Report both the launch boundary and any still-owed accepted-run cleanup. */
+export function buildSubagentSpawnFailureResult(params: {
+  failure: Extract<Awaited<ReturnType<typeof runSpawnPipeline>>, { ok: false }>;
+  childSessionKey: string;
+  childIdem: string;
+  acceptedRunCleanupError?: string;
+}): SpawnSubagentResult {
+  const { phase, error, runId } = params.failure;
+  const spawnStatus =
+    error && typeof error === "object" && "spawnStatus" in error ? error.spawnStatus : undefined;
+  return {
+    status: spawnStatus === "forbidden" ? "forbidden" : "error",
+    error: [
+      phase === "register" && spawnStatus !== "forbidden"
+        ? `Failed to register subagent run: ${summarizeSpawnError(error)}`
+        : summarizeSpawnError(error),
+      params.acceptedRunCleanupError,
+    ]
+      .filter(Boolean)
+      .join(" "),
+    childSessionKey: params.childSessionKey,
+    ...(phase === "initialize" ? {} : { runId: runId ?? params.childIdem }),
   };
 }
 

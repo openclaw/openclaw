@@ -4,6 +4,7 @@ import {
   missingScopeErrorShape,
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import {
   resolveSessionMethodScope,
@@ -12,7 +13,7 @@ import {
 import { holdsCronManagementGrant } from "../cron-creator-authority-grant.js";
 import { authorizeParticipationExecApprovalMethod } from "../exec-approval-participation.js";
 import { readParticipantPublicationAuthority } from "../github-publication-participation.js";
-import { isInProcessSessionRun, readInProcessParticipationRun } from "../in-process-session-run.js";
+import { isInProcessSessionRun } from "../in-process-session-run.js";
 import {
   ADMIN_SCOPE,
   authorizeOperatorScopesForMethod,
@@ -34,7 +35,6 @@ import {
   isPublicationTransportMethod,
   isPublicationTransportScope,
 } from "../publication-reader.js";
-import { readQueuedParticipationProfile } from "../queued-chat-input-admission.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
 import { isDirectCronOwnerClient, isHumanCronMutation } from "./cron-human-owner.js";
 import { resolveAuthenticatedPersonalGatewayProfileId } from "./gateway-personal-caller.js";
@@ -46,6 +46,7 @@ function authorizeGatewayMethodScopes(
   scopes: readonly string[],
   params: unknown,
   methodRegistry: GatewayMethodRegistryView,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
 ) {
   const registeredScope = methodRegistry.getScope(method);
   let scopeAuth = isOperatorScope(registeredScope)
@@ -60,11 +61,9 @@ function authorizeGatewayMethodScopes(
     : authorizeOperatorScopesForMethod(method, scopes, params);
   if (!scopeAuth.allowed && isInProcessSessionRun(method, params)) {
     scopeAuth = authorizeOperatorScopesForRequiredScope(
-      readInProcessParticipationRun(method, params)?.source
-        ? "operator.read"
-        : scopeAuth.missingScope,
+      operatorAuthority?.participationCeiling ? "operator.read" : scopeAuth.missingScope,
       scopes,
-      readInProcessParticipationRun(method, params)?.source
+      operatorAuthority?.participationCeiling
         ? "operator.sessions.read"
         : "operator.sessions.write",
       method,
@@ -167,7 +166,13 @@ export function authorizeGatewayMethod(
   if (registeredScope === APPROVALS_SCOPE && isHostPluginApprovalCall(method, client)) {
     return { error: null };
   }
-  const scopeAuth = authorizeGatewayMethodScopes(method, scopes, params, methodRegistry);
+  const scopeAuth = authorizeGatewayMethodScopes(
+    method,
+    scopes,
+    params,
+    methodRegistry,
+    client.internal?.operatorRunAuthority,
+  );
   if (!scopeAuth.allowed) {
     if (
       requiresSessionParticipation(method, scopes, params) &&
@@ -175,9 +180,7 @@ export function authorizeGatewayMethod(
         (!client.internal?.syntheticClient &&
           resolveAuthenticatedPersonalGatewayProfileId(client)) ||
         (method === "chat.send" &&
-          client.internal?.operatorRunAuthority !== undefined &&
-          readQueuedParticipationProfile(params) ===
-            client.internal?.operatorRunAuthority?.profileId))
+          client.internal?.operatorRunAuthority?.participationCeiling !== undefined))
     ) {
       return { error: null, participationRequired: true };
     }

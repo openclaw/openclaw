@@ -15,12 +15,14 @@ import {
   bindInProcessSessionRun,
   takeInProcessFreshChildSession,
 } from "../../../gateway/in-process-session-run.js";
+import { normalizeGatewayOperatorRecoverySnapshot } from "../../../gateway/operator-run-recovery-source.codec.js";
 import { initializeRepository } from "../../../gateway/server-methods/projects.test-support.js";
 import * as sessionProjectSource from "../../../gateway/session-project-source.js";
 import { registerProjectRegistry } from "../../../projects/project-registry.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { resolveAgentWorkspaceDir } from "../../agent-scope-config.js";
 import { prepareSubagentSessionContext } from "./subagent-spawn-context.js";
 import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
@@ -477,5 +479,72 @@ it("commits group and delivery facts with creation for one host-bound admission"
     expect(takeInProcessFreshChildSession({ ...request })).toBeUndefined();
     expect(takeInProcessFreshChildSession(request)).toEqual(result.freshChild);
     expect(takeInProcessFreshChildSession(request)).toBeUndefined();
+  });
+});
+
+it("persists the entire admitted delegated source and keeps ordinary children unbound", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const participationCeiling = {
+      kind: "send" as const,
+      profileId: "participant",
+      sessionKey,
+      permission: "guarded" as const,
+      tools: ["read", "exec"],
+      toolConstraints: [["read"]],
+      execPolicy: {
+        security: "allowlist" as const,
+        ask: "always" as const,
+        denyMisses: true as const,
+      },
+      source: {
+        agentId: "main",
+        sessionId: "parent",
+        lifecycleRevision: null,
+        creatorProfileId: "creator",
+        root: "/synthetic/root",
+      },
+    };
+    const snapshot = normalizeGatewayOperatorRecoverySnapshot({
+      version: 2,
+      participationCeiling,
+      profileId: "participant",
+      scopes: ["operator.write"],
+      assignedRole: null,
+      githubLogin: null,
+      grant: null,
+      aliasBindingIds: [],
+      authPolicy: {
+        generation: "",
+        grantGeneration: "test-grant",
+        role: "operator",
+        authMethod: "token",
+      },
+      controlUiAdmin: false,
+      localOperator: false,
+      sourceIngress: "internal",
+    });
+    if (!snapshot) {
+      throw new Error("Shared source fixture admission failed");
+    }
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "participant",
+      scopes: ["operator.write"],
+      participationCeiling,
+      recoverySnapshot: snapshot,
+      assertCurrent() {},
+    });
+    const constrained = await spawn({
+      operatorAuthority,
+      sessionPermissionPolicy: { root: "/synthetic/root", mode: "guarded" },
+    });
+    expect(constrained).toMatchObject({ status: "ok" });
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    expect(readEntry(storePath, childSessionKey)?.delegatedOperatorSource).toEqual({
+      kind: "gateway",
+      snapshot,
+    });
+    const ordinaryKey = "agent:main:subagent:ordinary";
+    expect(await spawn({ childSessionKey: ordinaryKey })).toMatchObject({ status: "ok" });
+    expect(readEntry(storePath, ordinaryKey)?.delegatedOperatorSource).toBeUndefined();
   });
 });
