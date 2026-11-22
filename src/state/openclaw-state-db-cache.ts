@@ -524,27 +524,25 @@ function retireOpenClawStateDatabaseHandle(
   }
 }
 
+/** Cached and disposal-only handles at one path or physical identity; all handles without one. */
+function stateDatabaseHandlesAt(pathname?: string, identity?: DatabasePathIdentity) {
+  return [...new Set([...retainedDatabaseHandles.values(), ...cachedDatabases.values()])].filter(
+    (database) =>
+      pathname === undefined ||
+      database.path === pathname ||
+      (identity !== undefined && databaseIdentities.get(database.db)?.key === identity.key),
+  );
+}
+
 /** Close cached and disposal-only handles, preserving independent cleanup failures. */
 function retireOpenClawStateDatabaseHandles(
   pathname?: string,
   options?: OpenClawStateDatabaseCloseOptions,
   identity?: DatabasePathIdentity,
 ): boolean {
-  const databases = new Set<StateDatabaseHandle>([
-    ...retainedDatabaseHandles.values(),
-    ...cachedDatabases.values(),
-  ]);
+  const databases = stateDatabaseHandlesAt(pathname, identity);
   const errors: unknown[] = [];
-  let found = false;
   for (const database of databases) {
-    if (
-      pathname !== undefined &&
-      database.path !== pathname &&
-      (identity === undefined || databaseIdentities.get(database.db)?.key !== identity.key)
-    ) {
-      continue;
-    }
-    found = true;
     try {
       retireOpenClawStateDatabaseHandle(database, true, options);
     } catch (error) {
@@ -552,7 +550,7 @@ function retireOpenClawStateDatabaseHandles(
     }
   }
   throwSqliteLifecycleErrors(errors, "OpenClaw state database cleanup failed.");
-  return found;
+  return databases.length > 0;
 }
 
 export function closeOpenClawStateDatabaseByPath(
@@ -566,13 +564,18 @@ export function closeOpenClawStateDatabaseByPath(
   );
 }
 
-/** Seal after final release unless a read still borrows the handle; the next owner validates. */
+/** Seal after final release unless a read still borrows a handle; the next owner validates. */
 export function sealOpenClawStateDatabaseByPath(pathname: string): boolean {
-  const database = cachedDatabases.get(resolveDatabasePath({ path: pathname }));
-  if (database && borrowers.get(database.db)?.references.size) {
+  const resolvedPath = resolveDatabasePath({ path: pathname });
+  const identity = asyncResources.identity(pathname);
+  if (
+    stateDatabaseHandlesAt(resolvedPath, identity).some(
+      (database) => borrowers.get(database.db)?.references.size,
+    )
+  ) {
     return false;
   }
-  return closeOpenClawStateDatabaseByPath(pathname);
+  return retireOpenClawStateDatabaseHandles(resolvedPath, undefined, identity);
 }
 
 export function closeOpenClawStateDatabase(options?: OpenClawStateDatabaseCloseOptions): void {
