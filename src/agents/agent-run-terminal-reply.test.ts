@@ -67,6 +67,16 @@ describe("prepareAgentRunTerminalReply", () => {
     });
   });
 
+  it.each([
+    ["Nothing to report, so NO_REPLY.\n</think>\n\nNO_REPLY", undefined],
+    ["<think>quiet</think>\nno_reply", undefined],
+    ["<think>quiet</think>\nanswer\nNO_REPLY", "<think>quiet</think>\nanswer"],
+  ])("classifies the answer after closed reasoning in %j", (rawText, text) => {
+    expect(prepareAgentRunTerminalReply({ rawText }).terminalReply).toEqual(
+      text === undefined ? { disposition: "silent" } : { disposition: "visible", text },
+    );
+  });
+
   it("preserves UTF-16 text exactly when retaining terminal evidence", () => {
     const text = `Unicode 🦞 and a lone surrogate \ud800`;
     expect(prepareAgentRunTerminalReply({ rawText: text })).toEqual({
