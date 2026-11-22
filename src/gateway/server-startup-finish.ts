@@ -701,9 +701,8 @@ export async function finishGatewayStartup(params: {
         repeatDelayMs: 60 * 60_000,
         isClosing: () => lifecycle.closePreludeStarted,
         isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
-        // Wait before admission, so this task never holds lean's post-ready release busy.
-        waitForReady: params.waitForPostReadyWork,
         run: async () => {
+          await params.waitForPostReadyWork();
           const { cleanupGatewayRetiredPluginArtifacts } =
             await import("./server-retained-plugin-cleanup.js");
           await cleanupGatewayRetiredPluginArtifacts({

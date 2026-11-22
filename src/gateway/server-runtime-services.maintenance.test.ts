@@ -58,7 +58,9 @@ describe("post-ready maintenance scheduling", () => {
       );
       // Maintenance waits for the barrier inside this wake without holding root work.
       const maintenanceWake = clock.advanceBy(1);
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       const release = vi.fn(gate.resolve);
       schedulePostReadyWorkRelease({
