@@ -68,8 +68,10 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
       : undefined;
   // A half-switched checkout's Gateway runs the updater that left it so; this process finishes.
   // Only the configured local Gateway serves this checkout; an override targets another install.
-  const conversion =
+  const found =
     opts.restart && (await isImplicitLocalGatewayTarget({})) ? await checkoutConversion() : null;
+  // A pinned commit is prepared afresh; a pending release for another commit is not started.
+  const conversion = found === "resume" && opts.sha ? "convert" : found;
   if (conversion) {
     // One budget for the conversion and for following its run.
     const started = Date.now();

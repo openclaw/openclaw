@@ -9,7 +9,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
-import { resolveServiceEntrypointIndex } from "../daemon/service-layout.js";
+import {
+  gatewayServiceCommandMatchesRoot,
+  resolveServiceEntrypointIndex,
+} from "../daemon/service-layout.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
@@ -40,9 +43,14 @@ async function exists(file: string): Promise<boolean> {
 async function inspectService(env: NodeJS.ProcessEnv) {
   const command = await resolveGatewayService().readCommand(env, { requireEffective: true });
   const index = command ? resolveServiceEntrypointIndex(command.programArguments) : undefined;
+  // The service's own selection: the caller's state and config overrides do not reach it.
+  const base = { ...env };
+  delete base.OPENCLAW_STATE_DIR;
+  delete base.OPENCLAW_CONFIG_PATH;
   return {
+    command,
     entry: index === undefined ? undefined : command?.programArguments[index],
-    env: { ...env, ...command?.environment },
+    env: { ...base, ...command?.environment },
   };
 }
 
@@ -67,8 +75,16 @@ export async function checkoutConversion(
   if (trial === null) {
     return null;
   }
+  // Only these trials can need conversion; others keep the normal route without a service read.
+  if (trial.v === 2 && trial.phase !== "rolled-back" && trial.phase !== "pending") {
+    return null;
+  }
   const launcher = path.join(prefix, "openclaw-launcher.mjs");
-  const { entry } = await inspectService(env);
+  // A service that cannot be read cannot be converted here; the normal route still works.
+  const entry = await inspectService(env).then(
+    (service) => service.entry,
+    () => undefined,
+  );
   const startsLauncher = entry !== undefined && path.resolve(entry) === launcher;
   if (trial.v !== 2) {
     // An install #200578 finished already starts the launcher; only a checkout start is stuck.
@@ -170,6 +186,12 @@ export async function convertHalfSwitchedCheckout(opts: {
   // The service's Gateway migrates and rolls back the state it is configured with; it must be
   // the state this conversion prepares for and records the run in.
   const service = await inspectService(env);
+  // Nothing is published for a checkout the service does not start.
+  if ((await gatewayServiceCommandMatchesRoot(checkout, service.command ?? null)) !== true) {
+    throw new Error(
+      `The Gateway service starts ${service.entry ?? "an entry OpenClaw cannot read"}, not the checkout at ${checkout}. Run this update with the release CLI of the checkout the service starts. Nothing changed.`,
+    );
+  }
   for (const [name, mine, theirs] of [
     ["state directory", resolveStateDir(env), resolveStateDir(service.env)],
     ["config", resolveConfigPath(env), resolveConfigPath(service.env)],
@@ -241,6 +263,13 @@ export async function convertHalfSwitchedCheckout(opts: {
     throw new Error(
       `${error instanceof Error ? error.message : String(error)}\nThe current version is still running.`,
       { cause: error },
+    );
+  }
+  if (opts.timeoutMs !== undefined && Date.now() - started >= opts.timeoutMs) {
+    // Nothing restarted: the next update converts again from the earlier record.
+    await restoreTrial(prefix, earlierTrial);
+    throw new Error(
+      `The --timeout budget ran out before the Gateway restart. The current version is still running; run this update again with a longer --timeout.`,
     );
   }
   await restartIntoTrial({
@@ -366,6 +395,16 @@ export async function resumeHalfSwitchedCheckout(opts: {
   const install = await detectInstall(opts.runningRoot);
   if (!trial || install.kind !== "git" || !install.checkout) {
     throw new Error("There is no prepared release to restart into. Run `openclaw update` again.");
+  }
+  // Restart only into the trial prepared for this checkout and this config.
+  const fallback = await fs.realpath(path.resolve(prefix, trial.previous)).catch(() => null);
+  if (
+    fallback !== (await fs.realpath(install.checkout)) ||
+    trial.config !== resolveConfigPath(env)
+  ) {
+    throw new Error(
+      `The prepared release ${trial.version} was prepared for another checkout or config, so it is not started from here. Run \`openclaw update\` from the release CLI of the checkout the service starts.`,
+    );
   }
   const serving = await readServingBuild(install.checkout);
   await restartIntoTrial({

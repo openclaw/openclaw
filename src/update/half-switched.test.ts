@@ -83,6 +83,8 @@ beforeEach(async () => {
   );
   vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH}`);
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  // The unit selects the same state directory as this process.
+  service.environment = { OPENCLAW_STATE_DIR: stateDir };
   vi.stubEnv("IN_NIX_SHELL", "");
 });
 afterEach(async () => {
@@ -244,6 +246,24 @@ it("keeps the published trial for the launcher once the restart was attempted", 
   const runId = await resumeHalfSwitchedCheckout({ runningRoot: dir });
   expect(runId).toBe(published.runId);
   expect(await getUpdateRunAsync(runId)).toMatchObject({ status: "running", trigger: "cli" });
+});
+
+it("changes nothing when the service starts another checkout", async () => {
+  const { dir } = await checkout();
+  await writeTrial(LEGACY_TRIAL);
+  const other = path.join(root, "other-checkout");
+  await fs.mkdir(path.join(other, "dist"), { recursive: true });
+  service.entry = path.join(other, "dist", "index.js");
+  await expect(convertHalfSwitchedCheckout({ runningRoot: dir, channel: "dev" })).rejects.toThrow(
+    /not the checkout at[\s\S]*Nothing changed\./u,
+  );
+  expect(service.restarts).toBe(0);
+  await expect(fs.access(path.join(stateDir, "git-install", "openclaw"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+  await expect(fs.access(path.join(dir, ".git", "openclaw-launcher"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
 });
 
 it("changes nothing when the service runs with another state directory", async () => {
