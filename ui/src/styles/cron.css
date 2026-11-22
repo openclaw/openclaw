@@ -1301,6 +1301,11 @@
   font-size: 12.5px;
 }
 
+/* Delivery failures can name an unbroken destination ID. Keep the full note in its run. */
+.cron-run-entry__delivery-error {
+  overflow-wrap: anywhere;
+}
+
 .cron-run-entry__details:empty,
 .cron-run-entry__details[hidden] {
   display: none;
@@ -1359,6 +1364,11 @@
 @media (max-width: 560px) {
   .cron-admin-note {
     align-self: flex-start;
+  }
+
+  /* The query shares a line with filters on wider screens. On phones, keep its hint readable. */
+  .cron-run-filter-search {
+    flex-basis: 100%;
   }
 
   .cron-run-filter-search input:placeholder-shown {
