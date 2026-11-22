@@ -126,6 +126,8 @@ test proof as incomplete and requires the exact commit's `macos-swift` CI result
 The hosting question has two routes: **On this Mac** and **On another computer**.
 The remote finder reuses network discovery, trusted connection settings, and
 browser Gateway sign-in. Discovery advertisements never establish trust.
+Browsing starts only when **Nearby** is chosen, because it makes macOS ask for
+Local Network access; the hosting question checks only this Mac's Gateway port.
 Local setup retains the runtime and live inference gates, then offers optional
 OpenClaw ID setup before the final page. **Set up later** starts no Gateway.
 

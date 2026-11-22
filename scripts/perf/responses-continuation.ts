@@ -42,7 +42,10 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { GCProfiler, writeHeapSnapshot } from "node:v8";
 import { configureAiTransportHost } from "../../packages/ai/src/host.js";
-import { cleanupSessionResources } from "../../packages/ai/src/session-resources.js";
+import {
+  claimConversationProviderState,
+  cleanupSessionResources,
+} from "../../packages/ai/src/session-resources.js";
 import type {
   ResponsesContinuationRequest,
   ResponsesContinuationState,
@@ -398,7 +401,7 @@ function run(count: number): void {
         );
       } else {
         const claim = owner.claimOpenAIResponsesHttpContinuation({
-          sessionId: "continuation-owner-bench",
+          scope: claimConversationProviderState("continuation-owner-bench"),
           apiKey: "synthetic-key",
           baseUrl: "https://provider.invalid/v1",
           headers: {},
