@@ -42,6 +42,7 @@ import {
   type TranscriptSourceAuthority,
 } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { selectUncoveredCodexCompaction } from "./session-codex-handoff-facts.js";
 import { readSessionContextSeed } from "./session-context-seed.js";
 import type {
   SessionContextSeedRequest,
@@ -284,6 +285,14 @@ export function readSessionTranscriptModelContext(
     limits,
   );
   return result.found ? result.value : { events: [] };
+}
+
+/** Read the native receipt and terminal provenance from the same canonical branch as replay. */
+export function hasUncoveredCodexCompaction(scope: SessionTranscriptReadScope): boolean {
+  const result = withTranscriptContextSnapshot(scope, ({ entries, readEntry }) => {
+    return selectUncoveredCodexCompaction(entries, readEntry);
+  });
+  return result.found && result.value;
 }
 
 /** Consume full-fidelity context lazily inside one read snapshot, never retaining raw history. */

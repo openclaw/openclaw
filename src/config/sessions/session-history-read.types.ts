@@ -50,6 +50,7 @@ export type SessionTranscriptContextSelection =
 
 export type SessionTranscriptModelContext = {
   events: TranscriptEvent[];
+  uncoveredCodexCompaction?: boolean;
   version?: SessionTranscriptContextVersion;
 };
 

@@ -350,11 +350,13 @@ async function prepareHistoryRead(
         });
     }
     case "model-context": {
-      const { readSessionTranscriptModelContext } =
+      const { hasUncoveredCodexCompaction, readSessionTranscriptModelContext } =
         await import("./session-accessor.sqlite-model-context.js");
       return () =>
         runWithSessionTranscriptReadFence(request.admission, () =>
-          readSessionTranscriptModelContext(request.target, request.through, request.limits),
+          request.codexHandoffOnly
+            ? { events: [], uncoveredCodexCompaction: hasUncoveredCodexCompaction(request.target) }
+            : readSessionTranscriptModelContext(request.target, request.through, request.limits),
         );
     }
     case "transcript-watermark": {

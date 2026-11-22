@@ -9,6 +9,7 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { MemoryFlushToolsUnavailableError } from "../../agents/agent-tools.memory-flush.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { readCompactionTranscriptBytes } from "../../agents/compaction-transcript-bytes.js";
+import { assertEmbeddedCodexHandoff } from "../../agents/embedded-agent-runner/codex-handoff.js";
 import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import type { AcceptedCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
@@ -265,6 +266,13 @@ export async function runSessionCompactionIfNeeded(params: {
   });
   if (!shouldCompactByTokens && !shouldCompactByTranscriptBytes) {
     return entry;
+  }
+
+  if (runtimeId === "openclaw") {
+    await assertEmbeddedCodexHandoff(
+      { ...compactionTarget, sessionId: entry.sessionId },
+      assertActive,
+    );
   }
 
   if (params.beforeCompaction) {

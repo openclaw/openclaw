@@ -137,12 +137,21 @@ export async function readSessionTranscriptModelContextInWorker(
   through?: SessionModelContextWorkerInput["through"],
   limits?: SessionModelContextWorkerInput["limits"],
   expectedIdentity?: SessionModelContextWorkerInput["expectedIdentity"],
+  codexHandoffOnly?: true,
 ): Promise<ReturnType<typeof readSessionTranscriptModelContext>> {
   signal?.throwIfAborted();
   const value = unwrapSessionTranscriptWorkerReply(
     await modelContextReads
       .run(
-        { kind: "model-context", target, admission, through, limits, expectedIdentity },
+        {
+          kind: "model-context",
+          target,
+          admission,
+          through,
+          limits,
+          expectedIdentity,
+          codexHandoffOnly,
+        },
         // Successful reads on slow hosts take 42–44s (#155627); allow startup headroom.
         { timeoutMs: 180_000, signal },
         {
