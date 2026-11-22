@@ -21,3 +21,9 @@ export type SharedWorkerHostRequest =
 export type SharedWorkerHostReply =
   | { type: "started" | "stopped"; id: number }
   | { type: "failed"; id: number; reason: string };
+
+/** Carrier identity shared by broker routing and physical-memory accounting. */
+export const sharedHostSqliteKeys = {
+  agent: "sqlite-store:agent",
+  "shared-state": "sqlite-store:shared-state",
+} as const;
