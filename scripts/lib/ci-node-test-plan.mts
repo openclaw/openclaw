@@ -3042,6 +3042,7 @@ export function createVitestCacheWarmGroups(
         includePatterns: [
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/ci-workflow-planning.test.ts",
+          "test/scripts/ci-workflow-volume-policy.test.ts",
           "test/scripts/ci-workflow-evidence.test.ts",
           "test/scripts/ci-run-node-test-shard.test.ts",
         ],
