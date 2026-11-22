@@ -135,7 +135,7 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, parentKey));
       const parent = page.locator(`[data-session-key="${parentKey}"]`);
       await parent.waitFor({ state: "visible", timeout: 10_000 });
-      // Children that already exist at load stay collapsed; only new children reveal.
+      // Linking directly to a parent doesn't open the child list.
       const initialToggle = parent.locator("[data-child-session-toggle]");
       await initialToggle.waitFor();
       expect(await initialToggle.getAttribute("aria-expanded")).toBe("false");

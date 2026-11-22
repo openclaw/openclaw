@@ -14,6 +14,7 @@ import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
 import * as mocks from "./update-cli-mocks.test-support.js";
 import * as cli from "./update-cli-modules.test-support.js";
 import { createChangedPostCoreUpdateOptions } from "./update-cli/update-cli-config.test-support.js";
+import { withUpdateCommandExecutor } from "./update-cli/update-command-executor.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
@@ -60,6 +61,45 @@ const continueFreshPostCore = () =>
     updateStartedAtMs: 123,
     timeoutMs: 30_000,
   });
+
+it.each([true, false])(
+  "copies the originals once the fresh post-core process will launch (launches=%s)",
+  async (launches) => {
+    // The fresh process runs Doctor repair and cannot copy itself; a missing entry point
+    // launches nothing and changes nothing, so it copies nothing.
+    const order: string[] = [];
+    const captureOriginal = vi.fn(async () => {
+      order.push("copy");
+    });
+    if (launches) {
+      freshContinuation();
+      mocks.spawn.mockImplementationOnce(() => {
+        order.push("spawn");
+        return exitingChild();
+      });
+    } else {
+      vi.mocked(cli.resolveGatewayInstallEntrypoint).mockResolvedValueOnce(undefined);
+    }
+    const root = "/tmp/openclaw-updated-root";
+    const { runId } = cli.createUpdateRun({ trigger: "cli" });
+    const result = await withUpdateCommandExecutor(runId, async (executor) => {
+      const executorFence = await executor.enter(root);
+      return await cli.continuePostCoreUpdateInFreshProcess({
+        root,
+        channel: "stable",
+        requestedChannel: null,
+        opts: { run: { runId, env: process.env, executorFence, captureOriginal } },
+        pluginInstallRecords: {},
+        updateStartedAtMs: 123,
+        timeoutMs: 30_000,
+      });
+    });
+    expect(order).toEqual(launches ? ["copy", "spawn"] : []);
+    if (!launches) {
+      expect(result).toEqual({ resumed: false });
+    }
+  },
+);
 
 it("keeps the candidate stopped through plugin convergence and only restarts the verified previous version despite its plugin errors", async () => {
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
