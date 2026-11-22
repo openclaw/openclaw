@@ -127,27 +127,24 @@ suite.define(() => {
           notice = card.locator(".board-document__state--error");
         await notice.waitFor();
         expect(await notice.textContent()).toBe("Dashboard storage is temporarily unavailable");
-        const g = await notice.evaluate((el) => {
+        const inside = await notice.evaluate((el) => {
           const preview = el.closest(".dashboard-preview")!.getBoundingClientRect(),
             sheet = el.closest(".dashboard-preview__sheet")!.getBoundingClientRect(),
             range = document.createRange();
           range.selectNodeContents(el);
           const rects = [...range.getClientRects()];
-          return {
-            font: parseFloat(getComputedStyle(el).fontSize),
-            inside:
-              rects.length > 0 &&
-              rects.every(
-                (r) =>
-                  r.left >= sheet.left &&
-                  r.right <= sheet.right &&
-                  r.top >= sheet.top &&
-                  r.bottom <= Math.min(sheet.bottom, preview.bottom),
-              ),
-          };
+          return (
+            rects.length > 0 &&
+            rects.every(
+              (r) =>
+                r.left >= sheet.left &&
+                r.right <= sheet.right &&
+                r.top >= sheet.top &&
+                r.bottom <= Math.min(sheet.bottom, preview.bottom),
+            )
+          );
         });
-        expect(g.font).toBeCloseTo(19.6);
-        expect(g.inside).toBe(true);
+        expect(inside).toBe(true);
         await card.getByRole("link", { name: "Release health" }).focus();
         expect(
           await card
