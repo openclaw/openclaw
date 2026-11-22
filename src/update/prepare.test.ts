@@ -206,7 +206,7 @@ if (args[0] === 'pack') {
 } else {
   if (process.cwd().split(path.sep).includes('node_modules')) process.exit(8);
   if (${JSON.stringify(runtime)} === 'bun'
-    ? !args.includes('--production') || !args.includes('--trust')
+    ? args.includes('--production') || !args.includes('--trust')
     : !args.includes('--ignore-scripts=false') || !args.includes('--omit=dev')) process.exit(9);
   if (args.includes('-g')) process.exit(12);
   const manifest = JSON.parse(fs.readFileSync('package.json', 'utf8'));
@@ -258,7 +258,7 @@ if (args[0] === 'pack') {
         JSON.parse(await fs.readFile(path.join(result.releaseRoot, "argv.json"), "utf8")),
       ).toEqual(
         runtime === "bun"
-          ? ["install", "--production", "--trust"]
+          ? ["install", "--trust"]
           : ["install", "--omit=dev", "--no-fund", "--no-audit", "--ignore-scripts=false"],
       );
       expect(result.releaseRoot).toBe(path.join(staging, "openclaw"));

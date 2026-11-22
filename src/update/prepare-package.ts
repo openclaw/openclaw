@@ -120,9 +120,10 @@ export async function preparePackage(params: {
       await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
     }
     await params.onStep?.("install");
+    // Bun rejects --production with --trust; this manifest already has no development dependencies.
     const result = await runCommandWithTimeout(
       bun
-        ? [params.node, "install", "--production", "--trust"]
+        ? [params.node, "install", "--trust"]
         : [
             params.npm,
             "install",
