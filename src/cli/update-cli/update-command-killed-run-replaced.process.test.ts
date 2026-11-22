@@ -266,28 +266,8 @@ describe.skipIf(process.platform === "win32")(
     );
 
     // A path that cannot be read is not evidence that the directory is gone.
-    const searchable = process.getuid?.() !== 0;
-    it.each<{ name: string; leave: (key: string) => void; skip?: boolean }>([
-      { name: "its package directory still exists", leave: () => undefined },
-      {
-        // lstat fails with ENOTDIR, not ENOENT.
-        name: "a file stands where its package directory's parent was",
-        leave: (key) => {
-          fs.rmSync(path.dirname(key), { recursive: true });
-          fs.writeFileSync(path.dirname(key), "");
-        },
-      },
-      {
-        // lstat fails with EACCES; root reads through the mode, so it cannot see this.
-        name: "its package directory's parent cannot be searched",
-        leave: (key) => fs.chmodSync(path.dirname(key), 0o000),
-        skip: !searchable,
-      },
-    ])("keeps today's refusals when $name", ({ leave, skip }, context) =>
+    const keepsTodaysRefusals = (leave: (key: string) => void) =>
       fixtures.lifetime.run(async () => {
-        if (skip) {
-          context.skip();
-        }
         const install = await linkedInstallation();
         const killed = await updater(install.key, { ...verified, root: install.slot });
         await replacePackageDirectory(install, { keepPrevious: true });
@@ -301,7 +281,7 @@ describe.skipIf(process.platform === "win32")(
             /^Plugin cohort recovery belongs to a different installation\.$/u,
           );
         } finally {
-          // The fixture's cleanup must be able to remove what this case made unsearchable.
+          // The fixture's cleanup must be able to remove what a case made unsearchable.
           const parent = path.dirname(install.key);
           if (fs.statSync(parent, { throwIfNoEntry: false })?.isDirectory()) {
             fs.chmodSync(parent, 0o755);
@@ -311,7 +291,24 @@ describe.skipIf(process.platform === "win32")(
         expect(mocks.proceed).not.toHaveBeenCalled();
         expect(reserved(killed.runId)).toEqual(before);
         expect(replacedWarning(killed.runId)).toBeUndefined();
-      }),
+      });
+
+    it.each<{ name: string; leave: (key: string) => void }>([
+      { name: "its package directory still exists", leave: () => undefined },
+      {
+        // lstat fails with ENOTDIR, not ENOENT.
+        name: "a file stands where its package directory's parent was",
+        leave: (key) => {
+          fs.rmSync(path.dirname(key), { recursive: true });
+          fs.writeFileSync(path.dirname(key), "");
+        },
+      },
+    ])("keeps today's refusals when $name", ({ leave }) => keepsTodaysRefusals(leave));
+
+    // lstat fails with EACCES; root reads through the mode, so it cannot see this.
+    it.skipIf(process.getuid?.() === 0)(
+      "keeps today's refusals when its package directory's parent cannot be searched",
+      () => keepsTodaysRefusals((key) => fs.chmodSync(path.dirname(key), 0o000)),
     );
   },
 );
