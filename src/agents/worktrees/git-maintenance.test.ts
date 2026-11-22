@@ -39,9 +39,69 @@ beforeEach(() => {
 });
 afterEach(() => clearRuntimeConfigSnapshot());
 
-it.each([false, true])(
-  "folds delta-heavy packs without inflation (promisor=%s)",
-  async (promisor) => {
+it("folds the small promisor tail before large history packs", async () => {
+  const repo = await initRepo(tempDirs.make("worktree-small-tail-"));
+  await insertRegistryWorktree(env, makeWorktreeRecord(repo, "small-tail"));
+  const directory = path.join(repo, ".git/objects/pack");
+  const history: string[] = [];
+  const tail: string[] = [];
+  for (const [index, size] of [
+    ...[8, 10, 18, 22].map((units) => units * 16 * 1024),
+    ...Array<number>(107).fill(256),
+  ].entries()) {
+    const nonce = Buffer.alloc(16);
+    nonce.writeUInt32LE(index);
+    const contents = createCipheriv("aes-256-ctr", Buffer.alloc(32), nonce).update(
+      Buffer.alloc(size),
+    );
+    const oid = await requireGit(repo, ["hash-object", "-w", "--stdin"], { input: contents });
+    const hash = await requireGit(repo, ["pack-objects", path.join(directory, "pack")], {
+      input: `${oid}\n`,
+    });
+    await fs.writeFile(path.join(directory, `pack-${hash}.promisor`), "");
+    (index < 4 ? history : tail).push(`pack-${hash}.pack`);
+  }
+  await git(repo, "prune-packed");
+  const objects = await git(repo, "cat-file", "--batch-all-objects", "--batch-check");
+  const stat = fs.stat;
+  const bytes = async (names: string[]) =>
+    (
+      await Promise.all(names.map(async (name) => (await stat(path.join(directory, name))).size))
+    ).reduce((sum, size) => sum + size, 0);
+  const inputBytes = await bytes(tail);
+  // Real packs, scaled admission only: 4/5/9/11 GiB history and a sub-GiB tail.
+  using sizes = vi.spyOn(fs, "stat");
+  sizes.mockImplementation(async (...args) => {
+    const result = await stat(...args);
+    if (result && String(args[0]).startsWith(directory) && String(args[0]).endsWith(".pack")) {
+      result.size = Number(result.size) * 32768;
+    }
+    return result;
+  });
+  // Retirement pacing is covered separately; observe the completed selected batch here.
+  using clock = vi.spyOn(performance, "now");
+  clock.mockReturnValue(0);
+  const progress = new WorktreeGcProgress();
+  await createWorktreeGitMaintenance(env)({ progress });
+  expect(progress.result.issues).toEqual([]);
+  const remaining = (await fs.readdir(directory)).filter((name) => name.endsWith(".pack"));
+  expect(history.every((name) => remaining.includes(name))).toBe(true);
+  expect(tail.some((name) => remaining.includes(name))).toBe(false);
+  const outputs = remaining.filter((name) => !history.includes(name));
+  expect(outputs).toHaveLength(1);
+  expect(await bytes(outputs)).toBeLessThanOrEqual(inputBytes);
+  expect(await git(repo, "cat-file", "--batch-all-objects", "--batch-check")).toBe(objects);
+  await git(repo, "fsck", "--full", "--no-dangling");
+});
+
+it.each([
+  { promisor: false, depth: 50 },
+  { promisor: true, depth: 50 },
+  { promisor: false, depth: 256 },
+  { promisor: true, depth: 256 },
+])(
+  "keeps delta-heavy merges within their input bytes (promisor=$promisor, depth=$depth)",
+  async ({ promisor, depth }) => {
     const root = tempDirs.make("worktree-delta-packs-");
     const repo = await initRepo(root);
     await insertRegistryWorktree(env, makeWorktreeRecord(repo, "delta-packs"));
@@ -65,9 +125,13 @@ it.each([false, true])(
       }
       const before = new Set(await fs.readdir(directory));
       // Git's bulk importer stores these unreachable revisions with compact offset deltas.
-      await requireGit(repo, ["-c", "fastimport.unpackLimit=0", "fast-import", "--quiet"], {
-        input: Buffer.concat(commands),
-      });
+      await requireGit(
+        repo,
+        ["-c", "fastimport.unpackLimit=0", "fast-import", `--depth=${depth}`, "--quiet"],
+        {
+          input: Buffer.concat(commands),
+        },
+      );
       const name = (await fs.readdir(directory)).find(
         (file) => !before.has(file) && file.endsWith(".pack"),
       )!;
@@ -82,12 +146,22 @@ it.each([false, true])(
     expect(progress.result.issues).toEqual([]);
     const remaining = await fs.readdir(directory);
     const outputs = remaining.filter((name) => name.endsWith(".pack") && name !== kept);
-    expect(outputs).toHaveLength(1);
-    expect(selected.every(({ name }) => !remaining.includes(name))).toBe(true);
-    const written = (await fs.stat(path.join(directory, outputs[0]!))).size;
+    const rejected = depth > 50;
+    expect(outputs).toHaveLength(rejected ? 2 : 1);
+    expect(selected.every(({ name }) => remaining.includes(name))).toBe(rejected);
+    const written = (
+      await Promise.all(
+        outputs.map(async (name) => (await fs.stat(path.join(directory, name))).size),
+      )
+    ).reduce((sum, size) => sum + size, 0);
     const retired = selected.reduce((sum, pack) => sum + pack.size, 0);
-    expect(written / retired).toBeLessThanOrEqual(1.01);
-    expect(remaining.filter((name) => name.endsWith(".promisor"))).toHaveLength(promisor ? 1 : 0);
+    expect(written / retired).toBeLessThanOrEqual(1);
+    expect(remaining.some((name) => name.startsWith(".tmp-") || name.startsWith("tmp_"))).toBe(
+      false,
+    );
+    expect(remaining.filter((name) => name.endsWith(".promisor"))).toHaveLength(
+      promisor ? outputs.length : 0,
+    );
     const { ino, nlink, size } = await fs.stat(path.join(directory, kept));
     expect({ ino, nlink, size }).toEqual({
       ino: keptStat.ino,
@@ -191,7 +265,7 @@ it("preserves shared packs across local clones and stops rewriting private packs
 });
 
 it.each([false, true])(
-  "converges overlapping history packs and bounds hourly writes (promisor=%s)",
+  "drains a fetch wave before converging overlapping history packs (promisor=%s)",
   async (promisor) => {
     const repo = await initRepo(tempDirs.make("worktree-geometric-packs-"));
     await insertRegistryWorktree(env, makeWorktreeRecord(repo, `geometry-${promisor}`));
@@ -245,12 +319,13 @@ it.each([false, true])(
     const rows = [];
     for (let cycle = 0; cycle < 9; cycle++) {
       const revisions = [];
-      for (let i = 0; i < 8; i++) {
+      const arrivals = cycle < 3 ? 8 : 0;
+      for (let i = 0; i < arrivals; i++) {
         const contents = Buffer.from(payload.subarray(0, 4096));
         contents.writeUInt32LE(cycle * 8 + i);
         revisions.push(await blob(contents));
       }
-      for (let i = 0; i < 8; i++) {
+      for (let i = 0; i < arrivals; i++) {
         await pack([...revisions, await blob(Buffer.from(`cycle-${cycle}-${i}`))]);
       }
       await git(repo, "prune-packed");

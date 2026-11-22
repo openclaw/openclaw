@@ -21,6 +21,7 @@ async function checkSelection(
     await state.writeConfig(config);
     const before = await fs.readFile(state.configPath);
     const store = preserveStore && (await state.writeText("state/openclaw.sqlite", retained));
+    const filesBefore = store && (await tree(state.stateDir));
     const result = expect(doctorDatabasePort(options));
     if (expected instanceof RegExp) {
       await result.rejects.toThrow(expected);
@@ -30,7 +31,7 @@ async function checkSelection(
     expect(await fs.readFile(state.configPath)).toEqual(before);
     if (store) {
       expect(await fs.readFile(store, "utf8")).toBe(retained);
-      expect(await fs.readdir(state.statePath("state"))).toEqual(["openclaw.sqlite"]);
+      expect(await tree(state.stateDir)).toEqual(filesBefore);
     }
   });
 }
@@ -70,6 +71,20 @@ describe("native Windows database port", () => {
 });
 
 describe.skipIf(process.platform === "win32")("database port engine-selection admission", () => {
+  it.each([
+    { to: "sqlite" },
+    { to: "sqlite", family: "state", dryRun: true },
+  ] satisfies DatabasePortOptions[])(
+    "refuses a SQLite destination with installation ownership before touching stores (%j)",
+    (options) =>
+      checkSelection(
+        { database: { engine: "postgres", postgres: { ...postgres, ownership: "installation" } } },
+        options,
+        /database\.postgres\.ownership.*installation.*state-directory/,
+        true,
+      ),
+  );
+
   it("requires a family for mixed installs before touching stores", async () => {
     await checkSelection(
       {

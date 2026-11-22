@@ -930,6 +930,7 @@ const startupEnglish = {
     settings: "Settings",
     askOpenClaw: "Ask OpenClaw",
     askBrand: "Ask {brand}",
+    settingsGroupPreferences: "Preferences",
     settingsGroupDevice: "This Mac",
     settingsGroupThisComputer: "This computer",
     settingsGroupThisIPhone: "This iPhone",
@@ -940,7 +941,7 @@ const startupEnglish = {
     settingsGroupSecurity: "Privacy & security",
     settingsGroupSystem: "System",
     settingsSearchLabel: "Search settings",
-    settingsSearchPlaceholder: "Search settings…",
+    settingsSearchPlaceholder: "Search",
     settingsSearchNoResults: "No settings match your search.",
     settingsSearchClear: "Clear settings search",
     settingsLoadFailed: "Settings navigation could not load.",
@@ -1169,17 +1170,14 @@ const startupEnglish = {
     install: "Install",
   },
   labsPage: {
-    sectionDescription:
-      "Changes save without restarting the Gateway. Code Mode and Tool Search apply to future replies.",
+    sectionDescription: "Changes save without restarting the Gateway.",
     restartRequired: "Gateway restart required.",
     saveErrorTitle: "Couldn’t save this setting. Try again.",
     saveFailed: "The feature setting could not be saved.",
     decisionAssistance: {},
     usageRankedToolIndex: {},
-    codeMode: {},
 
     swarm: {},
-    toolSearch: {},
 
     hostDesktop: {},
     openclawId: {},

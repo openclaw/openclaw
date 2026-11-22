@@ -53,8 +53,7 @@ function clearRouteBoundCatalogMetadata(
     inference: _inference,
     ...routeNeutral
   } = entry;
-  // Losing route provenance must not promote a declared typed route to legacy chat.
-  return { ...routeNeutral, ...(entry.inference ? { inference: { chat: false } } : {}) };
+  return routeNeutral;
 }
 
 type ThinkingLevelMap = Partial<Record<string, string | null>>;
@@ -111,6 +110,7 @@ export function overlayCatalogMetadata(
   const {
     contextWindows: _baseContextWindows,
     contextWindowDefault: _baseContextWindowDefault,
+    inference: _baseInference,
     ...selectionNeutralBase
   } = routeBase;
   const replacesContextWindows = overlay.contextWindows !== undefined;
@@ -120,11 +120,17 @@ export function overlayCatalogMetadata(
     : (overlay.contextWindowDefault ?? routeBase.contextWindowDefault) || undefined;
   const applyRoute = !options?.preserveBaseRoute;
   const inferenceRouteChanged = !modelTransportRoutesMatch(base, overlay);
+  // Losing route provenance keeps only an explicit chat veto, so a typed-only row never
+  // becomes legacy chat and Decision facts never reach another route.
   const inference =
     !applyRoute && inferenceRouteChanged
       ? base.inference
       : (overlay.inference ??
-        (inferenceRouteChanged && base.inference ? { chat: false } : base.inference));
+        (!inferenceRouteChanged
+          ? base.inference
+          : base.inference?.chat === false
+            ? { chat: false }
+            : undefined));
   return {
     ...selectionNeutralBase,
     ...(contextWindows !== undefined ? { contextWindows } : {}),

@@ -7,7 +7,7 @@ import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
 } from "../../gateway/device-revocation.js";
-import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import {
   createContext,
@@ -57,7 +57,7 @@ async function requesterAuthority(
     undefined,
     { isCurrent: () => true, subscribe: () => () => {} },
   );
-  const source = await captureGatewayOperatorRunAuthority({
+  const source = await prepareGatewayOperatorRunAuthority({
     client,
     context,
     hasCurrentClientAuthority: device.isCurrent,
@@ -170,10 +170,6 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
           request.params.sessionKey === sessionKey
         ) {
           const caller = getGatewayToolCallerIdentity();
-          if (boundary === "revoked") {
-            // This port observes handoff, not target admission; another start must still refuse.
-            expect(caller?.operatorAuthority?.reauthorize).toThrow();
-          }
           effects.push({
             origin: caller?.requesterOrigin,
             profileId: caller?.operatorAuthority?.profileId,

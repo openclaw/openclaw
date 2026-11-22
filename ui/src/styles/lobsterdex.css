@@ -32,9 +32,9 @@
 }
 
 .lobsterdex-page__card {
-  position: relative;
   display: grid;
-  grid-template-rows: 94px auto minmax(42px, auto) auto;
+  grid-row: span 4;
+  grid-template-rows: subgrid;
   gap: 7px;
   justify-items: center;
   min-width: 0;
@@ -76,6 +76,8 @@
   width: 90px;
   height: auto;
   aspect-ratio: 120 / 105;
+  /* Center the sprite in its 94px artwork slot without an extra grid item. */
+  margin-block: calc((94px - 90px * 105 / 120) / 2);
   align-self: center;
   transform: none;
   pointer-events: none;
@@ -88,6 +90,7 @@
 }
 
 .lobsterdex-page__lore {
+  min-height: 42px;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
@@ -100,54 +103,6 @@
 
 .lobsterdex-page__dates {
   min-height: 18px;
-}
-
-.lobsterdex-page__copy-link {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  display: grid;
-  width: 26px;
-  height: 26px;
-  padding: 5px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  place-items: center;
-  color: var(--muted);
-  background: color-mix(in srgb, var(--card) 82%, transparent);
-  opacity: 0;
-  pointer-events: none;
-  cursor: var(--cursor-action);
-  transition:
-    opacity 0.16s ease,
-    color 0.16s ease,
-    background 0.16s ease;
-}
-
-.lobsterdex-page__copy-link svg {
-  width: 15px;
-  height: 15px;
-}
-
-.lobsterdex-page__card:hover .lobsterdex-page__copy-link,
-.lobsterdex-page__card:focus-within .lobsterdex-page__copy-link {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-/* Touch screens have no hover to reveal the control; keep it tappable in a
-   quieter resting state instead of unreachable. */
-@media (hover: none) {
-  .lobsterdex-page__copy-link {
-    opacity: 0.55;
-    pointer-events: auto;
-  }
-}
-
-.lobsterdex-page__copy-link:hover,
-.lobsterdex-page__copy-link:focus-visible {
-  color: var(--text-strong);
-  background: color-mix(in srgb, var(--accent) 13%, var(--card));
 }
 
 .lobsterdex-page__star {

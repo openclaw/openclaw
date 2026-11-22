@@ -79,6 +79,7 @@ title: "Configuration — workplace chat channels"
         pins: true,
         memberInfo: true,
         emojiList: true,
+        channelInfo: true,
       },
       slashCommand: {
         enabled: true,
@@ -164,6 +165,7 @@ title: "Configuration — workplace chat channels"
 | pins         | enabled  | Pin/unpin/list            |
 | memberInfo   | enabled  | Member info               |
 | emojiList    | enabled  | List custom emoji         |
+| channelInfo  | enabled  | List conversations        |
 
 ## Mattermost
 

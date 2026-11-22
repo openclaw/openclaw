@@ -8,7 +8,7 @@ import {
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
 import { loadAuthProfileStoreForSecretsRuntime } from "../../../agents/auth-profiles/store-runtime.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { createModelAuthAvailabilityResolver } from "../../../agents/model-auth-availability.js";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import {
@@ -115,12 +115,12 @@ export function createRetiredModelRefRepairResolver(params: {
         const defaultRef = resolveConfiguredModelRef({
           ...modelOptions,
           defaultProvider: DEFAULT_PROVIDER,
-          defaultModel: DEFAULT_MODEL,
         });
-        const defaultProvider = defaultRef.provider;
+        const defaultProvider = defaultRef?.provider ?? DEFAULT_PROVIDER;
         const aliasIndex = buildModelAliasIndex({ ...modelOptions, defaultProvider });
         return {
           defaultRef,
+          defaultProvider,
           resolve: (raw: string) =>
             resolveModelRefFromString({ ...modelOptions, raw, defaultProvider, aliasIndex })?.ref,
         };
@@ -159,7 +159,7 @@ export function createRetiredModelRefRepairResolver(params: {
                 cfg: params.cfg,
                 catalog: [],
                 agentId,
-                defaultProvider: currentModel.defaultRef.provider,
+                defaultProvider: currentModel.defaultProvider,
                 defaultModel: currentModel.defaultRef,
                 manifestPlugins: metadataSnapshot.plugins,
               })

@@ -7,7 +7,7 @@ import type { createModelSelectionState } from "./model-selection.js";
 export function createModelSelectionStateFixture(params: {
   agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
   provider: string;
-  model: string;
+  model: string | undefined;
 }): Awaited<ReturnType<typeof createModelSelectionState>> {
   return {
     provider: params.provider,

@@ -128,7 +128,7 @@ explicitly, for example to `"${OMLX_API_KEY}"`.
 
 <Warning>
 Changing the embedding provider, model, provider settings, sources, scope,
-chunking, or tokenizer can make the existing SQLite vector index incompatible.
+chunking, or tokenizer can make the existing memory index incompatible.
 OpenClaw pauses vector search and reports an index identity warning instead of
 automatically re-embedding everything. Rebuild when you are ready with
 `openclaw memory status --index --agent <id>` or

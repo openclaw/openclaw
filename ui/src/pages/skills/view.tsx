@@ -1,6 +1,18 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { createMemo, Errored, For, isPending, latest, lazy, Loading, Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import {
+  createMemo,
+  Errored,
+  For,
+  isPending,
+  latest,
+  lazy,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import type { SkillStatusEntry } from "../../api/types.ts";
+import { isHtmlElement } from "../../components/focus-navigation.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
@@ -21,16 +33,21 @@ import "../../styles/plugins.css";
 import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
 import { isSkillAvailable } from "../../lib/skills-shared.ts";
 import { SkillDiscovery } from "./discovery-view.tsx";
-import { SkillDialogBoundary } from "./skill-dialog-boundary.tsx";
-import { SkillStateStatus, verdictForSkill, verdictStatus } from "./skill-status.tsx";
+import { SkillPageBoundary } from "./skill-page-boundary.tsx";
+import { SkillTile, SkillStateStatus, verdictForSkill, verdictStatus } from "./skill-status.tsx";
 import type { SkillsProps, SkillsStatusFilter } from "./view-types.ts";
 
 registerSkillsBrowserEnglish();
 registerSkillLibraryEnglish();
 
-const SkillDetail = lazy(() => import("./skill-detail.tsx"), { export: "SkillDetail" });
-const ClawHubDetailDialog = lazy(() => import("./skill-reader-dialog.tsx"), {
-  export: "ClawHubDetailDialog",
+const InstalledSkillPage = lazy(() => import("./skill-detail.tsx"), {
+  export: "InstalledSkillPage",
+});
+const ClawHubSkillPage = lazy(() => import("./clawhub-skill-page.tsx"), {
+  export: "ClawHubSkillPage",
+});
+const SkillPageAbsent = lazy(() => import("./skill-page-shell.tsx"), {
+  export: "SkillPageAbsent",
 });
 
 const STATUS_TABS: Array<{ id: SkillsStatusFilter; labelKey: string }> = [
@@ -111,73 +128,150 @@ export function Skills(props: SkillsProps) {
       ? (skills().find((skill) => skill.skillKey === props.state.skillsDetailKey) ?? null)
       : null,
   );
+  const pageOpen = () => Boolean(props.state.skillsDetailKey || props.state.clawhubDetailRef);
+  let list!: HTMLDivElement;
+  let opener: HTMLElement | null = null;
   return (
     <>
-      <SettingsPage wide carapace={props.surface === "discovery"}>
-        <Show
-          when={props.surface === "discovery"}
-          fallback={
-            <>
-              {props.library}
-              <Show when={props.showInventory !== false}>
-                <SkillsToolbar view={props} statusCounts={statusCounts()} readInventory={read} />
-              </Show>
-              <Errored
-                fallback={(error) => (
-                  <Loading>
-                    <Show when={!isPending(read)}>
-                      <InlineAlert tone="danger" role="alert">
-                        {formatUiError(error())}
-                      </InlineAlert>
-                    </Show>
-                  </Loading>
-                )}
-              >
-                <Loading>{readError()}</Loading>
-              </Errored>
-              <Show when={props.showInventory !== false}>
-                <Show
-                  when={acceptedFiltered().length > 0}
-                  fallback={
-                    <Show when={!props.error || props.state.skillsReport}>
-                      <SettingsEmpty
-                        message={
-                          props.loading && !props.state.skillsReport
-                            ? t("common.loading")
-                            : emptyMessage()
-                        }
-                      />
-                    </Show>
-                  }
-                >
-                  <SkillsInventory groups={groups()} view={props} />
+      {/* The list stays mounted behind a skill's page, so going back finds it as it was. The
+          wrapper only hides it: the list keeps its own page as the layout owner. */}
+      <div
+        class="skills-list-surface"
+        hidden={pageOpen()}
+        tabindex={-1}
+        ref={(element) => (list = element)}
+        onFocusIn={(event) => {
+          opener = isHtmlElement(event.target) ? event.target : null;
+        }}
+      >
+        <SettingsPage wide carapace={props.surface === "discovery"}>
+          <Show
+            when={props.surface === "discovery"}
+            fallback={
+              <>
+                {props.library}
+                <Show when={props.showInventory !== false}>
+                  <SkillsToolbar view={props} statusCounts={statusCounts()} readInventory={read} />
                 </Show>
-              </Show>
-            </>
-          }
-        >
-          <SkillDiscovery {...props} />
-          {props.library}
-        </Show>
-      </SettingsPage>
-      <Show when={detailSkill()}>
-        {(skill) => (
-          <SkillDialogBoundary onClose={() => props.onDetailClose()}>
-            <SkillDetail
-              skill={skill()}
-              view={props}
-              controlsLocked={skillControlsLocked(props)}
-              installLocked={skillInstallLocked(props)}
-            />
-          </SkillDialogBoundary>
-        )}
-      </Show>
-      <Show when={props.state.clawhubDetailRef}>
-        <SkillDialogBoundary onClose={() => props.onClawHubDetailClose()}>
-          <ClawHubDetailDialog view={props} installLocked={skillInstallLocked(props)} />
-        </SkillDialogBoundary>
+                <Errored
+                  fallback={(error) => (
+                    <Loading>
+                      <Show when={!isPending(read)}>
+                        <InlineAlert tone="danger" role="alert">
+                          {formatUiError(error())}
+                        </InlineAlert>
+                      </Show>
+                    </Loading>
+                  )}
+                >
+                  <Loading>{readError()}</Loading>
+                </Errored>
+                <Show when={props.showInventory !== false}>
+                  <Show
+                    when={acceptedFiltered().length > 0}
+                    fallback={
+                      <Show when={!props.error || props.state.skillsReport}>
+                        <SettingsEmpty
+                          message={
+                            props.loading && !props.state.skillsReport
+                              ? t("common.loading")
+                              : emptyMessage()
+                          }
+                        />
+                      </Show>
+                    }
+                  >
+                    <SkillsInventory groups={groups()} view={props} />
+                  </Show>
+                </Show>
+              </>
+            }
+          >
+            <SkillDiscovery {...props} />
+            <Show when={!pageOpen()}>{props.library}</Show>
+          </Show>
+        </SettingsPage>
+      </div>
+      <Show when={pageOpen()}>
+        <SkillPageFocus list={() => list} opener={() => opener}>
+          <SettingsPage wide carapace={props.surface === "discovery"}>
+            {/* Library notices and its import dialog also serve a ClawHub skill's page. */}
+            <Show when={props.surface === "discovery"}>{props.library}</Show>
+            <Show when={props.state.skillsDetailKey}>
+              {(skillKey) => (
+                <SkillPageBoundary onBack={() => props.onDetailClose()}>
+                  <Show
+                    when={detailSkill()}
+                    fallback={
+                      <SkillPageAbsent
+                        view={props}
+                        name={skillKey()}
+                        pending={!props.state.skillsReport && !props.error}
+                      />
+                    }
+                  >
+                    {(skill) => (
+                      <InstalledSkillPage
+                        skill={skill()}
+                        view={props}
+                        controlsLocked={skillControlsLocked(props)}
+                        installLocked={skillInstallLocked(props)}
+                      />
+                    )}
+                  </Show>
+                </SkillPageBoundary>
+              )}
+            </Show>
+            <Show when={props.state.clawhubDetailRef}>
+              <SkillPageBoundary onBack={() => props.onDetailClose()}>
+                <ClawHubSkillPage view={props} installLocked={skillInstallLocked(props)} />
+              </SkillPageBoundary>
+            </Show>
+          </SettingsPage>
+        </SkillPageFocus>
       </Show>
     </>
+  );
+}
+
+function SkillPageFocus(props: {
+  list: () => HTMLDivElement;
+  opener: () => HTMLElement | null;
+  children: JSX.Element;
+}) {
+  let region!: HTMLDivElement;
+  onSettled(() => {
+    const opener = props.opener();
+    const list = props.list();
+    const document = region.ownerDocument;
+    if (document.activeElement === document.body || list.contains(document.activeElement)) {
+      region.focus();
+    }
+    return () => {
+      // Back first unhides the retained list; leaving Skills entirely must not move focus.
+      queueMicrotask(() => {
+        if (!list.isConnected || list.hidden || document.activeElement !== document.body) {
+          return;
+        }
+        if (opener && list.contains(opener)) {
+          opener.focus();
+        }
+        if (document.activeElement === document.body) {
+          list.focus();
+        }
+      });
+    };
+  });
+  return (
+    <div
+      class="skills-detail-surface"
+      role="region"
+      aria-label={t("tabs.skills")}
+      tabindex={-1}
+      ref={(element) => (region = element)}
+    >
+      {props.children}
+    </div>
   );
 }
 
@@ -294,12 +388,17 @@ function SkillsToolbar(props: {
 
 function SkillRow(props: { skill: SkillStatusEntry; view: SkillsProps }) {
   const verdict = createMemo(() => verdictForSkill(props.skill, props.view.state.clawhubVerdicts));
+  const owner = () => {
+    const link = props.skill.clawhub;
+    return link?.valid && link.ownerHandle ? `@${link.ownerHandle}` : null;
+  };
   const status = () => {
     latest(props.view.readClawHubVerdicts);
     return verdictStatus(verdict(), isPending(props.view.readClawHubVerdicts));
   };
   return (
-    <div class="settings-row plugins-item plugins-item--clickable">
+    <div class="settings-row plugins-item plugins-item--clickable skill-inventory-row">
+      <SkillTile emoji={props.skill.emoji} />
       <button
         type="button"
         class="settings-row__text plugins-item__detail-button"
@@ -307,14 +406,10 @@ function SkillRow(props: { skill: SkillStatusEntry; view: SkillsProps }) {
         onClick={() => props.view.onDetailOpen(props.skill.skillKey)}
       >
         <span class="settings-row__title">
-          <Show when={props.skill.emoji}>
-            {(emoji) => (
-              <>
-                <span>{emoji()}</span>{" "}
-              </>
-            )}
+          <span class="skill-inventory-row__name">{props.skill.name}</span>
+          <Show when={owner()}>
+            {(handle) => <span class="skill-inventory-row__owner">{handle()}</span>}
           </Show>
-          {props.skill.name}
         </span>
         <span class="settings-row__desc">{clampText(props.skill.description, 140)}</span>
       </button>

@@ -113,13 +113,9 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
         openclaw models auth login --provider openai
         ```
 
-        For headless or callback-hostile setups, add `--device-code` to sign
-        in with a ChatGPT device-code flow instead of the localhost browser
-        callback:
-
-        ```bash
-        openclaw models auth login --provider openai --device-code
-        ```
+        Codex login shows a one-time device code, so it also works on headless
+        or remote hosts. It falls back to the localhost browser callback only
+        when OpenAI has device-code login turned off.
       </Step>
       <Step title="Use the standard OpenAI model route">
         <a id="use-the-canonical-openai-model-route" />
@@ -210,7 +206,7 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
 
     <Note>
     Onboarding no longer imports OAuth material from `~/.codex`. Sign in with
-    browser OAuth (default) or the device-code flow above; OpenClaw manages the
+    Codex login above; OpenClaw manages the
     resulting credentials in its own agent auth store.
     </Note>
 

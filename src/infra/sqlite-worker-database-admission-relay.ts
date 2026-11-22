@@ -3,6 +3,7 @@ import { MessageChannel, receiveMessageOnPort, MessagePort } from "node:worker_t
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-errors.js";
+import { currentHostedWorkerEndpoint } from "./shared-worker-host-endpoint.js";
 import { captureSqliteDatabaseAdmissions } from "./sqlite-database-admission-context.js";
 import {
   readSqliteDatabaseAdmissions,
@@ -46,8 +47,12 @@ const admissionUpstream = resolveGlobalSingleton<{
 }>(Symbol.for("openclaw.sqliteDatabaseAdmissionUpstream"), () => ({}));
 
 /** A served worker relays descendant facts through its existing lifetime channel. */
-export function bindSqliteDatabaseAdmissionUpstream(port: MessagePort): void {
-  const current = admissionUpstream.connection;
+export function bindSqliteDatabaseAdmissionUpstream(
+  port: MessagePort,
+  endpoint = currentHostedWorkerEndpoint(),
+): void {
+  // Each shared-host endpoint has its own lifetime channel; standalone isolates have one.
+  const current = endpoint ? endpoint.admissionUpstream : admissionUpstream.connection;
   if (current) {
     if (current.port !== port) {
       throw new SqliteWorkerError("SQLite admission upstream changed owner", "closed");
@@ -55,7 +60,11 @@ export function bindSqliteDatabaseAdmissionUpstream(port: MessagePort): void {
     return;
   }
   const connection = { port, closed: false };
-  admissionUpstream.connection = connection;
+  if (endpoint) {
+    endpoint.admissionUpstream = connection;
+  } else {
+    admissionUpstream.connection = connection;
+  }
   port.once("close", () => {
     connection.closed = true;
   });
@@ -63,7 +72,8 @@ export function bindSqliteDatabaseAdmissionUpstream(port: MessagePort): void {
 }
 
 export function getSqliteDatabaseAdmissionUpstream() {
-  return admissionUpstream.connection;
+  const endpoint = currentHostedWorkerEndpoint();
+  return endpoint ? endpoint.admissionUpstream : admissionUpstream.connection;
 }
 
 function isSqliteDatabaseAdmissionLocation(

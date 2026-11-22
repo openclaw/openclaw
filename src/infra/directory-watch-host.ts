@@ -155,6 +155,18 @@ export function watchDirectory(
 export function createDirectoryWatchChannel(): { port: MessagePort; close(): void } {
   const { port1, port2 } = new MessageChannel();
   const watches = new Map<number, DirectoryWatch>();
+  const pending: WatchReply[] = [];
+  const flush = () => {
+    port1.postMessage(pending);
+    pending.length = 0;
+  };
+  const post = (reply: WatchReply) => {
+    // A stdout chunk delivers many events synchronously; preserve them in one worker message.
+    if (!pending.length) {
+      queueMicrotask(flush);
+    }
+    pending.push(reply);
+  };
   const close = () => {
     for (const watch of watches.values()) {
       watch.close();
@@ -170,7 +182,6 @@ export function createDirectoryWatchChannel(): { port: MessagePort; close(): voi
       watches.delete(id);
       return;
     }
-    const post = (reply: WatchReply) => port1.postMessage(reply);
     const watch = watchDirectory(
       request.path,
       (event, filename) => post({ id, event, filename }),
@@ -191,13 +202,15 @@ export function installDirectoryWatchPort(port: MessagePort): void {
   const watches = new Map<number, EventEmitter>();
   let closed = false;
   const disconnected = () => new Error("Directory watch owner disconnected");
-  port.on("message", (reply: WatchReply) => {
-    const watch = watches.get(reply.id);
-    if ("event" in reply) {
-      watch?.emit("change", reply.event, reply.filename);
-    } else {
-      watches.delete(reply.id);
-      watch?.emit("error", reply.error, reply.pathUnavailable);
+  port.on("message", (replies: WatchReply[]) => {
+    for (const reply of replies) {
+      const watch = watches.get(reply.id);
+      if ("event" in reply) {
+        watch?.emit("change", reply.event, reply.filename);
+      } else {
+        watches.delete(reply.id);
+        watch?.emit("error", reply.error, reply.pathUnavailable);
+      }
     }
   });
   port.on("close", () => {
