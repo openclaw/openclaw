@@ -105,20 +105,10 @@ export function createSessionDiffChrome(bindings: SessionDiffViewBindings) {
               <Show
                 when={summary.result.baseRef && summary.result.baseRef !== summary.result.branch}
               >
-                <small
-                  ref={createTextOverflow(() => summary.result.baseRef)}
-                  title={summary.result.baseRef}
-                >
-                  {summary.result.baseRef}
-                </small>
+                <small>{summary.result.baseRef}</small>
               </Show>
               <Show when={summary.result.branch}>
-                <span
-                  ref={createTextOverflow(() => summary.result.branch)}
-                  title={summary.result.branch}
-                >
-                  {summary.result.branch}
-                </span>
+                <span>{summary.result.branch}</span>
               </Show>
             </span>
           </div>

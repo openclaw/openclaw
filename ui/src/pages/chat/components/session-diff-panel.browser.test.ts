@@ -555,11 +555,15 @@ describe.runIf(browserMode)("Review layout", () => {
     expect(bounds.left).toBeGreaterThanOrEqual(0);
     expect(bounds.bottom).toBeLessThanOrEqual(window.innerHeight);
     expect(bounds.right).toBeLessThanOrEqual(window.innerWidth);
+    const baseRef =
+      "release/regional-calibration-and-extended-verification-for-portable-monitoring-stations";
+    const headRef =
+      "feature/field-survey/regional-calibration/portable-monitoring-stations/verify-observation-receipts-before-autumn-deployment";
     pending.resolve({
       sessionKey: "main",
       root,
-      branch,
-      baseRef: "main",
+      branch: headRef,
+      baseRef,
       additions: 1,
       deletions: 0,
       files: [{ path: "added.ts", status: "added", additions: 1, deletions: 0 }],
@@ -570,6 +574,20 @@ describe.runIf(browserMode)("Review layout", () => {
     await waitForSolid(() => expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull());
     expect(document.activeElement).toBe(view);
     expect(view.style.getPropertyValue("anchor-name")).toBe(tooltipAnchor);
+    const refs = Array.from(
+      panel.querySelectorAll<HTMLElement>(".session-diff-mobile__branch > span > *"),
+    );
+    expect(refs.map((ref) => ref.textContent)).toEqual([baseRef, headRef]);
+    for (const ref of refs) {
+      const range = document.createRange();
+      range.selectNodeContents(ref);
+      const lines = Array.from(range.getClientRects());
+      const bounds = ref.getBoundingClientRect();
+      expect(lines.length).toBeGreaterThan(1);
+      for (const line of lines) {
+        expect(line.right).toBeLessThanOrEqual(bounds.right + 1);
+      }
+    }
     await userEvent.click(view);
     await waitForSolid(() =>
       expect(panel.querySelector(".session-diff-menu__surface")?.matches(":popover-open")).toBe(
