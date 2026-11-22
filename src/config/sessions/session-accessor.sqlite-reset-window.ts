@@ -522,14 +522,17 @@ export function readVisibleMessageRange(
   projection: CurrentTranscriptProjection,
   start: number,
   endExclusive: number,
+  maxPayloadBytes?: number,
 ): SessionTranscriptMessageEvent[] {
-  return Array.from(iterateVisibleMessageRange(projection, start, endExclusive));
+  return Array.from(iterateVisibleMessageRange(projection, start, endExclusive, maxPayloadBytes));
 }
 
 export function* iterateVisibleMessageRange(
   projection: CurrentTranscriptProjection,
   start: number,
   endExclusive: number,
+  /** History pages pass their ceiling; context reads decode every payload whole. */
+  maxPayloadBytes?: number,
 ): IterableIterator<SessionTranscriptMessageEvent> {
   for (const range of selectVisibleMessageRanges(projection, start, endExclusive)) {
     const rows =
@@ -546,7 +549,7 @@ export function* iterateVisibleMessageRange(
             endExclusive: range.endExclusive,
           });
     for (const row of rows) {
-      yield parseActiveTranscriptMessageRow(row, projection);
+      yield parseActiveTranscriptMessageRow(row, projection, maxPayloadBytes);
     }
   }
 }

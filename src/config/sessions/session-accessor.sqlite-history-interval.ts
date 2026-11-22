@@ -1,6 +1,10 @@
 import { sql, type Expression, type RawBuilder, type SqlBool } from "kysely";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../../agents/internal-runtime-context.js";
-import { SOURCE_PAGE_MAX_BYTES } from "../../gateway/session-transcript-source-pages.js";
+import { parseTranscriptLineWithinBytes } from "../../gateway/session-transcript-record-parser.js";
+import {
+  resolveTranscriptStandInThresholdBytes,
+  SOURCE_PAGE_MAX_BYTES,
+} from "../../gateway/session-transcript-source-pages.js";
 import { engineIndexHint } from "../../infra/database-engine/index-hint.js";
 import { jsonArrayElements } from "../../infra/database-engine/json-values.js";
 import {
@@ -291,12 +295,16 @@ function readHistoricalDisplayEventRange(
     SOURCE_PAGE_MAX_BYTES,
     Math.max(1_024, Math.floor(maxBytes ?? SOURCE_PAGE_MAX_BYTES)),
   );
+  // Admission and projection have to agree on which rows become stand-ins, or the
+  // interval is cut at an oversized row the reader would have bounded anyway.
+  const standInAboveBytes = resolveTranscriptStandInThresholdBytes(limit);
   const selectedRange = boundHistoryAnchorPageRange(
     { readStart: 0, endExclusive: ranged.length, hasOverreadContext: false, offset: 0 },
     anchorOptions ? anchor.displayPosition - start : ranged.length - 1,
     limit,
     (position) => ranged[position]!.serialized_bytes,
-    anchorOptions !== undefined && maxBytes === undefined,
+    false,
+    standInAboveBytes,
   );
   const selected = ranged.slice(selectedRange.start, selectedRange.endExclusive);
   if (selected.length === 0) {
@@ -316,7 +324,11 @@ function readHistoricalDisplayEventRange(
         ? []
         : [
             {
-              event: parseStoredTranscriptEvent(eventJson),
+              // Bounded on the same threshold the window was admitted under.
+              event: parseTranscriptLineWithinBytes(
+                eventJson,
+                standInAboveBytes,
+              ) as TranscriptEvent,
               eventSeq: row.event_seq,
               seq: row.displaySeq,
             },

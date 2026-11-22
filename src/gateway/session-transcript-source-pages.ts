@@ -11,6 +11,11 @@ import type {
 export const SOURCE_PAGE_MAX_MESSAGES = 128;
 export const SOURCE_PAGE_MAX_BYTES = 8 * 1024 * 1024;
 
+/** A page stands in for a row past its own budget, never below the hard ceiling. */
+export function resolveTranscriptStandInThresholdBytes(maxBytes: number): number {
+  return Math.max(SOURCE_PAGE_MAX_BYTES, maxBytes);
+}
+
 export class SessionTranscriptSourceMessageTooLargeError extends Error {
   readonly code = "TRANSCRIPT_SOURCE_MESSAGE_TOO_LARGE";
 

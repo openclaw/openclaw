@@ -16,6 +16,11 @@ const OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS = 64 * 1024;
 const OVERSIZED_TRANSCRIPT_METADATA_SUFFIX_CHARS = 64 * 1024;
 const MAX_OVERSIZED_TRANSCRIPT_RECOVERY_CANDIDATES = 32;
 const TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER = "[chat.history omitted: message too large]";
+/**
+ * Every stand-in a reader serves for an oversized row stays within the parse-line
+ * bound, so a history page can charge this instead of the row's real size.
+ */
+export const MAX_OVERSIZED_TRANSCRIPT_RECORD_BYTES = MAX_TRANSCRIPT_PARSE_LINE_BYTES;
 
 const TRANSCRIPT_STRING_FIELD_REGEXES = {
   id: /"id"\s*:\s*"((?:\\.|[^"\\])*)"/,
@@ -269,7 +274,9 @@ export function parseTranscriptRecord(line: string): TranscriptRecord | null {
   const prefix = line.slice(0, OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS);
   const messageMatch = /"message"\s*:/.exec(prefix);
   const recordPrefix = messageMatch ? prefix.slice(0, messageMatch.index) : prefix;
-  const id = extractJsonStringFieldPrefix(prefix, "id");
+  // Only the record's own fields, never an `id` nested in the payload: promoting a
+  // content-block id would point the stand-in's exact read at a row that cannot exist.
+  const id = extractJsonStringFieldPrefix(recordPrefix, "id");
   const parentId = TRANSCRIPT_PARENT_ID_NULL_RE.test(prefix)
     ? null
     : extractJsonStringFieldPrefix(prefix, "parentId");
@@ -298,4 +305,32 @@ export function parseTranscriptRecord(line: string): TranscriptRecord | null {
     ...(id ? { id } : {}),
     record,
   };
+}
+
+/** The bounded stand-in a reader serves for a row it holds nothing but the id of. */
+export function oversizedTranscriptStandIn(id: string): Record<string, unknown> {
+  return {
+    id,
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER }],
+      __openclaw: { truncated: true, reason: "oversized" },
+    },
+  };
+}
+
+/**
+ * Parse one stored transcript line, serving a line past `maxBytes` as the bounded
+ * stand-in the JSONL readers already project instead of decoding its whole payload.
+ * `maxBytes` is compared against recorded row bytes -- the payload plus exactly one
+ * JSONL separator -- because that is the quantity page admission charges.
+ */
+export function parseTranscriptLineWithinBytes(line: string, maxBytes: number): unknown {
+  if (Buffer.byteLength(line, "utf8") + 1 > maxBytes) {
+    const bounded = parseTranscriptRecord(line);
+    if (bounded) {
+      return bounded.record;
+    }
+  }
+  return JSON.parse(line) as unknown;
 }

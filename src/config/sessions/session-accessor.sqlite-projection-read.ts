@@ -1,5 +1,6 @@
 import { sql, type InferResult, type RawBuilder } from "kysely";
 import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
+import { parseTranscriptLineWithinBytes } from "../../gateway/session-transcript-record-parser.js";
 import { jsonArrayElements } from "../../infra/database-engine/json-values.js";
 import {
   createSqliteQueryCache,
@@ -225,6 +226,8 @@ export function parseActiveTranscriptMessageRow(
     message_position: number | null;
   },
   projection: Pick<CurrentTranscriptProjection, "readColdPayload">,
+  /** History pages set their ceiling; context reads decode every payload whole. */
+  maxPayloadBytes?: number,
 ): SessionTranscriptMessageEvent {
   if (row.message_position === null) {
     throw new Error("Active transcript message row is missing its message position");
@@ -232,7 +235,9 @@ export function parseActiveTranscriptMessageRow(
   const eventJson = readProjectionTranscriptPayload(projection, row, row.event_seq);
   return {
     // SAFETY: The active projection indexes serialized TranscriptEvent rows.
-    event: JSON.parse(eventJson) as TranscriptEvent,
+    event: (maxPayloadBytes === undefined
+      ? JSON.parse(eventJson)
+      : parseTranscriptLineWithinBytes(eventJson, maxPayloadBytes)) as TranscriptEvent,
     eventSeq: row.event_seq,
     // Gateway cursors use the visible-message ordinal, matching the JSONL index.
     // Raw event seq includes headers/control rows and would make pages overlap.
