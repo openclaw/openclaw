@@ -75,8 +75,8 @@ async function startSignIn(page: Page, nextResponse: () => unknown = () => paste
     // A Node-side reply outlives the page, so a reload sees the Gateway's current answer.
     { requestHandlers: { "wizard.next": () => nextResponse() } },
   );
-  await page.goto(`${suite.server.baseUrl}settings/model-providers`);
-  await page.locator("[data-models-connect]").click();
+  // First-run setup lands here with the picker open; a reload reopens the same address.
+  await page.goto(`${suite.server.baseUrl}settings/model-providers?connect=1`);
   await page.locator('[data-models-login-provider="example"]').click();
   await page.getByRole("button", { name: "Example browser sign-in", exact: true }).click();
   const login = await gateway.waitForRequest("models.authLogin");

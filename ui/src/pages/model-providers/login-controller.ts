@@ -360,7 +360,8 @@ export function createModelProviderLogin(options: {
   function pickerView(authStatus?: ModelAuthStatusResult | null) {
     view.read();
     const picker = currentPicker;
-    if (!picker) {
+    // A sign-in reopened after a reload wins over a picker its route opened.
+    if (!picker || wizard.state().phase !== "idle") {
       return null;
     }
     const canSelect = () => currentPicker === picker && Boolean(authStatus) && picker.isCurrent();
