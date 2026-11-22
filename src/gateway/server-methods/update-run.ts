@@ -74,7 +74,7 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
     return;
   }
   if (params.checkout) {
-    const mismatch = await updateInstallationMismatch(params.checkout, installed.root);
+    const mismatch = await updateInstallationMismatch(params.checkout, root);
     if (mismatch) {
       respond(true, {
         runId: null,
