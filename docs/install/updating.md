@@ -1312,6 +1312,10 @@ requirements, required tools are available (Git and pnpm for source builds, npm
 for packages), and the install and state filesystems have room for the release
 and state migration copies. Refusals name what to install or free.
 
+On macOS, if the updater selects `/usr/bin/git` and there is no active
+developer directory, run `xcode-select --install` to install the Command Line
+Tools or select an installed Xcode, then retry `openclaw update`.
+
 The old Gateway keeps serving during preparation. State migration happens when
 the new Gateway starts, through the boot-time copy-and-swap owner, not through a
 private rehearsal or an in-place package swap.

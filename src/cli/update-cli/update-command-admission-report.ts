@@ -16,6 +16,7 @@ import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { prepareResult, printResult } from "./progress.js";
 import {
   assertGlobalUpdateOwner,
+  assertMacosGitForUnownedCheckout,
   parseUpdateTimeoutMs,
   UpdatePreMutationError,
   type UpdateCommandOptions,
@@ -45,6 +46,9 @@ export async function assertReleaseUpdateAdmission(
 ): Promise<void> {
   try {
     await assertGlobalUpdateOwner(params);
+    if (params.installKind === "package") {
+      await assertMacosGitForUnownedCheckout(params);
+    }
   } catch (error) {
     if (!(error instanceof UpdatePreMutationError)) {
       throw error;
@@ -59,7 +63,7 @@ export async function assertReleaseUpdateAdmission(
           opts: params.opts,
           controlPlaneUpdateSentinelMeta: params.controlPlaneUpdateSentinelMeta,
         },
-        { exitCode: 0 },
+        error.reason === "git-version-unsupported" ? undefined : { exitCode: 0 },
       ),
     );
   }
