@@ -170,7 +170,9 @@ export async function recordRequiredCompletionNotice(
             : {
                 customType,
                 display: true,
-                excludeFromContext: true,
+                excludeFromContext:
+                  kind !== "failed" ||
+                  batch.every((child) => child.delivery?.requesterDelivery?.state === "consumed"),
                 content: findings,
                 details: { runId, childRunId: entry.runId, error: reason },
               },

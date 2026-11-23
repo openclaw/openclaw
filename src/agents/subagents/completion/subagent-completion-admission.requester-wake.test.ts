@@ -130,7 +130,7 @@ describe("persisted subagent requester wakes", () => {
     );
     expect(notices).toHaveLength(1);
     expect(notices[0]).toMatchObject({
-      excludeFromContext: true,
+      excludeFromContext: false,
       content: expect.stringContaining(input.subagent.childSessionKey),
     });
     expect(notices[0]).toMatchObject({ content: expect.stringContaining("Gateway restart") });

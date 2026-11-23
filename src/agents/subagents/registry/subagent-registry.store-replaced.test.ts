@@ -154,7 +154,6 @@ it("records a child-result notice for live children and none for a killed child"
     expect.objectContaining({
       customType: "subagent-completion",
       display: true,
-      excludeFromContext: true,
       content: expect.stringMatching(
         /^Release notes finished on .+ UTC, but its result couldn't be added[^]*canonical result$/,
       ),
