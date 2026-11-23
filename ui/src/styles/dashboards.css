@@ -878,6 +878,8 @@
       "title"
       "actions";
     align-items: center;
+    /* The trailing action sits on the header edge; let its focus ring paint outside. */
+    overflow: visible;
 
     .hub-page-header__actions {
       justify-self: stretch;

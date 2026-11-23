@@ -3,7 +3,7 @@ import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics"
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import type { AssistantMessage } from "../../../llm/types.js";
+import type { AssistantHistoryMessage } from "../../../llm/types.js";
 import { CONTEXT_OVERFLOW_ERROR_MESSAGE } from "../../../shared/assistant-error-format.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../../agent-compaction-constants.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
@@ -75,7 +75,7 @@ type EmbeddedRunOverflowRecoveryInput = EmbeddedRunCompactionRecoveryInput & {
   promptError: unknown;
   assistantErrorText?: string;
   assistantOverflowCandidate?: {
-    message: AssistantMessage;
+    message: AssistantHistoryMessage;
     classification: FailoverClassification | null;
   };
   attemptCompactionCount: number;

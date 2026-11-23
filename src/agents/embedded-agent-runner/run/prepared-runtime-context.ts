@@ -2,12 +2,14 @@ import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { isCurrentPluginMetadataSnapshotRuntimeGeneration } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import { loadPluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
+import { copyPreparedModelRuntimeAuthBindings } from "../../prepared-model-runtime-auth.js";
 import { getPreparedModelRuntimeBorrowedSnapshot } from "../../prepared-model-runtime-generation-scope.js";
 import { capturePreparedModelRuntimeCatalog } from "../../prepared-model-runtime.capture.js";
 import {
   preparedModelRuntimeConfigsMatch,
   type PreparedModelRuntimeSnapshot,
 } from "../../prepared-model-runtime.js";
+import { prepareAgentPromptProjects } from "../../prompt-projects.js";
 import {
   resolveCanonicalRunRuntimeWorkspace,
   resolveRootedRunRuntimeWorkspace,
@@ -102,6 +104,17 @@ export async function initializeReadOnlyRunModelCatalog(
   );
   signal.throwIfAborted();
   return capturePreparedModelRuntimeCatalog(snapshot, snapshot);
+}
+
+/** Adds turn-owned project facts without losing the admitted generation's private auth binding. */
+export async function prepareRunModelRuntimeProjects(
+  run: RunEmbeddedAgentParamsWithSessionFile,
+  snapshot: PreparedModelRuntimeSnapshot,
+) {
+  const projects = await prepareAgentPromptProjects(run);
+  const prepared = Object.freeze({ ...snapshot, ...projects });
+  copyPreparedModelRuntimeAuthBindings(snapshot, prepared);
+  return prepared;
 }
 
 /** Rebinds every config-derived run projection to one committed prepared generation. */

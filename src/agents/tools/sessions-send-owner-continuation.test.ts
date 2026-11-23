@@ -162,7 +162,11 @@ async function inRun<T>(
         ...requester,
         operationalRunInstance,
         approvalAuthority,
-        receiptAuthority: () => agentRuns.validateAgentRunDelegatedAuthority(approvalAuthority),
+        receiptAuthority: () => {
+          if (!agentRuns.validateAgentRunDelegatedAuthority(approvalAuthority)) {
+            throw new Error("agent tool caller authority is no longer active");
+          }
+        },
       },
       () => (scope ? runWithCronCreatorAuthorityCapability(scope, work) : work()),
     );

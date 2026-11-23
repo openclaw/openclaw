@@ -8,6 +8,7 @@ import { resetGlobalSingletonLifecycleState } from "../shared/global-singleton.j
 import {
   getGatewayResourceProfile,
   initializeGatewayResourceProfile,
+  predictGatewayResourceProfile,
 } from "./gateway-resource-profile.js";
 
 vi.mock("node:fs", async (importOriginal) => ({
@@ -140,6 +141,24 @@ it("explicit profiles win and readers retain the startup decision until restart"
   await resetGlobalSingletonLifecycleState(Symbol.for("openclaw.gatewayResourceProfile"));
   expect(getGatewayResourceProfile()).toBeUndefined();
 });
+
+it.each([
+  [undefined, 1.5 * GiB, "lean"],
+  ["auto", 4 * GiB, "lean"],
+  ["auto", 8 * GiB, "standard"],
+  ["lean", 16 * GiB, "lean"],
+  ["standard", 1.5 * GiB, "standard"],
+] as const)(
+  "predicts %s at %i bytes as startup will resolve it (%s)",
+  (configured, memory, profile) => {
+    files.set("/sys/fs/cgroup/service/gateway/memory.max", String(memory));
+    expect(predictGatewayResourceProfile(configured)).toBe(profile);
+    expect(getGatewayResourceProfile()).toBeUndefined();
+    expect(
+      initializeGatewayResourceProfile(configured ? { profile: configured } : undefined).profile,
+    ).toBe(profile);
+  },
+);
 
 it("uses host RAM off Linux and accepts only the documented config values", () => {
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");

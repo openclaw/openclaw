@@ -662,6 +662,11 @@ html.openclaw-native-desktop body .shell--mobile-nav {
 
 /* Controls take their phone size with the floating header and stacked rows. */
 @media (max-width: 640px) {
+  /* The primary heading is in the page header, outside the settings workspace. */
+  :is(openclaw-device-page, openclaw-device-permissions-page) > :focus-within:has(h1) {
+    overflow: visible;
+  }
+
   /* Page traits own the phone gutter even when a detail has no hub header.
      Full-bleed panes keep their inset if a nested SettingsPage reports a trait. */
   .shell--settings .content:not(.content--custodian),

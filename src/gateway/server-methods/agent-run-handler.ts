@@ -1,12 +1,5 @@
-import {
-  ErrorCodes,
-  errorShape,
-  validateAgentParams,
-} from "../../../packages/gateway-protocol/src/index.js";
-import {
-  captureExternalSessionCommitGuard,
-  composeSessionSourceAssertion,
-} from "../../config/sessions/session-source-authority.js";
+import { validateAgentParams } from "../../../packages/gateway-protocol/src/index.js";
+import { captureExternalSessionCommitGuard } from "../../config/sessions/session-source-authority.js";
 import { prepareAgentRequestPreflight } from "../agent-turn/agent-request-preflight.js";
 import { createAgentTurnService } from "../agent-turn/agent-turn-service.js";
 import { createAgentTurnIo } from "../agent-turn/io.js";
@@ -32,18 +25,8 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     client,
     context,
   });
-  const assertAdmissionCurrent = composeSessionSourceAssertion(
-    [captureExternalSessionCommitGuard(sessionMutationCommitGuard)],
-    (assertSource) => {
-      assertSource();
-      if (hasCurrentClientAuthority?.() === false) {
-        throw new SessionMutationAuthorizationChangedError(
-          errorShape(ErrorCodes.INVALID_REQUEST, "Gateway caller authority is no longer active."),
-        );
-      }
-    },
-  );
-  assertAdmissionCurrent();
+  const assertAdmissionCurrent = captureExternalSessionCommitGuard(sessionMutationCommitGuard);
+  assertAdmissionCurrent?.();
   const io = createAgentTurnIo(respond);
   if (
     !assertValidParams(params, validateAgentParams, "agent", (ok, payload, error, meta) =>

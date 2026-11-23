@@ -114,9 +114,7 @@ it("preserves bot sender scope and live owner authority through the host builder
           cfg,
           commandAuthorized: true,
         });
-        expect(() => authorization.assertOwnerCurrent?.()).not.toThrow();
-        cfg.commands = { ownerAllowFrom: [] };
-        expect(() => authorization.assertOwnerCurrent?.()).toThrow("authority changed");
+        expect(authorization.senderIsOwner).toBe(true);
       },
     );
   });

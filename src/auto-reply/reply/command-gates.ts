@@ -121,11 +121,6 @@ export function rejectNonOwnerCommand(
   commandLabel: string,
 ): CommandHandlerResult | null {
   if (params.command.senderIsOwner) {
-    try {
-      params.command.assertOwnerCurrent?.();
-    } catch {
-      return commandReply("Your owner authority changed; send a new request.");
-    }
     return null;
   }
   logVerbose(

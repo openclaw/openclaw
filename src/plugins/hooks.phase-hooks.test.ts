@@ -268,8 +268,8 @@ describe("prompt phase hooks", () => {
       prependContext: "authorized context",
     });
     const retained = enrichment.mock.calls[0]?.[1].toolAuthority;
-    expect(() => retained?.assertActive()).toThrow("no longer active");
-    expect(() => retained?.list?.()).toThrow("no longer active");
+    expect(() => retained?.assertActive()).toThrow("Prompt build ended.");
+    expect(() => retained?.list?.()).toThrow("Prompt build ended.");
   });
 
   it("enumerates only each finalized turn surface, including an empty surface", async () => {
@@ -556,7 +556,7 @@ describe("prompt hook invocation", () => {
         await expect(run).resolves.toEqual({ prependContext: "live context" });
         expect(isActive(contexts[1]?.hookInvocation)).toBe(false);
         if (phase === "authorized") {
-          expect(() => contexts[0]?.toolAuthority?.list?.()).toThrow("no longer active");
+          expect(() => contexts[0]?.toolAuthority?.list?.()).toThrow("Prompt build ended.");
         }
       } finally {
         firstGate.resolve();

@@ -219,16 +219,15 @@ it("retains the first source failure after revocation without reviving authority
   source.mockImplementation(() => {
     throw failure;
   });
-  const revoked = (scope: string) =>
-    expect.objectContaining({
-      message: `${scope} authority is no longer active`,
-      cause: failure,
-    });
-  expect(assertActive).toThrow(revoked("admitted run"));
+  const revoked = expect.objectContaining({
+    message: "This agent run is no longer active. Start a new turn to retry.",
+    cause: failure,
+  });
+  expect(assertActive).toThrow(revoked);
   source.mockReset();
   expect(run.getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
   expect(assertActive).toThrow(expect.objectContaining({ cause: failure }));
-  expect(prepared.assertSourceCurrent).toThrow(revoked("source execution"));
+  expect(prepared.assertSourceCurrent).toThrow(revoked);
 });
 
 it.each([false, true])(

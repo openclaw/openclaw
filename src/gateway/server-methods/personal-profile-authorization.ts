@@ -46,9 +46,7 @@ export function currentPersonalProfileClient(
       !isSyntheticGatewayCaller(client) &&
       !context.getClientConnIds?.((current) => current === client).has(client.connId))
   ) {
-    throw new Error(
-      "Personal profile request connection is no longer current; reconnect and try again.",
-    );
+    throw new Error("This personal profile connection lost access. Reconnect and try again.");
   }
   if (!client) {
     return null;

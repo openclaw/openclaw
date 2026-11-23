@@ -116,7 +116,7 @@ export function workerResponseSchema<const Payload extends TSchema, const Errors
   ]);
 }
 
-export const WorkerTranscriptUsageSchema = closedObject({
+export const WorkerInferenceUsageSchema = closedObject({
   input: Type.Number({ minimum: 0 }),
   output: Type.Number({ minimum: 0 }),
   cacheRead: Type.Number({ minimum: 0 }),
@@ -145,6 +145,12 @@ export const WorkerTranscriptUsageSchema = closedObject({
     total: Type.Number({ minimum: 0 }),
     totalOrigin: Type.Optional(Type.Literal("provider-billed")),
   }),
+});
+
+// Saved transcript usage may predate pricing; fresh inference keeps required cost.
+const WorkerTranscriptUsageSchema = closedObject({
+  ...WorkerInferenceUsageSchema.properties,
+  cost: Type.Optional(WorkerInferenceUsageSchema.properties.cost),
 });
 
 const WorkerTranscriptAssistantDiagnosticSchema = closedObject({

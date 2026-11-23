@@ -105,6 +105,114 @@ previous release, not manual edits made to the new one.
 
 ## Update implementation contract
 
+### Release updates
+
+`src/update/` owns updates of Git checkouts and npm, pnpm and Bun global installs.
+The Gateway's `update.run` and `openclaw update` both use one path:
+
+1. Preflight refuses before any change and names the reason.
+2. The target is prepared in its own release directory while the current Gateway
+   keeps serving.
+3. The new release checks itself with `update check-release`, from the directory
+   it serves from.
+4. The release is published, and the Gateway restarts one time.
+5. The resident launcher starts the new release as a trial. It commits when the
+   Gateway reports ready. After two failed starts, or when the trial budget ends,
+   it restores the previous release and the SQLite migration originals.
+6. The Gateway that serves after the switch records the outcome. Only a Gateway
+   that runs the target build records success.
+7. After success is recorded, the serving release runs advisory Doctor inspections
+   in the background. The same update details receive their results without a page
+   reload. Only warning and error findings add advice; inspections do not delay
+   completion, fail the update, or trigger rollback.
+
+Rules for update changes:
+
+- Change update behavior in `src/update/`. Do no update work while the Gateway is
+  stopped: work that needs the new build runs in the new release.
+- Validate a release at the path, and with the loader, that it serves from.
+- Every update must end with a recorded outcome that names the serving version.
+  No run may stay running.
+- Shipped updaters (v2026.11.7, v2026.11.10-beta.1 and earlier) still run their
+  first update to a new release in place, with their own code, and call contracts
+  in the new release. A note below that says the installed updater must contain
+  a fix applies only to that first update. The contracts the new release keeps for
+  them, the update routes not yet moved to `src/update/`, and the rules for fixing
+  legacy update code are in `src/cli/update-cli/AGENTS.md`.
+
+### Proof for update changes
+
+A change to `src/update/`, the `src/daemon` service stage functions,
+`release-launcher-forward.mjs`, `openclaw.mjs` or the `Dockerfile` needs real
+update runs, recorded with these rules. A missing run is written as "unproven"
+and blocks a stable release. The rules come from the 2026-11-23 audit, which
+found that earlier receipts did not prove what they claimed.
+
+- **Platforms:** a Linux systemd user service, a Linux container without a user
+  bus, a macOS LaunchAgent and a Windows Scheduled Task. (#203497 merged with
+  macOS-only package proof; #203735 and #203769 fixed Linux container failures
+  afterwards.)
+- **Route:** each run records the update run's `trigger` (`control-ui` or `api`),
+  the Gateway log line for `update.run`, and the environment of the Gateway and the
+  CLI. A run with `OPENCLAW_UPDATE_PACKAGE_SPEC`, `--tag` or `--no-restart` does
+  not prove the Gateway route: those select a local route or a different target
+  resolution. A run that ends at a shortened `--timeout` is not a product result.
+- **Service:** in the managed-service lanes, the service comes from `openclaw
+  gateway install`, and the effective service state is saved after each run
+  (`systemctl --user show -p ExecStart,NeedDaemonReload`, `launchctl print`, or
+  the task definition and script). A hand-written service definition is not
+  proof. The container lane runs with no service on purpose.
+- **Next build:** `T+1` has its own build ID and a higher state schema, and the
+  crash candidate crashes after its migration. A pass shows the state files equal
+  to the `.pre-` originals after a rollback. A re-stamped copy of `T` proves only
+  the switch.
+- **Freshness:** each receipt names the tested commit and `npm view openclaw
+  dist-tags`. It is stale when an update-path file changes or `latest` moves.
+- **Installed code:** a change to `src/update/launcher.ts`, `run.ts`,
+  `preflight.ts` or `convert-service.ts` after a release needs `T → T+1 → T+2`,
+  because the installed release runs that code for its next update.
+- **Fault lanes:** a removed update fault lane names the lane that replaces it, or
+  the accepted gap.
+
+### Recorded contract notes
+
+Add a note here when a change alters a contract. A note about the in-place update
+flow names the shipped-updater contract or unmoved route that it serves.
+
+Candidate Doctor's retirement-only pass retains deferred advisory inspection
+selectors in its result. Shipped v2026.11.7 and v2026.11.10-beta.1 updaters read
+the last Doctor result and run those inspections after Gateway readiness; a
+narrow repair pass must not replace them with an empty list. The candidate must
+contain this fix.
+
+At Gateway start, a preparation lock whose owner is dead or has the new Gateway's
+PID is released after its run is recorded as failed with reason `interrupted`.
+A live preparation owner in another process is left untouched.
+
+Shipped in-place updaters leave their running code in an `openclaw-update-runtime-*`
+directory and promise that the next update removes it. On the release path, `openclaw update`
+runs Doctor's retained-runtime maintenance in its own process before the update starts, the
+same way release preparation removes old releases first. A runtime still in use stays, and
+the cleanup never changes the update's outcome. A `--timeout` under 20 minutes skips it,
+because the process census cannot be interrupted. The Gateway's
+`update.run` and automatic updates do not run it, because the process census would block the
+serving Gateway. After the switch to releases, the resident launcher counts as a possible
+holder of a runtime without `owner.json`, and later commands no longer recognize its marker.
+Only an `openclaw update` run as the first release update removes such a runtime; otherwise
+it stays until removed by hand. Shipped updaters need no change.
+
+The resident launcher keeps the 20-minute combined trial ceiling while the new
+Gateway prepares state. Once the Gateway reports that boot state preparation has
+finished, it has up to 10 more minutes to finish starting, within that same
+ceiling. This includes agent database preparation and plugin startup, not just
+opening a listener. A measured healthy host took about 496 seconds to reach
+post-ready maintenance; the 600-second window leaves about 104 seconds of margin.
+Hangs before or during boot state preparation still use the full 20-minute limit.
+After rollback, the serving Gateway records why the update failed and names its
+running version. Another Update click starts a normal attempt; a failed version
+is not blocked. The resident launcher and candidate boot code must both contain
+this change; a candidate without the stage report keeps the original deadline.
+
 Candidate Doctor removes empty snapshot directories left by cancellation between
 private directory creation and native-token acquisition, after its inspection
 workers have settled. Unconfirmed worker cleanup and unowned snapshot payloads
@@ -1133,9 +1241,14 @@ archives retain full integrity checks.
 To request full integrity checking across every table and index during migration:
 
 ```bash
-openclaw update --full-integrity-check
 openclaw doctor --fix --full-integrity-check
 ```
+
+Prepared-release updates (Git and npm, pnpm or Bun installs) refuse
+`openclaw update --full-integrity-check` before creating an update run. They do
+not support this selection. Run the Doctor command above separately when you
+need full migration checks, then update without the flag. Doctor does not turn
+an already-current database into a separate verification job.
 
 The default can miss an index/table mismatch in an untouched table. Use the full
 check when you need that coverage; it can take considerably longer on large
@@ -2604,6 +2717,10 @@ confirm and show an access error if it was revoked. Once an update starts, its
 progress report remains available through that Gateway's restart. The dialog shows
 "Starting update…" until the progress report arrives and "Reconnecting…" during
 a temporary disconnect.
+
+After reconnecting, Settings → Updates reads the saved result and releases checks
+started by the previous connection. Administrators can close the completed report
+and change update settings or start another update.
 
 Ask the agent to update OpenClaw, or send `/update` from Discord or another
 connected chat. For natural-language owner requests on standard installations,

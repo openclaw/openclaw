@@ -110,7 +110,7 @@ it.for<[string, (h: ReturnType<typeof createHarness>) => void, RegExp]>([
   [
     "requester disconnected",
     (h) => Object.assign(h.requester, { invalidated: true }),
-    /authority|no longer connected/,
+    /authority|no longer connected|lost access/,
   ],
 ])(
   "rejects %s during handler preparation without redirecting delivery",
