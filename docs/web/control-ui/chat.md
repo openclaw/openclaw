@@ -582,11 +582,15 @@ conversation and draft open. The card disappears after the task starts; select
 the new session in the sidebar when you want to follow its progress.
 **Start in this session** runs the task in the current conversation.
 
-Before starting a worktree, OpenClaw checks that the suggested folder is a Git
-repository with a commit. If it is not, the card keeps the prompt and lets you
-select a registered project or enter the correct repository path. Select
-**Start in a new worktree** again to continue; no child session is started for
-an invalid source folder.
+A worktree needs a Git repository with a commit. When the suggested folder is
+not one, **Start in a new worktree** lists your registered projects with a
+repository. Choose one to start the task in a new worktree for that project, or
+select **Choose repository** to enter another repository path.
+
+OpenClaw checks the folder again when the task starts. If it is not a repository
+with a commit, the card keeps the prompt so you can choose a registered project
+or enter a repository path. Select **Start in a new worktree** again to
+continue; OpenClaw does not start a new session for an invalid folder.
 
 ## Mobile composer
 

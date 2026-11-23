@@ -62,7 +62,7 @@ function planTaskSuggestionEvictions(
 
 /** Records one suggestion without starting work. IDs intentionally vanish on restart. */
 export function createTaskSuggestion(
-  params: TaskSuggestionsCreateParams,
+  params: TaskSuggestionsCreateParams & { worktreeSource: boolean },
 ): CreateTaskSuggestionResult {
   const suggestion: TaskSuggestion = {
     id: `task_${randomUUID()}`,
@@ -73,6 +73,7 @@ export function createTaskSuggestion(
     sessionKey: params.sessionKey,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     createdAt: Date.now(),
+    worktreeSource: params.worktreeSource,
   };
   const suggestionBytes = retainedBytesForSuggestion(suggestion);
   const plannedEvictions = planTaskSuggestionEvictions(suggestionBytes);

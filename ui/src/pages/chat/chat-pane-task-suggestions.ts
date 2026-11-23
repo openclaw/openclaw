@@ -1,7 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { TASK_WORKTREE_SOURCE_REQUIRED_ERROR_CODE } from "../../../../packages/gateway-protocol/src/gateway-error-codes.js";
 import type {
-  ProjectsListResult,
   TaskSuggestion,
   TaskSuggestionEvent,
   TaskSuggestionsAcceptResult,
@@ -25,6 +24,9 @@ import type {
 
 registerChatSessionEnglish();
 
+type RepositoryProjectsRuntime = typeof import("./chat-task-repository-projects.runtime.ts");
+type ReadRepositoryProjects = RepositoryProjectsRuntime["readRepositoryProjects"];
+
 type TaskSuggestionOperation =
   | { action: "dismiss"; resolved: boolean }
   | {
@@ -47,6 +49,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
     activeId: string | undefined;
     swapDirection: "next" | "previous" | undefined;
     swapGeneration: number;
+    readRepositoryProjects: ReadRepositoryProjects | undefined;
   } = {
     suggestions: [],
     copiedIds: new Set(),
@@ -54,7 +57,10 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
     activeId: undefined,
     swapDirection: undefined,
     swapGeneration: 0,
+    readRepositoryProjects: undefined,
   };
+  // The project catalog stays out of chat boot until a card needs a worktree source.
+  private repositoryProjectsImport: Promise<void> | null = null;
   protected taskSuggestionsRequestVersion = 0;
   private explicitReadScope: string | undefined;
 
@@ -282,6 +288,21 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
         canWrite &&
         isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.resolve") === true,
       onResolveSessionSuggestion: this.resolveCurrentSessionSuggestion.bind(this),
+      taskRepositoryProjects: (): ReturnType<ReadRepositoryProjects> => {
+        const read = this.tasks.readRepositoryProjects;
+        if (read) {
+          return read(this.context.gateway);
+        }
+        this.repositoryProjectsImport ??= import("./chat-task-repository-projects.runtime.ts").then(
+          (runtime) => {
+            this.tasks.readRepositoryProjects = runtime.readRepositoryProjects;
+          },
+          () => {
+            this.repositoryProjectsImport = null;
+          },
+        );
+        return { status: "loading", projects: [] };
+      },
       canAcceptTaskSuggestions:
         canAdmin && isGatewayMethodAdvertised(gatewaySnapshot, "taskSuggestions.accept") === true,
       taskSuggestionBlockedReason: !connected
@@ -446,37 +467,20 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
           typeof details === "object" &&
           "code" in details &&
           details.code === TASK_WORKTREE_SOURCE_REQUIRED_ERROR_CODE;
-        const repository: Extract<TaskSuggestionAcceptance, { phase: "failed" }>["repository"] =
-          repositoryRequired
-            ? { cwd: operation.cwd ?? operation.suggestion.cwd, open: true, projects: [] }
-            : undefined;
         operation.outcome = {
           phase: "failed",
           error: formatUiError(error),
-          ...(repository ? { repository } : {}),
+          ...(repositoryRequired
+            ? { repository: { cwd: operation.cwd ?? operation.suggestion.cwd, open: true } }
+            : {}),
         };
         this.setTaskSuggestionOperation(suggestion.id, operation);
-        if (repository) {
-          void scope.client
-            .request<ProjectsListResult>("projects.list", {})
-            .then((result) => {
-              if (
-                !isCurrent() ||
-                operation.outcome.phase !== "failed" ||
-                operation.outcome.repository !== repository
-              ) {
-                return;
-              }
-              repository.projects = result.projects.filter((project) => Boolean(project.repoRoot));
-              this.setTaskSuggestionOperation(suggestion.id, operation);
-            })
-            .catch(() => {
-              // An explicit path remains usable when the optional project catalog is unavailable.
-            });
-        }
       }
+      // The card itself explains a missing repository next to its chooser.
       if (operation.action === "accept") {
-        operation.clearError = scope.state.setRecoverableChatError(formatUiError(error));
+        if (operation.outcome.phase !== "failed" || !operation.outcome.repository) {
+          operation.clearError = scope.state.setRecoverableChatError(formatUiError(error));
+        }
       } else {
         scope.state.lastError = formatUiError(error);
         scope.state.chatError = scope.state.lastError;

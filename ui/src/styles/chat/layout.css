@@ -1579,6 +1579,11 @@ openclaw-chat-video-player {
     max-height: 40cqh;
     margin: 10px 14px 18px;
   }
+
+  /* A card waiting for a repository choice needs room for its chooser. */
+  .chat-gutter-stack:has(.task-suggestion:not([hidden]) .task-suggestion__repository) {
+    max-height: 70cqh;
+  }
 }
 .chat-gutter-header {
   display: grid;
@@ -1932,11 +1937,30 @@ openclaw-chat-video-player {
 .task-suggestion__repository {
   display: grid;
   gap: 8px;
+  margin-top: 12px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.task-suggestion__repository p {
+  margin: 0 0 4px;
 }
 
 .task-suggestion__repository label {
   display: grid;
   gap: 4px;
+}
+
+.task-suggestion__repository label > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Sits beside the primary action, matching its height. */
+.task-suggestion__cancel {
+  height: 34px;
+  margin-inline-end: 8px;
+  padding-block: 0;
 }
 
 .task-suggestion__repository-path {
@@ -1950,15 +1974,20 @@ openclaw-chat-video-player {
   font: inherit;
 }
 
+/* One line per project: the name stays whole and the path fades at the card edge. */
 .task-suggestion__repository-choice {
-  display: grid;
-  justify-content: stretch;
+  justify-content: flex-start;
+  gap: 8px;
+  min-width: 0;
   text-align: left;
-  overflow-wrap: anywhere;
 }
 
 .task-suggestion__repository-choice small {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
   color: var(--muted);
+  mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
 }
 
 .task-suggestion__actions {

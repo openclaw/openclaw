@@ -55,7 +55,7 @@ describe("task suggestion tools", () => {
       properties: {
         cwd: {
           description:
-            "Absolute working directory for the follow-up; defaults to the current folder. Git is not required.",
+            "Absolute working directory for the follow-up; defaults to the current folder. For code changes, use the target repository checkout; other tasks do not need Git.",
         },
       },
     });

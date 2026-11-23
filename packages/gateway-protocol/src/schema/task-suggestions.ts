@@ -31,6 +31,8 @@ export const TaskSuggestionSchema = closedObject({
   sessionKey: TaskSessionKeySchema,
   agentId: Type.Optional(TaskAgentIdSchema),
   createdAt: Type.Integer({ minimum: 0 }),
+  /** Whether cwd was a Git checkout with a commit when suggested, so a new worktree can start from it. */
+  worktreeSource: Type.Optional(Type.Boolean()),
 });
 
 /** Lists pending suggestions, optionally narrowed to one source session. */

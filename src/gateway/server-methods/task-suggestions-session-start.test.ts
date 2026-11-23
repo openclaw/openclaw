@@ -61,8 +61,27 @@ async function sourceSuggestion(cwd: string, prompt: string, operator = false) {
     cwd,
     sessionKey: SOURCE_SESSION_KEY,
   });
-  return { request, taskId: (requirePayload(created) as { taskId: string }).taskId };
+  const { taskId, suggestion } = requirePayload(created) as {
+    taskId: string;
+    suggestion: Record<string, unknown>;
+  };
+  return { request, taskId, suggestion };
 }
+
+it("tells clients whether the suggested folder can start a worktree", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async ({ root, workspaceDir }) => {
+    const plain = await sourceSuggestion(await fs.realpath(workspaceDir), "Check the logs.");
+    expect(plain.suggestion).toMatchObject({ worktreeSource: false });
+    const repository = await initializeRepository(root, "project");
+    const checkout = await sourceSuggestion(repository, "Fix the adapter.");
+    expect(checkout.suggestion).toMatchObject({ worktreeSource: true });
+    expect(requirePayload(await checkout.request("taskSuggestions.list", {}))).toMatchObject({
+      suggestions: expect.arrayContaining([
+        expect.objectContaining({ id: plain.taskId, worktreeSource: false }),
+        expect.objectContaining({ id: checkout.taskId, worktreeSource: true }),
+      ]),
+    });
+  }));
 
 it("keeps an unborn-repository suggestion retryable and starts it once from the corrected repository", () =>
   withOpenClawTestState({ scenario: "minimal" }, async ({ root, workspaceDir }) => {
@@ -70,7 +89,9 @@ it("keeps an unborn-repository suggestion retryable and starts it once from the 
     await promisify(execFile)("git", ["init", "-b", "main", cwd]);
     const repository = await initializeRepository(root, "project");
     const prompt = "Investigate the service shutdown using retained evidence.";
-    const { taskId, request } = await sourceSuggestion(cwd, prompt, true);
+    const { taskId, request, suggestion } = await sourceSuggestion(cwd, prompt, true);
+    // A repository without a commit cannot be a worktree source either.
+    expect(suggestion).toMatchObject({ worktreeSource: false });
     const rejected = await request("taskSuggestions.accept", { taskId, mode: "worktree" });
     expect(rejected.response).toMatchObject([
       false,
