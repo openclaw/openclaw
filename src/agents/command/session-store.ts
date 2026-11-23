@@ -42,8 +42,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
   /** Private committed owner and ordered context; an unknown snapshot invalidates older usage. */
   compactionAccounting?: Extract<CompactionAccountingFact, { kind: "durable" }>;
   touchInteraction?: boolean;
-  /** When false, keep the current snooze; internal-event runs do not wake a snoozed session. */
-  clearSnooze?: boolean;
+  /**
+   * When false, skip the lastActivityAt bump so internal-event runs
+   * do not re-flag sessions unread; cron and user-facing runs count as activity.
+   */
+  touchActivity?: boolean;
   /**
    * When true, preserve the pre-existing runtime model fields (model,
    * modelProvider, contextTokens) on the session entry instead of overwriting
@@ -67,7 +70,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   } = params;
   const now = Date.now();
   const touchInteraction = params.touchInteraction !== false;
-  const clearSnooze = params.clearSnooze !== false;
+  const touchActivity = params.touchActivity !== false;
 
   const usage = result.meta.agentMeta?.usage;
   const promptTokens = result.meta.agentMeta?.promptTokens;
@@ -108,6 +111,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
     updatedAt: now,
     sessionStartedAt: entry.sessionStartedAt ?? now,
     lastInteractionAt: touchInteraction ? now : entry.lastInteractionAt,
+    lastActivityAt: touchActivity ? now : entry.lastActivityAt,
     ...(preserveRuntimeModel
       ? {}
       : {
@@ -169,7 +173,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
   const metadataPatch = preserveUserFacingRunState
     ? {
-        // Preserved-state runs must not alter perceived session state.
+        // Preserved-state runs must not alter perceived session state, so the
+        // unread-driving lastActivityAt stays untouched here.
         updatedAt: next.updatedAt,
         ...(touchInteraction ? { lastInteractionAt: next.lastInteractionAt } : {}),
       }
@@ -201,7 +206,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
         patch.totalTokensFresh = next.totalTokensFresh;
         patch.totalTokensVersion = next.totalTokensVersion;
       }
-      if (clearSnooze && !preserveUserFacingRunState && currentEntry.snoozedUntil !== undefined) {
+      if (touchActivity && !preserveUserFacingRunState && currentEntry.snoozedUntil !== undefined) {
         // Clear the current snooze, including one set while this run was in flight.
         patch.snoozedUntil = undefined;
         patch.snoozedAt = undefined;

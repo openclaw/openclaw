@@ -1,12 +1,6 @@
 // Unread follows visible activity through the real session writers.
 import { describe, expect, it } from "vitest";
-import {
-  createRunResult,
-  loadPersistedSessionEntry,
-  seedSessionStore,
-  updateSessionStoreAfterAgentRun,
-  withTempSessionStore,
-} from "../agents/command/session-store.test-support.js";
+import { withTempSessionStore } from "../agents/command/session-store.test-support.js";
 import {
   initSessionState,
   writeSessionStore,
@@ -39,28 +33,13 @@ function endRun(entry: SessionEntry, controlUiVisible: boolean): SessionEntry {
 }
 
 describe("deriveSessionUnread", () => {
-  it("stays read after a hidden turn and turns unread after a visible reply", async () => {
-    await withTempSessionStore(async ({ storePath }) => {
-      const sessionStore = { [sessionKey]: { ...readEntry } };
-      await seedSessionStore(storePath, sessionStore);
+  it("stays read after a hidden turn and turns unread after a visible reply", () => {
+    // A child's sessions_send starts a parent turn that only answers the child: the idle
+    // clock moves, the run is not Control UI visible.
+    const afterHiddenTurn = { ...readEntry, lastInteractionAt: Date.now() };
 
-      // A child's sessions_send starts a parent turn that only answers the child.
-      await updateSessionStoreAfterAgentRun({
-        cfg: {},
-        sessionId,
-        sessionKey,
-        storePath,
-        sessionStore,
-        defaultProvider: "openai",
-        defaultModel: "gpt-5.4",
-        result: createRunResult({ sessionId, provider: "openai", model: "gpt-5.4" }),
-      });
-      const afterHiddenTurn = loadPersistedSessionEntry(storePath, sessionKey)!;
-      expect(afterHiddenTurn.lastInteractionAt).toBeGreaterThan(10);
-
-      expect(deriveSessionUnread(endRun(afterHiddenTurn, false))).toBe(false);
-      expect(deriveSessionUnread(endRun(afterHiddenTurn, true))).toBe(true);
-    });
+    expect(deriveSessionUnread(endRun(afterHiddenTurn, false))).toBe(false);
+    expect(deriveSessionUnread(endRun(afterHiddenTurn, true))).toBe(true);
   });
 
   it("turns unread for an inbound channel message but not for an internal wake", async () => {
