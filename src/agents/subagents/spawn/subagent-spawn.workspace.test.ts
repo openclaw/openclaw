@@ -325,3 +325,41 @@ it.each([
   const entry = persistedModel("custom", model, "auto");
   expect(entry?.modelOverrideRouteResolution).toBe("resolved");
 });
+
+it.each([
+  ["different model", "custom/model-b", true, undefined, undefined, undefined],
+  ["same model alias explicit off", "same-model", false, undefined, undefined, false],
+  ["explicit child off", "custom/model-b", true, false, undefined, false],
+  ["active model differs from saved", "custom/model-a", undefined, undefined, "model-b", true],
+] as const)(
+  "scopes inherited Fast mode: %s",
+  async (_name, model, parentMode, override, savedModel, expected) => {
+    defaults(
+      {
+        model: { primary: "custom/model-a" },
+        models: {
+          "custom/model-a": { alias: "same-model", params: { fastMode: true } },
+          "custom/model-b": { params: { fastMode: false } },
+        },
+      },
+      { tools: { swarm: { enabled: true } } },
+    );
+    parentSession({
+      providerOverride: "custom",
+      modelOverride: savedModel ?? "model-a",
+      fastMode: parentMode,
+    });
+    const result = await spawn(
+      { model, fastMode: override },
+      {
+        ...mainContext,
+        requesterModel: { provider: "custom", model: "model-a" },
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const persistedEntry = Object.values(store)[0];
+    expect(persistedEntry).toBeDefined();
+    expect(persistedEntry?.fastMode).toBe(expected);
+  },
+);
