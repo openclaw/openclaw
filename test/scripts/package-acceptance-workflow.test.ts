@@ -4350,6 +4350,16 @@ type ProtectedPreflightConsumerParams = {
 function writePreflightConsumerTooling(toolingDir: string) {
   mkdirSync(resolve(toolingDir, "lib"), { recursive: true });
   for (const source of [
+    "release-qualification-admission.mjs",
+    "release-qualification-coverage.mjs",
+    "lib/canonical-json.mjs",
+    "lib/ci-node-test-evidence.mjs",
+    "lib/full-release-child-request.mjs",
+    "lib/plain-gh.mjs",
+    "lib/qualification-admission-baselines.mjs",
+    "lib/release-upgrade-baseline.mjs",
+    "lib/release-validation-waivers.json",
+    "lib/release-validation-waivers.mjs",
     "npm-preflight-tooling-identity.mjs",
     "npm-prepared-bundle.mjs",
     "openclaw-npm-extended-stable-release.mjs",
@@ -7145,8 +7155,12 @@ wait_for_run "$WORKFLOW" 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPROVE_ENVIRONMEN
     ).toMatchObject({
       ref: "${{ github.workflow_sha }}",
       "persist-credentials": false,
-      "sparse-checkout": "scripts",
     });
+    expect(
+      workflowStep(resolveJob, "Checkout trusted release validation tooling").with?.[
+        "sparse-checkout"
+      ],
+    ).toBeUndefined();
     for (const stepName of [
       "Write Android release approval",
       "Attest Android release approval",
@@ -9991,10 +10005,12 @@ describe("package artifact reuse", () => {
     for (const checkout of [
       workflowStep(discovery, "Checkout trusted candidate discovery"),
       workflowStep(candidateBinding, "Checkout candidate binding authority"),
-      workflowStep(summary, "Checkout release state verifier"),
     ]) {
       expect(checkout.with?.["sparse-checkout"]).toBe("scripts");
     }
+    expect(
+      workflowStep(summary, "Checkout release state verifier").with?.["sparse-checkout"],
+    ).toBeUndefined();
     expect(discovery.outputs?.state).toBe("${{ steps.discover.outputs.state }}");
     expect(workflowStep(discovery, "Discover trusted release candidate").run).toContain(
       "full-release-candidate-reuse.mjs discover",
@@ -14689,8 +14705,8 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       ref: "${{ github.workflow_sha }}",
       path: ".release-validation-tooling",
       "persist-credentials": false,
-      "sparse-checkout": "scripts",
     });
+    expect(trustedTooling.with?.["sparse-checkout"]).toBeUndefined();
     expect(validateManifest.env).toMatchObject({
       PUBLICATION_CONSUMER:
         "${{ inputs.publish_docker_only && !inputs.publish_openclaw_npm && 'docker-only' || 'publisher' }}",
@@ -14791,6 +14807,16 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
   it("loads the strict release validator from the isolated trusted tooling bundle", () => {
     const root = tempDirs.make("release-validation-tooling-");
     for (const source of [
+      "scripts/docker-channel-promote.mjs",
+      "scripts/docker-release-artifacts.mjs",
+      "scripts/full-release-artifacts.mjs",
+      "scripts/lib/docker-manifest-error.mjs",
+      "scripts/lib/docker-release-policy.mjs",
+      "scripts/lib/npm-core-release-packages.mjs",
+      "scripts/lib/npm-shrinkwrap-dependencies.mjs",
+      "scripts/lib/regexp.mjs",
+      "scripts/npm-prepared-bundle.mjs",
+      "scripts/verify-docker-attestations.mjs",
       "scripts/release-ci-summary.mjs",
       "scripts/lib/release-validation-waivers.mjs",
       "scripts/lib/release-validation-waivers.json",

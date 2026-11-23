@@ -20,7 +20,6 @@ import {
 } from "./lib/actions-artifact-archive.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
-import { resolveFullReleaseNpmPreflight } from "./npm-preflight-tooling-identity.mjs";
 import {
   QUALIFIED_NPM_PREFLIGHT_SCHEMA,
   sameJobExecution,
@@ -584,6 +583,7 @@ export async function verifyRetainedPublicationArtifacts(root, env, options = {}
     }
     return validateArtifactReceipt(receipt.value, request, runId, runAttempt);
   };
+  const { resolveFullReleaseNpmPreflight } = await import("./npm-preflight-tooling-identity.mjs");
   const npm = resolveFullReleaseNpmPreflight({
     manifest: root,
     repository: baseRequest.repository,
