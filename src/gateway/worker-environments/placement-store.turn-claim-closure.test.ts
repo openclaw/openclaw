@@ -524,10 +524,8 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
   }
   await store.releaseTurn(placementClosedClaim);
   expect(placementGate.validateWorkerTurn(placementClosedClaim)).toBe(false);
-  expect(() => placementReceiptAuthority?.()).toThrow("worker turn authority changed");
-  await expect(placementCapability.run(async () => "stale")).rejects.toThrow(
-    "worker turn authority changed",
-  );
+  expect(() => placementReceiptAuthority?.()).toThrow("worker turn ended");
+  await expect(placementCapability.run(async () => "stale")).rejects.toThrow("worker turn ended");
   releaseAgentRunDelegatedAuthority(placementClosedAuthority);
 
   const runClosedClaim = await store.claimTurn({
@@ -556,7 +554,7 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
       releaseAgentRunDelegatedAuthority(runClosedAuthority);
       return "closed-after-await";
     }),
-  ).rejects.toThrow("worker turn authority changed");
+  ).rejects.toThrow("worker turn ended");
   await store.releaseTurn(runClosedClaim);
 });
 

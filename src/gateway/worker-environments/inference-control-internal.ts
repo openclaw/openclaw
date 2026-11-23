@@ -104,7 +104,7 @@ export class WorkerInferenceAuthorityError extends Error {
     readonly reason: WorkerInferenceErrorReason,
     cause?: unknown,
   ) {
-    super(`Worker inference authority changed: ${reason}`, { cause });
+    super(`Worker inference stopped: ${reason}`, { cause });
   }
 }
 
