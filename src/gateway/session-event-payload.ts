@@ -170,6 +170,7 @@ export function buildGatewaySessionSnapshot(params: {
     effectiveResponseUsage: sessionRow.effectiveResponseUsage,
     modelProvider: sessionRow.modelProvider,
     model: sessionRow.model,
+    modelDisplayName: sessionRow.modelDisplayName ?? null,
     activeModelProvider: sessionRow.activeModelProvider ?? null,
     activeModel: sessionRow.activeModel ?? null,
     modelOverrideSource: sessionRow.modelOverrideSource,
@@ -199,6 +200,7 @@ export function buildGatewaySessionSnapshot(params: {
     for (const field of [
       "modelProvider",
       "model",
+      "modelDisplayName",
       "activeModelProvider",
       "activeModel",
       "modelOverrideSource",

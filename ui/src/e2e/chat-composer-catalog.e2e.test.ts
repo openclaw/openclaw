@@ -313,7 +313,10 @@ suite.define(() => {
             otherModel,
             [
               sessionRow(workModel, { key: "agent:work:main" }),
-              sessionRow(otherModel, { key: "agent:other:main" }),
+              sessionRow(otherModel, {
+                key: "agent:other:main",
+                modelDisplayName: otherModel.name,
+              }),
             ],
             200_000,
           ),
@@ -337,7 +340,7 @@ suite.define(() => {
       await navigateToControlUiSession(page, "agent:other:main");
       await gateway.waitForRequest("chat.startup", { after: 1 });
       const targetModelTrigger = activeComposer().locator('[data-chat-model-select="true"]');
-      await expectText(targetModelTrigger, "other-model");
+      await expect.poll(() => targetModelTrigger.textContent()).toBe(otherModel.name);
       expect(await targetModelTrigger.getAttribute("aria-busy")).toBe("false");
       expect(
         await targetModelTrigger.locator(".chat-controls__model-trigger-skeleton").count(),
@@ -360,6 +363,7 @@ suite.define(() => {
         ),
       ).toHaveLength(1);
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
+      await expect.poll(() => targetModelTrigger.textContent()).toBe(otherModel.name);
       await targetModelTrigger.click();
       await expect
         .poll(() => modelOption(activeComposer(), "anthropic/other-model").count())

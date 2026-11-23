@@ -52,6 +52,8 @@ Once session stores are admitted, authorization for direct session targets prepa
 
 `sessions.describe` and `sessions.get` are connection-bound observations. Disconnecting cancels further row-preparation retries, including preparation during authorization, after in-flight preparation settles. Reconnect and issue a new read to obtain a current result. Accepted session mutations retain their existing completion lifetime.
 
+Session rows include `modelDisplayName` when the Gateway already has the selected model's catalog name. Clients can show it before loading the model catalog. The name does not grant model access or identify the model serving a run.
+
 Changing a session's model or native runtime consent can wait for runtime preparation. During that wait, other sessions can still be created or updated. Changes to the same session remain ordered, and a prepared change is rejected if its captured session state changed before commit.
 
 Model-catalog reads in `sessions.create`, `sessions.patch`, `sessions.patchMany`, and Gateway copies through `sessions.catalog.continue` share a 20-second budget per request. A stalled catalog or canceled caller returns retryable `UNAVAILABLE` before the affected session change commits. `sessions.patchMany` retains ordered per-target outcomes; independent successful targets remain committed.

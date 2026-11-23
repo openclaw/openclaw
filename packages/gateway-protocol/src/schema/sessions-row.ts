@@ -314,6 +314,8 @@ export const SessionRowSchema = Type.Object(
     estimatedCostUsd: Type.Optional(Type.Number()),
     model: Type.Optional(Type.String()),
     modelProvider: Type.Optional(Type.String()),
+    /** Prepared catalog name for the selected model, not the model serving a run. */
+    modelDisplayName: Type.Optional(Type.String()),
     /** Runtime model serving this session while it differs from the selected model. */
     activeModel: Type.Optional(Type.String()),
     activeModelProvider: Type.Optional(Type.String()),

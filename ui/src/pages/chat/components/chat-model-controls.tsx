@@ -90,6 +90,7 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
         props.modelSelectionLocked,
         session?.model,
         session?.modelProvider,
+        session?.modelDisplayName,
         session?.modelOverrideSource,
         session?.runtimeSelectionLocked,
         session?.contextTokens,
@@ -125,6 +126,7 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
       modelSelectionLocked,
       sessionModel,
       sessionProvider,
+      sessionModelDisplayName,
       sessionOverrideSource,
       sessionRuntimeLocked,
       sessionContextTokens,
@@ -173,6 +175,19 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
     // A running turn can report its old model (or fallback) after a new choice is saved.
     const defaultProviderHint = defaultsProvider ?? "";
     const defaultCatalogEntry = catalog.entry(defaultModel);
+    const sessionModelValue = resolvePreferredServerChatModelValue(
+      sessionModel,
+      sessionProvider,
+      modelCatalog,
+    );
+    const selectedValue = currentOverride || defaultModel;
+    const selectedEntry = catalog.entry(selectedValue);
+    // A pending catalog need not rename a known selection. Never borrow the row's name
+    // for a different optimistic selection or use it to admit picker choices.
+    const rowLabel =
+      !selectedEntry && selectedValue && selectedValue === sessionModelValue
+        ? sessionModelDisplayName?.trim()
+        : undefined;
     const canonicalDefaultLabel = resolveChatModelPickerLabel(defaultCatalogEntry, defaultLabel);
     const pickerDefaultLabel =
       defaultModel && canonicalDefaultLabel !== defaultLabel
@@ -296,16 +311,14 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
         value: currentOverride,
         label: resolveChatModelPickerLabel(
           currentCatalogEntry,
-          currentCatalogEntry?.name.trim() || currentOverride,
+          currentCatalogEntry?.name.trim() || rowLabel || currentOverride,
         ),
         provider: catalog.provider(currentOverride, currentProviderHint),
       });
     }
     // A persisted pin can match a changed default; equality cannot establish inheritance.
     const selectedAgentRuntime =
-      selectedRuntimeOverride ??
-      sessionRuntimeId ??
-      catalog.entry(currentOverride || defaultModel)?.agentRuntime?.id;
+      selectedRuntimeOverride ?? sessionRuntimeId ?? selectedEntry?.agentRuntime?.id;
     const defaultRuntime = defaultCatalogEntry?.agentRuntime?.id ?? defaultsRuntimeId;
     // A default model can still have a runtime pin; only the configured model/runtime pair inherits Default.
     const pickerValue =
@@ -316,11 +329,7 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
     const activeModelOption = modelOptions.find((option) =>
       isModelPickerOptionSelected(option, pickerValue, selectedAgentRuntime),
     );
-    const activeSessionModel = sessionModel
-      ? catalog.entry(
-          resolvePreferredServerChatModelValue(sessionModel, sessionProvider, modelCatalog),
-        )
-      : undefined;
+    const activeSessionModel = catalog.entry(sessionModelValue);
     const activeOptionModel = activeModelOption
       ? catalog.entry(activeModelOption.value)
       : undefined;
@@ -353,10 +362,10 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
       modelSelectionLocked === true && !currentOverride
         ? translate("chat.selectors.lockedSessionModel")
         : resolveChatModelPickerLabel(
-            catalog.entry(currentOverride || defaultModel),
+            selectedEntry,
             formatPickerModelLabel(
               selectOptions.find((entry) => entry.value === currentOverride)?.label ??
-                (catalog.entry(currentOverride)?.name.trim() || currentOverride || defaultLabel),
+                (currentCatalogEntry?.name.trim() || rowLabel || currentOverride || defaultLabel),
             ),
             currentOverride || defaultModel ? triggerRuntime : null,
           );

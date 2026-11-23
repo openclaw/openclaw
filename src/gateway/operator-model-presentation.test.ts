@@ -88,6 +88,7 @@ it("reuses row redactions before copying while evaluating current model visibili
     },
     modelProvider: "fixture",
     model: "private",
+    modelDisplayName: "Private model",
     activeModelProvider: null,
     activeModel: null,
     contextBudgetStatus: { provider: "fixture", model: "private" },
