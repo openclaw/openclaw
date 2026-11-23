@@ -10,7 +10,6 @@ import { GatewayServiceAuthorityError } from "../daemon/service-update-authority
 import { acquireWithWait } from "../infra/acquire-with-wait.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatGatewayLockFailure } from "../infra/gateway-lock-diagnostics.js";
-import { assertLegacyGatewayStoppedForMaintenance } from "../infra/gateway-lock-legacy.js";
 import { GatewayLockError, readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
@@ -321,7 +320,14 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
   };
   const admitRepair = async () => {
     inspectingActivation = false;
-    await assertLegacyGatewayStoppedForMaintenance(state.env);
+    const { assertLegacyGatewayStoppedWithDoctorRecovery } =
+      await import("./doctor-legacy-lock-recovery.js");
+    await assertLegacyGatewayStoppedWithDoctorRecovery({
+      env: state.env,
+      options: params.options,
+      runtime: params.runtime,
+      signal: exit.signal,
+    });
     // Retain one process owner across every migration and its resource drainage.
     await admitDoctorAgentLeases({
       state,

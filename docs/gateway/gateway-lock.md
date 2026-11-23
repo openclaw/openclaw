@@ -94,6 +94,12 @@ heartbeat, changed payload, replaced file, or changed lease invalidates the
 confirmation; inspect again instead of removing lock files by hand. A locally
 verified live holder is always refused.
 
+When interactive `openclaw doctor --fix` refuses maintenance on a legacy lock
+that inspection covers, it offers the same explicit recovery inline: it shows
+the inspected records and the equivalent `recover-lock --confirm` command,
+then proceeds only after the operator confirms each holder has stopped. The
+offer never appears during updates, for JSON output, or without a TTY.
+
 PostgreSQL inspection uses the selected state family and verifies the original
 anchor, store identity and stable lease-table contract without initializing or
 migrating application schemas. Confirmation serializes with the store's native
