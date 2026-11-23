@@ -69,6 +69,45 @@ describe("resolveTelegramAccount", () => {
     expect(accounts).toMatchObject([{ accountId: "work", token: "tok-work" }]);
   });
 
+  it("does not resolve a disabled account's unresolved SecretRef token", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            disabled: {
+              enabled: false,
+              botToken: { source: "exec", provider: "vault", id: "telegram/disabled" },
+            },
+            work: { botToken: "tok-work" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const account = resolveTelegramAccount({ cfg, accountId: "disabled" });
+
+    expect(account.accountId).toBe("disabled");
+    expect(account.enabled).toBe(false);
+    expect(account.token).toBe("");
+    expect(account.tokenSource).toBe("none");
+  });
+
+  it("still fails closed on an enabled account's unresolved SecretRef token", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            work: { botToken: { source: "exec", provider: "vault", id: "telegram/work" } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(() => resolveTelegramAccount({ cfg, accountId: "work" })).toThrow(
+      /channels\.telegram\.accounts\.work\.botToken: unresolved SecretRef/i,
+    );
+  });
+
   it("preserves normalized agent-bound accounts and default-agent selection", () => {
     const cfg = telegramConfig(
       { botToken: "tok-default", accounts: { Alerts: { botToken: "tok-alerts" } } },

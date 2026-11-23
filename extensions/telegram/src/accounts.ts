@@ -133,7 +133,10 @@ export function resolveTelegramAccount(params: {
     const merged = mergeTelegramAccountConfig(params.cfg, accountId);
     const accountEnabled = merged.enabled !== false;
     const enabled = baseEnabled && accountEnabled;
-    const tokenResolution = resolveTelegramToken(params.cfg, { accountId });
+    const tokenResolution = resolveTelegramToken(params.cfg, {
+      accountId,
+      inactiveSurface: !enabled,
+    });
     return {
       accountId,
       enabled,
