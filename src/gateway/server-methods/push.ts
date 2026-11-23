@@ -42,10 +42,8 @@ import {
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
-import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { prepareDeviceTokenBindingLookup } from "../openclaw-id/device-token-binding.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
-import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
 import { resolveNodePushTransport } from "./node-push-transport.js";
 import { respondError, respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -79,29 +77,15 @@ function hasValidWebPushQuietHoursTimeZone(preferences: {
 }
 
 function createWebPushRequestGuard(options: PushRequestOptions) {
-  const { client, req } = options;
+  const { client } = options;
   const authority = readGatewayRequestMutationAuthority(options);
-  const method = req.method;
-  const deviceId = normalizeOptionalString(client?.connect.device?.id);
   const profileReference = client?.authenticatedUserProfile?.profileId;
-  const assertPolicyCurrent = () => {
-    const role = parseGatewayRole(client?.connect.role ?? "operator");
-    if (
-      !role ||
-      !isRoleAuthorizedForMethod(role, method) ||
-      !authorizeOperatorScopesForMethod(method, client?.connect.scopes ?? []).allowed ||
-      normalizeOptionalString(client?.connect.device?.id) !== deviceId
-    ) {
-      throw new Error("Web Push requester authority changed");
-    }
-  };
   const assertCurrent = (expectedProfile: string | undefined) => {
     if (authority.family === "worker") {
       authority.assertWorkerCurrent();
     } else {
       authority.assertCurrent();
     }
-    assertPolicyCurrent();
     if (client?.authenticatedUserProfile?.profileId !== expectedProfile) {
       throw new Error("Web Push requester profile changed");
     }

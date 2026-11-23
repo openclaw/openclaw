@@ -145,7 +145,7 @@ export function createExecApprovalHandlers(
           trustedAgentRuntime &&
           context.validateAgentRuntimeApprovalAuthority?.(trustedAgentRuntime) !== true
         ) {
-          rejectRequest("agent runtime approval authority is no longer active");
+          rejectRequest("The approval run ended. Start a new turn to request approval again.");
           return;
         }
         const workerOwner = captureApprovalWorkerOwner(trustedAgentRuntime);
