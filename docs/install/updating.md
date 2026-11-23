@@ -2152,7 +2152,31 @@ The updater in a checkout built from `main` between 2026-11-17 and 2026-11-19 (i
 releases under `git-install/releases/<release>/build`) never rebuilds the checkout, so after a
 database migration neither it nor the checkout's `openclaw` command can open the migrated data.
 When the new release would migrate state, its check stops that update before the release is
-switched, leaves the Gateway untouched, and prints a one-time rebuild to run from the checkout:
+switched. On Linux with a systemd user service, the new release then finishes the update
+itself, in a transient user unit that outlives the updater:
+
+1. It waits for the updater to exit and fast-forwards the checkout's branch to the release's
+   commit.
+2. It restarts the Gateway on the release the updater built, which migrates state at startup.
+3. It runs `pnpm install --frozen-lockfile` and `pnpm build` in the checkout while that release
+   serves, then restarts the Gateway on the rebuilt checkout with `openclaw gateway install
+   --force`.
+4. It removes the older layout's link, its releases and their Git worktree records, and records
+   the outcome for `openclaw update status`.
+
+It takes about 5 to 10 minutes. The Gateway restarts twice for a few seconds each and serves in
+between; until the rebuild finishes, the checkout's `openclaw` command refuses the migrated data.
+Follow it with `systemctl --user status openclaw-update-recovery` or
+`journalctl --user -u openclaw-update-recovery`. A paired node runner started from the
+checkout keeps its old code until you restart it; the recorded outcome names it.
+
+It never resets, stashes, cleans or rebases the checkout. It starts nothing, and the update
+prints the rebuild below with the reason, when the checkout has uncommitted changes to tracked
+files, is not on a branch, cannot fast-forward to the release's commit, or has commits its
+upstream lacks; when the service or the `openclaw` command on PATH runs another installation or
+state directory; when less than 4 GiB is free; and on macOS, Windows and hosts without a systemd
+user manager. If the build fails, the Gateway keeps serving the new release and the recorded
+outcome names the command to finish with. Then run from the checkout:
 
 ```sh
 git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force; openclaw gateway start
@@ -2160,12 +2184,11 @@ git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-loc
 
 The rebuild moves the service back to the checkout, which ends the startup failure above. The
 rebuilt Gateway migrates state when the service starts, and `openclaw gateway start` waits until
-it is ready.
-Later `openclaw update` runs use the rebuilt checkout's updater; their first trial falls back to
-the rebuilt checkout. The older layout's `git-install/lib/node_modules/openclaw` link and the
-release it names stay on disk (about 4.6 GiB) and are no longer used. To free that space, remove
-the release directory the link names, then the link, then run `git worktree prune` in the
-checkout. Updates that change no schema still go through the older updater.
+it is ready. Later `openclaw update` runs use the rebuilt checkout's updater. After this
+by-hand rebuild, the older layout's `git-install/lib/node_modules/openclaw` link and the release
+it names stay on disk (about 4.6 GiB) and are no longer used. To free that space, remove the
+release directory the link names, then the link, then run `git worktree prune` in the checkout.
+Updates that change no schema still go through the older updater.
 
 The inspection reports data at risk only on evidence: a schema that moved, or a store it
 cannot read after a new-version Doctor or boot check may have written it. When no

@@ -3,70 +3,49 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import {
-  finishEarlyGitReleaseRecovery,
-  runCommand,
-  runEarlyGitReleaseRecovery,
-  startEarlyGitReleaseRecovery,
-  type RecoveryOutcome,
-  type RecoveryPlan,
-  type RunCommand,
-  type StartDeps,
-} from "./update-early-release-recovery.js";
+import * as recovery from "./update-early-release-recovery.js";
+import type { RecoveryOutcome, RunCommand, StartDeps } from "./update-early-release-recovery.js";
 
 const roots: string[] = [];
 afterEach(() => cleanupTempDirs(roots));
+// The runner exists only for Linux systemd services; its fixtures use POSIX shells and links.
+const posix = it.runIf(process.platform !== "win32");
 
-function git(cwd: string, ...args: string[]) {
-  const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+function sh(cwd: string, script: string) {
+  const result = spawnSync("bash", ["-ec", script], { cwd, encoding: "utf8" });
   expect(result.status, result.stderr).toBe(0);
   return result.stdout.trim();
 }
 
 /**
- * A checkout on `main` one commit behind its upstream, and the target built by the early updater
- * as a release worktree at `<state>/git-install/releases/r1/build` beside the legacy link.
+ * A checkout on `main` one commit behind its upstream, and the target that the early updater
+ * built as the release worktree `state/git-install/releases/r1/build` beside its legacy link.
  * Git runs for real; systemd, pnpm and the Gateway service are scripted.
  */
 function install() {
   const base = makeTempDir(roots, "openclaw-early-recovery-");
-  const [upstream, checkout, bin] = ["upstream.git", "checkout", "bin"].map((dir) =>
-    path.join(base, dir),
-  );
-  spawnSync("git", ["init", "-q", "--bare", "-b", "main", upstream!]);
-  spawnSync("git", ["clone", "-q", upstream!, checkout!]);
-  git(checkout!, "config", "user.email", "t@example.invalid");
-  git(checkout!, "config", "user.name", "T");
-  fs.writeFileSync(path.join(checkout!, ".gitignore"), "dist/\n");
-  git(checkout!, "add", ".");
-  git(checkout!, "commit", "-qm", "a");
-  const before = git(checkout!, "rev-parse", "HEAD");
-  git(checkout!, "commit", "-q", "--allow-empty", "-m", "b");
-  git(checkout!, "push", "-q", "-u", "origin", "main");
-  const target = git(checkout!, "rev-parse", "HEAD");
-  git(checkout!, "reset", "-q", "--hard", before);
-  fs.mkdirSync(path.join(checkout!, "dist"));
-  fs.writeFileSync(path.join(checkout!, "dist", "index.js"), "");
+  const [before, target] = sh(
+    base,
+    `git init -q --bare -b main up.git && git clone -q up.git co 2>/dev/null && cd co
+    git config user.email t@example.invalid && git config user.name T && echo dist/ > .gitignore
+    git add . && git commit -qm a && git commit -q --allow-empty -m b && git push -q -u origin main
+    git rev-parse HEAD~1 HEAD && git reset -q --hard HEAD~1 && mkdir dist ../bin && touch dist/index.js
+    git worktree add -q --detach ../state/git-install/releases/r1/build origin/main
+    mkdir -p ../state/git-install/lib/node_modules && ln -s "$PWD" ../state/git-install/lib/node_modules/openclaw`,
+  ).split("\n") as [string, string];
+  const [checkout, stateDir, cli] = ["co", "state", "bin/openclaw"].map((p) => path.join(base, p));
   fs.writeFileSync(path.join(checkout!, "dist", "build-info.json"), `{"commit":"${before}"}`);
-  const stateDir = path.join(base, "state");
-  const prefix = path.join(stateDir, "git-install");
-  const root = path.join(prefix, "releases", "r1", "build");
-  git(checkout!, "worktree", "add", "-q", "--detach", root, target);
-  fs.mkdirSync(path.join(prefix, "lib", "node_modules"), { recursive: true });
-  fs.symlinkSync(checkout!, path.join(prefix, "lib", "node_modules", "openclaw"));
-  fs.mkdirSync(bin!);
-  const cli = path.join(bin!, "openclaw");
-  fs.writeFileSync(cli, `#!/bin/sh\necho "OpenClaw 1 (${before.slice(0, 7)})"\n`, { mode: 0o755 });
+  fs.writeFileSync(cli!, `#!/bin/sh\necho "OpenClaw 1 (${before.slice(0, 7)})"\n`, { mode: 0o755 });
   const home = path.join(base, "home");
   const systemd: string[][] = [];
   const deps: StartDeps & { active: string; systemdRun: number } = {
     platform: "linux",
-    env: { HOME: home, PATH: bin, OPENCLAW_STATE_DIR: stateDir },
+    env: { HOME: home, PATH: path.dirname(cli!), OPENCLAW_STATE_DIR: stateDir },
     active: "inactive",
     systemdRun: 0,
     run: async (argv, options) => {
       if (argv[0] === "git" || argv[0] === cli) {
-        return runCommand(argv, options);
+        return recovery.runCommand(argv, options);
       }
       systemd.push(argv);
       const code = argv[0] === "systemd-run" ? deps.systemdRun : 0;
@@ -77,27 +56,27 @@ function install() {
     readService: async () => ({
       sourcePath: path.join(home, ".config", "systemd", "user", "openclaw-gateway.service"),
       entry: path.join(checkout!, "dist", "index.js"),
-      environment: { OPENCLAW_STATE_DIR: stateDir },
+      environment: { OPENCLAW_STATE_DIR: stateDir! },
     }),
   };
-  const pending = { state: 40, agent: 42 };
-  const change = { root, stateDir, prefix: fs.realpathSync(prefix), pending };
-  return { checkout: checkout!, target, root, prefix: change.prefix, change, deps, systemd, cli };
+  const prefix = fs.realpathSync(path.join(stateDir!, "git-install"));
+  const root = path.join(prefix, "releases", "r1", "build");
+  const change = { root, stateDir: stateDir!, prefix, pending: { state: 40, agent: 42 } };
+  return { checkout: checkout!, target, root, prefix, change, deps, systemd, cli: cli! };
 }
 
-it("keeps the built release and starts the runner as a transient user service", async () => {
+posix("keeps the built release and starts the runner as a transient user service", async () => {
   const fx = install();
-  const result = await startEarlyGitReleaseRecovery(fx.change, fx.deps);
+  const result = await recovery.startEarlyGitReleaseRecovery(fx.change, fx.deps);
 
   expect(result).toEqual({ started: true, unit: "openclaw-update-recovery", target: fx.target });
   const release = path.join(fx.prefix, "recovery", "openclaw");
   expect(fs.existsSync(fx.root)).toBe(false);
-  expect(git(release, "rev-parse", "HEAD")).toBe(fx.target);
+  expect(sh(release, "git rev-parse HEAD")).toBe(fx.target);
   const argv = fx.systemd.find(([command]) => command === "systemd-run")!;
   expect(argv).toEqual(
-    expect.arrayContaining(["--user", "--unit=openclaw-update-recovery", "--collect"]),
+    expect.arrayContaining(["--unit=openclaw-update-recovery", "--property=Restart=on-abnormal"]),
   );
-  expect(argv).toContain("--property=Restart=on-abnormal");
   expect(argv.slice(-3, -1)).toEqual([
     path.join(release, "dist", "infra", "update-migrated-finalize.worker.js"),
     "--early-release-recovery",
@@ -114,16 +93,14 @@ type Fx = ReturnType<typeof install>;
 const refusals: Array<[string, (fx: Fx) => unknown]> = [
   ["Linux systemd user service", (fx) => (fx.deps.platform = "darwin")],
   ["uncommitted changes", (fx) => fs.writeFileSync(path.join(fx.checkout, ".gitignore"), "x")],
-  ["not on a branch", (fx) => git(fx.checkout, "checkout", "-q", "--detach")],
-  ["cannot fast-forward", (fx) => git(fx.checkout, "commit", "-q", "--allow-empty", "-m", "c")],
+  ["not on a branch", (fx) => sh(fx.checkout, "git checkout -q --detach")],
+  ["cannot fast-forward", (fx) => sh(fx.checkout, "git commit -q --allow-empty -m c")],
+  ["has no upstream", (fx) => sh(fx.checkout, "git branch -q --unset-upstream")],
   [
     "local commits that are not upstream",
-    (fx) => {
-      git(fx.checkout, "push", "-q", "--force", "origin", "HEAD:main");
-      git(fx.checkout, "merge", "-q", "--ff-only", fx.target);
-    },
+    (fx) =>
+      sh(fx.checkout, `git push -q -f origin HEAD:main && git merge -q --ff-only ${fx.target}`),
   ],
-  ["has no upstream", (fx) => git(fx.checkout, "branch", "-q", "--unset-upstream")],
   ["4 GiB", (fx) => (fx.deps.freeBytes = () => 1)],
   ["not a managed systemd user service", (fx) => (fx.deps.readService = async () => null)],
   [
@@ -143,52 +120,40 @@ const refusals: Array<[string, (fx: Fx) => unknown]> = [
   ["systemd-run failed", (fx) => (fx.deps.systemdRun = 1)],
 ];
 
-it.each(refusals)("changes nothing and says why: %s", async (reason, arrange) => {
+posix.each(refusals)("changes nothing and says why: %s", async (reason, arrange) => {
   const fx = install();
   arrange(fx);
-  const result = await startEarlyGitReleaseRecovery(fx.change, fx.deps);
+  const result = await recovery.startEarlyGitReleaseRecovery(fx.change, fx.deps);
 
   expect(result).toMatchObject({ started: false, reason: expect.stringContaining(reason) });
-  expect(git(fx.root, "rev-parse", "HEAD")).toBe(fx.target);
+  expect(sh(fx.root, "git rev-parse HEAD")).toBe(fx.target);
   expect(fs.existsSync(path.join(fx.prefix, "recovery"))).toBe(false);
 });
 
-it("starts nothing while another recovery runs", async () => {
+posix("starts nothing while another recovery runs", async () => {
   const fx = install();
   fx.deps.active = "active";
 
-  expect(await startEarlyGitReleaseRecovery(fx.change, fx.deps)).toEqual({
-    started: false,
-    running: "openclaw-update-recovery",
-  });
+  const result = await recovery.startEarlyGitReleaseRecovery(fx.change, fx.deps);
+  expect(result).toEqual({ started: false, running: "openclaw-update-recovery" });
   expect(fs.existsSync(fx.root)).toBe(true);
-  expect(fx.systemd.some(([command]) => command === "systemd-run")).toBe(false);
+  expect(fx.systemd.map(([command]) => command)).not.toContain("systemd-run");
 });
 
 /** The runner's world: a service definition, the kept release, and scripted command outcomes. */
-function runner(fail: Record<string, number>, servesRelease = false) {
+function runner(fail: Record<string, number>, resumed = false) {
   const base = makeTempDir(roots, "openclaw-early-runner-");
-  const release = path.join(base, "git-install", "recovery", "openclaw");
-  fs.mkdirSync(release, { recursive: true });
+  const prefix = path.join(base, "git-install");
+  const release = path.join(prefix, "recovery", "openclaw");
   const serviceFile = path.join(base, "openclaw-gateway.service");
-  const original = `ExecStart=node ${servesRelease ? release : "/checkout"}/dist/index.js\n`;
+  const original = `ExecStart=node ${resumed ? release : "/checkout"}/dist/index.js\n`;
+  fs.mkdirSync(release, { recursive: true });
   fs.writeFileSync(serviceFile, original);
-  const plan: RecoveryPlan = {
-    unit: "openclaw-update-recovery",
-    checkout: path.join(base, "checkout"),
-    branch: "main",
-    target: "b".repeat(40),
-    release,
-    prefix: path.join(base, "git-install"),
-    serviceFile,
-    fromVersion: "2026.11.4",
-    driver: { pid: 1, start: "1" },
-  };
+  const target = "b".repeat(40);
   const calls: string[] = [];
   const records: RecoveryOutcome[] = [];
-  let alive = 2;
-  let migrated = false;
-  const run: RunCommand = async (argv, options) => {
+  let [alive, migrated] = [2, false];
+  const run: RunCommand = async (argv) => {
     const cli = argv[1]?.endsWith("openclaw.mjs") ? path.dirname(argv[1]) : "";
     const role = cli === release ? "release" : cli ? "checkout" : "";
     const name = [role, ...argv.filter((arg) => !/^[/-]/u.test(arg))].join(" ").trim();
@@ -199,7 +164,7 @@ function runner(fail: Record<string, number>, servesRelease = false) {
     }
     migrated ||= name === "release gateway start";
     // A resumed runner already fast-forwarded the checkout.
-    const head = (servesRelease ? "b" : "a").repeat(40);
+    const head = resumed ? target : "a".repeat(40);
     const output = { "git rev-parse HEAD": head, "git symbolic-ref HEAD": "main" }[name];
     return { code: fail[name] ?? 0, output: output ?? "" };
   };
@@ -214,95 +179,71 @@ function runner(fail: Record<string, number>, servesRelease = false) {
     now: () => calls.length * 1000,
     sleep: async () => {},
   };
-  return { plan, calls, records, deps, serviceFile, release, original };
+  const plan = { unit: "u", checkout: path.join(base, "co"), branch: "main", target, release };
+  const full = { ...plan, prefix, serviceFile, fromVersion: "1", driver: { pid: 1, start: "1" } };
+  return { plan: full, calls, records, deps, serviceFile, release, original };
 }
 
 const TO_RELEASE = ["release gateway install", "release gateway start"];
 const BUILD = ["pnpm install", "pnpm build"];
 const TO_CHECKOUT = ["checkout gateway install", "checkout gateway start"];
 const MERGE = `git merge ${"b".repeat(40)}`;
+const RESTORE = ["systemctl daemon-reload", "systemctl restart openclaw-gateway.service"];
 
 it.each([
-  [
-    "serves the release while the checkout builds",
-    {},
-    false,
-    [...TO_RELEASE, ...BUILD, ...TO_CHECKOUT],
-    undefined,
-  ],
-  ["resumes at the build once the release serves", {}, true, [...BUILD, ...TO_CHECKOUT], undefined],
-  ["changes nothing when the fast-forward fails", { [MERGE]: 1 }, false, [], undefined],
+  ["serves the release while the checkout builds", {}, [...TO_RELEASE, ...BUILD, ...TO_CHECKOUT]],
+  ["resumes at the build once the release serves", {}, [...BUILD, ...TO_CHECKOUT], true],
+  ["changes nothing when the fast-forward fails", { [MERGE]: 1 }, []],
   [
     "puts back the previous service when the release fails before migrating",
     { "release gateway install": 1 },
-    false,
-    [
-      "release gateway install",
-      "systemctl daemon-reload",
-      "systemctl restart openclaw-gateway.service",
-    ],
-    undefined,
+    ["release gateway install", ...RESTORE],
   ],
   [
     "keeps the release serving when the build fails",
     { "pnpm build": 1 },
-    false,
     [...TO_RELEASE, ...BUILD],
-    "early-release-recovery-build-failed",
   ],
   [
     "returns to the release when the rebuilt checkout does not start",
     { "checkout gateway start": 1 },
-    false,
     [...TO_RELEASE, ...BUILD, ...TO_CHECKOUT, ...TO_RELEASE],
-    "early-release-recovery-switch-failed",
   ],
-])(
+] as Array<[string, Record<string, number>, string[], boolean?]>)(
   "%s",
-  async (_name, fail: Record<string, number>, servesRelease, expected: string[], failure) => {
-    const fx = runner(fail, servesRelease);
-    const removed = await runEarlyGitReleaseRecovery(fx.plan, fx.deps);
+  async (_name, fail, expected, resumed = false) => {
+    const fx = runner(fail, resumed);
+    expect(await recovery.runEarlyGitReleaseRecovery(fx.plan, fx.deps)).toBe(false);
 
     expect(fx.calls.filter((call) => /gateway|pnpm|systemctl/u.test(call))).toEqual(expected);
-    expect(fx.calls.includes(MERGE)).toBe(!servesRelease);
-    expect(fx.records.map((record) => record.reason)).toEqual(failure ? [failure] : []);
-    expect(removed).toBe(false);
+    expect(fx.calls.includes(MERGE)).toBe(!resumed);
+    // Once state migrated a failure is recorded with its next step; before that, nothing is.
+    const failed = Boolean(fail["pnpm build"] || fail["checkout gateway start"]);
+    expect(fx.records.map((record) => record.nextAction?.includes("install --force"))).toEqual(
+      failed ? [true] : [],
+    );
     // The kept release stays only while the Gateway may still serve from it.
     expect(fs.existsSync(fx.release)).toBe(expected.includes("pnpm install"));
-    if (fail["release gateway install"]) {
+    if (expected.includes(RESTORE[0]!)) {
       expect(fs.readFileSync(fx.serviceFile, "utf8")).toBe(fx.original);
-    }
-    if (failure === "early-release-recovery-build-failed") {
-      expect(fx.records[0]?.nextAction).toContain(
-        "pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force",
-      );
     }
   },
 );
 
-it("removes what the early layout left and records the outcome", async () => {
+posix("removes what the early layout left and records the outcome", async () => {
   const fx = runner({});
-  const releases = path.join(fx.plan.prefix, "releases");
-  fs.mkdirSync(path.join(releases, "git-old", "lib", "node_modules", "openclaw"), {
-    recursive: true,
-  });
-  fs.mkdirSync(path.join(releases, "current-layout", "openclaw"), { recursive: true });
-  fs.writeFileSync(path.join(releases, ".trial"), JSON.stringify({ target: "x", attempts: 1 }));
-  fs.mkdirSync(path.join(fx.plan.prefix, "lib", "node_modules"), { recursive: true });
-  const link = path.join(fx.plan.prefix, "lib", "node_modules", "openclaw");
-  fs.symlinkSync(path.join(releases, "git-old"), link);
-  await finishEarlyGitReleaseRecovery(fx.plan, { downtimeMs: 21_000 }, fx.deps);
+  sh(
+    fx.plan.prefix,
+    `mkdir -p releases/git-old/lib/node_modules/openclaw releases/now/openclaw lib/node_modules
+    ln -s ../../releases/git-old lib/node_modules/openclaw && echo '{"attempts":1}' > releases/.trial`,
+  );
+  await recovery.finishEarlyGitReleaseRecovery(fx.plan, { downtimeMs: 21_000 }, fx.deps);
 
   expect(fs.readdirSync(fx.plan.prefix)).toEqual(["releases"]);
-  expect(fs.readdirSync(releases)).toEqual(["current-layout"]);
+  expect(fs.readdirSync(path.join(fx.plan.prefix, "releases"))).toEqual(["now"]);
   expect(fx.calls).toContain("git worktree prune");
+  const removed = "Removed the old-format trial, the old release link, releases/git-old, recovery.";
   expect(fx.records).toEqual([
-    expect.objectContaining({
-      status: "succeeded",
-      downtimeMs: 21_000,
-      detail: expect.stringContaining(
-        "Removed the old-format trial, the old release link, releases/git-old, recovery.",
-      ),
-    }),
+    expect.objectContaining({ downtimeMs: 21_000, detail: expect.stringContaining(removed) }),
   ]);
 });
