@@ -303,13 +303,12 @@ export function renderUpdateRunReport(
       run.reason === "preflight-node-runtime-incompatible");
   const owed = listUpdateOwedSteps(run);
   // An owed step restates the warning it was recorded with; report that failure once.
-  const warningMessages = (steps: UpdateRunRecord["steps"]) => [
-    ...updateRunWarningMessages(steps).filter(
+  const warnings = [
+    ...updateRunWarningMessages(run.steps).filter(
       (message) => !owed.some((step) => message.startsWith(step.reason)),
     ),
     ...owed.map(formatUpdateOwedStep),
-  ];
-  const warnings = warningMessages(run.steps).map((message) => `Warning: ${message}`);
+  ].map((message) => `Warning: ${message}`);
   // A fresh prerequisite refusal leads with its producer's refusal block: the problem line,
   // then the owner's recovery steps. Saved records keep the historical-advice layout below.
   const refusalBlock =
@@ -320,22 +319,10 @@ export function renderUpdateRunReport(
   let headline: string;
   switch (run.status) {
     case "succeeded": {
-      // Findings from a completed inspection pass are advice. A pass that did not complete
-      // (no lint receipt) still needs attention, because `status --all` shows only the headline.
-      const inspected = run.steps.some(
-        ({ step }) => step === "finalize:doctor-lint:post-activation doctor inspections",
-      );
-      const attentionCount = warningMessages(
-        run.steps.filter(
-          ({ step }) =>
-            !inspected ||
-            (step !== "warning:post-activation doctor inspections" &&
-              !step.startsWith("warning:post-activation doctor inspections:")),
-        ),
-      ).length;
+      // A skipped post-swap step keeps the version change; the headline must not read as clean.
       const attention =
-        attentionCount > 0
-          ? `; ${attentionCount} warning${attentionCount === 1 ? " needs" : "s need"} attention`
+        warnings.length > 0
+          ? `; ${warnings.length} warning${warnings.length === 1 ? " needs" : "s need"} attention`
           : "";
       headline = repairRun
         ? `✅ OpenClaw repair completed${after ? ` for ${after}` : ""}${attention}.`
