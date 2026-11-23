@@ -22,16 +22,23 @@ export function registerStatusDashboardTargetTests(params: {
     { args: ["--port", "19001"], port: 19002, role: "diagnostic-only" },
     { args: [], port: 19002, role: "diagnostic-only" },
     { args: ["--port", "19001"], port: 19001, role: "target" },
-    { args: ["--port", "19001"], port: 19001, role: "target", host: "10.0.0.5" },
-    { args: ["--port", "19001"], port: 19001, role: "diagnostic-only", host: "10.0.0.9" },
+    { args: ["--port", "19001"], port: 19001, role: "target", host: "10.0.0.5", tls: true },
+    { args: ["--port", "19001"], port: 19001, role: "target", host: "10.0.0.5", tls: false },
+    {
+      args: ["--port", "19001"],
+      port: 19001,
+      role: "diagnostic-only",
+      host: "10.0.0.9",
+      tls: true,
+    },
   ])(
-    "probes the dashboard port $port on $host with installed args $args ($role)",
-    async ({ args, port, role, host }) => {
+    "probes the dashboard port $port on $host (tls $tls) with installed args $args ($role)",
+    async ({ args, port, role, host, tls }) => {
       const gateway = { port: 19001, auth: { token: "daemon-token" } };
-      // With a host: TLS on a custom bind to 10.0.0.5, so only that host is the service's endpoint.
+      // With a host: a custom bind to 10.0.0.5, so only that host is the service's endpoint.
       params.setDaemonConfig({
         gateway: host
-          ? { ...gateway, bind: "custom", customBindHost: "10.0.0.5", tls: { enabled: true } }
+          ? { ...gateway, bind: "custom", customBindHost: "10.0.0.5", tls: { enabled: tls } }
           : gateway,
       });
       if (host) {
@@ -48,7 +55,7 @@ export function registerStatusDashboardTargetTests(params: {
         environment: params.daemonEnvironment,
       });
 
-      const probeUrl = host ? `wss://${host}:${port}` : "ws://127.0.0.1:" + port;
+      const probeUrl = host ? `${tls ? "wss" : "ws"}://${host}:${port}` : "ws://127.0.0.1:" + port;
       const status = await params.gatherStatus({ dashboardTarget: { port, probeUrl } });
 
       const input = callGatewayStatusProbe.mock.calls[0]?.[0];
@@ -56,10 +63,10 @@ export function registerStatusDashboardTargetTests(params: {
       expect(status.rpc?.url).toBe(probeUrl);
       expect(status.service.targetRole).toBe(role);
       expect(input.url).toBe(probeUrl);
-      expect(input.token).toBe(role === "target" ? "daemon-token" : undefined);
-      expect(input.tlsFingerprint).toBe(
-        host && role === "target" ? "sha256:11:22:33:44" : undefined,
-      );
+      // Off loopback, only the local certificate pin lets the probe borrow service credentials.
+      const native = role === "target" && (!host || tls);
+      expect(input.token).toBe(native ? "daemon-token" : undefined);
+      expect(input.tlsFingerprint).toBe(native && host ? "sha256:11:22:33:44" : undefined);
     },
   );
 }
