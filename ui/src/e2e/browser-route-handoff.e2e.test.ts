@@ -105,16 +105,23 @@ suite.define(() => {
     );
   });
 
-  it("keeps a long alternative address inside its button on a phone", async () => {
+  it("keeps a long alternative address on one line and opens its full destination on a phone", async () => {
     await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport: { width: 390, height: 844 } },
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { width: 390, height: 844 },
+        hasTouch: true,
+        isMobile: true,
+      },
       async ({ page }) => {
         const tab = makeTab("existing", "Design review", "https://design.invalid/");
         await routeMedia(page);
-        await installMockGateway(page, {
+        const gateway = await installMockGateway(page, {
           featureMethods: ["browser.request"],
           operatorScopes: ["operator.admin"],
           methodResponses: browserResponses(
+            browserCase("/navigate", { targetId: tab.targetId }),
             ...browserCases(tab, {
               targetId: tab.targetId,
               path: "/fixture/design.png",
@@ -131,14 +138,25 @@ suite.define(() => {
         const panel = page.locator("openclaw-browser-panel");
         await panel.locator('.bp-shot[alt="Design review"]').waitFor();
         const draft = "studio/assets/56f03e68c20240a98eeff51dfa791bc9";
-        await panel.getByRole("textbox", { name: "Page address" }).fill(draft);
-        const option = panel.getByRole("button", { name: "Go to https://" + draft, exact: true });
-        const overflow = await option.evaluate((button) => {
-          const text = document.createRange();
-          text.selectNodeContents(button);
-          return text.getBoundingClientRect().right - button.getBoundingClientRect().right;
-        });
-        expect(overflow).toBeLessThanOrEqual(0);
+        const address = panel.getByRole("textbox", { name: "Page address" });
+        await address.fill("studio");
+        const short = panel.getByRole("button", { name: "Go to https://studio/", exact: true });
+        const height = await short.evaluate((button) => button.getBoundingClientRect().height);
+        await address.fill(draft);
+        const url = "https://" + draft;
+        const option = panel.getByRole("button", { name: "Go to " + url, exact: true });
+        expect(await option.evaluate((button) => button.getBoundingClientRect().height)).toBe(
+          height,
+        );
+        expect(await option.getAttribute("title")).toBe(url);
+        await option.tap();
+        await expect
+          .poll(async () =>
+            (await gateway.getRequests("browser.request")).map((request) => request.params),
+          )
+          .toContainEqual(
+            expect.objectContaining({ path: "/navigate", body: { targetId: tab.targetId, url } }),
+          );
       },
     );
   });
