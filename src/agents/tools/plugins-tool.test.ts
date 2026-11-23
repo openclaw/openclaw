@@ -283,3 +283,36 @@ it.each(["plugin-24", "café"])("bounds inventory and narrows it with %s", async
   const selected = { id: "plugin-24", state: "enabled", version: "1.0.0" };
   expect(narrowed.details).toMatchObject({ plugins: [selected], matching: 1, omitted: 0 });
 });
+
+it("preserves generation and bounded per-plugin runtime within list budget", async () => {
+  const plugins = Array.from({ length: 20 }, (_, index) => ({
+    id: `plugin-${index}-${"x".repeat(40)}`,
+    version: "1.0.0",
+    state: "enabled",
+    runtime: {
+      state: "error",
+      generation: 42,
+      error: "e".repeat(400),
+    },
+  }));
+  callGateway.mockResolvedValue({
+    generation: 42,
+    mutationAllowed: true,
+    plugins,
+  });
+  const tool = createPluginsTool();
+  const res = await tool.execute("list-budget", { action: "list" });
+  const details = res.details as {
+    generation: number;
+    plugins: Array<{ id: string; runtime?: { state?: string; error?: string } }>;
+    matching: number;
+    omitted: number;
+  };
+  expect(details.generation).toBe(42);
+  expect(details.matching).toBe(20);
+  expect(details.plugins.length).toBeGreaterThan(0);
+  expect(details.plugins.length).toBeLessThan(20);
+  expect(details.omitted).toBe(20 - details.plugins.length);
+  expect(details.plugins[0]?.runtime?.state).toBe("error");
+  expect(details.plugins[0]?.runtime?.error?.length).toBeLessThanOrEqual(160);
+});
