@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
 import {
   createOpenClawTestInstance,
@@ -106,8 +107,8 @@ suite.define(() => {
         const persisted = page.locator(".cfg-map").first();
         await persisted.waitFor({ state: "visible" });
         // Map keys render as input values, not descendant text.
-        await expect(persisted.locator("input").first()).toHaveValue("vllm/proof-model");
-        await expect(persisted.locator("input").nth(1)).toHaveValue("proof-alias");
+        await expectBrowser(persisted.locator("input").first()).toHaveValue("vllm/proof-model");
+        await expectBrowser(persisted.locator("input").nth(1)).toHaveValue("proof-alias");
         const reloadedShot = await takeControlUiScreenshotFrame(page, page.locator("body"), [], {
           animations: "disabled",
         });
