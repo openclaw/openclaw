@@ -8,7 +8,10 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as agentTools from "./agent-tools.async.js";
 import { createEnteredGate } from "./entered-gate.test-support.js";
+import { createAgentHarnessHostCapabilities } from "./harness/host-capability.js";
+import { admissionFixture } from "./harness/host-capability.shard.test-support.js";
 import type { AgentHarnessModelCatalogParams } from "./harness/types.js";
 import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
 import { prepareModelCatalogView } from "./model-catalog-view.js";
@@ -138,6 +141,21 @@ describe("prepared model runtime config stamps", () => {
         expect(getPreparedModelRuntimePolicyConfigReader(liveLease.snapshot)!()).toBe(revoked);
         expect(getPreparedModelRuntimePolicyConfigReader(scopedLease.snapshot)!()).toBe(scoped);
         expect(second.snapshot).not.toHaveProperty("readPolicyConfig");
+        const { attempt, admission } = await admissionFixture().admittedAttempt("listing-policy", {
+          config: live,
+          preparedModelRuntime: liveLease.snapshot,
+        });
+        const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+        using build = vi
+          .spyOn(agentTools, "createOpenClawCodingToolsInternalAsync")
+          .mockResolvedValue([]);
+        try {
+          await host.capabilities.createToolSurfaceAsync!({ config: structuredClone(live) });
+          expect(build.mock.lastCall?.[0]?.readDelegationConfig?.()).toBe(revoked);
+        } finally {
+          host.close();
+          admission.close();
+        }
       } finally {
         clearRuntimeConfigSnapshot();
       }

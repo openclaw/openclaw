@@ -196,11 +196,13 @@ export function captureRequiredWorkspaceToolFloor(
 export function captureHostToolPolicyConfigReader(attempt: AgentHarnessHostAttempt) {
   const policyConfig = attempt.config;
   const requiredWorkspace = attempt.requireWorkspaceOnly === true;
+  const admittedPolicyReader = getPreparedModelRuntimePolicyConfigReader(
+    attempt.preparedModelRuntime,
+  );
   const readPolicyConfig =
-    getPreparedModelRuntimePolicyConfigReader(attempt.preparedModelRuntime) ??
-    (policyConfig ? createRuntimeConfigReader(policyConfig) : undefined);
+    admittedPolicyReader ?? (policyConfig ? createRuntimeConfigReader(policyConfig) : undefined);
   return (options: HostToolSurfaceOptions) =>
-    requiredWorkspace || !options.config || options.config === policyConfig
+    admittedPolicyReader || requiredWorkspace || !options.config || options.config === policyConfig
       ? readPolicyConfig
       : createRuntimeConfigReader(options.config);
 }
