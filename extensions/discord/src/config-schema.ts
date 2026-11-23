@@ -13,6 +13,7 @@ import {
   ProviderCommandsSchema,
   refineChannelDmPolicy,
   TtsConfigSchema,
+  UnmentionedInboundSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
@@ -68,6 +69,7 @@ const DiscordGuildChannelSchema = buildGroupEntrySchema(
   {
     requireMentionInBotThreads: z.boolean().optional(),
     ignoreOtherMentions: z.boolean().optional(),
+    unmentionedInbound: UnmentionedInboundSchema.optional(),
     users: DiscordIdListSchema.optional(),
     roles: DiscordIdListSchema.optional(),
     includeThreadStarter: z.boolean().optional(),
@@ -93,6 +95,7 @@ const DiscordGuildSchema = buildGroupEntrySchema(
     requireMentionInBotThreads: z.boolean().optional(),
     slug: z.string().optional(),
     ignoreOtherMentions: z.boolean().optional(),
+    unmentionedInbound: UnmentionedInboundSchema.optional(),
     ...buildChannelReactionShape({
       notificationModes: ["off", "own", "all", "allowlist"],
     }),

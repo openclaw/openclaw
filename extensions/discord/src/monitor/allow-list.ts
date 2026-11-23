@@ -314,6 +314,7 @@ function resolveDiscordChannelConfigEntry(
     requireMention: entry.requireMention,
     requireMentionInBotThreads: entry.requireMentionInBotThreads,
     ignoreOtherMentions: entry.ignoreOtherMentions,
+    unmentionedInbound: entry.unmentionedInbound,
     skills: entry.skills,
     enabled: entry.enabled,
     users: entry.users,

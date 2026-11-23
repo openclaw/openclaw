@@ -32,6 +32,11 @@ export type DiscordGuildChannelConfig = Omit<CommonChannelGroupConfig, "allowFro
    * Default: false.
    */
   ignoreOtherMentions?: boolean;
+  /**
+   * Override how unmentioned messages in this channel are submitted. Channel settings override
+   * guild settings, which override `agents.entries.*.groupChat` and `messages.groupChat`.
+   */
+  unmentionedInbound?: "user_request" | "room_event";
   /** Optional allowlist for channel senders (ids or names). */
   users?: string[];
   /** Optional allowlist for channel senders by role ID. */
@@ -53,6 +58,7 @@ export type DiscordGuildEntry = Pick<
   | "requireMention"
   | "requireMentionInBotThreads"
   | "ignoreOtherMentions"
+  | "unmentionedInbound"
   | "tools"
   | "toolsBySender"
   | "users"

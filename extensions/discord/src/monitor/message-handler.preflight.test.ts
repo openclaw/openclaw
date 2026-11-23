@@ -484,6 +484,36 @@ describe("preflightDiscordMessage", () => {
     expect(saveRemoteMediaMock).not.toHaveBeenCalled();
   });
 
+  it("applies a channel unmentionedInbound override without changing sibling channels", async () => {
+    const guildId = "guild-room-inbound";
+    const guildEntries = {
+      [guildId]: {
+        requireMention: false,
+        channels: {
+          "channel-ambient": { unmentionedInbound: "room_event" as const },
+          "channel-regular": {},
+        },
+      },
+    };
+    const run = (channelId: string) =>
+      runGuildPreflight({
+        channelId,
+        guildId,
+        client: createGuildTextClient(channelId),
+        message: createDiscordMessage({
+          id: `m-${channelId}`,
+          channelId,
+          content: "ambient note",
+          author: { id: "user-room-inbound", bot: false, username: "Alice" },
+        }),
+        guildEntries,
+      });
+    expect(expectPreflightResult(await run("channel-ambient")).inboundEventKind).toBe("room_event");
+    expect(expectPreflightResult(await run("channel-regular")).inboundEventKind).toBe(
+      "user_request",
+    );
+  });
+
   it("does not count bot messages that earlier preflight gates drop (#58789)", async () => {
     const channelId = "channel-bot-loop-dropped";
     const guildId = "guild-bot-loop-dropped";

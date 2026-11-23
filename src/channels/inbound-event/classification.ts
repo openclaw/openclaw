@@ -34,10 +34,18 @@ export function classifyChannelInboundEvent(
   return "room_event";
 }
 
+/**
+ * Resolves unmentioned group traffic policy. Precedence: room (the channel's resolved per-room
+ * config) > agent (`agents.entries.*.groupChat`) > global (`messages.groupChat`).
+ */
 export function resolveUnmentionedGroupInboundPolicy(params: {
   cfg: OpenClawConfig;
   agentId?: string;
+  roomUnmentionedInbound?: InboundEventKind;
 }): InboundEventKind {
+  if (params.roomUnmentionedInbound) {
+    return params.roomUnmentionedInbound;
+  }
   const agentGroupChat = params.agentId
     ? resolveAgentConfig(params.cfg, params.agentId)?.groupChat
     : undefined;

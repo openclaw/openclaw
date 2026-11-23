@@ -205,6 +205,8 @@ Who may reach the bot, which guild channels it answers in, and which Discord act
 
     `ignoreOtherMentions` optionally drops messages addressed to another identity but not the bot. This covers explicit user/role mentions (excluding @everyone/@here) and replies to another non-webhook bot. An explicit mention of the current bot still wins.
 
+    `unmentionedInbound` (`user_request|room_event`) on a guild or a guild channel overrides the agent and global policy for unmentioned messages there. The channel value wins over the guild value. See [Ambient room events](/channels/ambient-room-events#room-specific-policy).
+
     Group DMs:
 
     - default: ignored (`dm.groupEnabled=false`)

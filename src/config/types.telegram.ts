@@ -136,6 +136,11 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
 export type TelegramTopicConfig = Omit<CommonChannelGroupConfig, "tools" | "toolsBySender"> & {
   /** Override mention gating in forum topics created by this bot; omitted preserves existing policy. */
   requireMentionInBotThreads?: boolean;
+  /**
+   * Override how unmentioned messages are submitted. Topic settings override group settings, which
+   * override `agents.entries.*.groupChat.unmentionedInbound` and `messages.groupChat.unmentionedInbound`.
+   */
+  unmentionedInbound?: "user_request" | "room_event";
   /** Emit internal message hooks for mention-skipped topic messages. */
   ingest?: boolean;
   /** Per-topic override for group message policy (open|disabled|allowlist). */
@@ -167,7 +172,10 @@ export type TelegramDirectConfig = Omit<CommonChannelGroupConfig, "requireMentio
   /** Per-DM override for DM message policy (open|disabled|allowlist). */
   dmPolicy?: DmPolicy;
   /** Per-topic configuration for DM topics (key is message_thread_id as string, or "*" for topic defaults). */
-  topics?: Record<string, Omit<TelegramTopicConfig, "requireMentionInBotThreads">>;
+  topics?: Record<
+    string,
+    Omit<TelegramTopicConfig, "requireMentionInBotThreads" | "unmentionedInbound">
+  >;
   /** If true, require messages to be from a topic when topics are enabled. */
   requireTopic?: boolean;
   /** Controls outbound error reporting for this DM. */

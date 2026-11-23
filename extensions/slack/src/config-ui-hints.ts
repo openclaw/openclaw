@@ -12,6 +12,11 @@ const botThreadMentionHint = {
   help: "Override mention gating in threads whose root message was sent by this bot. False allows unmentioned replies; true requires a mention even when implicit reply or participation signals are enabled. Omit to preserve the existing mention policy. Channel settings override account settings; access restrictions still apply.",
 };
 
+const roomUnmentionedInboundHint = {
+  label: "Channel Unmentioned Inbound",
+  help: 'Override how unmentioned messages in this channel are submitted. "room_event" makes them quiet context that only posts through the message tool; "user_request" keeps automatic replies. Overrides agents.entries.*.groupChat.unmentionedInbound and messages.groupChat.unmentionedInbound. Requires requireMention: false for the channel.',
+};
+
 export const slackChannelConfigUiHints = {
   historyLimit: observedGroupHistoryHint,
   "accounts.*.historyLimit": observedGroupHistoryHint,
@@ -23,6 +28,8 @@ export const slackChannelConfigUiHints = {
   "accounts.*.requireMentionInBotThreads": botThreadMentionHint,
   "channels.*.requireMentionInBotThreads": botThreadMentionHint,
   "accounts.*.channels.*.requireMentionInBotThreads": botThreadMentionHint,
+  "channels.*.unmentionedInbound": roomUnmentionedInboundHint,
+  "accounts.*.channels.*.unmentionedInbound": roomUnmentionedInboundHint,
   "": {
     label: "Slack",
     help: "Slack channel provider configuration for bot/app tokens, streaming behavior, and DM policy controls. Keep token handling and thread behavior explicit to avoid noisy workspace interactions.",

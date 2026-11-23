@@ -54,4 +54,34 @@ describe("resolveUnmentionedGroupInboundPolicy", () => {
     expect(resolveUnmentionedGroupInboundPolicy({ cfg, agentId: "room-agent" })).toBe("room_event");
     expect(resolveUnmentionedGroupInboundPolicy({ cfg, agentId: "other" })).toBe("user_request");
   });
+
+  it("lets a room override win over agent and global policy", () => {
+    const cfg = {
+      messages: { groupChat: { unmentionedInbound: "room_event" } },
+      agents: {
+        entries: {
+          "room-agent": { groupChat: { unmentionedInbound: "user_request" } },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      resolveUnmentionedGroupInboundPolicy({
+        cfg,
+        agentId: "room-agent",
+        roomUnmentionedInbound: "room_event",
+      }),
+    ).toBe("room_event");
+    expect(
+      resolveUnmentionedGroupInboundPolicy({
+        cfg,
+        agentId: "room-agent",
+        roomUnmentionedInbound: "user_request",
+      }),
+    ).toBe("user_request");
+    expect(resolveUnmentionedGroupInboundPolicy({ cfg, agentId: "room-agent" })).toBe(
+      "user_request",
+    );
+    expect(resolveUnmentionedGroupInboundPolicy({ cfg, agentId: "other" })).toBe("room_event");
+  });
 });

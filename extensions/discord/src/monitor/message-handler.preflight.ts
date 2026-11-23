@@ -534,6 +534,7 @@ export async function preflightDiscordMessage(
     unmentionedGroupPolicy: resolveUnmentionedGroupInboundPolicy({
       cfg: params.cfg,
       agentId: effectiveRoute.agentId,
+      roomUnmentionedInbound: channelConfig?.unmentionedInbound ?? guildInfo?.unmentionedInbound,
     }),
     wasMentioned: effectiveWasMentioned,
     hasControlCommand: hasControlCommandInMessage,

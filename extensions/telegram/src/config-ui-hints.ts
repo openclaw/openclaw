@@ -12,6 +12,11 @@ const botThreadMentionHint = {
   help: "Override mention gating in forum topics created by this bot. False allows unmentioned messages; true requires a mention even for replies to the bot. Topic settings override group settings. Omit to preserve existing behavior. Unknown or evicted topic ownership keeps the normal policy. Telegram privacy mode must allow ordinary group messages; sender and visible-reply policies still apply.",
 };
 
+const roomUnmentionedInboundHint = {
+  label: "Telegram Group Unmentioned Inbound",
+  help: 'Override how unmentioned messages in this group or topic are submitted. "room_event" makes them quiet context that only posts through the message tool; "user_request" keeps automatic replies. Topic settings override group settings, which override agent and global settings. Requires requireMention: false.',
+};
+
 export const telegramChannelConfigUiHints = {
   historyLimit: observedGroupHistoryHint,
   "accounts.*.historyLimit": observedGroupHistoryHint,
@@ -23,6 +28,10 @@ export const telegramChannelConfigUiHints = {
   "groups.*.topics.*.requireMentionInBotThreads": botThreadMentionHint,
   "accounts.*.groups.*.requireMentionInBotThreads": botThreadMentionHint,
   "accounts.*.groups.*.topics.*.requireMentionInBotThreads": botThreadMentionHint,
+  "groups.*.unmentionedInbound": roomUnmentionedInboundHint,
+  "groups.*.topics.*.unmentionedInbound": roomUnmentionedInboundHint,
+  "accounts.*.groups.*.unmentionedInbound": roomUnmentionedInboundHint,
+  "accounts.*.groups.*.topics.*.unmentionedInbound": roomUnmentionedInboundHint,
   "": {
     label: "Telegram",
     help: "Telegram channel provider configuration including auth tokens, retry behavior, and message rendering controls. Use this section to tune bot behavior for Telegram-specific API semantics.",
