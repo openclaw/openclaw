@@ -2,6 +2,11 @@
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  createRuntimeConfigReader,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEnteredGate } from "./entered-gate.test-support.js";
 import type { AgentHarnessModelCatalogParams } from "./harness/types.js";
@@ -9,12 +14,15 @@ import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
 import { prepareModelCatalogView } from "./model-catalog-view.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import {
+  getPreparedModelRuntimePolicyConfigReader,
   getPreparedModelRuntimeAuthMaterializations,
   getPreparedModelRuntimeAuthStore,
   loadPreparedModelRuntimeAuth,
   bindPreparedModelRuntimeAuth,
 } from "./prepared-model-runtime-auth.js";
 import {
+  acquireReadOnlyPreparedModelRuntime,
+  acquireAgentRunPreparedModelRuntime,
   advancePreparedModelRuntimeConfig,
   cancelPreparedModelRuntimeRefresh,
   loadPublishedGatewayReplyDispatchRuntime,
@@ -65,6 +73,76 @@ describe("prepared model runtime config stamps", () => {
   beforeEach(() => {
     mocks.configuredAgentIds = ["default"];
   });
+
+  it("keeps Gateway policy live through startup publication and config stamps", async () => {
+    const initial: OpenClawConfig = { tools: { openclaw: { autoApproveChanges: true } } };
+    clearRuntimeConfigSnapshot();
+    try {
+      await publish(initial, { catalogMode: "static" });
+      const input = fixture.agentInput("default", initial);
+      const snapshot = await prepareModelRuntimeSnapshot(input);
+      const reader = getPreparedModelRuntimePolicyConfigReader(snapshot)!;
+      expect(reader).toBeTypeOf("function");
+      expect(() => reader()).toThrow("Runtime config is not prepared");
+      setRuntimeConfigSnapshot(initial);
+      const replacement = { ...initial, logging: { level: "debug" as const } };
+      advancePreparedModelRuntimeConfig(replacement);
+      setRuntimeConfigSnapshot(replacement);
+      const advanced = await prepareModelRuntimeSnapshot({ ...input, config: replacement });
+      expect(getPreparedModelRuntimePolicyConfigReader(advanced)).toBe(reader);
+      expect(snapshot.config).toBe(initial);
+      expect(advanced.observationConfig).toBe(snapshot.observationConfig);
+      const runtime = (await dispatch())!;
+      expect(runtime.readPolicyConfig).toBe(reader);
+      await using lease = await acquireAgentRunPreparedModelRuntime(
+        {
+          ...input,
+          config: runtime.config,
+          readPolicyConfig: runtime.readPolicyConfig,
+        },
+        { catalogMode: "static", pluginGeneration: runtime.pluginGeneration },
+      );
+      const revoked = { tools: { openclaw: { autoApproveChanges: false } } };
+      setRuntimeConfigSnapshot(revoked);
+      expect(getPreparedModelRuntimePolicyConfigReader(lease.snapshot)!()).toBe(revoked);
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
+  it.each(["live-first", "scoped-first"] as const)(
+    "shares model inventory without sharing admitted policy: %s",
+    async (order) => {
+      const live = { tools: { openclaw: { autoApproveChanges: true } } };
+      const scoped = structuredClone(live);
+      clearRuntimeConfigSnapshot();
+      const readScoped = createRuntimeConfigReader(scoped);
+      setRuntimeConfigSnapshot(live);
+      try {
+        const liveInput = fixture.agentInput("policy", live);
+        const scopedInput = { ...liveInput, config: scoped, readPolicyConfig: readScoped };
+        await using first = await acquireReadOnlyPreparedModelRuntime(
+          order === "live-first" ? liveInput : scopedInput,
+        );
+        const builds = mocks.ensureOpenClawModelsJson.mock.calls.length;
+        await using second = await acquireReadOnlyPreparedModelRuntime(
+          order === "live-first" ? scopedInput : liveInput,
+        );
+        expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(builds);
+        expect(second.snapshot.config).toBe(first.snapshot.config);
+        expect(second.snapshot.observationConfig).toBe(first.snapshot.observationConfig);
+        const liveLease = order === "live-first" ? first : second;
+        const scopedLease = order === "scoped-first" ? first : second;
+        const revoked = { tools: { openclaw: { autoApproveChanges: false } } };
+        setRuntimeConfigSnapshot(revoked);
+        expect(getPreparedModelRuntimePolicyConfigReader(liveLease.snapshot)!()).toBe(revoked);
+        expect(getPreparedModelRuntimePolicyConfigReader(scopedLease.snapshot)!()).toBe(scoped);
+        expect(second.snapshot).not.toHaveProperty("readPolicyConfig");
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
 
   it("advances without rebuilding or mutating existing readers", async () => {
     const initialConfig = {};
