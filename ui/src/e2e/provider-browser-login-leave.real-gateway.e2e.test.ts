@@ -106,6 +106,47 @@ suite.define(() => {
     });
   }, 120_000);
 
+  it("recovers success when the final wizard reply is lost", async () => {
+    await suite.withPage(pageOptions, async ({ page, context }) => {
+      let dropped: string | undefined;
+      let recovered: string | undefined;
+      const tokenRequests = () => fixture.requests.filter((request) => request === "/token").length;
+      const before = tokenRequests();
+      await page.routeWebSocket("wss://files.proxy.test/**", (socket) => {
+        const server = socket.connectToServer();
+        const next = new Map<string, string>();
+        const reconnect = dropped !== undefined;
+        socket.onMessage((message) => {
+          const frame = JSON.parse(message.toString());
+          if (frame.type === "req" && frame.method === "wizard.next") {
+            next.set(frame.id, frame.params.sessionId);
+          }
+          server.send(message);
+        });
+        server.onMessage((message) => {
+          const frame = JSON.parse(message.toString());
+          const sessionId = next.get(frame.id);
+          if (sessionId && frame.ok && frame.payload?.done && frame.payload.status === "done") {
+            if (!dropped) {
+              dropped = sessionId;
+              void socket.close({ code: 1012, reason: "fixture link loss" });
+              return;
+            }
+            if (reconnect) {
+              recovered = sessionId;
+            }
+          }
+          socket.send(message);
+        });
+      });
+      await connect(page);
+      await finishSignIn(page, await beginSignIn(page, context));
+      expect(dropped).toBeTruthy();
+      expect(recovered).toBe(dropped);
+      expect(tokenRequests() - before).toBe(1);
+    });
+  }, 120_000);
+
   it("finishes the sign-in after the page reloads", async () => {
     await suite.withPage(pageOptions, async ({ page, context }) => {
       await connect(page);

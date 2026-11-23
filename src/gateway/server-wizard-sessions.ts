@@ -1,7 +1,8 @@
 import type { WizardSession } from "../wizard/session.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
+import { resolveSystemAgentSessionOwnerKey } from "./server-methods/system-agent-session-owner.js";
 
-const loginOwners = new WeakMap<WizardSession, GatewayClient>();
+const loginOwners = new WeakMap<WizardSession, GatewayClient | string>();
 
 /** Only credential-login sessions are connection-bound; setup keeps its recovery contract. */
 export function bindWizardLoginOwner(session: WizardSession, client: GatewayClient): void {
@@ -13,6 +14,9 @@ export function canAccessWizardSession(
   client: GatewayClient | null,
 ): boolean {
   const owner = loginOwners.get(session);
+  if (typeof owner === "string") {
+    return owner === resolveSystemAgentSessionOwnerKey({ client });
+  }
   return !owner || (owner === client && !owner.invalidated && !owner.connectionSignal?.aborted);
 }
 
@@ -33,6 +37,28 @@ export function isWizardSessionUnwatched(session: WizardSession): boolean {
 
 const UNCOLLECTED_TERMINAL_RETENTION_MS = 5 * 60 * 1000;
 
+export function bindRecoverableWizardLogin(
+  sessions: Map<string, WizardSession>,
+  id: string,
+  session: WizardSession,
+  ownerKey: string,
+): void {
+  loginOwners.set(session, ownerKey);
+  void session.whenSettled().then(() => {
+    if (session.getStatus() === "done") {
+      setTimeout(() => {
+        if (sessions.get(id) === session) {
+          sessions.delete(id);
+        }
+      }, UNCOLLECTED_TERMINAL_RETENTION_MS).unref();
+    }
+  });
+}
+
+function retainsCompletion(session: WizardSession): boolean {
+  return session.getStatus() === "done" && typeof loginOwners.get(session) === "string";
+}
+
 export function createWizardSessionTracker() {
   const wizardSessions = new Map<string, WizardSession>();
   const terminalSince = new Map<string, number>();
@@ -42,6 +68,9 @@ export function createWizardSessionTracker() {
       if (!session.isSettled()) {
         terminalSince.delete(id);
         return id;
+      }
+      if (retainsCompletion(session)) {
+        continue;
       }
       const observedAt = terminalSince.get(id);
       if (observedAt === undefined) {
@@ -61,7 +90,7 @@ export function createWizardSessionTracker() {
     if (!session) {
       return;
     }
-    if (!session.isSettled()) {
+    if (!session.isSettled() || retainsCompletion(session)) {
       return;
     }
     wizardSessions.delete(id);

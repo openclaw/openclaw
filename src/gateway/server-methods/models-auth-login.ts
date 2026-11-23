@@ -21,6 +21,7 @@ import { WizardSession } from "../../wizard/session.js";
 import { refreshModelAuthStateAfterMutation } from "../model-auth-refresh.js";
 import { createProviderBrowserAuthSession } from "../provider-browser-auth.js";
 import { createProviderAuthNodes } from "../server-plugins.js";
+import { bindRecoverableWizardLogin } from "../server-wizard-sessions.js";
 import {
   captureLocalStateMutationGuard,
   localStateOwnerChangedError,
@@ -167,12 +168,22 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
         assertCurrent: assertLoginCurrent,
         ...(ownerKey
           ? {
-              admit: (create: () => WizardSession, assertCurrent: () => void) =>
-                admitProviderSignIn(
+              admit: async (create: () => WizardSession, assertCurrent: () => void) => {
+                const session = await admitProviderSignIn(
                   { sessionId: params.sessionId, ownerKey, starter: client, context },
                   create,
                   assertCurrent,
-                ),
+                );
+                if (session && !params.expectedOwnerId) {
+                  bindRecoverableWizardLogin(
+                    context.wizardSessions,
+                    params.sessionId,
+                    session,
+                    ownerKey,
+                  );
+                }
+                return session;
+              },
             }
           : {}),
         createSession: (assertCurrent) =>

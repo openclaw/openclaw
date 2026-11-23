@@ -436,6 +436,7 @@ describe("models.authLogin ownership", () => {
 
   it("keeps a sign-in across a socket loss; another owner replaces it only while nobody reads it", async () => {
     const h = harness();
+    h.client.authenticatedUserId = "starter";
     void mockLogin(async (options) => {
       await options.prompter.text({ message: "Address of the page your browser opened" });
     });
@@ -453,7 +454,7 @@ describe("models.authLogin ownership", () => {
     const resumed = await h.invoke("wizard.next", { sessionId: "login" }, returned);
     expectReply(resumed, { step: expect.objectContaining({ id: step.step?.id }) });
     // Someone is watching the sign-in again, so another operator stays busy.
-    const other: GatewayClient = { ...h.client, connId: "other" };
+    const other: GatewayClient = { ...h.client, connId: "other", authenticatedUserId: "other" };
     const start = () =>
       h.invoke(
         "models.authLogin",
@@ -481,6 +482,45 @@ describe("models.authLogin ownership", () => {
     expectReply(await start(), { sessionId: "replacement", status: "running" });
     await whenAdmittedWizardSessionSettled(session);
     expect(session.getStatus()).toBe("cancelled");
+  });
+
+  it("recovers a lost final reply only for its owner until five minutes after completion", async () => {
+    vi.useFakeTimers();
+    const h = harness();
+    h.client.authenticatedUserId = "starter";
+    postSaveNote();
+    await h.start();
+    const params = { sessionId: "login" };
+    const step = await h.next();
+    const answer = { ...params, answer: { stepId: expectDefined(step.step, "saved note").id } };
+    expectReply(await h.invoke("wizard.next", answer), { done: true, status: "done" });
+    h.controller.abort();
+    const returned = {
+      ...h.client,
+      connId: "new-socket",
+      connectionSignal: new AbortController().signal,
+    };
+    const other = { ...returned, authenticatedUserId: "other" };
+    const missing = { details: { code: "WIZARD_NOT_FOUND" } };
+    expectReply(await h.invoke("wizard.status", params, returned), { status: "done" });
+    expectRejected(await h.invoke("wizard.status", params, other), missing);
+    expectRejected(await h.invoke("wizard.next", params, other), missing);
+    expectRejected(await h.invoke("wizard.next", answer, returned), {
+      message: "wizard not running",
+    });
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
+    expectReply(await h.invoke("wizard.next", params, returned), { done: true, status: "done" });
+    expect(hooks.login).toHaveBeenCalledTimes(1);
+    expectReply(
+      await h.invoke(
+        "models.authLogin",
+        { sessionId: "new-login", authChoice: "fixture/fixture-device" },
+        other,
+      ),
+      { status: "running" },
+    );
+    await vi.advanceTimersByTimeAsync(1);
+    expectRejected(await h.invoke("wizard.next", params, returned), missing);
   });
 
   it("settles discarded login input before admitting another login on the same connection", async () => {

@@ -22,6 +22,8 @@ rejects the key, the key stays saved, the form stays open with the reason, and
 you can paste a different key. If the check can't finish (for example, the
 provider returns a server error or times out), the key stays saved and you can
 retry with **Test access**.
+If the connection drops just after a provider credential sign-in finishes, the same user or paired device can reconnect within five minutes to see the result without signing in again. Restarting the Gateway ends that recovery window but does not remove the saved account.
+
 You can view Models without admin access, but only admins can change model settings.
 
 Saving a key and refreshing the catalog are separate outcomes. If refresh fails,
