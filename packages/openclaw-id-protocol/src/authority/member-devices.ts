@@ -15,6 +15,7 @@ import { peerKeyListedSeq } from "./allowlist.js";
 import {
   applied,
   isMemberRecoveryKey,
+  ownMember,
   refuse,
   type AuthorityState,
   type AuthorityResult,
@@ -49,7 +50,7 @@ export function setMemberRecoveryKit(
   ) {
     return refuse(state, "not_an_owner", "a recovery key cannot replace itself");
   }
-  const member = state.members[target.account_id];
+  const member = ownMember(state.members, target.account_id);
   if (
     !member ||
     (authority.kind === "member_device" && authority.account_id !== target.account_id)
@@ -101,7 +102,7 @@ export async function addMemberDevice(
   ) {
     return refuse(state, "not_an_owner", "signer cannot add a member device");
   }
-  const member = state.members[target.account_id];
+  const member = ownMember(state.members, target.account_id);
   if (!member) {
     return refuse(state, "target_mismatch", "unknown member");
   }
@@ -166,7 +167,10 @@ async function admitVerifiedMemberDevice(
   approved_by: MemberDeviceApprover,
   now: UnixSeconds,
 ): Promise<AuthorityResult> {
-  const member = state.members[target.account_id]!;
+  const member = ownMember(state.members, target.account_id);
+  if (!member) {
+    return refuse(state, "target_mismatch", "unknown member");
+  }
   return applied(
     {
       ...state,

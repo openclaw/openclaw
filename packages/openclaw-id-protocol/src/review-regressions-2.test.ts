@@ -3,6 +3,7 @@
 // down the old ones.
 import { describe, expect, it } from "vitest";
 import { submitStatement } from "./authority/apply.js";
+import { isAdmitted } from "./authority/state.js";
 import { signStatement } from "./statements/envelope.js";
 import { parseStatement } from "./statements/validate.js";
 import { buildWorld, certBody, signChange, worldKey, WORLD_NOW } from "./testing/world.js";
@@ -28,6 +29,59 @@ describe("ClawSweeper review regressions, round 2", () => {
         code: "malformed",
       });
     }
+  });
+
+  it("refuses a prototype account id instead of storing a member without peer keys", async () => {
+    const world = await buildWorld();
+    for (const account_id of ["__proto__", "constructor", "toString", "hasOwnProperty"]) {
+      await expect(
+        submitStatement(
+          world.state,
+          await signChange(world.state, world.device1.signer, {
+            op: "set_role",
+            account_id,
+            role: "admin",
+          }),
+          tunnel,
+        ),
+      ).resolves.toMatchObject({ ok: false, code: "target_mismatch" });
+      await expect(
+        submitStatement(
+          world.state,
+          await signChange(world.state, world.device1.signer, {
+            op: "set_member_recovery_kit",
+            account_id,
+            device_pub: null,
+          }),
+          tunnel,
+        ),
+      ).resolves.toMatchObject({ ok: false, code: "target_mismatch" });
+      await expect(
+        submitStatement(
+          world.state,
+          await signChange(world.state, world.device1.signer, {
+            op: "add_member_device",
+            account_id,
+            peer_key: world.invitee.peer,
+            device_pub: world.invitee.pub,
+            label: "browser",
+          }),
+          tunnel,
+        ),
+      ).resolves.toMatchObject({ ok: false, code: "target_mismatch" });
+      const removed = await submitStatement(
+        world.state,
+        await signChange(world.state, world.device1.signer, {
+          op: "remove",
+          account_id,
+        }),
+        tunnel,
+      );
+      expect(removed).toMatchObject({ ok: false, code: "target_mismatch" });
+      expect(removed.state).toBe(world.state);
+      expect(Object.hasOwn(removed.state.members, account_id)).toBe(false);
+    }
+    expect(isAdmitted(world.state, world.device1.peer, WORLD_NOW)).toBe(true);
   });
 
   it("refuses an undeclared constructor field, even one holding a lone surrogate", async () => {
