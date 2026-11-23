@@ -163,8 +163,6 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   const pinnable = createMemo(() => session().pinnable);
   const childCount = createMemo(() => {
     const row = session();
-    const homeReference =
-      !row.childLoadParentKeys?.length && host().mainSessionRow()?.key === row.key;
     // Flat references (such as pinned Home) can have child keys without a sidebar branch.
     return row.childLoadParentKeys?.length
       ? (row.snapshot?.childCount ?? row.childSessionKeys.length)
