@@ -145,7 +145,7 @@ and contribution-record gates at the Code SHA and refuse to dispatch on failure.
 A record target lost to a squash merge needs a corrected record and a new Code SHA.
 
 Record C/Q and independently trusted P. The helper defaults Q=C; on its
-candidate route, `--workflow-sha <Q>` may select a reviewed main-ancestor Q
+candidate route, `--workflow-sha <Q>` may select a reviewed exact Q
 without changing C. P performs lightweight admission before this same helper
 creates the exact Q transport and dispatches FRV. Missing Q contracts need a
 deliberate Q repair or candidate backport; never borrow moving-main requirements.

@@ -108,6 +108,7 @@
 }
 
 .cmd-palette__item {
+  color: inherit;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -214,6 +215,14 @@
   font-weight: var(--control-ui-font-weight-normal);
   line-height: 20px;
   overflow-wrap: anywhere;
+}
+
+.cmd-palette__item-title--archived {
+  color: var(--muted);
+}
+
+.cmd-palette__avatar--archived {
+  opacity: 0.55;
 }
 
 /* The time centers on the row, across the title and its metadata. */

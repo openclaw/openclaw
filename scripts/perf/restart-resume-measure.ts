@@ -14,6 +14,7 @@
  * never invoked unless --resume is selected. Neither mode measures Gateway readiness.
  * Process CPU includes workers; sampled allocation covers only the host isolate.
  * --mark measures shutdown marker persistence for 60 live run-registry owners.
+ * --automation gives half of those owners to cron; only the 30 operator runs should be marked.
  * --heap-mib retains numeric arrays across collections to exercise a large old heap.
  * --shutdown-baseline pins server-run-shutdown.ts; --cancel-dependent holds subagent
  * settlement until received-work cancellation, under --shutdown-budget-ms (default 85000).
@@ -54,6 +55,7 @@ const { values } = parseArgs({
     resume: { type: "boolean" },
     markers: { type: "boolean" },
     mark: { type: "boolean" },
+    automation: { type: "boolean" },
     "heap-mib": { type: "string", default: "0" },
     "shutdown-baseline": { type: "string" },
     "subagent-ms": { type: "string", default: "0" },
@@ -73,6 +75,7 @@ assert(!existsSync(values.output), "Refusing to overwrite evidence");
 assert(!values["cold-stale"] || (values.resume && !values.markers && !values.workspace));
 assert(!values.markers || values.resume, "--markers requires --resume");
 assert(!values.workspace || (values.resume && values.markers && values["handoff-baseline"]));
+assert(!values.automation || values.mark, "--automation requires --mark");
 assert(!values.mark || !values.resume, "--mark and --resume are separate workloads");
 assert(!values["shutdown-baseline"] || values.mark, "--shutdown-baseline requires --mark");
 assert(!values["cancel-dependent"] || values["shutdown-baseline"]);
@@ -491,7 +494,18 @@ const claims = values.mark
         runId,
         claim: registry.claimAgentRunContext(
           runId,
-          { agentId: "main", sessionKey, sessionId: entry.sessionId },
+          {
+            agentId: "main",
+            sessionKey,
+            sessionId: entry.sessionId,
+            ...(values.automation && index % 2 === 0
+              ? {
+                  cronRunsByJobId: new Map([
+                    [`synthetic-job-${index}`, { nextCheckEnabled: false }],
+                  ]),
+                }
+              : {}),
+          },
           { trackOwner: true, ownsContext: true },
         ),
       };
@@ -691,6 +705,8 @@ const retainWorkspaceBinding = () => {
     workspaceBinding = entry?.worktree ?? workspaceBinding;
   }
 };
+const markedPerCall = (arm: number) =>
+  values.automation && arm === 1 && !values.control ? 30 : 60;
 const inspector = new Session();
 const samples = [];
 let completedHistoryTasks = 0;
@@ -795,7 +811,7 @@ try {
                   sessionKey,
                 )?.entry.resumeAfterRestart,
             ).length,
-            60,
+            markedPerCall(arm),
           );
         }
       }
@@ -836,7 +852,7 @@ try {
         historyWorkerTasksPerPreparation: workerTasks / iterations,
         resumedPerCall: values.resume ? resumedPerCall : undefined,
         admissionOrder: values.workspace ? admissionOrder.slice(orderBefore) : undefined,
-        markedPerCall: values.mark ? 60 : undefined,
+        markedPerCall: values.mark ? markedPerCall(arm) : undefined,
         shutdownTimings: shutdownTimings.slice(),
         settledStaleRuns,
         hostLoad,
@@ -866,6 +882,7 @@ try {
           createHash("sha256").update(source).digest("hex"),
         ),
         markers: values.markers ?? false,
+        automation: values.automation ?? false,
         node: process.version,
         mode: values.allocation ? "allocation" : "timing",
         control: values.control ?? false,

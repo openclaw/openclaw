@@ -49,7 +49,9 @@ artifact limits: fail sealing, never truncate evidence.
 A nonempty plugin subset may consume authenticated all-publishable admission, retaining
 original release/channel/route, Windows operands, and sealed artifact identities. No
 replacement admission, qualification change, or broader authorization results. Each
-batch needs new parent authorization and final-effect current authority checks.
+batch needs publication authorization and final-effect current authority checks:
+parent-backed npm uses its parent receipt; direct human npm recovery keeps its own
+`npm-release` approval and protected `npm-publish` tooling tag.
 
 | Path         | Required evidence and completion                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -76,15 +78,22 @@ authorization owner.
 **Prepared npm quota:** preview checks current workflow token's REST core allowance
 before emitting matrix/evidence handoff:
 
-- Budget 512 requests/package: 256 `consume` + 256 `authorize`; leave 1,024 headroom
-  for final authority/surrounding work. Preview itself: 1,024 requests maximum.
+- FRV-backed preview creates an authenticated evidence handoff for both direct and
+  parent-backed npm publication. It binds the exact FRV, publication attempt,
+  source/tooling, artifact, selection, and parent tuple when present. The handoff
+  reuses immutable evidence, not approval: every consumer authenticates its successful
+  preview and refreshes live authority and artifact identities.
+- With that current-attempt handoff, budget 108 requests/package: 54 `consume` +
+  54 `authorize`. Without it (including a failed-job rerun retaining an older
+  preview), budget 512: 256 per command. Leave 1,024 headroom for surrounding work.
+  Preview itself is capped at 1,024 requests; admission uses the enforced worker cap.
 - Commands enforce ceilings across `gh`/artifact HTTP, pagination, retries, archive
   requests; exhaustion fails closed, never skipping authority/bytes. Accounting counts
   actual attempted requests; old `fetch-metadata-only` telemetry is partial.
 - Oversized selection reports supported smaller selection/reset time before outputs.
-  Example: 98 packages need 51,200 allowance; 5,000 remaining admits at most seven.
-  This does not reduce per-package authentication or promise 98 completions/hour.
-  Resume smaller batches after observed reset with fresh parent authorization; bytes
+  Example: 101 packages with a current handoff need 11,932 allowance; without it,
+  52,736. This is not a promise of completions per hour. Resume smaller batches
+  after observed reset with fresh publication authorization; bytes
   and per-package receipts stay unchanged.
 - Allowance is observation, not global reservation. Other workflows, parent/ClawHub,
   action-internal requests, and manual retries share quota; coordinate separately.
@@ -95,36 +104,80 @@ before emitting matrix/evidence handoff:
 
 ## Release-tooling waivers
 
-Trusted **P** owns `scripts/lib/release-validation-waivers.mjs`, not **C** or **Q**
-(default Q=C). Operator-approved entries require exact version, child role, job name,
-and short reason; optional `targetSha` and `evidence: { runId, runAttempt }` restrict
-candidate/execution. Checked-in list is authoritative; retain release-specific
-authorization/diagnostics in PR or handoff.
+The pinned release-tooling **Q** owns grant data in
+`scripts/lib/release-validation-waivers.json`. Trusted **P** owns the evaluator in
+`scripts/lib/release-validation-waivers.mjs`: it authenticates Q’s data and applies
+it to raw evidence, rather than using grants from P or the candidate **C**.
+Operator-approved entries require exact version, child role, job name, and short
+reason; optional `targetSha` and `evidence: { runId, runAttempt }` restrict the
+candidate and execution. Each entry also requires an `aggregates` array: use
+`[]` when no failed aggregate depends on the job, otherwise record each aggregate’s
+exact `jobName`, failed `stepName`, and accepted `causes`. Keep `exactCauses` or
+`logSha256` restrictions when present. The Q-pinned ledger is authoritative.
+
+For an authorized grant, commit only the ledger change directly to the selected
+release-tooling Q branch, then pin its new full SHA in a fresh qualification
+request/admission. Do not open a grant PR against `main`, cherry-pick the grant
+into C, or change candidate bytes/version to carry it. Executable policy and
+workflow changes still use the normal tooling-change process. Keep authorization
+and detailed diagnostics in the release handoff, not the ledger or public docs;
+Q branches in a public repository are public, not private storage. Main contains
+an empty ledger; actual grants belong only on the selected release Q branch.
+Missing or malformed Q ledgers, failed authentication, and transport errors remain
+blocking. There is no fallback to historical grants from main or another revision.
+
+For a newly approved job waiver, default to the exact release version, child
+role, and job across all future FRV runs, attempts, and candidates for that
+release. Omit `evidence` and `targetSha` restrictions unless the operator
+explicitly limits the approval. Reserve attempt-specific waivers for
+exceptionally high-risk cases where only the reviewed execution is accepted;
+record the risk and the explicit limit in the PR or handoff. A diagnostic run
+ID is evidence of the original failure, not a reason to restrict an ordinary
+waiver to that attempt. This default does not broaden existing grants or waive
+other jobs, versions, required execution, or evidence-integrity checks.
 
 A `testFailures` entry additionally requires the sole failed step and the complete
 ordered set of exact test/error signatures from the native test-evidence parser.
 The verifier reads the original leaf log and requires completed invocation
 evidence before accepting it. Changed or additional errors, incomplete logs, and
-setup failures remain blocking; aggregate causes are also checked exactly. The
-2026.11.10-beta.1 entries cover only the observed MCP listener collision and cron
-pre-output assertion. UI, QA, and mixed firstbirth/attachment failures are not
-granted by those entries.
+setup failures remain blocking; aggregate causes are also checked exactly.
 
-Changing P alone does not invalidate retained evidence for unchanged C/Q, coverage,
-inputs, and source digests. With reuse enabled, admitted P reevaluates sealed child
-receipts, including failures covered by current exact waivers. Accepted receipts
-return before dispatching another child workflow; a required initial run is still
-necessary. Failed parents without final manifests are recovered through child
-receipts, not relabeled successful. The fresh parent still must complete admission,
-collection, and final verification. Missing, expired, or incompatible evidence
-requires fresh work.
+An explicitly approved cancellation uses `cancelledStep` instead of
+`testFailures`. It matches only a completed job whose raw conclusion is
+`cancelled`; its only unsuccessful step must have that exact name and also be
+cancelled. It does not accept a different cancelled step, another failed step,
+a timed-out job, or a cancelled workflow. Ordinary failure grants never accept
+cancellation. The original job conclusion remains visible as cancelled, not passed.
 
-Land policy, pin P, run/revalidate FRV with unchanged C/Q. Candidate workflows must
-route state operations to admitted P; changing P cannot retrofit old workflows.
-State/manifest/summary retain raw failures/reasons. Grants neither skip tests nor
-mark passes; failed aggregates must contain only granted causes. Missing, cancelled,
-timed-out, incomplete, mismatched required evidence and ungranted failures block.
-Package, dispatch, and seal integrity remain mandatory.
+Plain-output native extension batches in CI retain separate invocation streams and emit a
+completion receipt only after every planned invocation and its descendants settle.
+An ordinary test failure does not skip later planned batches. Historical logs
+without that framing remain incomplete; never synthesize receipts or infer missing
+signatures from a later replay. Blank lines between a native failure header and
+its error are accepted, but unrelated errors and inconsistent counts still block.
+
+A Q change limited to the grant ledger does not change workload identity. With
+`reuse_evidence=true`, eligible raw successful or failed child receipts may be
+reused after authentication and reevaluation under the new Q grants. Preserve
+original producer Q, run/attempt, candidate, inputs, artifact digests, and raw
+conclusions; a prior accepted verdict is not a substitute for reevaluation.
+Removing or narrowing a grant can make retained failures blocking again. Broad
+Q changes to executable scripts, workflows, actions, dependencies, or other
+workload inputs still invalidate affected workload evidence; the ledger exception
+is not a general control-only exemption.
+
+Accepted receipts return before another child is dispatched; the required initial
+run cannot be skipped. Failed parents without final manifests can supply eligible
+child receipts, not be relabeled successful. The new parent must complete
+admission, collection, and final verification. Missing, expired, or incompatible
+evidence requires fresh work. A P-only change does not replace Q’s grants.
+
+State, manifests, and summaries retain raw failures and reasons. Grants neither
+skip tests nor mark passes; failed aggregates must contain only granted causes.
+Missing, cancelled, timed-out, incomplete, or mismatched required evidence and
+ungranted failures block. Package, dispatch, seal, and provenance integrity remain
+mandatory. Publication still requires a successful FRV parent under its admitted
+Q/P tuple; a publisher cannot add grants or swap Q after qualification.
 
 Kova grants cover approved thresholds only—not crashes, correctness, isolation, data
 integrity, install/update failures. Separate `qualificationExemption` means
@@ -133,7 +186,7 @@ integrity, install/update failures. Separate `qualificationExemption` means
 - P authenticates historical receipt and seals exemption into coverage.
 - Q supports `FULL_RELEASE_QUALIFICATION_EXEMPTION_CONTRACT` version `1`, consuming
   verified admission before dispatch. Older frozen Q needs explicit repair: frozen C
-  plus reviewed main-ancestor Q in a fresh request, or backport/requalify new C=Q.
+  plus reviewed exact Q in a fresh request, or backport/requalify new C=Q.
   Changing P alone cannot suppress old Q dispatch.
 - Plan omits only exempted lane; manifest records not-run, empty run ID, supporting receipt.
 
@@ -145,24 +198,28 @@ separate **not run** records.
 
 <a id="receipt-backed-beta-aggregate-recovery" />
 
-## Unavailable qualification evidence
+## Receipt-backed aggregate recovery
 
-Receipt-backed aggregate recovery is retired for every release profile, including
-beta. An earlier recovery aggregate is not accepted as qualification evidence.
+After a reviewed tooling-only repair, recover the original qualification receipts without
+rerunning tests or rebuilding publication artifacts:
 
-Use the ordinary authenticated qualification flow. If its required execution plan,
-admission, child evidence, or publication artifacts are unavailable, obtain fresh
-qualification for the same immutable candidate. Do not reconstruct missing evidence,
-substitute a recovery aggregate, or relabel the original parent as successful.
+```bash
+pnpm frv recover --run <original-parent-run-id> --workflow-sha <exact-trusted-main-P> --request-file <private-request-path>
+pnpm frv recover --reconcile-request <private-request-path> --json
+```
 
-Ordinary authenticated child and qualification reuse remains available when its
-required evidence exists and passes current admitted policy. A tooling-only repair
-may use a newly admitted Q without changing C; it still requires the normal successful
-qualification parent.
+The new aggregate authenticates the original admission, C/Q, complete child receipts,
+and unchanged npm/SDK/plugin/Docker bytes under current P policy. It never changes the
+original parent result. Qualification retains attempt 1; the request separately pins
+the latest terminal parent attempt. Missing evidence, changed attempts, or lost authority
+fail closed. Keep the private request: reconciliation never redispatches an uncertain
+request. Recovery supports the originally admitted beta, stable, full, or extended-stable
+publication selection; ordinary qualification remains unchanged.
 
 ## Workflow files
 
 - `.github/workflows/full-release-validation.yml`
+- `.github/workflows/full-release-receipt-recovery.yml`
 - `.github/workflows/full-release-candidate.yml`
 - `.github/workflows/openclaw-release-checks.yml`
 - `.github/workflows/openclaw-live-and-e2e-checks-reusable.yml`

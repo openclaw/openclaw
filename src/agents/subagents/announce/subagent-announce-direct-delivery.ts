@@ -1,7 +1,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
 import { resolveQueueSettings } from "../../../auto-reply/reply/queue.js";
-import { runOutsideAdmittedGenerationScopes } from "../../../auto-reply/reply/queue/drain-admission-scope.js";
+import { runOutsideAdmittedTurnScopes } from "../../../auto-reply/reply/queue/drain-admission-scope.js";
 import { getRuntimeConfig as getSubagentAnnounceRuntimeConfig } from "../../../config/config.js";
 import { bindInProcessSessionRun } from "../../../gateway/in-process-session-run.js";
 import { resolveExternalBestEffortDeliveryTarget } from "../../../infra/outbound/best-effort-delivery.js";
@@ -10,6 +10,7 @@ import {
   INTERNAL_PROVENANCE_SOURCE_CHANNEL,
   isAgentMediatedCompletionSourceTool,
 } from "../../../sessions/input-provenance.js";
+import { waitForReplyOperationBackend } from "../../../sessions/session-controller.state.js";
 import {
   submitSessionControllerSteer,
   type SessionControllerSteerResult,
@@ -77,7 +78,7 @@ function completionHandoffPendingResult(): SubagentAnnounceDeliveryResult {
 export async function sendSubagentAnnounceDirectly(
   params: SubagentAnnounceDirectParams,
 ): Promise<SubagentAnnounceDeliveryResult> {
-  return runOutsideAdmittedGenerationScopes(() =>
+  return runOutsideAdmittedTurnScopes(() =>
     withSubagentRequesterDelivery(
       params.targetRequesterSessionKey,
       params,
@@ -152,8 +153,6 @@ async function sendSubagentAnnounceDirectlyBound(
       },
       internalEvents: params.internalEvents,
     });
-    const hasFailedTrustedSubagentCompletion =
-      trustedCompletionEvent !== undefined && trustedCompletionEvent.status !== "ok";
     const hasRequiredSubagentNoOutputCompletion =
       params.expectsCompletionMessage &&
       isSubagentCompletion &&
@@ -162,9 +161,6 @@ async function sendSubagentAnnounceDirectlyBound(
         hasFailedSubagentNoOutputCompletion(params.internalEvents));
     const hasSuccessfulTrustedSubagentNoOutputCompletion =
       hasRequiredSubagentNoOutputCompletion && trustedCompletionEvent?.status === "ok";
-    const textCompletionDirectDeliveryKind = hasFailedTrustedSubagentCompletion
-      ? "failed_notice"
-      : "completed_result";
     const agentMediatedCompletion =
       params.expectsCompletionMessage && isAgentMediatedCompletionSourceTool(sourceToolId);
     const completionRouteRequiresMessageToolDelivery =
@@ -229,10 +225,7 @@ async function sendSubagentAnnounceDirectlyBound(
       // requester turn here would replay the original fanout during handoff.
       return completionHandoffPendingResult();
     }
-    const tryTextCompletionDirectDelivery = (
-      contentKind: "completed_result" | "failed_notice" = textCompletionDirectDeliveryKind,
-      agentResult?: { payloads?: unknown },
-    ) => {
+    const tryTextCompletionDirectDelivery = (agentResult?: { payloads?: unknown }) => {
       return deliverCompletionDirect({
         cfg,
         requesterSessionKey: canonicalRequesterSessionKey,
@@ -242,7 +235,6 @@ async function sendSubagentAnnounceDirectlyBound(
         directIdempotencyKey: params.directIdempotencyKey,
         deliveryTarget,
         internalEvents: params.internalEvents,
-        contentKind,
         agentResult,
         signal: params.signal,
         onDeliveryResult: params.onDeliveryResult,
@@ -277,6 +269,17 @@ async function sendSubagentAnnounceDirectlyBound(
     ) {
       let steer: SessionControllerSteerResult;
       try {
+        // Recovery owns the turn before its backend is ready. Queuing behind it can
+        // deadlock a parent waiting for this result; steering resolves its live owner below.
+        const requesterOperation = params.controllerInput.mailbox.owner.active;
+        if (requesterOperation) {
+          await waitForReplyOperationBackend(
+            requesterOperation,
+            params.signal
+              ? AbortSignal.any([params.signal, params.controllerInput.abortSignal])
+              : params.controllerInput.abortSignal,
+          );
+        }
         steer = await submitSessionControllerSteer({
           input: params.controllerInput,
           text: turnMessage,
@@ -439,7 +442,6 @@ async function sendSubagentAnnounceDirectlyBound(
       subagentDirectMessageCompletionRequiresMessageTool,
       effectiveDirectOrigin,
       requesterSessionOrigin,
-      textCompletionDirectDeliveryKind,
       tryTextCompletionDirectDelivery,
     });
     let directAnnounceResponse: unknown;
@@ -533,18 +535,13 @@ async function sendSubagentAnnounceDirectlyBound(
       if (hasAnnounceSendEvidence(err)) {
         throw err;
       }
-      const directCompletionFallbackKind = hasFailedTrustedSubagentCompletion
-        ? "failed_notice"
-        : isIncompleteAnnounceAgentResultError(err)
-          ? "completed_result"
-          : undefined;
       if (
         params.expectsCompletionMessage &&
         (shouldDeliverAgentFinal || subagentDirectMessageCompletionRequiresMessageTool) &&
         isSubagentCompletion &&
-        directCompletionFallbackKind
+        isIncompleteAnnounceAgentResultError(err)
       ) {
-        const textDelivery = await tryTextCompletionDirectDelivery(directCompletionFallbackKind);
+        const textDelivery = await tryTextCompletionDirectDelivery();
         if (textDelivery) {
           return textDelivery;
         }

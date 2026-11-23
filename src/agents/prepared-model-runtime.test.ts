@@ -1,6 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
+import { getPreparedModelRuntimeTestApi, usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { dispatchLowLevelChannelReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
@@ -32,7 +33,10 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createEnteredGate } from "./entered-gate.test-support.js";
 import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-support.js";
 import { getPreparedModelCatalogOwnerSnapshot as catalogOwner } from "./prepared-model-catalog.js";
-import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
+import {
+  getPreparedModelRuntimeAuthStore,
+  getPreparedModelRuntimePolicyConfigReader,
+} from "./prepared-model-runtime-auth.js";
 import {
   scopePreparedModelRuntimeLease,
   withPreparedModelRuntimePluginGenerationScope,
@@ -43,6 +47,7 @@ import {
   acquireReadOnlyPreparedModelRuntime as acquireReadOnly,
   activateStandalonePreparedModelRuntime as activate,
   getPreparedModelRuntimeSnapshot as readSnapshot,
+  getPendingPreparedModelRuntimeReplacement,
   loadPublishedGatewayReplyDispatchRuntime,
   markPreparedModelRuntimeSnapshotsStale as markStale,
   prepareModelRuntimeSnapshot as prepare,
@@ -52,6 +57,7 @@ import {
   applyRemoteModelCatalogUpdate,
 } from "./prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
+import * as runtimeOwners from "./prepared-model-runtime.owner.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const pendingBuilds: Array<() => Promise<void>> = [];
@@ -552,6 +558,166 @@ describe("remote catalog publication boundaries", () => {
     return { preparing, commit, pricingSpy };
   }
 
+  it("keeps staged registration current but recovers retirement only after commit", async () => {
+    await setup({ allowGatewaySubagentBinding: true });
+    using batches = vi.spyOn(runtimeOwners, "publishPreparedModelRuntimeOwnerBatch");
+    const { preparing, commit, pricingSpy } = holdPricing();
+    const adoption = applyRemoteModelCatalogUpdate(() => config);
+    let recovery: Promise<void> | undefined;
+    try {
+      await preparing.promise;
+      const candidate = batches.mock.calls.at(-1)![0].ownersToPublish[0]!;
+      const snapshot = candidate.snapshot!;
+      expect(snapshot.isCurrent()).toBe(true);
+      expect(getPendingPreparedModelRuntimeReplacement()).toBeUndefined();
+      candidate.onPluginGenerationRetired!();
+      expect(getPendingPreparedModelRuntimeReplacement()).toBeUndefined();
+
+      commit.resolve();
+      expect(await adoption).toBe("published");
+      expect(snapshot.isCurrent()).toBe(true);
+      candidate.onPluginGenerationRetired!();
+      recovery = getPendingPreparedModelRuntimeReplacement();
+      expect(recovery).toBeDefined();
+      await recovery;
+      expect(snapshot.isCurrent()).toBe(false);
+      expect(readSnapshot(candidate.input)?.isCurrent()).toBe(true);
+    } finally {
+      commit.resolve();
+      await Promise.allSettled([adoption, recovery]);
+      pricingSpy.mockRestore();
+    }
+  });
+
+  // Other async owners can schedule timers while pricing is held.
+  function trackPublicationTimers() {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const scope = new AsyncLocalStorage<boolean>();
+    const pending = new Set<unknown>();
+    const schedule = globalThis.setTimeout;
+    const cancel = globalThis.clearTimeout;
+    const scheduled = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, ms, ...args) => {
+        const owned = scope.getStore() === true;
+        const timer = schedule(
+          (...values) => {
+            pending.delete(timer);
+            scope.run(owned, callback, ...values);
+          },
+          ms,
+          ...args,
+        );
+        if (owned) {
+          pending.add(timer);
+        }
+        return timer;
+      });
+    const cancelled = vi.spyOn(globalThis, "clearTimeout").mockImplementation((timer) => {
+      pending.delete(timer);
+      cancel(timer);
+    });
+    return {
+      pending,
+      run<T>(operation: () => T): T {
+        return scope.run(true, operation);
+      },
+      [Symbol.dispose]() {
+        scheduled.mockRestore();
+        cancelled.mockRestore();
+        scope.disable();
+        vi.useRealTimers();
+      },
+    };
+  }
+
+  it("releases the pricing deadline when preparation settles", async () => {
+    await setup();
+    using timers = trackPublicationTimers();
+    const { preparing, commit, pricingSpy } = holdPricing();
+    const adoption = timers.run(() => applyRemoteModelCatalogUpdate(() => config));
+    try {
+      await preparing.promise;
+      expect(timers.pending.size).toBe(1);
+      commit.resolve();
+      expect(await adoption).toBe("published");
+      expect(timers.pending.size).toBe(0);
+    } finally {
+      commit.resolve();
+      await Promise.allSettled([adoption]);
+      pricingSpy.mockRestore();
+    }
+  });
+
+  it("shares one pricing deadline across configs without starting later work after timeout", async () => {
+    await setup();
+    for (const agentId of ["other", "last"]) {
+      await publish(
+        fixture.agentInput(agentId, {
+          ...config,
+          messages: { responsePrefix: agentId },
+        }),
+        { provenance: "configured", catalogMode: "static" },
+      );
+    }
+    using timers = trackPublicationTimers();
+    getPreparedModelRuntimeTestApi().setModelRuntimeBuildTimeoutMsForTest(100);
+    const started = [createDeferred(), createDeferred()];
+    const finished = [createDeferred(), createDeferred()];
+    const preparePricing = pricing.prepareModelPricingContext;
+    const pendingPricing: ReturnType<typeof preparePricing>[] = [];
+    let calls = 0;
+    const pricingSpy = vi
+      .spyOn(pricing, "prepareModelPricingContext")
+      .mockImplementation((...args) => {
+        const index = calls++;
+        const pending = (async () => {
+          started[index]?.resolve();
+          await finished[index]?.promise;
+          return preparePricing(...args);
+        })();
+        pendingPricing.push(pending);
+        return pending;
+      });
+    let settled = false;
+    const unrelated = vi.fn();
+    const unrelatedTimer = setTimeout(unrelated, 1_000);
+    const adoption = timers
+      .run(() => applyRemoteModelCatalogUpdate(() => config))
+      .catch((error: unknown) => {
+        settled = true;
+        return error;
+      });
+    try {
+      await started[0]!.promise;
+      expect(timers.pending.size).toBe(1);
+      await vi.advanceTimersByTimeAsync(80);
+      finished[0]!.resolve();
+      await started[1]!.promise;
+      await vi.advanceTimersByTimeAsync(19);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await adoption).toMatchObject({
+        name: "AbortError",
+        message: "Operation aborted",
+        cause: { name: "TimeoutError", message: "The operation was aborted due to timeout" },
+      });
+      expect(calls).toBe(2);
+      expect(unrelated).not.toHaveBeenCalled();
+      expect(timers.pending.size).toBe(0);
+      expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(200);
+      expect(readSnapshot(fixture.agentInput("default", config))?.isCurrent()).toBe(true);
+    } finally {
+      clearTimeout(unrelatedTimer);
+      for (const gate of finished) {
+        gate.resolve();
+      }
+      await Promise.allSettled([adoption, ...pendingPricing]);
+      pricingSpy.mockRestore();
+    }
+    expect(calls).toBe(2);
+  });
+
   it("models.list does not retry after the remote replacement itself loses authority", async () => {
     await setup();
     const afterRead = vi.fn(async () => {
@@ -733,7 +899,9 @@ describe("prepared runtime generation admission", () => {
     const previousSnapshot = readSnapshot(previousInput);
 
     await using outerLease = scopePreparedModelRuntimeLease(await acquirePrevious());
-    expect(outerLease.snapshot).toBe(previousSnapshot);
+    // Run projections retain inventory ownership while carrying their own admitted policy.
+    expect(outerLease.snapshot.catalogOwner).toBe(previousSnapshot?.catalogOwner);
+    expect(getPreparedModelRuntimePolicyConfigReader(outerLease.snapshot)?.()).toBe(previousConfig);
 
     await refresh(committedConfig, publicationOptions);
     const committedSnapshot = readSnapshot(committedInput);
@@ -749,12 +917,17 @@ describe("prepared runtime generation admission", () => {
           acquirePrevious,
         );
 
-        expect(resumed.snapshot).toBe(previousSnapshot);
+        expect(resumed.snapshot.catalogOwner).toBe(previousSnapshot?.catalogOwner);
+        expect(getPreparedModelRuntimePolicyConfigReader(resumed.snapshot)).toBe(
+          getPreparedModelRuntimePolicyConfigReader(outerLease.snapshot),
+        );
         expect(readSnapshot(committedInput)).toBe(committedSnapshot);
         await resumed[Symbol.asyncDispose]();
         {
-          await using cloned = await acquirePrevious(runInput(structuredClone(previousConfig)));
-          expect(cloned.snapshot).toBe(previousSnapshot);
+          const clonedConfig = structuredClone(previousConfig);
+          await using cloned = await acquirePrevious(runInput(clonedConfig));
+          expect(cloned.snapshot.catalogOwner).toBe(previousSnapshot?.catalogOwner);
+          expect(getPreparedModelRuntimePolicyConfigReader(cloned.snapshot)?.()).toBe(clonedConfig);
         }
         for (const [input, requestedGeneration] of [
           [{ ...previousInput, workspaceDir: "/tmp/different-workspace" }, generation],
@@ -777,7 +950,10 @@ describe("prepared runtime generation admission", () => {
     expect(readSnapshot(committedInput)).toBe(committedSnapshot);
 
     await using next = await acquireRun(committedInput);
-    expect(next.snapshot).toBe(committedSnapshot);
+    expect(next.snapshot.catalogOwner).toBe(committedSnapshot?.catalogOwner);
+    expect(getPreparedModelRuntimePolicyConfigReader(next.snapshot)).toBe(
+      getPreparedModelRuntimePolicyConfigReader(committedSnapshot),
+    );
   });
   it("does not let a stale dynamic lease authorize a replacement generation", async () => {
     const config = {};

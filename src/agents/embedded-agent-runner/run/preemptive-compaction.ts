@@ -149,10 +149,7 @@ function estimateTranscriptBoundaryTokenPressure(
   const messagesForPressure = boundary ? messages.slice(boundary.index + 1) : messages;
   const locallyEstimatedTokens = messagesForPressure.reduce(
     (sum, message) => sum + estimateMessageTokenPressure(message),
-    (params.fixedTokenPressure
-      ? params.fixedTokenPressure.systemTokens +
-        estimateRenderedPromptTokens({ prompt: params.prompt })
-      : estimateRenderedPromptTokens(params)) +
+    estimateRenderedPromptTokens(params) +
       (boundary ? 0 : (replay?.prefixTokens ?? 0) - (replay?.measuredTokens ?? 0)),
   );
   const toolSchemaTokens = Math.max(
@@ -200,6 +197,7 @@ export function estimateLlmBoundaryTokenPressure(params: {
 export function estimateRenderedLlmBoundaryTokenPressure(params: {
   systemPrompt?: string;
   prompt: string;
+  fixedTokenPressure?: FixedRequestTokenPressure;
 }): number {
   return Math.max(0, Math.ceil(estimateRenderedPromptTokens(params) * SAFETY_MARGIN));
 }

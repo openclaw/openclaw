@@ -98,7 +98,7 @@ export function LoginGateBrowserPairCard(props: {
               <span class="login-gate__hero-label">{t("login.browserPair.runOnGatewayHost")}</span>
               <ConnectCommand command={request().command} variant="hero" />
             </div>
-            <p class="login-gate__lede" role="status">
+            <p class="login-gate__lede login-gate__progress" role="status">
               <Show
                 when={request().kind !== "cancelFailed" && request().kind !== "alreadyApproved"}
               >

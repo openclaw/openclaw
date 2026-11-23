@@ -31,7 +31,6 @@ import {
   type ProjectedContinuationSource,
 } from "../chat-turn-boundary.ts";
 import { ChatHandoffResume } from "./chat-handoff-sessions.tsx";
-import { ChatInlineSwarm, type InlineSwarm } from "./chat-inline-swarm.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
   ActivityGroup,
@@ -57,7 +56,6 @@ const ChatSourcePreviews = lazy(() => import("./chat-source-previews.tsx"), {
 type AgentRunFrameOptions = {
   basePath?: string;
   sessionPublicOrigin?: string;
-  swarms?: readonly InlineSwarm[];
   streamOptions: StreamGroupOptions;
   renderGroupOptions: (group: MessageGroupData) => NativeMessageGroupOptions;
   partDependencies: (part: BodyPart) => readonly unknown[];
@@ -318,24 +316,11 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
   };
 }
 
-function FrameSwarms(props: { swarms: readonly InlineSwarm[] | undefined }) {
-  return (
-    <For each={props.swarms} keyed={(swarm) => swarm.group.groupId}>
-      {(swarm) => <ChatInlineSwarm swarm={swarm()} />}
-    </For>
-  );
-}
-
 export function AgentRunFrame(props: FrameProps) {
   const statusParts = createMemo(() => agentRunFrameActiveStatusParts(props.frame));
   return (
     <Show when={statusParts()} fallback={<RunFrame frame={props.frame} options={props.options} />}>
-      {(parts) => (
-        <>
-          <FrameSwarms swarms={props.options.swarms} />
-          <StreamGroup parts={parts()} options={props.options.streamOptions} />
-        </>
-      )}
+      {(parts) => <StreamGroup parts={parts()} options={props.options.streamOptions} />}
     </Show>
   );
 }
@@ -348,7 +333,6 @@ function RunFrame(props: FrameProps) {
     shellOptions().bubbleMode ? undefined : state().actionOwner?.key;
   const firstBubbleKey = createMemo(() => state().firstBubbleKey);
   const frameContent = [
-    <FrameSwarms swarms={props.options.swarms} />,
     <FrameBody
       parts={state().bodyParts}
       options={props.options}

@@ -22,6 +22,7 @@ import type {
   MediaUnderstandingModelDecision,
   MediaUnderstandingOutput,
 } from "../../packages/media-understanding-common/src/types.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
 import { isProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import { configuredModelSupportsNativeVideo } from "../agents/model-input.js";
@@ -246,10 +247,9 @@ function resolveImageModelFromAgentDefaults(params: {
   if (refs.length === 0) {
     return [];
   }
-  const defaultProvider = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  }).provider;
+  const defaultProvider =
+    resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId })?.provider ??
+    DEFAULT_PROVIDER;
   const entries: MediaUnderstandingModelConfig[] = [];
   for (const ref of refs) {
     const effectiveDefaultProvider = ref.includes("/")
@@ -724,14 +724,14 @@ export async function runCapability(
   // it once here (apply.ts's memoized factory builds it at most once per turn)
   // and reuse the concrete value for every remaining call below.
   const providerRegistry = resolveProviderRegistry(params.providerRegistry);
-  const entries = resolveModelEntries({
+  let resolvedEntries = resolveModelEntries({
     cfg,
     capability,
     config,
     providerRegistry,
+    modelOverride: params.request?.modelOverride,
   });
-  const automaticAudio = capability === "audio" && entries.length === 0;
-  let resolvedEntries: ResolvedMediaModelEntry[] = entries;
+  const automaticAudio = capability === "audio" && resolvedEntries.length === 0;
   if (!automaticAudio && resolvedEntries.length === 0) {
     resolvedEntries = await resolveAutoEntries({
       ...params,

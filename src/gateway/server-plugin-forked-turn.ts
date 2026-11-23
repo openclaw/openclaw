@@ -8,6 +8,7 @@ import {
 import { resolveAgentWorkspaceDir, resolveSessionAgentIdsStrict } from "../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../agents/model-selection-config.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { NormalizedUsage } from "../agents/usage.js";
@@ -234,7 +235,7 @@ export async function forkPluginSession<T>(input: {
   // user pin or an automatic rotation): its internal session has no stored selection, so
   // without this it could bill another profile and miss the turn's cache.
   const sessionProfile =
-    turnModel.provider === sessionModel.provider
+    turnModel && sessionModel && turnModel.provider === sessionModel.provider
       ? session.entry.authProfileOverride?.trim()
       : undefined;
   const model = override
@@ -243,12 +244,15 @@ export async function forkPluginSession<T>(input: {
         model: override.model,
         ...(override.profile ? { authProfileId: override.profile } : {}),
       }
-    : { ...turnModel, ...(sessionProfile ? { authProfileId: sessionProfile } : {}) };
+    : turnModel && { ...turnModel, ...(sessionProfile ? { authProfileId: sessionProfile } : {}) };
+  if (!model) {
+    throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+  }
   // Running on the turn's or session's own model needs no override trust.
   const ownModel =
     !override?.profile &&
     [turnModel, sessionModel].some(
-      (own) => own.provider === model.provider && own.model === model.model,
+      (own) => own !== undefined && own.provider === model.provider && own.model === model.model,
     );
   if (override && !ownModel) {
     expectDefined(input.authorizeModelOverride, "model override authorization")(

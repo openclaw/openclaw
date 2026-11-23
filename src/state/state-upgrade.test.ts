@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import { load as loadSqliteVec } from "sqlite-vec";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import { sqliteDatabaseAdmissionState } from "../infra/sqlite-database-admission-context.js";
+import { captureSqliteDatabaseDescriptorCustodyLocations } from "../infra/sqlite-database-admission.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -18,7 +20,7 @@ import {
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { createDoctorChain } from "./state-upgrade-doctor.js";
-import { copyTree, pruneGenerations, writePlan } from "./state-upgrade-tree.js";
+import { applyPlan, copyTree, pruneGenerations, writePlan } from "./state-upgrade-tree.js";
 import { ChainStepError } from "./state-upgrade-validate.js";
 import { isStateUpgradePending, upgradeStateDirectory } from "./state-upgrade.js";
 
@@ -29,6 +31,40 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+it("releases admitted source and successor descriptors before replacing a database", () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-custody-")));
+  dirs.push(root);
+  const live = path.join(root, "live.sqlite");
+  const next = path.join(root, "next.sqlite");
+  [live, next].forEach((file, index) => {
+    {
+      using db = new DatabaseSync(file);
+      db.exec("CREATE TABLE witness (value INTEGER)");
+      db.prepare("INSERT INTO witness VALUES (?)").run(index);
+    }
+    // Vitest is a worker, not admission's host. Retain the host's real descriptor custody.
+    const descriptor = fs.openSync(file, "r");
+    sqliteDatabaseAdmissionState.registry.retainDescriptorCustody(
+      file,
+      descriptor,
+      fs.fstatSync(descriptor, { bigint: true }),
+    );
+  });
+  expect([...captureSqliteDatabaseDescriptorCustodyLocations()]).toEqual(
+    expect.arrayContaining([live, next]),
+  );
+
+  applyPlan({ appVersion: "custody-test", ops: [{ kind: "replace", live, next }] });
+
+  const retained = [...captureSqliteDatabaseDescriptorCustodyLocations()];
+  expect(retained).not.toContain(live);
+  expect(retained).not.toContain(next);
+  using published = new DatabaseSync(live, { readOnly: true });
+  expect(published.prepare("SELECT value FROM witness").get()).toEqual({ value: 1 });
+  using previous = new DatabaseSync(`${live}.pre-custody-test`, { readOnly: true });
+  expect(previous.prepare("SELECT value FROM witness").get()).toEqual({ value: 0 });
 });
 
 describe("startup reader replacement", () => {

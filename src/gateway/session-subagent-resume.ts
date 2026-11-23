@@ -43,10 +43,7 @@ export function shouldResumeParentSubagent(params: {
 
 // Control ownership comes from the registry, not the child's key shape or message provenance.
 function requirePausedChild(cfg: OpenClawConfig, caller: TrustedAgentToolCaller, key: string) {
-  if (!caller.assertCurrent) {
-    throw new Error("Task resume requires an admitted parent tool caller.");
-  }
-  caller.assertCurrent();
+  caller.assertCurrent?.();
   const controller = resolveSubagentController({
     cfg,
     agentId: caller.agentId,

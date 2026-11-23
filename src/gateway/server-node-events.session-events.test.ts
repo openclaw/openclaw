@@ -1,7 +1,7 @@
 import "./server-node-events.test-support.js";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import * as runtimeSnapshot from "../config/runtime-snapshot.js";
 import * as pairing from "../infra/device-pairing-node-state.js";
 import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
@@ -70,8 +70,7 @@ it.each(["live", "revoked", "inline", "unscoped", "result-live", "result-revoked
     using pairingCurrent = vi.spyOn(pairing, "isNodePairingGenerationCurrent");
     pairingCurrent.mockResolvedValue(true);
     let current = true;
-    const release = vi.fn();
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "original-guest",
       scopes: ["operator.write"],
       gatewayAccessGrant: null,
@@ -80,7 +79,6 @@ it.each(["live", "revoked", "inline", "unscoped", "result-live", "result-revoked
           throw new Error("original guest revoked");
         }
       },
-      retain: () => release,
     });
     const producerTarget = {
       ...target("main", sessionKey),
@@ -189,12 +187,7 @@ it.each(["live", "revoked", "inline", "unscoped", "result-live", "result-revoked
     }
     finish();
     expect((await invocation).mock.calls[0]?.[0]).toBe(delivered);
-    expect(captureTarget).toHaveBeenCalledExactlyOnceWith(
-      "main",
-      sessionKey,
-      expect.objectContaining({ operatorAuthority: authority }),
-    );
-    expect(release).toHaveBeenCalledOnce();
+    expect(captureTarget.mock.calls[0]?.[2]?.operatorAuthority?.source).toBe(authority.source);
   },
 );
 

@@ -6,6 +6,7 @@ import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { SubagentAnnounceFlowOutcome } from "../announce/subagent-announce.js";
+import { settleSubagentCompletionInHistory } from "../completion/subagent-completion-admission.store.js";
 import {
   getDeliveryLastError,
   ensureCompletionState,
@@ -21,7 +22,6 @@ import {
 import {
   resolveAnnounceDeliveryDeadline,
   resolveDeferredCleanupDecision,
-  shouldSuspendPendingFinalDelivery,
 } from "./subagent-registry-cleanup.js";
 import {
   logAnnounceGiveUp,
@@ -36,7 +36,6 @@ import {
 import {
   retireSupersededCleanupIfNeeded,
   scheduleResumeSubagentRun,
-  suspendPendingFinalDelivery,
 } from "./subagent-registry-lifecycle-cleanup.js";
 import type { SubagentLifecycleAnnounceCleanupContext } from "./subagent-registry-lifecycle-context.js";
 import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
@@ -287,11 +286,11 @@ export const finalizeSubagentCleanup = async (
       ? ANNOUNCE_COMPLETION_HARD_EXPIRY_MS
       : ANNOUNCE_EXPIRY_MS;
   const expired = Date.now() >= resolveAnnounceDeliveryDeadline(entry, Date.now(), expiryMs);
-  // A suspended descendant has settled its own delivery, so it cannot hold this completion.
+  // Settled descendant delivery cannot hold this completion for unfinished cleanup.
   const activeDescendantRuns = expired
     ? 0
     : await params.countPendingDescendantRuns(entry.childSessionKey, assertCurrent, {
-        excludeSuspendedDelivery: true,
+        excludeSettledDelivery: true,
       });
   assertCurrent();
   const now = Date.now();
@@ -334,8 +333,6 @@ export const finalizeSubagentCleanup = async (
         delivery.lastError ??= "completion announcement did not report a delivery outcome";
         delivery.status = "pending";
         delivery.payload ??= loadPendingFinalDeliveryPayload(draft);
-        delivery.windowStartedAt ??= draft.execution.endedAt ?? now;
-        delivery.deadlineAt ??= delivery.windowStartedAt + ANNOUNCE_COMPLETION_HARD_EXPIRY_MS;
         resumeDelayMs = deferredDecision.resumeDelayMs;
         delivery.nextAttemptAt = now + (resumeDelayMs ?? 0);
       }
@@ -368,7 +365,7 @@ export const finalizeSubagentCleanup = async (
     // Descendants may settle while this attempt still owns the deferred-state write.
     decision.value?.kind === "defer-descendants" &&
     (await params.countPendingDescendantRuns(entry.childSessionKey, assertCurrent, {
-      excludeSuspendedDelivery: true,
+      excludeSettledDelivery: true,
     })) === 0
   ) {
     assertCurrent();
@@ -408,12 +405,24 @@ export const finalizeResumedAnnounceGiveUp = async (
   if (!isCurrent()) {
     return;
   }
-  if (shouldSuspendPendingFinalDelivery(entry)) {
-    await suspendPendingFinalDelivery(context, {
-      runId: entry.runId,
+  if (entry.expectsCompletionMessage === true) {
+    // The status entry is the delivery; cleanup then finishes like any delivered child.
+    const settled = await settleSubagentCompletionInHistory({ subagent: entry });
+    entry = getCurrentSubagentRunOwner(params.runs, entry) ?? entry;
+    if (!settled) {
+      if (entry.delivery?.status === "delivered") {
+        return;
+      }
+      throw new Error(`subagent completion settlement lost its owner: ${entry.runId}`);
+    }
+    await finishSubagentCleanup(context, {
       entry,
-      reason,
-      error: getDeliveryLastError(entry),
+      cleanup: cleanup ?? entry.cleanup,
+      cleanupGeneration,
+      completedAt,
+      stateContext,
+      isCurrent,
+      completionReason: entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE,
     });
     return;
   }

@@ -70,8 +70,9 @@ export function createSessionControllerWatchdog(params: {
   // While an opted-in runtime-owned wait is live, the native runtime owns liveness, so
   // that interval is never semantically stale. Its release (a native turn that just
   // completed) starts the semantic horizon; it must not make the masked interval
-  // retroactively expire and stop a run that is finalizing. Other waits keep their
-  // retroactive horizon and publish progress themselves when they end.
+  // retroactively expire and stop a run that is finalizing. Nested maintenance
+  // (compaction) owns liveness the same way until its own execution deadline. Other
+  // waits keep their retroactive horizon and publish progress themselves when they end.
   let runtimeOwnedThroughAt: number | undefined;
   const progressOrigin = () => Math.max(semanticAt, runtimeOwnedThroughAt ?? semanticAt);
   let retryAllowanceAt: number | undefined;
@@ -98,6 +99,7 @@ export function createSessionControllerWatchdog(params: {
     }
   >();
   const executions = new Set<OwnedExecution>();
+  const maintenance = new Set<OwnedExecution>();
   const finalizationWork = new Set<{ deadlineAtMs: number }>();
   const current = () => !closed && live(params.isCurrent);
   const semanticDeadline = () =>
@@ -105,6 +107,7 @@ export function createSessionControllerWatchdog(params: {
       progressOrigin() + abortMs,
       requestRecoveryAt ?? 0,
       ...[...requests].map((request) => request.deadlineAtMs ?? 0),
+      ...[...maintenance].map((work) => work.deadlineAtMs ?? 0),
     );
 
   const assessment = createWatchdogAssessment(
@@ -449,6 +452,7 @@ export function createSessionControllerWatchdog(params: {
       requests.clear();
       finalizationWork.clear();
       executions.clear();
+      maintenance.clear();
       attempt = undefined;
       attemptReleases = undefined;
     },
@@ -539,6 +543,7 @@ export function createSessionControllerWatchdog(params: {
       const maintenanceExecution: OwnedExecution | undefined = parent ? {} : undefined;
       if (maintenanceExecution) {
         executions.add(maintenanceExecution);
+        maintenance.add(maintenanceExecution);
       }
       let attemptClosed = false;
       const ownedReleases = new Set<() => void>();
@@ -560,6 +565,15 @@ export function createSessionControllerWatchdog(params: {
         parentReleases?.delete(closeAttempt);
         if (maintenanceExecution) {
           executions.delete(maintenanceExecution);
+          // Releasing live maintenance starts the semantic horizon, never retroactively.
+          if (
+            maintenance.delete(maintenanceExecution) &&
+            maintenanceExecution.deadlineAtMs !== undefined &&
+            current() &&
+            !recovery
+          ) {
+            runtimeOwnedThroughAt = Math.max(runtimeOwnedThroughAt ?? 0, now());
+          }
         }
         for (const release of ownedReleases) {
           release();

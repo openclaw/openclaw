@@ -11,6 +11,7 @@ import {
 } from "../../test-helpers/cron.ts";
 import * as gatewayErrors from "../gateway-errors.ts";
 import { createMethodRequest, createStateWithRequest } from "./cron.test-support.ts";
+import { loadCronStatus, retireCronStatusFeedback } from "./editor-status.ts";
 import {
   addCronJob,
   cancelCronEdit,
@@ -21,7 +22,6 @@ import {
   startCronEdit,
 } from "./index.ts";
 import { loadCronRuns, updateCronRunsFilter } from "./runs.ts";
-import { loadCronStatus, retireCronStatusFeedback } from "./state.ts";
 
 const requireRecord = createRequireRecord("record", "expected-label-record");
 

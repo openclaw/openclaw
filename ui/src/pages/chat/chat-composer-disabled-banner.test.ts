@@ -21,7 +21,9 @@ function drawBanner(overrides: Partial<NonNullable<Banner>> = {}) {
       ...overrides,
     },
   });
+  // A cached archived pane paints the banner in its first frame (#185788).
   const banner = view.container.querySelector(".agent-chat__disabled-banner")!;
+  expect(banner).not.toBeNull();
   const update = (disabledBanner: Banner) =>
     renderComposerInto(view.container, { ...view.props, disabledBanner });
   return { ...view, update, banner, action: banner.querySelector<HTMLButtonElement>("button")! };

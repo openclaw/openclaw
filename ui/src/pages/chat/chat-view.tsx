@@ -32,6 +32,7 @@ import {
 import type { ChatActivityPillsProps } from "./components/chat-activity-pills-types.ts";
 import { publicationOutsidePills } from "./components/chat-activity-pills-visibility.ts";
 import { ChatCommentController } from "./components/chat-comment-controller.ts";
+import { ChatComposerPluginContributions } from "./components/chat-composer-plugin-contributions.tsx";
 import {
   ComposerQuestionDock,
   createComposerQuestionPanel,
@@ -76,6 +77,7 @@ type ChatViewInput = {
   questions: ComposerQuestions;
   props: ChatProps;
   frame: ChatViewFrame;
+  showComposerSessionCards: boolean;
   presented: boolean;
   application?: ApplicationContext;
   bindTranscriptViewport: (element: HTMLDivElement) => () => void;
@@ -140,6 +142,7 @@ function ChatFooterContent(
   input: ChatViewInput & {
     mobileComposition?: boolean;
     activities?: ChatActivityPillsProps;
+    toolbar?: boolean;
   },
 ) {
   const pendingInputs = () => input.frame.pendingInputs;
@@ -177,7 +180,7 @@ function ChatFooterContent(
           </ChatLazyBoundary>
         </div>
       </Show>
-      <Show when={!input.props.detailsEnabled}>
+      <Show when={input.showComposerSessionCards}>
         <ChatPullRequests
           pullRequests={input.activities?.pullRequests ? [] : (input.props.pullRequests ?? [])}
           gateway={input.props.pullRequestsGateway}
@@ -210,15 +213,12 @@ function ChatFooterContent(
           />
         </ChatLazyBoundary>
       </Show>
-      <Show when={input.application}>
-        <openclaw-plugin-contributions
-          prop:kind="composer"
-          prop:sessionKey={input.props.sessionKey}
-          prop:agentId={input.props.currentAgentId}
-          prop:presented={input.presented}
-          prop:composer={input.props}
-        />
-      </Show>
+      <ChatComposerPluginContributions
+        kind="composer"
+        composer={input.props}
+        presented={input.presented}
+        toolbar={input.toolbar}
+      />
     </>
   );
 }
@@ -273,20 +273,15 @@ function ChatComposerView(input: ChatViewInput) {
           : undefined,
     };
   });
+  const showProgress = () => input.showComposerSessionCards && !activities()?.progress;
   return (
     <ChatComposer
       {...input.props}
       questions={input.questions}
       getTranscriptElement={input.getTranscriptElement}
       getScrollToLatestElement={input.getScrollToLatestElement}
-      progressCard={
-        input.props.detailsEnabled || activities()?.progress ? null : input.props.progressCard
-      }
-      progressCardInitialLoading={
-        input.props.detailsEnabled || activities()?.progress
-          ? false
-          : input.props.progressCardInitialLoading
-      }
+      progressCard={showProgress() ? input.props.progressCard : null}
+      progressCardInitialLoading={showProgress() && input.props.progressCardInitialLoading}
       displayQueue={input.frame.displayQueue}
       footerContent={
         <ChatFooterContent
@@ -295,6 +290,7 @@ function ChatComposerView(input: ChatViewInput) {
           activities={activities()}
         />
       }
+      pluginActionsPresented={input.presented}
       mobileActivityPills={activities()}
       mobileApprovalContent={
         <Show
@@ -345,7 +341,7 @@ function ChatComposerCompanion(input: ChatViewInput) {
   );
   return (
     <div class="chat-footer__context">
-      <ChatFooterContent {...input} />
+      <ChatFooterContent {...input} toolbar={false} />
       <div class="agent-chat__composer-notices">
         <ChatComposerNoticesView {...input.props} presented={input.presented} />
       </div>
@@ -493,6 +489,8 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
     questions: input.questions,
     props: input.props,
     frame: frame(),
+    // Full chat owns these in Details; the assistant dock has no fallback cards.
+    showComposerSessionCards: !input.props.detailsEnabled && !input.props.hideComposerSessionCards,
     presented: presented(),
     application,
     bindTranscriptViewport,

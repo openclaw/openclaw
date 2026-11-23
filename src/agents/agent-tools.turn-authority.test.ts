@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "../../packages/agent-core/src/internal-hooks.js";
+import {
   bindAgentToolAvailability,
   finalizeAgentToolAvailability,
 } from "./agent-tool-availability.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
 import { isHostSystemTurn, resolveTurnToolSurface } from "./agent-tools.turn-authority.js";
 import { expectOwnerGated } from "./agent-tools.turn-authority.test-support.js";
 import { fakeTool } from "./test-helpers/fake-tool.js";
@@ -134,4 +139,44 @@ describe("resolveTurnToolSurface on a system turn", () => {
     const result = await run(tools, "automations", { action: "get", jobId: "job-1" });
     expect(result.details).toMatchObject({ gated: true });
   });
+});
+
+it.each([
+  [
+    "a turn policy",
+    (wrapped: AnyAgentTool) =>
+      resolveTurnToolSurface({
+        turnTools: [],
+        sessionTools: [wrapped],
+        outsideTurnReason: (name) => `${name} refused`,
+        ownerOnlyDenied: new Set(),
+      }).tools[0]!,
+  ],
+])("never hands the source's preparer to a tool %s refuses", async (_label, refuse) => {
+  let ran = false;
+  const source = fakeTool("exec", "exec");
+  source.execute = async () => {
+    ran = true;
+    return { content: [{ type: "text", text: "ran" }], details: {} };
+  };
+  const wrapped = wrapToolWithBeforeToolCallHook(source);
+  expect(getInternalToolExecutionPreparer(wrapped)).toBeDefined();
+  const refused = refuse(wrapped);
+  // The agent loop and the definition adapter prefer the preparer over execute.
+  expect(getInternalToolExecutionPreparer(refused)).toBeUndefined();
+  expect((await refused.execute("call", {})).details).toMatchObject({ gated: true });
+  expect(ran).toBe(false);
+});
+
+it("keeps the scoped-reads split off the source preparer", () => {
+  const source = fakeTool("automations", "automations");
+  attachInternalToolExecutionPreparer(source, async () => {
+    throw new Error("source preparer ran");
+  });
+  const [split] = resolveTurnToolSurface({
+    turnTools: [source],
+    ownerOnlyDenied: new Set(["automations"]),
+    hostSystemTurn: true,
+  }).tools;
+  expect(getInternalToolExecutionPreparer(split!)).toBeUndefined();
 });

@@ -45,8 +45,8 @@ export function resolvePendingInputEndCause(
   if (isUserInitiatedAgentRunAbortReason(signal?.aborted ? signal.reason : failure)) {
     return "user-stop";
   }
-  if (defaultEndCause === "delete") {
-    return "delete";
+  if (defaultEndCause === "delete" || defaultEndCause === "user-stop") {
+    return defaultEndCause;
   }
   if (
     reason === "auth-revoked" ||
@@ -75,11 +75,12 @@ export async function settleUserTurnPendingInput(
   deleted = false,
   disposition: "cancelled" | "interrupted" = "cancelled",
   accepted = false,
+  explicitStop?: "user-stop",
 ): Promise<void> {
   const consumed = recorder?.isPendingInputConsumed?.();
   const endCause = consumed
     ? undefined
-    : resolvePendingInputEndCause(signal, failure, deleted ? "delete" : "failed");
+    : resolvePendingInputEndCause(signal, failure, deleted ? "delete" : explicitStop);
   try {
     if (!consumed && endCause === undefined && accepted) {
       recorder?.relinquishPendingInput?.();

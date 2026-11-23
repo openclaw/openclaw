@@ -18,7 +18,7 @@ import { registerCodexManagedAppServerDoctorChecks } from "./api.js";
 import plugin from "./index.js";
 
 const CHECK_ID = "codex/native-profile-recovery";
-const IMPORT_COMMAND = "openclaw models auth login --provider openai --method device-code";
+const IMPORT_COMMAND = "openclaw models auth login --provider openai --method oauth";
 const config: OpenClawConfig = {
   auth: { profiles: { "openai:default": { provider: "openai", mode: "oauth" } } },
   agents: { entries: { main: {}, worker: {} } },
@@ -68,6 +68,8 @@ it("reports missing agent-local profiles without importing native credentials, t
   const findings = await detect();
   expect(findings).toEqual([warning("2026.9.5", IMPORT_COMMAND)]);
   expect(findings[0]?.message).toContain("native Codex login");
+  // The message also reaches chat turns; only the doctor fix hint names the CLI command.
+  expect(findings[0]?.message).not.toContain("openclaw models");
   expect(findings[0]?.message).toContain("Affected agents: main.");
   expect(findings[0]?.message).not.toMatch(/HTTP 401|re-authenticate/);
   state.applyEnv();

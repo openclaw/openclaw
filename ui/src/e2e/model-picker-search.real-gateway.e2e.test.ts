@@ -138,7 +138,6 @@ suite.define(() => {
         await publish(models);
         await selectChatModelOption(scope, "fixture/aurora-large");
         await menu.waitFor({ state: "hidden" });
-        await page.locator("#cron-name").fill("Keep this draft");
         await page.locator("#cron-payload-text").fill("Do not submit this automation");
         const writesBeforeSearch = mutations.length;
         const selectedLabel = await trigger.getAttribute("aria-label");
@@ -154,7 +153,6 @@ suite.define(() => {
         await press("Enter");
         expect(await trigger.getAttribute("aria-label")).toBe(selectedLabel);
         await press("Escape");
-        expect(await page.locator("#cron-name").inputValue()).toBe("Keep this draft");
         expect(await page.locator("#cron-payload-text").inputValue()).toBe(
           "Do not submit this automation",
         );

@@ -69,7 +69,7 @@ async function load(root: string, side: Side): Promise<Owner> {
   );
   const code = stripTypeScriptTypes(`
 ${between(text.admit!, "export async function admitCorrelatedSubagentSessionDelivery(", "export function resolveCorrelatedSubagentDelivery(")}
-${between(text.settle!, "export async function settleSubagentCompletionDelivery(", "export async function blockSubagentCompletionDelivery(")}
+${between(text.settle!, "export async function settleSubagentCompletionDelivery(", "export async function settleSubagentCompletionInHistory(")}
 ${between(text.cleanup!, "export function mutateCleanup(")}
 ${between(text.delivery!, "export function ensureDeliveryState(", "export function clearDeliveryState(")}
 const Date = { now: () => 1000000 };

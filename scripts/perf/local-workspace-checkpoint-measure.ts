@@ -184,6 +184,7 @@ const { values } = parseArgs({
     "freeze-source": { type: "string" },
     "source-root": { type: "string" },
     "fixture-source": { type: "string" },
+    "filesystem-worker": { type: "string" },
     "serial-turns": { type: "boolean", default: false },
     "fingerprint-import": { type: "boolean", default: false },
     "source-authority": { type: "boolean", default: false },
@@ -262,7 +263,8 @@ function installFingerprintObservers(destination: string) {
       "  async (command, channel, control) => {",
       `  async (command, channel, control) => {
     const fingerprintMetrics = { contentHashCount: 0, contentReadBytes: 0,
-      fingerprintHitCount: 0, fingerprintMissCount: 0, packedRecords: 0 };
+      fingerprintHitCount: 0, fingerprintMissCount: 0, packedRecords: 0,
+      hostIndexDiscoveryCount: 0, ignoreDiscoveryCount: 0 };
     Reflect.set(globalThis, "__workspaceFingerprintMetrics", fingerprintMetrics);`,
     ],
     [
@@ -274,7 +276,13 @@ function installFingerprintObservers(destination: string) {
       '      Reflect.deleteProperty(globalThis, "__workspaceFingerprintMetrics");\n      /(?:)/.test("");',
     ],
   ]);
-  rewrite("src/gateway/worker-environments/workspace-actual-manifest.ts", [
+  const scanner = "src/gateway/worker-environments/workspace-actual-manifest.ts";
+  const reuse = fs
+    .readFileSync(path.join(destination, scanner), "utf8")
+    .includes("params.reuseFile?.(relative, stats)")
+    ? "      const reusable = params.reuseFile?.(relative, stats);"
+    : "      const reusable = params.reuseFile?.(relative, identity, stats);";
+  rewrite(scanner, [
     [
       "      if (metrics) {\n        metrics.contentHashCount += 1;\n      }",
       `      const measured = Reflect.get(globalThis, "__workspaceFingerprintMetrics");
@@ -282,13 +290,23 @@ function installFingerprintObservers(destination: string) {
       if (metrics) { metrics.contentHashCount += 1; }`,
     ],
     [
-      "      const reusable = params.reuseFile?.(relative, identity, stats);",
-      `      const reusable = params.reuseFile?.(relative, identity, stats);
+      reuse,
+      `${reuse}
       const measured = Reflect.get(globalThis, "__workspaceFingerprintMetrics");
       if (measured) {
         if (reusable) { measured.fingerprintHitCount++; }
         else { measured.fingerprintMissCount++; }
       }`,
+    ],
+  ]);
+  rewrite("src/gateway/worker-environments/local-workspace-inventory.ts", [
+    [
+      '    const listed = await requireGitBuffer(params.root, ["ls-files", "--cached", "-z"], {',
+      '    const measured = Reflect.get(globalThis, "__workspaceFingerprintMetrics"); if (measured) measured.hostIndexDiscoveryCount++;\n    const listed = await requireGitBuffer(params.root, ["ls-files", "--cached", "-z"], {',
+    ],
+    [
+      "  const listed = await requireGitBuffer(root, [",
+      '  const measured = Reflect.get(globalThis, "__workspaceFingerprintMetrics"); if (measured) measured.ignoreDiscoveryCount++;\n  const listed = await requireGitBuffer(root, [',
     ],
   ]);
   rewrite("src/gateway/worker-environments/workspace-manifest-computation.runtime.ts", [
@@ -590,8 +608,16 @@ const reusableSerial =
   !values["agent-db-fixture"] &&
   siblingWorktrees === 0;
 assert(
-  !fingerprintImport || reusableSerial || reconcile,
-  "Fingerprint counters require the simple serial fixture or reconcile mode",
+  !fingerprintImport ||
+    reusableSerial ||
+    reconcile ||
+    (serialTurns &&
+      values.acceleration &&
+      !values["owner-switch"] &&
+      !values["restart-stage"] &&
+      !values["fresh-only"] &&
+      !values["reuse-fixture"]),
+  "Fingerprint counters require serial reuse, fresh template reuse, or reconcile mode",
 );
 if (fingerprintImport) {
   const frozen = path.join(sourceRoot, "checkpoint-source.json");
@@ -991,6 +1017,8 @@ type FingerprintMetrics = {
   fingerprintHitCount: number;
   fingerprintMissCount: number;
   packedRecords: number;
+  hostIndexDiscoveryCount: number;
+  ignoreDiscoveryCount: number;
 };
 const fingerprintMetrics: FingerprintMetrics[] = [];
 const mutationObserver = values["mutation-segments"] ? observeLocalWorkspaceMutations() : undefined;
@@ -1169,6 +1197,15 @@ registerHooks({
   load(url, context, nextLoad) {
     const relative = url.startsWith("file:") ? path.relative(root, fileURLToPath(url)) : "";
     let code = source.get(relative);
+    if (values["filesystem-worker"] && relative === "src/agents/worktrees/filesystem-native.ts") {
+      assert(code);
+      const anchor = "return resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.fsSafeCopy);";
+      assert(code.includes(anchor));
+      code = code.replace(
+        anchor,
+        `return new URL(${JSON.stringify(values["filesystem-worker"])});`,
+      );
+    }
     if (
       values["mutation-segments"] &&
       relative === "src/gateway/worker-environments/local-workspace-store.ts"
@@ -2254,7 +2291,7 @@ measurement: try {
       () => true,
     );
     try {
-      const captured = await authorityRuntime.captureGatewayOperatorRunAuthority({
+      const captured = await authorityRuntime.prepareGatewayOperatorRunAuthority({
         client: {
           connId: `synthetic-${++admissions}`,
           connect: {
@@ -2439,8 +2476,12 @@ measurement: try {
       fingerprintMetrics.length = 0;
       const workerStartsBefore = workerStarts,
         workerExitsBefore = workerExits;
+      // Native cumulative counters stay outside the owner timing window. The
+      // fingerprint workload can compare allocation pairs without profiling.
       const workerAllocationBefore =
-        values.instrument === "allocation" ? await sampleWorkerAllocation() : undefined;
+        values.instrument === "allocation" || fingerprintImport
+          ? await sampleWorkerAllocation()
+          : undefined;
       const gitOperations: Record<string, number> = {};
       const gitDiagnostics = channel("openclaw.git.operation");
       const observeGitOperation = (message: unknown) => {
@@ -2990,6 +3031,7 @@ measurement: try {
         files: inventory.length,
         bytes: initialBytes,
         source: values["fixture-source"] ?? null,
+        filesystemWorker: values["filesystem-worker"] ?? null,
         agentDatabase: values["agent-db-fixture"] ?? null,
         siblingWorktrees,
         acceleration: values.acceleration,

@@ -24,6 +24,7 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "../plugins/runtime/load-context.resolve.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { captureAsyncWorkTracker } from "../shared/async-work-scope.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -32,6 +33,7 @@ import {
   loadSetupInferencePluginGeneration,
   revalidateStableSetupInferenceOwner,
   runSetupInferenceTurn,
+  verifySetupInferenceConfig,
 } from "./setup-inference-turn.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
 import * as verifiedInference from "./verified-inference.js";
@@ -126,6 +128,68 @@ describe("setup inference plugin ownership", () => {
       ok: true,
       text: "OK",
     });
+  });
+
+  it.each([
+    [8_192, true, true],
+    [16_384, true, false],
+    [8_192, undefined, false],
+  ] as const)(
+    "verifies a %i-token runtime context and warns only a chosen small model (candidate: %s)",
+    async (contextTokens, candidateSetup, warned) => {
+      const config = embeddedRoute("openclaw", "fixture", "direct-model").runConfig;
+      config.models = createFixtureProviderModels("http://127.0.0.1:18299/v1");
+      vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async (params) => ({
+        payloads: [{ text: "OK" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId: params.sessionId,
+            provider: params.provider ?? "fixture",
+            model: params.model ?? "direct-model",
+            contextTokens,
+          },
+          executionTrace: { winnerProvider: params.provider, winnerModel: params.model },
+        },
+      }));
+      const result = await verifySetupInferenceConfig({
+        config,
+        agentId: "main",
+        runtime: {
+          log: vi.fn<RuntimeEnv["log"]>(),
+          error: vi.fn<RuntimeEnv["error"]>(),
+          exit: vi.fn<RuntimeEnv["exit"]>(),
+        },
+        ...(candidateSetup ? { candidateSetup } : {}),
+      });
+      expect(result.ok, result.ok ? undefined : result.error).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      if (warned) {
+        expect(result.warning).toContain(
+          "fixture/direct-model has an effective context window of 8192 tokens",
+        );
+        expect(result.warning).toContain("at least 16384");
+      } else {
+        expect(result.warning).toBeUndefined();
+      }
+    },
+  );
+
+  it("leaves the context floor to setup callers, not the shared probe", async () => {
+    const route = embeddedRoute("openclaw");
+    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async () => {
+      const reply = probeReply(route);
+      const agentMeta = {
+        sessionId: "probe",
+        provider: route.provider,
+        model: route.model,
+        contextTokens: 8_192,
+      };
+      return { ...reply, meta: { ...reply.meta, agentMeta } };
+    });
+    await expect(runProbe(route)).resolves.toMatchObject({ ok: true, contextTokens: 8_192 });
   });
 
   it.each([

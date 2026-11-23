@@ -16,11 +16,9 @@ import {
   attachRuntimePromptMediaFacts,
   readRuntimePromptMediaFacts,
 } from "../media/media-facts.js";
+import type { PersistedUserTurnMessage } from "../sessions/user-turn-input.types.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../sessions/user-turn-transcript-runtime-context.js";
-import {
-  createUserTurnTranscriptRecorder,
-  type PersistedUserTurnMessage,
-} from "../sessions/user-turn-transcript.js";
+import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {

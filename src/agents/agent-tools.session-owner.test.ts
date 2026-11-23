@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
@@ -61,12 +61,7 @@ it.each([false, undefined])("limits assignment for owner=%s", async (senderIsOwn
   expect(gateway).toHaveBeenCalledWith({
     method: assignmentOnly ? "sessions.assignOwner" : "sessions.patch",
     params: { key: sessionKey, ...(assignmentOnly ? { owner } : { label: "Scheduled session" }) },
-    ...(assignmentOnly
-      ? {
-          agentToolCaller: { agentId: "main", sessionKey },
-          assertDispatchCurrent: expect.any(Function),
-        }
-      : {}),
+    ...(assignmentOnly ? { agentToolCaller: { agentId: "main", sessionKey } } : {}),
   });
   const denied = assemble({
     config: { tools: { allow: ["sessions"], deny: ["sessions"] } },
@@ -74,7 +69,7 @@ it.each([false, undefined])("limits assignment for owner=%s", async (senderIsOwn
   expect(denied.some((candidate) => candidate.name === "sessions")).toBe(false);
 });
 it("lists creation without operator authority while preserving explicit denies and management restrictions", async () => {
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId: "profile-requester",
     scopes: ["operator.sessions.write"],
     signal: new AbortController().signal,

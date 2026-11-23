@@ -34,7 +34,7 @@ import {
 } from "../compaction-real-conversation.js";
 import { prepareAssistantReplayImageContent } from "../embedded-agent-helpers/images.js";
 import { hasOpenAIReasoningSignature } from "../embedded-agent-helpers/openai.js";
-import { annotateInterSessionUserMessages } from "../replay-provenance.js";
+import { annotateCrossSessionMessages } from "../replay-provenance.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
   collectReplayToolBlockFacts,
@@ -383,7 +383,7 @@ export function collectExactReplaySourceFact<S>(
   source: S,
   options?: PreparedCompactionReplayOptions,
 ): ExactReplaySourceFact<S> {
-  const annotated = annotateInterSessionUserMessages([message])[0]!;
+  const annotated = annotateCrossSessionMessages([message])[0]!;
   const normalized = normalizeReplayMessage(annotated);
   const recovery =
     message.role === "assistant" &&
@@ -392,7 +392,7 @@ export function collectExactReplaySourceFact<S>(
       : null;
   return {
     source,
-    role: message.role,
+    role: annotated.role,
     rawPairing: collectToolPairingMessageFact(annotated),
     normalized: normalized ? collectMessage(normalized, source, annotated, options) : null,
     recovery,
@@ -442,7 +442,7 @@ export async function collectExactReplayMediaFacts<S>(
   indexes: readonly number[],
   options: PreparedCompactionReplayOptions,
 ): Promise<ReadonlyMap<number, ReplayBlockFact<S>>> {
-  const normalized = normalizeReplayMessage(annotateInterSessionUserMessages([message])[0]!);
+  const normalized = normalizeReplayMessage(annotateCrossSessionMessages([message])[0]!);
   const content =
     normalized && "content" in normalized && Array.isArray(normalized.content)
       ? normalized.content
@@ -496,7 +496,7 @@ export async function compareExactReplayRows<S>(
       const { source, index, projection } = block.locator;
       if (previousMessage === undefined || previousSource !== source) {
         previousMessage = normalizeReplayMessage(
-          annotateInterSessionUserMessages([await readSource(source)])[0]!,
+          annotateCrossSessionMessages([await readSource(source)])[0]!,
         );
         previousSource = source;
       }

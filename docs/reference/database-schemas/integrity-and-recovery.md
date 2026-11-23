@@ -136,11 +136,19 @@ Each owned database can have a regular file named `<database>.seal` beside it,
 for example `openclaw.sqlite.seal`. The database admission owner writes this file
 after the final accepted writer settles, a `TRUNCATE` checkpoint completes, and
 the native database closes successfully. Failed or unfinished cleanup cannot
-publish a seal. The seal contains the admitted schema and integrity facts, a
+publish a seal. The Gateway owner-lease release seals only when no read still
+borrows the shared handle; a restart whose startup outlived its stop budget
+keeps that handle open, releases its lease, and the next startup validates
+instead. The seal contains the admitted schema and integrity facts, a
 schema identity, the time and kind of the accepted verification, and the final
 physical file metadata. A recovery-quick receipt remains distinct from a full
 verification. The seal is reconstructible verification metadata, not database state
 or a backup.
+
+Shutdown publishes seals during database close, before process exit. A slow close
+step's diagnostic grace does not skip later retirement: shutdown awaits its actual
+settlement, bounded by the process watchdog. A watchdog report of no pending steps
+does not establish successful close; a rejected step can leave later steps unrun.
 
 During shutdown, idle session-reader pools retire without their normal warm-cache
 delay. Accepted reads and writes settle through their existing owners before the

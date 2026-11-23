@@ -150,6 +150,11 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
       if (!current.emojiEnabled || current.draftKey !== previous?.context.draftKey) {
         state.emojiMenu.close();
       }
+      // A proposal belongs to the draft it was offered for; another chat never shows it.
+      if (previous && current.draftKey !== previous.context.draftKey) {
+        state.tasks()?.dismiss();
+      }
+      state.tasks()?.syncDraft(current.visibleDraft);
       const options = current.dictationOptions;
       voice.picker.syncCatalog(options.client, options.connected, options.sessionKey);
       voice.dictation.update(options);
@@ -193,10 +198,15 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
   );
   onSettled(() => {
     const stop = () => context().stopRunFromEscape();
+    const send = () => context().runControlsProps.onSend();
     state.stopRunFromEscape = stop;
+    state.sendDraft = send;
     return () => {
       if (state.stopRunFromEscape === stop) {
         state.stopRunFromEscape = null;
+      }
+      if (state.sendDraft === send) {
+        state.sendDraft = null;
       }
     };
   });

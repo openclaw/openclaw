@@ -9,6 +9,7 @@
 // equivalents. --base-dir overlays saved src/gateway owners without swapping files.
 // --corpus records identical rows and change decisions for reparent/archive/compaction.
 // This measures in-memory owners only, not Gateway RPCs, database size, or production share.
+// --refresh resolves live inputs in 64-row slices and publishes changing transcript previews.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -28,6 +29,7 @@ const { values } = parseArgs({
     "base-dir": { type: "string" },
     materialize: { type: "boolean" },
     snapshots: { type: "boolean" },
+    refresh: { type: "boolean" },
     sessions: { type: "string", default: "10000" },
     reads: { type: "string", default: "1" },
     corpus: { type: "string" },
@@ -47,6 +49,8 @@ const owners = [
   "session-utils-row",
   "session-row-identity",
   "session-row-presentation",
+  "session-runtime-resolution",
+  "session-row-materialization",
 ];
 const sources = new Map(
   owners.map((name) => {
@@ -72,6 +76,8 @@ const { materializeSessionRow, readSessionRowInputs, replaceSessionRowFacts } =
 const { materializeSessionRowIfChanged } =
   await import("../../src/gateway/session-row-materialization.js");
 const records = await import("../../src/gateway/session-row-projection-record.js");
+const { createSessionRuntimeResolution } =
+  await import("../../src/gateway/session-runtime-resolution.js");
 const { buildSessionListRowMetadataContext } =
   await import("../../src/gateway/session-utils-projection.js");
 const { buildSubagentSessionListReadIndex } =
@@ -102,10 +108,46 @@ try {
     inspector.connect();
   }
   for (const scope of ["per-sender", "global"] as const) {
-    const cfg: OpenClawConfig = { agents: { entries: { main: {} } }, session: { scope } };
+    const models = Array.from({ length: 32 }, (_, index) => ({
+      id: `model-${index}`,
+      name: `Synthetic model ${index}`,
+      contextTokens: 32768 + index * 1024,
+      reasoning: false,
+      input: ["text" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      maxTokens: 8192,
+    }));
+    const modelCatalog = models.map((model) => ({ ...model, provider: "fixture" }));
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {} } },
+      session: { scope },
+      models: { providers: { fixture: { baseUrl: "https://fixture.invalid", models } } },
+    };
     const rows = new Map<string, Row>();
     const inventory: Row[] = [];
     const inputs: ReturnType<typeof readSessionRowInputs>["inputs"][] = [];
+    const readInputs = (row: Row, runtimeResolution = createSessionRuntimeResolution(cfg)) =>
+      readSessionRowInputs({
+        cfg,
+        key: row.key,
+        agentId: row.agentId,
+        entry: row.entry,
+        store: {},
+        storePath: row.storeTarget.storePath,
+        rowContext: context,
+        active: false,
+        activeModel: null,
+        terminalModel: null,
+        preparedAcpMeta: null,
+        preparedRuntimeOwnership: null,
+        preparedModelMetadata: null,
+        preparedRepositoryWorkspace: null,
+        lightweightListRow: true,
+        skipTranscriptUsageFallback: true,
+        now: 1,
+        runtimeResolution,
+        modelCatalog,
+      }).inputs;
     let publications = 0;
     const owner = {
       rows,
@@ -128,6 +170,8 @@ try {
         lifecycleRevision: "synthetic-generation",
         label: `Synthetic completed task ${index}`,
         status: "done",
+        providerOverride: "fixture",
+        modelOverride: models[index % models.length]!.id,
         parentSessionKey: "agent:main:main",
         spawnedBy: "agent:main:main",
         owner: { actor: { type: "agent", id: "main" }, assignedAt: 1 },
@@ -151,33 +195,21 @@ try {
       assert.equal(acquired.entry?.spawnedBy, parentKey);
       inventory.push(acquired);
       if (values.materialize) {
-        const input = readSessionRowInputs({
-          cfg,
-          key: acquired.key,
-          agentId: "main",
-          entry: acquired.entry,
-          store: {},
-          storePath: acquired.storeTarget.storePath,
-          rowContext: context,
-          active: false,
-          activeModel: null,
-          terminalModel: null,
-          preparedAcpMeta: null,
-          preparedRuntimeOwnership: null,
-          preparedModelMetadata: null,
-          preparedRepositoryWorkspace: null,
-          lightweightListRow: true,
-          skipTranscriptUsageFallback: true,
-          now: 1,
-        }).inputs;
+        const input = readInputs(acquired);
         inputs.push(input);
         acquired.materialized = materializeSessionRow(input);
       }
     }
     const coldWallMs = performance.now() - coldStart;
     const coldUsed = process.threadCpuUsage(coldCpu);
+    let sequence = 0;
     const acquire = () => {
+      sequence++;
+      let runtimeResolution = createSessionRuntimeResolution(cfg);
       for (const [index, row] of inventory.entries()) {
+        if (index % 64 === 0) {
+          runtimeResolution = createSessionRuntimeResolution(cfg);
+        }
         for (let read = 0; read < reads; read++) {
           const next = records.acquireSessionRowEntry({
             ...owner,
@@ -185,12 +217,28 @@ try {
             storedEntry: values.snapshots ? structuredClone(row.storedEntry) : row.storedEntry,
           });
           if (values.materialize && read === 0) {
-            row.materialized = materializeSessionRow(inputs[index]!, row.materialized);
-            row.materialized = replaceSessionRowFacts(
-              row.materialized,
-              { lastMessagePreview: "Synthetic preview" },
-              { lastMessagePreview: "Synthetic preview" },
-            );
+            const input = values.refresh ? readInputs(row, runtimeResolution) : inputs[index]!;
+            row.materialized = materializeSessionRow(input, row.materialized);
+            if (values.refresh && records.ready(row)) {
+              records.publishTranscriptFields(
+                row,
+                {
+                  lastMessagePreview: `Synthetic preview ${sequence}`,
+                  lastAssistantMessage: {
+                    text: `Synthetic assistant ${sequence}`,
+                    timestamp: sequence,
+                  },
+                },
+                cfg,
+                context,
+              );
+            } else {
+              row.materialized = replaceSessionRowFacts(
+                row.materialized,
+                { lastMessagePreview: "Synthetic preview" },
+                { lastMessagePreview: "Synthetic preview" },
+              );
+            }
           }
           if (next !== row) {
             throw new Error("Unchanged acquisition replaced a retained row");
@@ -297,6 +345,31 @@ try {
             selection: row.selection,
             row: materialized?.row,
           });
+          if (records.ready(row)) {
+            for (const fields of [
+              {
+                lastMessagePreview: "First",
+                lastAssistantMessage: { text: "Answer", timestamp: 1 },
+              },
+              {
+                lastMessagePreview: "First",
+                lastAssistantMessage: { text: "Answer", timestamp: 1 },
+              },
+              {
+                lastMessagePreview: "Next",
+                lastAssistantMessage: { text: "Next answer", timestamp: 2 },
+              },
+              {},
+              {},
+            ]) {
+              const changed = records.publishTranscriptFields(row, fields, cfg, context);
+              decisions.push({ transcriptChanged: changed, row: row.materialized.row });
+              assert(Object.isFrozen(row.materialized.row));
+              if (row.materialized.row.lastAssistantMessage) {
+                assert(Object.isFrozen(row.materialized.row.lastAssistantMessage));
+              }
+            }
+          }
         }
       }
       corpus.push(decisions);
@@ -313,6 +386,7 @@ try {
         mode: values.allocation ? "allocation" : values["cpu-profile"] ? "cpu-profile" : "timing",
         materialize: Boolean(values.materialize),
         snapshots: Boolean(values.snapshots),
+        refresh: Boolean(values.refresh),
         sessions,
         passes,
         reads,

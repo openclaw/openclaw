@@ -83,7 +83,12 @@ import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-comm
 import { withUpdateFailureTriage, type UpdateTriageTarget } from "./update-command-triage.js";
 import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
 import { settleManagedHandoffPluginCohort } from "./update-plugin-cohort-settlement.js";
-import { restoreRepairGateway } from "./update-repair-service.js";
+import {
+  hasUnverifiedDataAtRisk,
+  refuseUnverifiedDataAtRiskBeforeMaintenance,
+  restoreRepairGateway,
+  verifyUnverifiedDataAtRisk,
+} from "./update-repair-service.js";
 import {
   reportRetainedUpdateCustody,
   type RetainedUpdateCustodyReport,
@@ -423,6 +428,9 @@ async function updateFinalizeCommandInternal(
   };
   let outcome: { complete: () => Promise<void> } | { error: unknown };
   try {
+    if (ownsMaintenance) {
+      await refuseUnverifiedDataAtRiskBeforeMaintenance(lifecycle, invokingRunId, opts.json);
+    }
     if (prepared.installKind === "git") {
       const runtimeTimeoutMs = lifecycle.budget("plugins");
       const runtimeDeadline = performance.now() + runtimeTimeoutMs;
@@ -546,9 +554,36 @@ async function updateFinalizeCommandInternal(
       defaultRuntime.error(`Warning: ${formatUpdateOwedStep(step)}`);
     }
 
+    const restoresGateway = interruptedGateway && pluginUpdate.status !== "error" && !retained;
+    // Checked again after Doctor, whether or not the marked run stopped the Gateway.
+    const checksMarks =
+      ownsMaintenance && pluginUpdate.status !== "error" && !retained && hasUnverifiedDataAtRisk();
     const gateway =
-      interruptedGateway && pluginUpdate.status !== "error" && !retained
+      restoresGateway || checksMarks
         ? await lifecycle.run("gatewayRestoration", async (phase) => {
+            const markRefusal =
+              checksMarks &&
+              (await verifyUnverifiedDataAtRisk({
+                repairRunId: invokingRunId,
+                config: configSnapshot.config,
+                json: Boolean(opts.json),
+                phase,
+                timeoutMs: lifecycle.budget("gatewayRestoration"),
+                // Doctor maintenance ran above only with exclusive state ownership.
+                writersExcluded: true,
+              }));
+            // Inconsistent state keeps every Gateway as it is, whichever run stopped it.
+            if (markRefusal) {
+              return {
+                restart: false,
+                warning: markRefusal,
+                verification: undefined,
+                refused: true as const,
+              };
+            }
+            if (!restoresGateway) {
+              return undefined;
+            }
             const restore = (assertCurrent: () => void) =>
               restoreRepairGateway({
                 originalRunId: interruptedGateway.runId,
@@ -606,9 +641,11 @@ async function updateFinalizeCommandInternal(
         plugins: pluginUpdate,
       },
     };
+    // A mark still refused after Doctor leaves recovery unfinished and retryable.
+    const markRefusal = gateway && "refused" in gateway ? gateway.warning : undefined;
     outcome = {
       complete: async () => {
-        if (result.status !== "error" && recoveryRunIds.length) {
+        if (result.status !== "error" && !markRefusal && recoveryRunIds.length) {
           // Publish successful recovery only after convergence and the ledger's
           // transactional inactivity/driver check both finish.
           await reconcileAbandonedUpdateRunsAsync({ explicit: true, runIds: recoveryRunIds });
@@ -637,11 +674,13 @@ async function updateFinalizeCommandInternal(
               })
             : undefined;
         const observed = failure ? await lifecycle.observeFailure(failure) : undefined;
-        if (!failure) {
+        if (!failure && !markRefusal) {
           lifecycle.handoff?.complete(invokingRunId);
         }
         // Exit status and advisories do not distinguish completed core work from deferred maintenance.
-        const coreUpdate: UpdateCoreCompletion = failure || retained ? "pending" : "completed";
+        // A refused mark leaves recovery unfinished; a handoff helper must not restart on it.
+        const coreUpdate: UpdateCoreCompletion =
+          failure || retained || markRefusal ? "pending" : "completed";
         if (stage) {
           stage.status = result.status;
         } else if (opts.json) {
@@ -652,9 +691,9 @@ async function updateFinalizeCommandInternal(
               ? { recovery: observed.recovery, verification: observed.verification }
               : {}),
           });
-        } else if (result.status === "ok") {
+        } else if (result.status === "ok" && !markRefusal) {
           defaultRuntime.log(theme.muted("Update finalization completed."));
-        } else if (result.status === "warning") {
+        } else if (result.status === "warning" && !markRefusal) {
           defaultRuntime.log(theme.warn("Update finalization completed with warnings."));
           if (retained) {
             defaultRuntime.log(theme.warn(retained.nextAction));
@@ -667,9 +706,10 @@ async function updateFinalizeCommandInternal(
             `Managed Gateway ${gateway.restart ? "started and " : ""}verified after update repair.`,
           );
         }
-        lifecycle.complete(result.status === "error" ? 1 : 0);
-        if (failure) {
-          throw failure;
+        lifecycle.complete(result.status === "error" || markRefusal ? 1 : 0);
+        const thrown = failure ?? (markRefusal ? new Error(markRefusal) : undefined);
+        if (thrown) {
+          throw thrown;
         }
       },
     };

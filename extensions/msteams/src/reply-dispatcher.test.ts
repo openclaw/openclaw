@@ -65,7 +65,6 @@ describe("createMSTeamsReplyDispatcher", () => {
       },
       channel: {
         text: {
-          chunkMarkdownTextWithMode: (text: string) => [text],
           resolveChunkMode: vi.fn(() => "length"),
           resolveMarkdownTableMode: vi.fn(() => "code"),
         },

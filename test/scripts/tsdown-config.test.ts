@@ -11,6 +11,7 @@ import {
   collectRootPackageExcludedExtensionDirs,
   DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { RELEASED_READER_ENTRIES } from "../../scripts/lib/catalog-compare-released-gate.mts";
 import { createCompactModuleLabelsPlugin } from "../../scripts/lib/compact-module-labels.mts";
 import {
   collectPackageDistImportErrors,
@@ -61,6 +62,25 @@ function hasWorkerEntry(config: TsdownConfig, name: string, source: string): boo
   }
   return (entry as Record<string, unknown>)[name] === source;
 }
+
+// Renaming or dropping one of these entries would fail the catalog publish gate for
+// the release that ships it, long after this PR merged.
+it("ships the stable entries the catalog publish gate runs released readers from", async () => {
+  for (const [reader, name] of Object.entries(RELEASED_READER_ENTRIES)) {
+    const source = configs
+      .map((config) => config.entry)
+      .find(
+        (entry): entry is Record<string, string> =>
+          typeof entry === "object" && entry !== null && !Array.isArray(entry) && name in entry,
+      )?.[name];
+    expect(source, `dist entry ${name}`).toBeTypeOf("string");
+    const module = (await import(pathToFileURL(path.resolve(source ?? "")).href)) as Record<
+      string,
+      unknown
+    >;
+    expect(module[reader], `${source} exports ${reader}`).toBeTypeOf("function");
+  }
+});
 
 it("keeps retirement reads outside the Doctor restoration graph", async () => {
   const selected = configs.find((config) =>

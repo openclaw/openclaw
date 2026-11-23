@@ -104,9 +104,62 @@ function render(patch: Partial<ReportRecord>) {
 
 afterEach(() => vi.restoreAllMocks());
 
+it("gives a restored update one next step without claiming an unknown cause", () => {
+  const report = render({
+    status: "failed",
+    reason: "The new version did not finish starting within 10 minutes; v2026.9.1 is still running",
+    origin: { cause: "unknown" },
+    verification: {
+      runningVersion: "2026.9.1",
+      serviceRunning: true,
+      coreReady: true,
+      rollbackOutcome: { status: "succeeded", reason: "startup timed out" },
+    },
+  });
+  expectText(
+    report.markdown,
+    [
+      "The new version did not finish starting within 10 minutes; v2026.9.1 is still running",
+      "Retry the update. If it fails again, choose Report update failure in Settings → Updates.",
+    ],
+    ["Cause: unknown", "triage", "Diagnose"],
+  );
+});
+
+it("labels standalone repair and leads with the update it repaired", () => {
+  const detail =
+    "Update 2b6f7c1e-9a41-4c2d-8f3e-5d6a7b8c9d0e to 2026.11.5 failed at activating: post-update-failed. finalize:doctor: database is locked";
+  const report = render({
+    after: { version: "2026.11.5" },
+    steps: [
+      { step: "requested", status: "completed" },
+      { step: "repairing", status: "completed" },
+      { step: "finalize:repaired-run", status: "completed", detail },
+    ],
+  });
+  expect(report.headline).toBe("✅ OpenClaw repair completed for 2026.11.5.");
+  expect(report.lines[0]).toBe(`Repaired update: ${detail}`);
+});
+
+it("bounds the repaired update lead alongside long pending-repair guidance", () => {
+  const detail = "x".repeat(1024);
+  const report = render({
+    status: "skipped",
+    reason: "doctor-maintenance-pending",
+    origin: { nextAction: "Recovery instructions ".repeat(48) },
+    steps: [
+      { step: "repairing", status: "skipped" },
+      { step: "finalize:repaired-run", status: "completed", detail },
+    ],
+  });
+  expectChatBudget(report.markdown);
+  expectText(report.markdown, [report.headline, "Repaired update:"]);
+  expect(report.lines[0]).toBe(`Repaired update: ${detail}`);
+});
+
 it("reports repeated database-path advisories once across Doctor phases", () => {
   const detail =
-    "Skipped agent database path repair during update Doctor. Run openclaw doctor --fix to repair agent database paths.";
+    "Skipped agent database path repair for 1 registration(s) during update Doctor. Run openclaw doctor --fix to repair agent database paths.";
   const report = render({
     steps: [
       { step: "warning:doctor", status: "completed", detail },
@@ -673,8 +726,21 @@ it.each<[string | null, string[], string]>([
   expectChatBudget(report.markdown);
 });
 
-it.each<[UpdateRunRecord["status"], string | null, string]>([
-  ["succeeded", null, "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1)."],
+it.each<[UpdateRunRecord["status"], string | null, string, Step[]?]>([
+  [
+    "succeeded",
+    null,
+    "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1); 1 warning needs attention.",
+  ],
+  [
+    "succeeded",
+    null,
+    "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1); 1 warning needs attention.",
+    [
+      failedStep("plugins"),
+      { step: "warning:plugins", status: "completed", detail: "Plugin maintenance needs a retry." },
+    ],
+  ],
   ["running", null, "⬆️ OpenClaw update in progress: verifying."],
   ["skipped", null, "ℹ️ OpenClaw update skipped: unknown reason."],
   ["rolled-back", null, "↩️ OpenClaw update rolled back to 2026.9.2: unknown reason."],
@@ -688,12 +754,15 @@ it.each<[UpdateRunRecord["status"], string | null, string]>([
     "still-starting",
     "ℹ️ OpenClaw 2026.9.2 installed; Gateway still starting; readiness unverified; recovery backups retained.",
   ],
-])("keeps %s headline despite failed children (%s)", (status, reason, headline) => {
-  const report = render({
-    status,
-    reason,
-    phase: "verifying",
-    steps: [failedStep("finalize:doctor")],
-  });
-  expect(report.headline).toBe(headline);
-});
+])(
+  "keeps the %s outcome when plugin maintenance fails (%s, case %#)",
+  (status, reason, headline, steps = [failedStep("plugins")]) => {
+    const report = render({
+      status,
+      reason,
+      phase: "verifying",
+      steps,
+    });
+    expect(report.headline).toBe(headline);
+  },
+);

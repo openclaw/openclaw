@@ -8,11 +8,11 @@ import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { createPluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
+import { shouldDeferFinalTtsText } from "../../tts/captioned-final-eligibility.js";
 import {
   buildCaptionedFinalTextFallback,
   cleanDeferredFinalText,
   mergeDeferredFinalText,
-  shouldDeferFinalTtsText,
 } from "../../tts/captioned-final.js";
 import { shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";

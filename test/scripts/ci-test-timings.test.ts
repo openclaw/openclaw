@@ -1763,8 +1763,8 @@ describe("CI timing sampler provenance", () => {
       jobs: [
         samplerJob(1, 1),
         samplerJob(2, 2),
-        samplerJob(130, 13),
-        samplerJob(140, 14),
+        samplerJob(130, 13, { name: "unrelated-job" }),
+        samplerJob(140, 14, { name: "unrelated-job" }),
         ...[11, 12].map((id) =>
           samplerJob(id * 10, id, {
             name: "checks-node-release-packed-1",
@@ -1779,7 +1779,11 @@ describe("CI timing sampler provenance", () => {
         }),
       ],
     });
-    invoke(fixture);
+    const result = invoke(fixture);
+    expect(result.stdout).toContain(
+      "Independent main compact contributors: 2 (Blacksmith: 2; GitHub: 0; Boat: 0).",
+    );
+    expect(result.stdout).toContain("Independent packed release contributors: 2;");
     expect(JSON.parse(fixture.contents()).compactGroupSeconds.github).toEqual({
       [`dual-all:${timingKeys[0]}`]: 32,
       [`dual-all:${timingKeys[1]}`]: 30,
@@ -1789,6 +1793,50 @@ describe("CI timing sampler provenance", () => {
       requests.some((url) => url.includes("ci.yml/runs?event=workflow_dispatch&status=completed")),
     ).toBe(true);
     expect(requests.some((url) => url.endsWith("/jobs/111/logs"))).toBe(false);
+  });
+
+  it("collects full-dispatch compact runtime spans without repricing single-run or failed siblings", () => {
+    const log = (runtime: "node" | "bun") =>
+      [
+        "2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: dual-all",
+        "2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME: " + runtime,
+        compactLog(
+          runtime === "node" ? 30 : 40,
+          (runtime === "bun" ? "bun:" : "") + "dispatch-fixture",
+        ),
+      ].join("\n");
+    const fixture = makeFixture({
+      packedReleaseRuns: samplerRuns([11, 12], { event: "workflow_dispatch" }),
+      jobs: [
+        samplerJob(11, 1),
+        samplerJob(21, 2),
+        ...[11, 12].flatMap((id) => [
+          samplerJob(id * 10, id, {
+            name: "checks-node-compact-small-1 (node)",
+            labels: ["ubuntu-24.04"],
+            log: log("node"),
+          }),
+          samplerJob(id * 10 + 1, id, {
+            name: "checks-node-compact-small-1 (bun)",
+            labels: ["ubuntu-24.04"],
+            log: log("bun"),
+            conclusion: id === 12 ? "failure" : "success",
+          }),
+        ]),
+      ],
+      baseline: compactBaseline({}, { retained: 90 }),
+    });
+    const result = invoke(fixture);
+    expect(result.stdout).toContain(
+      "Independent main compact contributors: 2 (Blacksmith: 2; GitHub: 0; Boat: 0).",
+    );
+    expect(result.stdout).toContain("Independent packed release contributors: 2;");
+    expect(readTimings(fixture).compactGroupSeconds.github).toEqual({
+      retained: 90,
+      "dispatch-fixture": 30,
+    });
+    expect(fixture.requestUrls().some((url) => url.endsWith("/jobs/111/logs"))).toBe(true);
+    expect(fixture.requestUrls().some((url) => url.endsWith("/jobs/121/logs"))).toBe(false);
   });
 
   const retained: CiTestTimings = {

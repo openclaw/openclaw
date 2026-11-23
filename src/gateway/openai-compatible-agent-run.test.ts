@@ -123,7 +123,7 @@ describe("OpenAI-compatible operator run authority", () => {
   });
 
   it.each(["member", "owner"] as const)(
-    "retains the authenticated HTTP %s instead of the named-reader default",
+    "retains the authenticated HTTP %s profile grant instead of the named-reader default",
     async (kind) => {
       await withOpenClawTestState({ label: "compat-http-membership" }, async () => {
         const fixture = createOperatorRunFixture();
@@ -166,6 +166,9 @@ describe("OpenAI-compatible operator run authority", () => {
               : await ensureCanonicalUserProfileForOpenClawIdIdentity({
                   accountId: principal.accountId,
                 });
+          if (principal.kind === "member") {
+            setUserProfileRole(person.id, "operator");
+          }
           const authenticated = await authorizeScopedGatewayHttpRequestOrReply({
             req,
             res,
@@ -230,7 +233,6 @@ describe("OpenAI-compatible operator run authority", () => {
           const replacement = { ...principal, peerKey: `iroh:${"22".repeat(32)}` };
           membership.set(replacement.peerKey, replacement);
           expect(() => authority.assertCurrent()).not.toThrow();
-          expect(() => authority.reauthorize?.()).toThrow();
         } finally {
           admission?.close();
           res.destroy();
@@ -282,7 +284,7 @@ describe("OpenAI-compatible operator run authority", () => {
           assert(childAuthority, "Detached work lost its original operator authority");
           expect(() => childAuthority.assertCurrent()).not.toThrow();
           child.close();
-          expect(() => authority.assertCurrent()).toThrow(/no longer active/);
+          expect(() => authority.assertCurrent()).toThrow(/Operator execution ended/);
         } finally {
           await close();
           child?.close();
@@ -311,7 +313,7 @@ describe("OpenAI-compatible operator run authority", () => {
           assert(authority, "Expected the original operator authority");
           if (changed === "grant") {
             fixture.source.abort(new Error("Visitor access ended"));
-            expect(options.abortSignal?.aborted).toBe(true);
+            expect(options.abortSignal?.aborted).toBe(false);
           } else if (changed === "role") {
             setUserProfileRole(fixture.person.id, "blocked");
             invalidateOperatorRolePolicy(fixture.person.id);
@@ -335,16 +337,8 @@ describe("OpenAI-compatible operator run authority", () => {
             committed = restricted;
           }
           settlement.resolve(completedResult);
-          if (changed === "grant") {
-            expect(() => authority.assertCurrent()).toThrow();
-            await expect(running).rejects.toThrow();
-          } else {
-            expect(() => authority.assertCurrent()).not.toThrow();
-            await expect(running).resolves.toBe(completedResult);
-            if (changed !== "host") {
-              expect(() => authority.reauthorize?.()).toThrow();
-            }
-          }
+          expect(() => authority.assertCurrent()).not.toThrow();
+          await expect(running).resolves.toBe(completedResult);
         } finally {
           await close();
         }
@@ -525,7 +519,7 @@ describe("OpenAI-compatible command admission", () => {
         await expect(pending).resolves.toMatchObject({ payloads: [{ text: "settled" }] });
         expect(executed).toHaveBeenCalledOnce();
       } else {
-        await expect(pending).rejects.toThrow("Gateway requester authority changed");
+        await expect(pending).rejects.toThrow("Gateway requester changed during admission");
         expect(executed).not.toHaveBeenCalled();
       }
     },

@@ -58,7 +58,7 @@ suite.define(() => {
         const input = page.locator("#cron-schedule-at");
         await input.waitFor({ state: "visible" });
         expect(await input.inputValue()).toBe("2026-10-30T12:00");
-        const summary = page.locator('[data-test-id="cron-schedule-note"]');
+        const summary = page.locator('.cron-detail-header [data-test-id="cron-schedule-runtime"]');
         const frame = await takeControlUiScreenshotFrame(page, summary, [summary, input], {
           animations: "disabled",
           scrollTo: summary,
@@ -100,9 +100,9 @@ suite.define(() => {
         await expect.poll(() => summary.textContent()).toContain(reason);
         await expect
           .poll(async () => {
-            const clock = await page.locator(".cron-prompt__clock").boundingBox();
+            const timing = await page.locator(".cron-editor-schedule").boundingBox();
             const runControls = await page.locator(".cron-prompt__run-controls").boundingBox();
-            return clock && runControls && runControls.y < clock.y + clock.height;
+            return timing && runControls && Math.abs(runControls.y - timing.y) < 2;
           })
           .toBe(true);
       },

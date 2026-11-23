@@ -33,6 +33,10 @@
   color: var(--muted);
   font-size: 13px;
 }
+.cloud-environments__sheet,
+.cloud-environments__snapshot {
+  overflow-wrap: anywhere;
+}
 .cloud-environments__sheet {
   min-width: 0;
   display: grid;
@@ -40,7 +44,7 @@
 }
 .cloud-environments__header {
   display: flex;
-  align-items: start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
 }

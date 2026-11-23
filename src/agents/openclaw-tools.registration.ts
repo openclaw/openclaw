@@ -74,6 +74,7 @@ type ProgressCardToolRegistrationParams = {
   modelProvider?: string;
   pluginToolDenylist?: string[];
   runtimeToolAllowlist?: string[];
+  fixedToolListing?: boolean;
 };
 
 export function prepareProgressCardToolForOpenClawTools(
@@ -95,7 +96,9 @@ export function shouldIncludeProgressCardToolForOpenClawTools(
     !isToolAllowedByPolicyName("progress_card", {
       deny: expandShippedCoreToolPolicyNames(params.pluginToolDenylist),
     }) ||
-    !isRuntimeToolAllowed("progress_card", params.runtimeToolAllowlist)
+    // A fixed listing builds it whatever the run allowlist names; the turn policy gates calls.
+    (!params.fixedToolListing &&
+      !isRuntimeToolAllowed("progress_card", params.runtimeToolAllowlist))
   ) {
     return false;
   }

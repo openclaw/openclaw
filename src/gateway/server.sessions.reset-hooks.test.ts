@@ -360,6 +360,9 @@ test.each([
     expectNoCreationHooks();
     return;
   }
+  if (mainScope) {
+    expect(readStoredSession()?.sessionId).toBe(parentId);
+  }
   const [endEvent, startEvent] = lifecycleEvents();
   expect(endEvent).toMatchObject({
     sessionId: parentId,

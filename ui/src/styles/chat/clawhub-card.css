@@ -1,6 +1,7 @@
 openclaw-chat-clawhub-card {
   display: block;
-  width: 640px;
+  container-type: inline-size;
+  width: 384px;
   max-width: 100%;
   margin-block: 12px 20px;
 }
@@ -8,40 +9,36 @@ openclaw-chat-clawhub-card {
 .card.chat-clawhub-card {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
-  min-height: 108px;
-  padding: 24px;
-  border-radius: 27px;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  min-height: 63px;
+  padding: 9px 12px;
+  border-radius: 15px;
 
-  @media (max-width: 640px) {
-    flex-wrap: wrap;
-    padding: 20px;
-    border-radius: 20px;
+  @container (width < 384px) {
+    gap: var(--space-2);
+    padding-inline: 10px;
   }
 }
 
 .chat-clawhub-card__listing {
   display: flex;
   align-items: center;
-  flex: 1;
-  gap: var(--space-4);
+  flex: 1 1 10rem;
+  gap: inherit;
   min-width: 0;
   padding: 0;
   border: 0;
   background: none;
   text-align: start;
-
-  @media (max-width: 640px) {
-    flex-basis: 100%;
-  }
 }
 
 .chat-clawhub-card__icon {
   display: grid;
-  flex: 0 0 50px;
-  height: 50px;
-  padding: 8px;
-  border-radius: 14px;
+  flex: 0 0 32px;
+  height: 32px;
+  padding: 6px;
+  border-radius: 9px;
   background: var(--brand-logo-chip-bg);
   place-items: center;
 
@@ -53,14 +50,14 @@ openclaw-chat-clawhub-card {
   }
 
   & > svg {
-    width: 28px;
-    height: 28px;
+    width: 20px;
+    height: 20px;
   }
 }
 
 .chat-clawhub-card__identity {
   display: grid;
-  gap: 4px;
+  gap: 2px;
   overflow-wrap: anywhere;
 }
 
@@ -68,9 +65,9 @@ openclaw-chat-clawhub-card {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
-  font-size: 18px;
-  line-height: 24px;
+  gap: var(--space-1);
+  font-size: 15px;
+  line-height: 22px;
 
   & .plugin-card-author {
     font-size: var(--control-ui-text-sm);
@@ -79,9 +76,9 @@ openclaw-chat-clawhub-card {
 }
 
 .chat-clawhub-card__status {
-  min-height: 22px;
-  font-size: 15px;
-  line-height: 22px;
+  min-height: 18px;
+  font-size: 13px;
+  line-height: 18px;
 
   & > span {
     display: flex;
@@ -95,17 +92,14 @@ openclaw-chat-clawhub-card {
   flex-wrap: wrap;
   align-items: center;
   justify-content: end;
+  max-width: 100%;
+  margin-inline-start: auto;
   gap: var(--space-2);
 
   & .btn {
-    min-height: 40px;
-    padding-inline: 18px;
+    min-height: 34px;
+    padding: 4px 10px;
     border-radius: var(--radius-full);
-  }
-
-  @media (max-width: 640px) {
-    min-height: 40px;
-    width: 100%;
   }
 }
 

@@ -1,10 +1,5 @@
-import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-
-export const shouldSuspendPendingFinalDelivery = (entry: SubagentRunRecord) =>
-  entry.expectsCompletionMessage === true &&
-  entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE &&
-  entry.execution.outcome?.status === "ok";
+import { isClaimedByLiveRequesterTurn } from "./subagent-requester-turn-liveness.js";
 
 type DeferredCleanupDecision =
   | {
@@ -29,9 +24,14 @@ export function resolveAnnounceDeliveryDeadline(
   expiryMs: number,
 ): number {
   const delivery = entry.expectsCompletionMessage === true ? entry.delivery : undefined;
-  return (
-    delivery?.deadlineAt ?? (delivery?.windowStartedAt ?? entry.execution.endedAt ?? now) + expiryMs
-  );
+  const deadline =
+    delivery?.deadlineAt ??
+    (delivery?.windowStartedAt ?? entry.execution.endedAt ?? now) + expiryMs;
+  // A live requester owns its wait; only an orphan spends the delivery deadline.
+  return now >= deadline &&
+    isClaimedByLiveRequesterTurn(entry, delivery?.requesterDelivery?.blockingRunId ?? "")
+    ? now + expiryMs
+    : deadline;
 }
 
 export function resolveDeferredCleanupDecision(params: {
@@ -49,11 +49,15 @@ export function resolveDeferredCleanupDecision(params: {
     : params.announceExpiryMs;
   const expiryExceeded =
     params.now >= resolveAnnounceDeliveryDeadline(params.entry, params.now, expiryMs);
-  if (isCompletionMessageFlow && params.activeDescendantRuns > 0) {
-    if (expiryExceeded) {
-      return { kind: "give-up", reason: "expiry" };
+  if (isCompletionMessageFlow) {
+    if (params.activeDescendantRuns > 0 && !expiryExceeded) {
+      return { kind: "defer-descendants", delayMs: params.deferDescendantDelayMs };
     }
-    return { kind: "defer-descendants", delayMs: params.deferDescendantDelayMs };
+    // A required result that missed its turn settles into requester history, never retries.
+    return {
+      kind: "give-up",
+      reason: params.activeDescendantRuns > 0 ? "expiry" : "permanent_failure",
+    };
   }
 
   const retryCount = (params.entry.delivery?.attemptCount ?? 0) + 1;

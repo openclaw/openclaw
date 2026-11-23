@@ -3,6 +3,44 @@ import SwabbleKit
 import XCTest
 
 final class WakeWordGateTests: XCTestCase {
+    func testMatchRequiresTrigger() {
+        let transcript = "hello world"
+        let segments = makeSegments(
+            transcript: transcript,
+            words: [("hello", 0.0, 0.1), ("world", 0.2, 0.1)])
+        let config = WakeWordGateConfig(triggers: ["openclaw"])
+
+        XCTAssertNil(WakeWordGate.match(transcript: transcript, segments: segments, config: config))
+    }
+
+    func testMatchRequiresCommandAfterTrigger() {
+        let transcript = "hey openclaw"
+        let segments = makeSegments(
+            transcript: transcript,
+            words: [("hey", 0.0, 0.1), ("openclaw", 0.2, 0.1)])
+        let config = WakeWordGateConfig(triggers: ["openclaw"])
+
+        XCTAssertNil(WakeWordGate.match(transcript: transcript, segments: segments, config: config))
+    }
+
+    func testMatchNormalizesTriggerWords() {
+        let transcript = "hey openclaw do thing"
+        let segments = makeSegments(
+            transcript: transcript,
+            words: [
+                ("hey", 0.0, 0.1),
+                ("openclaw", 0.2, 0.1),
+                ("do", 0.9, 0.1),
+                ("thing", 1.1, 0.1),
+            ])
+        for triggers in [["  openclaw  "], ["", "   ", "openclaw"]] {
+            let config = WakeWordGateConfig(triggers: triggers, minPostTriggerGap: 0.3)
+            let match = WakeWordGate.match(transcript: transcript, segments: segments, config: config)
+
+            XCTAssertEqual(match?.command, "do thing")
+        }
+    }
+
     func testMatchRequiresGapAfterTrigger() {
         let transcript = "hey clawd do thing"
         let segments = makeSegments(

@@ -399,6 +399,8 @@ export interface UserMessage {
   runtimeContextCarrierRetained?: boolean;
   /** Operator-authored text projected to system authority on capable routes. */
   operatorMessage?: { turnScoped: boolean };
+  /** `false`: sent once and never replayed, so transports place no prompt-cache checkpoint on it. */
+  cacheCheckpoint?: false;
 }
 
 export const RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
@@ -575,7 +577,13 @@ export interface ToolResultMessage<TDetails = unknown> {
   timestamp: number; // Unix timestamp in milliseconds
 }
 
-export type Message = UserMessage | AssistantMessage | ToolResultMessage;
+/** Historical token counts can survive without a recorded price; absence is not zero cost. */
+export type HistoryUsage = Omit<Usage, "cost"> & { cost?: Usage["cost"] };
+
+/** Replay input is weaker than a live provider result, which always supplies Usage. */
+export type AssistantHistoryMessage = Omit<AssistantMessage, "usage"> & { usage: HistoryUsage };
+
+export type Message = UserMessage | AssistantHistoryMessage | ToolResultMessage;
 
 export type ImagesInputContent = TextContent | ImageContent;
 export type ImagesOutputContent = TextContent | ImageContent;
@@ -738,6 +746,8 @@ export interface OpenAIResponsesCompat {
   supportsLongCacheRetention?: boolean;
   /** Whether the provider honors top-level `instructions`. Defaults to true only for verified native routes (OpenAI, xAI); every other route defaults to false and embeds the system prompt in `input` unless set true here after verifying against that endpoint. */
   supportsInstructions?: boolean;
+  /** Whether the model caches top-level `instructions`. False sends the system prompt as a cacheable input item placed after the last compaction item. Default: true. */
+  cachesInstructions?: boolean;
   /**
    * Explicit opt-in for HTTP continuation (client-side delta + `previous_response_id`)
    * on a custom/proxy OpenAI-Responses-compatible endpoint. A native `api.openai.com`
