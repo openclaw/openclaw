@@ -73,6 +73,7 @@ it.each([
     const source = createTestOperatorAuthority({
       profileId: "guest-source",
       scopes: ["operator.write"],
+      assertCurrent: () => {},
       ...(synchronous ? { signal: controller.signal } : {}),
     });
     const foregroundAbort = !synchronous && revocation !== "gateway rotation";

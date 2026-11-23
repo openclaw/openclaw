@@ -61,6 +61,7 @@ it("copies private turn participants and freezes only their shared command targe
   const authority = createTestOperatorAuthority({
     profileId: "participant",
     scopes: ["operator.read"],
+    assertCurrent: () => {},
   });
   const freeze = vi.spyOn(Object, "freeze");
   const participants = createReplyTurnParticipants({

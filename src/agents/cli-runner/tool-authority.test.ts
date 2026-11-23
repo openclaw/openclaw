@@ -165,6 +165,7 @@ describe("CLI question creator binding", () => {
     const source = createTestOperatorAuthority({
       profileId: "creator-profile",
       scopes: ["operator.write"],
+      assertCurrent: () => {},
     });
     using authority = captureCliRunToolAuthority(
       {
