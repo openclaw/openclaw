@@ -166,6 +166,55 @@ suite.define(() => {
     );
   });
 
+  it("keeps a wrapped error disclosure clear of the text and inline when it fits", async () => {
+    await suite.withPage(
+      { locale: "en-US", viewport: { width: 320, height: 740 } },
+      async ({ page }) => {
+        await routeMedia(page);
+        const tab = makeTab("existing", "Selected page", "https://selected.example/");
+        await installMockGateway(page, {
+          featureMethods: ["browser.request"],
+          operatorScopes: ["operator.admin"],
+          methodResponses: browserResponses(
+            ...browserCases(tab, {
+              targetId: tab.targetId,
+              path: "/proof/selected.png",
+              url: tab.url,
+            }),
+            browserCase("/screencast", {
+              __mockError: { code: "UNAVAILABLE", message: "No stream" },
+            }),
+            browserCase("/navigate", {
+              __mockError: { code: "UNAVAILABLE", message: "Reload failed" },
+            }),
+          ),
+        });
+        await page.goto(
+          `${suite.server.baseUrl}focus/browser?sessionKey=agent%3Amain%3Awork&target=host&profile=work&targetId=existing`,
+        );
+        const panel = page.locator("openclaw-browser-panel");
+        await panel.locator(".bp-shot").waitFor();
+        await panel.getByRole("button", { name: "Reload" }).click();
+        const alert = panel.getByRole("alert");
+        await alert.locator("summary").waitFor();
+        await page.evaluate(() => document.fonts.ready);
+        const geometry = () =>
+          alert.evaluate((note) => {
+            const text = document.createRange();
+            text.selectNodeContents(note.firstElementChild!);
+            const ink = text.getBoundingClientRect();
+            const toggle = note.querySelector("summary")!.getBoundingClientRect();
+            return { verticalGap: toggle.top - ink.bottom, horizontalGap: toggle.left - ink.right };
+          });
+        expect((await geometry()).verticalGap).toBeGreaterThanOrEqual(6);
+        await page.setViewportSize({ width: 480, height: 740 });
+        const inline = await geometry();
+        expect(inline.verticalGap).toBeLessThan(0);
+        expect(inline.horizontalGap).toBeGreaterThan(0);
+      },
+    );
+  });
+
   it("shows browser access unavailability without opening another surface", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 390, height: 844 } },
