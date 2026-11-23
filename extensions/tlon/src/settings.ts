@@ -1,5 +1,9 @@
 // Settings in Urbit's %settings agent hot-reload without restarting the Gateway.
-import { asBoolean, filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asBoolean,
+  asNullableRecord,
+  filterStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   TlonClubPolicySchema,
   TlonClubRulesSchema,
@@ -165,17 +169,15 @@ function parsePendingApprovals(value: unknown): PendingApproval[] | undefined {
 }
 
 function parseSettingsEvent(event: unknown): { key: string; value: unknown } | null {
-  if (!event || typeof event !== "object") {
+  const record = asNullableRecord(event);
+  if (!record) {
     return null;
   }
 
-  const record = event as Record<string, unknown>;
-  const wrapped = record["settings-event"];
-  const evt =
-    wrapped && typeof wrapped === "object" ? (wrapped as Record<string, unknown>) : record;
+  const evt = asNullableRecord(record["settings-event"]) ?? record;
 
   const operation = evt["put-entry"] ? "put-entry" : "del-entry";
-  const entry = evt[operation] as Record<string, unknown> | undefined;
+  const entry = asNullableRecord(evt[operation]);
   if (!entry || entry.desk !== SETTINGS_DESK || entry["bucket-key"] !== SETTINGS_BUCKET) {
     return null;
   }
