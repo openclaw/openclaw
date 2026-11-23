@@ -166,10 +166,27 @@ export function publicationIntentInputs(intent) {
   };
 }
 
+export function validatePublicationArtifactSelection(value) {
+  object(value, ["runId", "runAttempt"], "publication artifact source");
+  if (
+    !/^[1-9][0-9]*$/u.test(value.runId ?? "") ||
+    typeof value.runId !== "string" ||
+    !Number.isSafeInteger(value.runAttempt) ||
+    value.runAttempt < 1
+  ) {
+    throw new Error("Publication artifact source requires an exact parent run and attempt");
+  }
+  return { runId: value.runId, runAttempt: value.runAttempt };
+}
+
 export function normalizePublicationLaneInputs(value) {
   object(
     value,
-    ["extension_test_exclude_patterns_json", "qualification_baselines_json"],
+    [
+      "extension_test_exclude_patterns_json",
+      "qualification_baselines_json",
+      "publication_artifact_source_json",
+    ],
     "source-admission lane inputs",
   );
   return Object.fromEntries(
@@ -178,6 +195,9 @@ export function normalizePublicationLaneInputs(value) {
         throw new Error(`invalid ${key}`);
       }
       const entries = JSON.parse(raw);
+      if (key === "publication_artifact_source_json") {
+        return [key, JSON.stringify(validatePublicationArtifactSelection(entries))];
+      }
       if (key === "qualification_baselines_json") {
         return [key, JSON.stringify(validateQualificationBaselines(entries))];
       }
@@ -273,7 +293,8 @@ export function dispatchEnvelopeFromInputs(inputs) {
     Object.hasOwn(inputs, "validation_purpose") ||
     Object.hasOwn(inputs, "publication_selection_json") ||
     Object.hasOwn(inputs, "extension_test_exclude_patterns_json") ||
-    Object.hasOwn(inputs, "qualification_baselines_json")
+    Object.hasOwn(inputs, "qualification_baselines_json") ||
+    Object.hasOwn(inputs, "publication_artifact_source_json")
   ) {
     throw new Error("source intent must use only the trusted_workflow_json envelope");
   }

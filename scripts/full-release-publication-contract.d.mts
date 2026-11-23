@@ -31,6 +31,7 @@ export interface PublicationDispatchEnvelope extends PublicationIntent {
   laneInputs?: {
     extension_test_exclude_patterns_json?: string;
     qualification_baselines_json?: string;
+    publication_artifact_source_json?: string;
   };
 }
 export interface PublicationSourceRequest extends PublicationIntent {
@@ -199,6 +200,9 @@ export function createPublicationAdmission(
   observations: PublicationObservations,
   artifact: PublicationObservationArtifact,
   admittedAt: string,
+  options?: {
+    workflowPath?: string;
+  },
 ): PublicationAdmission;
 export function validatePublicationAdmissionBinding(
   record: Record<string, unknown>,

@@ -25,6 +25,7 @@ import {
   releaseManifestChildEvidence,
 } from "./lib/full-release-manifest.mjs";
 import { changelogEntryPath, isReleaseChangelogPath } from "./lib/release-changelog.mjs";
+import { retainedPublicationArtifactSource } from "./lib/release-evidence-identity.mjs";
 import { validateQualificationBaselines } from "./lib/release-upgrade-baseline.mjs";
 import {
   evaluateReleaseChildPolicy,
@@ -1146,6 +1147,7 @@ function releaseExecutionPlanShape(payload) {
       ...basePlanKeys,
       ...(Object.hasOwn(payload, "knownFlakyJobs") ? ["knownFlakyJobs"] : []),
       ...(Object.hasOwn(payload, "childReuse") ? ["childReuse"] : []),
+      ...(Object.hasOwn(payload, "publicationArtifactSource") ? ["publicationArtifactSource"] : []),
       ...(Object.hasOwn(payload, "qualificationCoverage")
         ? ["qualificationCoverage", "qualificationInputs"]
         : []),
@@ -1208,6 +1210,9 @@ function executionPlanDigestPayload(plan) {
               }
             : {}),
           ...(plan.childReuse !== undefined ? { childReuse: plan.childReuse } : {}),
+          ...(plan.publicationArtifactSource !== undefined
+            ? { publicationArtifactSource: plan.publicationArtifactSource }
+            : {}),
           ...(Object.hasOwn(plan, "knownFlakyJobs") ? { knownFlakyJobs: plan.knownFlakyJobs } : {}),
           attemptEvidenceVersion: plan.attemptEvidenceVersion,
           ...(Object.hasOwn(plan, "sealParentRunAttempt")
@@ -1257,6 +1262,7 @@ export function buildReleaseExecutionPlanArtifact({
   sourceAdmission,
   publicationAdmissionContract,
   publicationAdmission,
+  publicationArtifactSource,
   pendingEvidenceReuse = false,
   qualificationCoverage,
   qualificationInputs,
@@ -1336,6 +1342,7 @@ export function buildReleaseExecutionPlanArtifact({
     }
   }
   const basePlan = {
+    ...(publicationArtifactSource === undefined ? {} : { publicationArtifactSource }),
     ...(frozenCoverage ? { qualificationCoverage: frozenCoverage, qualificationInputs } : {}),
     ...(sourceAdmissionContract !== undefined ? { sourceAdmissionContract, sourceAdmission } : {}),
     ...(publicationAdmissionContract !== undefined
@@ -1484,7 +1491,11 @@ function validateCandidatePlanBinding(plan, expectedCandidateRequest) {
   if (plan.candidate !== null) {
     const candidate = validateFullReleaseCandidateBinding(plan.candidate);
     if (
-      JSON.stringify(candidate.request) !== JSON.stringify(request) ||
+      JSON.stringify(candidate.request) !==
+        JSON.stringify({
+          ...request,
+          toolingSha: retainedPublicationArtifactSource(plan)?.workflow.sha ?? request.toolingSha,
+        }) ||
       // Historical strict plans omitted targetVersion; absence grants no waiver.
       (Object.hasOwn(plan, "targetVersion") && plan.targetVersion !== candidate.package.version)
     ) {

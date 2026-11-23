@@ -202,6 +202,7 @@ jobs:
       performance_exempt: ${{ steps.tooling_identity.outputs.performance_exempt }}
       extension_test_exclude_patterns_json: ${{ steps.publication_dispatch.outputs.extension_test_exclude_patterns_json }}
       qualification_baselines_json: ${{ steps.publication_dispatch.outputs.qualification_baselines_json }}
+      publication_artifact_source_json: ${{ steps.publication_dispatch.outputs.publication_artifact_source_json }}
       live_suite_filter: ${{ steps.filters.outputs.live_suite_filter }}
       cross_os_suite_filter: ${{ steps.filters.outputs.cross_os_suite_filter }}
       candidate_required: ${{ steps.candidate_request.outputs.required }}
@@ -1046,6 +1047,9 @@ jobs:
       evidence_policy: ${{ steps.find.outputs.evidence_policy }}
       changed_paths: ${{ steps.find.outputs.changed_paths }}
       publication_artifacts_reused: ${{ steps.artifacts.outputs.publication_artifacts_reused }}
+      publication_artifact_source: ${{ steps.artifacts.outputs.publication_artifact_source }}
+      candidate_binding_json: ${{ steps.artifacts.outputs.candidate_binding_json }}
+      candidate_artifact_json: ${{ steps.artifacts.outputs.candidate_artifact_json }}
       prepared_bundle_json: ${{ steps.artifacts.outputs.prepared_bundle_json }}
       qualified_preflight_bundle_json: ${{ steps.artifacts.outputs.qualified_preflight_bundle_json }}
       npm_run_id: ${{ steps.artifacts.outputs.npm_run_id }}
@@ -1061,10 +1065,6 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: workflow
-          sparse-checkout: |
-            scripts
-            .github/actions/setup-pnpm-store-cache
-          sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
           submodules: false
@@ -1076,8 +1076,6 @@ jobs:
         with:
           ref: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json).qualificationAdmission.workflowSha }}
           path: qualification-verifier
-          sparse-checkout: scripts
-          sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
           submodules: false
@@ -1103,6 +1101,20 @@ jobs:
           source workflow/.github/actions/setup-pnpm-store-cache/ensure-node.sh
           openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
+      - name: Setup qualification verifier dependencies
+        uses: ./workflow/.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: off
+          package-manager-file: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && 'qualification-verifier' || 'workflow' }}/package.json
+          lockfile-path: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && 'qualification-verifier' || 'workflow' }}/pnpm-lock.yaml
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install qualification verifier dependencies
+        working-directory: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && 'qualification-verifier' || 'workflow' }}
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
       - name: Download publication admission for reuse budgeting
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -1113,6 +1125,7 @@ jobs:
 
       - name: Find reusable validation evidence
         id: find
+        if: needs.resolve_target.outputs.publication_artifact_source_json == ''
         env:
           GH_TOKEN: ${{ github.token }}
           OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/workflow/scripts/release-ci-summary.mjs', github.workspace) }}
@@ -1233,8 +1246,9 @@ jobs:
 
       - name: Resolve original publication artifact receipts
         id: artifacts
-        if: steps.find.outputs.reuse == 'true'
+        if: steps.find.outputs.reuse == 'true' || needs.resolve_target.outputs.publication_artifact_source_json != ''
         env:
+          CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
           GH_TOKEN: ${{ github.token }}
           EVIDENCE_REUSE: ${{ steps.find.outputs.reuse }}
           EVIDENCE_POLICY: ${{ steps.find.outputs.evidence_policy }}
@@ -2264,10 +2278,11 @@ jobs:
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 360
     outputs:
-      state: ${{ steps.bundle.outputs.state }}
-      binding_json: ${{ steps.bundle.outputs.binding_json }}
-      candidate_artifact_json: ${{ steps.bundle.outputs.candidate_artifact_json }}
+      state: ${{ needs.evidence_reuse.outputs.candidate_binding_json != '' && 'ready' || steps.bundle.outputs.state }}
+      binding_json: ${{ needs.evidence_reuse.outputs.candidate_binding_json || steps.bundle.outputs.binding_json }}
+      candidate_artifact_json: ${{ needs.evidence_reuse.outputs.candidate_artifact_json || steps.bundle.outputs.candidate_artifact_json }}
     env:
+      PUBLICATION_ARTIFACTS_REUSED: ${{ needs.evidence_reuse.outputs.publication_artifacts_reused }}
       GH_TOKEN: ${{ github.token }}
       CHILD_WORKFLOW_KIND: artifact-candidate
       ARTIFACT_STAGE: candidate
@@ -2288,16 +2303,17 @@ jobs:
           package-manager-cache: false
 
       - name: Wait for candidate acquisition GitHub API quota
-        if: github.run_attempt == 1
+        if: github.run_attempt == 1 && env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         run: node scripts/wait-for-github-api-quota.mjs --minimum-remaining 6 --max-wait-seconds 18000
       - name: Dispatch immutable validation candidate producer
         id: dispatch
-        if: github.run_attempt == 1
+        if: github.run_attempt == 1 && env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         run: *full_release_child_dispatch
 
       - *artifact_producer_resolution
       - name: Wait for exact validation candidate
         id: bundle
+        if: env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         env:
           ARTIFACT_RUN_ID: ${{ steps.producer.outputs.run_id }}
           ARTIFACT_RUN_ATTEMPT: ${{ steps.producer.outputs.run_attempt }}
@@ -2334,8 +2350,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: scripts
-          sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - *qualification_evidence_verifier_checkout
@@ -2386,6 +2400,22 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
+
+      - &qualification_verifier_dependencies
+        name: Setup qualification verifier dependencies
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: off
+          package-manager-file: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && 'qualification-verifier' || '.' }}/package.json
+          lockfile-path: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && 'qualification-verifier' || '.' }}/pnpm-lock.yaml
+          node-version: ${{ env.NODE_VERSION }}
+
+      - &qualification_verifier_dependencies_install
+        name: Install qualification verifier dependencies
+        working-directory: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && 'qualification-verifier' || '.' }}
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Prepare immutable release execution plan inputs
         id: plan_inputs
@@ -2451,6 +2481,7 @@ jobs:
           RESOLVE_TARGET_RESULT: ${{ needs.resolve_target.result }}
           CANDIDATE_REQUIRED: ${{ needs.resolve_target.outputs.candidate_required }}
           CANDIDATE_ACQUISITION_RESULT: ${{ needs.candidate_acquisition.result }}
+          PUBLICATION_ARTIFACT_SOURCE_JSON: ${{ needs.evidence_reuse.outputs.publication_artifact_source || 'null' }}
           CANDIDATE_EVIDENCE_JSON: ${{ needs.candidate_acquisition.outputs.binding_json }}
           CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
           NPM_PREPARATION_RESULT: ${{ needs.prepare_npm_package.result }}
@@ -2491,6 +2522,7 @@ jobs:
               --arg resolveTargetResult "$RESOLVE_TARGET_RESULT" \
               --arg candidateRequired "$CANDIDATE_REQUIRED" \
               --arg candidateAcquisitionResult "$CANDIDATE_ACQUISITION_RESULT" \
+              --argjson publicationArtifactSource "$PUBLICATION_ARTIFACT_SOURCE_JSON" \
               --argjson candidateEvidence "${CANDIDATE_EVIDENCE_JSON:-null}" \
               --argjson candidateRequestInput "$CANDIDATE_REQUEST_JSON" \
               --arg npmPreparationResult "$NPM_PREPARATION_RESULT" \
@@ -2574,7 +2606,8 @@ jobs:
                   npmTelegram: {result: $npmTelegramResult, runId: $npmTelegramRunId, runAttempt: $npmTelegramRunAttempt, url: $npmTelegramUrl},
                   productPerformance: {result: $performanceResult, runId: $performanceRunId, runAttempt: $performanceRunAttempt, url: $performanceUrl}
                 }
-              } + (if $coveragePolicy == "" then {} else {coveragePolicy: $coveragePolicy} end)
+              } + (if $publicationArtifactSource == null then {} else {publicationArtifactSource: $publicationArtifactSource} end)
+              + (if $coveragePolicy == "" then {} else {coveragePolicy: $coveragePolicy} end)
               + ({normalCi: $normalCiReuse, pluginPrereleaseIndependent: $pluginPrereleaseIndependentReuse, pluginPrereleaseCandidate: $pluginPrereleaseCandidateReuse, releaseChecksIndependent: $releaseChecksIndependentReuse, releaseChecksCandidate: $releaseChecksCandidateReuse, npmTelegram: $npmTelegramReuse, productPerformance: $productPerformanceReuse} | with_entries(select(.value != null)) | if length == 0 then {} else {childReuse: .} end)'
             )"
           fi
@@ -2784,8 +2817,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: scripts
-          sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - *qualification_evidence_verifier_checkout
@@ -2813,6 +2844,9 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
+
+      - *qualification_verifier_dependencies
+      - *qualification_verifier_dependencies_install
 
       - name: Select newest compatible release state artifacts
         id: selected_state

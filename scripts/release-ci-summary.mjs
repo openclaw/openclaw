@@ -15,6 +15,7 @@ import { join, resolve } from "node:path";
 import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
+import { verifyRetainedPublicationArtifacts } from "./full-release-artifacts.mjs";
 import { validateFullReleaseCandidateBinding } from "./full-release-candidate-contract.mjs";
 import {
   decodePublicationDispatchEnvelope,
@@ -1227,7 +1228,8 @@ export function validateParentManifest(value, expected) {
   if (
     candidateBinding !== null &&
     (candidateBinding.request.targetSha !== targetSha ||
-      candidateBinding.request.toolingSha !== workflowSha ||
+      candidateBinding.request.toolingSha !==
+        (retainedPublicationArtifactSource(value)?.workflow.sha ?? workflowSha) ||
       candidateBinding.request.releaseProfile !== releaseProfile ||
       (expected.repository !== undefined &&
         candidateBinding.request.repository !== expected.repository))
@@ -1439,6 +1441,9 @@ export function validateParentManifest(value, expected) {
       ? { publicationAdmissionContract: value.publicationAdmissionContract, publicationAdmission }
       : {}),
     ...(publicationArtifacts ? { publicationArtifacts } : {}),
+    ...(value.publicationArtifactSource === undefined
+      ? {}
+      : { publicationArtifactSource: value.publicationArtifactSource }),
     ...(sourceAdmission
       ? {
           sourceAdmissionContract: value.sourceAdmissionContract,
@@ -2151,6 +2156,7 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
       : immutableReads.text(route, load);
   };
   return {
+    readWorkloadIdentity: readJson,
     validateChildReuse(selection, request, { deadlineMs } = {}) {
       return validateReusableReleaseChild(selection, request, {
         immutableReads,
@@ -2236,6 +2242,9 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
         ...options,
         ...(immutableReads ? { runGh: runAdmissionGh } : {}),
       });
+    },
+    verifyRetainedPublicationArtifacts(root, env, options) {
+      return verifyRetainedPublicationArtifacts(root, env, { ...options, immutableReads });
     },
     downloadArtifactArchive(options) {
       return downloadExactActionsArtifactArchive({ ...options, immutableReads });
@@ -2809,6 +2818,8 @@ export async function validateReleaseRunEvidence(
       admitted.request.inputs.trusted_workflow_json,
     );
     if (
+      (admittedIntent.laneInputs?.publication_artifact_source_json ?? "") !==
+        (manifest.sourceAdmission.coverage.publication_artifact_source_json ?? "") ||
       admittedIntent.validationPurpose !== manifest.sourceAdmission.validationPurpose ||
       !isDeepStrictEqual(
         admittedIntent.publicationSelection,
@@ -2991,6 +3002,36 @@ export async function validateReleaseRunEvidence(
           publicationObservationJson(manifest.publicationAdmission)
       ) {
         throw new Error("publication admission manifest differs from its original execution plan");
+      }
+      if (manifest.sourceAdmission.coverage.publication_artifact_source_json) {
+        const { selectPublicationArtifactSource } = await import("./full-release-artifacts.mjs");
+        const selected = await selectPublicationArtifactSource(
+          JSON.parse(manifest.sourceAdmission.coverage.publication_artifact_source_json),
+          {
+            GITHUB_REPOSITORY: normalizedRepository,
+            GITHUB_RUN_ID: manifest.runId,
+            GITHUB_RUN_ATTEMPT: manifest.runAttempt,
+            TARGET_SHA: manifest.targetSha,
+            PARENT_WORKFLOW_SHA: manifest.workflowSha,
+            SOURCE_ADMISSION_JSON: JSON.stringify(manifest.sourceAdmission),
+            CANDIDATE_REQUEST_JSON: JSON.stringify(plan.candidateRequest),
+            PLUGIN_NPM_REQUIRED: String(Boolean(manifest.publicationArtifacts?.pluginNpm)),
+          },
+          evidenceClient,
+        );
+        if (
+          !isDeepStrictEqual(selected.source, plan.publicationArtifactSource) ||
+          !isDeepStrictEqual(selected.source, manifest.publicationArtifactSource) ||
+          !isDeepStrictEqual(selected.candidate, plan.candidate) ||
+          !isDeepStrictEqual(selected.candidate, manifest.candidateBinding) ||
+          !isDeepStrictEqual(selected.publicationArtifacts, manifest.publicationArtifacts)
+        ) {
+          throw new Error(
+            "Selected publication bytes differ from the authenticated historical producers",
+          );
+        }
+      } else if (plan.publicationArtifactSource || manifest.publicationArtifactSource) {
+        throw new Error("Historical publication artifacts require explicit admitted selection");
       }
       sourcePlans.set(manifest.runId, plan);
     }
@@ -3239,6 +3280,7 @@ export async function validateReleaseRunEvidence(
 }
 
 // Normalize only after the owner has authenticated the complete evidence graph.
+// Recovery retains its original admission here, never in the aggregate source field.
 function qualificationFacts(evidence) {
   const admission = evidence.qualificationAdmission;
   const manifest = evidence.current.manifest;

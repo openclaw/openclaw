@@ -479,7 +479,49 @@ async function workloadTree(sha, request, deps) {
   });
 }
 
-async function validateWorkloadIdentity(workflowSha, request, deps) {
+// Reviewed beta.2 admission/receipt bookkeeping, not executed child workload.
+// Keep exact blob identities: a future edit in one of these mixed-purpose
+// modules must not inherit compatibility. See dispatch.md#historical-artifact-workload-compatibility.
+// Original Q pins the before side; the bounded GitHub comparison pins the after side.
+const BETA2_BOOKKEEPING_SOURCE = "f95261af52cdf1f6abcbd77a459dd5a630e0f3c7";
+const BETA2_BOOKKEEPING_BLOBS = new Map([
+  ["scripts/full-release-artifacts.mjs", "cdeac9e53c8482821ffbcb911a05a4f7d4e86a7e"],
+  ["scripts/full-release-publication-contract.d.mts", "6f8cfcb1f57d4dfc60c27ae777d041effa7c5812"],
+  ["scripts/full-release-publication-contract.mjs", "d0abcf5d86ac1a746f3796323b1c5c8db8cf8184"],
+  ["scripts/full-release-validation-at-sha.mts", "e1fb448ed1833e7d25c2cb47a3bc9ec875e1093c"],
+  ["scripts/full-release-validation-policy.d.mts", "14e94cda01794faf60733f36c2d19c14d1d7d1d9"],
+  ["scripts/full-release-validation-policy.mjs", "a6a3560c4e548fa89a26b32630cf0576597341d8"],
+  ["scripts/full-release-validation-state.mjs", "b446cb2c42fe97e43b5bbe6fd8275c82ce82b44e"],
+  ["scripts/lib/full-release-manifest.mjs", "56335ca0409365dc04f99daccc9363333ba5ecc6"],
+  [
+    "scripts/lib/full-release-publication-artifacts.mjs",
+    "a8e3f0ffa17e0c7343d36690b9b8c4074c1dcd88",
+  ],
+  ["scripts/lib/full-release-publication-inputs.mjs", "6c1b2f2791fad45259a4bc9d539c1c33d524e565"],
+  ["scripts/lib/release-evidence-identity.mjs", "04ed419ced91ffbc5fb59d15684bd59d46bae3c5"],
+  ["scripts/npm-preflight-tooling-identity.mjs", "0ff20cc936e7a0b2c45c315d45476d8e5727e200"],
+  ["scripts/release-ci-summary.mjs", "3e5a49b8af750b8c4de3acb939113cb49b40f750"],
+  [
+    "scripts/validate-full-release-validation-evidence.mjs",
+    "c25be5b842220a4ea562df5fecaa47e34e642682",
+  ],
+  [
+    "test/scripts/candidate-publication.test-support.ts",
+    "c966b1fbb8e32e535164f4073d1124a152483f39",
+  ],
+  [
+    "test/scripts/full-release-artifact-contract.test.ts",
+    "bae2928a25ac7a955941bf9e885dd5e834b4c5f9",
+  ],
+  ["test/scripts/full-release-artifacts.test.ts", "493c57b4f1d4682f23c201a6fef55256fa68670b"],
+  [
+    "test/scripts/full-release-validation-at-sha.candidate.test.ts",
+    "8642e22cab6c0aff3f968e6ae47afe249026c7b4",
+  ],
+  ["test/scripts/release-upgrade-baseline.test.ts", "23c00952c86b67d33707a8237cded5a837ef3255"],
+]);
+
+export async function validateReleaseWorkloadIdentity(workflowSha, request, deps) {
   if (workflowSha === request.workflowSha) {
     return;
   }
@@ -506,7 +548,15 @@ async function validateWorkloadIdentity(workflowSha, request, deps) {
     comparison.files?.length > 0 &&
     comparison.files.length < 300 &&
     comparison.files.every(
-      (file) => file.status === "modified" && orchestrationPaths.has(file.filename),
+      (file) =>
+        (file.status === "modified" && orchestrationPaths.has(file.filename)) ||
+        (workflowSha === BETA2_BOOKKEEPING_SOURCE &&
+          file.status ===
+            (file.filename === "scripts/lib/full-release-publication-artifacts.mjs"
+              ? "added"
+              : "modified") &&
+          BETA2_BOOKKEEPING_BLOBS.has(file.filename) &&
+          BETA2_BOOKKEEPING_BLOBS.get(file.filename) === file.sha),
     )
   ) {
     return;
@@ -520,7 +570,7 @@ async function validateWorkloadIdentity(workflowSha, request, deps) {
 
 async function validateEvidence(selection, request, deps) {
   validateSelectionIdentity(selection, request);
-  await validateWorkloadIdentity(selection.workflowSha, request, deps);
+  await validateReleaseWorkloadIdentity(selection.workflowSha, request, deps);
   const run = await deps.github(`actions/runs/${selection.runId}`);
   validateRun(run, selection, request);
   if (

@@ -27,6 +27,21 @@ const septemberLine = {
 };
 
 describe("release upgrade baseline resolver", () => {
+  it("retains the beta.2 pre-11.7 tuple while fresh resolution advances", () => {
+    const context = {
+      candidateVersion: "2026.11.10-beta.2",
+      targetContextRef: "release/2026.11.10",
+    };
+    const original = baselines("2026.11.6", ["2026.10.33", "2026.11.5", "2026.11.6"]);
+    expect(validateQualificationBaselines(original, context)).toEqual(original);
+    expect(
+      resolveQualificationBaselines({
+        ...context,
+        oldestSupportedVersion: "2026.10.33",
+        publishedVersions: ["2026.10.33", "2026.11.5", "2026.11.6", "2026.11.7"],
+      }).upgradeBaseline,
+    ).toBe("openclaw@2026.11.7");
+  });
   it.each([
     [
       "captures supported predecessors, never future registry tags",
