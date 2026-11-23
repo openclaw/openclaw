@@ -275,10 +275,8 @@ suite.define(() => {
         expect(await row.getByLabel("API key", { exact: true }).count()).toBe(0);
 
         // Adding a provider checks the key the same way, inside the add dialog.
-        await page.getByRole("button", { name: "Add account", exact: true }).first().click();
-        const picker = page.getByRole("dialog", { name: "Add an account" });
-        await picker.getByRole("searchbox", { name: "Search providers…" }).fill("Tencent");
-        await picker.getByRole("button", { name: "Tencent TokenHub" }).click();
+        await page.locator("[data-models-catalog-search]").fill("tencent-tokenhub");
+        await page.locator('[data-models-catalog-provider="tencent-tokenhub"] button').click();
         const form = page.getByRole("dialog", { name: "Add provider" });
         await form.getByRole("textbox", { name: "API key" }).fill("sk-synthetic-revoked");
         const added = await saveAndRead(form, () =>

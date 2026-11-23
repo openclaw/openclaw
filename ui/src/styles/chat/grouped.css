@@ -1475,7 +1475,7 @@ button.chat-reply-attribution__target:disabled {
   --chat-bubble-background: var(--chat-participant-surface);
   background: var(--chat-bubble-background);
 
-  :where(.shell[data-background-managed]) & {
+  :where([data-background-painted]) & {
     background:
       linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
       var(--bg-content, var(--bg));
@@ -1503,7 +1503,7 @@ button.chat-reply-attribution__target:disabled {
   --chat-bubble-background: var(--chat-participant-surface);
   background: var(--chat-bubble-background);
 
-  :where(.shell[data-background-managed]) & {
+  :where([data-background-painted]) & {
     background:
       linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
       var(--bg-content, var(--bg));
@@ -1737,7 +1737,7 @@ button.chat-reply-attribution__target:disabled {
   border-radius: var(--radius-md);
   background: var(--chat-bubble-background);
 
-  :where(.shell[data-background-managed]) & {
+  :where([data-background-painted]) & {
     background:
       linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
       var(--bg-content, var(--bg));

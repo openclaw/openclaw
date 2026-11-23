@@ -66,10 +66,7 @@ import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.type
 import type { AgentToolResult } from "./runtime/index.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./tools/gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { hasProviderAuthForTool } from "./tools/model-config.helpers.js";
 import { captureAgentWorkspaceReadiness } from "./workspace-readiness.js";
@@ -493,7 +490,10 @@ function* resolveOpenClawPluginToolSteps(
     : requestRegistry;
   const loadContext = getPluginRuntimeLoadContext(preparedRegistry);
   const metadataSnapshot = preparedModelRuntime?.metadataSnapshot ?? loadContext?.metadataSnapshot;
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
+  const caller = getGatewayToolCallerIdentity();
+  const assertCallerCurrent = caller?.operationalRunInstance
+    ? () => caller.approvalSignals?.forEach((signal) => signal.throwIfAborted())
+    : undefined;
   const assertRequestCurrent = params.options?.assertInvocationCurrent;
   const resolution = {
     ...pluginToolInputs,

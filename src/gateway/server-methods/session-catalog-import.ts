@@ -12,6 +12,7 @@ import {
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { recordSessionStateEventAsync } from "../../sessions/session-state-events.js";
 import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { resolveSessionCatalogProfileRelation } from "../session-catalog-identity.js";
 import { buildSessionCatalogImportKey } from "../session-create-key.js";
 import { createGatewaySession } from "../session-create-service.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
@@ -45,6 +46,11 @@ export async function importAuthorizedSessionCatalog(params: {
 > {
   const { request, provider, agentId, context, client } = params;
   const { displayName, ...locator } = request;
+  // Resolve the receiver identity once for the entire paged import.
+  locator.profileRelation = await resolveSessionCatalogProfileRelation(
+    request.profileRelation,
+    client?.authenticatedUserProfile?.profileId,
+  );
   const history = await readBoundedSessionCatalogHistory({
     limits: SESSION_CATALOG_TRANSCRIPT_IMPORT_LIMITS,
     read: async (page) => {

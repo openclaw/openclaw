@@ -508,7 +508,7 @@ it.for([
                     {
                       ...scope,
                       operationalRunInstance: createOperationalRunInstanceRef(runId),
-                      receiptAuthority: () => !runAbort.signal.aborted,
+                      receiptAuthority: () => runAbort.signal.throwIfAborted(),
                       approvalSignals: [runAbort.signal],
                     },
                     exercise,

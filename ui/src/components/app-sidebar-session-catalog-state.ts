@@ -1,6 +1,7 @@
 import type {
   SessionCatalog,
   SessionCatalogHost,
+  SessionCatalogProfileRelation,
   SessionCatalogSession,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
@@ -60,8 +61,10 @@ function mergeCatalogSessionRows(
 }
 
 export function sessionCatalogPageFailed(host: Pick<SessionCatalogHost, "error">): boolean {
-  // A discovery frontier is a successful partial page, including its rows and exhausted cursor.
-  return host.error !== undefined && host.error.code !== "DISCOVERY_TRUNCATED";
+  // Discovery frontiers and client-side filter fallbacks are successful partial pages.
+  return (
+    host.error !== undefined && !["DISCOVERY_TRUNCATED", "FILTER_PARTIAL"].includes(host.error.code)
+  );
 }
 
 export function preserveExpandedCatalogHost(
@@ -171,6 +174,7 @@ export async function refetchExpandedSessionCatalogPages(params: {
   previousCatalogs: readonly SessionCatalog[];
   client: GatewayBrowserClient;
   agentId: string;
+  profileRelation?: SessionCatalogProfileRelation;
   pageDepths: ReadonlyMap<string, number>;
   isCurrent: () => boolean;
   canRequestPage: () => boolean;
@@ -250,6 +254,9 @@ export async function refetchExpandedSessionCatalogPages(params: {
                 "sessions.catalog.list",
                 {
                   agentId: params.agentId,
+                  ...(params.profileRelation && catalog.capabilities.profileRelation
+                    ? { profileRelation: params.profileRelation }
+                    : {}),
                   catalogId: catalog.id,
                   hostIds: [host.hostId],
                   cursors: { [host.hostId]: nextCursor },

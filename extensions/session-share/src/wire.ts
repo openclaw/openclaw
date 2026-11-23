@@ -5,6 +5,7 @@ import {
 import {
   sessionCatalogPaging,
   type SessionCatalogSession,
+  type SessionCatalogSourceProfileRelation,
   type SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -76,13 +77,14 @@ const actor = {
     avatarUrl: shortString,
   },
 };
-function sessionPageSchema(includeLinks: boolean): JsonSchemaObject {
+function sessionPageSchema(includeLinks: boolean, relationScoped: boolean): JsonSchemaObject {
   return {
     type: "object",
     additionalProperties: false,
     required: ["sessions"],
     properties: {
       nextCursor: cursor,
+      ...(relationScoped ? { relationUnresolved: { const: true } } : {}),
       sessions: {
         type: "array",
         maxItems: 100,
@@ -114,8 +116,12 @@ function sessionPageSchema(includeLinks: boolean): JsonSchemaObject {
     },
   };
 }
-const plainSessionPageSchema = sessionPageSchema(false);
-const linkedSessionPageSchema = sessionPageSchema(true);
+const sessionPageSchemas = {
+  plain: sessionPageSchema(false, false),
+  plainScoped: sessionPageSchema(false, true),
+  linked: sessionPageSchema(true, false),
+  linkedScoped: sessionPageSchema(true, true),
+};
 const transcriptPageSchema: JsonSchemaObject = {
   type: "object",
   additionalProperties: false,
@@ -146,19 +152,33 @@ const transcriptPageSchema: JsonSchemaObject = {
   },
 };
 export type SessionShareSession = SessionCatalogSession & { originalPath?: string };
-type SessionSharePage = { sessions: SessionShareSession[]; nextCursor?: string };
+type SessionSharePage = {
+  sessions: SessionShareSession[];
+  nextCursor?: string;
+  /** The source could not resolve the requested relation target; the receiver filters client-side. */
+  relationUnresolved?: true;
+};
 type SessionShareTranscriptPage = {
   threadId: string;
   items: SessionCatalogTranscriptItem[];
   nextCursor?: string;
 };
 
-function isSessionPage(value: unknown, includeLinks: boolean): value is SessionSharePage {
-  return validateJsonSchemaValue({
-    schema: includeLinks ? linkedSessionPageSchema : plainSessionPageSchema,
-    cacheKey: includeLinks ? "session-share.sessions-with-links.v1" : "session-share.sessions.v1",
-    value,
-  }).ok;
+function isSessionPage(
+  value: unknown,
+  includeLinks: boolean,
+  relationScoped: boolean,
+): value is SessionSharePage {
+  const name = `${includeLinks ? "linked" : "plain"}${relationScoped ? "-scoped" : ""}`;
+  const schema = includeLinks
+    ? relationScoped
+      ? sessionPageSchemas.linkedScoped
+      : sessionPageSchemas.linked
+    : relationScoped
+      ? sessionPageSchemas.plainScoped
+      : sessionPageSchemas.plain;
+  return validateJsonSchemaValue({ schema, cacheKey: `session-share.sessions.${name}.v1`, value })
+    .ok;
 }
 
 function isTranscriptPage(value: unknown): value is SessionShareTranscriptPage {
@@ -181,11 +201,15 @@ function unwrapPayload(value: unknown): unknown {
 
 // The wire vocabulary deliberately excludes profile identities and local sessionKey.
 // Only the receiver's explicit binding may turn a paired node claim into local attribution.
-export function parseSessionSharePage(raw: unknown, includeLinks = false): SessionSharePage {
+export function parseSessionSharePage(
+  raw: unknown,
+  includeLinks = false,
+  query?: SessionCatalogSourceProfileRelation,
+): SessionSharePage {
   const value = unwrapPayload(raw);
   if (
-    !isSessionPage(value, includeLinks) ||
-    (value.nextCursor !== undefined && !sessionCatalogPaging.isExactCursor(value.nextCursor))
+    !isSessionPage(value, includeLinks, query !== undefined) ||
+    (value.nextCursor !== undefined && !sessionCatalogPaging.isExactCursor(value.nextCursor, query))
   ) {
     throw new Error("Invalid OpenClaw session page from paired node");
   }

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { loginOption } from "../../test-helpers/model-providers.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { chooseLogin, loginHarness } from "./model-providers-page.login.test-support.ts";
@@ -13,6 +14,57 @@ afterEach(() => {
 });
 
 describe("Models provider login", () => {
+  it("resumes once while admission is pending and can resume a later disconnect", async () => {
+    vi.spyOn(window, "open").mockReturnValue(null);
+    const { context, request, answer, cancel, publishPhase, notifySelection, snapshot } =
+      loginHarness();
+    const auth = snapshot.hello?.auth;
+    if (!auth) {
+      throw new Error("Expected an authenticated Gateway fixture");
+    }
+    auth.recoveryScope = "provider-sign-in-recovery";
+    const admission = createDeferred();
+    const runMutation = context.runtimeConfig.runExternalMutation;
+    let admissions = 0;
+    const page = appendPage(context);
+    try {
+      await chooseLogin(page, "Example browser sign-in");
+      await waitForSolid(() =>
+        expect(page.querySelector("input[name=wizard-text]")).not.toBeNull(),
+      );
+      context.runtimeConfig.runExternalMutation = async (task, options) => {
+        admissions += 1;
+        if (admissions === 1) {
+          await admission.promise;
+        }
+        return runMutation(task, options);
+      };
+      publishPhase("reconnecting");
+      publishPhase("connected");
+      await waitForSolid(() => expect(admissions).toBe(1));
+      notifySelection();
+      notifySelection();
+      await waitForSolid(() => expect(admissions).toBe(1));
+      admission.resolve();
+      const nextCalls = () => request.mock.calls.filter(([method]) => method === "wizard.next");
+      await waitForSolid(() => expect(nextCalls()).toHaveLength(2));
+
+      publishPhase("reconnecting");
+      publishPhase("connected");
+      await waitForSolid(() => expect(nextCalls()).toHaveLength(3));
+      expect(admissions).toBe(2);
+      answer.resolve({ done: true, status: "done" });
+      await waitForSolid(() =>
+        expect(page.querySelector(".model-setup-wizard--done")).not.toBeNull(),
+      );
+    } finally {
+      admission.resolve();
+      answer.resolve({ done: true, status: "cancelled" });
+      cancel.resolve({ status: "cancelled" });
+      unmountPage(page);
+    }
+  });
+
   it("keeps the browser sign-in link visible while its automatic callback read is held", async () => {
     vi.spyOn(window, "open").mockReturnValue(null);
     const { context, request, answer, cancel } = loginHarness();

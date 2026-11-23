@@ -63,9 +63,8 @@ export async function handleToolsInvokeHttpRequest(
   }
   const abortController = new AbortController();
   const operatorAccessAuthority = requestAuth.operatorAccessAuthority;
-  const signal = operatorAccessAuthority
-    ? AbortSignal.any([abortController.signal, operatorAccessAuthority.signal])
-    : abortController.signal;
+  // Admitted once above; operator access revocation applies to the next request.
+  const signal = abortController.signal;
   const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
 
   try {
@@ -111,8 +110,7 @@ export async function handleToolsInvokeHttpRequest(
         context,
         resolveGatewayContext: opts.resolveGatewayContext,
         signal,
-        hasCurrentClientAuthority: () =>
-          !signal.aborted && requestAuth.hasCurrentClientAuthority?.() !== false,
+        hasCurrentClientAuthority: () => !signal.aborted,
         isWebchatConnect: () => false,
         pluginRegistry: context?.getGatewayMethodRegistry?.().pluginRegistry,
       },

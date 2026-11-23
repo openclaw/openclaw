@@ -54,13 +54,16 @@ async function connect(page: Page): Promise<void> {
 }
 
 async function beginSignIn(page: Page, context: BrowserContext): Promise<Page> {
-  await page.locator("[data-models-connect]").click();
-  await page.locator(`[data-models-login-provider="${loginProvider}"]`).click();
-  await page
+  await page.locator("[data-models-catalog-search]").fill(loginProvider);
+  await page.locator(`[data-models-catalog-provider="${loginProvider}"] button`).click();
+  const method = page
     .locator("openclaw-modal-dialog")
-    .getByRole("button", { name: loginLabel, exact: true })
-    .click();
+    .getByRole("button", { name: loginLabel, exact: true });
   const link = page.locator(".wizard-step__external-link");
+  await method.or(link).first().waitFor();
+  if (await method.isVisible()) {
+    await method.click();
+  }
   await link.waitFor();
   const popup = context.waitForEvent("page");
   await link.click();

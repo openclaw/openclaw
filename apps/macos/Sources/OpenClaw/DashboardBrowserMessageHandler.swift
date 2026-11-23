@@ -10,6 +10,11 @@ struct DashboardBrowserRect: Codable, Equatable, Sendable {
     let height: Double
 }
 
+struct DashboardBrowserCutout: Equatable, Sendable {
+    let rect: DashboardBrowserRect
+    let radius: Double
+}
+
 enum DashboardBrowserAction: String, Equatable, Sendable {
     case back, forward, reload, stop, close, snapshot, download
 }
@@ -19,6 +24,7 @@ enum DashboardBrowserRequest: Equatable, Sendable {
     case navigate(tabId: String, url: URL)
     case action(DashboardBrowserAction, tabId: String)
     case present(scope: String, tabId: String?, rect: DashboardBrowserRect?, visible: Bool)
+    case overlayCutouts([DashboardBrowserCutout])
     case releaseScope(String)
     case inspect(tabId: String, x: Double, y: Double)
 }
@@ -95,11 +101,7 @@ final class DashboardBrowserMessageHandler: NSObject, WKScriptMessageHandlerWith
                 guard let raw = payload["rect"] as? [String: Any] else {
                     throw DashboardBrowserError.invalidRequest
                 }
-                let width = try Self.number(raw["width"])
-                let height = try Self.number(raw["height"])
-                guard width >= 0, height >= 0 else { throw DashboardBrowserError.invalidRequest }
-                rect = try DashboardBrowserRect(
-                    x: Self.number(raw["x"]), y: Self.number(raw["y"]), width: width, height: height)
+                rect = try Self.rect(raw)
             }
             guard payload["tabId"] != nil else { throw DashboardBrowserError.invalidRequest }
             return try .present(
@@ -107,6 +109,18 @@ final class DashboardBrowserMessageHandler: NSObject, WKScriptMessageHandlerWith
                 tabId: tabId,
                 rect: rect,
                 visible: Self.boolean(payload["visible"]))
+        case "overlay-cutouts":
+            guard let raw = payload["cutouts"] as? [[String: Any]], raw.count <= 64 else {
+                throw DashboardBrowserError.invalidRequest
+            }
+            return try .overlayCutouts(raw.map { cutout in
+                let rect = try Self.rect(cutout)
+                let radius = try Self.number(cutout["radius"])
+                guard radius >= 0, radius <= min(rect.width, rect.height) / 2 else {
+                    throw DashboardBrowserError.invalidRequest
+                }
+                return DashboardBrowserCutout(rect: rect, radius: radius)
+            })
         case "release-scope":
             return try .releaseScope(Self.identifier(payload["scope"]))
         case "inspect":
@@ -134,6 +148,14 @@ final class DashboardBrowserMessageHandler: NSObject, WKScriptMessageHandlerWith
               value == value.trimmingCharacters(in: .whitespacesAndNewlines)
         else { throw DashboardBrowserError.invalidRequest }
         return value
+    }
+
+    private nonisolated static func rect(_ raw: [String: Any]) throws -> DashboardBrowserRect {
+        let width = try Self.number(raw["width"])
+        let height = try Self.number(raw["height"])
+        guard width >= 0, height >= 0 else { throw DashboardBrowserError.invalidRequest }
+        return try DashboardBrowserRect(
+            x: Self.number(raw["x"]), y: Self.number(raw["y"]), width: width, height: height)
     }
 
     private nonisolated static func number(_ value: Any?) throws -> Double {

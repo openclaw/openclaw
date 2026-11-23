@@ -40,6 +40,8 @@ extension DashboardWindowController {
                 try self.nativeBrowser.perform(action, tabId: tabId)
             case let .present(scope, tabId, rect, visible):
                 try self.nativeBrowser.present(scope: scope, tabId: tabId, rect: rect, visible: visible)
+            case let .overlayCutouts(cutouts):
+                self.nativeBrowser.setOverlayCutouts(cutouts)
             case let .releaseScope(scope):
                 self.nativeBrowser.releaseScope(scope)
             case let .inspect(tabId, x, y):

@@ -2,6 +2,7 @@ import type { SessionFilesDisplay } from "../../../app/settings-contract.ts";
 import { resolveAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 import type { WorkspaceCatalogFile } from "./chat-session-workspace-catalog.ts";
 import type { TranscriptAttachmentEntry } from "./chat-sidebar-content-types.ts";
+import { representedArtifactIds } from "./chat-transcript-attachments.ts";
 
 /** One Session files row or tile: a session-written file/artifact or a transcript attachment. */
 export type SessionFileEntry =
@@ -40,8 +41,11 @@ export function orderSessionFiles(
   attachments: readonly TranscriptAttachmentEntry[],
   sort: SessionFilesDisplay["sort"],
 ): SessionFileEntry[] {
+  const represented = representedArtifactIds(attachments);
   const entries: SessionFileEntry[] = [
-    ...files.map((file): SessionFileEntry => ({ kind: "file", key: file.key, file })),
+    ...files
+      .filter((file) => !file.artifactId || !represented.has(file.artifactId))
+      .map((file): SessionFileEntry => ({ kind: "file", key: file.key, file })),
     ...attachments.map((entry): SessionFileEntry => ({
       kind: "attachment",
       key: entry.key,
