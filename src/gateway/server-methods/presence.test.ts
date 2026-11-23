@@ -290,21 +290,26 @@ describe("presence.query", () => {
     );
   });
 
-  it("re-reads connections and checks caller authority after awaited location lookup", async () => {
+  it("re-reads connections after lookup without rechecking the admitted caller", async () => {
     mocks.presence.mockReturnValue([row("tab", { ip: "203.0.113.2" })]);
+    const entered = createDeferred();
     const lookup = createDeferred<GatewayMethodDispatchResponse>();
-    mocks.lookup.mockReturnValue(lookup.promise);
-    const result = request({ include: ["location"] });
+    mocks.lookup.mockImplementation(() => {
+      entered.resolve();
+      return lookup.promise;
+    });
+    let current = true;
+    const result = request({ include: ["location"] }, { current: () => current });
+    await Promise.race([entered.promise, result.run]);
+    expect(mocks.lookup).toHaveBeenCalledOnce();
     mocks.presence.mockReturnValue([]);
+    current = false;
     lookup.resolve({ ok: false });
     await result.run;
-    expect(result.respond.mock.calls[0]?.[1]).toMatchObject({ people: [], totalPeople: 0 });
-
-    mocks.presence.mockReturnValue([row("tab", { ip: "203.0.113.2" })]);
-    let current = true;
-    const revoked = request({ include: ["location"] }, { current: () => current });
-    current = false;
-    await expect(revoked.run).rejects.toThrow("authority changed");
-    expect(revoked.respond).not.toHaveBeenCalled();
+    expect(result.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ people: [], totalPeople: 0 }),
+      undefined,
+    );
   });
 });

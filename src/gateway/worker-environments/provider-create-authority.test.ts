@@ -8,7 +8,7 @@ describe("worker creation request authority", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
   it.each(["installation", "provider-preparation", "provisioning-transition"] as const)(
-    "does not allocate or recover a caller refused after %s",
+    "does not allocate or recover a request cancelled after %s",
     async (phase) => {
       const entered = createDeferredCore();
       const release = createDeferredCore();
@@ -48,21 +48,26 @@ describe("worker creation request authority", () => {
         },
       });
       const service = support.createService(provider);
-      let current = true;
+      const cancellation = new AbortController();
       const creating = invokeEnvironment(
         "environments.create",
         { profileId: "development", idempotencyKey: "caller-authority" },
         mockContext(service),
         null,
-        () => current,
+        undefined,
+        cancellation.signal,
       );
       try {
         await beforeSettlement(entered.promise, creating, "Creation preparation");
-        current = false;
+        cancellation.abort(new Error("Worker creation cancelled"));
       } finally {
         release.resolve();
       }
-      expect((await creating)[0]).toBe(false);
+      expect(await creating).toMatchObject([
+        false,
+        undefined,
+        { message: "worker environment creation failed" },
+      ]);
       expect(allocate).not.toHaveBeenCalled();
       const environment = support.testState.store.list()[0]!;
       expect(environment).toMatchObject({ state: "failed", leaseId: null });

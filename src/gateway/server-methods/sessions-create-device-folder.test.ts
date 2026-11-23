@@ -151,9 +151,12 @@ test.each([
   expect(read()).toBeUndefined();
 });
 
-test.each(["caller", "device"] as const)(
-  "sessions.create persists nothing when the %s is revoked while the node validates",
-  async (revoked) => {
+test.each([
+  { revoked: "caller", accepted: true },
+  { revoked: "device", accepted: false },
+] as const)(
+  "sessions.create after $revoked is revoked while the node validates (accepted=$accepted)",
+  async ({ revoked, accepted }) => {
     let callerCurrent = true;
     const validated = invoke.getMockImplementation()!;
     invoke.mockImplementation(async (request) => {
@@ -175,7 +178,11 @@ test.each(["caller", "device"] as const)(
       ).isCurrent,
     }).catch((error: unknown) => ({ ok: false, error: { message: String(error) } }));
     expect(invoke).toHaveBeenCalledOnce();
-    expect(result.ok).toBe(false);
-    expect(read()).toBeUndefined();
+    expect(result.ok).toBe(accepted);
+    if (accepted) {
+      expect(read()?.deviceFolder).toEqual(canonicalFolder);
+    } else {
+      expect(read()).toBeUndefined();
+    }
   },
 );

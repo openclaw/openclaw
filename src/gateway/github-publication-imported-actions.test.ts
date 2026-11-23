@@ -457,11 +457,14 @@ describe("actions on the imported original PR", () => {
     ["request_review", "author"],
   ])("rechecks explicit %s target %s before the write", async (action, change) => {
     const f = await fixture(false, false, false);
+    const revokeRequester = change === "requester" || change === "requester and transport";
     let reads = 0;
+    let requesterRevoked = false;
     f.onRead(async (endpoint) => {
       if (endpoint.endsWith("/pulls/7") && ++reads === 2) {
-        if (change === "requester" || change === "requester and transport") {
+        if (revokeRequester) {
           await f.revoke();
+          requesterRevoked = true;
           if (change === "requester and transport") {
             throw new Error("Synthetic GitHub read failure");
           }
@@ -486,8 +489,8 @@ describe("actions on the imported original PR", () => {
         ...(action === "edit" ? { title: "Requested title", expectedTitle: "Original title" } : {}),
       }),
     ).rejects.toThrow(
-      change === "requester" || change === "requester and transport"
-        ? /role changed/
+      revokeRequester
+        ? /Authenticated profile verification is unavailable/
         : change === "head"
           ? /head changed/
           : change === "closed"
@@ -496,6 +499,7 @@ describe("actions on the imported original PR", () => {
               ? /not authored/
               : /metadata changed/,
     );
+    expect(requesterRevoked).toBe(revokeRequester);
     expect(f.writes).toEqual([]);
   });
 
