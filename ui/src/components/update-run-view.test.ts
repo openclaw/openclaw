@@ -128,6 +128,36 @@ it("shows recorded serving health without treating absent checks as failures aft
   expect(element.querySelectorAll('[data-step="diagnostic:startup"]')).toHaveLength(0);
 });
 
+it("keeps machine Doctor receipts out of user-facing steps, details, and reports", () => {
+  const receipt = JSON.stringify({
+    exitCode: 1,
+    termination: "exit",
+    counts: { error: 0, warning: 1, info: 11 },
+  });
+  const step = "finalize:doctor-lint:post-activation doctor inspections";
+  const attempt: Partial<Run> = {
+    status: "succeeded",
+    phase: "finished",
+    verification: {
+      runningVersion: "2026.9.2",
+      serviceRunning: true,
+      versionMatch: true,
+      coreReady: true,
+    },
+    steps: [
+      makeStep("post-activation doctor inspections", "completed", "Doctor checks completed."),
+      makeStep(step, "completed", receipt),
+    ],
+  };
+  const { element, output } = mount(attempt);
+  expect(element.querySelector(`[data-step="${step}"]`)).toBeNull();
+  expect(output()).toBe("Doctor checks completed.");
+  expect(element.textContent).not.toContain(receipt);
+  expect(project(attempt).report.markdown).not.toContain(receipt);
+  expect(element.querySelectorAll("[data-oracle]")).toHaveLength(2);
+  expect(element.querySelectorAll('[data-oracle][data-state="warn"]')).toHaveLength(0);
+});
+
 it("presents diagnostic receipts as readable details without inventing installation steps", () => {
   const staged = "Revision verified.";
   const backup = "Backup needs 18 GiB.";

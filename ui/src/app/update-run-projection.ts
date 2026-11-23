@@ -65,6 +65,8 @@ export function projectUpdateRun(
   serving?: UpdateRunServingIdentity,
 ) {
   const terminal = run.status !== "running";
+  // Machine lint receipts stay in saved diagnostics, not user-facing steps or output.
+  const visibleSteps = run.steps.filter(({ step }) => !step.startsWith("finalize:doctor-lint:"));
   const repairRun = isUpdateRepairRun(run);
   const managedByOcm = run.target.installationMethod === "ocm";
   const historical = connected ? projectUpdateRunHistory(run, serving) : null;
@@ -81,7 +83,7 @@ export function projectUpdateRun(
     : renderUpdateRunReport(run);
   const currentIndex = UPDATE_RUN_PHASES.indexOf(run.phase);
   const phases = UPDATE_RUN_PHASES.flatMap((phase, index) => {
-    const recorded = run.steps.find((step) => step.step === phase);
+    const recorded = visibleSteps.find((step) => step.step === phase);
     if (
       !recorded &&
       phase !== run.phase &&
@@ -108,7 +110,7 @@ export function projectUpdateRun(
     return [{ step: phase, status, label: t(`updates.run.phase.${phase}`) }];
   });
   // Supplemental receipts share the ledger but do not represent installation steps.
-  const steps = run.steps.filter(
+  const steps = visibleSteps.filter(
     (step) =>
       !step.step.startsWith("notice:") &&
       !step.step.startsWith("diagnostic:") &&
@@ -117,10 +119,10 @@ export function projectUpdateRun(
   // An active operation owns the panel even before it has emitted diagnostic text.
   const detailStep =
     steps.findLast((step) => step.status === "in_progress") ??
-    run.steps.findLast((step) => step.status === "in_progress" && step.detail) ??
-    run.steps.findLast((step) => step.detail);
+    visibleSteps.findLast((step) => step.status === "in_progress" && step.detail) ??
+    visibleSteps.findLast((step) => step.detail);
   const groupedDetails = new Map<string, string[]>();
-  for (const step of run.steps) {
+  for (const step of visibleSteps) {
     if (!step.detail) {
       continue;
     }
