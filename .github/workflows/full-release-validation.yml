@@ -2679,73 +2679,10 @@ jobs:
           path: full-release-execution-plan
           key: full-release-execution-plan-v2-${{ github.run_id }}
 
-  boat_release_runners:
-    name: Provision Boat release runners
-    needs:
-      [
-        resolve_target,
-        prepare_npm_package,
-        qualify_npm_package,
-        prepare_plugin_npm,
-        prepare_docker_release,
-        release_execution_plan,
-      ]
-    if: always() && !cancelled() && vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && needs.resolve_target.result == 'success'
-    runs-on: ubuntu-24.04
-    # Two sequential runners: each can take 15 minutes to provision and 10 to register.
-    timeout-minutes: 55
-    outputs:
-      decision_vm: ${{ steps.decision.outputs.vm }}
-      decision_runner: ${{ steps.decision.outputs.runner }}
-      decision_label: ${{ steps.decision.outputs.label }}
-      drain_vm: ${{ steps.drain.outputs.vm }}
-      drain_runner: ${{ steps.drain.outputs.runner }}
-      drain_label: ${{ steps.drain.outputs.label }}
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout Boat runner tooling
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          install-bun: "false"
-      - name: Setup Boat
-        uses: ./.github/actions/setup-boat
-      - name: Setup Crabbox
-        run: node --import ./scripts/tsx.mjs scripts/crabbox-setup.mts
-      - name: Provision decision runner
-        id: decision
-        uses: ./.github/actions/boat-release-runner
-        with:
-          operation: provision
-          role: decision
-          api-key: ${{ secrets.BOAT_API_KEY }}
-          boat-org: ${{ vars.BOAT_ORG }}
-          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
-          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
-          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
-      - name: Provision drain runner
-        id: drain
-        uses: ./.github/actions/boat-release-runner
-        with:
-          operation: provision
-          role: drain
-          api-key: ${{ secrets.BOAT_API_KEY }}
-          boat-org: ${{ vars.BOAT_ORG }}
-          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
-          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
-          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
-
   release_decision:
     name: Release Decision
     needs:
       [
-        boat_release_runners,
         resolve_target,
         prepare_npm_package,
         qualify_npm_package,
@@ -2753,11 +2690,11 @@ jobs:
         prepare_docker_release,
         release_execution_plan,
       ]
-    if: always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')
-    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@b720fcdb58b62c90eaae10c2d1ba99ba813adb36
+    if: always()
+    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@b5e0ed2fdd00553915067a258603606515236c58
     with:
       mode: decision
-      runner_label: ${{ needs.boat_release_runners.outputs.decision_label }}
+      runner_label: blacksmith-2vcpu-ubuntu-2404
       fail_fast: ${{ inputs.fail_fast }}
       release_profile: ${{ inputs.release_profile }}
       rerun_group: ${{ inputs.rerun_group }}
@@ -2772,7 +2709,6 @@ jobs:
     name: Diagnostic Drain
     needs:
       [
-        boat_release_runners,
         resolve_target,
         prepare_npm_package,
         qualify_npm_package,
@@ -2780,11 +2716,11 @@ jobs:
         prepare_docker_release,
         release_execution_plan,
       ]
-    if: always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')
-    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@b720fcdb58b62c90eaae10c2d1ba99ba813adb36
+    if: always()
+    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@b5e0ed2fdd00553915067a258603606515236c58
     with:
       mode: drain
-      runner_label: ${{ needs.boat_release_runners.outputs.drain_label }}
+      runner_label: blacksmith-2vcpu-ubuntu-2404
       fail_fast: ${{ inputs.fail_fast }}
       release_profile: ${{ inputs.release_profile }}
       rerun_group: ${{ inputs.rerun_group }}
@@ -3093,55 +3029,3 @@ jobs:
           path: ${{ runner.temp }}/full-release-validation
           if-no-files-found: error
           overwrite: true
-
-  cleanup_boat_release_runners:
-    name: Remove Boat release runners
-    needs: [boat_release_runners, release_decision, diagnostic_drain]
-    if: always() && vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout Boat runner tooling
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          install-bun: "false"
-      - name: Setup Boat
-        uses: ./.github/actions/setup-boat
-      - name: Setup Crabbox
-        run: node --import ./scripts/tsx.mjs scripts/crabbox-setup.mts
-      - name: Cleanup decision runner
-        id: decision
-        if: always()
-        uses: ./.github/actions/boat-release-runner
-        with:
-          operation: cleanup
-          role: decision
-          api-key: ${{ secrets.BOAT_API_KEY }}
-          boat-org: ${{ vars.BOAT_ORG }}
-          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
-          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
-          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
-          vm: ${{ needs.boat_release_runners.outputs.decision_vm }}
-          runner: ${{ needs.boat_release_runners.outputs.decision_runner }}
-      - name: Cleanup drain runner
-        id: drain
-        if: always()
-        uses: ./.github/actions/boat-release-runner
-        with:
-          operation: cleanup
-          role: drain
-          api-key: ${{ secrets.BOAT_API_KEY }}
-          boat-org: ${{ vars.BOAT_ORG }}
-          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
-          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
-          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
-          vm: ${{ needs.boat_release_runners.outputs.drain_vm }}
-          runner: ${{ needs.boat_release_runners.outputs.drain_runner }}
