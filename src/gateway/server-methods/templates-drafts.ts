@@ -24,6 +24,7 @@ import {
   fetchClawHubPackageVersion,
   fetchClawHubPackageSecurity,
 } from "../../infra/clawhub-packages.js";
+import { assertTemplatesEnabled, TemplatesDisabledError } from "../../templates/availability.js";
 import { templateDraftPrompt } from "../../templates/draft-prompt.js";
 import {
   prepareTemplateDraft,
@@ -33,10 +34,6 @@ import {
   templateDraftRevision,
   MAX_TEMPLATE_DRAFT_BYTES,
 } from "../../templates/draft.js";
-import {
-  assertTemplatesLabsEnabled,
-  TemplatesLabsDisabledError,
-} from "../../templates/labs-gate.js";
 import { TemplateProjectError } from "../../templates/project.js";
 import {
   authorizeCurrentOperatorRoleScopes,
@@ -342,7 +339,7 @@ function draftAuthority(
     }
     options.sessionMutationCommitGuard?.();
     const cfg = context.getRuntimeConfig();
-    assertTemplatesLabsEnabled(cfg);
+    assertTemplatesEnabled(cfg);
     const resolved = resolveRequestedSessionAgentId(cfg, sourceSessionKey, agentId);
     if (!resolved.ok) {
       throw new TemplateProjectError("invalid_agent", resolved.error.message);
@@ -371,8 +368,7 @@ function draftAuthority(
 }
 
 function draftError(error: unknown, publishing = false, publicationStarted = false) {
-  const known =
-    error instanceof TemplateProjectError || error instanceof TemplatesLabsDisabledError;
+  const known = error instanceof TemplateProjectError || error instanceof TemplatesDisabledError;
   const code = error instanceof TemplateProjectError ? error.code : "templates_disabled";
   const unconfirmed = publicationStarted || code === "publication_unconfirmed";
   const publication =
@@ -388,7 +384,7 @@ function draftError(error: unknown, publishing = false, publicationStarted = fal
         }
       : {};
   if (
-    error instanceof TemplatesLabsDisabledError ||
+    error instanceof TemplatesDisabledError ||
     (error instanceof TemplateProjectError &&
       ["human_required", "forbidden", "source_forbidden"].includes(error.code))
   ) {

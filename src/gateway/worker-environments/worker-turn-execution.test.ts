@@ -77,6 +77,7 @@ import {
   unusedEnvironments,
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-launcher.test-support.js";
+import { settledTurn } from "./worker-turn-settled.test-support.js";
 
 afterAll(closeStateDatabaseForTest);
 
@@ -898,8 +899,7 @@ describe("worker turn execution", () => {
       release.resolve();
       expect(await operation).toMatchObject({ payloads: [{ text: "Committed reply 🦞" }] });
       await waitForSessionRunEnd(SESSION_ID, null);
-      expect((await openSessionManager()).getPersistedEntries()).toEqual(committed);
-      expect(readWorkerTurnTranscriptStorageRows()).toEqual(committedRows);
+      expect(await settledTurn(committedRows.length)).toEqual([committed, committedRows]);
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
       expect(runLocal).not.toHaveBeenCalled();

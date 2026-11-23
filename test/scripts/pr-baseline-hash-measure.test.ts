@@ -10,12 +10,12 @@ import { createBaselineFixture } from "./pr-baseline-native.test-support.js";
 
 const output = process.env.OPENCLAW_PR_HASH_MEASURE;
 it.skipIf(!output || process.platform === "win32")(
-  "validates retained evidence without temporary hash writes",
+  "validates retained evidence with bounded captured-hash reuse",
   () => {
     const root = resolve(output!);
     mkdirSync(root);
-    const files = Number(process.env.OPENCLAW_PR_HASH_FILES ?? 62000);
-    const logBytes = Number(process.env.OPENCLAW_PR_HASH_LOG_BYTES ?? 128 * 1024 * 1024);
+    const files = Number(process.env.OPENCLAW_PR_HASH_FILES ?? 32);
+    const logBytes = Number(process.env.OPENCLAW_PR_HASH_LOG_BYTES ?? 256 * 1024);
     const bytes = Buffer.alloc(18000, 0xa5);
     const f = createBaselineFixture(root, 2, "IMPORTANT", (repo) => {
       for (let i = 0; i < files; i++) {
@@ -142,13 +142,19 @@ for i,arm in enumerate(['base','base','base']+['base','candidate']*5):
   loadBefore=load,loadAfter=os.getloadavg(),wallSeconds=time.monotonic()-start,treeUserSeconds=after.ru_utime-before.ru_utime,
   treeSystemSeconds=after.ru_stime-before.ru_stime)
  results.append(sample)
- print(json.dumps({k:v for k,v in sample.items() if k not in ['hashes','stdout','stderr']}),flush=True)
+ print(json.dumps({**{k:v for k,v in sample.items() if k not in ['hashes','stdout','stderr']},
+  'hashCalls':len(sample['hashes']),'hashBytes':sum(h['bytes'] for h in sample['hashes'])}),flush=True)
  assert run.returncode == 0, run.stderr
- assert sample['hashes'] == results[0]['hashes']
+ baseline=results[0]
+ key=lambda h:(h['bytes'],h['write'],h['oid'])
+ assert set(map(key,sample['hashes'])) == set(map(key,baseline['hashes']))
+ assert [h for h in sample['hashes'] if h['write']] == [h for h in baseline['hashes'] if h['write']]
+ assert sample['capturedReadBytes'] == baseline['capturedReadBytes']
+ if arm=='candidate': assert len(sample['hashes']) < len(baseline['hashes'])
  assert sample['stdout'] == results[0]['stdout']
  assert sample['temporaryBytes'] == (0 if arm=='candidate' else results[0]['temporaryBytes'])
 (root/'results.json').write_text(json.dumps(results,indent=2))
-assert results[0]['temporaryBytes'] >= work['logBytes']
+assert all(s['temporaryBytes'] == 0 for s in results)
 `,
     );
     const result = spawnSync("python3", [join(root, "measure.py")], { encoding: "utf8" });

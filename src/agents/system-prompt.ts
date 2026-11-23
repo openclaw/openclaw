@@ -322,6 +322,7 @@ export function buildAgentSystemPrompt(params: {
   sandboxInfo?: EmbeddedSandboxInfo;
   /** Whether read/write/edit/apply_patch are restricted to the workspace root. */
   fsWorkspaceOnly?: boolean;
+  sessionProjectGuidance?: string;
   /** Reaction guidance for the agent (for Telegram minimal/extensive modes). */
   reactionGuidance?: {
     level: "minimal" | "extensive";
@@ -471,10 +472,12 @@ export function buildAgentSystemPrompt(params: {
     params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
       ? sanitizedSandboxContainerWorkspace
       : sanitizedWorkspaceDir;
+  // Reply file paths (#202534): repo-relative paths in a reply opened from the session
+  // workspace instead of the repository, so chat file links showed "session file not found".
   const workspaceGuidance =
     params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
-      ? `File tools use host workspace ${sanitizedWorkspaceDir}.${hasExec ? ` exec uses container ${sanitizedSandboxContainerWorkspace} or relative workdir paths; never host paths. Prefer relative paths for both.` : ""}`
-      : "Single global file workspace unless explicitly told otherwise.";
+      ? `File tools use host workspace ${sanitizedWorkspaceDir}.${hasExec ? ` exec uses container ${sanitizedSandboxContainerWorkspace} or relative workdir paths; never host paths. Prefer relative paths for both.` : ""} Reply file paths: relative ones resolve from the working directory; write others as absolute paths.`
+      : "Single global file workspace unless explicitly told otherwise. Reply file paths: relative ones resolve from the working directory; write others as absolute paths.";
   const workspaceOnlyGuidance =
     params.fsWorkspaceOnly === true
       ? `tools.fs.workspaceOnly ON: outputs that file tools need to read or write later stay in ${hasSeparateRuntimeCwd ? "working directory" : "workspace"}, preferably \`.openclaw/tmp/\`. Keep the provided TMPDIR, TMP, and TEMP values so temporary files stay in owned scratch; avoid explicit /tmp paths.`
@@ -482,7 +485,7 @@ export function buildAgentSystemPrompt(params: {
   const directorySection = hasSeparateRuntimeCwd
     ? [
         "## Directory Roles",
-        `Working directory: ${sanitizeForPromptLiteral(runtimeCwd)} (tools and deliverables).`,
+        `Working directory: ${sanitizeForPromptLiteral(runtimeCwd)} (tools, deliverables, and relative reply file paths; write other files as absolute paths).`,
         `Agent workspace: ${sanitizedWorkspaceDir} (AGENTS.md/SOUL.md, other agent instructions, MEMORY.md/memory only; use absolute paths).`,
       ]
     : ["## Workspace", `Working directory: ${displayWorkspaceDir}`];
@@ -499,10 +502,6 @@ export function buildAgentSystemPrompt(params: {
     deferredToolsDirectlyCallable: params.deferredToolsDirectlyCallable,
   });
   params.onRenderedSkillsPrompt?.(renderedSkillsPrompt);
-  const toolGuidanceSection = listToolPromptGuidance(availableTools).flatMap((section) => [
-    section,
-    "",
-  ]);
   const memorySection =
     isMinimal || params.includeMemorySection === false
       ? []
@@ -658,7 +657,8 @@ export function buildAgentSystemPrompt(params: {
       setupIssue: params.openClawSetupIssue,
     }),
     ...skillsSection,
-    ...toolGuidanceSection,
+    ...listToolPromptGuidance(availableTools).flatMap((section) => [section, ""]),
+    params.sessionProjectGuidance && [params.sessionProjectGuidance, ""],
     ...memorySection,
     params.modelAliasLines &&
       params.modelAliasLines.length > 0 &&

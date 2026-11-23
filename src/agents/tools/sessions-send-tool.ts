@@ -108,13 +108,11 @@ async function executeSessionsSendWithDeadline(
             ]),
           SESSIONS_SEND_ADMISSION_TIMEOUT_MS,
           () => true,
-          { signal: opts?.signal },
         );
         return admissionExpired ? timeout() : await execution;
       },
       timeoutMs,
       timeout,
-      { signal: opts?.signal },
     );
   } finally {
     releaseDeadline?.();

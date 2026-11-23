@@ -89,10 +89,7 @@ import {
   type ExactStateRetirement,
 } from "./snapshot-exact-state-contract.js";
 import { retireManagedWorktreeSnapshotById } from "./snapshot-host.js";
-import {
-  restoreManagedWorktreeSnapshot,
-  requireManagedWorktreeRestoreRecord,
-} from "./snapshot-restore.js";
+import { restoreManagedWorktreeSnapshot } from "./snapshot-restore.js";
 import { collectWorktreeTemplates } from "./template-cache.js";
 import { hasTemplatesAsync } from "./template-registry-async.js";
 import type { WorktreeWarmPoolRequest } from "./template-registry.js";
@@ -175,15 +172,13 @@ export class ManagedWorktreeService {
               return;
             }
             await retainRepository({ ...guard, repository });
-            const bytes = await estimateWorktreeGitBytes(
-              repository.repoRoot,
-              request.template.sourceCommit,
-              {
-                signal: guard.signal,
-                assertCurrent: guard.commitGuard,
-                preparationKey: request.template.sourceCommit,
-              },
-            );
+            const commit = request.targetCommit ?? request.template.sourceCommit;
+            const bytes = await estimateWorktreeGitBytes(repository.repoRoot, commit, {
+              signal: guard.signal,
+              assertCurrent: guard.commitGuard,
+              preparationKey: commit,
+              idleIoPriority: guard.idleIoPriority,
+            });
             await prepareWarmWorktree(this.env, request, guard, (cloneBytes) =>
               requireAllocationSpace(
                 guard,
@@ -751,13 +746,9 @@ export class ManagedWorktreeService {
     params: { id: string; recoverExactState?: ExactStateRetirement } & WorktreeMutationGuard,
   ): Promise<ManagedWorktreeRecord> {
     return await withWorktreeRunEnd(this.env, async () => {
-      const record = requireManagedWorktreeRestoreRecord(
-        params.id,
-        await readRegistryWorktreeForMutation({ ...params, env: this.env }),
-      );
-      return await withWorktreeMutationLease({ ...params, id: record.id, env: this.env }, (guard) =>
-        restoreManagedWorktreeSnapshot(
-          { ...params, ...guard, id: record.id },
+      return await withWorktreeMutationLease({ ...params, env: this.env }, async (guard) => {
+        return await restoreManagedWorktreeSnapshot(
+          { ...params, ...guard },
           {
             env: this.env,
             getConfig: this.getConfig,
@@ -770,8 +761,8 @@ export class ManagedWorktreeService {
                 },
               ),
           },
-        ),
-      );
+        );
+      });
     });
   }
 

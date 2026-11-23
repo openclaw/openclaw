@@ -85,9 +85,14 @@ export async function assertPackageReleaseIdentity(expected: PackageReleaseIdent
   }
 }
 
-/** Relative text keeps the link valid when the whole prefix moves. */
+/**
+ * Relative text keeps the link valid when the whole prefix moves. A Windows junction
+ * stores an absolute target, so its text is absolute, as `readlink` reports it.
+ */
 export function packageReleaseLinkTarget(slot: string, releaseRoot: string): string {
-  return path.relative(path.dirname(slot), releaseRoot);
+  return process.platform === "win32"
+    ? path.resolve(releaseRoot)
+    : path.relative(path.dirname(slot), releaseRoot);
 }
 
 /** Allocate the private npm prefix that becomes a release once the link names it. */
@@ -168,7 +173,8 @@ async function createTemporaryLink(globalRoot: string, target: string) {
     globalRoot,
     `${TEMPORARY_LINK_PREFIX}${process.pid}-${Date.now()}-${randomBytes(4).toString("hex")}`,
   );
-  await fs.symlink(target, temporary);
+  // POSIX ignores the type; on Windows a junction needs no administrator rights.
+  await fs.symlink(target, temporary, "junction");
   const identity = statIdentity(await fs.lstat(temporary, { bigint: true }));
   await syncDirectoryIfSupported(globalRoot);
   return { temporary, identity };
@@ -201,6 +207,11 @@ export async function switchPackageReleaseLink(params: {
   } catch (error) {
     await fs.unlink(temporary).catch(ignoreMissingPath);
     throw error;
+  }
+  // Windows cannot rename onto an existing junction, so it removes the old one first; a
+  // process killed in between leaves no package path, and the next update publishes it again.
+  if (process.platform === "win32") {
+    await fs.unlink(params.slot).catch(ignoreMissingPath);
   }
   await fs.rename(temporary, params.slot);
   const published = await fs.lstat(params.slot, { bigint: true });
@@ -393,22 +404,16 @@ export function resolvePackageReleaseTarget(
 
 /**
  * The release stage for `openclaw update`, labelled with the version it expects
- * to install. npm only: pnpm and Bun stage their own projects, and a Git source
- * exposure keeps its link to the checkout.
+ * to install. npm only: pnpm and Bun stage their own projects.
  */
 export function resolvePackageReleaseStage(params: {
   installTarget: ResolvedGlobalInstallTarget;
   packageName: string;
   installSpec: string;
   env?: NodeJS.ProcessEnv;
-  expectedGitCheckout?: unknown;
-  activateGitRoot?: string;
 }): (PackageReleaseTarget & { label: string }) | undefined {
   const target =
-    params.installTarget.manager !== "npm" ||
-    params.installTarget.directNodeModulesRoot === true ||
-    params.expectedGitCheckout ||
-    params.activateGitRoot
+    params.installTarget.manager !== "npm" || params.installTarget.directNodeModulesRoot === true
       ? null
       : resolvePackageReleaseTarget(params.installTarget.packageRoot, params.env ?? process.env);
   return target

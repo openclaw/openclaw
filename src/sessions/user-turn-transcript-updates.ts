@@ -3,6 +3,7 @@ import {
   capturePreparedTranscriptModelPromptProjection,
   rewritePreparedTranscriptMessageAtAnchor,
 } from "../config/sessions/session-message-rewrite.js";
+import type { PersistedUserTurnMessage } from "./user-turn-input.types.js";
 import {
   isUserMessage,
   prepareModelPromptProjection,
@@ -13,7 +14,6 @@ import {
   rewritePersistedSteerTargetRunId,
 } from "./user-turn-transcript.metadata.js";
 import type {
-  PersistedUserTurnMessage,
   PreparedModelPromptProjection,
   UserTurnTranscriptAdmissionReceipt,
 } from "./user-turn-transcript.types.js";

@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -249,7 +249,7 @@ test.each<[string, string, string, SelectionOptions]>([
           hasResolvedTurnModelOverride: fixture.turnOverride,
           preparedModelCatalog: { entries, routeVariants: entries, authoritative: true },
           operatorAuthority: fixture.operator
-            ? createAdmittedRunOperatorAuthority({
+            ? createTestOperatorAuthority({
                 profileId: "limited-operator",
                 scopes: ["operator.write"],
                 assertCurrent: () => {},

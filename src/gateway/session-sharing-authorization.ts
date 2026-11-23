@@ -408,6 +408,33 @@ export function findPreparedSharingTarget(
   );
 }
 
+/** Resolve a canonical writer target back to its retained request identity. */
+export function bindSessionMutationSharingReader(
+  authorization: SessionMutationAuthorization,
+  params: SessionMutationAuthorizationParams,
+  targets: readonly AuthorizedSessionMutationTarget[],
+): void {
+  if (!params.preparedTargets) {
+    return;
+  }
+  authorization.readTargetSharing = (targetRef) => {
+    const expected = targets.find(
+      (target) =>
+        target.resolved?.canonicalKey === targetRef.sessionKey &&
+        target.resolved.agentId === targetRef.agentId,
+    );
+    if (!expected) {
+      throw sessionMutationTargetChanged(params.method, targetRef.sessionKey);
+    }
+    authorization.assertTargetCurrent(expected);
+    const retained = findPreparedSharingTarget(params, expected);
+    if (!retained) {
+      throw sessionMutationTargetChanged(params.method, targetRef.sessionKey);
+    }
+    return retained.read();
+  };
+}
+
 export async function withCurrentSessionSharingSource<T>(params: {
   request: SessionMutationAuthorizationParams;
   target: SessionMutationTarget;

@@ -237,7 +237,7 @@ describe("buildAgentSystemPrompt", () => {
     [
       "sanitizes runtime cwd before rendering directory roles",
       { runtimeCwd: "/tmp/repo\n\u2028\u202e-injected" },
-      ["Working directory: /tmp/repo-injected (tools and deliverables)."],
+      ["Working directory: /tmp/repo-injected (tools, deliverables, and relative reply"],
     ],
   ])("%s", expectPromptCase);
   it("does not inspect owner identities when minimal prompts omit owner guidance", () => {
@@ -380,7 +380,7 @@ describe("buildAgentSystemPrompt", () => {
       { toolNames: ["openclaw", "gateway"] },
       [
         "For this Gateway's config writes, channels, plugins, agents, or models/providers: use `openclaw`",
-        "`gateway` runs `update.run` (supervised restart)",
+        "`gateway`: use update.run only when the installation uses the built-in updater",
         "`update.cleanup` (`dryRun` previews; permanently removes rollback copies",
       ],
       ["models/providers, updates: ask `openclaw`"],

@@ -526,6 +526,8 @@ export type OpenClawPluginChannelRegistration<
  * - `setup-only`: lightweight channel setup entry only.
  * - `setup-runtime`: setup flow that also needs the runtime channel entry.
  * - `cli-metadata`: CLI command metadata collection.
+ * - `memory-backend`: passive memory backend for the slot owner; only
+ *   `registerMemoryCapability({ providerRuntime })` is honored.
  */
 export type PluginRegistrationMode =
   | "full"
@@ -533,7 +535,8 @@ export type PluginRegistrationMode =
   | "tool-discovery"
   | "setup-only"
   | "setup-runtime"
-  | "cli-metadata";
+  | "cli-metadata"
+  | "memory-backend";
 
 export type {
   PluginServiceSessionWorkV1,

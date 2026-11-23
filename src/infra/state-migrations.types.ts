@@ -4,6 +4,7 @@ import type {
   PluginDoctorStateMigrationInventory,
 } from "../plugins/doctor-contract-registry.js";
 import type { StateLeaseLoss } from "../shared/state-lease-loss.js";
+import type { DeferredPluginMigration } from "./deferred-plugin-migrations.contract.js";
 import type { EngineConnection } from "./sql-connection.js";
 import type { LegacyAuditLogsDetection } from "./state-migrations.audit-logs.types.js";
 import type { LegacyChannelPairingStateDetection } from "./state-migrations.channel-pairing.js";
@@ -131,8 +132,10 @@ export type MigrationMessages = {
   notices?: string[];
   /** Active plugin owners whose required migration phases were inspected and completed. */
   completedPluginIds?: readonly string[];
-  /** Actual loaded migration contracts, independent of detector or writer success. */
+  /** Declared or loaded migration obligations, independent of detector or writer success. */
   requiredPluginIds?: readonly string[];
+  /** These owners must finish inspection or migration on a later Doctor pass. */
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
   /** Successful contract inspection found no state actions; this is not completion proof. */
   statelessPluginIds?: readonly string[];
   rehearsal?: { outsideRootLegacyFileCount: number };

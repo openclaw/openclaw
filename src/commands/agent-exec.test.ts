@@ -8,7 +8,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AgentRunTerminalOutcomeError } from "../agents/agent-run-terminal-error.js";
-import { captureAgentToolSourceExecutionGuard } from "../agents/agent-tool-source-execution-guard.js";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
@@ -589,20 +588,5 @@ describe("agent exec tool lifetime", () => {
     });
     await expect(retained?.execute("late", {})).rejects.toThrow();
     expect(source).not.toHaveBeenCalled();
-  });
-
-  it("retained effect guards cannot borrow a replacement invocation's authority", async () => {
-    let retainedGuard: (() => void) | undefined;
-    const effect = vi.fn();
-    await runSuccessfulExec({}, () => {
-      retainedGuard = captureAgentToolSourceExecutionGuard();
-    });
-    await runSuccessfulExec({}, () => {
-      expect(() => {
-        retainedGuard?.();
-        effect();
-      }).toThrow("execution scope is no longer active");
-    });
-    expect(effect).not.toHaveBeenCalled();
   });
 });

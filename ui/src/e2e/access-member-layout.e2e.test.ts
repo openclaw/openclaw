@@ -15,15 +15,19 @@ async function expectContained(surface: Locator) {
     const bounds = root.getBoundingClientRect();
     return [...root.querySelectorAll<HTMLElement>("*")]
       .filter((element) => {
+        const style = getComputedStyle(element);
         const box = element.getBoundingClientRect();
+        // On phones the shell shows the title; the clipped heading remains for assistive tech.
+        const clippedTitle =
+          element.classList.contains("plugin-page-title") && style.clipPath === "inset(50%)";
         return (
           element.checkVisibility() &&
           box.width > 0 &&
+          !clippedTitle &&
           !element.closest(".ocid-access__sr-only") &&
           (box.left < bounds.left - 1 ||
             box.right > bounds.right + 1 ||
-            (getComputedStyle(element).textOverflow !== "ellipsis" &&
-              element.scrollWidth > element.clientWidth + 1))
+            (style.textOverflow !== "ellipsis" && element.scrollWidth > element.clientWidth + 1))
         );
       })
       .map((element) => element.className || element.tagName);

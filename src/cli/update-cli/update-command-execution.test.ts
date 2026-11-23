@@ -7,8 +7,8 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import * as gatewayLock from "../../infra/gateway-lock.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
-import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
-import { toPublicUpdateRun } from "../../infra/update-run-record.js";
+import * as candidateState from "../../infra/update-candidate-state.js";
+import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -33,6 +33,7 @@ const {
   inspectOrStopService,
   mocks,
   packageCandidate,
+  readyCandidate,
   successfulUpdate,
 } = await import("./update-command-execution.test-support.js");
 
@@ -130,66 +131,6 @@ describe("mutable update execution", () => {
   registerExecutionTimeoutTests();
 
   registerNativeAdmissionTests();
-  it.each(["same", "alias", "disjoint", "unmanaged", "foreign", "unverifiable"] as const)(
-    "preserves managed refusals and warns for unowned Git consumers: %s",
-    async (destination) =>
-      withTestDir({ prefix: "git-live-runtime-custody-" }, async (dir) => {
-        const servingRoot = path.join(dir, "serving");
-        const warn = ["unmanaged", "foreign", "unverifiable"].includes(destination);
-        const targetRoot = destination === "same" || warn ? servingRoot : path.join(dir, "target");
-        await fs.mkdir(path.join(servingRoot, "dist"), { recursive: true });
-        if (destination === "alias") {
-          await fs.symlink(
-            servingRoot,
-            targetRoot,
-            process.platform === "win32" ? "junction" : "dir",
-          );
-        } else if (destination === "disjoint") {
-          await fs.mkdir(path.join(targetRoot, "dist"), { recursive: true });
-        }
-        const artifact = path.join(servingRoot, "dist", "prepare.runtime.js");
-        const targetArtifact = path.join(targetRoot, "dist", "prepare.runtime.js");
-        await fs.writeFile(artifact, "retained serving runtime");
-        const target = { schemaVersions: { state: 15, agent: 19 } };
-        const state = serviceState(servingRoot, "inspect", "serving-generation");
-        if (warn) {
-          state.serviceUpdateVerdict = destination === "foreign" ? { kind: "foreign" } : undefined;
-        }
-        mocks.maybeStopService.mockResolvedValue({ ...state, servicePid: 23456 });
-        const owner = warn ? { pid: process.pid, createdAt: "now", port: 20445 } : undefined;
-        const readOwner = vi
-          .spyOn(gatewayLock, "readActiveGatewayLockIdentity")
-          .mockResolvedValue(owner);
-        if (destination === "unverifiable") {
-          readOwner.mockRejectedValue(new Error("owner inspection unavailable"));
-        }
-        mocks.runGitUpdate.mockImplementation(
-          async (options: Parameters<typeof updateGitInstall>[0]) => {
-            await options.inspectGitTarget?.(target);
-            await options.beforeGitMutation?.(target);
-            await fs.writeFile(targetArtifact, "candidate runtime");
-            return { ...successfulUpdate, mode: "git" };
-          },
-        );
-        const execution = await execute({
-          ...executionParams("git"),
-          root: targetRoot,
-          shouldRestart: warn,
-          opts: { json: true, restart: warn },
-        });
-        expect(await fs.readFile(artifact, "utf8")).toBe(
-          warn ? "candidate runtime" : "retained serving runtime",
-        );
-        const blocked = !warn && destination !== "disjoint";
-        expect(execution?.mutationStarted).toBe(!blocked);
-        expect(execution?.result.status).toBe(blocked ? "error" : "ok");
-        expect(execution?.result.reason).toBe(blocked ? "runtime-artifact-publication" : undefined);
-        const diagnostics = (execution?.result.steps ?? [])
-          .map((step) => step.advisory?.message ?? step.stderrTail ?? "")
-          .join("");
-        expect(diagnostics).toMatch(warn ? /previous runtime/ : blocked ? /23456/ : /^$/);
-      }),
-  );
   it("retains the live update run when stopped-service context capture fails", async () => {
     await withTestDir({ prefix: "partial-stop-recovery-owner-" }, async (dir) => {
       const params = await runParams(dir, "package");
@@ -299,6 +240,123 @@ describe("mutable update execution", () => {
     });
   });
 
+  it.each([
+    { migrating: true, owner: true, retained: false, owned: "none" },
+    { migrating: true, owner: false, retained: false, owned: "none" },
+    { migrating: false, owner: true, retained: false, owned: "none" },
+    { migrating: true, owner: true, retained: true, owned: "none" },
+    { migrating: true, owner: true, retained: false, owned: "running" },
+    { migrating: true, owner: true, retained: false, owned: "stopped" },
+  ] as const)(
+    "admits activation only when Doctor can migrate (migrating=$migrating, live owner=$owner, retained=$retained, owned service=$owned)",
+    async ({ migrating, owner, retained, owned }) => {
+      await withTestDir({ prefix: "migration-owner-" }, async (state) => {
+        // #202700: a Gateway this update does not stop keeps Doctor out of maintenance.
+        vi.stubEnv("OPENCLAW_STATE_DIR", state);
+        const external = path.join(state, "..", "archive-data", "openclaw-agent.sqlite");
+        const read = vi
+          .spyOn(candidateState, "readUpdateStateSchemaVersions")
+          .mockImplementation(async ({ onInventory }) => {
+            onInventory?.(
+              new Map([[external, { spellings: [external], registeredPaths: [external] }]]),
+            );
+            return [
+              {
+                path: path.join(state, "state", "openclaw.sqlite"),
+                userVersion: 15,
+                ...(retained ? { retainedAgentPaths: [external] } : {}),
+              },
+              { path: external, userVersion: migrating ? 18 : 19 },
+            ];
+          });
+        vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue(
+          owner ? { pid: 4242, createdAt: "2026-11-21T00:00:00.000Z", port: 18789 } : undefined,
+        );
+        mocks.checkCandidate.mockResolvedValue({
+          ...readyCandidate([]),
+          candidateSchemaVersions: { state: 15, agent: 19 },
+        });
+        mocks.maybeStopService.mockResolvedValue(
+          owned !== "none"
+            ? { ...inspectOrStopService("inspect"), stopped: false, running: owned === "running" }
+            : {
+                stopped: false,
+                inspected: false,
+                serviceMutationAllowed: false,
+                serviceMutationSkipMessage: "service management skipped: non-default install",
+              },
+        );
+        mocks.runPackageUpdate.mockImplementation(packageCandidate(state));
+        const params = executionParams("package");
+        params.opts.restart = params.shouldRestart = false;
+
+        const execution = await execute(params);
+
+        if (migrating && owner && !retained && owned !== "running") {
+          expect(execution).toMatchObject({
+            mutationStarted: false,
+            result: { status: "error", reason: "database-migration-owner-live" },
+          });
+          expect(JSON.stringify(execution?.result)).toContain(
+            `${external} (schema 18 -> 19), which needs exclusive access to the state, but a Gateway (PID 4242)`,
+          );
+        } else {
+          expect(execution).toMatchObject({ mutationStarted: true, result: { status: "ok" } });
+        }
+        expect(read).toHaveBeenCalledWith(
+          expect.objectContaining({ includeRetainedAgentPaths: true }),
+        );
+      });
+    },
+  );
+
+  it.each([
+    { node: "running", nodeState: "same" },
+    { node: "running", nodeState: "alias" },
+    { node: "running", nodeState: "other" },
+    { node: "running", nodeState: "default" },
+    { node: "stopped", nodeState: "same" },
+  ] as const)(
+    "refuses before the Gateway stops while a node service keeps the state open (node=$node, node state=$nodeState)",
+    async ({ node, nodeState }) => {
+      await withTestDir({ prefix: "update-node-" }, async (state) => {
+        // #203457: the node host keeps openclaw.sqlite open, so update Doctor cannot take exclusion.
+        vi.stubEnv("OPENCLAW_STATE_DIR", state);
+        const alias = path.join(path.dirname(state), `${path.basename(state)}-alias`);
+        await fs.symlink(state, alias);
+        const nodeStateDir = { same: state, alias, other: path.join(state, "other") };
+        mocks.nodeServiceCommand.mockResolvedValue({
+          programArguments: ["node", "openclaw.mjs", "node", "run"],
+          // A default node omits the selector and must not inherit this CLI's.
+          environment: {
+            OPENCLAW_SERVICE_KIND: "node",
+            ...(nodeState === "default" ? {} : { OPENCLAW_STATE_DIR: nodeStateDir[nodeState] }),
+          },
+        });
+        mocks.nodeServiceRuntime.mockResolvedValue({ status: node, pid: 5151 });
+        mocks.runPackageUpdate.mockImplementation(packageCandidate(state));
+        const params = executionParams("package");
+        params.opts.restart = params.shouldRestart = false;
+
+        const execution = await execute(params);
+
+        const refused = node === "running" && (nodeState === "same" || nodeState === "alias");
+        if (refused) {
+          expect(execution).toMatchObject({
+            mutationStarted: false,
+            result: { status: "error", reason: "database-migration-owner-live" },
+          });
+          expect(JSON.stringify(execution?.result)).toContain(
+            `needs exclusive access to ${path.join(state, "state", "openclaw.sqlite")}, but the node host service (PID 5151) keeps it open`,
+          );
+        } else {
+          expect(execution).toMatchObject({ mutationStarted: true, result: { status: "ok" } });
+        }
+        expect(mocks.serviceStopped).toBe(!refused);
+      });
+    },
+  );
+
   it.each([false, true])(
     "keeps plugin availability advisory (incompatible=%s)",
     async (incompatible) =>
@@ -372,10 +430,6 @@ describe("mutable update execution", () => {
       await withTestDir({ prefix: "git-selection-online-" }, async (root) => {
         const events: string[] = [];
         const target = { schemaVersions: { state: 14, agent: 18 } };
-        const beginMutation = vi.fn(() => {
-          expect(mocks.serviceStopped).toBe(true);
-          events.push("mutation");
-        });
         const onActivation = vi.fn();
         mocks.checkTargetSchemas.mockImplementation(async (versions) => {
           expect(mocks.serviceStopped).toBe(false);
@@ -387,17 +441,7 @@ describe("mutable update execution", () => {
           if (phase === "prepare") {
             events.push("stop");
           }
-          const state = serviceState(root, phase);
-          state.windowsTaskAutoStartRecovery = {
-            suspended: Promise.resolve(true),
-            beginMutation,
-            assertRecoveryCurrent: () => {},
-            restore: vi.fn(async () => {}),
-            handoff: vi.fn(),
-            complete: vi.fn(async () => {}),
-            interrupted: () => false,
-          };
-          return state;
+          return serviceState(root, phase);
         });
         // The predecessor-readiness suite owns real HTTP probes; this case owns activation order.
         vi.spyOn(readiness, "verifyPreviousGatewayForUpdate").mockImplementation(
@@ -433,13 +477,14 @@ describe("mutable update execution", () => {
           },
         );
 
+        // A Git release activates beside the serving Gateway: it neither verifies nor stops it.
         expect(events).toEqual([
           "mutable-prepare",
           "git",
           "activation-schema",
-          ...(incompatible ? [] : ["verified", "mutable-prepare", "stop", "mutation"]),
+          ...(incompatible ? [] : ["mutable-prepare"]),
         ]);
-        expect(execution?.previousVerified).toBe(!incompatible);
+        expect(execution?.previousVerified).toBe(false);
         expect(onActivation).toHaveBeenCalledTimes(incompatible ? 0 : 1);
         expect(execution, JSON.stringify(execution?.failure)).toMatchObject({
           mutationStarted: !incompatible,
@@ -510,7 +555,8 @@ describe("mutable update execution", () => {
           },
         );
 
-        expect(mocks.serviceStopped).toBe(scenario === "postgres-free");
+        // A Git release never stops the serving Gateway: it keeps its own release.
+        expect(mocks.serviceStopped).toBe(scenario === "postgres-free" && kind === "package");
         expect(events).toEqual(refused ? [] : ["install-replaced"]);
         expect(execution, JSON.stringify(execution?.failure)).toMatchObject({
           mutationStarted: !refused,
@@ -636,41 +682,6 @@ describe("mutable update execution", () => {
 
         expect(events, JSON.stringify(execution?.failure)).toEqual(["validated"]);
         expect(execution?.result.reason).not.toBe("database-engine-preflight");
-      }),
-  );
-
-  it.each([true, false])(
-    "records a checkout activation on its run before reserving plugin recovery (%s)",
-    async (checkout) =>
-      withTestDir({ prefix: "git-activation-record-" }, async (root) => {
-        const params = await runParams(root, "git");
-        const activation = { sha: "a".repeat(40), buildId: "build-new", previousBuildId: null };
-        let reservation: unknown;
-        mocks.runGitUpdate.mockImplementation(
-          async (options: Parameters<typeof updateGitInstall>[0]) => {
-            const transaction = {
-              backupRoot: root,
-              ...(checkout ? { readGitActivation: async () => activation } : {}),
-              rollback: async () => {
-                throw new Error("unused");
-              },
-              complete: async () => undefined,
-            };
-            // The fixture admitted no core identities, so the cohort reservation refuses.
-            reservation = await Promise.resolve(options.onTransaction?.(transaction)).catch(String);
-            return { ...successfulUpdate, mode: "git" };
-          },
-        );
-        await withUpdateCommandExecutor(params.opts.run.runId, async (executor) => {
-          params.opts.run.executorFence = await executor.enter(root);
-          return execute(params);
-        });
-
-        expect(reservation).toMatch(/Plugin cohort rollback requires the admitted core/);
-        const run = getUpdateRun(params.opts.run.runId, params.opts.run);
-        expect(run?.origin.gitActivation).toEqual(checkout ? activation : undefined);
-        // Public history projections keep their shape.
-        expect(run && toPublicUpdateRun(run).origin).not.toHaveProperty("gitActivation");
       }),
   );
 });

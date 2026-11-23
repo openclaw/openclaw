@@ -3,28 +3,6 @@ import { en } from "./en.ts";
 
 // Memory views register their English fallback when loaded, keeping this copy off startup.
 const enMemoryImport = {
-  onboarding: {
-    memoryImport: {
-      title: en.onboarding.memoryImport.title,
-      body: "OpenClaw found memory from other coding agents. Import it into your agent’s workspace?",
-      plannedCount: "{count} ready to import",
-      alreadyImported: "Conflicts: {count}",
-      sourceUnavailable: "Source path unavailable",
-      import: "Import",
-      skip: "Skip for now",
-      reviewDetails: "Review details",
-      importingProvider: "Importing…",
-      providerResult: "Imported {migrated}, skipped {skipped}",
-      providerIncomplete:
-        "Imported {migrated}, skipped {skipped}, {errors} failed, {conflicts} conflicts",
-      providerError: "Couldn’t import memory. Continue setup, then try importing again.\n{error}",
-      connectionChanged:
-        "Import skipped because the Gateway connection changed. Reconnect and try again.",
-      unknownError: "No error details available.",
-      doneTitle: "Memory import finished",
-      doneBody: "Imported {migrated}, skipped {skipped}. Continue setting up OpenClaw.",
-    },
-  },
   memoryImport: {
     unknownCollection: "Memory collection",
     claudeCode: "Claude Code",
@@ -111,7 +89,6 @@ const enMemoryImport = {
 export const registerMemoryImportEnglish = Object.assign(
   () => {
     en.memoryImport = enMemoryImport.memoryImport;
-    Object.assign(en.onboarding.memoryImport, enMemoryImport.onboarding.memoryImport);
   },
   { catalog: enMemoryImport },
 );

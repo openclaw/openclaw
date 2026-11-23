@@ -11,6 +11,7 @@ import type { AuthProfileAuthorization } from "../../agents/auth-profiles/author
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { captureScheduledOperatorSource } from "../../agents/operator-run-recovery-source.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-selection.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { attributeDelegatedSessionCreator } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -36,6 +37,10 @@ import {
 import { resolveCarriedCronModelSelection } from "../../cron/isolated-agent/session-carried-model.js";
 import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
+import {
+  resolveCronRunAdmissionSource,
+  resolveCronSessionWorkspaceOwnershipError,
+} from "../../cron/run-authority.js";
 import { resolveFailureAlert } from "../../cron/service/failure-alerts.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
 import {
@@ -58,7 +63,7 @@ import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { readGatewayDeviceSourceAuthority } from "../device-revocation.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import type { CronCallerScope } from "./cron-caller-scope.js";
@@ -221,9 +226,13 @@ export async function assertValidCronUpdatePatch(params: {
   if (
     "agentId" in params.patch ||
     "sessionTarget" in params.patch ||
-    "sessionKey" in params.patch
+    "sessionKey" in params.patch ||
+    "payload" in params.patch ||
+    "schedule" in params.patch ||
+    "trigger" in params.patch ||
+    params.patch.enabled === true
   ) {
-    await assertCronDoesNotTargetAgentHarness(nextJob, params.cfg);
+    await assertValidCronSessionTarget(nextJob, params.cfg);
   }
   // Clearing a concrete channel (channel: null) while keeping a bare announce `to`
   // intentionally falls back to "last" in multi-channel configs. Use the same
@@ -277,12 +286,9 @@ export async function assertValidCronUpdatePatch(params: {
   return nextJob;
 }
 
-export async function assertCronDoesNotTargetAgentHarness(
-  input: {
-    agentId?: string | null;
-    sessionTarget?: string | null;
-    sessionKey?: string | null;
-  },
+export async function assertValidCronSessionTarget(
+  input: CronJobCreate &
+    Partial<Pick<CronStoredJob, "scheduledToolPolicy" | "toolsAllowProvenance">>,
   cfg: OpenClawConfig,
 ): Promise<void> {
   const targetSessionKey =
@@ -307,6 +313,32 @@ export async function assertCronDoesNotTargetAgentHarness(
         ? AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE
         : AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
     );
+  }
+  if (
+    input.payload.kind === "agentTurn" &&
+    resolveCronSessionTargetSessionKey(input.sessionTarget)
+  ) {
+    const entry = loaded.entry;
+    const ownershipError = resolveCronSessionWorkspaceOwnershipError({
+      cfg,
+      agentId: loaded.agentId,
+      sessionKey: loaded.canonicalKey,
+      ownerSessionKey: input.owner?.sessionKey,
+      admissionSource: resolveCronRunAdmissionSource(input),
+      hasWorkspaceBinding: Boolean(
+        entry &&
+        (entry.spawnedCwd?.trim() ||
+          entry.worktree ||
+          resolveIngressWorkspaceOverrideForSessionRun({
+            spawnedBy: entry.spawnedBy,
+            workspaceDir: entry.spawnedWorkspaceDir,
+            cwd: entry.spawnedCwd,
+          })),
+      ),
+    });
+    if (ownershipError) {
+      throw new TypeError(ownershipError);
+    }
   }
   if (!reservedKey || loaded.entry) {
     // `harness:*` was historically a valid public key. Preserve an existing
@@ -417,7 +449,7 @@ export async function captureCronCreatorSession(
     job.operatorSource?.source.snapshot.openclawIdPrincipal ||
     job.streamOperatorSource,
   );
-  let captured: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+  let captured: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
   try {
     if (!inheritedAuthority && independent) {
       if (!caller.hasCurrentClientAuthority) {
@@ -425,7 +457,7 @@ export async function captureCronCreatorSession(
           "Current authenticated requester authority is required to reauthorize this automation.",
         );
       }
-      captured = await captureGatewayOperatorRunAuthority({
+      captured = await prepareGatewayOperatorRunAuthority({
         client: caller.client,
         context: caller.context,
         hasCurrentClientAuthority: caller.hasCurrentClientAuthority,

@@ -198,7 +198,7 @@ async function replayCreation(
       runStarted: false,
       creationReplayed: true,
       publicRead: Boolean(resolveSessionPublicShare(entry)),
-      resolved: { modelProvider: model.provider, model: model.model },
+      resolved: { modelProvider: model?.provider, model: model?.model },
     },
     meta: { cached: true },
   };

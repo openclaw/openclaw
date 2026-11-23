@@ -5,7 +5,7 @@ import { SUBAGENT_ENDED_REASON_ERROR } from "../agents/subagents/registry/subage
 import { SubagentLifecycleController } from "../agents/subagents/registry/subagent-registry-lifecycle.js";
 import { persistRegistryFixture } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { waitForSessionEvent } from "./session-message-event.test-support.js";
-import { writeSessionStore } from "./test-helpers.server.js";
+import { rpcReq, writeSessionStore } from "./test-helpers.server.js";
 
 export function registerTerminalSubagentSessionEventTest({
   createSessionStoreFile,
@@ -69,7 +69,7 @@ export function registerTerminalSubagentSessionEventTest({
       confirmProvisionalKill: vi.fn(),
       callGateway: async <T = Record<string, unknown>>() => ({}) as T,
       captureSubagentCompletionReply: vi.fn(async () => undefined),
-      runSubagentAnnounceFlow: vi.fn(async () => "retryable" as const),
+      runSubagentAnnounceFlow: vi.fn(async () => "undelivered" as const),
       maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async () => false),
       warn: vi.fn(),
     });
@@ -82,6 +82,13 @@ export function registerTerminalSubagentSessionEventTest({
     } satisfies Parameters<typeof controller.completeSubagentRun>[0];
 
     await withOperatorSessionSubscriber(async (ws) => {
+      // Establish the seeded row before testing its terminal update rather than discovery.
+      expect(
+        await rpcReq(ws, "sessions.describe", { key: entry.childSessionKey, agentId: "main" }),
+      ).toMatchObject({
+        ok: true,
+        payload: { session: { key: entry.childSessionKey, sessionId: identity.sessionId } },
+      });
       const waitForRecoveredTerminal = (timeoutMs?: number) =>
         waitForSessionEvent(
           ws,

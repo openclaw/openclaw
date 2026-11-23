@@ -23,6 +23,16 @@ export type PluginHookToolAuthority = {
   assertActive(): void;
 };
 
+/** The turn that started a command a later run continues. */
+export type PluginHookExecRequestOwner = Readonly<{
+  /** Run that called the tool, not a later run that continued it. */
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  /** Verified paired device of the connection that sent the starting turn. */
+  ownerDeviceId?: string;
+}>;
+
 export type PluginHookAgentContext = PluginHookContextWindow & {
   runId?: string;
   jobId?: string;
@@ -82,6 +92,13 @@ export type PluginHookAgentContext = PluginHookContextWindow & {
    * for runs that did not start from a device-authenticated connection.
    */
   requesterDeviceId?: string;
+  /**
+   * Turns that started the commands this run continues, such as a background exec whose
+   * completion this run reports. Set by the host from its exec ownership records, one entry
+   * per owning request; absent when the run continues no other request. This is ancestry
+   * metadata only: it does not grant the run the starter's authority or approvals.
+   */
+  execRequestOwners?: readonly PluginHookExecRequestOwner[];
   /** Present only for post-policy prompt enrichment hooks that requested tool authority. */
   toolAuthority?: PluginHookToolAuthority;
   /** Checks this prompt hook handler's result-acceptance lifetime. */

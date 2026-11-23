@@ -246,6 +246,7 @@ it.each(["runtime", "doctor"] as const)(
     const migrationTables = [
       ...backupTables,
       ...stateTemplateNamesMigration.tables,
+      "operator_approvals",
       "acp_replay_events",
       "device_identities",
       "device_auth_tokens",

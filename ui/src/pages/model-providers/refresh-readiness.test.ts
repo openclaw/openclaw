@@ -3,6 +3,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ModelCatalogResult } from "../../api/types.ts";
+import { profile } from "../../test-helpers/model-providers.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   appendPage,
@@ -32,7 +33,8 @@ it.each(["refreshing", "error"] as const)(
     let usageReads = 0;
     h.request.mockImplementation(async (method: string) => {
       if (method === "models.authStatus") {
-        return createAuthStatus();
+        // A provider-wide plan is shown only when it describes a single account.
+        return createAuthStatus([{ profiles: [profile("openai:one")] }]);
       }
       if (method === "models.list") {
         return refreshing ? pending.promise : catalog;
@@ -94,7 +96,13 @@ it.each(["agent", "reconnect"] as const)(
     let version = 1;
     h.request.mockImplementation(async (method: string, params?: { agentId?: string }) => {
       if (method === "models.authStatus") {
-        return createAuthStatus([{ displayName: `Confirmed ${params?.agentId} ${version}` }]);
+        return createAuthStatus([
+          { displayName: `Confirmed ${params?.agentId} ${version}` },
+          ...Array.from({ length: 6 }, (_, index) => ({
+            provider: `fixture-${index}`,
+            displayName: `Fixture ${index}`,
+          })),
+        ]);
       }
       if (method === "models.list") {
         return version === 1 ? catalog : pending.promise;

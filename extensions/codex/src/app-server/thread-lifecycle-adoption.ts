@@ -8,6 +8,7 @@ import {
 } from "./auth-start-options.js";
 import { assertCodexSessionRuntimeOwnership } from "./binding-connection.js";
 import { isCodexAppServerLiveThreadClaimed } from "./client-runtime.js";
+import { CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS } from "./client-thread-closure.js";
 import { getCodexInferenceThread } from "./inference-routing.js";
 import { assertCodexThreadAcceptsDirectInput } from "./protocol-validators.js";
 import { isJsonObject, type CodexThread } from "./protocol.js";
@@ -306,13 +307,6 @@ function isCodexThreadNonRunning(
 ): status is Exclude<NonNullable<CodexThread["status"]>, { type: "active" }> {
   return status?.type === "idle" || status?.type === "notLoaded" || status?.type === "systemError";
 }
-
-/**
- * Codex emits thread/closed only after the unloaded thread's shutdown_and_wait finishes,
- * and treats shutdown as slow only after 10s (app-server thread_lifecycle.rs,
- * unload_thread_without_subscribers). Live teardown with MCP servers takes about 2s.
- */
-const CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS = 10_000;
 
 function observeCodexThreadConfiguration(
   params: CodexStartOrResumeThreadParams,

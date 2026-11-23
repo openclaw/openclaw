@@ -245,6 +245,15 @@ extension RootTabs {
         return .settings
     }
 
+    /// A pending registry read is not evidence of a fresh install.
+    static func shouldOfferFirstGatewaySetup(
+        hasConnectedOnce: Bool,
+        hasSavedGateway: Bool?,
+        hasRuntimeOrLegacyGatewayConfig: Bool) -> Bool
+    {
+        !hasConnectedOnce && hasSavedGateway == false && !hasRuntimeOrLegacyGatewayConfig
+    }
+
     static func shouldPresentQuickSetup(
         quickSetupDismissed: Bool,
         showOnboarding: Bool,

@@ -20,7 +20,7 @@ test("listAgentsForGateway resolves only representable permission labels across 
       const cfg: OpenClawConfig = {
         tools: { exec: { mode: "ask" } },
         agents: {
-          defaults: { sandbox: { mode } },
+          defaults: { sandbox: { mode }, model: { primary: "openai/gpt-6-astra" } },
           entries: {
             guarded: {},
             restricted: { tools: { exec: { mode: "allowlist" } } },
@@ -43,7 +43,10 @@ test("listAgentsForGateway distinguishes attended creation from existing-session
   await withAgentPermissionState(async () => {
     const { agents } = await listAgentsForGateway({
       tools: { exec: { mode: "deny" } },
-      agents: { entries: { main: { newSessionPermissionMode: "full" }, unconfigured: {} } },
+      agents: {
+        defaults: { model: { primary: "openai/gpt-6-astra" } },
+        entries: { main: { newSessionPermissionMode: "full" }, unconfigured: {} },
+      },
     });
     expect(agents).toEqual([
       expect.objectContaining({
@@ -99,7 +102,7 @@ test("listAgentsForGateway infers Full Access only from available unrestricted G
 
     const deploymentRestricted = await listAgentsForGateway({
       tools: { exec: { mode: "full" }, gatewayPolicy: { allow: ["read", "openclaw"] } },
-      agents: { entries: { main: {} } },
+      agents: { defaults: { model: { primary: "openai/gpt-6-astra" } }, entries: { main: {} } },
     });
     expect(deploymentRestricted.agents[0]).not.toHaveProperty("defaultPermissionMode");
   });
@@ -168,7 +171,10 @@ test("Default Full Access labels account for applicable host execution gates", a
       handler: () => ({ block: true }),
     });
     initializeGlobalHookRunner(registry);
-    const cfg = { tools: { exec: { mode: "full" as const } }, agents: { entries: { main: {} } } };
+    const cfg = {
+      tools: { exec: { mode: "full" as const } },
+      agents: { defaults: { model: { primary: "openai/gpt-6-astra" } }, entries: { main: {} } },
+    };
     expect((await listAgentsForGateway(cfg)).agents[0]?.defaultPermissionMode).toBe("full");
     registry.typedHooks[0]!.matcher = ["exec"];
     expect((await listAgentsForGateway(cfg)).agents[0]?.defaultPermissionMode).toBeUndefined();

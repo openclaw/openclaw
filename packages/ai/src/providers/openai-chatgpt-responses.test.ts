@@ -11,7 +11,8 @@ import {
   runWithAiTransportHost,
 } from "../host.js";
 import { responsesPromptObserver, type ResponsesPromptObservation } from "../internal/openai.js";
-import { cleanupSessionResources } from "../session-resources.js";
+import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
+import { claimConversationProviderState, cleanupSessionResources } from "../session-resources.js";
 import { createNodeLlmRuntime } from "../stream.js";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { Context, Model, SimpleStreamOptions } from "../types.js";
@@ -630,6 +631,145 @@ describe("streamOpenAICodexResponses transport", () => {
     ).toMatchObject({ reasoning: { effort: "medium", summary: null } });
   });
 
+  it("sends system prompt in input and omits instructions when cachesInstructions is false", async () => {
+    const payload = await capturePayload(
+      {
+        systemPrompt: "You are an autonomous agent.",
+        messages: [{ role: "user", content: "hello", timestamp: 1 }],
+      },
+      {},
+      {
+        ...model,
+        id: "gpt-6.2-sol",
+        reasoning: true,
+        compat: { ...model.compat, cachesInstructions: false },
+      },
+    );
+    expect(payload).not.toHaveProperty("instructions");
+    expect(payload.input).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "message",
+          role: "developer",
+          content: [{ type: "input_text", text: "You are an autonomous agent." }],
+        }),
+      ]),
+    );
+  });
+
+  it("keeps system prompt in instructions when cachesInstructions is not false", async () => {
+    const payload = await capturePayload(
+      {
+        systemPrompt: "You are an autonomous agent.",
+        messages: [{ role: "user", content: "hello", timestamp: 1 }],
+      },
+      {},
+      {
+        ...model,
+        id: "gpt-6.1-sol",
+        reasoning: true,
+      },
+    );
+    expect(payload.instructions).toBe("You are an autonomous agent.");
+    expect(payload.input).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "message",
+          role: "developer",
+        }),
+      ]),
+    );
+  });
+
+  it("reuses websocket continuation across turns when cachesInstructions is false", async () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    installWebSocket((socket, rawPayload) => {
+      payloads.push(JSON.parse(rawPayload) as Record<string, unknown>);
+      message(socket, completion(`resp_${payloads.length}`));
+    });
+
+    const customModel = {
+      ...model,
+      id: "gpt-6.2-sol",
+      reasoning: true,
+      compat: { ...model.compat, cachesInstructions: false },
+    };
+    const sessionId = "session-cached-instructions";
+    const options = {
+      transport: "websocket-cached" as const,
+      sessionId,
+      [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
+    };
+
+    const res1 = await run(
+      options,
+      {
+        systemPrompt: "System Prompt 1",
+        messages: [{ role: "user", content: "turn 1", timestamp: 1 }],
+      },
+      customModel,
+    );
+    expect(res1.stopReason).toBe("stop");
+    expect(payloads[0]).not.toHaveProperty("instructions");
+    expect(payloads[0]).not.toHaveProperty("previous_response_id");
+    expect(payloads[0]?.input).toEqual([
+      expect.objectContaining({
+        type: "message",
+        role: "developer",
+        content: [{ type: "input_text", text: "System Prompt 1" }],
+      }),
+      expect.objectContaining({
+        type: "message",
+        role: "user",
+      }),
+    ]);
+
+    const res2 = await run(
+      options,
+      {
+        systemPrompt: "System Prompt 1",
+        messages: [
+          { role: "user", content: "turn 1", timestamp: 1 },
+          res1,
+          { role: "user", content: "turn 2", timestamp: 2 },
+        ],
+      },
+      customModel,
+    );
+    expect(res2.stopReason).toBe("stop");
+    expect(payloads[1]?.previous_response_id).toBe("resp_1");
+    expect(payloads[1]).not.toHaveProperty("instructions");
+    expect(payloads[1]?.input).toEqual([
+      expect.objectContaining({
+        type: "message",
+        role: "user",
+      }),
+    ]);
+
+    const res3 = await run(
+      options,
+      {
+        systemPrompt: "System Prompt 2 (Changed)",
+        messages: [
+          { role: "user", content: "turn 1", timestamp: 1 },
+          res1,
+          { role: "user", content: "turn 2", timestamp: 2 },
+          res2,
+          { role: "user", content: "turn 3", timestamp: 3 },
+        ],
+      },
+      customModel,
+    );
+    expect(res3.stopReason).toBe("stop");
+    expect(payloads[2]).not.toHaveProperty("previous_response_id");
+    expect(payloads[2]).not.toHaveProperty("instructions");
+    expect((payloads[2]?.input as Array<Record<string, unknown>>)?.[0]).toMatchObject({
+      type: "message",
+      role: "developer",
+      content: [{ type: "input_text", text: "System Prompt 2 (Changed)" }],
+    });
+  });
+
   it("keeps tool controls when a tool schema is usable", async () => {
     const payload = await capturePayload({
       ...context,
@@ -734,7 +874,12 @@ describe("ChatGPT Responses runtime transport ownership", () => {
     await once(server, "listening");
     vi.stubGlobal("WebSocket", WebSocket);
     const loopbackModel = createLoopbackModel(server);
-    const options = { apiKey: "opaque", sessionId, transport: "websocket-cached" as const };
+    const options = {
+      apiKey: "opaque",
+      sessionId,
+      [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
+      transport: "websocket-cached" as const,
+    };
     const registry = createApiRegistry();
     registry.registerApiProvider({
       api: "openai-chatgpt-responses",
@@ -794,6 +939,7 @@ describe("ChatGPT Responses runtime transport ownership", () => {
       await streamOpenAICodexResponses(loopbackModel, context, {
         apiKey: "opaque",
         sessionId,
+        [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
         transport: "websocket-cached",
         onPayload: (body) => {
           configureAiTransportHost({ resolveSecretSentinel: () => runtimeToken });
@@ -803,6 +949,7 @@ describe("ChatGPT Responses runtime transport ownership", () => {
       await streamOpenAICodexResponses(loopbackModel, context, {
         apiKey: "opaque",
         sessionId,
+        [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
         transport: "websocket-cached",
       }).result();
 
@@ -810,6 +957,7 @@ describe("ChatGPT Responses runtime transport ownership", () => {
       await streamOpenAICodexResponses(loopbackModel, context, {
         apiKey: "opaque",
         sessionId,
+        [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
         transport: "websocket-cached",
       }).result();
 

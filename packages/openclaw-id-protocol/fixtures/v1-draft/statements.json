@@ -614,6 +614,22 @@
       "signing_input_hex": "6f70656e636c61772f526f6f7452657365742f7631007b2262696e64696e675f736571223a332c22636c61775f6964223a223031323334353637383961626364656630313233343536373839616263646566222c226973737565645f6174223a313739333331343830302c226e65775f726f6f745f707562223a22656432353531393a30323434376530336637623333393834623163646232393661363465353336653134663539333431363035376363383236363138393964363739373265663061227d"
     },
     {
+      "name": "gateway unlinks the claw at binding 2",
+      "verifier": "unlink",
+      "statement": {
+        "v": 1,
+        "type": "ClawUnlink",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "binding_seq": 2
+        },
+        "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+        "alg": "ed25519",
+        "sig": "N0iB0NMDV5z0NuUP6YFBozgbw4CdKIlS_CtDrBbY8FUJf8w6Q9mHj1Vf8j4zRYwTK8GmuMFh0W05d6k_8nwADA"
+      },
+      "signing_input_hex": "6f70656e636c61772f436c6177556e6c696e6b2f7631007b2262696e64696e675f736571223a322c22636c61775f6964223a223031323334353637383961626364656630313233343536373839616263646566227d"
+    },
+    {
       "name": "owner invites a node",
       "verifier": "owner",
       "statement": {
@@ -1162,6 +1178,102 @@
         "sig": "x_MSlbPB1sE1sJZrjL_ZOcTFJmaHWQNVeh6YQm_vLtpQLBlnlop3rlisJsAO6nWno_AHB5aXTYA-1Tq8zI27DQ"
       },
       "expected_error": "wrong_claw"
+    },
+    {
+      "name": "unlink not signed by K_gw",
+      "verifier": "unlink",
+      "statement": {
+        "v": 1,
+        "type": "ClawUnlink",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "binding_seq": 2
+        },
+        "signer": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+        "alg": "ed25519",
+        "sig": "I2-qERH8iB1kOZ1_DDaPAAQaUabfHBBg1wrsKWGItZNUGgjiNf0RbiQebT4-6ruA4bAjglYxoOgrHZA0Q2l-DQ"
+      },
+      "expected_error": "wrong_signer"
+    },
+    {
+      "name": "unlink for another claw",
+      "verifier": "unlink",
+      "statement": {
+        "v": 1,
+        "type": "ClawUnlink",
+        "body": {
+          "claw_id": "ffffffffffffffffffffffffffffffff",
+          "binding_seq": 2
+        },
+        "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+        "alg": "ed25519",
+        "sig": "Awdw7R1Nl97m1b77Tlxp8bOX00idZ-3TWlR5aEMouTpKP_yQ9GfB6BKEYwh0GMaV6sbnlJXbNer9tcbaY6x6AQ"
+      },
+      "expected_error": "wrong_claw"
+    },
+    {
+      "name": "unlink replayed from an older binding",
+      "verifier": "unlink",
+      "statement": {
+        "v": 1,
+        "type": "ClawUnlink",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "binding_seq": 1
+        },
+        "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+        "alg": "ed25519",
+        "sig": "x8O_7G-CoAcc406iiJkvABoh0WBS5U1zroo5auTiw-vsfhfltmQIwlfEO1kOC4LywNel35UrhwEnoTwELfg2Dw"
+      },
+      "expected_error": "rollback"
+    },
+    {
+      "name": "unlink for a binding that was never published",
+      "verifier": "unlink",
+      "statement": {
+        "v": 1,
+        "type": "ClawUnlink",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "binding_seq": 3
+        },
+        "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+        "alg": "ed25519",
+        "sig": "hmUegiWqW5UBPA1aG-cSvOe11T1gs95pRnmAW6sxuyYYxNJsT1hd06fpa1pv_fMVvsvwPVY3MpgS5d4waKDOAw"
+      },
+      "expected_error": "not_yet_valid"
+    },
+    {
+      "name": "unlink from K_gw with a signature over another body",
+      "verifier": "unlink",
+      "statement": {
+        "v": 1,
+        "type": "ClawUnlink",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "binding_seq": 2
+        },
+        "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+        "alg": "ed25519",
+        "sig": "x8O_7G-CoAcc406iiJkvABoh0WBS5U1zroo5auTiw-vsfhfltmQIwlfEO1kOC4LywNel35UrhwEnoTwELfg2Dw"
+      },
+      "expected_error": "bad_signature"
+    },
+    {
+      "name": "unlink signed under another statement type",
+      "verifier": "unlink",
+      "statement": {
+        "v": 1,
+        "type": "ClawUnlink",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "binding_seq": 2
+        },
+        "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+        "alg": "ed25519",
+        "sig": "wnKO0V3IzSybKXUkPMfH03b5UnN6xo9zxGB84daH_fjyRmIe-iKfVx6J84T9r0uQ1gpa0PR-Aquq30uaYI3IDg"
+      },
+      "expected_error": "bad_signature"
     }
   ],
   "pins": [
@@ -1591,6 +1703,197 @@
       "expected": {
         "ok": false,
         "error": "root_mismatch"
+      }
+    }
+  ],
+  "unlink_pins": [
+    {
+      "name": "unlink signed by the pinned K_gw",
+      "pin": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+        "binding_seq": 2,
+        "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6"
+      },
+      "statement": {
+        "v": 1,
+        "type": "ClawUnlink",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "binding_seq": 2
+        },
+        "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+        "alg": "ed25519",
+        "sig": "N0iB0NMDV5z0NuUP6YFBozgbw4CdKIlS_CtDrBbY8FUJf8w6Q9mHj1Vf8j4zRYwTK8GmuMFh0W05d6k_8nwADA"
+      },
+      "expected": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unlink for a later binding than the pin has seen",
+      "pin": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+        "binding_seq": 2,
+        "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6"
+      },
+      "statement": {
+        "v": 1,
+        "type": "ClawUnlink",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "binding_seq": 3
+        },
+        "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+        "alg": "ed25519",
+        "sig": "hmUegiWqW5UBPA1aG-cSvOe11T1gs95pRnmAW6sxuyYYxNJsT1hd06fpa1pv_fMVvsvwPVY3MpgS5d4waKDOAw"
+      },
+      "expected": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unlink not signed by the pinned K_gw",
+      "pin": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+        "binding_seq": 2,
+        "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6"
+      },
+      "statement": {
+        "v": 1,
+        "type": "ClawUnlink",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "binding_seq": 2
+        },
+        "signer": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+        "alg": "ed25519",
+        "sig": "I2-qERH8iB1kOZ1_DDaPAAQaUabfHBBg1wrsKWGItZNUGgjiNf0RbiQebT4-6ruA4bAjglYxoOgrHZA0Q2l-DQ"
+      },
+      "expected": {
+        "ok": false,
+        "error": "wrong_signer"
+      }
+    },
+    {
+      "name": "unlink seen by a pin that never stored K_gw",
+      "pin": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+        "binding_seq": 2
+      },
+      "statement": {
+        "v": 1,
+        "type": "ClawUnlink",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "binding_seq": 2
+        },
+        "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+        "alg": "ed25519",
+        "sig": "N0iB0NMDV5z0NuUP6YFBozgbw4CdKIlS_CtDrBbY8FUJf8w6Q9mHj1Vf8j4zRYwTK8GmuMFh0W05d6k_8nwADA"
+      },
+      "expected": {
+        "ok": false,
+        "error": "wrong_signer"
+      }
+    },
+    {
+      "name": "unlink from the pinned K_gw with a bad signature",
+      "pin": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+        "binding_seq": 2,
+        "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6"
+      },
+      "statement": {
+        "v": 1,
+        "type": "ClawUnlink",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "binding_seq": 2
+        },
+        "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+        "alg": "ed25519",
+        "sig": "x8O_7G-CoAcc406iiJkvABoh0WBS5U1zroo5auTiw-vsfhfltmQIwlfEO1kOC4LywNel35UrhwEnoTwELfg2Dw"
+      },
+      "expected": {
+        "ok": false,
+        "error": "bad_signature"
+      }
+    },
+    {
+      "name": "unlink signed under another statement type",
+      "pin": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+        "binding_seq": 2,
+        "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6"
+      },
+      "statement": {
+        "v": 1,
+        "type": "ClawUnlink",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "binding_seq": 2
+        },
+        "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+        "alg": "ed25519",
+        "sig": "wnKO0V3IzSybKXUkPMfH03b5UnN6xo9zxGB84daH_fjyRmIe-iKfVx6J84T9r0uQ1gpa0PR-Aquq30uaYI3IDg"
+      },
+      "expected": {
+        "ok": false,
+        "error": "bad_signature"
+      }
+    },
+    {
+      "name": "unlink for another claw",
+      "pin": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+        "binding_seq": 2,
+        "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6"
+      },
+      "statement": {
+        "v": 1,
+        "type": "ClawUnlink",
+        "body": {
+          "claw_id": "ffffffffffffffffffffffffffffffff",
+          "binding_seq": 2
+        },
+        "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+        "alg": "ed25519",
+        "sig": "Awdw7R1Nl97m1b77Tlxp8bOX00idZ-3TWlR5aEMouTpKP_yQ9GfB6BKEYwh0GMaV6sbnlJXbNer9tcbaY6x6AQ"
+      },
+      "expected": {
+        "ok": false,
+        "error": "wrong_claw"
+      }
+    },
+    {
+      "name": "unlink for a binding older than the pin",
+      "pin": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+        "binding_seq": 2,
+        "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6"
+      },
+      "statement": {
+        "v": 1,
+        "type": "ClawUnlink",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "binding_seq": 1
+        },
+        "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+        "alg": "ed25519",
+        "sig": "x8O_7G-CoAcc406iiJkvABoh0WBS5U1zroo5auTiw-vsfhfltmQIwlfEO1kOC4LywNel35UrhwEnoTwELfg2Dw"
+      },
+      "expected": {
+        "ok": false,
+        "error": "rollback"
       }
     }
   ]

@@ -1,7 +1,11 @@
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { chatSessionListResponse, waitForTranscriptScrollIdle } from "./chat-flow.test-support.ts";
+import {
+  chatSessionListResponse,
+  waitForTranscriptScrollIdle,
+  openAiAuthor,
+} from "./chat-flow.test-support.ts";
 import { swarmSnapshot } from "./chat-swarm.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -24,6 +28,7 @@ const message = (
   runId: string | null = "review",
 ) => ({
   role,
+  ...(role === "assistant" ? openAiAuthor : {}),
   content,
   __openclaw: { id, ...(runId ? { runId } : {}) },
   timestamp,

@@ -592,6 +592,16 @@ openclaw-pending-session-create {
   width: 100%;
   contain: content;
 
+  /* WebKit paints the row's trailing margin when a native range crosses turns.
+     Keep the range intact; only its content should paint the selection. */
+  &::selection {
+    background-color: transparent;
+  }
+
+  > *::selection {
+    background-color: var(--selection-bg);
+  }
+
   /* WebKit restyles hidden parked subtrees that retain layout boxes.
      Chromium needs those boxes for timely forecast paint. */
   @supports (-webkit-nbsp-mode: space) {
@@ -636,10 +646,9 @@ openclaw-pending-session-create {
   justify-content: center;
 }
 
-.chat-virtual-sizer > .chat-history-sentinel {
+.chat-thread-inner--virtual > .chat-history-sentinel {
   position: absolute;
   z-index: 1;
-  top: 0;
   right: 0;
   left: 0;
   min-height: 1px;
@@ -2776,6 +2785,10 @@ openclaw-chat-ci-details {
 
 .agent-chat__disabled-banner--neutral {
   color: inherit;
+}
+
+.agent-chat__workspace-restore-error {
+  color: var(--warn);
 }
 
 .agent-chat__disabled-banner-icon {
