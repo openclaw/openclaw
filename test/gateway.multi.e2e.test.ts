@@ -107,7 +107,7 @@ describe("gateway multi-instance e2e", () => {
           ),
         ),
       );
-      expect(hookResults).toMatchObject([
+      expect(hookResults, JSON.stringify(hookResults)).toMatchObject([
         { status: 200, json: { ok: true } },
         { status: 200, json: { ok: true } },
       ]);

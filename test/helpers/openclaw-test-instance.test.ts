@@ -321,7 +321,8 @@ if (kind === "cli-json") {
 process.stdout.write("fake gateway attempt " + attempt + "\\n");
 if (kind === "held-ready-tree") {
   const descendant = spawn(process.execPath, ["-e", 'process.send("ready");setInterval(() => {}, 1000);'], {
-    detached: true, stdio: ["ignore", "ignore", "ignore", "ipc"],
+    // Windows escapes libuv's inner Job; POSIX retains the owning process group.
+    detached: process.platform === "win32", stdio: ["ignore", "ignore", "ignore", "ipc"],
   });
   await new Promise((resolve) => descendant.once("message", resolve));
   writeFileSync(tracePath + ".writer-pid", String(descendant.pid));
