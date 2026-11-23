@@ -645,7 +645,7 @@ describe("operator model policy on plugin completions", () => {
             ? "Plugin model completion requires its current Gateway binding."
             : expect.stringContaining(
                 source === "unbound-operator"
-                  ? "requires original Gateway authority"
+                  ? "Plugin model completion requires its current Gateway binding."
                   : "cannot use this model",
               ),
       );

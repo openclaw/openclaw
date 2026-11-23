@@ -185,6 +185,10 @@
   font-size: var(--control-ui-text-xs);
 }
 
+.agent-channel-read-error {
+  overflow-wrap: anywhere;
+}
+
 .agent-config-error {
   display: flex;
   flex-wrap: wrap;

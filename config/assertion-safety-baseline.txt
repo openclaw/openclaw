@@ -798,7 +798,7 @@ extensions/tlon/src/monitor/authorization.ts	1
 extensions/tlon/src/monitor/discovery.ts	1
 extensions/tlon/src/monitor/history.ts	2
 extensions/tlon/src/monitor/index.ts	5
-extensions/tlon/src/settings.ts	7
+extensions/tlon/src/settings.ts	5
 extensions/tlon/src/setup-core.ts	3
 extensions/tlon/src/tlon-api.ts	2
 extensions/tlon/src/types.ts	1

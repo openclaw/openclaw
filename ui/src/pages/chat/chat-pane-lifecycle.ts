@@ -577,7 +577,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
 
   override synchronizeInputs(changes: ChatPaneInputChanges) {
     this.captureArchivePresentationFocus();
-    if (changes.sessionKey && this.state) {
+    if ((changes.sessionKey || changes.catalogProfileRelation) && this.state) {
       const catalogKey = parseCatalogSessionKey(this.sessionKey);
       const nextSessionKey = catalogKey
         ? this.sessionKey
@@ -596,8 +596,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         // after its transcript commit in deferSessionHydrationUntilTranscript.
         this.sessionDiscussion.forgetState(nextSessionKey);
       }
-      if (catalogKey && this.catalogRequestedSessionKey !== this.sessionKey) {
-        this.catalogLoadGeneration += 1;
+      const catalogChanged = this.catalogRequestedSessionKey !== this.sessionKey;
+      if (catalogKey && (catalogChanged || changes.catalogProfileRelation)) {
         this.openCatalogSession(catalogKey, this.state);
       } else if (nextSessionKey) {
         // A retained pane owns one conversation for its lifetime. Only its

@@ -689,6 +689,7 @@ export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositi
       </Show>
       {/* Keep the automation slot after Progress while its inventory revalidates. */}
       <DetailsAutomations props={props.props} presented={props.presented} desktop />
+      <p class="chat-details-desktop-empty">{t("chat.sessionDetails.empty")}</p>
     </>
   );
 }
