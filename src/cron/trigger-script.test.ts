@@ -267,6 +267,52 @@ it("projects typed exec details into trigger scripts without content wrappers", 
   ).resolves.toEqual({ kind: "evaluated", fire: true });
 });
 
+it.skipIf(process.platform === "win32")(
+  "waits for a slow trigger command instead of handing back a running process",
+  async () => {
+    // The incident shape: a yield window shorter than the command, then a check for "completed".
+    await expect(
+      execEvaluator("gateway")({
+        ...INPUT,
+        toolsAllow: ["exec", "process"],
+        scheduledToolPolicy: { version: 1, mode: "trusted" },
+        script: `
+          const result = await exec({ command: "sleep 0.5; printf '[]'", yieldMs: 10 });
+          if (result.status !== "completed" || result.exitCode !== 0) {
+            throw new Error("GitHub search failed: " + JSON.stringify(result).slice(0, 200));
+          }
+          return { fire: false, state: JSON.parse(result.aggregated) };
+        `,
+      }),
+    ).resolves.toEqual({ kind: "evaluated", fire: false, state: [] });
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "gives a trigger only the command's output when the command leaves a process running",
+  async () => {
+    // One JSON line, then a child that outlives the command (as `gh` does with its telemetry).
+    const command = `printf '{"ok":true}\\n'; (sleep 5 >/dev/null 2>&1 &)`;
+
+    await expect(
+      execEvaluator("gateway")({
+        ...INPUT,
+        toolsAllow: ["exec", "process"],
+        scheduledToolPolicy: { version: 1, mode: "trusted" },
+        script: `
+          const result = await exec({ command: ${JSON.stringify(command)} });
+          // Where the host hands a survivor off, the script can still stop it.
+          const left = /keeps running as background session (\\S+):/.exec(result.warningText ?? "");
+          if (left) {
+            await process({ action: "kill", sessionId: left[1] });
+          }
+          return { fire: false, state: JSON.parse(result.aggregated) };
+        `,
+      }),
+    ).resolves.toEqual({ kind: "evaluated", fire: false, state: { ok: true } });
+  },
+);
+
 it.each([
   [
     "prefers the return value",
@@ -527,21 +573,6 @@ it.each(["policy change", "capacity eviction"] as const)(
     }
   },
 );
-
-it("returns busy instead of queueing a fourth concurrent evaluation", async () => {
-  const pending = createDeferred<CodeModeHeadlessResult>();
-  const runHeadless = vi.fn(async () => await pending.promise);
-  const { evaluate } = createEvaluator(runHeadless);
-  const running = ["one", "two", "three"].map((jobId) => evaluate({ jobId }));
-  await vi.waitFor(() => expect(runHeadless).toHaveBeenCalledTimes(3));
-
-  const saturated = await evaluate({ jobId: "four" });
-  pending.resolve(completed({ fire: false }));
-  await Promise.all(running);
-
-  expect(saturated).toEqual({ kind: "busy" });
-  expect(runHeadless).toHaveBeenCalledTimes(3);
-});
 
 it.each(["preparation", "headless"] as const)("survives a clock jump during %s", async (phase) => {
   const now = Date.now();

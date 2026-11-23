@@ -459,11 +459,11 @@ async function deleteGatewayAgentAttempt(
           );
           const legacyPlan =
             workspaceCleanupPaths.length > 0
-              ? prepareLegacyWorkspaceStateReset(deleteResult.workspaceDir)
+              ? await prepareLegacyWorkspaceStateReset(deleteResult.workspaceDir)
               : undefined;
           const statePlan =
             workspaceCleanupPaths.length > 0
-              ? prepareWorkspaceStateDeletion(deleteResult.workspaceDir)
+              ? await prepareWorkspaceStateDeletion(deleteResult.workspaceDir)
               : undefined;
           const markCleanupPathDone = async (
             cleanupPath: AgentDeleteCleanupPath,

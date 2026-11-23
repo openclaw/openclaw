@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { recordGatewaySessionRunFailure } from "../../../sessions/session-run-error.js";
+import { onInternalSessionTranscriptUpdate } from "../../../sessions/transcript-events.js";
 import { visibleCompletion } from "./subagent-announce-fixtures.test-support.js";
 import {
   registryRuntimeMock,
@@ -18,6 +20,13 @@ const { maybeWakeRequesterAfterAllChildrenSettled } =
   await import("./subagent-announce.requester-settle-wake.js");
 const wake = (overrides?: Parameters<typeof wakeParams>[0]) =>
   maybeWakeRequesterAfterAllChildrenSettled(wakeParams(overrides));
+
+// mock-isolation: Policy fixtures use an in-memory session map; the benchmark proves real notice storage.
+vi.mock("../../../sessions/session-run-error.js", () => ({
+  recordGatewaySessionRunFailure: vi.fn(async () => {}),
+}));
+
+beforeEach(() => vi.mocked(recordGatewaySessionRunFailure).mockReset());
 
 describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
   type PrivateOptions = Partial<Record<"mixed" | "yielded" | "single" | "marked", boolean>>;
@@ -59,6 +68,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     ${"reset lifecycle"}     | ${false} | ${true}  | ${true}  | ${true}  | ${true}  | ${{ sessionId: "sess-main", lifecycleRevision: "rev-2" }}
   `("preserves the admitted reply policy: $name", async (scenario: Scenario) => {
     const { single, yielded, current, marked = true } = scenario;
+    const onUpdate = vi.fn();
+    onTestFinished(onInternalSessionTranscriptUpdate(onUpdate));
     if (current) {
       setSessionStore({ [REQUESTER]: current });
     }
@@ -66,22 +77,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     if (scenario.frozen) {
       children[0]!.requesterSettleWake!.batchRunIds = ["run-b"];
     }
-    expect(await wake()).toBe(!current);
-    if (current) {
-      expect(deliverSpy).not.toHaveBeenCalled();
-      expect(completeBatchSpy).toHaveBeenCalledWith(
-        ["run-b"],
-        expect.anything(),
-        expect.objectContaining({
-          delivered: false,
-          reason: "completion_handoff_unavailable",
-          disposition: "intentional_non_delivery",
-        }),
-      );
-      return;
-    }
+    // The chat key is the address: a reset or a replacement session still receives the results.
+    expect(await wake()).toBe(true);
     const call = deliveredCallArg();
-    expect(call.completionRequesterSessionId).toBe("sess-main");
+    expect(recordGatewaySessionRunFailure).not.toHaveBeenCalled();
+    expect(onUpdate).not.toHaveBeenCalled();
     expect(call.requireVisibleReply).toBeUndefined();
     expect(call.completionTarget).toBe(yielded && marked ? undefined : "parent");
     if (yielded && single) {

@@ -100,34 +100,27 @@ export function createUsageControls(
       start.setDate(start.getDate() - (days - 1));
     }
     return {
-      start: formatIsoDate(start, props.filters.timeZone),
-      end: formatIsoDate(end, props.filters.timeZone),
+      startDate: formatIsoDate(start, props.filters.timeZone),
+      endDate: formatIsoDate(end, props.filters.timeZone),
     };
   };
 
-  const applyPreset = (days: number) => {
-    const range = presetRange(days);
-    props.callbacks.filters.onDatesChange({ startDate: range.start });
-    props.callbacks.filters.onDatesChange({ endDate: range.end });
-  };
   const selectedPreset = createMemo(() => {
     if (props.filters.startDate === "1970-01-01") {
       return "all";
     }
     const match = datePresets.find((preset) => {
       const range = presetRange(preset.days);
-      return props.filters.startDate === range.start && props.filters.endDate === range.end;
+      return props.filters.startDate === range.startDate && props.filters.endDate === range.endDate;
     });
     return match ? String(match.days) : "";
   });
   const applyPresetKey = (key: string) =>
-    key === "all" ? applyAllRange() : applyPreset(Number(key));
-  const applyAllRange = () => {
-    props.callbacks.filters.onDatesChange({ startDate: "1970-01-01" });
-    props.callbacks.filters.onDatesChange({
-      endDate: formatIsoDate(new Date(), props.filters.timeZone),
-    });
-  };
+    props.callbacks.filters.onDatesChange(
+      key === "all"
+        ? { startDate: "1970-01-01", endDate: formatIsoDate(new Date(), props.filters.timeZone) }
+        : presetRange(Number(key)),
+    );
   // Everything behind the phone filter button; presets and metric stay on the page.
   const filtersActive = () =>
     selectedPreset() === "" || props.filters.creatorKey !== null || hasDraftQuery() || hasQuery();
@@ -235,7 +228,7 @@ export function createUsageControls(
         <UsageQueryFilter
           filterKey={filterKey}
           label={t(`usage.filters.${filterKey}`)}
-          options={filterOptions()[filterKey]}
+          options={props.data.filterOptions?.[filterKey]}
           counts={
             props.data.readChartSnapshot("filterOptions")?.overview?.filterOptionCounts?.[filterKey]
           }
@@ -268,7 +261,6 @@ export function createUsageControls(
   const hasAppliedFilters = () =>
     queryTerms().length > 0 ||
     props.filters.selectedDays.length > 0 ||
-    props.filters.selectedHours.length > 0 ||
     props.filters.selectedSessions.length > 0;
   const showPhoneCount = () =>
     ctx.hasOverviewData() && (hasQuery() || totalSessions() !== ctx.displaySessionCount());
@@ -282,18 +274,16 @@ export function createUsageControls(
             return (
               <span class="usage-query-chip">
                 {label}
-                <openclaw-tooltip prop:content={removeLabel()}>
-                  <button
-                    aria-label={removeLabel()}
-                    onClick={() =>
-                      props.callbacks.filters.onQueryDraftChange(
-                        removeQueryToken(props.filters.queryDraft, label),
-                      )
-                    }
-                  >
-                    <Icon name="x" />
-                  </button>
-                </openclaw-tooltip>
+                <button
+                  aria-label={removeLabel()}
+                  onClick={() =>
+                    props.callbacks.filters.onQueryDraftChange(
+                      removeQueryToken(props.filters.queryDraft, label),
+                    )
+                  }
+                >
+                  <Icon name="x" />
+                </button>
               </span>
             );
           }}

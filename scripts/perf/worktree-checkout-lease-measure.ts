@@ -8,9 +8,14 @@
  *   --base-checkout-file <checkout.ts> --base-lease-file <state-lease.ts> [--pairs 5]
  * Five serial AB/BA pairs followed by A/A, fresh clone/process per sample.
  * --arm candidate --profile runs a separate phase-scoped CPU profile.
- * Acceptance: foreground lease wait <1s during the real consolidation command,
- * unchanged HEAD/object availability, no >=20% owner CPU/allocation regression.
- * Node 26 V8 allocation counters and macOS time -l are required. Copies, startup,
+ * --untraced runs maintenance only, with two eligible packs and all other inputs kept.
+ * It uses direct Git, no marker/command wrappers, and requires complete retirement.
+ * Allocation is main-isolate only; process CPU includes workers but excludes Git children.
+ * Default mode is instrumented contention: Git receipt wrappers and macOS time -l
+ * measure child CPU and foreground admission during consolidation (<1s target).
+ * Untraced mode requires exactly two retired inputs, one replacement, unchanged
+ * HEAD and all original objects; report any >=20% CPU/allocation regression.
+ * Node 26 V8 allocation counters are required in both modes. Copies, startup,
  * fixture registration and verification are outside measurement. Disk caches are
  * warm; this is owner-level APFS proof, not a cold Gateway/btrfs/agent-DB claim.
  * The owner never reads agent databases; a padded 35 GiB DB adds no exercised work.
@@ -42,6 +47,7 @@ const { values } = parseArgs({
     "pack-kib": { type: "string", default: "512" },
     arm: { type: "string" },
     profile: { type: "boolean" },
+    untraced: { type: "boolean" },
   },
 });
 const actualGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
@@ -165,6 +171,9 @@ if (values.prepare) {
             "--arm",
             arm,
           ];
+          if (values.untraced) {
+            args.push("--untraced");
+          }
           if (arm === "base" || control) {
             args.push(
               "--base-file",
@@ -201,28 +210,49 @@ if (values.prepare) {
       oids: string[];
     } = JSON.parse(await fs.readFile(path.join(clone, ".git", "fixture.json"), "utf8"));
     const expectedHead = git(clone, ["rev-parse", "HEAD"]);
+    const packDirectory = path.join(clone, ".git", "objects", "pack");
+    const eligiblePacks = values.untraced
+      ? (await fs.readdir(packDirectory))
+          .filter((name) => name.endsWith(".promisor"))
+          .toSorted()
+          .slice(0, 2)
+          .map((name) => name.slice(0, -9))
+      : [];
+    if (values.untraced) {
+      assert.equal(eligiblePacks.length, 2);
+      for (const name of await fs.readdir(packDirectory)) {
+        if (name.endsWith(".promisor") && !eligiblePacks.includes(name.slice(0, -9))) {
+          await fs.writeFile(
+            path.join(packDirectory, `${name.slice(0, -9)}.keep`),
+            "bounded timing fixture\n",
+          );
+        }
+      }
+    }
     const metrics = path.join(output, "git-metrics"),
       bin = path.join(output, "bin");
-    await fs.mkdir(metrics);
-    await fs.mkdir(bin);
     const marker = path.join(metrics, "pack-started");
     const completed = path.join(metrics, "pack-completed");
-    await fs.writeFile(marker, "");
-    await fs.writeFile(completed, "");
-    await fs.writeFile(
-      path.join(bin, "git"),
-      `#!/bin/sh\nreceipt=${shellQuote(metrics)}/git-$$\n` +
-        `printf '%s\\n' "$*" > "$receipt.argv"\n` +
-        `case "$*" in *alias.openclaw-consolidate=*) printf started > ${shellQuote(marker)} ;; esac\n` +
-        `if [ "$OPENCLAW_PERF_GIT_TIMED" = 1 ]; then exec ${shellQuote(actualGit)} "$@"; fi\n` +
-        `export OPENCLAW_PERF_GIT_TIMED=1\n/usr/bin/time -l -o "$receipt.time" ${shellQuote(actualGit)} "$@"\nresult=$?\n` +
-        `case "$*" in *alias.openclaw-consolidate=*) printf completed > ${shellQuote(completed)} ;; esac\nexit "$result"\n`,
-      { mode: 0o755 },
-    );
+    if (!values.untraced) {
+      await fs.mkdir(metrics);
+      await fs.mkdir(bin);
+      await fs.writeFile(marker, "");
+      await fs.writeFile(completed, "");
+      await fs.writeFile(
+        path.join(bin, "git"),
+        `#!/bin/sh\nreceipt=${shellQuote(metrics)}/git-$$\n` +
+          `printf '%s\\n' "$*" > "$receipt.argv"\n` +
+          `case "$*" in *alias.openclaw-consolidate=*) printf started > ${shellQuote(marker)} ;; esac\n` +
+          `if [ "$OPENCLAW_PERF_GIT_TIMED" = 1 ]; then exec ${shellQuote(actualGit)} "$@"; fi\n` +
+          `export OPENCLAW_PERF_GIT_TIMED=1\n/usr/bin/time -l -o "$receipt.time" ${shellQuote(actualGit)} "$@"\nresult=$?\n` +
+          `case "$*" in *alias.openclaw-consolidate=*) printf completed > ${shellQuote(completed)} ;; esac\nexit "$result"\n`,
+        { mode: 0o755 },
+      );
+    }
     Object.assign(process.env, gitEnv, {
       OPENCLAW_STATE_DIR: path.join(output, "state"),
       OPENCLAW_HOME: output,
-      PATH: `${bin}:${process.env.PATH}`,
+      ...(values.untraced ? {} : { PATH: `${bin}:${process.env.PATH}` }),
     });
     const owners = [
       ["src/agents/worktrees/git-maintenance.ts", baseline],
@@ -253,6 +283,13 @@ if (values.prepare) {
     const { createWorktreeGitMaintenance } =
       await import("../../src/agents/worktrees/git-maintenance.js");
     const { withProjectCheckoutLifecycle } = await import("../../src/projects/project-checkout.js");
+    const { captureOpenClawStateWorkerContext } =
+      await import("../../src/state/openclaw-state-worker-context.js");
+    // Retain the old owner's env input when replaying an immutable baseline module.
+    const checkoutOptions = {
+      context: captureOpenClawStateWorkerContext({ env: process.env }),
+      env: process.env,
+    };
     const { insertRegistryWorktree } = await import("../../src/agents/worktrees/registry.js");
     const { WorktreeGcProgress } = await import("../../src/agents/worktrees/gc-progress.js");
     const { requireGit } = await import("../../src/agents/worktrees/git.js");
@@ -273,7 +310,8 @@ if (values.prepare) {
       lastActiveAt: 1,
     });
     // Warm state admission independently of the measured owner operation.
-    await withProjectCheckoutLifecycle(clone, { env: process.env }, async () => {});
+    await withProjectCheckoutLifecycle(clone, checkoutOptions, async () => {});
+    assert(!(values.untraced && values.profile), "Untraced measurement cannot attach an inspector");
     const profiler = values.profile ? new Session() : undefined;
     profiler?.connect();
     if (profiler) {
@@ -288,41 +326,51 @@ if (values.prepare) {
     let packStarted = false;
     let acquiredDuringConsolidation = false;
     // Watch the file itself: macOS directory FSEvents can coalesce past a short pass.
-    const observer = watch(marker, () => {
-      if (packStarted || readFileSync(marker, "utf8") !== "started") {
-        return;
-      }
-      packStarted = true;
-      assert.equal(
-        readFileSync(completed, "utf8"),
-        "",
-        "Foreground must request during consolidation",
-      );
-      requestedAt = performance.now();
-      foreground = withProjectCheckoutLifecycle(
-        clone,
-        { env: process.env, signal: controller.signal, waitMs: 120_000 },
-        async (lease) => {
-          waitMs = performance.now() - requestedAt;
-          acquiredDuringConsolidation = readFileSync(completed, "utf8") === "";
-          await requireGit(
-            clone,
-            [
-              "worktree",
-              "add",
-              "--no-checkout",
-              "--detach",
-              path.join(output, "registered"),
-              expectedHead,
-            ],
-            { signal: lease.signal, beforeRun: () => lease.assertCurrent() },
+    const observer = values.untraced
+      ? undefined
+      : watch(marker, () => {
+          if (packStarted || readFileSync(marker, "utf8") !== "started") {
+            return;
+          }
+          packStarted = true;
+          assert.equal(
+            readFileSync(completed, "utf8"),
+            "",
+            "Foreground must request during consolidation",
           );
-        },
-      ).then(() => {
-        foregroundMs = performance.now() - requestedAt;
-      });
-      void foreground.catch(() => {});
-    });
+          requestedAt = performance.now();
+          foreground = withProjectCheckoutLifecycle(
+            clone,
+            { ...checkoutOptions, signal: controller.signal, waitMs: 120_000 },
+            async (lease) => {
+              waitMs = performance.now() - requestedAt;
+              acquiredDuringConsolidation = readFileSync(completed, "utf8") === "";
+              await requireGit(
+                clone,
+                [
+                  "worktree",
+                  "add",
+                  "--no-checkout",
+                  "--detach",
+                  path.join(output, "registered"),
+                  expectedHead,
+                ],
+                {
+                  signal: lease.signal,
+                  beforeRun: () => lease.assertCurrent(),
+                  startRun: async <T>(run: () => T): Promise<Awaited<T>> => {
+                    await lease.assertOwned();
+                    lease.assertCurrent();
+                    return await run();
+                  },
+                },
+              );
+            },
+          ).then(() => {
+            foregroundMs = performance.now() - requestedAt;
+          });
+          void foreground.catch(() => {});
+        });
     const progress = new WorktreeGcProgress();
     const beforeCpu = process.cpuUsage(),
       beforeThread = process.threadCpuUsage();
@@ -338,21 +386,35 @@ if (values.prepare) {
         0,
         "Maintenance must preserve a healthy repository",
       );
-      assert(
-        foreground && packStarted,
-        "A real consolidation launch must trigger the foreground request",
-      );
-      await foreground;
+      if (!values.untraced) {
+        assert(
+          foreground && packStarted,
+          "A real consolidation launch must trigger the foreground request",
+        );
+        await foreground;
+      }
       const wallMs = performance.now() - started;
       const cpu = process.cpuUsage(beforeCpu),
         thread = process.threadCpuUsage(beforeThread);
       const allocatedBytes = getHeapStatistics().total_allocated_bytes - beforeAllocation;
-      observer.close();
+      observer?.close();
       if (profiler) {
         const { profile } = await profiler.post("Profiler.stop");
         await fs.writeFile(path.join(output, "maintenance.cpuprofile"), JSON.stringify(profile));
       }
-      assert.equal(git(path.join(output, "registered"), ["rev-parse", "HEAD"]), expectedHead);
+      assert.equal(
+        git(values.untraced ? clone : path.join(output, "registered"), ["rev-parse", "HEAD"]),
+        expectedHead,
+      );
+      if (values.untraced) {
+        const remaining = await fs.readdir(packDirectory);
+        assert(
+          eligiblePacks.every((name) => !remaining.includes(`${name}.pack`)),
+          "Both fixed-work inputs must retire completely",
+        );
+        assert.equal(remaining.filter((name) => name.endsWith(".pack")).length, fixture.packs);
+        assert.equal(progress.result.packsRemoved, 1);
+      }
       const objects = git(
         clone,
         ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
@@ -362,7 +424,7 @@ if (values.prepare) {
       let gitCpuMs = 0,
         gitPeakRssBytes = 0,
         gitCommands = 0;
-      for (const name of await fs.readdir(metrics)) {
+      for (const name of values.untraced ? [] : await fs.readdir(metrics)) {
         if (name.endsWith(".argv")) {
           gitCommands++;
           assert(
@@ -382,22 +444,20 @@ if (values.prepare) {
       }
       const row = {
         arm: values.arm,
+        method: values.untraced ? "untraced-maintenance-only" : "instrumented-contention",
+        eligibleInputPacks: values.untraced ? eligiblePacks.length : fixture.packs,
         baseline: Boolean(baseline),
         ownerSha256: ownerSha256.digest("hex"),
         node: process.version,
         ...fixture,
         oids: undefined,
-        waitMs,
-        acquiredDuringConsolidation,
-        foregroundMs,
+        ...(values.untraced ? {} : { waitMs, acquiredDuringConsolidation, foregroundMs }),
         maintenanceMs,
         wallMs,
         processCpuMs: (cpu.user + cpu.system) / 1000,
         threadCpuMs: (thread.user + thread.system) / 1000,
-        allocatedBytes,
-        gitCpuMs,
-        gitPeakRssBytes,
-        gitCommands,
+        mainAllocatedBytes: allocatedBytes,
+        ...(values.untraced ? {} : { gitCpuMs, gitPeakRssBytes, gitCommands }),
         progress: progress.result,
         loadBefore,
         loadAfter: loadavg(),
@@ -405,7 +465,7 @@ if (values.prepare) {
       await fs.writeFile(path.join(output, "result.json"), JSON.stringify(row, null, 2));
       console.log(JSON.stringify(row));
     } finally {
-      observer.close();
+      observer?.close();
       controller.abort(new Error("Benchmark finished"));
       await Promise.allSettled([foreground]);
       await drainGlobalSingletonLifecycleState();

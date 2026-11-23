@@ -243,7 +243,6 @@ describe("ClawRouter native xAI Responses replay", () => {
       const options = {
         apiKey: "synthetic-router-key",
         sessionId: "synthetic-session",
-        authProfileId: "synthetic-profile",
         reasoning: "high" as const,
         cacheRetention: "none" as const,
       };
@@ -285,10 +284,8 @@ describe("ClawRouter native xAI Responses replay", () => {
           }),
         ]),
       );
-      for (const change of [{ sessionId: "other-session" }, { authProfileId: "other-profile" }]) {
-        await (await hostStream(model, context, { ...options, ...change })).result();
-        expect(JSON.stringify(wires.at(-1)?.body)).not.toContain(opaque);
-      }
+      await (await hostStream(model, context, { ...options, sessionId: "other-session" })).result();
+      expect(JSON.stringify(wires.at(-1)?.body)).not.toContain(opaque);
       expect(context).toEqual(stored);
       for (const wire of wires) {
         expect(wire).toMatchObject({

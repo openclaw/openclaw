@@ -7,7 +7,10 @@ import {
   migrateLegacySessionEntryState,
   normalizePersistedSessionEntryShape,
 } from "../commands/doctor/shared/session-entry-shape.js";
-import { hasLegacySessionProviderState } from "../config/sessions/session-entry-state-format.js";
+import {
+  hasLegacySessionProviderState,
+  isCanonicalSessionDeliveryState,
+} from "../config/sessions/session-entry-state-format.js";
 import {
   ensureSessionStorePromptBlobsForPersistence,
   hydrateSessionStoreSkillPromptRefs,
@@ -30,7 +33,6 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
 import {
   deliveryContextFromChannelRoute,
-  isCanonicalSessionDeliveryState,
   isInternalRouteContext,
   mergeDeliveryContext,
   mergeExternalDeliveryContextOverInternalRoute,

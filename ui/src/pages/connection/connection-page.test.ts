@@ -612,6 +612,7 @@ it("swaps the connection action slot in place while the draft differs", async ()
       button.textContent?.trim(),
     );
   expect(labels()).toEqual(["Reconnect"]);
+  expect(page.textContent).not.toContain("Reconnect to the current Gateway to try again.");
   expect(page.querySelector(".connection-actions .btn.primary")).toBeNull();
   editInput(page, "Gateway secret", "draft-token");
   await waitForPage(() => expect(labels()).toEqual(["Discard changes", "Apply and reconnect"]));

@@ -20,13 +20,13 @@ import { applyGatewayToolPolicy } from "../agents/gateway-tool-policy.js";
 import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import { createOpenClawToolsAsync } from "../agents/openclaw-tools.js";
 import {
-  applySwarmCollectorToolContract,
   createSwarmCollectorWriteAuthority,
   resolveSwarmCollectorToolContext,
 } from "../agents/openclaw-tools.swarm.js";
 import { resolveSandboxRuntimeStatusAsync } from "../agents/sandbox/runtime-status.js";
 import { createScheduledMessageInvocationAdmission } from "../agents/scheduled-message-invocation.js";
 import { resolveScheduledToolCallerContext } from "../agents/scheduled-tool-policy.js";
+import { applySwarmCollectorToolContract } from "../agents/subagents/swarm/swarm-collector-capability.js";
 import { resolveCoreToolFactoryFamily } from "../agents/tool-catalog.js";
 import { buildDeclaredToolAllowlistContext } from "../agents/tool-policy-declared-context.js";
 import { filterToolsByPolicy } from "../agents/tool-policy-match.js";
@@ -136,10 +136,8 @@ export async function resolveGatewayScopedTools(
   },
   assertPreparationCurrent?: () => void,
 ) {
-  const { assertCurrent, assertInvocationCurrent } = captureGatewayToolResolutionAuthority(
-    params,
-    assertPreparationCurrent,
-  );
+  const { assertCurrent, assertInvocationCurrent, prepareHostFileMutation } =
+    captureGatewayToolResolutionAuthority(params, assertPreparationCurrent);
   assertCurrent();
   const runtimePolicySessionKey = params.runtimePolicySessionKey?.trim() || params.sessionKey;
   const sessionAgentId = resolveSessionAgentIds({
@@ -209,7 +207,7 @@ export async function resolveGatewayScopedTools(
     agentProviderPolicy,
     profilePolicy,
     providerProfilePolicy,
-    gatewayConfigReadAllowed,
+    gatewayManagementActionsAllowed,
   } = configuredToolPolicies;
   const policyAgentId = resolvedPolicyAgentId ?? runtimePolicyAgentId;
   const senderId = params.channelContext?.sender?.id;
@@ -222,10 +220,9 @@ export async function resolveGatewayScopedTools(
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
   const completionHandoff =
     stableSessionSurface && requesterPolicies.requesterPolicySource === "completion-handoff";
-  const sessionPermissionPolicy =
-    requesterPolicies.inheritedToolPolicySource === "sender"
-      ? params.sessionPermissionPolicy
-      : undefined;
+  // The Gateway runs these tools, so it enforces the session's permission mode for every caller,
+  // on every runtime; a runtime's own sandbox only covers that runtime's own tools.
+  const sessionPermissionPolicy = params.sessionPermissionPolicy;
   const sandboxRuntime = await resolveSandboxRuntimeStatusAsync({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
@@ -274,7 +271,7 @@ export async function resolveGatewayScopedTools(
   ];
   // HTTP callers start with additional surface denies because they cross auth only.
   const workspaceDir =
-    (requesterPolicies.inheritedToolPolicySource === "sender"
+    (sessionPermissionPolicy || requesterPolicies.inheritedToolPolicySource === "sender"
       ? params.preparedSessionWorkspaceDir?.trim()
       : undefined) ||
     params.workspaceDir?.trim() ||
@@ -343,6 +340,7 @@ export async function resolveGatewayScopedTools(
   };
   const swarmCollectorContext = resolveSwarmCollectorToolContext(swarmCollectorAdmission);
   const commonToolOptions = () => ({
+    prepareHostFileMutation,
     requesterOrigin: params.requesterOrigin,
     operatorProfileId: params.operatorProfileId,
     conversationId: params.conversationId,
@@ -380,11 +378,16 @@ export async function resolveGatewayScopedTools(
     agentId: policyAgentId,
     model: { provider: params.modelProvider, id: params.modelId },
   });
+  let messageToolAvailable = true;
   const openClawToolOptions: Parameters<typeof createOpenClawToolsAsync>[0] = {
     ...commonToolOptions(),
+    retainUnavailableMessageTool: true,
+    onMessageToolAvailability: (available) => {
+      messageToolAvailable = available;
+    },
     computerExecutionId: params.admittedRunContext?.operationalRunInstance.instanceId,
     sessionPortalTarget,
-    gatewayConfigReadAllowed,
+    gatewayManagementActionsAllowed,
     requesterIsSubagent: subagentPolicy !== undefined,
     agentSessionKey: params.sessionKey,
     messageToolTurnCapability:
@@ -415,6 +418,7 @@ export async function resolveGatewayScopedTools(
         }
       : {}),
     execSession: params.execSession,
+    sessionProjectMoveEligible: params.sessionProjectMoveEligible,
     execOverrides: { ...params.execOverrides, ...delegatedExecPolicy },
     // Exported MCP tools do not certify the client's effective execution policy.
     // Explicit OpenClaw Full Access and standing delegation grants remain independent.
@@ -626,6 +630,9 @@ export async function resolveGatewayScopedTools(
     workspaceDir,
     toolDenylist: catalogDenylist,
   });
+  // A turn that grants no tools cannot make any configured allowlist entry available, so
+  // skip the unknown-entry analysis instead of warning (or caching a warning) for it.
+  const toolLessTurn = Array.isArray(params.toolsAllow) && params.toolsAllow.length === 0;
   function filterGatewayToolPolicies(
     config: OpenClawConfig,
     onFilter?: Parameters<typeof applyToolPolicyPipeline>[0]["onFilter"],
@@ -652,7 +659,9 @@ export async function resolveGatewayScopedTools(
           groupPolicy,
           senderPolicy,
           agentId: policyAgentId,
-        }),
+        }).map((step) =>
+          toolLessTurn ? Object.assign(step, { stripPluginOnlyAllowlist: false }) : step,
+        ),
         { policy: sandboxPolicy, label: "sandbox tools.allow" },
         { policy: subagentPolicy, label: "subagent tools.allow" },
         {
@@ -722,9 +731,12 @@ export async function resolveGatewayScopedTools(
     nativeCapture,
   );
 
+  const permissionTools = applyToolAvailabilityDescriptions(tools);
   return {
     agentId: sessionAgentId,
-    tools: applyToolAvailabilityDescriptions(tools),
+    tools: permissionTools.filter((tool) => messageToolAvailable || tool.name !== "message"),
+    // Only route omission needs a separate candidate surface for MCP grant/schema capture.
+    ...(messageToolAvailable ? {} : { permissionTools }),
     workspaceDir,
     // Only the MCP owner knows which tools survived its grant and schema gates.
     captureFinalCronCreatorTools: cronCreatorToolAllowlistCaptureRef

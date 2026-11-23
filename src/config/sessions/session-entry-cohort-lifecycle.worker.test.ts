@@ -75,11 +75,11 @@ async function startGatedRead(scope: SessionAccessScope, assertCurrent = noop) {
   const entered = createDeferredCore();
   const release = createDeferredCore();
   let armed = false;
-  const capture = executionOwner.captureOpenClawAgentDatabaseExecution;
+  const capture = executionOwner.captureOpenClawAgentDatabaseExecutionAsync;
   const intercept = vi
-    .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution")
-    .mockImplementation((...args) => {
-      const execution = capture(...args);
+    .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecutionAsync")
+    .mockImplementation(async (...args) => {
+      const execution = await capture(...args);
       const runExisting = execution.runExisting.bind(execution);
       execution.runExisting = (source, operation, options) =>
         runExisting(

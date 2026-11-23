@@ -4,7 +4,10 @@ import type {
   GatewaySuspendHandoffResult,
   GatewaySuspendPrepareResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { GatewayServiceStopUnsafeError } from "../../daemon/service-inspection-error.js";
+import {
+  GatewayMaintenanceResidentChangedError,
+  GatewayServiceStopUnsafeError,
+} from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import { readSystemdGatewayStopTimeout } from "../../daemon/systemd-stop-policy.js";
 import { resolveReadOnlyLocalGatewayAuth } from "../../gateway/call-device-auth.js";
@@ -100,7 +103,7 @@ export async function withGatewayMaintenanceDrain<T>(
   const assertResidentCurrent = () => {
     params.assertCurrent();
     if (residentChanged) {
-      throw new Error("Gateway process changed during maintenance drain");
+      throw new GatewayMaintenanceResidentChangedError();
     }
   };
   let residentBudget: GatewayShutdownStatus | undefined;
@@ -145,8 +148,21 @@ export async function withGatewayMaintenanceDrain<T>(
   const connection = params.control
     ? undefined
     : await (async () => {
+        let port: number | undefined;
+        if (!explicitDrain && !params.state.running && params.state.runtime?.status === "stopped") {
+          port = await resolveUpdatedGatewayRestartPort({
+            serviceEnv: params.state.env,
+            serviceCommand: params.state.command,
+          });
+          const usage = await inspectPortUsage(port, { probeHosts: ["127.0.0.1"] });
+          assertResidentCurrent();
+          if (usage.status === "free") {
+            // No resident needs control credentials or a lifecycle drain.
+            return null;
+          }
+        }
         const { config, auth } = await resolveGatewayRestartProbeContext(params.state.env);
-        const port = await resolveUpdatedGatewayRestartPort({
+        port ??= await resolveUpdatedGatewayRestartPort({
           config,
           serviceEnv: params.state.env,
           serviceCommand: params.state.command,
@@ -171,6 +187,28 @@ export async function withGatewayMaintenanceDrain<T>(
     const usage = await inspectPortUsage(connection.port, { probeHosts: ["127.0.0.1"] });
     assertResidentCurrent();
     return usage.status === "busy" && allListenersOwnedByRuntimePid(usage.listeners, pid);
+  };
+  // Runtime recovery reruns a Gateway whose Node fails admission under another
+  // Node; the launcher stays the service's main process and its direct child
+  // serves the port and stops with the service.
+  const isServiceResident = async (pid: number | undefined) => {
+    const runtimePid = params.state.runtime?.pid;
+    if (pid === undefined || runtimePid === undefined) {
+      return false;
+    }
+    if (pid === runtimePid) {
+      return true;
+    }
+    if (!connection) {
+      return false;
+    }
+    const usage = await inspectPortUsage(connection.port, { probeHosts: ["127.0.0.1"] });
+    assertResidentCurrent();
+    return (
+      usage.status === "busy" &&
+      usage.listeners.length > 0 &&
+      usage.listeners.every((listener) => listener.pid === pid && listener.ppid === runtimePid)
+    );
   };
   const call = async <R>(
     method: string,
@@ -220,6 +258,10 @@ export async function withGatewayMaintenanceDrain<T>(
     assertResidentCurrent();
     return result;
   };
+  if (connection === null) {
+    // Rollback can revisit an already-stopped unit; retain the guarded native stop.
+    return await finish();
+  }
   let managerTimeout: number | undefined;
   let verifiedResident = false;
   try {
@@ -229,7 +271,7 @@ export async function withGatewayMaintenanceDrain<T>(
       "status",
       { includeChannelSummary: false },
     );
-    if (typeof resident.pid === "number" && resident.pid === params.state.runtime?.pid) {
+    if (await isServiceResident(resident.pid)) {
       residentBudget = resident.shutdownBudget;
       verifiedResident = true;
     }
@@ -237,20 +279,6 @@ export async function withGatewayMaintenanceDrain<T>(
     observationFailure = { error };
   }
   assertResidentCurrent();
-  if (
-    !explicitDrain &&
-    !params.state.running &&
-    params.state.runtime?.status === "stopped" &&
-    observationFailure &&
-    connection?.target
-  ) {
-    const usage = await inspectPortUsage(connection.port, { probeHosts: ["127.0.0.1"] });
-    assertResidentCurrent();
-    if (usage.status === "free") {
-      // Rollback can revisit an already-stopped unit; retain the guarded native stop.
-      return await finish();
-    }
-  }
   // A resident whose installation was replaced underneath it refuses every
   // connection; it can neither report readiness nor accept new work, so
   // draining it is pointless and would only burn the deadline.
@@ -295,7 +323,7 @@ export async function withGatewayMaintenanceDrain<T>(
     if (explicitDrain) {
       const identity = await call<{ pid: number; processInstanceId: string }>("system.info", {});
       if (
-        identity.pid !== params.state.runtime?.pid ||
+        !(await isServiceResident(identity.pid)) ||
         typeof identity.processInstanceId !== "string" ||
         !identity.processInstanceId.trim()
       ) {
@@ -313,7 +341,7 @@ export async function withGatewayMaintenanceDrain<T>(
       try {
         if (!verifiedResident) {
           const identity = await call<{ pid: number }>("system.info", {});
-          if (identity.pid !== params.state.runtime?.pid) {
+          if (!(await isServiceResident(identity.pid))) {
             residentChanged = true;
             assertResidentCurrent();
           }

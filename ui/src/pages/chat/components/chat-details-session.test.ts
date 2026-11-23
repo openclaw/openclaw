@@ -660,6 +660,7 @@ it.each([false, true])(
     element.desktop = desktop;
     await element.updateComplete;
     const environment = element.querySelector('[data-details-group="environment"]')!;
+    await vi.dynamicImportSettled();
     await waitForSolid(() =>
       expect(environment.querySelector("button.chat-pr__create")?.textContent).toBe("Create PR"),
     );

@@ -222,8 +222,6 @@ async function withAsyncReadHook<T>(
   hook: () => Promise<void>,
   run: () => Promise<T>,
   phase: "before" | "after" = "after",
-  // Unpersisted input opens the transcript; it is admitted only after the policy gate.
-  method: "openModelContextAsync" | "openAsync" = "openModelContextAsync",
 ) {
   const wrap =
     <A extends unknown[]>(original: (...args: A) => Promise<SessionManager>) =>
@@ -237,12 +235,10 @@ async function withAsyncReadHook<T>(
       }
       return result;
     };
-  const openAsync = wrap(SessionManager.openAsync.bind(SessionManager));
   const openModelContextAsync = wrap(SessionManager.openModelContextAsync.bind(SessionManager));
-  const read =
-    method === "openAsync"
-      ? vi.spyOn(SessionManager, "openAsync").mockImplementation(openAsync)
-      : vi.spyOn(SessionManager, "openModelContextAsync").mockImplementation(openModelContextAsync);
+  const read = vi
+    .spyOn(SessionManager, "openModelContextAsync")
+    .mockImplementation(openModelContextAsync);
   try {
     return { result: await run(), calls: read.mock.calls.length };
   } finally {
@@ -513,8 +509,7 @@ describe("worker detached model-context branch parity", () => {
           }),
       );
       await pending;
-      // Unstarted input is persisted only after the policy gate, so its prefix read is unfenced.
-      expect(calls).toBe(state === "in-flight" ? 1 : 0);
+      expect(calls).toBe(1);
       expect(inputRecorder.getAdmissionReceipt()).toBeDefined();
       expect(result.launch).toEqual({
         baseLeafId: inputRecorder.getAdmissionReceipt()?.entryId,
@@ -796,8 +791,6 @@ describe("worker detached model-context branch parity", () => {
               }
             },
           ),
-        "after",
-        "openAsync",
       );
       expect(observed.calls).toBe(1);
       expectNoLaunch(observed.result);

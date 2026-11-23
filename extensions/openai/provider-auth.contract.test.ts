@@ -6,6 +6,11 @@ import { resolveModelAuthPolicy } from "./provider-policy-api.js";
 
 const loginOpenAICodexOAuthMock = vi.hoisted(() => vi.fn());
 
+// Codex login tries device code first; a disabled endpoint (null) reaches the browser flow.
+vi.mock("./openai-chatgpt-device-code.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openai-chatgpt-device-code.js")>()),
+  loginOpenAICodexDeviceCode: async () => null,
+}));
 vi.mock("./openai-chatgpt-oauth.runtime.js", () => ({
   loginOpenAICodexOAuth: loginOpenAICodexOAuthMock,
 }));

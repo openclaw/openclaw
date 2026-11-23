@@ -116,7 +116,7 @@ suite.define(() => {
       },
       async (page, gateway) => {
         const slackRow = page.locator(".channels-item", { hasText: "Slack" }).first();
-        await slackRow.getByRole("button", { name: "Set up", exact: true }).click();
+        await slackRow.getByRole("button", { name: "Set up Slack", exact: true }).click();
         const wizard = page.locator(".channels-wizard");
         await button(wizard, "Continue").click();
 

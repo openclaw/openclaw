@@ -1,2 +1,0 @@
-35
-# Pane event regression: a saved CLI reply retires only its matching live tail mid-run.

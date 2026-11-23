@@ -11,9 +11,19 @@ import {
   callInProcessGatewayToolWithCreation,
 } from "../agents/tools/in-process-gateway.js";
 import { createSessionsCreateTool } from "../agents/tools/sessions-create-tool.js";
+import { createSessionsSpawnTool } from "../agents/tools/sessions-spawn-tool.js";
 import { maybeSpawnVisibleSession } from "../agents/tools/sessions-spawn-visible.js";
+import { prepareChannelRunAdmission } from "../auto-reply/reply/channel-run-admission.js";
+import { getRequesterProfile, transferRequesterProfile } from "../auto-reply/requester-profile.js";
+import { readChannelContextAdmissionEvidence } from "../channels/message-access/admission-evidence.js";
+import {
+  createHostIngressFixture,
+  ingressInput,
+  ingressMessage,
+} from "../channels/message-access/host-ingress.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
+  assignSessionOwner,
   listSessionEntryKeysReadOnly,
   loadSessionEntry,
   upsertSessionEntryCore,
@@ -26,7 +36,9 @@ import {
   bindGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { createReplyTurnParticipants } from "../sessions/session-controller.tool-authority.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { linkUserChannelIdentity } from "../state/user-channel-identities.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -35,7 +47,7 @@ import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodRegistry,
 } from "./methods/registry.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { sessionCreateHandlers } from "./server-methods/sessions-create.js";
@@ -77,9 +89,23 @@ vi.mock("./server-methods/chat-send-external-entry.js", () => ({
   },
 }));
 
-type HostedSource = "operator" | "unidentified" | "scheduled";
+type HostedSource = "operator" | "unidentified" | "scheduled" | "channel";
 
-async function createHostedCreation(state: OpenClawTestState, source: HostedSource) {
+type ChannelCase =
+  | "unlinked"
+  | "linked"
+  | "linked-other-account"
+  | "unverified"
+  | "mismatched"
+  | "system"
+  | "serialized"
+  | "bot";
+
+async function createHostedCreation(
+  state: OpenClawTestState,
+  source: HostedSource,
+  channelCase: ChannelCase = "unlinked",
+) {
   kickoff.internal.mockReset().mockImplementation(async (options: GatewayRequestHandlerOptions) => {
     options.respond(true, { status: "started", runId: "scope-independent-run" });
   });
@@ -90,6 +116,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
     agents: {
       defaults: {
         workspace: state.workspaceDir,
+        model: { primary: "test-provider/scope-model" },
         subagents: { allowAgents: ["main", "reviewer"] },
       },
       entries: { main: {}, reviewer: {} },
@@ -123,6 +150,12 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
     permissionMode: "full",
     ...(source === "scheduled" ? {} : { createdActor: person }),
   });
+  if (source === "channel") {
+    assignSessionOwner(parentScope, {
+      owner: { type: "human", id: profileId },
+      assignedBy: { type: "system", id: "fixture" },
+    });
+  }
   expect(loadSessionEntry(parentScope)?.sessionId).toBe("scope-parent-session");
   const context = createDirectChatContext({
     getRuntimeConfig: () => cfg,
@@ -135,7 +168,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
   const captured =
     source === "operator"
       ? expectDefined(
-          await captureGatewayOperatorRunAuthority({
+          await prepareGatewayOperatorRunAuthority({
             client,
             context,
             sourceAuthority: {
@@ -159,7 +192,60 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
           jobId: "scope-test-job",
         })
       : undefined;
+  const channelHost =
+    source === "channel" ? createHostIngressFixture("discord", cfg, context) : undefined;
+  const senderId = "channel-person";
+  if (channelCase === "linked" || channelCase === "linked-other-account") {
+    linkUserChannelIdentity(profileId, {
+      channelId: "discord",
+      accountId: channelCase === "linked" ? "default" : "other-account",
+      senderId,
+    });
+  }
+  const message = ingressMessage("discord", parentKey, senderId, {
+    sender: { id: senderId, isBot: channelCase === "bot" },
+  });
+  const channelContext = channelHost
+    ? channelHost.buildContext({
+        ...message,
+        channelIngress: await channelHost.ingress.resolveStable(
+          ingressInput(message, {
+            identity: { authentication: "verified" },
+            ...(channelCase === "unverified"
+              ? { subject: { stableId: senderId, authentication: { stableId: "asserted" } } }
+              : {}),
+          }),
+        ),
+      })
+    : undefined;
+  const channelRun = {};
+  if (channelContext) {
+    if (channelCase === "linked") {
+      expect(getRequesterProfile(channelContext)?.id).toBe(profileId);
+    }
+    if (channelCase === "mismatched") {
+      channelContext.AccountId = "different-account";
+    }
+    if (channelCase === "system") {
+      channelContext.InputProvenance = { kind: "internal_system" };
+    }
+    // Same private source-to-run handoff used by get-reply-run-execute.ts.
+    transferRequesterProfile(channelContext, {}, channelRun);
+  }
+  const channelAdmission = channelContext
+    ? prepareChannelRunAdmission({
+        cfg,
+        runId: "scope-parent-run",
+        agentId: "main",
+        ingressKind: "channel",
+        boundary: "discord",
+        sourceContext:
+          channelCase === "serialized" ? structuredClone(channelRun) : { ...channelRun },
+        evidence: readChannelContextAdmissionEvidence(channelContext),
+      })
+    : undefined;
   const parent =
+    channelAdmission ??
     scheduled?.preparedRunAdmission ??
     prepareSystemAgentRunAdmission(
       cfg,
@@ -184,6 +270,10 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
     }),
     "hosted caller",
   );
+  const channelParticipants = channelHost ? createReplyTurnParticipants(undefined) : undefined;
+  if (channelParticipants) {
+    caller.personalToolParticipants = channelParticipants;
+  }
   const beforeCreate = vi.fn(async () => {});
   const handler = vi.fn(async (options: GatewayRequestHandlerOptions) => {
     // Observe the real router admission, then call the real SQLite creation owner.
@@ -277,6 +367,8 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
   return {
     ...(await bindTool()),
     bindTool,
+    withCaller,
+    cfg,
     workspaceDir: state.workspaceDir,
     create,
     spawn: (mode: SessionEntry["permissionMode"], agentId?: string) =>
@@ -322,7 +414,10 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
     beforeCreate,
     revoke: () => sourceController.abort(new Error("original native source revoked")),
     profileId,
+    retireChannel: () => channelHost?.retire(),
     dispose: async () => {
+      channelParticipants?.close();
+      channelHost?.retire();
       (scheduled ?? parent).close();
       captured?.release();
       // Retire the embedded placement owner before removing this fixture's state directory.
@@ -334,9 +429,10 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
 async function withHostedCreation(
   run: (fixture: Awaited<ReturnType<typeof createHostedCreation>>) => Promise<void>,
   source: HostedSource = "operator",
+  channelCase: ChannelCase = "unlinked",
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const fixture = await createHostedCreation(state, source);
+    const fixture = await createHostedCreation(state, source, channelCase);
     try {
       await run(fixture);
     } finally {
@@ -375,7 +471,7 @@ describe("hosted session tool narrow scope projection", () => {
     }, "unidentified"));
 
   it.each(["operator", "scheduled"] as const)(
-    "retains the original %s source after admission until the creation COMMIT",
+    "cancels %s session creation when its invocation ends before COMMIT",
     (source) =>
       withHostedCreation(async (fixture) => {
         const entered = createDeferred();
@@ -385,11 +481,7 @@ describe("hosted session tool narrow scope projection", () => {
           await release.promise;
         });
         const request = fixture.create({}, { inheritedPermissionMode: "full" });
-        const rejected = expect(request).rejects.toThrow(
-          source === "operator"
-            ? "original native source revoked"
-            : "agent tool caller authority is no longer active",
-        );
+        const rejected = expect(request).rejects.toThrow("original native source revoked");
         try {
           await Promise.race([entered.promise, request]);
           expect(fixture.handler).toHaveBeenCalledOnce();
@@ -460,6 +552,102 @@ describe("hosted visible spawn permission inheritance", () => {
 });
 
 describe("independent session creation tool", () => {
+  it.each([false, true])(
+    "creates for an admitted unlinked channel (supplied user=%s)",
+    (suppliedUser) =>
+      withHostedCreation(async ({ bindTool, read, profileId, handler }) => {
+        // The parent row deliberately names a real unrelated profile; it is metadata, not a grant.
+        expect(read(parentKey)?.createdActor?.id).toBe(profileId);
+        const { toolCreate } = await bindTool({
+          inheritedToolDenylist: ["exec"],
+          sessionPermissionPolicy: { mode: "read-only", root: "/workspace" },
+        });
+        const result = await toolCreate(suppliedUser ? { user: profileId } : {});
+        const receipt = result.details as { sessionKey: string; sessionId: string };
+        expect(result.details).toMatchObject({ runStarted: false });
+        expect(handler).toHaveBeenCalledOnce();
+        expect(read(receipt.sessionKey)).toMatchObject({
+          sessionId: receipt.sessionId,
+          sandbox: "required",
+          permissionMode: "read-only",
+          inheritedToolDeny: ["exec"],
+          spawnedBy: parentKey,
+        });
+        expect(kickoff.internal).not.toHaveBeenCalled();
+        expect(kickoff.external).not.toHaveBeenCalled();
+      }, "channel"),
+  );
+
+  it.each([
+    "linked",
+    "unverified",
+    "mismatched",
+    "system",
+    "serialized",
+    "bot",
+    "retired",
+  ] as const)("keeps explicit-user validation for a %s channel source", (source) =>
+    withHostedCreation(
+      async ({ toolCreate, profileId, handler, keys, retireChannel }) => {
+        const before = await keys();
+        if (source === "retired") {
+          retireChannel();
+        }
+        await expect(toolCreate({ user: profileId, message: "No fallback" })).rejects.toThrow(
+          source === "retired" ? /channel requester is no longer current/i : /no person authority/i,
+        );
+        expect(await keys()).toEqual(before);
+        expect(handler).not.toHaveBeenCalled();
+        expect(kickoff.internal).not.toHaveBeenCalled();
+        expect(kickoff.external).not.toHaveBeenCalled();
+      },
+      "channel",
+      source === "retired" ? "unlinked" : source,
+    ),
+  );
+
+  it("does not normalize user for sessions_spawn on the same unlinked channel turn", () =>
+    withHostedCreation(async ({ cfg, withCaller, profileId, handler, keys }) => {
+      const before = await keys();
+      const spawn = createSessionsSpawnTool({ config: cfg, agentSessionKey: parentKey });
+      await expect(
+        withCaller(() =>
+          spawn.execute("explicit-spawn", { user: profileId, visible: true, task: "Bounded work" }),
+        ),
+      ).rejects.toThrow(/no person authority/i);
+      expect(await keys()).toEqual(before);
+      expect(handler).not.toHaveBeenCalled();
+    }, "channel"));
+
+  it("uses the sender account linkage, not another account's profile", () =>
+    withHostedCreation(
+      async ({ toolCreate, handler }) => {
+        expect((await toolCreate({ user: "unrelated-profile" })).details).toMatchObject({
+          runStarted: false,
+        });
+        expect(handler).toHaveBeenCalledOnce();
+      },
+      "channel",
+      "linked-other-account",
+    ));
+
+  it.each(["scheduled", "unidentified"] as const)(
+    "refuses an unrelated owner/profile ID from a %s run before any creation effect",
+    (source) =>
+      withHostedCreation(async ({ toolCreate, read, profileId, keys, handler }) => {
+        const before = await keys();
+        const parent = read(parentKey);
+        await expect(toolCreate({ user: profileId, message: "Wrong requester" })).rejects.toThrow(
+          /active personal-tool turn/i,
+        );
+        expect(await keys()).toEqual(before);
+        expect(read(parentKey)).toEqual(parent);
+        expect(handler).not.toHaveBeenCalled();
+        expect(kickoff.internal).not.toHaveBeenCalled();
+        expect(kickoff.external).not.toHaveBeenCalled();
+      }, source),
+  );
+
   it("creates a guest-owned idle visible session with spawn lineage and a bounded receipt", () =>
     withHostedCreation(async ({ tool, toolCreate, read, profileId }) => {
       expect(tool?.name).toBe("sessions_create");

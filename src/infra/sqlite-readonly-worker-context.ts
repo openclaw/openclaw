@@ -16,6 +16,17 @@ export const readOnlyWorkerScope = new AsyncContext<SqliteReadOnlyWorkerScope>(
   Symbol("sqliteReadOnlyWorkerScope"),
 );
 
+// Retired scopes keep their cancellation signal. Caller-first ordering preserves the
+// caller's reason when both signals are already aborted.
+export function resolveSqliteInspectionSignal(signal?: AbortSignal): AbortSignal | undefined {
+  const scope = readOnlyWorkerScope.getStore();
+  return scope
+    ? signal
+      ? AbortSignal.any([signal, scope.controller.signal])
+      : scope.controller.signal
+    : signal;
+}
+
 export class SqliteReadOnlyWorkerScopeClosedError extends Error {
   readonly code = "SQLITE_READONLY_WORKER_SCOPE_CLOSED";
 

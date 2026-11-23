@@ -54,10 +54,58 @@ function parseSample(value: unknown, requests: number) {
   };
 }
 
-function parseConversionSample(value: unknown, evaluations: number) {
+function cloneCounts(value: unknown) {
+  assert(isRecord(value), "Missing clone counts");
+  const counts = {
+    calls: nonNegative(value.calls),
+    stateBearingBatches: nonNegative(value.stateBearingBatches),
+    questions: nonNegative(value.questions),
+    results: nonNegative(value.results),
+  };
+  assert(Object.values(counts).every(Number.isInteger));
+  return counts;
+}
+
+function parseProductionSample(
+  value: unknown,
+  evaluations: number,
+  workload: string,
+  fixture: string,
+  mode: string,
+) {
   assert(isRecord(value), "Missing conversion result");
-  assert.equal(value.case, "conversion");
-  assert.equal(value.fixture, "provider-defined-v1-estimates");
+  assert.equal(value.case, workload);
+  assert.equal(
+    value.fixture,
+    workload === "conversion" ? "provider-defined-v1-estimates" : fixture,
+  );
+  if (workload === "runtime-v1") {
+    assert.equal(value.mode, mode);
+    assert.equal(value.stateEvidenceBytes, fixture === "small" ? 32 : 1_046_528);
+    assert.equal(value.questionCount, 1);
+  }
+  const cloneWork =
+    mode === "work"
+      ? {
+          clones: cloneCounts(value.clones),
+          coldClones: cloneCounts(value.coldClones),
+          warmClones: cloneCounts(value.warmClones),
+        }
+      : undefined;
+  if (cloneWork) {
+    assert(cloneWork.clones.calls > 0 && cloneWork.clones.stateBearingBatches > 0);
+    assert(cloneWork.clones.results > 0);
+    for (const field of ["calls", "stateBearingBatches", "questions", "results"] as const) {
+      assert.equal(
+        cloneWork.clones[field],
+        cloneWork.coldClones[field] + cloneWork.warmClones[field],
+      );
+    }
+  } else {
+    for (const field of ["clones", "coldClones", "warmClones"]) {
+      assert(!Object.hasOwn(value, field), "Cost must use the unwrapped native clone");
+    }
+  }
   assert.equal(value.evaluations, evaluations);
   assert.equal(value.validatedOutputs, evaluations);
   for (const field of ["connections", "responseBytes", "socketsAfterPoolClose"]) {
@@ -67,6 +115,14 @@ function parseConversionSample(value: unknown, evaluations: number) {
   assert.equal(value.warmTimingsMs.length, evaluations - 1);
   return {
     evaluations,
+    ...(workload === "runtime-v1"
+      ? {
+          inputJsonBytes: nonNegative(value.inputJsonBytes),
+          stateEvidenceBytes: nonNegative(value.stateEvidenceBytes),
+          questionCount: nonNegative(value.questionCount),
+        }
+      : {}),
+    ...cloneWork,
     firstEvaluationMs: nonNegative(value.firstEvaluationMs),
     warmTimingsMs: value.warmTimingsMs.map(nonNegative),
     cpuMs: nonNegative(value.cpuMs),
@@ -129,15 +185,10 @@ function artifact(manifestPath: string) {
   };
 }
 
-function qualifyConversionBenchmark(
+function qualifyProductionBenchmark(
   options: {
-    baseline: string;
-    candidate: string;
     runs: number;
     requests: number;
-    json: boolean;
-    help: boolean;
-    output: string;
   },
   artifacts: Record<"baseline" | "candidate", ReturnType<typeof artifact>>,
 ) {
@@ -181,6 +232,8 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
       baseline: "",
       candidate: "",
       case: "http",
+      fixture: "small",
+      mode: "cost",
       runs: 20,
       requests: 50,
       json: false,
@@ -195,8 +248,16 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
         opts.candidate = value;
       },
       "--case": (opts, value) => {
-        assert(value === "http" || value === "conversion", "Unknown benchmark case");
+        assert(["http", "conversion", "runtime-v1"].includes(value), "Unknown benchmark case");
         opts.case = value;
+      },
+      "--fixture": (opts, value) => {
+        assert(value === "small" || value === "near-limit", "Unknown runtime fixture");
+        opts.fixture = value;
+      },
+      "--mode": (opts, value) => {
+        assert(value === "cost" || value === "work", "Unknown measurement mode");
+        opts.mode = value;
       },
       "--runs": (opts, value) => {
         opts.runs = parseBenchmarkInteger(value, "--runs", 1, 100);
@@ -211,11 +272,12 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
   );
   if (options.help) {
     console.log(
-      "Usage: node scripts/bench-decision-transport.mts --baseline <manifest.json> --candidate <manifest.json> [--case http|conversion] [--runs 20] [--requests 50] [--json] [--output <report.json>]\nBuild each revision with scripts/build-decision-transport-bench.mts first. HTTP remains the default and proves TCP reuse, not TLS-handshake savings. Conversion separates setup from the cold first production entry.",
+      "Usage: node scripts/bench-decision-transport.mts --baseline <manifest.json> --candidate <manifest.json> [--case http|conversion|runtime-v1] [--fixture small|near-limit] [--mode cost|work] [--runs 20] [--requests 50] [--json] [--output <report.json>]\nBuild each revision with scripts/build-decision-transport-bench.mts first. HTTP remains the default and proves TCP reuse, not TLS-handshake savings. Conversion separates setup from the cold first production entry.",
     );
     return;
   }
   assert(options.baseline && options.candidate, "Both build manifests are required");
+  assert(options.mode === "cost" || options.case === "runtime-v1", "Clone work is runtime-only");
   const variants = ["baseline", "candidate"] as const;
   const artifacts = {
     baseline: artifact(options.baseline),
@@ -229,8 +291,8 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
     artifacts.baseline.manifest.harnessSourceSha256,
     artifacts.candidate.manifest.harnessSourceSha256,
   );
-  if (options.case === "conversion") {
-    qualifyConversionBenchmark(options, artifacts);
+  if (options.case !== "http") {
+    qualifyProductionBenchmark(options, artifacts);
   }
   const jobs = Array.from({ length: options.runs }, (_, sample) =>
     variants.map((variant) => ({ variant, sample })),
@@ -250,7 +312,7 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
         args: [
           artifacts[variant].entry,
           String(options.requests),
-          ...(options.case === "http" ? [] : [options.case]),
+          ...(options.case === "http" ? [] : [options.case, options.fixture, options.mode]),
         ],
         label: variant,
         sentinel: "[bench-decision-transport-result] ",
@@ -258,7 +320,13 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
         validate: (value) =>
           options.case === "http"
             ? parseSample(value, options.requests)
-            : parseConversionSample(value, options.requests),
+            : parseProductionSample(
+                value,
+                options.requests,
+                options.case,
+                options.fixture,
+                options.mode,
+              ),
       });
       return { variant, sample, commandWallMs: performance.now() - started, result };
     },
@@ -268,6 +336,29 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
       const rows = samples
         .filter((sample) => sample.variant === variant)
         .map((sample) => sample.result);
+      if (options.mode === "work") {
+        return [
+          variant,
+          Object.fromEntries(
+            (["clones", "coldClones", "warmClones"] as const).map((phase) => [
+              phase,
+              Object.fromEntries(
+                (["calls", "stateBearingBatches", "questions", "results"] as const).map((field) => [
+                  field,
+                  summarizeBenchmarkTimings(
+                    rows.map((row) => {
+                      assert("clones" in row && row.clones);
+                      const counts = row[phase];
+                      assert(counts);
+                      return counts[field];
+                    }),
+                  ),
+                ]),
+              ),
+            ]),
+          ),
+        ];
+      }
       return [
         variant,
         {
@@ -331,15 +422,28 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
             requests: options.requests,
           }
         : {
-            workload: "decision-result-conversion",
-            fixture: "provider-defined-v1-estimates",
+            workload:
+              options.case === "conversion"
+                ? "decision-result-conversion"
+                : "registered-same-v1-runtime",
+            fixture:
+              options.case === "conversion" ? "provider-defined-v1-estimates" : options.fixture,
+            mode: options.mode,
             scope:
-              "Real converters plus independent public result validation; no HTTP or model inference",
+              options.case === "conversion"
+                ? "Real converters plus independent public result validation; no HTTP or model inference"
+                : "Actual registry, operator authority and evaluateDecisionInRegistry; provider mutates its admitted copy",
+            costQualified: options.mode === "cost",
             initialization:
               "Setup precedes timing; first entry is cold in a fresh worker, without warmup",
             cpuScope:
-              "cpuMs covers the validated loop; processCpuMs/peak cover the worker through its result snapshot",
+              options.case === "conversion"
+                ? "cpuMs covers the validated loop; processCpuMs/peak cover the worker through its result snapshot"
+                : "cpuMs includes evaluation loop and owned teardown; clone-instrumented work runs are not cost",
             evaluationsPerWorker: options.requests,
+            ...(options.mode === "work"
+              ? { coldEvaluationsPerWorker: 1, warmEvaluationsPerWorker: options.requests - 1 }
+              : {}),
           }),
       runtime: { node: process.version, platform: process.platform, arch: process.arch },
       hardware: {

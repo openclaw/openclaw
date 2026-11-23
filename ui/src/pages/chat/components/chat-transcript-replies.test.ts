@@ -1,8 +1,10 @@
-import { expectDefined } from "@openclaw/normalization-core";
 /* @vitest-environment jsdom */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { openAIModel } from "../chat-thread-fixtures.test-support.ts";
 import {
   createTestTranscript as createTranscript,
   stubAnimationFrames,
@@ -14,6 +16,7 @@ import {
   renderTranscriptSearch,
 } from "../test-helpers/chat-transcript-native.tsx";
 import { toggleTranscriptSearch, type ChatThreadProps } from "./chat-thread-interactions.ts";
+import { emitTranscriptResize } from "./chat-transcript-fixture.test-support.tsx";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -197,9 +200,10 @@ it.each([false, true])(
         timestamp: 0,
         ...(framed ? { __openclaw: { idempotencyKey: "source-run:user" } } : {}),
       },
-      { ...sourceMessage, ...(framed ? { runId: "source-run" } : {}) },
+      { ...sourceMessage, ...openAIModel, ...(framed ? { runId: "source-run" } : {}) },
       {
         role: "assistant",
+        ...openAIModel,
         phase: "final_answer",
         content: "Final answer",
         timestamp: 1_500,
@@ -230,10 +234,12 @@ it.each([true, false])(
       turn("question", "user", "How was that approved?", prompt, 1_000),
       {
         ...turn("commentary", "assistant", "Checking the saved approval.", run, 2_000),
+        ...openAIModel,
         phase: "commentary",
       },
       {
         ...turn("answer", "assistant", "An operator approved it.", run, 3_000),
+        ...openAIModel,
         stopReason: "stop",
       },
     ]);
@@ -369,7 +375,6 @@ it.each([
   { target: "unloaded explicit", loaded: false, readOnly: false },
   { target: "loaded automatic in a read-only archive", loaded: true, readOnly: true },
 ])("clears search and navigates to a $target reply target", async ({ loaded, readOnly }) => {
-  vi.useFakeTimers();
   const transcript = createTestTranscript();
   const searchContainer = document.body.appendChild(document.createElement("div"));
   const threadContainer = document.body.appendChild(document.createElement("div"));
@@ -413,9 +418,11 @@ it.each([
   toggleTranscriptSearch(props.paneId);
   rerender();
   transcript.start();
+  await vi.dynamicImportSettled();
   const input = await waitForSolid(
     () => requireElement(searchContainer, "input") as HTMLInputElement,
   );
+  vi.useFakeTimers();
   input.value = "Follow up";
   input.dispatchEvent(new Event("input", { bubbles: true }));
   await vi.advanceTimersByTimeAsync(0);
@@ -432,9 +439,9 @@ it.each([
   expect(searchContainer.querySelector("input")).toBeNull();
   if (loaded) {
     expect(access.open).not.toHaveBeenCalled();
-    expect(requireElement(threadContainer, sourceSelector).classList.contains(replyTarget)).toBe(
-      true,
-    );
+    const target = requireElement(threadContainer, sourceSelector);
+    emitTranscriptResize(expectDefined(target.closest(".chat-virtual-row"), "reply row"), 800, 100);
+    await waitForSolid(() => expect(target.classList.contains(replyTarget)).toBe(true));
   } else {
     expect(access.open).toHaveBeenCalledWith(sourceId);
   }

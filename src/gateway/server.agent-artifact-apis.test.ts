@@ -30,7 +30,10 @@ import { startGatewayServer } from "./server.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 import { acquireGatewayE2ePortBlock } from "./test-helpers.listener.js";
-import type { WorkerEnvironmentServiceRecord } from "./worker-environments/service-contract.js";
+import type {
+  WorkerEnvironmentServiceContract,
+  WorkerEnvironmentServiceRecord,
+} from "./worker-environments/service-contract.js";
 
 const injectedWorkerService = vi.hoisted(() => {
   const records = new Map<string, WorkerEnvironmentServiceRecord>();
@@ -42,11 +45,16 @@ const injectedWorkerService = vi.hoisted(() => {
     get: (environmentId: string) => records.get(environmentId),
     readPreparedPoolSummary: () => ({ maxTotal: 4, reservedEnvironmentIds: [] }),
     readReadyWorkerTarget: () => 1,
-    create: async (profileId: string, idempotencyKey: string) => {
+    createWithRequest: async ({
+      profileId,
+      idempotencyKey,
+      beforeProvision,
+    }: Parameters<WorkerEnvironmentServiceContract["createWithRequest"]>[0]) => {
       const existingId = idempotency.get(idempotencyKey);
       if (existingId) {
         return records.get(existingId)!;
       }
+      beforeProvision?.();
       createCount += 1;
       const environmentId = `worker-qa-${createCount}`;
       const record: WorkerEnvironmentServiceRecord = {
@@ -492,6 +500,73 @@ describe("Gateway agent and artifact APIs", () => {
       expect(range.status).toBe(206);
       expect(Buffer.from(await range.arrayBuffer())).toEqual(fixture.body.subarray(0, 4));
     }
+
+    const appendAt = Date.now();
+    await appendTranscriptMessage(scope, {
+      eventId: "gateway-agent-artifact-chatter",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Plain progress without attachments." }],
+        timestamp: appendAt,
+      } as never,
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "gateway-agent-artifact-upload",
+      message: {
+        role: "user",
+        content: "Please review this screenshot.",
+        timestamp: appendAt + 1,
+        __openclaw: {
+          media: [
+            {
+              url: "media://inbound/upload---0b6f3d7e.png",
+              contentType: "image/png",
+              kind: "image",
+              fileName: "upload.png",
+              sizeBytes: 2048,
+            },
+          ],
+        },
+      } as never,
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "gateway-agent-artifact-directive",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: `Here is the summary.\n\nMEDIA:${path.join(mainWorkspace, "report.pdf")}`,
+          },
+        ],
+        timestamp: appendAt + 2,
+      } as never,
+    });
+    const { attachments } = await client.request<{
+      attachments: {
+        messages: Array<{
+          role: string;
+          content: unknown;
+          __openclaw?: { id?: string; seq?: number };
+        }>;
+        sessionId: string;
+        truncated?: boolean;
+      };
+    }>("artifacts.list", { sessionKey });
+    expect(attachments.truncated).toBeUndefined();
+    expect(attachments.sessionId).toBe(sessionId);
+    expect(attachments.messages.map((message) => message["__openclaw"]?.seq)).toEqual([1, 3, 4]);
+    const [managed, upload, directive] = attachments.messages;
+    expect(managed?.content).toHaveLength(2);
+    expect(upload).toMatchObject({
+      role: "user",
+      content: [],
+      __openclaw: { media: [expect.objectContaining({ fileName: "upload.png" })] },
+    });
+    // Only the directive survives; the reply prose never leaves the Gateway.
+    expect(directive?.content).toEqual([
+      { type: "text", text: `MEDIA:${path.join(mainWorkspace, "report.pdf")}` },
+    ]);
 
     const artifact = artifactList.artifacts[0]!;
 

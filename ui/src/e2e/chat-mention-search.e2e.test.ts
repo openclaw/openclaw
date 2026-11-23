@@ -19,6 +19,7 @@ function withMentions(
   run: (fixture: {
     page: Page;
     input: Locator;
+    rawValue: Locator;
     menu: Locator;
     gateway: Awaited<ReturnType<typeof installMockGateway>>;
   }) => Promise<void>,
@@ -37,11 +38,13 @@ function withMentions(
           : { methodResponses: { "users.mentionable": { users: people, truncated: false } } }),
       });
       await page.goto(`${suite.server.baseUrl}${route}`, { waitUntil: "domcontentloaded" });
-      const input = page.locator(
-        route === "chat" ? ".agent-chat__composer-combobox textarea" : ".new-session-page__message",
+      const composer = page.locator(
+        route === "chat" ? ".agent-chat__composer-combobox" : ".new-session-page__composer",
       );
+      const input = composer.getByRole("textbox");
+      const rawValue = composer.locator("textarea");
       const menu = page.getByRole("listbox", { name: "Mention a person" });
-      await run({ page, input, menu, gateway });
+      await run({ page, input, rawValue, menu, gateway });
     },
   );
 }
@@ -49,7 +52,7 @@ function withMentions(
 suite.define(() => {
   for (const route of ["chat", "new"] as const) {
     it(route + " mentions a person after literal backticks in prose", async () => {
-      await withMentions({ route }, async ({ page, input, menu, gateway }) => {
+      await withMentions({ route }, async ({ page, input, rawValue, menu, gateway }) => {
         const prefix =
           "When using ``` in the input field, the code block is clipped. Please fix. cc ";
         await input.fill(prefix);
@@ -60,61 +63,67 @@ suite.define(() => {
         });
         await captureUiProof(suite, page, "literal-backticks", `${route}-picker.png`);
         await menu.getByRole("option").first().click();
-        expect(await input.inputValue()).toBe(prefix + "@Harper ");
-        expect(await page.locator(".composer-context-strip__person-name").textContent()).toContain(
-          "Harper",
-        );
+        expect(await rawValue.inputValue()).toBe(prefix + "@Harper ");
+        const mention = input.locator(".chat-composer-mention");
+        expect(await mention.textContent()).toContain("Harper");
+        expect(await mention.getAttribute("data-profile-id")).toBe("harper");
       });
     });
     it.each(["prose", "caret"] as const)(
       route + " dismisses a mention on %s and ignores stale results",
       async (mode) => {
         const deferred = mode === "prose";
-        await withMentions({ route, deferred }, async ({ page, input, menu, gateway }) => {
-          await input.waitFor();
-          await page.clock.install();
-          const prefix = "Please review ";
-          const suffix = "the project plan";
-          if (!deferred) {
-            await input.fill(prefix + suffix);
-            await input.press(process.platform === "darwin" ? "Meta+ArrowUp" : "Control+Home");
-            for (const key of Array.from(prefix, () => "ArrowRight")) {
-              await input.press(key);
+        await withMentions(
+          { route, deferred },
+          async ({ page, input, rawValue, menu, gateway }) => {
+            await input.waitFor();
+            await page.clock.install();
+            const prefix = "Please review ";
+            const suffix = "the project plan";
+            if (!deferred) {
+              await input.fill(prefix + suffix);
+              await input.press(process.platform === "darwin" ? "Meta+ArrowUp" : "Control+Home");
+              for (const key of Array.from(prefix, () => "ArrowRight")) {
+                await input.press(key);
+              }
             }
-          }
-          await input.pressSequentially("@");
-          await page.clock.fastForward(150);
-          await (deferred ? menu : menu.getByRole("option").nth(1)).waitFor();
-          expect(await gateway.waitForRequest("users.mentionable")).toMatchObject({
-            params: { query: "" },
-          });
-          await input.press(
-            deferred ? "Space" : process.platform === "darwin" ? "Meta+ArrowDown" : "Control+End",
-          );
-          await menu.waitFor({ state: "detached" });
-          await input.pressSequentially(deferred ? "please review" : " with next steps");
-          if (deferred) {
-            await gateway.resolveDeferred("users.mentionable", { users: people, truncated: false });
-          }
-          await page.clock.fastForward(500);
-          expect(await gateway.getRequests("users.mentionable")).toHaveLength(1);
-          expect(await menu.count()).toBe(0);
-          const expected = deferred
-            ? "@ please review"
-            : prefix + "@" + suffix + " with next steps";
-          expect(await input.inputValue()).toBe(expected);
-          if (deferred) {
-            await input.press("Shift+Enter");
-            expect(await input.inputValue()).toBe(expected + "\n");
-          }
-          expect(await page.locator(".composer-context-strip__person-name").count()).toBe(0);
-        });
+            await input.pressSequentially("@");
+            await page.clock.fastForward(150);
+            await (deferred ? menu : menu.getByRole("option").nth(1)).waitFor();
+            expect(await gateway.waitForRequest("users.mentionable")).toMatchObject({
+              params: { query: "" },
+            });
+            await input.press(
+              deferred ? "Space" : process.platform === "darwin" ? "Meta+ArrowDown" : "Control+End",
+            );
+            await menu.waitFor({ state: "detached" });
+            await input.pressSequentially(deferred ? "please review" : " with next steps");
+            if (deferred) {
+              await gateway.resolveDeferred("users.mentionable", {
+                users: people,
+                truncated: false,
+              });
+            }
+            await page.clock.fastForward(500);
+            expect(await gateway.getRequests("users.mentionable")).toHaveLength(1);
+            expect(await menu.count()).toBe(0);
+            const expected = deferred
+              ? "@ please review"
+              : prefix + "@" + suffix + " with next steps";
+            expect(await rawValue.inputValue()).toBe(expected);
+            if (deferred) {
+              await input.press("Shift+Enter");
+              expect(await rawValue.inputValue()).toBe(expected + "\n");
+            }
+            expect(await input.locator(".chat-composer-mention").count()).toBe(0);
+          },
+        );
       },
     );
   }
 
   it("searches refined queries on the server and reuses exact results on backspace", async () => {
-    await withMentions({}, async ({ input, menu, gateway }) => {
+    await withMentions({}, async ({ input, rawValue, menu, gateway }) => {
       await input.fill("@h");
       await expect.poll(() => menu.getByRole("option").count()).toBe(2);
       await gateway.setMethodResponse("users.mentionable", {
@@ -130,7 +139,7 @@ suite.define(() => {
       await expectRequestCountStable(gateway, "users.mentionable", 2);
       await input.press("ArrowDown");
       await input.press("Enter");
-      expect(await input.inputValue()).toBe("@Henry ");
+      expect(await rawValue.inputValue()).toBe("@Henry ");
     });
   });
 

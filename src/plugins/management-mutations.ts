@@ -148,6 +148,11 @@ export async function installManagedPlugin(
         officialCatalog.entries,
         clawhubUrl,
       );
+      if (request.source === "local" && params.localArtifact) {
+        request.recordPath = params.localArtifact.sourcePath;
+        request.expectedIntegrity = params.localArtifact.integrity;
+        request.policySource = params.localArtifact.policySource;
+      }
       // Official installs retain catalog-owned recovery after resolving their package source.
       const planned = resolvePluginInstallRequestContext({
         source: request.source,
@@ -210,7 +215,8 @@ export async function installManagedPlugin(
           },
         },
         onCapabilityConsent: params.onCapabilityConsent,
-        requireCapabilityConsent: params.templateManaged === true,
+        requireCapabilityConsent:
+          params.templateManaged === true || params.requireCapabilityConsent,
         requireClawHubTrust: params.templateManaged === true,
         onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
         beforePersistentEffect: prepareEffect,
@@ -252,6 +258,7 @@ export async function installManagedPlugin(
           assertCurrent: beforePersistentApply,
         });
         const catalog = await listManagedPlugins({
+          view: "inventory",
           config: installed.config,
           env,
           officialCatalog,
@@ -477,7 +484,12 @@ export async function setManagedPluginEnabled(params: ManagedPluginEnableRequest
       reason: params.enabled ? "enable" : "disable",
       assertInvokerOwned: beforePersistentApply,
     });
-    const catalog = await listManagedPlugins({ config: result.config, env, metadata });
+    const catalog = await listManagedPlugins({
+      config: result.config,
+      env,
+      metadata,
+      view: "inventory",
+    });
     const plugin = catalog.plugins.find((entry) => entry.id === result.pluginId);
     if (!plugin) {
       throw new ManagedPluginLifecycleError(

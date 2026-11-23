@@ -6,7 +6,6 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { resolveUpgradeSurvivorConfigStepsForBaseline } from "../e2e/lib/upgrade-survivor/config-recipe.mts";
-import { installedRecoveryLaneNames } from "../e2e/lib/upgrade-survivor/installed-recovery-cases.mjs";
 import {
   BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS,
   allReleasePathLanes,
@@ -104,7 +103,6 @@ export function parseLaneSelection(raw: string | undefined): string[] {
   const laneAliases = new Map([
     ["install-e2e", ["install-e2e-openai", "install-e2e-anthropic"]],
     [UPDATE_FIRST_HOP_COMPAT_LANE, listUpdateFirstHopCompatLaneNames()],
-    ["package-installed-recovery", installedRecoveryLaneNames],
     [
       "bundled-plugin-install-uninstall",
       Array.from(

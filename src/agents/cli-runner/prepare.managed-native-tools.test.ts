@@ -77,15 +77,16 @@ afterEach(async () => {
   cliBackendsTesting.resetDepsForTest();
 });
 
-it.each<[string, OpenClawConfig["tools"], string[]]>([
+it.each<[string, OpenClawConfig["tools"], string[], { apiKey: string }?]>([
   ["allowed", { allow: ["read", "web_search"] }, ["Agent", "WebSearch"]],
   ["outside the allowlist", { allow: ["read"] }, ["Agent"]],
   ["denied by group", { deny: ["group:web"] }, ["Agent"]],
   ["globally off", { web: { search: { enabled: false } } }, ["Agent"]],
   ["on a pinned provider", { web: { search: { provider: "brave" } } }, ["Agent"]],
+  ["without a configured OpenClaw provider", {}, ["Agent"], { apiKey: "test-key" }],
 ])(
   "keeps managed native WebSearch only when %s, on both turn kinds",
-  async (_name, tools, kept) => {
+  async (_name, tools, kept, braveWebSearch) => {
     const { sessionTarget } = fixture.session;
     const child = "agent:main:subagent:search";
     replaceSessionEntrySync(
@@ -115,6 +116,9 @@ it.each<[string, OpenClawConfig["tools"], string[]]>([
           plugins: {
             entries: {
               anthropic: { config: { managedNativeTools: { default: ["Agent", "WebSearch"] } } },
+              ...(braveWebSearch
+                ? { brave: { enabled: true, config: { webSearch: braveWebSearch } } }
+                : {}),
             },
           },
         },
@@ -126,3 +130,23 @@ it.each<[string, OpenClawConfig["tools"], string[]]>([
     expect(natives).toEqual([kept, kept]);
   },
 );
+
+it.each<[string, Pick<OpenClawConfig, "plugins">, string[]]>([
+  ["by default", {}, ["WebSearch"]],
+  [
+    "not after an explicit opt-out",
+    { plugins: { entries: { anthropic: { config: { managedNativeTools: { default: [] } } } } } },
+    [],
+  ],
+])("keeps native WebSearch %s", async (_name, extra, kept) => {
+  const { sessionTarget } = fixture.session;
+  const context = await fixture.prepare({
+    sessionKey: sessionTarget.sessionKey,
+    sessionId: sessionTarget.sessionId,
+    provider: "claude-cli",
+    model: "opus",
+    config: { session: { store: sessionTarget.storePath }, ...extra },
+  });
+  expect(context.params.cliToolAvailability?.native).toEqual(kept);
+  await context.preparedBackend.cleanup?.();
+});

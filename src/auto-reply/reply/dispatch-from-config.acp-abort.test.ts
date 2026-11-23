@@ -44,7 +44,7 @@ let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acpx.js").tryDispat
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let getSessionControllerOperation: typeof import("../../sessions/session-controller.js").getSessionControllerOperation;
 let waitForSessionRunIdle: typeof import("../../sessions/session-controller.js").waitForSessionRunIdle;
-let listActiveReplyRunSessionKeys: typeof import("../../sessions/session-controller.queries.js").listActiveReplyRunSessionKeys;
+let listActiveSessionRunKeys: typeof import("../../sessions/session-controller.queries.js").listActiveSessionRunKeys;
 let createReplyOperation: typeof import("../../sessions/session-controller.js").createReplyOperation;
 let controllerTesting: typeof import("../../sessions/session-controller.test-support.js").testing;
 
@@ -141,7 +141,7 @@ function startDispatch(
         await beforeSettle();
         await Promise.allSettled([dispatch, operation?.ownerSettlement]);
       }
-      expect(listActiveReplyRunSessionKeys()).toEqual([]);
+      expect(listActiveSessionRunKeys()).toEqual([]);
     },
   };
 }
@@ -213,8 +213,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
     ({ getSessionControllerOperation, waitForSessionRunIdle, createReplyOperation } =
       await import("../../sessions/session-controller.js"));
-    ({ listActiveReplyRunSessionKeys } =
-      await import("../../sessions/session-controller.queries.js"));
+    ({ listActiveSessionRunKeys } = await import("../../sessions/session-controller.queries.js"));
     ({ testing: controllerTesting } =
       await import("../../sessions/session-controller.test-support.js"));
   });
@@ -301,7 +300,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     });
 
     expect((await dispatch).counts.final).toBe(0);
-    expect(listActiveReplyRunSessionKeys()).toEqual([]);
+    expect(listActiveSessionRunKeys()).toEqual([]);
   });
 
   it.each([false, true])(
@@ -557,7 +556,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expect(existingOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
     existingOperation.complete();
     await existingOperation.ownerSettlement;
-    expect(listActiveReplyRunSessionKeys()).toEqual([]);
+    expect(listActiveSessionRunKeys()).toEqual([]);
   });
 
   it.each([false, true])(
@@ -658,7 +657,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       }
       existing.complete();
       await existing.ownerSettlement;
-      expect(listActiveReplyRunSessionKeys()).toEqual([]);
+      expect(listActiveSessionRunKeys()).toEqual([]);
     },
   );
 
@@ -718,7 +717,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       }
 
       expectNoReplies(dispatcher);
-      expect(listActiveReplyRunSessionKeys()).toEqual([]);
+      expect(listActiveSessionRunKeys()).toEqual([]);
     },
   );
 
@@ -752,14 +751,14 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         reason: "reply_operation_aborted",
       }),
     );
-    expect(listActiveReplyRunSessionKeys()).toEqual([]);
+    expect(listActiveSessionRunKeys()).toEqual([]);
   });
 
   registerNativeDispatchAbortCases(() => ({
     dispatchReplyFromConfig,
     getSessionControllerOperation,
     createReplyOperation,
-    listActiveReplyRunSessionKeys,
+    listActiveSessionRunKeys,
     createDispatchConfig,
     expectNoReplies,
   }));

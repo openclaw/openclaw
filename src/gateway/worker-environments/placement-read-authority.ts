@@ -211,8 +211,8 @@ export async function prepareCachedPlacementPreservationRead(
           yield placement;
         }
       }
-      // Replica reads cannot publish beyond the owner's sequence at capture.
-      if (owner.sequence >= sequence) {
+      // Only preservation changes can add a non-local placement outside the baseline.
+      if (observation.revoked) {
         for (const [sessionId, published] of owner.placements) {
           const placement = published.placement;
           if (

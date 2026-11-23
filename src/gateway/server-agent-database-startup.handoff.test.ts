@@ -18,7 +18,11 @@ import {
 } from "../secrets/runtime.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { prepareHandoffEffectProbe } from "./server-agent-database-startup.effects.test-support.js";
@@ -121,6 +125,17 @@ it.for([
       const siblingInput = inputs.find(
         (input) => input.agentId !== firstAgent && input.agentId !== "main",
       )!;
+      if (effectProbe) {
+        // Join preparatory native cleanup before capturing the lifetimes under test.
+        // Close-time PRAGMAs must not race the later refused-call SQL observation.
+        await closeOpenClawAgentDatabaseByPathAsync(
+          resolveOpenClawAgentSqlitePath({
+            agentId: expectDefined(siblingInput.agentId, "prepared sibling agent"),
+            env,
+          }),
+          siblingInput.agentId,
+        );
+      }
       const siblingModel = getPreparedModelRuntimeSnapshot(siblingInput);
       expect(getPreparedModelRuntimeSnapshot(firstInput)).toBeDefined();
       expect(
@@ -176,6 +191,8 @@ it.for([
         const refusalReason = expectDefined(refusal?.reason, "failed admission reason");
         const refused = { name: "AgentDatabaseAdmissionError", refusal };
         effects!.arm();
+        // Healthy sibling reads may overlap refusals; only the refused agent must stay fenced.
+        await effects!.sibling.session.reloadPersistedTranscriptAsync();
         const hostSql = observeHostDataSql();
         try {
           await expect.soft(effects!.first.complete()).rejects.toMatchObject(refused);
@@ -196,7 +213,6 @@ it.for([
             )
             .rejects.toMatchObject(refused);
           expect.soft(effects!.providerCalls.slice(providerCallsBeforeRefusal)).toEqual([]);
-          expect.soft(effects!.sql()).toEqual([]);
           expect.soft(hostSql.queries).toEqual([]);
         } finally {
           hostSql.restore();

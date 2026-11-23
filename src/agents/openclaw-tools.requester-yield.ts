@@ -1,7 +1,8 @@
 import type { ScheduledToolTargets } from "../cron/execution-context-registry.js";
-import { isCronSessionKey } from "../sessions/session-key-utils.js";
+import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
 import { listFinishedSessions, listRunningSessions } from "./bash-process-registry.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
+import { awaitExecsForYield, listYieldAwaitableExecs } from "./bash-tools.exec-notify.js";
 import { bindRequesterYieldCronAuthority } from "./cron-creator-authority-context.js";
 import type {
   SessionsYieldClaimResult,
@@ -11,6 +12,17 @@ import type {
 
 const SWARM_COLLECTOR_YIELD_UNSUPPORTED_ERROR =
   "Collector runs cannot use sessions_yield because their results are collected explicitly instead of announced. Finish this turn so the collected result is recorded for whoever waits on this run.";
+
+/** Automation turns end on yield; the scheduler, not a requester continuation, owns child output. */
+export function isSchedulerOwnedRequesterYield(params: {
+  requesterSessionKey?: string;
+  scheduledToolTargets?: Pick<ScheduledToolTargets, "placement">;
+}): boolean {
+  return (
+    isCronSessionKey(params.requesterSessionKey) ||
+    params.scheduledToolTargets?.placement !== undefined
+  );
+}
 
 type YieldCompletionClaim = (
   intent?: SessionsYieldIntent,
@@ -33,13 +45,28 @@ export function createRequesterYieldCallback(params: {
   }
   // The scheduler owns child output and delivery for every automation placement.
   // End the model turn without arming an interactive requester continuation.
-  if (
-    isCronSessionKey(params.requesterSessionKey) ||
-    params.scheduledToolTargets?.placement !== undefined
-  ) {
-    return () => ({ schedulerOwned: true });
+  if (isSchedulerOwnedRequesterYield(params)) {
+    // The cron run executor resumes a yield on this run chat's wake-armed commands in place.
+    const resumesInPlace = isCronRunSessionKey(params.requesterSessionKey);
+    return () => {
+      const execs =
+        resumesInPlace && params.requesterSessionKey
+          ? listYieldAwaitableExecs({
+              agentId: params.requesterAgentId,
+              sessionKey: params.requesterSessionKey,
+            })
+          : [];
+      if (execs.length === 0) {
+        return { schedulerOwned: true };
+      }
+      awaitExecsForYield(execs);
+      return { resumesInPlace: true };
+    };
   }
   const requesterSessionKey = params.requesterSessionKey?.trim() || undefined;
+  const requesterChat = requesterSessionKey
+    ? { agentId: params.requesterAgentId, sessionKey: requesterSessionKey }
+    : undefined;
   const hasRegistryClaim = Boolean(requesterSessionKey && params.requesterTurnRunId);
   if (!params.claimYieldCompletion && !requesterSessionKey) {
     return undefined;
@@ -54,7 +81,9 @@ export function createRequesterYieldCallback(params: {
     // Runtime claims are observational. Check them before durable registry state
     // so a runtime failure cannot record a yield that never reaches onYield.
     const runtimeClaim = (await params.claimYieldCompletion?.()) ?? false;
-    const runtimeClaimed = runtimeClaim === true;
+    // The chat's wake-armed commands resume it on exit, bounded by their deadlines.
+    const runtimeClaimed =
+      runtimeClaim === true || listYieldAwaitableExecs(requesterChat).length > 0;
     let registryClaimed = false;
     if (hasRegistryClaim) {
       const { markRequesterTurnYielded } =
@@ -92,7 +121,7 @@ export function createRequesterYieldCallback(params: {
       if (claim === "pending-work") {
         return {
           error:
-            "Background exec is still running or has an uncollected result in this subagent session. Use process to poll and collect it before yielding; background exec completion cannot resume this subagent, and run-scoped proxy credentials expire when the turn ends.",
+            "Background exec is still running or has an uncollected result in this subagent session, and its exit cannot resume this run. Use process to poll and collect it before yielding.",
         };
       }
       if (claim !== "nothing-pending") {
@@ -100,7 +129,16 @@ export function createRequesterYieldCallback(params: {
       }
     }
     if (completionClaimed) {
-      return true;
+      // Recheck at commit: a command that exited meanwhile already reported its exit.
+      const execs = listYieldAwaitableExecs(requesterChat);
+      if (execs.length > 0) {
+        awaitExecsForYield(execs);
+        // The armed exit wake is this turn's continuation; report it so the runner sees it.
+        return { execWakeArmed: true };
+      }
+      if (runtimeClaim === true || registryClaimed) {
+        return true;
+      }
     }
     // This turn owns no claim, but an earlier turn of the same session may still
     // await its children: their completion resumes the session on its own, so
