@@ -521,7 +521,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
     });
   }
 
-  #importCronDismissals(): void {
+  async #importCronDismissals(): Promise<void> {
     const gateway = this.sources.gateway;
     const { client } = gateway.snapshot;
     const key = resolveSidebarAttentionKey(gateway);
@@ -544,18 +544,16 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
     }
     const pending = { key, client };
     this.#cronDismissalImport = pending;
-    void import("./sidebar-cron-failure-dismissals.ts")
-      .then(({ importCronFailureDismissals }) =>
-        importCronFailureDismissals(client, key, isCurrent),
-      )
-      .catch(() => {
-        // The browser records remain available if the lazy import fails.
-      })
-      .finally(() => {
-        if (this.#cronDismissalImport === pending) {
-          this.#cronDismissalImport = null;
-        }
-      });
+    try {
+      const { importCronFailureDismissals } = await import("./sidebar-cron-failure-dismissals.ts");
+      await importCronFailureDismissals(client, key, isCurrent);
+    } catch {
+      // The browser records remain available if the lazy import fails.
+    } finally {
+      if (this.#cronDismissalImport === pending) {
+        this.#cronDismissalImport = null;
+      }
+    }
   }
 
   #synchronizeGateway(): void {
@@ -611,7 +609,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       return;
     }
     if (dismissalKeyChanged || snapshot.client !== this.loadedClient) {
-      this.#importCronDismissals();
+      void this.#importCronDismissals();
     }
     const owner = this.#owner();
     const agentScope = this.sources.agentSelection.state;
@@ -679,9 +677,9 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
     const key = this.#dismissalKey;
     if (key && (event.key === null || event.key === key)) {
       this.syncDismissals();
-      this.#importCronDismissals();
+      void this.#importCronDismissals();
     } else if (key && event.key?.startsWith(deferredCronFailurePrefix(key))) {
-      this.#importCronDismissals();
+      void this.#importCronDismissals();
     }
   };
 
