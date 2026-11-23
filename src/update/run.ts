@@ -444,6 +444,8 @@ export async function reclaimRetainedUpdateRuntimes(params: {
       inspectService: false,
       packageRoots: [params.runningRoot],
     });
+    // Doctor also fences its own process's workers; this process never loads code from
+    // another updater's runtime, and its own runtimes stay registered with their creator.
     return await maintain(true, {
       assertCurrent: () => {
         if (Date.now() >= params.deadline) {

@@ -177,7 +177,7 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
       Math.max(0, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
     );
   }
-  report(record, opts.json, !request);
+  report(record, opts.json, !viaGateway);
   process.exitCode =
     record?.status === "succeeded" || record?.status === "skipped" || isPendingActivation(record)
       ? 0
@@ -369,9 +369,9 @@ function printLines(lines: readonly string[], json: boolean) {
   }
 }
 
-function report(record: UpdateRunRecord | undefined, json: boolean, local: boolean) {
-  // A Gateway-run update's maintenance follows this CLI's own, which it already printed.
-  const runtimes = local
+function report(record: UpdateRunRecord | undefined, json: boolean, unreported: boolean) {
+  // After this CLI's own pass, the run's pass can only repeat what that pass kept.
+  const runtimes = unreported
     ? record?.steps.find(({ step }) => step === RETAINED_RUNTIMES_STEP)?.detail
     : undefined;
   if (runtimes) {

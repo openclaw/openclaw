@@ -28,7 +28,11 @@ beforeEach(async () => {
 const sent = vi.hoisted(() => [] as unknown[]);
 const missingCredentials = vi.hoisted(() => ({ enabled: false }));
 const install = vi.hoisted(() => ({ kind: "git" }));
-const localRun = vi.hoisted(() => ({ status: "skipped", phase: "finished" }));
+const localRun = vi.hoisted(() => ({
+  status: "skipped",
+  phase: "finished",
+  steps: [] as Array<{ step: string; status: string; detail?: string }>,
+}));
 // The selected package release; the running version unless a case tests a downgrade.
 const packageTarget = { version: VERSION };
 const confirmDowngrade = vi.hoisted(() =>
@@ -87,7 +91,6 @@ vi.mock("../infra/update-run-reader.js", async (importOriginal) => ({
     ...localRun,
     runId: "run-cli",
     reason: "already-current",
-    steps: [],
     after: {},
     origin: {},
   }),
@@ -135,6 +138,7 @@ afterEach(async () => {
   missingCredentials.enabled = false;
   localRun.status = "skipped";
   localRun.phase = "finished";
+  localRun.steps = [];
   packageTarget.version = VERSION;
   confirmDowngrade.mockReset();
   reclaim.mockReset();
@@ -242,6 +246,18 @@ it.each([false, true])(
     expect(process.exitCode).toBe(0);
   },
 );
+
+it("prints a kept runtime once when the update falls back to this process", async () => {
+  missingCredentials.enabled = true;
+  const kept = "Runtime retained at /tmp/openclaw-update-runtime-Held01: still in use";
+  reclaim.mockResolvedValue([kept]);
+  // The local run's own pass finds the same runtime still in use.
+  localRun.steps = [{ step: "retained-runtimes", status: "completed", detail: kept }];
+  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+  await runReleaseUpdateCli({ json: false, restart: true, runningRoot: root, yes: true });
+  expect(prepared).toHaveLength(1);
+  expect(log.mock.calls.map(([line]) => line)).toEqual([kept, "Already up to date."]);
+});
 
 it("says the update is still running when the --timeout budget ends first", async () => {
   const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});

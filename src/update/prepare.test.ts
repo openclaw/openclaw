@@ -719,7 +719,7 @@ describe("already-current update", () => {
 });
 
 describe("retained updater runtimes", () => {
-  it("reclaims an earlier updater's runtime and keeps one still in use without failing", async () => {
+  it("reclaims an earlier updater's runtime and keeps uncertain ones without failing", async () => {
     const { checkout, sha } = await repository();
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     vi.stubEnv("GIT_COMMIT", sha);
@@ -727,11 +727,15 @@ describe("retained updater runtimes", () => {
     const tmp = path.join(root, "tmp");
     const abandoned = createDoctorRuntimeProjection(tmp, checkout, "Gone01");
     const held = createDoctorRuntimeProjection(tmp, checkout, "Held01");
-    const census = vi
-      .spyOn(processCensus, "inspectOtherOpenClawProcesses")
-      .mockImplementation(((directory: string) =>
-        directory === held
-          ? { pids: [4242] }
+    const unseen = createDoctorRuntimeProjection(tmp, checkout, "Blind1");
+    // One runtime is still used by another process; for another, processes cannot be listed.
+    vi.spyOn(processCensus, "inspectOtherOpenClawProcesses").mockImplementation(((
+      directory: string,
+    ) =>
+      directory === held
+        ? { pids: [4242] }
+        : directory === unseen
+          ? { error: "Could not inspect OpenClaw processes: census unavailable" }
           : { pids: [] }) as typeof processCensus.inspectOtherOpenClawProcesses);
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     try {
@@ -746,18 +750,24 @@ describe("retained updater runtimes", () => {
       expect(process.exitCode).toBe(0);
       await expect(fs.access(abandoned)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.access(held)).resolves.toBeUndefined();
-      expect(census).toHaveBeenCalledWith(held, { creatorExited: false });
+      await expect(fs.access(unseen)).resolves.toBeUndefined();
       // The run record shortens the fixture home to ~.
       const shown = (name: string) => path.join("~", "tmp", `openclaw-update-runtime-${name}`);
       const removed = `Removed abandoned updater runtime: ${shown("Gone01")}`;
       const kept = `Runtime retained at ${shown("Held01")}: other OpenClaw processes are still running (PIDs: 4242)`;
+      const blind = `Runtime retained at ${shown("Blind1")}: Could not inspect OpenClaw processes: census unavailable`;
       const { lastRun } = await getUpdateRunStatusAsync();
       expect(lastRun).toMatchObject({ status: "skipped", reason: "already-current" });
       const detail = lastRun?.steps.find(({ step }) => step === "retained-runtimes")?.detail;
-      expect(detail?.split("\n").toSorted()).toEqual([removed, expect.stringContaining(kept)]);
+      expect(detail?.split("\n").toSorted()).toEqual([
+        removed,
+        blind,
+        expect.stringContaining(kept),
+      ]);
       const printed = log.mock.calls.map(([line]) => String(line));
-      expect(printed).toContain(removed);
-      expect(printed).toContainEqual(expect.stringContaining(kept));
+      expect(printed).toEqual(
+        expect.arrayContaining([removed, blind, expect.stringContaining(kept)]),
+      );
       expect(printed.at(-1)).toBe("Already up to date.");
     } finally {
       process.exitCode = undefined;
