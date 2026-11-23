@@ -28,11 +28,8 @@ export const INTERNAL_RUNTIME_CONTEXT_END = RUNTIME_CONTEXT_END_MARKER;
 const ESCAPED_INTERNAL_RUNTIME_CONTEXT_BEGIN = "[[OPENCLAW_INTERNAL_CONTEXT_BEGIN]]";
 const ESCAPED_INTERNAL_RUNTIME_CONTEXT_END = "[[OPENCLAW_INTERNAL_CONTEXT_END]]";
 
-/** Header used when a runtime event is surfaced as its own context block. */
-export const RUNTIME_EVENT_HEADER = "OpenClaw runtime event.";
-
 /** Notice inserted into runtime-generated context blocks. */
-export const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
+const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
   "This context is runtime-generated, not user-authored. Keep internal details private.";
 export const RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
 /** Custom message type used for structured runtime-context messages. */
