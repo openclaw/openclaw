@@ -81,7 +81,7 @@ export async function recordGatewaySessionRunFailure(
         params.target,
         {
           kind: "custom",
-          customTypes: [RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE],
+          customTypes: [RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE, "subagent-completion"],
           selectReport: (latest) => {
             params.assertCommitAllowed?.();
             return isRecord(latest?.details) && latest.details.runId === runId ? undefined : report;
