@@ -324,14 +324,12 @@ class ProcessObservation {
         }
         this.loading = false;
         this.changed();
-        // A change arriving during the read needs one trailing snapshot. Otherwise
-        // retain one slow recovery poll, including after transient read failures.
-        if (!accessDenied) {
-          if (this.refreshAgain) {
-            void this.refresh();
-          } else {
-            this.timer = setTimeout(() => void this.refresh(), REFRESH_INTERVAL_MS);
-          }
+        // A change during the read needs a fresh authorized snapshot, even if
+        // the old read was denied. A denial alone does not restart polling.
+        if (this.refreshAgain) {
+          void this.refresh();
+        } else if (!accessDenied) {
+          this.timer = setTimeout(() => void this.refresh(), REFRESH_INTERVAL_MS);
         }
       });
     this.pending = pending;

@@ -193,6 +193,10 @@
 }
 
 @media (max-width: 640px) {
+  .skill-discovery .plugin-catalog-chip {
+    flex-shrink: 0;
+  }
+
   .plugin-catalog-results--rows .plugin-catalog-row__main > .skill-tile {
     margin-top: 1px;
   }

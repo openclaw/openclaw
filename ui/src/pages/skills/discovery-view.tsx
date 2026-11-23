@@ -304,6 +304,17 @@ export function SkillDiscovery(props: SkillsProps) {
     return directory && groupOverview(remoteRows(), directory.categories);
   });
   const remoteTitle = () => category()?.label ?? t("skillsPage.clawHub");
+  const groupingPending = () =>
+    props.state.connected &&
+    scope() === "all" &&
+    !category() &&
+    !query().trim() &&
+    !props.readCategories();
+  const loadingResults = () => (
+    <CatalogDiscoverySection id="clawhub" title={remoteTitle()}>
+      {renderCatalogGridSkeleton({ label: t("skillsPage.searching"), cards: 6 })}
+    </CatalogDiscoverySection>
+  );
   const inventoryReady = () =>
     props.libraryEntries !== undefined &&
     !props.loading &&
@@ -371,10 +382,8 @@ export function SkillDiscovery(props: SkillsProps) {
           {props.state.clawhubInstallMessage!.text}
         </InlineAlert>
       )}
-      {/* The registry sets the number of chips; one row keeps installed skills in place. */}
-      <CatalogDiscoveryChips label={t("skillsPage.categories")} singleRow>
+      <CatalogDiscoveryChips label={t("skillsPage.categories")}>
         <CatalogDiscoveryChip
-          fixed
           icon={<Icon name="layoutGrid" />}
           active={scope() === "all" && !category()}
           onClick={() => selectBuiltin("all")}
@@ -383,7 +392,6 @@ export function SkillDiscovery(props: SkillsProps) {
         </CatalogDiscoveryChip>
         <Show when={hasInstalled()}>
           <CatalogDiscoveryChip
-            fixed
             icon={<Icon name="bookOpenText" />}
             active={scope() === "installed"}
             onClick={() => selectBuiltin("installed")}
@@ -391,31 +399,14 @@ export function SkillDiscovery(props: SkillsProps) {
             {t("skillsPage.installed")}
           </CatalogDiscoveryChip>
         </Show>
-        <Show when={props.readCategories()?.error}>
-          {(message) => (
-            <InlineAlert tone="warning" role="alert">
-              {message()}{" "}
-              <button type="button" class="btn btn--sm" onClick={() => props.onRetryCategories()}>
-                {t("common.retry")}
-              </button>
-            </InlineAlert>
-          )}
-        </Show>
         <Show
           when={props.readCategories()}
-          fallback={
-            <span
-              class="skeleton plugin-catalog-chip--skeleton"
-              style={{ height: "auto" }}
-              aria-hidden="true"
-            />
-          }
+          fallback={<span class="skeleton plugin-catalog-chip--skeleton" aria-hidden="true" />}
         >
           {(directory) => (
             <For each={directory().categories} keyed={(item) => item.slug}>
               {(item) => (
                 <CatalogDiscoveryChip
-                  fixed
                   ref={(button) => categoryChips.set(item().slug, button)}
                   icon={registryCategoryIcon(item().icon)}
                   active={category()?.slug === item().slug}
@@ -428,85 +419,97 @@ export function SkillDiscovery(props: SkillsProps) {
           )}
         </Show>
       </CatalogDiscoveryChips>
-      <div class="plugin-catalog-results__body">
-        <Show when={shelf()}>
-          <InstalledShelf entries={installed()} onOpen={() => setScope("installed")} />
-        </Show>
-        <Show when={installedSection().length > 0}>
-          <CatalogDiscoverySection id="installed" title={t("skillGroups.installed")}>
-            <PluginCatalogGrid items={installedSection()} results busy={props.loading}>
-              {(entry, contentRef) => (
-                <DiscoveryRow entry={entry()} skills={props} contentRef={contentRef} />
-              )}
-            </PluginCatalogGrid>
-          </CatalogDiscoverySection>
-        </Show>
-        <Show
-          when={remoteRows().length > 0 && sections()}
-          fallback={
-            <Show
-              when={
-                scope() === "all" &&
-                (pending() || (remoteRows().length > 0 && !sections())) &&
-                props.state.connected
-              }
-            >
-              <CatalogDiscoverySection id="clawhub" title={remoteTitle()}>
-                {renderCatalogGridSkeleton({ label: t("skillsPage.searching"), cards: 6 })}
-              </CatalogDiscoverySection>
-            </Show>
-          }
-        >
-          <For each={sections()?.shelves} keyed={(section) => section.category.slug}>
-            {(section) => (
-              <CatalogDiscoverySection
-                id={"category-" + section().category.slug}
-                title={section().category.label}
-                viewAllLabel={t("skillsPage.viewAll")}
-                // Previews have at most four rows; the next section must not paint below a provisional shelf.
-                eager
-                onViewAll={() => {
-                  // The shelf button leaves the DOM; keep keyboard navigation on its matching chip.
-                  const next = section().category;
-                  categoryChips.get(next.slug)?.focus();
-                  selectCategory(next);
-                }}
-              >
-                <div class="plugin-catalog-grid">
-                  <For each={section().rows} keyed={(entry) => entry.id}>
-                    {(entry) => <DiscoveryRow entry={entry()} skills={props} />}
-                  </For>
-                </div>
-              </CatalogDiscoverySection>
-            )}
-          </For>
-          <Show when={sections()?.ungrouped.length}>
-            <CatalogDiscoverySection id="clawhub" title={remoteTitle()}>
-              <PluginCatalogGrid
-                items={sections()?.ungrouped ?? []}
-                results
-                busy={props.loading || pending()}
-              >
+      <Show when={props.readCategories()?.error}>
+        {(message) => (
+          <InlineAlert tone="warning" role="alert">
+            {message()}{" "}
+            <button type="button" class="btn btn--sm" onClick={() => props.onRetryCategories()}>
+              {t("common.retry")}
+            </button>
+          </InlineAlert>
+        )}
+      </Show>
+      {/* Place the grouped overview after the wrapping strip settles. Installed and search stay independent. */}
+      <Show
+        when={!groupingPending()}
+        fallback={
+          props.state.connected &&
+          (shelf() || pending() || remoteRows().length > 0) &&
+          loadingResults()
+        }
+      >
+        <div class="plugin-catalog-results__body">
+          <Show when={shelf()}>
+            <InstalledShelf entries={installed()} onOpen={() => setScope("installed")} />
+          </Show>
+          <Show when={installedSection().length > 0}>
+            <CatalogDiscoverySection id="installed" title={t("skillGroups.installed")}>
+              <PluginCatalogGrid items={installedSection()} results busy={props.loading}>
                 {(entry, contentRef) => (
                   <DiscoveryRow entry={entry()} skills={props} contentRef={contentRef} />
                 )}
               </PluginCatalogGrid>
             </CatalogDiscoverySection>
           </Show>
-        </Show>
-        <Show when={scope() === "all" && props.hasNextPage && sections()}>
-          <div class="plugin-catalog-load-more">
-            <button
-              type="button"
-              class="btn btn--sm oc-action oc-action-secondary"
-              disabled={pending()}
-              onClick={() => props.onLoadMore()}
-            >
-              {t(pending() ? "skillsPage.loadingMore" : "skillsPage.loadMore")}
-            </button>
-          </div>
-        </Show>
-      </div>
+          <Show
+            when={remoteRows().length > 0 && sections()}
+            fallback={
+              <Show when={scope() === "all" && pending() && props.state.connected}>
+                {loadingResults()}
+              </Show>
+            }
+          >
+            <For each={sections()?.shelves} keyed={(section) => section.category.slug}>
+              {(section) => (
+                <CatalogDiscoverySection
+                  id={"category-" + section().category.slug}
+                  title={section().category.label}
+                  viewAllLabel={t("skillsPage.viewAll")}
+                  // Previews have at most four rows; the next section must not paint below a provisional shelf.
+                  eager
+                  onViewAll={() => {
+                    // The shelf button leaves the DOM; keep keyboard navigation on its matching chip.
+                    const next = section().category;
+                    categoryChips.get(next.slug)?.focus();
+                    selectCategory(next);
+                  }}
+                >
+                  <div class="plugin-catalog-grid">
+                    <For each={section().rows} keyed={(entry) => entry.id}>
+                      {(entry) => <DiscoveryRow entry={entry()} skills={props} />}
+                    </For>
+                  </div>
+                </CatalogDiscoverySection>
+              )}
+            </For>
+            <Show when={sections()?.ungrouped.length}>
+              <CatalogDiscoverySection id="clawhub" title={remoteTitle()}>
+                <PluginCatalogGrid
+                  items={sections()?.ungrouped ?? []}
+                  results
+                  busy={props.loading || pending()}
+                >
+                  {(entry, contentRef) => (
+                    <DiscoveryRow entry={entry()} skills={props} contentRef={contentRef} />
+                  )}
+                </PluginCatalogGrid>
+              </CatalogDiscoverySection>
+            </Show>
+          </Show>
+          <Show when={scope() === "all" && props.hasNextPage && sections()}>
+            <div class="plugin-catalog-load-more">
+              <button
+                type="button"
+                class="btn btn--sm oc-action oc-action-secondary"
+                disabled={pending()}
+                onClick={() => props.onLoadMore()}
+              >
+                {t(pending() ? "skillsPage.loadingMore" : "skillsPage.loadMore")}
+              </button>
+            </div>
+          </Show>
+        </div>
+      </Show>
       <Errored fallback={() => null}>
         <Loading on={[query(), category(), connected(), epoch()]} fallback={null}>
           {props.readClawHubSearch() &&

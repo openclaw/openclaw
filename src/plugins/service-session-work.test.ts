@@ -24,6 +24,8 @@ const state = vi.hoisted(() => ({
   readError: undefined as Error | undefined,
   allowTool: true,
   recoverable: true,
+  snapshotScopes: ["operator.write"] as string[],
+  restoredBy: [] as string[],
   release: vi.fn(),
   assertCurrent: vi.fn(),
   prepare: vi.fn(),
@@ -46,18 +48,18 @@ vi.mock("../gateway/operator-invocation-authority.js", () => ({
   captureAmbientGatewayOperatorAuthority: async () => ({
     authority: {
       assertCurrent: state.assertCurrent,
-      ...(state.recoverable ? { recoverySnapshot: { source: "fixture" } } : {}),
+      ...(state.recoverable ? { recoverySnapshot: { scopes: state.snapshotScopes } } : {}),
     },
     release: state.release,
   }),
 }));
 // mock-isolation: keep durable storage and original operator fixtures local to this host-boundary test.
-vi.mock("../gateway/operator-run-recovery.js", () => ({
-  restoreGatewayOperatorSource: async (params: { prepareCurrent: () => Promise<void> }) => {
+vi.mock("../gateway/operator-run-recovery.js", () => {
+  const restore = (entry: string) => async () => {
+    state.restoredBy.push(entry);
     if (state.restoreError) {
       throw state.restoreError;
     }
-    await params.prepareCurrent();
     return {
       authority: {
         assertCurrent: state.assertCurrent,
@@ -67,8 +69,12 @@ vi.mock("../gateway/operator-run-recovery.js", () => ({
       authenticatedUserProfile: { profileId: "alice" },
       release: state.release,
     };
-  },
-}));
+  };
+  return {
+    restoreGatewayOperatorSource: restore("write"),
+    restoreScheduledAutomationOperator: restore("automation"),
+  };
+});
 // mock-isolation: keep durable storage and original operator fixtures local to this host-boundary test.
 vi.mock("../gateway/server-plugin-in-process-authority.js", () => ({
   resolveInProcessGatewayDispatch: () => ({ operatorSourceClient: {} }),
@@ -167,6 +173,8 @@ beforeEach(() => {
   state.readError = undefined;
   state.allowTool = true;
   state.recoverable = true;
+  state.snapshotScopes = ["operator.write"];
+  state.restoredBy = [];
   state.target.lifecycleRevision = "1";
   vi.clearAllMocks();
 });
@@ -223,6 +231,19 @@ it("propagates current-work failure and closes the borrowed authority", async ()
   expect(() => escaped?.assertCurrent()).toThrow("borrow closed");
   expect(state.records.size).toBe(0);
   expect(state.release).toHaveBeenCalled();
+});
+it.each([
+  [["operator.write"], "write"],
+  [["operator.sessions.write"], "write"],
+  [["operator.cron"], "automation"],
+])("restores work accepted with %j through the %s start grant", async (scopes, entry) => {
+  state.snapshotScopes = scopes;
+  const { service } = fixture();
+  await service.admit(input);
+  await expect(service.run("job", async () => "done")).resolves.toMatchObject({
+    status: "completed",
+  });
+  expect(state.restoredBy).toEqual([entry]);
 });
 it("admits and reauthorizes an exact operation with its original tool ceiling", async () => {
   const { service } = fixture();

@@ -43,6 +43,7 @@ it("reports full edit events and retires input refs and pending layout on remova
   const onValueChange = vi.fn((next: string) => setValue(next));
   const view = () => (
     <CommandPaletteInput
+      mode="search"
       value={value()}
       placeholder="Search or start a task…"
       onInputRef={inputRef}
