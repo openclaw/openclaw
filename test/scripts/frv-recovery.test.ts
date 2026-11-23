@@ -24,6 +24,7 @@ const roles = [
   "releaseChecksIndependent",
   "releaseChecksCandidate",
   "pluginPrereleaseCandidate",
+  "stableClientCompatibility",
 ];
 const directories: string[] = [];
 afterEach(() => {
