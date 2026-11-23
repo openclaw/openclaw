@@ -35,6 +35,10 @@ import {
 } from "./tailscale-route-owner-protocol.js";
 import { TailscaleRouteOwnershipConflictError } from "./tailscale-route-ownership-error.js";
 import { TailscaleServeDisabledError } from "./tailscale-serve-disabled-error.js";
+import {
+  TailscaleServePathPermissionError,
+  isTailscaleServePathPermissionMessage,
+} from "./tailscale-serve-path-permission-error.js";
 
 const TAILSCALE_STATUS_ATTEMPTS = 3;
 const TAILSCALE_STATUS_RETRY_DELAY_MS = 500;
@@ -196,6 +200,9 @@ function routeClaimError(
     return new TailscaleRouteOwnershipConflictError(Number(conflict[1]), serveStatus);
   }
   const detail = [message.stderr.trim(), message.stdout.trim()].find(Boolean);
+  if (mode === "serve" && isTailscaleServePathPermissionMessage(output)) {
+    return new TailscaleServePathPermissionError(detail);
+  }
   return Object.assign(new Error(detail || "Tailscale route owner exited before claiming route"), {
     code: message.code,
     stdout: message.stdout,
