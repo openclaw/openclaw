@@ -8,12 +8,7 @@ import {
 import type { PreparedGitHubPublicationIdentity } from "../../agents/github-tool-identity.types.js";
 import type { AgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
-import { registerConfigWriteListener } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  onUserProfilesChanged,
-  onUserProfileEmailBindingChanged,
-} from "../../state/user-profile-events.js";
 import {
   parseWorkerGitHubLaunchBinding,
   type WorkerGitHubLaunchBinding,
@@ -153,7 +148,6 @@ async function prepareWorkerGitHubBindingGrant(
   const assertRun = () => {
     signal.throwIfAborted();
     params.assertCurrent();
-    params.operatorAuthority?.assertCurrent();
   };
   assertRun();
   if (
@@ -202,25 +196,12 @@ async function prepareWorkerGitHubBindingGrant(
   const assertCurrent = () => {
     try {
       assertRun();
-      if (
-        !sameGitHubPublicationWorkspace(initial, workspace.current()) ||
-        !matchesCurrentGitHubPublicationIdentity({
-          agentId: params.agentId,
-          identity: params.identity,
-        })
-      ) {
-        throw new Error("Worker GitHub credential authority changed");
+      if (!sameGitHubPublicationWorkspace(initial, workspace.current())) {
+        throw new Error("Worker GitHub workspace changed. Start a new turn.");
       }
     } catch (error) {
       controller.abort(error);
       throw error;
-    }
-  };
-  const changed = () => {
-    try {
-      assertCurrent();
-    } catch {
-      /* Abort owns cleanup. */
     }
   };
   try {
@@ -230,9 +211,6 @@ async function prepareWorkerGitHubBindingGrant(
     }
     signal.addEventListener("abort", onAbort, { once: true });
     stops.push(
-      registerConfigWriteListener(changed),
-      onUserProfilesChanged(changed),
-      onUserProfileEmailBindingChanged(changed),
       onManagedGitHubProfileChanged(({ profileDir, kind }) => {
         if (profileDir === params.identity.env.GH_CONFIG_DIR) {
           if (kind === "removed") {

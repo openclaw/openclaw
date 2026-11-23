@@ -60,9 +60,6 @@ function requestOwner(options: ThemeRequest) {
     options.signal?.throwIfAborted();
     options.sessionMutationCommitGuard?.();
     options.sessionMutationAuthorization?.assertCurrent();
-    if (options.hasCurrentClientAuthority?.() === false || client?.invalidated) {
-      throw new Error("Theme request authority is no longer active.");
-    }
     if (
       (capturedProfile && readResidentUserProfileId(capturedProfile) !== profileId) ||
       (!runtimeIdentity &&

@@ -5,6 +5,7 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
+import { composePreparedOnlySessionSource } from "../../../config/sessions/session-source-authority.js";
 import type { SqliteWorkerCommand } from "../../../infra/sqlite-worker-contract.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { resetGatewayWorkAdmission } from "../../../process/gateway-work-admission.js";
@@ -15,7 +16,7 @@ import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import type { DomainScope } from "../../../state/openclaw-state-worker-store.types.js";
 import { createOperationalRunInstanceRef } from "../../operational-run-instance.js";
 import {
-  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../tools/gateway-caller-context.js";
 import {
@@ -108,10 +109,10 @@ describe("requester settle retry lifetime", () => {
       const entered = createDeferred();
       const release = createDeferred();
       driver.wake.mockImplementation(async (params) => {
-        const assertCaller = captureGatewayToolCallerAssertion();
+        const assertCaller = composePreparedOnlySessionSource(getGatewayToolCallerIdentity());
         entered.resolve();
         await release.promise;
-        assertCaller?.("agent");
+        assertCaller?.();
         expect(params.isSourceCurrent()).toBe(true);
         await params.completeBatch(
           [params.settledEntry],
@@ -124,9 +125,9 @@ describe("requester settle retry lifetime", () => {
         await awaitGateBeforeSettlement(entered.promise, running, "Wake did not start");
         origin.abort();
         await withGatewayToolCallerIdentity(caller, () => {
-          expect(() => captureGatewayToolCallerAssertion()?.("agent")).toThrow(
-            "operation was aborted",
-          );
+          expect(() =>
+            composePreparedOnlySessionSource(getGatewayToolCallerIdentity())?.(),
+          ).toThrow("operation was aborted");
         });
         release.resolve();
         await running;

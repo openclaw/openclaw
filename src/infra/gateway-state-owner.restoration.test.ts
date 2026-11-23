@@ -34,15 +34,14 @@ it("prioritizes Gateway bootstrap over an already waiting CLI schema writer", as
         const databasePath = ${JSON.stringify(databasePath)};
         const open = fs.openSync;
         let announced = false;
-        fs.openSync = function (pathname, ...args) {
-          try { return open.call(this, pathname, ...args); }
-          catch (error) {
-            if (pathname === ${JSON.stringify(owner.path)} && error.code === "EEXIST" && !announced) {
-              announced = true;
-              process.stdout.write("waiting\\n");
-            }
-            throw error;
+        fs.openSync = function (pathname, flags, ...args) {
+          const fd = open.call(this, pathname, flags, ...args);
+          if (pathname === ${JSON.stringify(owner.path)} && typeof flags === "number" &&
+              (flags & fs.constants.O_CREAT) === 0 && !announced) {
+            announced = true;
+            process.stdout.write("waiting\\n");
           }
+          return fd;
         };
         function acquire(pathname = databasePath) {
           try {

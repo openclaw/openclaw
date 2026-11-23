@@ -322,7 +322,7 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
           ]),
         ),
       );
-      expect(occlusion.mock.calls).toEqual([[false]]);
+      expect(occlusion.mock.calls).toEqual([["live"]]);
       const { page } = await import("vitest/browser");
       await page.getByRole("button", { name: "Open session" }).click();
       expect(open).toHaveBeenCalledOnce();

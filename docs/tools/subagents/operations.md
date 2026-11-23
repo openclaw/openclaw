@@ -36,6 +36,9 @@ limit. Collector admission instead uses Swarm's `maxChildrenPerGroup` (default
 not raise either group limit. [Codex-native subagents](/plugins/codex-harness) use Codex's own scheduler
 and limits independently of these OpenClaw queues.
 
+When a session reaches its active subagent limit, web chat shows the count on
+the launch row and tells you to wait for a subagent to finish before retrying.
+
 Suspended completion deliveries do not block new work. Native subagents, ACP
 sessions, and visible sessions retain their normal active-run limits and
 authorization checks independently of the delivery backlog.

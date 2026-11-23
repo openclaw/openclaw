@@ -86,19 +86,33 @@ The published integrity is `sha512-5wjcYMIX1aqhJC9hSUGjfSW+7SWEaLC8NUaek0xH5KGXq
 
 Remove the Matrix patch, its registration, and its exact-version guard exception when an upstream release passes `node scripts/run-vitest.mjs extensions/matrix/src/matrix/client/file-sync-store.test.ts` and the full Matrix QA catalog, including the original DM SAS-to-QR sequence. The regression exercises the real SQLite sync store, SDK cache hydration, and crypto event wiring; it observes crypto input rather than substituting for native verification proof.
 
+`tinyglobby@0.2.17` has an approved coordinate-matching repair in both published
+module formats. Absolute include and ignore patterns match absolute filesystem
+paths; relative patterns keep the caller's `cwd` as their origin. Traversal-root
+selection and directory pruning preserve those origins without changing the
+requested output format. POSIX backslashes remain literal filename characters.
+This prevents ancestor globs from omitting files inside `cwd` and prevents
+absolute exclusions from admitting files under a different discovery directory.
+
+Remove this patch, its registration, and exact-version guard when an upstream
+release passes `test/scripts/native-glob-coordinates.test.ts` without it. Preserve
+the fixed filesystem expectations for sync/async discovery, CJS/ESM, both output
+formats, ancestor patterns, exclusions, and literal POSIX backslashes. The native
+watch cases also require the paired Vitest behavior below.
+
 `vitest@5.0.5` has one approved exact-version pnpm patch. Vitest 5 bundles the
 runner, and `@vitest/runner@5.0.0` is not published, so no standalone runner
 dependency or patch remains. The published package integrity is
 `sha512-cPODOMF8YnkiiYtDdHo6n4wWmBrOBBbOIYH2d33M4l3CdNn72h+qMmO6uXffUN6A5AZFXNND/d+krS9mgkXRfg==`.
 The patch SHA-256 is
-`af34f8b20f312ef2483070dc17cd9ca5127e14947d9a8a190682daca360c13fc`
+`1aca6d2c713739c6cbd32d4af2aed8655bb01cd558d5a1cc86cf8187eaa59609`
 and it changes exactly these eleven published files:
 
 | Target | Published SHA-256 | Patched SHA-256 |
 | --- | --- | --- |
 | `dist/chunks/cac.CLrZKo1g.js` | `cbe6e023d5b1e5c8de648da0d43242e660d88676b172a022d2b95f22a88b78c0` | `5c429f733a64ee9a0de35db6fe15f5ee10d03ae784f664faf0afe940896ad7fb` |
 | `dist/chunks/cli-api.De07GUeT.js` | `8b75d08fd468ac1428ef5562e43883e2cf1953c8953a7eab95da17b30ed97945` | `39173bec8f75564cd8db538593973cdf101a8321fd2a9c26d9d5edfa6ac3af53` |
-| `dist/chunks/index.1TqnEahn.js` | `4e311af8b4db378a5c3d4e768b5210b0779d2ae0d0ec05f81a72378dbaf25412` | `5e145f05fb6a3626b30ecdb984b993380915b03c1ba580b60ee58d3603979d5b` |
+| `dist/chunks/index.1TqnEahn.js` | `4e311af8b4db378a5c3d4e768b5210b0779d2ae0d0ec05f81a72378dbaf25412` | `5c7d2ee840007b1c20122d3712daccbd3614674f2562934bc769a3eaf3082c09` |
 | `dist/chunks/index.CK-t0WMg.js` | `4712d1e9acaefca5d215c21f53007eeae30904768d45a10cd1fd09c01c6fd46e` | `605c675633a59166e5ca9b04108f4b34ca9f3cf2e3cc41a292f8277ec64aaa99` |
 | `dist/chunks/index.aTZaPVhf.js` | `381472b0170386acbc3f7d05b68ef05b3da53dcaa1058d2750d138648cd2933a` | `9fed49edda9cac115628ff4203ca307200ff721786925654044fbe4076be5ad9` |
 | `dist/chunks/init.PvxYpuCm.js` | `c0f37bd5e2230b47784675ecdb4d915a7df0a2100eadcc80fca99dab30013148` | `d844ad0dc35cc54bcad3041fa894fbc101de2c0d75193fb5dc4ce9842102c7f7` |
@@ -115,6 +129,14 @@ repairs. The split runtime keeps cache integrity initialization with upstream
 share the checked generation. The patch does not reintroduce the retired `_fsCache` owner.
 The patch owns these temporary invariants and removal gates:
 
+- **Watch discovery coordinates (`index.1TqnEahn.js`):** new-file matching uses
+  absolute module paths for absolute patterns and discovery-directory-relative
+  paths for relative patterns across include, exclude, and includeSource.
+  Cached test admission, exclusion precedence, and lazy source inspection stay
+  with their existing owners. Remove this hunk when unpatched Vitest passes the
+  native watch cases in `test/scripts/native-glob-coordinates.test.ts`: create
+  files after watcher readiness, then edit and unlink/recreate them while
+  preserving exact ordinary, isolated, and Docker project ownership.
 - **Mock resolution (`index.CK-t0WMg.js`):** module fetches join the mocker's
   serialized resolution before reading its registry, even after the pending-id
   queue is emptied by an in-flight pass. Resolution drains ids queued during a

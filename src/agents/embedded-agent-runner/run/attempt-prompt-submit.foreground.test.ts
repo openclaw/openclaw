@@ -369,7 +369,7 @@ it("rechecks authority after awaiting persistence, before dispatch", async () =>
           await activeSession.agent.streamFn(testModel, { messages: [] }, {});
         },
       }),
-    ).rejects.toThrow("admitted run authority is no longer active");
+    ).rejects.toThrow("This agent run is no longer active. Start a new turn to retry.");
     expect(stream).not.toHaveBeenCalled();
   } finally {
     admission.close();

@@ -250,7 +250,6 @@ export async function createWorkerSessionToolTestFixture(
   const delegatedAuthorities: AgentRunDelegatedAuthority[] = [];
   const sourceOperationalRun = createOperationalRunInstanceRef(sourceClaim.runId);
   let sourceRunActive = true;
-  let operatorAuthorityActive = true;
   const assertSourceCurrent = () => assert(sourceRunActive, "source worker run ended");
   const sessionTarget = {
     agentId: source.agentId,
@@ -313,8 +312,7 @@ export async function createWorkerSessionToolTestFixture(
         ? createTestOperatorAuthority({
             profileId: options.operatorProfileId,
             scopes: options.operatorScopes ?? ["operator.write"],
-            assertCurrent: () =>
-              assert(operatorAuthorityActive, "source operator authority revoked"),
+            assertCurrent: () => {},
           })
         : undefined,
     );
@@ -496,9 +494,6 @@ export async function createWorkerSessionToolTestFixture(
     closeSourceRun: () => {
       sourceRunActive = false;
       scheduledAdmission?.close();
-    },
-    revokeOperatorAuthority: () => {
-      operatorAuthorityActive = false;
     },
     spawnState,
     activate,

@@ -547,7 +547,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       scopes: [],
       assertCurrent: () => {
         if (revoked) {
-          throw new Error("operator model execution authority is no longer active");
+          throw new Error("This agent run is no longer active. Start a new turn to retry.");
         }
       },
     });

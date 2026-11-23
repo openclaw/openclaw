@@ -61,7 +61,7 @@ export function BrowserDocumentContent(props: { value: BrowserDocumentViewProps 
               />
             ) : null}
             {!available() && (connected() || snapshot().lastError) ? (
-              <main class="connect-splash" role="status">
+              <main class="connect-splash" role="status" style="padding-inline: var(--space-4);">
                 <div class="stack">
                   <span>{t(tab() ? "browser.unavailable" : "focus.unsupported")}</span>
                   {value.renderEscape(t("common.back"))}
