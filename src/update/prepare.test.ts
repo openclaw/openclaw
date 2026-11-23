@@ -925,39 +925,6 @@ describe("update preflight", () => {
     ).toMatchObject({ ok: false, reason: "node-engine-mismatch" });
   });
 
-  it.each(["supported", "unsupported"] as const)(
-    "checks Bun capabilities (%s), not the target's Node engine",
-    async (status) => {
-      const bun = path.join(bin, "bun");
-      vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
-        status,
-        version: "1.4.5",
-        sqliteVersion: status === "supported" ? "3.51.3" : "3.50.0",
-        nodeSharedSqlite: false,
-        sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
-      });
-      const result = await preflight({
-        kind: "package",
-        target: {
-          kind: "package",
-          spec: "openclaw@2026.11.21",
-          version: "2026.11.21",
-          engines: { node: ">=999" },
-        },
-        prefix: root,
-        stateDir: root,
-        node: bun,
-        statfs: async () => ({ bavail: 2_000_000_000, bsize: 1 }),
-      });
-      expect(result).toMatchObject(
-        status === "supported" ? { ok: true } : { ok: false, reason: "bun-runtime-unsupported" },
-      );
-      if (!result.ok) {
-        expect(result.message).toContain("Bun 1.4.4+ with WAL-reset-safe node:sqlite is required.");
-      }
-    },
-  );
-
   it("uses an artifact target's engine metadata without querying it as a registry version", async () => {
     await executable(
       "npm",

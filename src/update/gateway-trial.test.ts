@@ -11,7 +11,6 @@ import type * as InspectionOwner from "../cli/update-cli/update-command-post-act
 import { runPostActivationInspections } from "../cli/update-cli/update-command-post-activation-inspections.js";
 import type * as DoctorContributions from "../flows/doctor-health-contributions.js";
 import type * as UpdateNotices from "../gateway/update-run-notice.runtime.js";
-import type * as UpdateRunWatcher from "../gateway/update-run-watcher.js";
 import * as watcherModule from "../gateway/update-run-watcher.js";
 import * as rootModule from "../infra/openclaw-root.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
@@ -94,7 +93,7 @@ vi.mock("../flows/doctor-health-contributions.js", async (importOriginal) => ({
   resolvePostActivationInspectionCheckIds: async () => ["core/doctor/secrets"],
 }));
 vi.mock("../gateway/update-run-watcher.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof UpdateRunWatcher>()),
+  ...(await importOriginal<typeof watcherModule>()),
   wakeUpdateRunWatcher: (_runId?: string, advisoryWork?: () => Promise<void>) => {
     if (advisoryWork) {
       backgroundWork.push(trackAsyncWork(advisoryWork));
@@ -110,6 +109,7 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
   notices.length = 0;
+  vi.restoreAllMocks();
   vi.clearAllMocks();
   for (const dir of directories.splice(0)) {
     await fs.rm(dir, { recursive: true, force: true });
@@ -497,7 +497,7 @@ it.each([undefined, true, false])(
     expect(maintained?.steps).toContainEqual(
       expect.objectContaining({
         step: "plugins",
-        status: failed || acceptCapabilities === false ? "failed" : "completed",
+        status: acceptCapabilities ? "completed" : "failed",
       }),
     );
     expect(reload).toHaveBeenCalledExactlyOnceWith(targets);
@@ -510,7 +510,7 @@ it.each([undefined, true, false])(
       expect(report.headline).toMatch(/; 1 warning needs attention\.$/u);
       expect(report.lines.join("\n")).toContain("broken: package download failed");
       expect(report.lines.join("\n")).toContain("openclaw plugins update broken");
-    } else if (acceptCapabilities === false) {
+    } else if (!acceptCapabilities) {
       const pluginStep = maintained?.steps.find(({ step }) => step === "plugins");
       expect(pluginStep?.detail).toContain("changed after the installation batch");
       expect(pluginStep?.detail).toContain("openclaw plugins reload updated restored");
@@ -537,13 +537,13 @@ port1.on("message", () => {});
 process.stdout.write("maintenance-ready\\n");`,
   );
   const actualExec = await vi.importActual<typeof ProcessExec>("../process/exec.js");
-  const actualWatcher = await vi.importActual<typeof UpdateRunWatcher>(
+  const actualWatcher = await vi.importActual<typeof watcherModule>(
     "../gateway/update-run-watcher.js",
   );
-  using _root = vi.spyOn(rootModule, "resolveOpenClawPackageRoot").mockResolvedValue(release);
-  using _wake = vi
-    .spyOn(watcherModule, "wakeUpdateRunWatcher")
-    .mockImplementation(actualWatcher.wakeUpdateRunWatcher);
+  vi.spyOn(rootModule, "resolveOpenClawPackageRoot").mockResolvedValue(release);
+  vi.spyOn(watcherModule, "wakeUpdateRunWatcher").mockImplementation(
+    actualWatcher.wakeUpdateRunWatcher,
+  );
   const entered = Promise.withResolvers<void>();
   const stopped = Promise.withResolvers<SpawnResult>();
   let childPid: number | undefined;
