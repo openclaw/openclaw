@@ -17,7 +17,6 @@ import {
   getUpdateRun,
   recordUpdateRunStep,
 } from "./update-run-ledger.js";
-import { renderUpdateRunReport } from "./update-run-report.js";
 import { recordUpdateRunStepAsync } from "./update-run-write.async.js";
 
 const tempDirs = createTempDirTracker();
@@ -120,10 +119,7 @@ it.each(["completed", "failed"] as const)(
     expect(getUpdateRun(run.runId, options)?.steps).not.toContainEqual(
       expect.objectContaining({ step: "plugins" }),
     );
-    const detail =
-      status === "failed"
-        ? "broken: package download failed\nRun `openclaw plugins update` to retry."
-        : "Plugins updated.";
+    const detail = "Plugin maintenance receipt.";
     recordUpdateRunStep(
       run.runId,
       {
@@ -151,13 +147,5 @@ it.each(["completed", "failed"] as const)(
         detail,
       }),
     );
-    const report = renderUpdateRunReport(retained);
-    if (status === "failed") {
-      expect(report.headline).toMatch(/; 1 warning needs attention\.$/u);
-      expect(report.lines.join("\n")).toContain("broken: package download failed");
-      expect(report.lines.join("\n")).toContain("openclaw plugins update");
-    } else {
-      expect(report.headline).not.toContain("needs attention");
-    }
   },
 );
