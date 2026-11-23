@@ -1,10 +1,8 @@
 import { createIdentityFromStatus } from "@openclaw/acp-core/runtime/session-identity";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "../../agents/admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import { readAcpSessionEntryAsync } from "../runtime/session-meta.js";
 import {
@@ -33,7 +31,7 @@ it("preserves replacement metadata when a cancelled late handle fails its applie
       runtimeSessionName: "retained-runtime",
       runtimeOptions: { model: "fixture/allowed" },
     });
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "fixture-operator",
       scopes: ["operator.write"],
       assertCurrent: () => {},

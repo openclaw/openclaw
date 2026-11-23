@@ -124,8 +124,8 @@ export function registerMemoryWikiGatewayMethods(params: {
           signal,
           assertCurrent() {
             signal?.throwIfAborted();
-            if (!active || (hasCurrentClientAuthority && !hasCurrentClientAuthority())) {
-              throw new Error("Memory Wiki request authority is no longer current.");
+            if (!active) {
+              throw new Error("Memory Wiki request ended. Start a new request to retry.");
             }
           },
         };

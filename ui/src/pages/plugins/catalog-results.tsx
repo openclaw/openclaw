@@ -350,7 +350,10 @@ function CategoryChips(props: PluginCatalogResultsProps): JSX.Element {
           </>
         )}
       >
-        <CatalogDiscoveryChips label={t("pluginsPage.categoriesLabel")}>
+        <CatalogDiscoveryChips
+          label={t("pluginsPage.categoriesLabel")}
+          revision={ready() ? categories() : undefined}
+        >
           <BuiltinCategoryChips {...props} />
           {ready() && (
             <For each={categories()} keyed={(item) => item.slug}>

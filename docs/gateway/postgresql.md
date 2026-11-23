@@ -36,7 +36,8 @@ manual qualification can run all three majors. See the
 | Gateway turns and CLI parity                      | Supported                               | Real agent turns, tools, compaction, restart, child sessions and plugin operations.                                                                                                                                            |
 | Doctor                                            | Supported                               | Per-store configured/observed engines, schema, extensions, reachability and custody; unknown evidence stays unknown.                                                                                                           |
 | Update admission, forward migrations and recovery | Supported                               | Exact captures and state/agent rollback; independent writes can prevent automatic recovery.                                                                                                                                    |
-| Published stable 2026.10.5 → current upgrade      | Supported, qualified scope              | Published 2026.10.5 SQLite → current → PG17 port, foreground Gateway and matched-backup rollback verified. Stable PG → current is not applicable; [evidence and service/turn limits](#published-stable-upgrade-qualification). |
+| Published stable 2026.10.5 → current upgrade      | Supported, qualified scope              | Published 2026.10.5 SQLite → current → PG17 port, foreground Gateway and matched-backup rollback verified. See [evidence and service/turn limits](#published-stable-upgrade-qualification).                                    |
+| Published stable 2026.11.5 PostgreSQL upgrade     | Linux CI coverage                       | Linux CI upgrades both PostgreSQL 17 stores then checks that the candidate foreground Gateway can read the original session and transcript. See [the qualification scope and limits](#published-stable-upgrade-qualification). |
 | Port, backup, restore and disaster recovery       | Supported                               | All five families, retained roots and mixed engines; memory indexes require the documented rebuild step. No cluster/PITR orchestration.                                                                                        |
 | Mixed engines                                     | Supported                               | All four state/agent pairs and independently selected plugin families; one shared PostgreSQL connection configuration.                                                                                                         |
 | Independent Gateways on one server                | Supported                               | Separate databases recommended; distinct namespaces in one database also tested. One live Gateway per store.                                                                                                                   |
@@ -54,7 +55,7 @@ manual qualification can run all three majors. See the
 | Headless macOS CLI                                | Supported                               | Real PostgreSQL CLI, interactive setup and Gateway runs.                                                                                                                                                                       |
 | Native Windows + PostgreSQL                       | Supported                               | Native Windows client and PG17 server, including fresh backup restore; [qualification and limits](#native-windows-qualification).                                                                                              |
 | Native Windows managed service                    | Supported                               | Install, readiness, turns, graceful stop, restart continuity and data-preserving uninstall; [qualification](#native-windows-qualification).                                                                                    |
-| Native Windows package update with PG state       | Not yet applicable                      | No published release selects PostgreSQL for state and agent stores; requalify when one ships. [Evidence](#native-windows-qualification).                                                                                       |
+| Native Windows package update with PG state       | Qualification pending                   | 2026.11.5 supports PostgreSQL state and agent stores. A published-package upgrade on Windows still needs qualification. [Evidence](#native-windows-qualification).                                                             |
 | Native Windows database port                      | Not supported yet                       | Use fresh PostgreSQL state on Windows, or run the port on Linux/macOS; [details](#native-windows-qualification).                                                                                                               |
 | macOS app                                         | Experimental: pending signed-app proof  | Credentials stay local, runtime pins stay local, and exec approvals use the shared owner. Combined signed-app acceptance is pending.                                                                                           |
 | iOS/iPad app                                      | Not supported without real-device proof | Simulator evidence is insufficient; real-device authentication and approval flows remain unqualified.                                                                                                                          |
@@ -142,12 +143,10 @@ patched build. The baseline `2f95e977c77d`, target `5abc0c66e293` and patched se
 build used state **32** / agent **34**; this run does not qualify the later state
 33 / agent 35–36 migrations.
 
-**Package update with PostgreSQL state is not yet applicable.** No published
-release selected PostgreSQL for state and agent stores in the 2026-10-25 registry
-inspection. Stable **2026.10.7** lacks that support; **2026.10.10-beta.3** accepts
-the configuration but its bundled runtime selects SQLite for state and agent
-stores, with PostgreSQL enabled only for Workboard. Requalify published-release
-updates when a version selecting PostgreSQL state and agent stores ships.
+**Package update with PostgreSQL state still needs Windows qualification.**
+Published 2026.11.5 supports PostgreSQL state and agent stores. The earlier
+Windows service runs used development builds and do not establish package-update
+continuity from that release.
 
 The previous-main update and managed rollback attempts did not complete.
 Separate handoff-path and candidate-admission fixes landed in
@@ -973,6 +972,15 @@ To recover these scopes:
 
 ## Published-stable upgrade qualification
 
+[OpenClaw 2026.11.5](https://www.npmjs.com/package/openclaw/v/2026.11.5) ships
+PostgreSQL support for shared state and agent stores. The Linux published-driver
+CI cell installs that release against PostgreSQL 17, writes a session and
+transcript through the Gateway, and runs the installed updater with
+`--no-restart` against the candidate package. It checks both PostgreSQL schema
+versions and reads the same session and transcript from the candidate Gateway.
+The matched-backup rollback evidence below comes from the separate 2026.10.5
+SQLite upgrade.
+
 The qualification below used [OpenClaw 2026.10.5](https://www.npmjs.com/package/openclaw/v/2026.10.5).
 Its packaged configuration schema does not support `database.engine=postgres`,
 so a native 2026.10.5-PostgreSQL → current upgrade is **not applicable**. Users on
@@ -1022,8 +1030,9 @@ The native-client support rows above retain their own qualification scope.
 
 Use `openclaw update` for supported update admission. The
 [published-stable qualification](#published-stable-upgrade-qualification) covers
-SQLite update, PostgreSQL adoption and matched-backup rollback, with foreground
-Gateway verification. Its service and live-turn limits still apply.
+SQLite update, PostgreSQL adoption and matched-backup rollback, and a separate
+PostgreSQL-to-PostgreSQL upgrade cell, with foreground Gateway verification.
+Its service and live-turn limits still apply.
 
 Before stopping the previous Gateway or changing data, it checks the target's declared engine and PostgreSQL
 family support against selected families and retained physical stores. Explicit

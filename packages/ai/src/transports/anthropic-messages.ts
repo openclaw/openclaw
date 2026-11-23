@@ -492,8 +492,8 @@ export async function buildAnthropicRequest(
             ? msg.runtimeContext.retained
             : msg.runtimeContextCarrierRetained;
         if (
-          hasRuntimeContextMarker(msg) &&
-          !(runtimeContextRetained ?? modelRetainsRuntimeContext)
+          msg.cacheCheckpoint === false ||
+          (hasRuntimeContextMarker(msg) && !(runtimeContextRetained ?? modelRetainsRuntimeContext))
         ) {
           cacheBreakpointOptOutMessageIndexes.add(messages.length - 1);
         }

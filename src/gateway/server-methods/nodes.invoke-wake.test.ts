@@ -4,10 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  createOperationalRunInstanceRef,
-} from "../../agents/admitted-run-context.js";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as nodeInvokePluginPolicy from "../node-invoke-plugin-policy.js";
 import { NodeRegistry, type NodeInvokeResult } from "../node-registry.js";
@@ -1827,7 +1825,7 @@ describe("node.invoke APNs wake path", () => {
                 client: {
                   ...client,
                   internal: {
-                    operatorRunAuthority: createAdmittedRunOperatorAuthority({
+                    operatorRunAuthority: createTestOperatorAuthority({
                       profileId: "operator",
                       scopes: ["operator.write"],
                       assertCurrent() {},

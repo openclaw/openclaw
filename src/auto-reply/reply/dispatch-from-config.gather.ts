@@ -202,9 +202,7 @@ export async function gatherDispatchRequest(
     normalizeOptionalString(ctx.SessionKey) ?? normalizeOptionalString(ctx.CommandTargetSessionKey);
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
-  const assertRequestCurrent = () => params.replyOptions?.operatorAuthority?.assertCurrent();
-  const initialSessionStoreEntry = await resolveSessionStoreLookup(ctx, cfg, assertRequestCurrent);
-  assertRequestCurrent();
+  const initialSessionStoreEntry = await resolveSessionStoreLookup(ctx, cfg);
   // resolveSessionStoreLookup is command-target-aware (it prefers
   // resolveCommandTurnTargetSessionKey), whereas the lifecycle's sessionKey is
   // source-first (ctx.SessionKey). On a native command turn that targets a
@@ -380,10 +378,8 @@ export async function gatherDispatchRequest(
             CommandTargetSessionKey: undefined,
           },
           cfg,
-          assertRequestCurrent,
         )
       : initialSessionStoreEntry;
-  assertRequestCurrent();
   if (params.replyOptions?.abortSignal?.aborted) {
     return finishReplyOperationAborted();
   }
@@ -413,13 +409,8 @@ export async function gatherDispatchRequest(
     }
   };
   const sessionStoreEntry = boundAcpDispatchSessionKey
-    ? await resolveSessionStoreLookup(
-        { ...ctx, SessionKey: boundAcpDispatchSessionKey },
-        cfg,
-        assertRequestCurrent,
-      )
+    ? await resolveSessionStoreLookup({ ...ctx, SessionKey: boundAcpDispatchSessionKey }, cfg)
     : initialSessionStoreEntry;
-  assertRequestCurrent();
   if (params.replyOptions?.abortSignal?.aborted) {
     return finishReplyOperationAborted();
   }
@@ -504,7 +495,6 @@ export async function gatherDispatchRequest(
     );
     preparedTtsPreferences = await prepareTtsPreferences();
     params.replyOptions?.abortSignal?.throwIfAborted();
-    params.replyOptions?.operatorAuthority?.assertCurrent();
   } catch (error) {
     if (params.replyOptions?.abortSignal?.aborted && isAbortError(error)) {
       return finishReplyOperationAborted();
@@ -533,7 +523,6 @@ export async function gatherDispatchRequest(
     assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
     params.replyOptions?.abortSignal?.throwIfAborted();
     replyOperationCoordinator.getDispatchAbortSignal()?.throwIfAborted();
-    assertRequestCurrent();
   };
   const verboseProgress = createShouldEmitVerboseProgress({
     agentId: sessionAgentId,

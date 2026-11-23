@@ -82,6 +82,8 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
       },
       "cron.list": scopedCronResponses(writerJob),
       "models.authStatus": { providers: [], ts: 1 },
+      // The gateway records the dismissed run; failures carry no run time, so they fail at 0.
+      "cron.acknowledgeFailure": { acknowledgedAtMs: 0 },
     },
   });
   const cronScopeRequestCount = async (agentId: string | null) =>
@@ -141,6 +143,12 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
         }),
       )
       .toEqual({ opacity: "1", pointerEvents: "auto" });
+    const close = page
+      .getByRole("dialog", { name: "Inbox" })
+      .getByRole("button", { name: "Close", exact: true });
+    expect(await mainDismiss.evaluate((button) => button.getBoundingClientRect().right)).toBe(
+      await close.evaluate((button) => button.getBoundingClientRect().right),
+    );
     await captureProof("08-desktop-inbox-main-agent.png", true);
     await automationRows
       .filter({ hasText: "Main release digest" })

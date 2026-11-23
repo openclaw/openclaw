@@ -2,7 +2,7 @@ import { expect, it, vi } from "vitest";
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import {
   createContext,
   createOperatorClient,
@@ -36,7 +36,7 @@ it.each([
   "revoked",
   "unchanged while blocked",
   "revision while blocked",
-] as const)("readmits a retained requester completion after %s", async (change) => {
+] as const)("revalidates a retained requester completion after %s", async (change) => {
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const cfg = { commands: { ownerAllowFrom: ["telegram:synthetic-owner"] } };
     setRuntimeConfigSnapshot(cfg);
@@ -58,9 +58,11 @@ it.each([
       profileName: "synthetic-requester-retry",
       scopes: ["operator.admin"],
     });
-    const source = await captureGatewayOperatorRunAuthority({ client, context });
-    expect(source).toBeDefined();
-    client.internal = { operatorRunAuthority: source!.authority };
+    const source = await prepareGatewayOperatorRunAuthority({ client, context });
+    if (!source) {
+      throw new Error("Requester completion requires admitted operator authority");
+    }
+    client.internal = { operatorRunAuthority: source.authority };
     const ownerCurrent = () =>
       isConfiguredCommandOwner(getRuntimeConfig(), {
         channel: "telegram",
@@ -97,7 +99,11 @@ it.each([
               sessionKey: requesterSessionKey,
               operationalRunInstance,
               approvalAuthority,
-              receiptAuthority: () => runs.validateAgentRunDelegatedAuthority(approvalAuthority),
+              receiptAuthority: () => {
+                if (!runs.validateAgentRunDelegatedAuthority(approvalAuthority)) {
+                  throw new Error("agent tool caller authority is no longer active");
+                }
+              },
             },
             () =>
               runWithCronCreatorAuthorityCapability(capability, () =>
@@ -119,7 +125,7 @@ it.each([
       if (change === "revision" || change === "revision while blocked") {
         await replaceSessionEntry(
           { agentId: "main", sessionKey: requesterSessionKey },
-          { ...requester, lifecycleRevision: "after" },
+          { ...requester, updatedAt: 2, label: "Progress after retaining completion" },
         );
       } else if (change === "policy") {
         setRuntimeConfigSnapshot({
@@ -211,9 +217,7 @@ it.each([
           vi.useRealTimers();
         }
       } else if (change === "revoked") {
-        await expect(attempt()).rejects.toThrow(
-          "Requester followup authority is no longer current",
-        );
+        await expect(attempt()).rejects.toThrow("Requester followup ended");
       } else {
         await expect(attempt()).resolves.toBe("accepted");
       }
@@ -222,7 +226,7 @@ it.each([
       request?.custody.release();
       runs.releaseAgentRunDelegatedAuthority(approvalAuthority);
       runs.clearAgentRunContext("parent");
-      source?.release();
+      source.release();
     }
   });
 });

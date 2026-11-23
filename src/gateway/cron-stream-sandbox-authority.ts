@@ -1,10 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { isConversationToolAllowed } from "../agents/conversation-tool-policy-pipeline.js";
 import { prepareExecDefaults, resolveExecConfigState } from "../agents/exec-defaults.js";
-import { captureSandboxConfig, resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { resolveSandboxContextForPersistentExecution } from "../agents/sandbox/context.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import { captureCronStreamSandboxTarget } from "../agents/sandbox/stream-context.js";
@@ -18,32 +16,15 @@ import { parseCronStreamSandboxTarget } from "../cron/stream-sandbox-target.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
-import type { PluginGatewayAccessAuthority } from "../plugins/gateway-access-policy.types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import {
-  hasOnlySessionMutationKindActive,
-  isSessionMutationActive,
-} from "../sessions/session-controller.lifecycle.js";
+import { isSessionMutationActive } from "../sessions/session-controller.lifecycle.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { resolveCronSkillsSnapshot } from "../skills/runtime/cron-snapshot.js";
-import { onUserProfilesChanged } from "../state/user-profile-events.js";
-import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
-import {
-  isOpenClawIdTunnelPrincipalCurrent,
-  onOpenClawIdTunnelPrincipalsChanged,
-  openclawIdSubjectRolePolicy,
-  openclawIdTunnelRolePolicy,
-  prepareOpenClawIdTunnelPrincipal,
-} from "./openclaw-id/tunnel-principal.js";
-import { resumeGatewayOperatorAccessGrant } from "./operator-access-policy.js";
-import { operatorRoleSubject } from "./operator-role-enforcement.js";
-import {
-  onOperatorRolePolicyChanged,
-  resolveOperatorRolePolicyForAssignment,
-} from "./operator-role-policy.js";
-import { sourceRolePolicy } from "./operator-role-source-policy.js";
+import type { PreparedUserProfileIdentity } from "../state/user-profiles.types.js";
+import { decideOperatorAdmission, prepareOperatorAdmission } from "./operator-admission.js";
+import type { RestoredGatewayOperatorAuthority } from "./operator-run-recovery.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import {
   authorizePreparedSessionMutation,
@@ -55,7 +36,6 @@ import {
 } from "./session-sharing-preparation.js";
 import { resolveSessionSelectedModelRef } from "./session-utils-model-selection.js";
 
-type PreparedProfile = Awaited<ReturnType<typeof prepareUserProfileIdentity>>;
 type PreparedSession = Awaited<ReturnType<typeof prepareSessionMutationFacts>>;
 
 class PolicySessionReadRequired extends Error {
@@ -64,7 +44,7 @@ class PolicySessionReadRequired extends Error {
   }
 }
 
-/** Restore the recorded sandbox and original access dependency for one live stream owner. */
+/** Admit current requester policy once; retain the sandbox and session data owners. */
 export async function prepareCronStreamSandboxAuthority(params: {
   job: CronStoredJob;
   getRuntimeConfig: () => OpenClawConfig;
@@ -81,34 +61,27 @@ export async function prepareCronStreamSandboxAuthority(params: {
     throw new Error("Persistent sandbox stream target is unavailable; recreate this automation.");
   }
   const selections = structuredClone(params.job.skillLibrarySelections);
-  const config = params.getRuntimeConfig();
-  const sandboxConfig = captureSandboxConfig(resolveSandboxConfigForAgent(config, target.agentId));
-  const configuredWorkspace = resolveAgentWorkspaceDir(config, target.agentId);
-  const operator = target.operator;
+  let config = params.getRuntimeConfig();
+  const { operator, ...sandboxTarget } = target;
   const principal = operator?.openclawIdPrincipal;
-  const membershipPolicy = openclawIdTunnelRolePolicy(principal);
-  if (principal) {
-    await prepareOpenClawIdTunnelPrincipal(principal);
-  }
   params.assertCurrent();
   params.signal?.throwIfAborted();
-  let originalRole: ReturnType<typeof sourceRolePolicy>;
+  let requester: Pick<RestoredGatewayOperatorAuthority, "authority" | "release"> | undefined;
   const client = operator
     ? createSyntheticPluginRuntimeClient({
         operatorRoleActor: { kind: "operator", profileId: operator.profileId },
-        // The original source is checked below; the client carries its role ceiling.
+        // The host-recorded requester is admitted below; scopes remain a ceiling.
         openclawIdPrincipal: principal,
         scopes: [...operator.scopes],
       })
     : undefined;
   const revoked = new AbortController();
   const subscriptions: Array<() => void> = [];
-  let profile: PreparedProfile | undefined;
-  let emailBindingIds: readonly string[] | undefined;
+  let profile: PreparedUserProfileIdentity | undefined;
   let session: PreparedSession | undefined;
   const policySessions = new Map<string, SessionFactsRead<PreparedSessionMutationFacts>>();
   let policyPrepared = false;
-  let access: PluginGatewayAccessAuthority | null | undefined;
+  let admitted = false;
   let runtime: ReturnType<typeof resolveSandboxRuntimeStatus> | undefined;
   let references = 1;
   let released = false;
@@ -127,7 +100,7 @@ export async function prepareCronStreamSandboxAuthority(params: {
       for (const related of policySessions.values()) {
         related.release();
       }
-      profile?.release();
+      requester?.release();
     }
   };
   const release = () => {
@@ -208,8 +181,8 @@ export async function prepareCronStreamSandboxAuthority(params: {
         get: readEntry,
         getById: () => undefined,
       },
-      modelProvider: model.provider,
-      modelId: model.model,
+      modelProvider: model?.provider,
+      modelId: model?.model,
       pluginMetadataSnapshot: metadata,
       sandboxToolPolicy: currentRuntime.toolPolicy,
       scheduledToolPolicy,
@@ -222,74 +195,15 @@ export async function prepareCronStreamSandboxAuthority(params: {
     revoked.signal.throwIfAborted();
     params.signal?.throwIfAborted();
     params.assertCurrent();
-    if (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
-      throw unavailable();
-    }
-    const currentConfig = params.getRuntimeConfig();
-    if (
-      !listAgentIds(currentConfig).includes(target.agentId) ||
-      !isDeepStrictEqual(
-        resolveSandboxConfigForAgent(currentConfig, target.agentId),
-        sandboxConfig,
-      ) ||
-      resolveAgentWorkspaceDir(currentConfig, target.agentId) !== configuredWorkspace
-    ) {
-      throw unavailable();
-    }
-    const identity = profile?.readCurrentFacts(emailBindingIds);
-    const role = operator
-      ? openclawIdSubjectRolePolicy(principal, () =>
-          resolveOperatorRolePolicyForAssignment(
-            operator.profileId,
-            operator.assignedRole,
-            currentConfig,
-            identity ? (identity.profile.githubLogin ?? null) : operator.githubLogin,
-            operatorRoleSubject(identity?.profile),
-          ),
-        )
-      : undefined;
-    if (operator && identity) {
-      // Role comparison starts after canonical profile preparation owns its snapshot.
-      // A current owner certificate, not the linked person's stored role, bounds owner work.
-      const ownerCertificate =
-        principal?.kind === "owner" && isOpenClawIdTunnelPrincipalCurrent(principal);
-      if (
-        identity.profile.profileId !== operator.profileId ||
-        (!ownerCertificate && identity.profile.assignedRole !== operator.assignedRole) ||
-        (identity.profile.githubLogin ?? null) !== operator.githubLogin ||
-        !isDeepStrictEqual(sourceRolePolicy(role), originalRole) ||
-        (role &&
-          !roleScopesAllow({
-            role: "operator",
-            requestedScopes: operator.scopes,
-            allowedScopes: role.scopes,
-          }))
-      ) {
-        throw unavailable();
-      }
-    }
+    const currentConfig = config;
     const facts = session?.readCurrent(currentConfig);
     const entry = facts?.target.entry;
     if (
       session &&
-      isSessionMutationActive(session.storageTarget.storePath, [
-        target.sessionKey,
-        target.sessionId,
-      ]) &&
-      !hasOnlySessionMutationKindActive(
+      isSessionMutationActive(
         session.storageTarget.storePath,
         [target.sessionKey, target.sessionId],
-        "compaction",
-      ) &&
-      !hasOnlySessionMutationKindActive(
-        session.storageTarget.storePath,
-        [target.sessionKey, target.sessionId],
-        "read-marker",
-      ) &&
-      !hasOnlySessionMutationKindActive(
-        session.storageTarget.storePath,
-        [target.sessionKey, target.sessionId],
-        "background-result",
+        ["reset", "delete"],
       )
     ) {
       throw unavailable();
@@ -306,24 +220,7 @@ export async function prepareCronStreamSandboxAuthority(params: {
     ) {
       throw unavailable();
     }
-    if (
-      facts &&
-      client &&
-      identity &&
-      authorizePreparedSessionMutation(
-        {
-          cfg: currentConfig,
-          client,
-          agentId: target.agentId,
-          sessionKey: target.sessionKey,
-        },
-        facts,
-        { policy: role, aliases: identity.aliases },
-      )
-    ) {
-      throw unavailable();
-    }
-    if (entry) {
+    if (entry && !admitted) {
       const currentRuntime = resolveSandboxRuntimeStatus({
         cfg: currentConfig,
         agentId: target.agentId,
@@ -337,22 +234,10 @@ export async function prepareCronStreamSandboxAuthority(params: {
         assertExecutionPolicy(currentConfig, entry, currentRuntime);
       }
     }
-    return { currentConfig, identity, entry };
+    return { currentConfig, entry, facts };
   };
   const assertAuthorityCurrent = () => {
     try {
-      const current = assertPreparedCurrent();
-      access?.signal.throwIfAborted();
-      access?.assertCurrent();
-      if (operator && current.identity) {
-        resumeGatewayOperatorAccessGrant(
-          current.identity.profile,
-          current.currentConfig,
-          operator.gatewayAccessGrant,
-          { openclawIdPrincipal: principal, retained: access ?? undefined },
-        );
-      }
-      // Plugin callbacks may synchronously publish role, profile, session, or config changes.
       assertPreparedCurrent();
     } catch (error) {
       revoke(error);
@@ -362,30 +247,12 @@ export async function prepareCronStreamSandboxAuthority(params: {
   const recheck = () => {
     try {
       assertPreparedCurrent();
-      access?.signal.throwIfAborted();
-      access?.assertCurrent();
     } catch (error) {
       revoke(error);
     }
   };
   const sourceAborted = () => revoke(params.signal?.reason ?? unavailable());
   subscriptions.push(
-    onUserProfilesChanged(recheck),
-    onOperatorRolePolicyChanged((change) => {
-      if (
-        change.kind === "assignment" &&
-        change.profileId === operator?.profileId &&
-        change.roleOnly &&
-        principal?.kind === "owner"
-      ) {
-        // A linked owner device's authority is its certificate; its person's role is not.
-        recheck();
-      } else if (change.kind === "assignment" && change.profileId === operator?.profileId) {
-        revoke(unavailable());
-      } else if (change.kind === "config") {
-        recheck();
-      }
-    }),
     sessionChanges.subscribe((change) => {
       // Run projections do not change authority and can arrive before entry writes settle.
       if (
@@ -412,31 +279,24 @@ export async function prepareCronStreamSandboxAuthority(params: {
       }
     }),
   );
-  if (operator) {
-    subscriptions.push(onOpenClawIdTunnelPrincipalsChanged(recheck));
-  }
   params.signal?.addEventListener("abort", sourceAborted, { once: true });
   subscriptions.push(() => params.signal?.removeEventListener("abort", sourceAborted));
   try {
     assertAuthorityCurrent();
     if (operator) {
-      profile = await prepareUserProfileIdentity(operator.profileId);
-      emailBindingIds = profile.emailBindingIds;
-      const initial = profile.readCurrentProfile(emailBindingIds);
-      originalRole = structuredClone(
-        sourceRolePolicy(
-          openclawIdSubjectRolePolicy(principal, () =>
-            resolveOperatorRolePolicyForAssignment(
-              operator.profileId,
-              operator.assignedRole,
-              config,
-              operator.githubLogin,
-              operatorRoleSubject(initial),
-            ),
-          ),
-        ),
-      );
-      assertAuthorityCurrent();
+      const source = { kind: "recorded", snapshot: operator, agentId: target.agentId } as const;
+      const preparation = await prepareOperatorAdmission(source, {
+        getRuntimeConfig: params.getRuntimeConfig,
+      });
+      requester = decideOperatorAdmission(source, preparation);
+      profile = preparation.identity;
+      config = preparation.config;
+      if (!operatorScopeSatisfied("operator.write", requester.authority.scopes)) {
+        throw unavailable();
+      }
+      if (client) {
+        client.connect.scopes = [...requester.authority.scopes];
+      }
     }
     session = await prepareSessionMutationFacts({
       cfg: config,
@@ -447,17 +307,20 @@ export async function prepareCronStreamSandboxAuthority(params: {
     if (!prepared.entry) {
       throw unavailable();
     }
-    if (operator && prepared.identity) {
-      access = resumeGatewayOperatorAccessGrant(
-        prepared.identity.profile,
-        prepared.currentConfig,
-        operator.gatewayAccessGrant,
-        { openclawIdPrincipal: principal },
-      );
-      const originalAccess = access;
-      const accessAborted = () => revoke(originalAccess?.signal.reason ?? unavailable());
-      access?.signal.addEventListener("abort", accessAborted, { once: true });
-      subscriptions.push(() => originalAccess?.signal.removeEventListener("abort", accessAborted));
+    if (client && profile && prepared.facts) {
+      const identity = profile.readCurrentFacts();
+      if (
+        authorizePreparedSessionMutation(
+          { cfg: config, client, agentId: target.agentId, sessionKey: target.sessionKey },
+          prepared.facts,
+          {
+            policy: requester?.authority.readCurrentRoleFacts?.().policy,
+            aliases: identity.aliases,
+          },
+        )
+      ) {
+        throw unavailable();
+      }
     }
     assertAuthorityCurrent();
     runtime = resolveSandboxRuntimeStatus({
@@ -491,29 +354,13 @@ export async function prepareCronStreamSandboxAuthority(params: {
         assertAuthorityCurrent();
       }
     }
-    const authority = operator
+    // Policy changes affect the next process start, not this admitted process.
+    admitted = true;
+    const authority = requester
       ? createAdmittedRunOperatorAuthority({
-          profileId: operator.profileId,
-          openclawIdPrincipal: principal,
-          scopes: operator.scopes,
-          gatewayAccessGrant: operator.gatewayAccessGrant,
+          ...requester.authority,
           assertCurrent: assertAuthorityCurrent,
           signal: revoked.signal,
-          readCurrentRoleFacts: () => ({
-            assignedRole: operator.assignedRole,
-            githubLogin: operator.githubLogin,
-            ...(membershipPolicy ? { policy: openclawIdTunnelRolePolicy(principal) } : {}),
-          }),
-          ...(originalRole
-            ? {
-                rolePolicy: {
-                  sessionAccessCap: originalRole.sessions.others,
-                  sandboxRequired: originalRole.sandbox === "required",
-                  agents: originalRole.agents,
-                  accessPrograms: originalRole.accessPrograms,
-                },
-              }
-            : {}),
           retain: () => {
             assertAuthorityCurrent();
             references += 1;
@@ -559,18 +406,17 @@ export async function prepareCronStreamSandboxAuthority(params: {
       try {
         assertAuthorityCurrent();
         const current = assertPreparedCurrent();
-        if (
-          !current.entry ||
-          !isDeepStrictEqual(
-            captureCronStreamSandboxTarget({
-              sandbox,
-              agentId: target.agentId,
-              sessionKey: target.sessionKey,
-              entry: current.entry,
-            }),
-            target,
-          )
-        ) {
+        if (!current.entry) {
+          throw unavailable();
+        }
+        const captured = captureCronStreamSandboxTarget({
+          sandbox,
+          agentId: target.agentId,
+          sessionKey: target.sessionKey,
+          entry: current.entry,
+        });
+        delete captured.operator;
+        if (!isDeepStrictEqual(captured, sandboxTarget)) {
           throw unavailable();
         }
         assertAuthorityCurrent();

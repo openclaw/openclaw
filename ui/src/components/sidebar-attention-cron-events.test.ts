@@ -27,13 +27,23 @@ async function setup(selection?: ApplicationContext["agentSelection"]) {
   vi.useFakeTimers();
   let inventory = cronPage("incident");
   const request = inventoryRequest(() => inventory);
-  const harness = createGatewayHarness(mockClient(request));
+  const readReceipts = vi.fn(async () => ({ status: "ok", entries: {} }));
+  const harness = createGatewayHarness(
+    mockClient((method, params) =>
+      method === "users.prefs.get" ? readReceipts() : request(method, params),
+    ),
+  );
   if (!selection) {
     harness.update({ selfUser: { id: "alice", name: "Alice" } });
   }
   store = createStore(harness.gateway, undefined, selection);
   store.activate(SidebarAttentionStoreOwner);
   await vi.advanceTimersByTimeAsync(0);
+  if (!selection) {
+    await vi.dynamicImportSettled();
+    expect(readReceipts).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(0);
+  }
   return {
     inventory(id?: string) {
       inventory = cronPage(id);

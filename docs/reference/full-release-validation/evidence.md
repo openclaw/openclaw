@@ -49,7 +49,9 @@ artifact limits: fail sealing, never truncate evidence.
 A nonempty plugin subset may consume authenticated all-publishable admission, retaining
 original release/channel/route, Windows operands, and sealed artifact identities. No
 replacement admission, qualification change, or broader authorization results. Each
-batch needs new parent authorization and final-effect current authority checks.
+batch needs publication authorization and final-effect current authority checks:
+parent-backed npm uses its parent receipt; direct human npm recovery keeps its own
+`npm-release` approval and protected `npm-publish` tooling tag.
 
 | Path         | Required evidence and completion                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -76,15 +78,22 @@ authorization owner.
 **Prepared npm quota:** preview checks current workflow token's REST core allowance
 before emitting matrix/evidence handoff:
 
-- Budget 512 requests/package: 256 `consume` + 256 `authorize`; leave 1,024 headroom
-  for final authority/surrounding work. Preview itself: 1,024 requests maximum.
+- FRV-backed preview creates an authenticated evidence handoff for both direct and
+  parent-backed npm publication. It binds the exact FRV, publication attempt,
+  source/tooling, artifact, selection, and parent tuple when present. The handoff
+  reuses immutable evidence, not approval: every consumer authenticates its successful
+  preview and refreshes live authority and artifact identities.
+- With that current-attempt handoff, budget 108 requests/package: 54 `consume` +
+  54 `authorize`. Without it (including a failed-job rerun retaining an older
+  preview), budget 512: 256 per command. Leave 1,024 headroom for surrounding work.
+  Preview itself is capped at 1,024 requests; admission uses the enforced worker cap.
 - Commands enforce ceilings across `gh`/artifact HTTP, pagination, retries, archive
   requests; exhaustion fails closed, never skipping authority/bytes. Accounting counts
   actual attempted requests; old `fetch-metadata-only` telemetry is partial.
 - Oversized selection reports supported smaller selection/reset time before outputs.
-  Example: 98 packages need 51,200 allowance; 5,000 remaining admits at most seven.
-  This does not reduce per-package authentication or promise 98 completions/hour.
-  Resume smaller batches after observed reset with fresh parent authorization; bytes
+  Example: 101 packages with a current handoff need 11,932 allowance; without it,
+  52,736. This is not a promise of completions per hour. Resume smaller batches
+  after observed reset with fresh publication authorization; bytes
   and per-package receipts stay unchanged.
 - Allowance is observation, not global reservation. Other workflows, parent/ClawHub,
   action-internal requests, and manual retries share quota; coordinate separately.
@@ -132,6 +141,20 @@ ordered set of exact test/error signatures from the native test-evidence parser.
 The verifier reads the original leaf log and requires completed invocation
 evidence before accepting it. Changed or additional errors, incomplete logs, and
 setup failures remain blocking; aggregate causes are also checked exactly.
+
+An explicitly approved cancellation uses `cancelledStep` instead of
+`testFailures`. It matches only a completed job whose raw conclusion is
+`cancelled`; its only unsuccessful step must have that exact name and also be
+cancelled. It does not accept a different cancelled step, another failed step,
+a timed-out job, or a cancelled workflow. Ordinary failure grants never accept
+cancellation. The original job conclusion remains visible as cancelled, not passed.
+
+Plain-output native extension batches in CI retain separate invocation streams and emit a
+completion receipt only after every planned invocation and its descendants settle.
+An ordinary test failure does not skip later planned batches. Historical logs
+without that framing remain incomplete; never synthesize receipts or infer missing
+signatures from a later replay. Blank lines between a native failure header and
+its error are accepted, but unrelated errors and inconsistent counts still block.
 
 A Q change limited to the grant ledger does not change workload identity. With
 `reuse_evidence=true`, eligible raw successful or failed child receipts may be

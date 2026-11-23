@@ -107,6 +107,11 @@ it.each(["permanent_failure", "expiry"] as const)(
   "keeps unconsumed private answers internal in a mixed %s notice",
   async (suspendedReason) => {
     const { batch, readNotice } = await fixture(4);
+    batch[0]!.requesterSettleWake = {
+      status: "dispatching",
+      attemptCount: 1,
+      privateInput: { runId: "public-wake", message: "public input", privateOnly: false },
+    };
     batch[1]!.completionTarget = "parent";
     batch[2]!.requesterSettleWake = {
       status: "pending",

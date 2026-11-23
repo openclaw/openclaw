@@ -85,6 +85,7 @@ import {
 import { createSidebarAttentionStore } from "./sidebar-attention-store.ts";
 import { createStartupLifecycle, type StartupStep } from "./startup-lifecycle.ts";
 import { bindUpdateConfigWriteInterlock } from "./update-config-interlock.ts";
+import { bindUpdateToast } from "./update-toast.ts";
 import { openUpdateFailureTriage } from "./update-triage.ts";
 import { seedUserPreferences } from "./user-prefs-cache.ts";
 import { createWebPushCapability } from "./web-push.ts";
@@ -322,6 +323,7 @@ export function bootstrapApplication(
     connectionBootstrap,
   });
   const stopConfigWriteSuspension = bindUpdateConfigWriteInterlock(overlays, runtimeConfig);
+  const stopUpdateToast = bindUpdateToast(gateway, overlays, () => context.navigate("updates"));
   const navigation = createApplicationNavigationPreferences(theme);
   const nativeChatDrafts = createNativeChatDrafts();
   let shell: MountedApplicationShell | undefined;
@@ -702,6 +704,7 @@ export function bootstrapApplication(
       placementStartup.dispose();
       sessions.dispose();
       stopConfigWriteSuspension();
+      stopUpdateToast();
       stopBootstrapPreferences();
       runtimeConfig.dispose();
       overlays.dispose();

@@ -110,27 +110,3 @@ export function ComposerProgress(view: { composer: ChatComposerProps; shown: boo
     </Show>
   );
 }
-
-const WorktreeRestoreNotice = lazy(() => import("./chat-worktree-restore-notice.tsx"), {
-  export: "ChatWorktreeRestoreNotice",
-});
-
-export function ComposerWorkspaceNotice(
-  props: ChatComposerProps & { children?: import("@solidjs/web").JSX.Element },
-) {
-  return (
-    <Show
-      when={
-        props.selectedSession?.worktreeState && props.selectedSession.worktreeState !== "ready"
-          ? props.selectedSession.worktree?.id
-          : undefined
-      }
-      keyed
-      fallback={props.children}
-    >
-      <ChatLazyBoundary>
-        <WorktreeRestoreNotice {...props} />
-      </ChatLazyBoundary>
-    </Show>
-  );
-}

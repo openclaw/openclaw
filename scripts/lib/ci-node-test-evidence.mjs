@@ -11,7 +11,7 @@ export function extractNodeFailedTests(log) {
   const files = new Map();
   const streams = new Map();
   for (const raw of stripVTControlCharacters(log).split("\n")) {
-    const line = raw.replace(/^\d{4}-\d{2}-\d{2}T\S+\s+/u, "").trim();
+    const line = raw.replace(/^\uFEFF?\d{4}-\d{2}-\d{2}T\S+\s+/u, "").trim();
     const shard = /^\[shard:([^\]]+)\]\s*(.*)$/u.exec(line);
     const stream = shard?.[1] ?? "";
     const text = (shard?.[2] ?? line).trim();
@@ -197,7 +197,7 @@ export function parseNodeFailureReport(log, requireComplete) {
   const rows = stripVTControlCharacters(log)
     .split("\n")
     .map((line) => {
-      const raw = line.replace(/^\d{4}-\d{2}-\d{2}T\S+\s/u, "");
+      const raw = line.replace(/^\uFEFF?\d{4}-\d{2}-\d{2}T\S+\s/u, "");
       const match = /^\[shard:([^\]]+)\]\s*(.*)$/u.exec(raw);
       return { stream: match?.[1] ?? "", text: (match?.[2] ?? raw).trim() };
     });
@@ -240,7 +240,12 @@ export function parseNodeFailureReport(log, requireComplete) {
       failureHeaders++;
       const failure =
         /^FAIL\s+(?:\S+(?:\s+\([^()\r\n]+\))?\s+)?(\S+?)(?::\d+(?::\d+)?)? > (.+)$/u.exec(line);
-      const message = lines[index + 1];
+      // Native reporters separate a failure header from its error with blank lines.
+      let messageIndex = index + 1;
+      while (lines[messageIndex] === "") {
+        messageIndex++;
+      }
+      const message = lines[messageIndex];
       if (
         !failure ||
         !isNodeTestEvidencePath(failure[1]) ||
@@ -248,17 +253,16 @@ export function parseNodeFailureReport(log, requireComplete) {
       ) {
         return [];
       }
-      let end = index + 2;
+      let end = messageIndex + 1;
       while (
         end < lines.length &&
         !/^(?:FAIL\s|Test Files\s|Tests\s|\[test\]|⎯+(?:\[\d+\/\d+\])?⎯*$)/u.test(lines[end])
       ) {
         end++;
       }
-      const assertion = lines
-        .slice(index + 1, end)
-        .join("\n")
-        .trim();
+      const assertion = lines.slice(messageIndex, end).join("\n").trim();
+      // The consumed error belongs to this header, not a second loose error.
+      index = messageIndex;
       assertionMessages.add(message);
       signatures.push({ kind: "vitest", file: failure[1], test: `${failure[2]} :: ${assertion}` });
     }

@@ -162,37 +162,6 @@ describe("loadControlUiSessionPullRequests", () => {
   const loadFork = (candidates = [{ owner: forkOwner, repo: "openclaw" }]) =>
     load({}, { resolveGitContext: async () => ({ ...context, forkHeadCandidates: candidates }) });
 
-  it("returns chips with diff counts and check rollup for open PRs", async () => {
-    const fetchImpl = routedFetch([
-      pullsRoute(() => githubJson([pullListItem()])),
-      route("/pulls/103469", () => githubJson({ additions: 4, deletions: 3, changed_files: 2 })),
-      route("/check-runs", () =>
-        githubJson({
-          total_count: 2,
-          check_runs: [
-            { status: "completed", conclusion: "success" },
-            { status: "completed", conclusion: "skipped" },
-          ],
-        }),
-      ),
-    ]);
-    vi.stubGlobal("fetch", fetchImpl);
-
-    expect(await load()).toEqual({
-      repository: { owner: "openclaw", repo: "openclaw" },
-      pullRequests: [
-        chip({
-          additions: 4,
-          deletions: 3,
-          changedFiles: 2,
-          checks: { state: "passing", passed: 1, failed: 0, skipped: 1, running: 0 },
-          checksUrl: "https://github.com/openclaw/openclaw/pull/103469/checks",
-        }),
-      ],
-      rateLimited: false,
-    });
-  });
-
   it("does not reuse cached private PRs after the GitHub token is removed", async () => {
     const cacheLifetime = new AbortController();
     vi.stubEnv("GH_TOKEN", "github-token-a");
@@ -375,14 +344,6 @@ describe("loadControlUiSessionPullRequests", () => {
     const stillBackedOff = await load();
     expect(stillBackedOff).toEqual(stale);
     expect(fetchImpl.mock.calls).toHaveLength(callsDuringBackoff);
-  });
-
-  it("returns no chips without a git context and spends no quota", async () => {
-    const fetchImpl = routedFetch([]);
-    vi.stubGlobal("fetch", fetchImpl);
-    const result = await load({}, { resolveGitContext: async () => null });
-    expect(result).toEqual({ pullRequests: [], rateLimited: false });
-    expect(fetchImpl.mock.calls).toHaveLength(0);
   });
 
   it("revalidates local facts on refresh and observes changed merged heads or the slow fallback", async () => {

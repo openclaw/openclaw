@@ -1,6 +1,5 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
-import * as trace from "../../../infra/diagnostic-trace-context.js";
 import * as work from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import * as caller from "../../tools/gateway-caller-context.js";
@@ -8,14 +7,10 @@ import * as swarm from "./swarm-scheduler.js";
 
 const readContext = () => ({
   caller: caller.getGatewayToolCallerIdentity(),
-  trace: trace.getActiveDiagnosticTraceContext(),
 });
-function withContext<T>(agentId: string, run: () => T, traceDigit = "1", span = "2") {
+function withContext<T>(agentId: string, run: () => T) {
   const identity = { agentId, sessionKey: `agent:${agentId}:main` };
-  const context = { traceId: traceDigit.repeat(32), spanId: span.repeat(16) };
-  return caller.withGatewayToolCallerIdentity(identity, () =>
-    trace.runWithDiagnosticTraceContext(context, run),
-  );
+  return caller.withGatewayToolCallerIdentity(identity, run);
 }
 
 it.each(["success", "failure", "cancelled", "shutdown"] as const)(
@@ -99,11 +94,8 @@ it.each(["success", "failure", "cancelled", "shutdown"] as const)(
         });
         expect(pending).toBeDefined();
       } else {
-        await withContext(
-          "release-agent",
-          () => expect(swarm.releaseSwarmRun("holder")).toBe(true),
-          "3",
-          "4",
+        await withContext("release-agent", () =>
+          expect(swarm.releaseSwarmRun("holder")).toBe(true),
         );
       }
       await entered.promise;
@@ -129,7 +121,6 @@ it.each(["success", "failure", "cancelled", "shutdown"] as const)(
       failureTail.resolve();
       await pending;
       expect(expected.caller).toBeDefined();
-      expect(expected.trace).toBeDefined();
       expect(observed).toEqual(Array(mode === "failure" ? 4 : 2).fill(expected));
       expect(failures).toEqual(mode === "failure" ? [failure] : []);
       expect(tailFailures).toEqual([]);

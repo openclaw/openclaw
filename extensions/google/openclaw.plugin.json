@@ -1064,7 +1064,7 @@
       "choiceLabel": "Google AI Studio API key",
       "choiceHint": "Supported API-key access from aistudio.google.com/apikey",
       "groupId": "google",
-      "groupLabel": "Google",
+      "groupLabel": "Google AI Studio",
       "groupHint": "Supported API-key setup",
       "onboardingFeatured": true,
       "optionKey": "geminiApiKey",

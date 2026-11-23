@@ -9,7 +9,10 @@ import {
   CronDeliveryAuthorityError,
   type CronCompletionDeliveryFence,
 } from "../delivery-attempt-fence.js";
-import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
+import {
+  CronRunReceiptRevisionError,
+  type CronRunReceiptHandle,
+} from "../store/run-receipt.types.js";
 import type { CronJob } from "../types.js";
 import { finishCronRun } from "./run-history.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
@@ -58,6 +61,16 @@ export function createCronCompletionDeliveryFence(params: {
     }
   };
   const fence: CronCompletionDeliveryFence = {
+    standingGrantAuthority: {
+      context,
+      handle,
+      assertCurrent: () => {
+        assertCurrent();
+        if (activeJobMarker?.jobRemoved) {
+          throw new CronRunReceiptRevisionError(handle.receiptId, "cron execution source removed");
+        }
+      },
+    },
     assertCurrent,
     async recordWithheld({ runId, sessionKey, error }) {
       // A continuation may outlive its completed occurrence. Keep that result and

@@ -497,6 +497,8 @@ async function invokeGatewayToolWithSignal(
     sessionEntry,
     sessionWorkspace,
   );
+  const sessionModel = resolveSessionModelRef(params.cfg, sessionEntry, selectedAgentId);
+  const authProfileId = sessionEntry?.authProfileOverride;
   const { resolved, mcpUnavailable } = await resolveToolsWithInvocationMcp({
     toolName,
     knownCoreTool,
@@ -508,10 +510,7 @@ async function invokeGatewayToolWithSignal(
         sessionPermissionPolicy,
         preparedSessionWorkspaceDir: sessionWorkspace,
         agentId: selectedAgentId,
-        webSearchModelSelection: {
-          ...resolveSessionModelRef(params.cfg, sessionEntry, selectedAgentId),
-          authProfileId: sessionEntry?.authProfileOverride,
-        },
+        webSearchModelSelection: sessionModel && { ...sessionModel, authProfileId },
         messageProvider: params.messageChannel,
         accountId: params.accountId,
         agentTo: params.agentTo,

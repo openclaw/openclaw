@@ -239,8 +239,8 @@ test("a guest's plugin RPC sees its visitor grant, owns the session it creates, 
       expect(denied.payload?.error).toContain("require your own session");
       expect((await history(staffSession)).payload?.messages).toEqual([]);
 
-      // Revoking the real visitor grant after the transcript append has started stops
-      // the durable message and its Inbox entry.
+      // A visitor grant revoked after the append starts does not roll back the
+      // admitted message or its Inbox entry.
       const revokedKey = `agent:main:dashboard:${randomUUID()}`;
       transcriptAppend.onStart = () => {
         transcriptAppend.onStart = undefined;
@@ -250,8 +250,18 @@ test("a guest's plugin RPC sees its visitor grant, owns the session it creates, 
       expect(revoked?.payload?.messageId).toBeUndefined();
       expect(transcriptAppend.onStart).toBeUndefined();
       visitorGrant = new AbortController();
-      expect((await history(revokedKey)).payload?.messages ?? []).toEqual([]);
-      expect((await inbox()).payload?.items).toHaveLength(1);
+      // The probe replies before the admitted append settles.
+      await expect
+        .poll(async () => (await history(revokedKey)).payload?.messages)
+        .toMatchObject([
+          {
+            role: "assistant",
+            content: [
+              { text: "Welcome! @Staff invited you. Please test [[audio_as_voice]] replies." },
+            ],
+          },
+        ]);
+      await expect.poll(async () => (await inbox()).payload?.items).toHaveLength(2);
     } finally {
       staffWs.close();
       guestWs.close();

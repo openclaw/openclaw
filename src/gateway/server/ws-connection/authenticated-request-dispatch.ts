@@ -43,7 +43,6 @@ import {
 import { hasCurrentGatewayOperatorAccess } from "../../operator-access-policy.js";
 import { onOperatorRolePolicyChanged } from "../../operator-role-policy.js";
 import { isPublicationTransportCurrent } from "../../publication-reader.js";
-import { bindWebSocketRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestEntry } from "../../server-request-entry.js";
 import { SharedGatewaySessionGenerationState } from "../../server-shared-auth-generation.js";
 import { classifyGatewayStaleInstall } from "../../stale-install.js";
@@ -568,29 +567,25 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           }
           await runOutsideGatewayRootWorkAdmission(() =>
             handleGatewayRequest(
-              bindWebSocketRequestMutationAuthority(
-                {
-                  req,
-                  respond,
-                  acceptsSerializedJson: true,
-                  acceptsDeflatedSegments: params.handler.socket.acceptsDeflatedSegments,
-                  client,
-                  isWebchatConnect: params.isWebchatConnect,
-                  hasCurrentClientAuthority,
-                  expectedProfileBinding,
-                  extraHandlers,
-                  methodRegistry: getMethodRegistry?.(),
-                  context,
-                  ...(admission ? { admission } : {}),
-                  requestEntry: entry,
-                  onHandlerStart: () => {
-                    handlerStarted = true;
-                  },
-                  ...(signal ? { signal } : {}),
-                },
+              {
+                req,
+                respond,
+                acceptsSerializedJson: true,
+                acceptsDeflatedSegments: params.handler.socket.acceptsDeflatedSegments,
                 client,
-                getRequiredSharedGatewaySessionGeneration,
-              ),
+                isWebchatConnect: params.isWebchatConnect,
+                hasCurrentClientAuthority,
+                expectedProfileBinding,
+                extraHandlers,
+                methodRegistry: getMethodRegistry?.(),
+                context,
+                ...(admission ? { admission } : {}),
+                requestEntry: entry,
+                onHandlerStart: () => {
+                  handlerStarted = true;
+                },
+                ...(signal ? { signal } : {}),
+              },
               diagnostics,
             ),
           );

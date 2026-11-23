@@ -20,7 +20,7 @@ import type { DelegationCapability } from "./delegation-capability.js";
 import type { HostFileMutationPreparer } from "./host-file-write.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
-import type { OpenClawSharedToolsOptions } from "./openclaw-tools.types.js";
+import type { OpenClawToolsOptions, OpenClawSharedToolsOptions } from "./openclaw-tools.types.js";
 import type { SandboxContext } from "./sandbox/types.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
@@ -135,6 +135,7 @@ export type OpenClawCodingToolsOptions = {
   AgentRunChannelContext;
 
 export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
+  readDelegationConfig?: OpenClawToolsOptions["readDelegationConfig"];
   /** Internal listing owner pins discovery changes or renders a read-only inventory. */
   githubPublicationConfigurationAware?: true;
   /** Describe prospective GitHub actions before policy filtering; never executable. */

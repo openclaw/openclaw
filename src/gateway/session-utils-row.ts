@@ -168,7 +168,7 @@ export function readSessionRowInputs(params: {
           transcriptUsage: params.transcriptUsage,
         })
       : undefined;
-  const { provider, model } = selectedModel;
+  const { provider, model } = selectedModel ?? {};
   // Display aliases do not change the selected route's catalog or runtime policy.
   const activeModel = resolveGatewaySessionActiveModel({
     cfg,
@@ -251,13 +251,11 @@ export function readSessionRowInputs(params: {
         thinkingProjection.agentRuntime,
       ),
       contextWindowProfile,
-      fastModeState: resolveFastModeState({
-        cfg,
-        provider,
-        model,
-        agentId,
-        sessionEntry: entry,
-      }),
+      // Fast mode is a model property; a session without a model has none.
+      fastModeState:
+        provider && model
+          ? resolveFastModeState({ cfg, provider, model, agentId, sessionEntry: entry })
+          : undefined,
       hasAutomation: sessionHasAutomation(key, cfg, agentId) ? true : undefined,
       rowModelIdentity,
       selectedModel,
@@ -465,9 +463,9 @@ export function materializeSessionRow(
     ...definedSessionRowField("cyberAccessProgram", entry?.cyberAccessProgram),
     ...definedSessionRowField("fastMode", entry?.fastMode),
     ...definedSessionRowField("toolOverrides", entry?.toolOverrides),
-    ...definedSessionRowField("effectiveFastMode", input.fastModeState.mode),
-    ...definedSessionRowField("effectiveFastModeSource", input.fastModeState.source),
-    ...definedSessionRowField("fastAutoOnSeconds", input.fastModeState.fastAutoOnSeconds),
+    ...definedSessionRowField("effectiveFastMode", input.fastModeState?.mode),
+    ...definedSessionRowField("effectiveFastModeSource", input.fastModeState?.source),
+    ...definedSessionRowField("fastAutoOnSeconds", input.fastModeState?.fastAutoOnSeconds),
     ...definedSessionRowField("verboseLevel", entry?.verboseLevel),
     ...definedSessionRowField("traceLevel", entry?.traceLevel),
     ...definedSessionRowField("reasoningLevel", entry?.reasoningLevel),
@@ -502,7 +500,7 @@ export function materializeSessionRow(
     ...definedSessionRowField("model", input.rowModelIdentity.model),
     ...definedSessionRowField(
       "modelOverrideSource",
-      input.selectedModel.storedOverrideSource === "parent"
+      input.selectedModel?.storedOverrideSource === "parent"
         ? "inherited"
         : resolveSessionModelOverrideSource(entry),
     ),
@@ -517,8 +515,8 @@ export function materializeSessionRow(
       "contextBudgetStatus",
       resolveProjectedSessionContextBudgetStatus({
         entry,
-        provider: input.selectedModel.provider,
-        model: input.selectedModel.model,
+        provider: input.selectedModel?.provider,
+        model: input.selectedModel?.model,
         contextTokens: input.contextTokens,
       }),
     ),

@@ -247,6 +247,7 @@ it("searches and displays static settings blocks in the active locale", async ()
 
   expectBlocks(
     search("modelo"),
+    { routeId: "ai-agents", search: "?section=tools", hash: "#config-section-tools" },
     { routeId: "model-providers", hash: "#settings-model-behavior" },
     { routeId: "appearance", hash: "#settings-appearance-sidebar" },
   );

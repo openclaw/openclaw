@@ -5,7 +5,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
-import { captureGatewayOperatorRunAuthority } from "../../../gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../../gateway/operator-run-authority.js";
 import {
   createContext,
   createOperatorClient,
@@ -372,7 +372,7 @@ it.each([false, true])(
       profileName: "retirement-successor",
       scopes: ["operator.write"],
     });
-    const source = await captureGatewayOperatorRunAuthority({ client, context });
+    const source = await prepareGatewayOperatorRunAuthority({ client, context });
     if (!source) {
       throw new Error("Expected canonical successor authority");
     }

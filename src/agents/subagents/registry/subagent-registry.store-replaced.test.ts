@@ -18,6 +18,7 @@ import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpe
 import {
   blockSubagentCompletionDelivery,
   mutateRequesterCompletionBatch,
+  recordRequiredCompletionNotice,
 } from "../completion/subagent-completion-admission.store.js";
 import {
   records,
@@ -104,7 +105,7 @@ it.each(["delivered", "failed", "error-failed"] as const)(
         ? delayed
         : [
             ...delayed,
-            expect.objectContaining({ customType: "run-failed-before-reply", display: true }),
+            expect.objectContaining({ customType: "subagent-completion", display: true }),
           ],
     );
     expect(loadSubagentRegistryFromSqlite().get(subagent.runId)?.delivery?.disposition).toBe(
@@ -112,6 +113,54 @@ it.each(["delivered", "failed", "error-failed"] as const)(
     );
   },
 );
+
+it("records a child-result notice for live children and none for a killed child", async () => {
+  const target = {
+    agentId: "main",
+    sessionKey: records().subagent.requesterSessionKey,
+    sessionId: "expired-delivery-requester",
+    storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+  };
+  await upsertSessionEntryCore(target, {
+    sessionId: target.sessionId,
+    lifecycleRevision: "requester-revision",
+    updatedAt: Date.now(),
+  });
+  const killed: SubagentRunRecord = {
+    ...records().subagent,
+    runId: "killed-run",
+    childSessionKey: "agent:main:subagent:killed",
+    requesterStorePath: target.storePath,
+    endedReason: "subagent-killed",
+    completion: { required: true, resultText: null, capturedAt: Date.now() },
+  };
+  killed.execution = { ...killed.execution, outcome: { status: "error", error: "killed" } };
+  const live: SubagentRunRecord = {
+    ...records().subagent,
+    label: "Release notes",
+    requesterStorePath: target.storePath,
+  };
+  const notices = async () =>
+    (await loadTranscriptEvents(target)).filter(
+      (event) => isRecord(event) && event.type === "custom_message",
+    );
+
+  await recordRequiredCompletionNotice(killed, "expired");
+  expect(await notices()).toEqual([]);
+
+  await recordRequiredCompletionNotice(killed, "expired", [killed, live]);
+  const recorded = await notices();
+  expect(recorded).toEqual([
+    expect.objectContaining({
+      customType: "subagent-completion",
+      display: true,
+      content: expect.stringMatching(
+        /^Release notes finished on .+ UTC, but its result couldn't be added[^]*canonical result$/,
+      ),
+    }),
+  ]);
+  expect(recorded[0]).toMatchObject({ content: expect.not.stringContaining("killed") });
+});
 
 it.each([false, true])(
   "settles an unreachable yielded task only after custody retires (%s)",

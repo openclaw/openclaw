@@ -291,7 +291,7 @@ suite.define(() => {
       },
     ));
 
-  it("keeps unnamed people private when filtering their phone activity", () =>
+  it("aligns phone activity and its people filter without exposing unnamed identities", () =>
     suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 844, width: 390 } },
       async ({ page }) => {
@@ -364,6 +364,19 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}activity`);
         await waitForControlUiRoute(page, { pathname: "/activity", routeId: "activity" });
         const activity = page.locator("openclaw-activity-page");
+        await activity.locator(".activity-feed__sessions").waitFor();
+        const pageEdge = (await activity.locator(".page-subtitle").boundingBox())!.x;
+        for (const selector of [".activity-feed__search", ".activity-feed__sessions"]) {
+          expect((await activity.locator(selector).first().boundingBox())!.x).toBe(pageEdge);
+        }
+        const tabLabelEdge = await activity
+          .getByRole("tab", { name: "Sessions" })
+          .evaluate((tab) => {
+            const label = document.createRange();
+            label.selectNodeContents(tab);
+            return label.getBoundingClientRect().left;
+          });
+        expect(Math.abs(tabLabelEdge - pageEdge)).toBeLessThanOrEqual(1);
         const rowLink = (name: string) =>
           activity.locator(`[data-activity-session="agent:main:${name}"]`);
         const meta = (name: string) => rowLink(name).locator(".activity-feed__session-meta");
@@ -380,6 +393,10 @@ suite.define(() => {
 
         // Selecting the full identity keeps its unnamed heading private.
         await activity.locator(".activity-feed__people-trigger").click();
+        const labelEdges = await activity
+          .locator(".activity-feed__people-name")
+          .evaluateAll((labels) => labels.map((label) => label.getBoundingClientRect().left));
+        expect(new Set(labelEdges).size).toBe(1);
         await page.locator(`[data-activity-unresolved] [data-activity-person="${rawId}"]`).click();
         await expectText(activity.locator(`[data-activity-identity="${rawId}"] h2`)).toBe("Person");
       },

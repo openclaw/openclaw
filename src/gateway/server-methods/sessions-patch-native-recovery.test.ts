@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import type { SessionsPatchParams } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
-} from "../../agents/admitted-run-context.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import * as harnessRegistry from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import * as modelRuntime from "../../auto-reply/reply/model-runtime-normalization.js";
@@ -79,7 +77,7 @@ async function prepare(
 }
 
 const operatorAuthority = (accessOnly: boolean): AdmittedRunOperatorAuthority =>
-  createAdmittedRunOperatorAuthority({
+  createTestOperatorAuthority({
     profileId: "runtime-policy-fixture",
     scopes: ["operator.admin"],
     assertCurrent() {},
@@ -112,7 +110,7 @@ it.each([false, true])(
   },
 );
 
-it("retains exact native runtimes and rechecks operator policy at commit", async () => {
+it("retains admitted native policy and checks runtime availability at commit", async () => {
   harness.nativeModelPolicySupport = "exact";
   expect(
     (await prepare(unrestricted(), true, cfg, { operatorAuthority: operatorAuthority(true) })).ok,
@@ -120,7 +118,7 @@ it("retains exact native runtimes and rechecks operator policy at commit", async
 
   harness.nativeModelPolicySupport = undefined;
   let policy: AdmittedRunOperatorAuthority["modelPolicy"] = undefined;
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId: "runtime-policy-fixture",
     scopes: ["operator.admin"],
     assertCurrent() {},
@@ -132,8 +130,18 @@ it("retains exact native runtimes and rechecks operator policy at commit", async
   assert(result.ok);
   expect(result.validate?.()).toBeUndefined();
   policy = { models: [], allows: () => true };
+  expect(result.validate?.()).toBeUndefined();
+  expect(
+    await prepare(unrestricted(), true, cfg, {
+      operatorAuthority: createTestOperatorAuthority({ ...authority, modelPolicy: policy }),
+    }),
+  ).toMatchObject({
+    ok: false,
+    error: { message: expect.stringContaining("cannot enforce your operator role") },
+  });
+  validate.mockReturnValue("Selected runtime retired");
   expect(result.validate?.()).toMatchObject({
-    message: expect.stringContaining("cannot enforce your operator role"),
+    message: "Selected runtime retired",
   });
 });
 
