@@ -151,7 +151,15 @@ suite.define(() => {
           requestId: "example-request",
         });
         await link.waitFor();
+        const requestHeading = page.getByRole("heading", { name: "Connect Example AI app?" });
+        expect((await heading.boundingBox())!.width).toBeGreaterThan(1);
         await page.setViewportSize({ width: 400, height: 820 });
+        await page.locator(".topbar-page-title", { hasText: "Connected apps" }).waitFor();
+        // The page heading remains available to assistive tech. The request is not a duplicate.
+        await expect
+          .poll(() => heading.evaluate((node) => getComputedStyle(node).clipPath))
+          .toBe("inset(50%)");
+        expect((await requestHeading.boundingBox())!.width).toBeGreaterThan(1);
         await page.locator(".topbar-nav-toggle").click();
         await link.waitFor();
         expect(await link.getAttribute("aria-current")).toBe("page");

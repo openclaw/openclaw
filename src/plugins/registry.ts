@@ -541,20 +541,26 @@ export function createPluginRegistry(registryOptions: PluginRegistryParams) {
               registerSessionCatalog: bound.registerSessionCatalog,
             }
           : {}),
-        // Allow setup-only/setup-runtime paths to surface parse-time CLI metadata
-        // without opting into the wider full-registration surface.
-        registerCli: bound.registerCli,
-        ...(registrationMode === "cli-metadata"
-          ? {}
+        // A passive memory backend serves the slot owner's provider runtime only; every other
+        // registrar keeps its inert default, so no tool, hook, service, or prompt surface exists.
+        ...(registrationCapabilities.memoryBackend
+          ? { registerMemoryCapability: bound.registerMemoryCapability }
           : {
-              registerChannel: (registration) =>
-                registerChannel(
-                  registration,
-                  registrationMode,
-                  registrationCapabilities.runtimeChannel
-                    ? () => resolveRegisteredChannelRuntime(record)
-                    : undefined,
-                ),
+              // Allow setup-only/setup-runtime paths to surface parse-time CLI metadata
+              // without opting into the wider full-registration surface.
+              registerCli: bound.registerCli,
+              ...(registrationMode === "cli-metadata"
+                ? {}
+                : {
+                    registerChannel: (registration) =>
+                      registerChannel(
+                        registration,
+                        registrationMode,
+                        registrationCapabilities.runtimeChannel
+                          ? () => resolveRegisteredChannelRuntime(record)
+                          : undefined,
+                      ),
+                  }),
             }),
       },
     });

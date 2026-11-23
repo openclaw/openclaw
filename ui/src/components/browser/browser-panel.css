@@ -309,6 +309,16 @@ openclaw-browser-panel {
     flex: 1 1 auto;
     min-height: 100px;
   }
+  .bp-native-backdrop {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: top left;
+    pointer-events: none;
+    user-select: none;
+  }
   .bp-native-loading {
     display: block;
     padding: var(--space-2);

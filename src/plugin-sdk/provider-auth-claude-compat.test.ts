@@ -5,10 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockClaudeManagedSettings } from "../../test/helpers/claude-managed-settings.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  attestClaudeNativeLoginOwner,
-  readClaudeNativeLoginOwner,
-} from "./provider-auth-claude-compat.js";
+import { attestClaudeNativeLoginOwner } from "./provider-auth-claude-compat.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const writeJson = (file: string, value: unknown) =>
@@ -80,7 +77,6 @@ describe("attestClaudeNativeLoginOwner", () => {
       credentials: credentials({ accessToken: tokenFor("uuid-b") }),
     });
     expect(await attest({ homeDir, platform: "linux" })).toBe("uuid:uuid-b");
-    expect(readClaudeNativeLoginOwner({ homeDir, platform: "linux" })).toBe("uuid:uuid-b");
   });
 
   it("sends only the access token, only to the Anthropic profile endpoint, bounded", async () => {
@@ -119,23 +115,20 @@ describe("attestClaudeNativeLoginOwner", () => {
       fetchFn: vi.fn(response) as never,
     });
     expect(result.owner).toBeUndefined();
-    expect(readClaudeNativeLoginOwner({ homeDir, platform: "linux" })).toBeUndefined();
     expect(await attest({ homeDir, platform: "linux" })).toBe("uuid:uuid-a");
   });
 
   describe("attestation cache", () => {
-    it("answers the synchronous check only for a token this process attested", async () => {
+    it("asks the network once per token", async () => {
       const homeDir = makeHome({ credentials: credentials() });
       const fetchFn = profileFetch();
-      expect(readClaudeNativeLoginOwner({ homeDir, platform: "linux" })).toBeUndefined();
       expect(await attest({ homeDir, platform: "linux" }, fetchFn as never)).toBe("uuid:uuid-a");
-      expect(readClaudeNativeLoginOwner({ homeDir, platform: "linux" })).toBe("uuid:uuid-a");
       expect(await attest({ homeDir, platform: "linux" }, fetchFn as never)).toBe("uuid:uuid-a");
       expect(fetchFn).toHaveBeenCalledTimes(1);
-      // A rotated token has no owner until it is attested itself.
+      // A rotated token is attested itself.
       writeCredentials(path.join(homeDir, ".claude"));
-      expect(readClaudeNativeLoginOwner({ homeDir, platform: "linux" })).toBeUndefined();
-      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(await attest({ homeDir, platform: "linux" }, fetchFn as never)).toBe("uuid:uuid-a");
+      expect(fetchFn).toHaveBeenCalledTimes(2);
     });
 
     it("never asks the network for an expired token, but keeps an owner attested before", async () => {
@@ -158,7 +151,7 @@ describe("attestClaudeNativeLoginOwner", () => {
         platform: "linux",
         fetchFn: fetchFn as never,
       });
-      expect(later).toEqual({ owner: "uuid:uuid-a", refreshDueAt: expired - 10 * 60_000 });
+      expect(later).toEqual({ owner: "uuid:uuid-a" });
       expect(fetchFn).toHaveBeenCalledTimes(1);
     });
 
@@ -172,7 +165,8 @@ describe("attestClaudeNativeLoginOwner", () => {
         await attest({ homeDir, platform: "linux" }, fetchFn as never);
       }
       fs.writeFileSync(path.join(homeDir, ".claude", ".credentials.json"), first);
-      expect(readClaudeNativeLoginOwner({ homeDir, platform: "linux" })).toBeUndefined();
+      await attest({ homeDir, platform: "linux" }, fetchFn as never);
+      expect(fetchFn).toHaveBeenCalledTimes(66);
     });
   });
 
@@ -253,7 +247,6 @@ describe("attestClaudeNativeLoginOwner", () => {
       writeManaged("managed-settings.d/10-auth.txt", { env: { ANTHROPIC_API_KEY: "synthetic" } });
       expect(await attest(options)).toBe("uuid:uuid-a");
       writeManaged("managed-settings.json", { apiKeyHelper: "echo synthetic" });
-      expect(readClaudeNativeLoginOwner(options)).toBeUndefined();
       expect(await attest(options)).toBeUndefined();
       writeManaged("managed-settings.json", {});
       writeManaged("managed-settings.d/20-auth.json", { env: { ANTHROPIC_API_KEY: "synthetic" } });
@@ -270,7 +263,6 @@ describe("attestClaudeNativeLoginOwner", () => {
         }
         return realpathSync(target);
       }) as typeof fs.realpathSync);
-      expect(readClaudeNativeLoginOwner(options)).toBe("uuid:uuid-a");
       expect(await attest(options)).toBe("uuid:uuid-a");
     });
 

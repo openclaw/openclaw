@@ -17,6 +17,7 @@
 }
 
 .chat-compaction {
+  container: chat-compaction / inline-size;
   margin: var(--space-5) 8px;
 }
 
@@ -26,6 +27,35 @@
   font-size: 13px;
   letter-spacing: 0;
   text-transform: none;
+}
+
+@container chat-compaction (max-width: 400px) {
+  .chat-compaction .chat-divider__label:has(> .chat-divider__metric) {
+    display: grid;
+    grid-template-columns: auto minmax(0, max-content);
+    grid-template-areas:
+      "glyph title"
+      "glyph metric";
+    min-width: 0;
+    row-gap: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .chat-compaction__glyph {
+    grid-area: glyph;
+  }
+
+  .chat-compaction .chat-divider__title {
+    grid-area: title;
+  }
+
+  .chat-compaction .chat-divider__metric {
+    grid-area: metric;
+  }
+
+  .chat-compaction .chat-divider__separator {
+    display: none;
+  }
 }
 
 .chat-compaction__glyph {

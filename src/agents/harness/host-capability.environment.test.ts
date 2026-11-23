@@ -4,7 +4,7 @@ import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { withInstallationTarget } from "../../infra/installation-target-context.js";
 import * as gatewayCliShim from "../../infra/openclaw-cli-shim.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 
 afterEach(() => {
@@ -28,7 +28,7 @@ describe("prepared harness tool environment", () => {
           config,
         },
         {
-          operatorAuthority: createAdmittedRunOperatorAuthority({
+          operatorAuthority: createTestOperatorAuthority({
             profileId: "requester",
             scopes: ["operator.read"],
             assertCurrent: () => {},

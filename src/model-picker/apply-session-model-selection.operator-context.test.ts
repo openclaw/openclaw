@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { withOperatorToolGatewayAuthority } from "../gateway/server-plugin-in-process-dispatch.js";
@@ -26,7 +26,7 @@ function restrictedSelection(options: { empty?: boolean; assertCurrent?: () => v
     },
   );
   const before = structuredClone(params.sessionEntry);
-  const operatorAuthority = createAdmittedRunOperatorAuthority({
+  const operatorAuthority = createTestOperatorAuthority({
     profileId: profile.profileId,
     scopes: ["operator.write"],
     assertCurrent: options.assertCurrent ?? (() => {}),
@@ -104,30 +104,27 @@ it.each([
   },
 );
 
-it.each(["caller", "profiled"] as const)(
-  "rechecks %s authority after model preparation before mutation",
-  async (source) => {
-    let current = true;
-    const message =
-      source === "caller" ? "operator policy changed" : "direct invocation authority expired";
-    const assertCurrent = () => {
-      if (!current) {
-        throw new Error(message);
-      }
-    };
-    const { params, run, expectUnchanged } = restrictedSelection(
-      source === "caller" ? { assertCurrent } : {},
-    );
-    params.request.runtime = { kind: "set", runtime: "openclaw" };
-    prepareRuntime.mockImplementationOnce(async () => {
-      current = false;
-      return { kind: "ready", runtimeId: "openclaw", validate: () => undefined };
-    });
-    const result = await run(source, assertCurrent);
-    expect(result).toMatchObject({ status: "rejected", reason: "not-allowed", message });
-    expectUnchanged();
-  },
-);
+it("rechecks caller authority after model preparation before mutation", async () => {
+  let current = true;
+  const assertCurrent = () => {
+    if (!current) {
+      throw new Error("operator policy changed");
+    }
+  };
+  const { params, run, expectUnchanged } = restrictedSelection({ assertCurrent });
+  params.request.runtime = { kind: "set", runtime: "openclaw" };
+  prepareRuntime.mockImplementationOnce(async () => {
+    current = false;
+    return { kind: "ready", runtimeId: "openclaw", validate: () => undefined };
+  });
+  const result = await run("caller", assertCurrent);
+  expect(result).toMatchObject({
+    status: "rejected",
+    reason: "not-allowed",
+    message: "operator policy changed",
+  });
+  expectUnchanged();
+});
 
 it.each(["request", "profiled", "unbound"] as const)(
   "the public SDK cannot omit operator model policy in %s context",

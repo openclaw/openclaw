@@ -39,10 +39,13 @@ export function GrantRow(props: {
         <button
           class="btn btn--sm standing-grants__revoke"
           aria-label={`${revokeLabel()}: ${props.grant.cronJobName ?? props.grant.cronJobId} — ${props.grant.command}`}
+          data-alternate-label={t(
+            props.revoking ? "standingGrants.revoke" : "standingGrants.revoking",
+          )}
           disabled={props.disabled}
           onClick={props.onRevoke}
         >
-          {revokeLabel()}
+          <span>{revokeLabel()}</span>
         </button>
       ) : null}
     </li>

@@ -1,6 +1,5 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, expect, it, vi } from "vitest";
-import { GitCleanupReportingError } from "../../infra/update-runner-git-cleanup.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
@@ -13,11 +12,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
 import { UpdatePreMutationError } from "./shared.js";
-import {
-  resolveMutableUpdateFailure,
-  UpdateCommandFailure,
-  UpdateCommandPendingRecoveryFailure,
-} from "./update-command-result.js";
+import { resolveMutableUpdateFailure, UpdateCommandFailure } from "./update-command-result.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 
 const boundary = vi.hoisted(() => ({ admission: vi.fn(), prepareFailure: vi.fn() }));
@@ -117,13 +112,9 @@ it.each(["forced", "uncertain"] as const)(
   },
 );
 
-it.each([
-  { uncertain: false, reporting: false },
-  { uncertain: false, reporting: true },
-  { uncertain: true, reporting: true },
-])(
-  "preserves recovery metadata without authorizing uncertain cleanup ($uncertain, reporting=$reporting)",
-  async ({ uncertain, reporting }) => {
+it.each([false, true])(
+  "preserves recovery metadata without authorizing uncertain cleanup (%s)",
+  async (uncertain) => {
     using report = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     const original = new UpdatePreMutationError(
       "node-runtime-preflight",
@@ -135,9 +126,7 @@ it.each([
         ],
       },
     );
-    const error = reporting
-      ? new GitCleanupReportingError(original, [new Error("cleanup ledger unavailable")])
-      : original;
+    const error = original;
     const originalRecovery = vi.fn(async () => ({
       serviceRestartSafe: true as const,
       version: "2026.9.4",
@@ -159,21 +148,3 @@ it.each([
     }
   },
 );
-
-it("keeps pending recovery closed when cleanup reporting also fails", async () => {
-  const original = new UpdateCommandPendingRecoveryFailure(
-    { status: "error", mode: "git", reason: "update-failed", steps: [], durationMs: 1 },
-    "Recovery owner has not settled",
-  );
-  const reporting = new Error("cleanup ledger unavailable");
-  const cause = new GitCleanupReportingError(original, [reporting]);
-  const originalRecovery = vi.fn();
-  const error = await resolveFailure(cause, originalRecovery, "git").catch(
-    (caught: unknown) => caught,
-  );
-  expect(error).toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
-  expect(collectNestedErrorCandidates(error)).toEqual(
-    expect.arrayContaining([original, reporting]),
-  );
-  expect(originalRecovery).not.toHaveBeenCalled();
-});

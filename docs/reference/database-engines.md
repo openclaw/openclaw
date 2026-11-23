@@ -92,6 +92,9 @@ selecting PostgreSQL alone is not a warning.
 | `database.postgres.connection`   | None         | Required when any effective family uses PostgreSQL. A shared DSN string or env/file/exec SecretRef; store-backed refs are rejected.                                |
 | `database.postgres.schemaPrefix` | `"openclaw"` | Prefix for new store schemas: 1–27 lowercase letters, digits, or underscores, starting with a letter or underscore. Existing anchors keep their recorded schema.   |
 
+OpenClaw rejects the prefix `pg` and any prefix starting with `pg_` because
+both produce names reserved for PostgreSQL system schemas.
+
 Shared state, agent databases, Workboard, Logbook, and Team Reports support PostgreSQL.
 Before its first shared-state read, the Gateway resolves the effective family
 map and, if needed, the shared PostgreSQL connection once on the host. Reader,
@@ -378,6 +381,12 @@ including its vector dimension, is refused with `SearchExtensionDefinitionChange
 restore the previous definition until the owning component provides a derived-index
 rebuild. Canonical embeddings remain unchanged. SQLite registration only binds
 the existing capability and leaves its FTS5 and vec0 lifecycle unchanged.
+
+Memory provides that owner-controlled rebuild through `openclaw memory index --force`.
+On PostgreSQL, new vector dimensions are installed in the same transaction that
+publishes the rebuilt chunks and index metadata. Failed publication preserves the
+previous projection. Tokenizer changes update the memory trigram indexes at
+admission without replacing source text or the full-text columns.
 
 For a store that declares search indexes, install these extensions in the
 database before opening it. The default extension namespace is `public`:

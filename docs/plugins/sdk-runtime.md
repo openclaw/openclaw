@@ -46,6 +46,34 @@ surface and session root. Channels may use this capability to enable helper
 tools for restricted senders. Core remains responsible for authorization and
 containment. The same ID is advertised in Gateway `hello-ok.features.capabilities`.
 
+## Resource profile
+
+`openclaw/plugin-sdk/resource-profile` exposes the host's read-only resource
+policy as `ResourceProfile` (`"standard" | "lean"`):
+
+```typescript
+import { getResourceProfile, onResourceProfileChange } from "openclaw/plugin-sdk/resource-profile";
+
+const profile = getResourceProfile();
+const unsubscribe = onResourceProfileChange((nextProfile) => {
+  // Update plugin-owned resource policy; let admitted work settle first.
+  applyResourcePolicy(nextProfile);
+});
+api.lifecycle.onDispose(unsubscribe);
+```
+
+Reads return the Gateway owner's resolved decision, without inspecting config,
+memory or CPUs again. Before Gateway initialization and in standalone commands,
+the default is `standard`. The subscription observes future changes only; it
+does not immediately call the listener. Listeners run synchronously after the
+new value is visible, and one listener throwing does not stop the others.
+Unsubscribe on plugin disposal; Gateway shutdown also clears subscriptions.
+
+`gateway.resources.profile` still requires a Gateway restart. This signal does
+not enable hot configuration changes or grant execution authority. Plugins own
+their policy: lean can defer optional startup and retire idle resources, but
+must preserve watches, accepted operations and durable maintenance obligations.
+
 ## Settled agent lifecycle events
 
 Use `api.agent.events.registerAgentEventSubscription` with `streams: ["lifecycle"]`
@@ -165,9 +193,12 @@ Every tool the session lists stays in the request; the fork runs only the tools
 it was given. A call to any other tool returns a normal result such as
 `exec is not available in this background run.` A tool-free fork also sets tool
 choice to `none` on OpenAI Responses (including native ChatGPT), Chat
-Completions and Anthropic Messages, so provider-hosted tools cannot run. Other
-APIs keep the parent's tool choice; a tool-free fork whose request carries a
-provider-hosted tool on those APIs fails before it is sent.
+Completions and Anthropic Messages, so provider-hosted tools cannot run; it lists
+the session's hosted tools (for example web search) like the session does. A
+fork that runs tools lists provider-hosted search only when it was given
+`web_search`, because the provider runs hosted tools before the fork's tool
+gate. Other APIs keep the parent's tool choice; a tool-free fork whose request
+carries a provider-hosted tool on those APIs fails before it is sent.
 
 A fork uses the session's full model context with the model's own context
 window and compaction, not an excerpt. Thinking follows the session, because
@@ -188,8 +219,15 @@ bundled plugins). The caller must also have the target session's `sessions.get`
 read access. That authority, the Gateway binding and conversation access remain
 live through the run and its settlement. Tool policy is checked as the anchored
 turn's requester: the sender, owner flag, group and channel that the turn's
-stored user message recorded. Plugins cannot supply requester facts. CLI
-runtimes are not supported.
+stored user message recorded. Plugins cannot supply requester facts.
+
+A session whose model runs on a subscription login that a CLI backend owns (for
+example `claude-cli` with a Claude login or Claude subscription token) forks
+through that CLI, so the fork stays within the plan. The CLI starts a fresh
+session with the conversation as context, so the session's prompt cache is not
+reused, and only the fork's own tools are available to it. A fork that grants
+the plugin's own tools or sets `maxTokens` cannot run on the CLI and uses the
+direct provider route instead. API-key sessions keep the request replay above.
 
 Sandboxed managed-worktree forks prepare the same private workspace and selected
 working directory as an ordinary turn of the source session. The durable project
@@ -488,6 +526,10 @@ callback keeps its registry until its returned operation settles; detached async
 resources do not extend that lifetime. Access to a released registry fails instead
 of silently selecting the current generation. Admitted turns and explicitly
 retained consumers keep their selected generation until they settle.
+Queued channel replies retain their delivery and run-observer callbacks until
+source settlement, independently of the inbound turn's adoption lifecycle.
+An internal delivery-recovery turn takes its own callback hold; completing the
+original turn does not close the recovery's callbacks or reuse its cancellation identity.
 Registry-dependent runtime APIs re-enter their live plugin owner after adoption
 and preserve an explicitly prepared registry, including an empty selection.
 
@@ -1104,7 +1146,7 @@ Beyond `api.runtime`, the API object also provides:
   Scoped logger (`debug`, `info`, `warn`, `error`).
 </ParamField>
 <ParamField path="api.registrationMode" type="PluginRegistrationMode">
-  Current load mode: `"full"` (live activation), `"discovery"` / `"tool-discovery"` (read-only capability discovery), `"setup-only"` (lightweight setup entry), `"setup-runtime"` (setup flow that also needs the runtime channel entry), or `"cli-metadata"` (CLI command metadata collection).
+  Current load mode: `"full"` (live activation), `"discovery"` / `"tool-discovery"` (read-only capability discovery), `"setup-only"` (lightweight setup entry), `"setup-runtime"` (setup flow that also needs the runtime channel entry), `"cli-metadata"` (CLI command metadata collection), or `"memory-backend"` (passive memory backend for the slot owner).
 </ParamField>
 <ParamField path="api.resolvePath(input)" type="(string) => string">
   Resolve a path relative to the plugin root.

@@ -63,6 +63,7 @@ export type SettingsSidebarProps = {
   activeRouteId: RouteId;
   pluginTabs?: readonly GatewayControlUiPluginTab[];
   activePluginTab?: GatewayControlUiPluginTab;
+  embeddedPluginTitle?: string;
   agents: readonly AgentRosterRow[];
   agentIdentity: AgentIdentityCapability;
   settingsAgentSelection: AgentSelectionCapability;
@@ -93,6 +94,7 @@ export type SettingsSidebarProps = {
 };
 
 type SettingsNavigationGroupView = {
+  key: RouteId | "search-results";
   labelKey: string | null;
   items: readonly SettingsNavigationItemView[];
   plugins?: readonly GatewayControlUiPluginTab[];
@@ -339,7 +341,7 @@ function EmbeddedSettingsHeader(props: SettingsSidebarProps) {
       <h1 class="page-title">
         {props.presentation === "embed-list"
           ? t("nav.settings")
-          : (props.activePluginTab?.label ??
+          : (props.embeddedPluginTitle ??
             settingsNavigationLabelForRoute(
               props.activeRouteId,
               props.nativeDeviceSettings?.snapshot,
@@ -432,6 +434,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
       const normalizedQuery = normalizeLowercaseStringOrEmpty(searchQuery);
       if (!normalizedQuery) {
         return navigationGroups.map((group) => ({
+          key: group.key,
           labelKey: group.labelKey,
           items: group.routes.map((routeId) => ({ routeId, showPage: true, blocks: [] })),
           plugins: group.labelKey === "nav.settingsGroupAgents" ? props.pluginTabs : undefined,
@@ -529,7 +532,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
         })),
       ];
       return items.length > 0 || pluginMatches.length > 0
-        ? [{ labelKey: null, items, plugins: pluginMatches }]
+        ? [{ key: "search-results", labelKey: null, items, plugins: pluginMatches }]
         : [];
     });
     function SearchCompletion() {
@@ -608,13 +611,13 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
               </p>
             }
           >
-            <For each={groups()} keyed={false}>
+            <For each={groups()} keyed={(group) => group.key}>
               {(group) => (
                 <div class="settings-sidebar__group">
                   <Show when={group().labelKey}>
                     {(label) => <div class="settings-sidebar__group-label">{t(label())}</div>}
                   </Show>
-                  <For each={group().items} keyed={false}>
+                  <For each={group().items} keyed={(item) => item.routeId}>
                     {(item) => (
                       <>
                         <Show when={item().showPage}>
