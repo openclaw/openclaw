@@ -120,7 +120,8 @@ describe("session organizer nested archive choice", () => {
     expect(harness.patch).not.toHaveBeenCalled();
     expect(harness.request).not.toHaveBeenCalled();
     answerConfirmDialog(actions, "confirm");
-    expect(await pending).toMatchObject({
+    const result = await pending;
+    expect(result).toMatchObject({
       kind: "tree",
       rows: [
         {
@@ -128,9 +129,12 @@ describe("session organizer nested archive choice", () => {
           archiveGuard: { expectedSidebarAncestors: [guardedTarget(2), guardedTarget(0)] },
         },
         { key: child.key, archiveGuard: { expectedSidebarAncestors: [guardedTarget(0)] } },
-        { key: root.key, archiveGuard: { expectedSidebarAncestors: [] } },
+        { key: root.key, archiveGuard: { expectedCategory: null, expectedArchived: false } },
       ],
     });
+    expect(result?.kind === "tree" && result.rows.at(-1)?.archiveGuard).not.toHaveProperty(
+      "expectedSidebarAncestors",
+    );
     expect(reads.refreshList.mock.calls.map(([query]) => query?.spawnedBy)).toEqual([
       root.key,
       worker.key,
@@ -240,9 +244,13 @@ describe("session organizer nested archive choice", () => {
           targets: Array.from({ length: count }, (_, index) => count - index - 1).map((index) =>
             Object.assign(guardedTarget(index), {
               expectedArchived: false,
-              expectedSidebarAncestors: Array.from({ length: index }, (_, ancestor) =>
-                guardedTarget(index - ancestor - 1),
-              ),
+              ...(index > 0
+                ? {
+                    expectedSidebarAncestors: Array.from({ length: index }, (_, ancestor) =>
+                      guardedTarget(index - ancestor - 1),
+                    ),
+                  }
+                : {}),
             }),
           ),
           patch: { archived: true },
@@ -353,7 +361,7 @@ function withCronList(
   return cronList;
 }
 
-const cronPage = (...jobs: { id: string; name: string }[]) => ({
+const cronPage = (...jobs: { id: string; name: string; displayName?: string }[]) => ({
   jobs,
   total: jobs.length,
   offset: 0,
@@ -387,7 +395,8 @@ describe("archive confirmation for bound automations", () => {
       );
       expect(document.body.textContent).toContain('Archiving "Batch 1" pauses its automations.');
       expect(document.body.textContent).not.toContain("openclaw automations");
-      expect(document.body.textContent).toContain("Nightly digest (job-1)");
+      expect(document.body.textContent).toContain("Nightly digest");
+      expect(document.body.textContent).not.toContain("job-1");
       expect(actions.textContent).toContain("Archive anyway");
       answerConfirmDialog(actions, decision);
       await pending;
@@ -447,7 +456,10 @@ describe("archive confirmation for bound automations", () => {
     const child = gatewayRow(1, { parentSessionKey: root.key, hasAutomation: true });
     prepareArchiveTree(harness, [root, child]);
     const cronList = withCronList(harness, async () =>
-      cronPage({ id: "job-2", name: "Child report" }),
+      cronPage(
+        { id: "job-2", name: "child-report", displayName: "Child report" },
+        { id: "job-3", name: "Weekly backup" },
+      ),
     );
     const pending = modal.track(
       confirmSessionArchive(
@@ -462,7 +474,12 @@ describe("archive confirmation for bound automations", () => {
     expect(document.body.textContent).toContain(
       "Automations are bound to 1 of these conversations.",
     );
-    expect(document.body.textContent).toContain("Child report (job-2)");
+    expect(
+      Array.from(
+        document.body.querySelectorAll(".bound-automation-cards__row"),
+        (row) => row.textContent,
+      ),
+    ).toEqual(["Child report", "Weekly backup"]);
     expect(actions.textContent).toContain("Archive all (2)");
     answerConfirmDialog(actions, "cancel");
     await expect(pending).resolves.toBeNull();

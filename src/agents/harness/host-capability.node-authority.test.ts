@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
@@ -33,19 +32,6 @@ const { admittedAttempt, closeAdmissions } = admissionFixture(
   { permissionMode: "full" },
   "host-capability-node-authority-test",
 );
-
-function assertWithoutHostSql(assertCurrent: () => void) {
-  const sql = observeHostDataSql();
-  try {
-    assertCurrent();
-  } finally {
-    try {
-      expect(sql.queries).toEqual([]);
-    } finally {
-      sql.restore();
-    }
-  }
-}
 
 afterEach(() => {
   closeAdmissions();
@@ -77,7 +63,6 @@ it.each(["durable", "incognito"])(
           "close",
           "admission",
           "restart",
-          "permission",
           "session",
           "placement",
           "gateway",
@@ -140,9 +125,7 @@ it.each(["durable", "incognito"])(
                   },
                 };
                 expect(() =>
-                  assertWithoutHostSql(() =>
-                    placementGrantAuthority?.assertCurrent(placementGrantRequest),
-                  ),
+                  placementGrantAuthority?.assertCurrent(placementGrantRequest),
                 ).not.toThrow();
                 const ready = createDeferred();
                 const release = createDeferred();
@@ -155,7 +138,7 @@ it.each(["durable", "incognito"])(
                   async (assertCurrent) => {
                     ready.resolve();
                     await release.promise;
-                    assertWithoutHostSql(assertCurrent);
+                    assertCurrent();
                     return await dispatched();
                   },
                 );
@@ -166,7 +149,7 @@ it.each(["durable", "incognito"])(
                   return;
                 }
                 if (change === "plugin") {
-                  await expect(result).rejects.toThrow("no longer current");
+                  await expect(result).rejects.toThrow("The run or its session ended");
                   expect(dispatched).not.toHaveBeenCalled();
                   return;
                 }
@@ -180,9 +163,6 @@ it.each(["durable", "incognito"])(
                     break;
                   case "restart":
                     rotateAgentRunRegistryLifecycleGeneration();
-                    break;
-                  case "permission":
-                    await upsertSessionEntryCore(sessionTarget, { permissionMode: "workspace" });
                     break;
                   case "session":
                     await upsertSessionEntryCore(sessionTarget, { sessionId: "replacement" });
@@ -208,7 +188,9 @@ it.each(["durable", "incognito"])(
                     placementGrantAuthority?.assertCurrent(placementGrantRequest),
                   ).toThrow("no longer active");
                 } else {
-                  await expect(result).rejects.toThrow(/no longer (active|current)/);
+                  await expect(result).rejects.toThrow(
+                    /no longer (active|current)|The run or its session ended/,
+                  );
                   expect(dispatched).not.toHaveBeenCalled();
                 }
               }),

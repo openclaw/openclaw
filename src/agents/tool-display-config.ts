@@ -215,6 +215,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     session_status: displayTool("barChart", "Session Status", ["sessionKey", "model"]),
     github_publish: displayTool("github", "GitHub Publish", ["title"]),
     github_identity_status: displayTool("settings", "GitHub Identity Status", []),
+    session_project: displayTool("layers", "Session Project", ["action", "projectId"]),
     sessions: {
       icon: "layers",
       title: "Session Settings",
@@ -308,7 +309,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     agents_wait: displayTool("clock", "Wait for Agents", ["ids", "timeoutSeconds"]),
     structured_output: displayTool("fileText", "Structured Output", ["result"]),
     subagents: {
-      icon: "users",
+      icon: "bot",
       title: "Subagents",
       actions: {
         list: displayAction("list", ["recentMinutes"]),

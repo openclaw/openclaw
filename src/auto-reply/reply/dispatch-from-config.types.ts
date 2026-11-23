@@ -1,10 +1,10 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionWorkerPlacementContext } from "../../gateway/worker-environments/session-placement-lifecycle.js";
-import type { ReplyOperation } from "../../sessions/session-controller.js";
+import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { FinalizedMsgContext } from "../templating.js";
-import type { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
+import type { FastAbortResolver, FormatAbortReplyText } from "./abort.types.js";
 import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
 import type { InternalGetReplyFromConfig, InternalGetReplyOptions } from "./get-reply.types.js";
 import type {
@@ -54,8 +54,8 @@ export type DispatchFromConfigParams = {
   replyOptions?: Omit<InternalGetReplyOptions, "onBlockReply" | "onPreparedBlockReply">;
   replyResolver?: InternalGetReplyFromConfig;
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
-  fastAbortResolver?: typeof tryFastAbortFromMessage;
-  formatAbortReplyTextResolver?: typeof formatAbortReplyText;
+  fastAbortResolver?: FastAbortResolver;
+  formatAbortReplyTextResolver?: FormatAbortReplyText;
   /** Optional patch applied to the current runtime config before reply resolution. */
   configOverride?: OpenClawConfig;
   /** Gateway-owned worker services for archive recovery outside a request scope. */

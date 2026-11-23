@@ -80,6 +80,8 @@ export type UsageCostWorkerOperation =
   | {
       kind: "refresh";
       pricingFingerprint: string;
+      /** The publication queue, never a direct caller awaiting a refresh. */
+      background?: true;
       maxFiles?: number;
       sessionsDir?: string;
       sessionFiles?: string[];

@@ -186,7 +186,7 @@ it.each(["caller revoked at commit", "successor reassigned at commit"] as const)
         ).rejects.toThrow(
           revocation === "caller revoked at commit"
             ? "successor caller revoked"
-            : "authority changed",
+            : "Local sandbox workspace changed",
         );
       } finally {
         command.mockRestore();

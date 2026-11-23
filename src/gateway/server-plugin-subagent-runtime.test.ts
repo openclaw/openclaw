@@ -28,7 +28,7 @@ import { resetCommandQueueStateForTest } from "../process/command-queue.test-sup
 import { CommandLane } from "../process/lanes.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 import * as inProcessDispatch from "./server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
@@ -292,7 +292,7 @@ describe("plugin background completions", () => {
           },
         };
         const profile = ensureProfileForEmail("completion-model-policy@example.com");
-        const source = await captureGatewayOperatorRunAuthority({
+        const source = await prepareGatewayOperatorRunAuthority({
           client: createSyntheticPluginRuntimeClient({
             scopes: ["operator.write"],
             authenticatedUserProfile: { ...operatorProfile, profileId: profile.id },

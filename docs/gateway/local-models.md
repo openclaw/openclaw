@@ -332,6 +332,8 @@ It uses vLLM's native scheduler and is disabled by default.
 
 If the model loads cleanly but full agent turns misbehave, check transport first, then inspect tool use and the context budget.
 
+Setup's connection check sends a short prompt without tools, so it can pass on a model whose context window is too small for a real first turn, which also carries the system prompt and tool definitions. When the effective window is below 16,384 tokens, automatic setup skips the model, and a model you choose yourself is accepted with a warning that names the window and what to raise.
+
 1. **Check the local model responds** - no tools, no agent context:
 
    ```bash

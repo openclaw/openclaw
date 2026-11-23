@@ -88,7 +88,7 @@ Classify a failure before changing Git state:
 - Changelog-only defect: replace Release SHA and reuse Code SHA evidence only
   after proving the exact changelog delta.
 - Qualification harness/contract defect: a tooling-only repair can preserve C
-  and select an explicit reviewed main-ancestor Q through a new admission and
+  and select an explicit reviewed exact Q through a new admission and
   successful parent. Missing contracts need a deliberate Q repair or candidate
   backport, not a moving-main fallback. Follow the
   [frozen-C recovery procedure](../../../../docs/reference/full-release-validation/dispatch.md#recover-qualification-tooling-without-changing-the-candidate);
@@ -355,6 +355,18 @@ JSON uploads currently run only after successful publish steps. Review commands
 before executing; never automatically override scan failures. Verify recovered
 versions publicly before final release verification.
 
+For a terminal, partially executed child, the release parent can instead reuse
+original packed artifacts for an explicit selected subset only when every selected
+entry has an authenticated `unavailable` receipt with no attempt ID and the
+authoritative publication endpoint reports `absent`. This is initial publication
+of retained bytes, not attempt recovery. The original full roster, FRV admission,
+artifact producers, and current parent approval still authenticate before selection;
+pending, published, failed, or unknown selected states cannot enter this route.
+The prepared-artifact owner rechecks absence and current authority before exposing
+restored bytes and again at the existing publication approval boundary. Keep the
+original child identity and tarballs; never replace this binding with a normal
+selected plan that repacks source.
+
 Watch the independent ClawHub child until every package's
 `versions/<version>` returns 200. Seen in 2026.9.6: Convex 512 MB out-of-memory
 errors, runner ENOSPC, and curl timeouts. Recover only the failed packages,
@@ -489,11 +501,7 @@ verify packaging after publish; it does not authorize republishing.
 
 ## Check the bootstrap token
 
-Before publishing a never-published npm package, check the repository's actual
-`NPM_TOKEN` in an approved GitHub Actions job. Disable shell tracing, write the
-token to a private temporary npmrc, and run `npm whoami` against
-`https://registry.npmjs.org` with that file and an otherwise clean environment.
-Suppress account output, remove the temporary file, and retain the run URL.
-Never print or upload the token. A local login or secret update time is not a
-substitute for this check. Successful authentication does not establish package
-permissions or approve publication; failures go to the credential owner.
+Ask the release credential owner to confirm the repository `NPM_TOKEN` is ready
+with scope/package-creation access before bootstrap dispatch. No standalone token
+probe exists: keep liveness unverified without evidence for that token, and do
+not publish or rotate credentials to test it.

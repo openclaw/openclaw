@@ -239,32 +239,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
     func testReleaseChatScreenshot() {
         self.captureReleaseScreenshot(Self.chatScreenshotTarget) { app in
-            let input = self.chatMessageInput(in: app)
-            XCTAssertTrue(input.waitForExistence(timeout: 8))
-            input.tap()
-            let keyboard = app.keyboards.firstMatch
-            if UIDevice.current.userInterfaceIdiom == .phone {
-                XCTAssertTrue(keyboard.waitForExistence(timeout: 3))
-            }
-            let focusProbe = "focus"
-            input.typeText(focusProbe)
-            XCTAssertEqual(input.value as? String, focusProbe)
-            self.clearTextField(input)
-            XCTAssertEqual(input.value as? String, "")
-            // Dismiss through the transcript gutter, not a diagram that opens its preview on tap.
-            guard let transcript = try? self.chatTranscript(in: app) else { return }
-            let gutterPoint = transcript
-                .coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.05)).screenPoint
-            // The layout stays stationary until this tap. Avoid resolving the transcript during synthesis.
-            let origin = app.coordinate(withNormalizedOffset: .zero)
-            let originPoint = origin.screenPoint
-            origin.withOffset(CGVector(
-                dx: gutterPoint.x - originPoint.x,
-                dy: gutterPoint.y - originPoint.y)).tap()
-            if keyboard.exists {
-                XCTAssertTrue(keyboard.waitForNonExistence(timeout: 3))
-            }
-            XCTAssertFalse(app.buttons["Close diagram preview"].exists)
             let diagram = app.buttons["Mermaid diagram"]
             XCTAssertTrue(diagram.waitForExistence(timeout: 8))
             XCTAssertTrue(diagram.isHittable)

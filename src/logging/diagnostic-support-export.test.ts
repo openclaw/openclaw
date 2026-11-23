@@ -742,6 +742,22 @@ describe("diagnostic support export", () => {
     },
   );
 
+  it.skipIf(process.platform === "win32")(
+    "writes where a symlinked parent's `..` leads, not to the lexical neighbor",
+    async () => {
+      const physical = path.join(tempDir, "physical");
+      fs.mkdirSync(path.join(physical, "nested"), { recursive: true });
+      fs.symlinkSync(path.join(physical, "nested"), path.join(tempDir, "selected"));
+      const result = await writeDiagnosticSupportExport({
+        outputPath: `${tempDir}/selected/../bundle.zip`,
+      });
+
+      expect(result.path).toBe(path.join(fs.realpathSync(physical), "bundle.zip"));
+      expect(fs.existsSync(result.path)).toBe(true);
+      expect(fs.existsSync(path.join(tempDir, "bundle.zip"))).toBe(false);
+    },
+  );
+
   it("treats a blank output path as omitted and writes to the default support directory", async () => {
     const result = await writeDiagnosticSupportExport({ outputPath: "   " });
 

@@ -109,7 +109,7 @@ export async function executeWorkspaceManifestComputation(
       const { rawManifest, manifestRef } = await readActualWorkspaceManifestImpl(
         { ...input, buildCacheInputs: new Set(input.buildCacheInputs) },
         previous
-          ? (relative, _identity, stats) => {
+          ? (relative, stats) => {
               const entry = entries.get(relative);
               return !changed.has(relative) &&
                 // Installer-owned bytes can be retained by a staged-input marker.
@@ -158,22 +158,15 @@ export async function executeWorkspaceManifestComputation(
       return result;
     }
     case "workspace.manifest.base-refresh": {
-      const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
+      const { readWorkspaceBaseRefreshTrees } = await import("./workspace-base-refresh-trees.js");
       const input = command.input;
       return await withHashes(input.hashes, async () => {
-        const { manifest: before } = await readActualWorkspaceManifestImpl({
-          root: input.beforeRoot,
-          baseCommit: input.baseCommit,
-        });
-        const { manifest: after } = await readActualWorkspaceManifestImpl({
-          root: input.afterRoot,
-          baseCommit: input.baseCommit,
-        });
         const accepted = parseWorkerWorkspaceManifest(
           decodeUtf8(input.baseRaw),
           input.baseRef,
           input.buildCacheInputs,
         );
+        const [before, after] = await readWorkspaceBaseRefreshTrees(input, accepted);
         const current = applyWorkspaceSourceOverlay(before, accepted, after);
         current.buildCacheInputs = [
           ...new Set([...input.buildCacheInputs, ...after.entries.map((entry) => entry.path)]),

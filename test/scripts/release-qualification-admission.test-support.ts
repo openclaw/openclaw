@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
   buildQualificationAdmissionRequest,
   produceQualificationAdmission,
@@ -60,8 +61,10 @@ export function fixture(
   protectedTag = false,
   options: {
     inputs?: Record<string, string | number | boolean>;
+    missingLedger?: boolean;
     policy?: unknown;
     workflowSource?: string;
+    baselinePolicySource?: string;
     candidateSha?: string;
     qualificationSha?: string;
     transportRef?: string;
@@ -109,7 +112,7 @@ export function fixture(
   const authority = {
     permission: "write",
     ancestry: "ahead",
-    qualificationAncestry: "ahead",
+    qualificationAncestry: "diverged",
     tagSha: admissionSha,
   };
   const policy = options.policy ?? {
@@ -139,16 +142,22 @@ export function fixture(
             .map((key) => "      " + key + ":\n        type: string\n")
             .join("") +
           "jobs:\n  untrusted:\n    run: NEVER_EXECUTE_Q\n",
+      [qualificationSha + ":scripts/lib/release-validation-waivers.json"]: readFileSync(
+        "scripts/lib/release-validation-waivers.json",
+        "utf8",
+      ),
       [qualificationSha + ":scripts/lib/release-qualification-coverage.json"]:
         JSON.stringify(policy),
       [sourceSha + ":package.json"]: JSON.stringify({
         version: options.candidateVersion ?? "2026.8.1",
       }),
-      [sourceSha + ":scripts/lib/upgrade-survivor-scenarios.json"]: JSON.stringify({
-        oldestSupportedBaseline: Object.hasOwn(options, "oldestSupportedBaseline")
-          ? options.oldestSupportedBaseline
-          : "2026.6.34",
-      }),
+      [sourceSha + ":scripts/lib/upgrade-survivor-scenarios.json"]:
+        options.baselinePolicySource ??
+        JSON.stringify({
+          oldestSupportedBaseline: Object.hasOwn(options, "oldestSupportedBaseline")
+            ? options.oldestSupportedBaseline
+            : "2026.6.34",
+        }),
     }),
   );
   const metadata = {
@@ -218,10 +227,14 @@ export function fixture(
     if (path.startsWith("contents/")) {
       const [sourcePath, sha] = path.slice(9).split("?ref=");
       const text = sources.get(sha + ":" + sourcePath);
-      if (text === undefined) {
+      if (options.missingLedger && sourcePath === "scripts/lib/release-validation-waivers.json") {
+        throw new Error("gh: Not Found (HTTP 404)");
+      }
+      const source = text;
+      if (source === undefined) {
         throw new Error("Unexpected source acquisition: " + path);
       }
-      const bytes = Buffer.from(text);
+      const bytes = Buffer.from(source);
       return JSON.stringify({
         type: "file",
         path: sourcePath,

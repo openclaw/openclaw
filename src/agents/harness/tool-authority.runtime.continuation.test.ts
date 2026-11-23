@@ -129,7 +129,7 @@ it.each(["matching attempt", "different tools", "different model", "revoked sour
               if (change === "revoked source") {
                 close();
                 await expect(join.prepareCurrent()).rejects.toThrow(
-                  "admitted run authority is no longer active",
+                  "This agent run is no longer active. Start a new turn to retry.",
                 );
                 expect(queue).not.toHaveBeenCalled();
                 return;

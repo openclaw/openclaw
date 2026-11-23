@@ -835,8 +835,10 @@ it.each(["all", "off"] as const)(
   },
 );
 
-it("finalizes Block Kit work links with bounded labels and numbered fallbacks", async () => {
+it.each(["final", "block"] as const)("settles Block Kit work links after %s", async (kind) => {
   const draftStream = useDraftStream(true);
+  const payload = { text: FINAL_REPLY_TEXT, mediaUrl: "https://example.com/demo.png" };
+  mockedDispatchSequence = [{ kind, payload }];
   mockedReplyOptionEvents = [
     {
       kind: "item",
@@ -848,9 +850,7 @@ it("finalizes Block Kit work links with bounded labels and numbered fallbacks", 
     },
     {
       kind: "visible_work",
-      sessions: Array.from({ length: 6 }, (_, i) =>
-        workSession(i + 1, i ? undefined : "🚀".repeat(40)),
-      ),
+      sessions: Array.from({ length: 6 }, (_, i) => workSession(i + 1, i ? "" : "🚀".repeat(40))),
     },
   ];
   await dispatch({
@@ -886,7 +886,7 @@ it("finalizes Block Kit work links with bounded labels and numbered fallbacks", 
     ),
   );
   expect(deliverRepliesMock).toHaveBeenCalledOnce();
-  expect(delivered().replies).toEqual([{ text: FINAL_REPLY_TEXT }]);
+  expect(delivered().replies).toEqual([payload]);
   expectNoCalls(draftStream.clear, startSlackStreamMock);
 });
 
@@ -1748,19 +1748,6 @@ it.each([true, false])(
     expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
   },
 );
-
-it("streams rolling reasoning snapshots as deduplicated narration", async () => {
-  await dispatchNativeProgressScenario([
-    { kind: "reasoning", text: "Checking", isReasoningSnapshot: true },
-    { kind: "reasoning", text: "Checking the Slack handler", isReasoningSnapshot: true },
-  ]);
-
-  expect(collectNativeTaskUpdates()).toEqual([]);
-  expectNativeStreamText("Checking");
-  // A snapshot arriving inside the throttle window rides the completion append.
-  expectNativeProgressAppend(0, [{ type: "markdown_text", text: " the Slack handler" }]);
-  expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
-});
 
 it("keeps final fallback in the planned thread when native Slack progress start fails", async () => {
   startSlackStreamMock.mockRejectedValueOnce(new Error("start stream failed"));

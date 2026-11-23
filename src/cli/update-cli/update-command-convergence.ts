@@ -10,6 +10,7 @@ import {
   retireDeferredUpdateStepWarnings,
 } from "../../infra/deferred-update-warnings.js";
 import { compareSemverStrings } from "../../infra/npm-registry-spec.js";
+import { readPackageReleaseSlotSync } from "../../infra/package-release-slot-path.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import {
   hasDeferredUpdateModelRetirement,
@@ -31,6 +32,7 @@ import { VERSION } from "../../version.js";
 import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
 import {
   capturePreUpdateSourceConfig,
+  persistRequestedUpdateChannel,
   persistValidatedDowngradeConfig,
   withUpdatePluginCohortConfigCapture,
 } from "./update-command-config.js";
@@ -46,6 +48,11 @@ import {
 import { convergePostCoreUpdatePlugins } from "./update-command-resume.js";
 import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 import { withOwnedManagedUpdateEnv, withUpdateEnv } from "./update-command-service-env.js";
+
+/** A Git update that switched the release link instead of rewriting a checkout. */
+function isSwitchedGitRelease(result: UpdateRunResult): boolean {
+  return result.mode === "git" && readPackageReleaseSlotSync(result.root ?? "") !== null;
+}
 
 export async function convergeUpdatePlugins(params: {
   databaseBackup?: import("../../infra/update-database-backup.js").UpdateDatabaseBackup;
@@ -83,6 +90,25 @@ export async function convergeUpdatePlugins(params: {
   const assertCurrent = params.assertCurrent ?? params.opts.run?.executorFence?.assertCurrent;
   assertCurrent?.();
   const postUpdateRoot = params.result.root ?? params.root;
+  const gitRelease = isSwitchedGitRelease(params.result);
+  // Every path below writes a changed channel to config: copy the originals first.
+  if (
+    params.requestedChannel &&
+    params.configSnapshot.valid &&
+    params.requestedChannel !== params.storedChannel
+  ) {
+    await params.opts.run?.captureOriginal?.();
+    assertCurrent?.();
+  }
+  if (gitRelease && params.opts.restart === false) {
+    // Unverified until it starts: replacing plugins now could strand them if its trial fails.
+    const postUpdateConfigSnapshot = await persistRequestedUpdateChannel({
+      configSnapshot: params.configSnapshot,
+      requestedChannel: params.requestedChannel,
+      assertCurrent,
+    });
+    return { resultWithPostUpdate: params.result, postUpdateConfigSnapshot };
+  }
   // Uncommitted target finalization cannot authorize a detached helper restart.
   const failedTargetRuntime = (result = params.result): UpdateRunResult => ({
     ...result,
@@ -108,7 +134,10 @@ export async function convergeUpdatePlugins(params: {
   const retainedDifferentRuntime =
     params.coreAlreadyCurrent === true &&
     (runtimeRootChanged || (versionComparison !== null && versionComparison !== 0));
+  // A switched Git release converges here: its fresh process would need Doctor maintenance,
+  // which the still-serving Gateway holds, and older targets cannot skip it.
   const shouldResumePostCoreInFreshProcess =
+    !gitRelease &&
     (!params.coreAlreadyCurrent || retainedDifferentRuntime) &&
     !params.candidateRuntime &&
     shouldResumePostCoreUpdateInFreshProcess({
@@ -152,11 +181,12 @@ export async function convergeUpdatePlugins(params: {
     );
   }
 
-  const compatibilityHostVersion = params.candidateRuntime
-    ? (postUpdateInstalledVersion ?? VERSION)
-    : versionComparison != null && versionComparison > 0
-      ? postUpdateInstalledVersion
-      : null;
+  const compatibilityHostVersion =
+    params.candidateRuntime || gitRelease
+      ? (postUpdateInstalledVersion ?? VERSION)
+      : versionComparison != null && versionComparison > 0
+        ? postUpdateInstalledVersion
+        : null;
   // Downgraded parents and candidate workers select the installed target version.
   const convergenceEnv = {
     ...(compatibilityHostVersion
@@ -220,7 +250,13 @@ export async function convergeUpdatePlugins(params: {
           postCorePluginUpdate = freshProcessResult.pluginUpdate;
         }
 
-        if (retainedDifferentRuntime && !params.candidateRuntime && !targetRuntimeConverged) {
+        // A switched Git release converges here, in the updater, by design.
+        if (
+          retainedDifferentRuntime &&
+          !params.candidateRuntime &&
+          !targetRuntimeConverged &&
+          !gitRelease
+        ) {
           return {
             resultWithPostUpdate: failedTargetRuntime(),
             detail:
@@ -248,7 +284,9 @@ export async function convergeUpdatePlugins(params: {
             channel: params.channel,
             requestedChannel: params.requestedChannel,
             opts: params.opts,
-            requiresCohort: !params.coreAlreadyCurrent && params.adoptedFinalization !== true,
+            // A cohort pairs plugins with a core rollback; a Git release never rolls core back here.
+            requiresCohort:
+              !params.coreAlreadyCurrent && params.adoptedFinalization !== true && !gitRelease,
             timeoutMs: params.updateStepTimeoutMs,
             preUpdateConfig,
             ...(params.candidateRuntime
@@ -266,6 +304,7 @@ export async function convergeUpdatePlugins(params: {
 
         if (
           postCorePluginUpdate &&
+          !gitRelease &&
           (!params.coreAlreadyCurrent ||
             postCorePluginUpdate.changed ||
             hasDeferredUpdateModelRetirement(params.opts.run?.env, params.opts.run?.runId))
@@ -287,7 +326,13 @@ export async function convergeUpdatePlugins(params: {
                 }
               : {}),
             pluginUpdate: producedPluginUpdate,
-            beforeDoctor: params.beforeDoctor,
+            beforeDoctor: async () => {
+              // Fresh Doctor can migrate core and plugin state. An already-current core
+              // copies its originals only here, once it knows Doctor will run.
+              await params.opts.run?.captureOriginal?.();
+              assertCurrent?.();
+              await params.beforeDoctor?.();
+            },
             assertCurrent,
             yes: params.opts.yes === true,
             json: params.opts.json === true,

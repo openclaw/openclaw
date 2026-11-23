@@ -39,7 +39,10 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { resolveUserPath } from "../../utils.js";
-import { resolveRegisteredAgentIdForDir } from "../agent-dir-registry.js";
+import {
+  resolveRegisteredAgentIdForDir,
+  resolveRegisteredAgentIdForDirAsync,
+} from "../agent-dir-registry.js";
 import {
   prepareAuthProfileAuthorizationWrite,
   readAuthProfileAuthorizationLifetimes,
@@ -189,6 +192,11 @@ export function resolveAuthProfileDatabaseOwnerId(agentDir: string): string {
     throw new Error("agent auth database unexpectedly resolved to shared state");
   }
   return target.agentId;
+}
+
+export async function resolveAuthProfileDatabaseOwnerIdAsync(agentDir: string): Promise<string> {
+  const directory = path.dirname(resolveAuthProfileDatabasePath(agentDir));
+  return (await resolveRegisteredAgentIdForDirAsync(directory)) ?? inferAgentIdFromDir(directory);
 }
 
 /** Resolves the SQLite database and sidecar paths used by auth profiles. */
@@ -605,6 +613,7 @@ export async function prepareAuthProfileWriteTransactionAsync(
   agentDir: string | undefined,
   options: AuthProfileWriteOptions,
   assertCurrent?: () => void,
+  existingDatabaseTarget?: AuthProfileDatabaseTarget,
 ) {
   const env = prepareAuthProfileWriteEnvironment(options);
   const capturedAgentDir = agentDir ? resolveUserPath(agentDir, env) : undefined;
@@ -616,10 +625,9 @@ export async function prepareAuthProfileWriteTransactionAsync(
   });
   options.assertEnvironment?.(env);
   assertCurrent?.();
-  const databaseTarget = resolveAuthProfileDatabaseOptions(
-    sharedStoreWrite ? undefined : capturedAgentDir,
-    env,
-  );
+  const databaseTarget =
+    existingDatabaseTarget ??
+    resolveAuthProfileDatabaseOptions(sharedStoreWrite ? undefined : capturedAgentDir, env);
   return { databaseTarget, sharedOwner: prepareAuthProfileSharedOwner(env) };
 }
 

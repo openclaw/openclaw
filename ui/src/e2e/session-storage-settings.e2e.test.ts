@@ -73,6 +73,31 @@ async function openStorage(page: Page, options: Parameters<typeof installMockGat
 }
 
 suite.define(() => {
+  it("uses default archival settings and preserves an explicit opt-out", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const config = {};
+      const gateway = await openStorage(page, {
+        methodResponses: {
+          "config.get": {
+            ...configSnapshot(config, "default-storage"),
+            appliedConfigHash: "default-storage",
+          },
+        },
+      });
+      await expectRow(page, "Chats", "1200");
+      await expect.poll(() => archiveSwitch(page).isChecked()).toBe(true);
+      expect(await ageInput(page).inputValue()).toBe("30");
+      await expect.poll(() => button(page, "Run now").isEnabled()).toBe(true);
+      await archiveSwitch(page).click();
+      const save = await gateway.waitForRequest("config.set");
+      expect(submittedConfig(save)).toHaveProperty(
+        "session.maintenance.coldStorage.enabled",
+        false,
+      );
+      expect(await archiveSwitch(page).isChecked()).toBe(false);
+    });
+  });
+
   it("shows inventory, saves whole-day policy without restart, and runs only applied settings", async () => {
     await suite.withPage(
       { viewport: { width: 1440, height: 1100 }, colorScheme: "dark" },
@@ -152,6 +177,15 @@ suite.define(() => {
         await notice.filter({ hasText: "Batch completed. 12 chats archived." }).waitFor();
         await page.clock.resume();
         await page.setViewportSize({ width: 390, height: 844 });
+        const archiveValue = await row(page, "Archive files")
+          .locator(".settings-row__value")
+          .boundingBox();
+        const databaseValue = await row(page, "Databases")
+          .locator(".settings-row__value")
+          .boundingBox();
+        expect(archiveValue).not.toBeNull();
+        expect(databaseValue).not.toBeNull();
+        expect(Math.abs(archiveValue!.x - databaseValue!.x)).toBeLessThanOrEqual(1);
         expect(
           await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
         ).toBe(true);

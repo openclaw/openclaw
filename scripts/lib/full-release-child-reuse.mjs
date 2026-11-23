@@ -23,7 +23,10 @@ import {
 import { execGhRead, execGhReadAsync } from "./plain-gh.mjs";
 import { isRecord } from "./record-shared.mjs";
 import {
+  decodeReleaseValidationSource,
   evaluateReleaseChildPolicy,
+  readReleaseValidationWaiversAsync,
+  RELEASE_VALIDATION_WAIVERS_PATH,
   validateReleaseWaiverAggregates,
 } from "./release-validation-waivers.mjs";
 
@@ -150,7 +153,24 @@ function dependencies(repository, deps) {
   return {
     github,
     immutableReads: deps.immutableReads,
-    getJobLog: deps.getJobLog,
+    getJobLog:
+      deps.getJobLog ??
+      (async (id) => {
+        const args = ["api", `repos/${repository}/actions/jobs/${id}/logs`];
+        const read = (extra) =>
+          execGhReadAsync([...args, ...extra], {
+            timeout: Math.min(60_000, remaining("aggregate job log")),
+            maxBuffer: 32 * 1024 * 1024,
+          });
+        try {
+          return await read(["--allow-escape-sequences"]);
+        } catch (error) {
+          if (!String(error?.stderr).includes("unknown flag: --allow-escape-sequences")) {
+            throw error;
+          }
+          return read([]);
+        }
+      }),
     downloadArchive:
       deps.downloadArchive ??
       (async (params) => {
@@ -463,6 +483,34 @@ async function validateWorkloadIdentity(workflowSha, request, deps) {
   if (workflowSha === request.workflowSha) {
     return;
   }
+  const comparison = await deps.github(
+    "compare/" + workflowSha + "..." + request.workflowSha + "?per_page=1",
+  );
+  // Parent orchestration and current-verdict policy do not change a sealed child
+  // execution. Keep this list explicit: child workflows, harnesses, build inputs,
+  // and shared helpers still require workload equivalence below. #203854 plus a
+  // grant update must not invalidate unchanged child execution. The current
+  // policy, exact inputs, live attempt, and authenticated receipt are checked next.
+  // GitHub caps changed files at 300; a capped inventory cannot prove equivalence.
+  const orchestrationPaths = new Set([
+    RELEASE_VALIDATION_WAIVERS_PATH,
+    ".github/workflows/full-release-validation.yml",
+    "scripts/lib/full-release-child-reuse.mjs",
+    "test/scripts/full-release-child-reuse.test.ts",
+    "docs/reference/full-release-validation/dispatch.md",
+    "docs/reference/full-release-validation/stages.md",
+  ]);
+  if (
+    comparison?.status === "ahead" &&
+    comparison.merge_base_commit?.sha === workflowSha &&
+    comparison.files?.length > 0 &&
+    comparison.files.length < 300 &&
+    comparison.files.every(
+      (file) => file.status === "modified" && orchestrationPaths.has(file.filename),
+    )
+  ) {
+    return;
+  }
   requireEvidence(
     (await workloadTree(workflowSha, request, deps)) ===
       (await workloadTree(request.workflowSha, request, deps)),
@@ -475,8 +523,14 @@ async function validateEvidence(selection, request, deps) {
   await validateWorkloadIdentity(selection.workflowSha, request, deps);
   const run = await deps.github(`actions/runs/${selection.runId}`);
   validateRun(run, selection, request);
-  if (selection.workflowSha !== request.targetSha) {
-    const lineage = await deps.github(`compare/${selection.workflowSha}...main?per_page=1`);
+  if (
+    selection.workflowSha !== request.targetSha &&
+    (!request.policyTargetVersion || selection.workflowSha !== request.workflowSha)
+  ) {
+    const lineageTarget = request.policyTargetVersion ? request.workflowSha : "main";
+    const lineage = await deps.github(
+      `compare/${selection.workflowSha}...${lineageTarget}?per_page=1`,
+    );
     requireEvidence(
       ["ahead", "identical"].includes(lineage?.status) &&
         lineage.merge_base_commit?.sha === selection.workflowSha,
@@ -575,7 +629,7 @@ async function validateEvidence(selection, request, deps) {
       ),
     "receipt does not match the complete live composite workload",
   );
-  // Only authenticated recovery supplies a version. Ordinary reuse/discovery remains green-only.
+  // P evaluates raw executions against the current admitted candidate and Q grants.
   if (request.policyTargetVersion) {
     const child = {
       key: request.role,
@@ -586,12 +640,19 @@ async function validateEvidence(selection, request, deps) {
       jobs: composite.jobs,
     };
     requireEvidence(
-      terminalPolicyPass(child, request.policyTargetVersion),
+      terminalPolicyPass(
+        child,
+        request.policyTargetVersion,
+        request.targetSha,
+        request.waiverPolicy,
+      ),
       "workload does not pass recovery release policy",
     );
     const policy = evaluateReleaseChildPolicy({
       child,
       targetVersion: request.policyTargetVersion,
+      targetSha: request.targetSha,
+      waiverPolicy: request.waiverPolicy,
     });
     await validateReleaseWaiverAggregates({
       policy,
@@ -629,13 +690,30 @@ async function validateEvidence(selection, request, deps) {
 
 export async function validateReusableReleaseChild(selection, request, deps = {}) {
   const normalized = requestValue(request);
+  const resolved = dependencies(request.repository, deps);
+  if (request.policyTargetVersion) {
+    normalized.waiverPolicy = await readReleaseValidationWaiversAsync(async (sourcePath) =>
+      decodeReleaseValidationSource(
+        await resolved.github("contents/" + sourcePath + "?ref=" + request.workflowSha),
+        sourcePath,
+      ),
+    );
+  }
   requireEvidence(/^[a-f0-9]{64}$/u.test(selection?.receiptSha256), "selection omitted its digest");
-  return validateEvidence(selection, normalized, dependencies(request.repository, deps));
+  return validateEvidence(selection, normalized, resolved);
 }
 
 export async function discoverReusableReleaseChild(request, deps = {}) {
   const normalized = requestValue(request);
   const resolved = dependencies(request.repository, deps);
+  if (request.policyTargetVersion) {
+    normalized.waiverPolicy = await readReleaseValidationWaiversAsync(async (sourcePath) =>
+      decodeReleaseValidationSource(
+        await resolved.github("contents/" + sourcePath + "?ref=" + request.workflowSha),
+        sourcePath,
+      ),
+    );
+  }
   const report = deps.report ?? console.error;
   const inventory = await resolved.github(
     `actions/workflows/${normalized.spec.workflow}/runs?event=workflow_dispatch&per_page=${MAX_RUNS}`,
@@ -654,7 +732,11 @@ export async function discoverReusableReleaseChild(request, deps = {}) {
     );
   for (const run of inventory.workflow_runs.slice(0, MAX_RUNS)) {
     scanned += 1;
-    if (run.status !== "completed" || run.conclusion !== "success") {
+    if (
+      run.status !== "completed" ||
+      (run.conclusion !== "success" &&
+        !(normalized.policyTargetVersion && run.conclusion === "failure"))
+    ) {
       skip("not-green");
       continue;
     }

@@ -24,7 +24,8 @@ export type StoredModelOverride = {
 function resolveStoredOverrideFromEntry(
   params: {
     entry?: SessionEntry;
-    defaultProvider: string;
+    /** Provider for a bare stored model id; omitted uses the core bare-id provider. */
+    defaultProvider?: string;
     source: StoredModelOverride["source"];
     allowPluginNormalization?: boolean;
   } & ModelManifestNormalizationContext,
@@ -59,7 +60,8 @@ function resolveStoredOverrideFromEntry(
 export function resolveDirectStoredModelOverride(
   params: {
     sessionEntry?: SessionEntry;
-    defaultProvider: string;
+    /** Provider for a bare stored model id; omitted uses the core bare-id provider. */
+    defaultProvider?: string;
     allowPluginNormalization?: boolean;
   } & ModelManifestNormalizationContext,
 ): StoredModelOverride | null {
@@ -94,7 +96,8 @@ export function resolveStoredModelOverride(params: {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   parentSessionKey?: string;
-  defaultProvider: string;
+  /** Provider for a bare stored model id; omitted uses the core bare-id provider. */
+  defaultProvider?: string;
   allowPluginNormalization?: boolean;
 }): StoredModelOverride | null {
   warnPluginSdkDeprecation({
@@ -158,7 +161,8 @@ export function resolveStoredModelOverrideCore(
 
 function resolveParentStoredModelOverride(
   params: {
-    defaultProvider: string;
+    /** Provider for a bare stored model id; omitted uses the core bare-id provider. */
+    defaultProvider?: string;
     allowPluginNormalization?: boolean;
   } & ModelManifestNormalizationContext,
   parentEntry: SessionEntry | undefined,

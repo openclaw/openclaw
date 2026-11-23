@@ -46,6 +46,15 @@ it("ignores types, pure re-exports, imports exported locally, and renamed export
 
 it.each([
   [
+    "createNativeWorkerResource",
+    "otherBehavior",
+    "src/unrelated/extra.ts",
+    [
+      "src/infra/sqlite-readonly-native-resource.ts",
+      "src/plugins/plugin-capture-native-resource.ts",
+    ],
+  ],
+  [
     "loadFreeBsdProcessIdentityNative",
     "otherBehavior",
     "src/extra.ts",

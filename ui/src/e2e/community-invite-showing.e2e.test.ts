@@ -1,5 +1,10 @@
 import { expect, it } from "vitest";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  reconnectMockGateway,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -19,6 +24,33 @@ const sessions = Array.from({ length: 32 }, (_, index) =>
 );
 
 suite.define(() => {
+  it("keeps the first direct chat visit quiet across reload and Gateway reconnect", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 760 } }, async ({ context, page }) => {
+      const url = controlUiSessionUrl(suite.server.baseUrl, "agent:main:main");
+      const card = page.locator(".community-invite-card");
+      const gateway = await installMockGateway(page, { communityInvite: true, sessions });
+      await page.goto(url);
+      await waitForControlUiRoute(page, { routeId: "chat" });
+      expect(await card.count()).toBe(0);
+
+      await reconnectMockGateway(page, gateway, "invite-after-restart");
+      expect(await card.count()).toBe(0);
+      await page.reload();
+      await waitForControlUiRoute(page, { routeId: "chat" });
+      expect(await card.count()).toBe(0);
+
+      await page.close();
+      const later = await context.newPage();
+      await installMockGateway(later, { communityInvite: true, sessions });
+      await later.goto(url);
+      const laterCard = later.locator(".community-invite-card");
+      await laterCard.getByRole("button", { name: "Dismiss and don't show again" }).click();
+      await later.reload();
+      await waitForControlUiRoute(later, { routeId: "chat" });
+      expect(await laterCard.count()).toBe(0);
+    });
+  });
+
   for (const [mobile, mode] of [
     [false, "dark"],
     [true, "light"],
@@ -30,14 +62,21 @@ suite.define(() => {
           hasTouch: mobile,
           colorScheme: mode,
         },
-        async ({ page }) => {
+        async ({ context, page: first }) => {
+          const url = controlUiSessionUrl(suite.server.baseUrl, "agent:main:main");
+          await installMockGateway(first, { communityInvite: true, sessions });
+          await first.goto(url);
+          await waitForControlUiRoute(first, { routeId: "chat" });
+          await first.close();
+
+          const page = await context.newPage();
           await seedChatSettings(page, suite.server.baseUrl, {
             themeMode: mode,
             sidebarAgentsMode: "chip",
             navWidth: 320,
           });
           await installMockGateway(page, { communityInvite: true, sessions });
-          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+          await page.goto(url);
           if (mobile) {
             await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
             await waitForMobileSidebarDrawerOpen(page);
@@ -122,10 +161,16 @@ suite.define(() => {
           await list.evaluate((node) => {
             node.scrollTop = 0;
           });
-          await page.locator('.sidebar-rail [data-navigation-view="pages"]').click();
+          await page.locator('.sidebar-rail [data-navigation-view="online"]').click();
+          if (!mobile) {
+            await waitForControlUiRoute(page, { routeId: "activity" });
+          }
           await close.waitFor();
           const sessionsRail = page.locator('.sidebar-rail [data-navigation-view="sessions"]');
           await sessionsRail.click();
+          if (!mobile) {
+            await waitForControlUiRoute(page, { routeId: "chat" });
+          }
           await page.keyboard.press("Tab");
           await close.focus();
           expect(await close.evaluate((node) => node.matches(":focus-visible"))).toBe(true);

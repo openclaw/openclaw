@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.entry.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
@@ -69,11 +69,7 @@ async function withDiscoveryState(
     projection: Awaited<ReturnType<typeof createSessionRowProjection>>;
     context: GatewayRequestContext;
     setConfig: (cfg: OpenClawConfig) => void;
-    call: (
-      method: keyof typeof handlers,
-      client?: GatewayClient,
-      hasCurrentClientAuthority?: () => boolean,
-    ) => Promise<Parameters<RespondFn>>;
+    call: (method: keyof typeof handlers, client?: GatewayClient) => Promise<Parameters<RespondFn>>;
   }) => Promise<void>,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -98,14 +94,13 @@ async function withDiscoveryState(
           cfg = value;
           setRuntimeConfigSnapshot(cfg);
         },
-        async call(method, client, hasCurrentClientAuthority) {
+        async call(method, client) {
           const responses: Parameters<RespondFn>[] = [];
           await handlers[method]({
             req: { type: "req", id: method, method },
             params: { sessionKey, agentId: "main" },
             client: client ?? participant(),
             context,
-            hasCurrentClientAuthority,
             isWebchatConnect: () => true,
             respond: (...response) => responses.push(response),
           });
@@ -152,12 +147,10 @@ it.each(["commands.list", "skills.status"] as const)(
       for (const change of [
         "member",
         "dirty",
-        "callback-dirty",
         "profile",
         "policy",
         "projection",
         "run",
-        "request",
         "session",
         "route",
       ] as const) {
@@ -171,7 +164,7 @@ it.each(["commands.list", "skills.status"] as const)(
           client.internal = {
             syntheticClient: true,
             operatorRoleActor: { kind: "operator", profileId: "alice" },
-            operatorRunAuthority: createAdmittedRunOperatorAuthority({
+            operatorRunAuthority: createTestOperatorAuthority({
               profileId: "alice",
               scopes: ["operator.read", "operator.write"],
               assertCurrent: () => {
@@ -192,14 +185,7 @@ it.each(["commands.list", "skills.status"] as const)(
             "pending",
           );
         };
-        let dirtyOnCheck = false;
-        const pending = call(method, client, () => {
-          if (dirtyOnCheck) {
-            dirtyOnCheck = false;
-            invalidateMembership();
-          }
-          return change !== "request" || !revoked;
-        });
+        const pending = call(method, client);
         await gate.during(
           awaitGateBeforeSettlement(
             gate.entered,
@@ -211,9 +197,6 @@ it.each(["commands.list", "skills.status"] as const)(
             const changes: Partial<Record<typeof change, () => void>> = {
               member: () => removeSessionMember(scope, "alice"),
               dirty: invalidateMembership,
-              "callback-dirty": () => {
-                dirtyOnCheck = true;
-              },
               profile: () => {
                 client.authenticatedUserProfile!.profileId = "bob";
               },

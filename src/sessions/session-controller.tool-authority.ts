@@ -201,7 +201,7 @@ export function createReplyOperationToolAuthority(lifecycle: {
         getAttachedBackend(operation) !== backend ||
         getAgentEventLifecycleGeneration() !== generation
       ) {
-        throw new Error("Reply operation authority is no longer active");
+        throw new Error("This agent run is no longer active. Start a new turn to retry.");
       }
     };
     assertCurrent();
@@ -437,7 +437,7 @@ export function createReplyOperationToolAuthority(lifecycle: {
         selected.fingerprint(preparedRoute));
       assertCurrent();
       if (snapshot !== selected || route !== previousRoute) {
-        throw new Error("Reply operation tool authority changed during preparation");
+        throw new Error("The reply route changed during preparation. Start a new turn to retry.");
       }
       route = preparedRoute;
       fingerprint = prepared;
@@ -460,7 +460,7 @@ export function createReplyOperationToolAuthority(lifecycle: {
           route !== selectedRoute ||
           fingerprint !== expected
         ) {
-          throw new Error("question creator reply authority is no longer active");
+          throw new Error("The question's reply target changed. Start a new turn to retry.");
         }
       };
       assertCurrent();

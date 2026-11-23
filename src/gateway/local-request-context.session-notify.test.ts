@@ -14,7 +14,7 @@ import {
   sessionToolsStorePath,
   seedSessionToolsEntry,
 } from "./local-request-context.session-tools.test-support.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import * as sessionRowProjection from "./session-row-projection.js";
 import { roleClient } from "./session-sharing.test-utils.js";
 
@@ -92,7 +92,7 @@ async function withNotification(
     const context = sessionToolsContext();
     const source = new AbortController();
     const captured = expectDefined(
-      await captureGatewayOperatorRunAuthority({
+      await prepareGatewayOperatorRunAuthority({
         client,
         context,
         sourceAuthority: {
@@ -189,7 +189,7 @@ describe("session notification authority", () => {
   );
 
   it.each(["source revoked", "role changed", "target deleted"] as const)(
-    "cannot queue when %s during notification authorization",
+    "keeps admitted policy but honors target deletion (%s)",
     async (change) => {
       await withNotification(
         "operator.sessions.write",
@@ -227,20 +227,22 @@ describe("session notification authority", () => {
               await deleteTarget();
             }
             resume.resolve();
-            await expect(pending).rejects.toThrow(
-              change === "source revoked"
-                ? /notification source revoked/
-                : change === "role changed"
-                  ? /operator role changed/
-                  : /session target is unavailable/i,
-            );
+            if (change !== "target deleted") {
+              await expect(pending).resolves.toMatchObject({ details: { status: "queued" } });
+            } else {
+              await expect(pending).rejects.toThrow(/session target is unavailable/i);
+            }
           } finally {
             resume.resolve();
             await pending.catch(() => {});
             context.ensureSessionRowProjection = prepare;
             spy.mockRestore();
           }
-          expect(drainSystemEvents(TARGET)).toEqual([]);
+          expect(drainSystemEvents(TARGET)).toEqual(
+            change !== "target deleted"
+              ? [expect.stringContaining("Inspect the prepared change.")]
+              : [],
+          );
         },
       );
     },

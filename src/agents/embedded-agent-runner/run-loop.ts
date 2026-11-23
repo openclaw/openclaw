@@ -11,6 +11,7 @@ import {
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
 import type { FailoverReason } from "../failover/signal.js";
+import { readCapturedPreparedModelRuntimeCatalog } from "../prepared-model-runtime.capture.js";
 import type { ToolOutcomeObservation } from "../tool-outcome-observation.js";
 import { normalizeUsage } from "../usage.js";
 import { resolveSourceReplyDelivery } from "./delivery-evidence.js";
@@ -202,6 +203,7 @@ export async function runPreparedEmbeddedLoop(
       hookRunner,
       hookContext: hookCtx,
       sessionPromptState,
+      isTurnTainted: turnTaintState.isTainted,
     });
     let authRetryPending = false;
     let accumulatedReplayState = createEmbeddedRunReplayState();
@@ -489,8 +491,15 @@ export async function runPreparedEmbeddedLoop(
           lastRetryFailoverReason = recovery.lastRetryFailoverReason;
           continue;
         }
+        const preparedModelRuntime = admittedRunInput.preparedModelRuntime;
         const assistantFailureOutcome = await handleEmbeddedAssistantFailure({
           runInput: admittedRunInput,
+          providerOutcomes:
+            preparedModelRuntime &&
+            (
+              readCapturedPreparedModelRuntimeCatalog(preparedModelRuntime) ??
+              preparedModelRuntime.modelCatalog
+            ).providerOutcomes,
           preparedRuntime,
           normalizedAttempt,
           runtime: attemptRuntimeSnapshot,

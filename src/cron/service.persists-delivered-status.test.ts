@@ -288,15 +288,10 @@ describe("CronService persists delivered status", () => {
       const updated = await h.cron.readJob(h.job.id);
       expect(updated?.state.consecutiveErrors).toBe(consecutiveErrors + 1);
       expect(updated?.state.lastDeliveryError).toContain("Cancelled during webhook delivery.");
-      expect(updated?.enabled).toBe(consecutiveErrors === 0);
-      if (consecutiveErrors === 9) {
-        expect(updated?.state.autoDisabled).toMatchObject({
-          reason: "consecutive-failures",
-          consecutiveErrors: 10,
-        });
-      } else {
-        expect(h.sendCronFailureAlert).toHaveBeenCalledOnce();
-      }
+      // A failed run never turns the job off, however long its failure streak.
+      expect(updated?.enabled).toBe(true);
+      expect(updated?.state.autoDisabled).toBeUndefined();
+      expect(h.sendCronFailureAlert).toHaveBeenCalledOnce();
     },
   );
 

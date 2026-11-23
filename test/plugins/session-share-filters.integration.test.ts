@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -19,7 +20,7 @@ import { createPluginRuntime } from "../../src/plugins/runtime/index.js";
 import { createDeferredCore } from "../../src/shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../src/state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../../src/state/openclaw-state-db.paths.js";
-import { linkEmail } from "../../src/state/user-profile-writes.worker.js";
+import { linkEmail, syncGitHubIdentity } from "../../src/state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../src/state/user-profiles.js";
 import { observeHostDataSql } from "../helpers/sqlite-statement-execution-counter.js";
 import { commandFixture } from "./session-share.test-support.js";
@@ -414,6 +415,7 @@ describe("session-share source publication filters", () => {
         capturedEnv.OPENCLAW_STATE_DIR = env.OPENCLAW_STATE_DIR + "/changed-contents";
         params.env = { ...env, OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR + "/replaced-env" };
         params.involvingProfileId = "";
+        // SAFETY: params.stores is seeded above with exactly one store for the held request.
         params.stores[0]!.sessionKeys.length = 0;
         params.stores[0]!.agentId = "different";
         release.resolve();
@@ -634,5 +636,134 @@ describe("session-share source publication filters", () => {
         ).toBe(false);
       }
     });
+  });
+});
+
+it("rejects profile-shaped synthetic clients without host-attested device admission", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const fixture = commandFixture();
+    fixture.select({
+      groups: ["Team"],
+      involvingProfileId: "person",
+      gateway: true,
+      gatewayDeviceIds: ["reader"],
+    });
+    const respond = vi.fn();
+    // SAFETY: the fixture registers this method; deliberately omit socket attestation to test rejection.
+    await fixture.gatewayHandlers["session-share.list"]!({
+      req: { method: "session-share.list" },
+      params: {},
+      context: {},
+      respond,
+      hasCurrentClientAuthority: () => true,
+      client: { preparedSessionProfile: { profileId: "person", aliases: new Set(["person"]) } },
+    } as unknown as GatewayRequestHandlerOptions);
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("source operator"),
+      }),
+      undefined,
+    );
+  });
+});
+
+it("intersects request relationships with publication before paging and transcript reads", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const fixture = commandFixture();
+    const person = syncGitHubIdentity({
+      identity: { accountId: 101, login: "reader" },
+      authenticationAlias: { kind: "email", email: "reader@example.test" },
+    });
+    const other = ensureProfileForEmail("unrelated@example.test");
+    for (const [name, owner, participant] of [
+      ["owned", person.id, false],
+      ["participating", other.id, true],
+      ["other", other.id, false],
+    ] as const) {
+      const scope = { agentId: "main", sessionKey: `agent:main:${name}` };
+      await replaceSessionEntry(scope, { sessionId: name, updatedAt: 1, category: "Team" });
+      assignSessionOwner(scope, {
+        owner: { type: "human", id: owner },
+        assignedBy: { type: "human", id: other.id },
+      });
+      if (participant) {
+        recordSessionParticipant(scope, {
+          identity: { type: "profile", id: person.id },
+          promptedAt: 1,
+        });
+      }
+    }
+    const involving = { relationship: "involving", target: { type: "github-account", id: "101" } };
+    const owned = { ...involving, relationship: "owned" };
+    await expect(fixture.list({ profileRelation: involving })).rejects.toThrow("Unknown");
+    const first = await fixture.listForProfile({ profileRelation: involving, limit: 1 });
+    expect(first.sessions.map((session) => session.threadId)).toEqual(["agent:main:owned"]);
+    expect(first.nextCursor).toBeDefined();
+    const second = await fixture.listForProfile({
+      profileRelation: involving,
+      limit: 1,
+      cursor: first.nextCursor,
+    });
+    expect(second.sessions.map((session) => session.threadId)).toEqual([
+      "agent:main:participating",
+    ]);
+    expect(second.nextCursor).toBeUndefined();
+    await expect(
+      fixture.listForProfile({ profileRelation: owned, cursor: first.nextCursor }),
+    ).rejects.toThrow("cursor");
+    expect(
+      (await fixture.listForProfile({ profileRelation: owned })).sessions.map(
+        (session) => session.threadId,
+      ),
+    ).toEqual(["agent:main:owned"]);
+    await expect(
+      fixture.readForProfile("agent:main:participating", { profileRelation: owned }),
+    ).rejects.toThrow("not shared");
+    await expect(
+      fixture.readForProfile("agent:main:participating", { profileRelation: involving }),
+    ).resolves.toMatchObject({ threadId: "agent:main:participating" });
+    for (const [name, state] of [
+      [
+        "mention-only",
+        {
+          hidden: true,
+          updatedAt: 1,
+          lastMention: { generation: "fixture", sequence: 1, timestamp: 1 },
+        },
+      ],
+      ["personal-only", { hidden: false, updatedAt: 1 }],
+    ] as const) {
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: `agent:main:${name}` },
+        {
+          sessionId: name,
+          updatedAt: 1,
+          category: "Team",
+          profileInvolvement: { key: `agent:main:${name}`, profiles: { [person.id]: state } },
+        },
+      );
+    }
+    expect(
+      (await fixture.listForProfile({ profileRelation: involving })).sessions.map(
+        (row) => row.threadId,
+      ),
+    ).toEqual(["agent:main:mention-only", "agent:main:owned", "agent:main:participating"]);
+    fixture.select({ groups: ["Team"], involvingProfileId: person.id });
+    expect(
+      (await fixture.listForProfile({ profileRelation: involving })).sessions.map(
+        (row) => row.threadId,
+      ),
+    ).toEqual(["agent:main:owned", "agent:main:participating"]);
+    fixture.select({ groups: ["Other"] });
+    expect((await fixture.listForProfile({ profileRelation: involving })).sessions).toEqual([]);
+    // Unknown targets answer with a typed page: node transports flatten thrown errors to text.
+    await expect(
+      fixture.listForProfile({
+        profileRelation: { ...involving, target: { type: "github-account", id: "999" } },
+      }),
+    ).resolves.toEqual({ sessions: [], relationUnresolved: true });
   });
 });

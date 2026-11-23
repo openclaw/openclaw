@@ -118,6 +118,7 @@ export function createTranscriptMessageOptions(
     | "mediaPolicyKey"
     | "showAssistantAvatar"
     | "bubbleMode"
+    | "interruptedRunIds"
   >,
 ): StreamGroupOptions {
   return {

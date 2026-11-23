@@ -5,7 +5,6 @@ import { note } from "../../packages/terminal-core/src/note.js";
 // exposing the same checks to structured lint and repair commands.
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
-import { isUpdateDoctorInspectionReportMode } from "../commands/doctor/shared/update-phase.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
 import {
@@ -36,6 +35,7 @@ import {
   noteDoctorRepairResult,
   resolveDoctorMode,
   resolveDoctorWorkspaceDir,
+  shouldDeferPostActivationInspections,
 } from "./doctor-health-contribution-utils.js";
 import {
   recordDoctorHealthWarnings,
@@ -413,14 +413,6 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
     : { checked: false, ready: false, skipped: healthOk };
 }
 
-function shouldDeferPostActivationInspections(env: NodeJS.ProcessEnv): boolean {
-  return (
-    isUpdateDoctorRun(env) &&
-    !resolveUpdateRehearsalRoot(env) &&
-    isUpdateDoctorInspectionReportMode(env)
-  );
-}
-
 function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   return [
     ...resolveInitialDoctorHealthContributions({
@@ -507,6 +499,12 @@ async function selectPostActivationInspections(
       ? [{ contribution, checks }]
       : [];
   });
+}
+
+/** The serving release owns which advisory inspections can run after activation. */
+export async function resolvePostActivationInspectionCheckIds(): Promise<string[]> {
+  const inspections = await selectPostActivationInspections(resolveDoctorHealthContributions());
+  return [...new Set(inspections.flatMap(({ checks }) => checks.map((check) => check.id)))];
 }
 
 async function runDoctorHealthContributionList(
@@ -719,6 +717,13 @@ export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext)
       "doctor:write-config",
       "doctor:final-config-validation",
     ]);
+    // The last Doctor receipt replaces earlier selectors in shipped updaters.
+    // Keep deferrals in the narrow pass without running the inspections here.
+    if (shouldDeferPostActivationInspections(ctx.env ?? process.env)) {
+      for (const { contribution } of await selectPostActivationInspections(contributions)) {
+        retained.add(contribution.id);
+      }
+    }
     await runDoctorHealthContributionList(
       ctx,
       contributions.filter((entry) => retained.has(entry.id)),

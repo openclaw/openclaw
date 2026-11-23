@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import { readUsageOverviewSortValue } from "../../infra/session-cost-usage-overview-batch.js";
 import {
@@ -15,6 +16,7 @@ import {
   selectUsageModelCohorts,
   type UsageModelCohorts,
 } from "../../shared/usage-model-cohorts.js";
+import { extractQueryTerms } from "../../shared/usage-query.js";
 import { usageOverviewPage } from "../../shared/usage-table-page.js";
 import type {
   SessionUsageEntry,
@@ -79,9 +81,14 @@ function usageOverviewReportInput(
   };
 }
 
-// Membership includes context availability: query filters can read it.
-const usageOverviewMembers = (rows: readonly SessionUsageEntry[]) =>
-  rows.map((row) => `${usageOverviewRowKey(row)}\u0000${row.hasContextWeight ? 1 : 0}`).join("\n");
+const usageOverviewMembers = (rows: readonly SessionUsageEntry[], contextAffectsQuery = false) =>
+  rows
+    .map((row) =>
+      contextAffectsQuery
+        ? `${usageOverviewRowKey(row)}\u0000${row.hasContextWeight ? 1 : 0}`
+        : usageOverviewRowKey(row),
+    )
+    .join("\n");
 
 export async function prepareUsageOverviewUsage(params: {
   usage: UsageOverviewUsage;
@@ -128,103 +135,73 @@ export function createUsageOverviewReporter(params: {
   if (!usage || !options) {
     return undefined;
   }
-  let report:
-    | {
-        members: string;
-        rows: SessionUsageEntry[];
-        cohort: boolean;
-        slice: Promise<UsageOverviewSlice>;
-      }
-    | undefined;
+  // Page hydration changes presentation, not aggregation, unless a predicate reads it.
+  const contextAffectsQuery = extractQueryTerms(options.query ?? "").some(
+    ({ key, value }) =>
+      normalizeLowercaseStringOrEmpty(key) === "has" &&
+      normalizeLowercaseStringOrEmpty(value) === "context",
+  );
+  let report: { members: string; slice: Promise<UsageOverviewSlice> } | undefined;
   return {
     run(rows) {
-      const members = usageOverviewMembers(rows);
+      const members = usageOverviewMembers(rows, contextAffectsQuery);
       if (report?.members !== members) {
-        const previous = report;
-        // This request's context hydration clones rows without changing model usage.
-        if (
-          previous?.cohort &&
-          rows.length === previous.rows.length &&
-          rows.every((row, index) => {
-            const source = previous.rows[index]!;
-            return (
-              row.key === source.key &&
-              row.agentId === source.agentId &&
-              row.sessionId === source.sessionId &&
-              row.usage === source.usage
-            );
-          })
-        ) {
-          report = {
-            ...previous,
-            members,
-            rows,
-            slice: previous.slice.then((slice) => withVisibleUsageOverviewRows(slice, rows)),
+        const prepared = usage.prepared;
+        const selection =
+          !contextAffectsQuery && prepared?.members === members
+            ? selectUsageModelCohorts(prepared.cohorts, options)
+            : undefined;
+        let task: UsageOverviewTask;
+        if (selection) {
+          const { indices, ...query } = selection;
+          const page = usageOverviewPage(
+            indices.map((index) => rows[index]!),
+            options,
+            options.sort && options.sort !== "recent"
+              ? (row) => {
+                  const ref = usage.refs.get(usageOverviewRowKey(row));
+                  return ref
+                    ? readUsageOverviewSortValue(usage.packed[ref[0]]!.batch, ref[1], options.sort)
+                    : undefined;
+                }
+              : undefined,
+          );
+          task = {
+            kind: "cohorts",
+            input: {
+              ...query,
+              rows: readUsageOverviewPage(
+                usageOverviewReportInput({ rows: page, usage, options, dayBucket }),
+              ),
+            },
+            options,
+            dayBucket,
           };
         } else {
-          const prepared = usage.prepared;
-          const selection =
-            prepared?.members === members
-              ? selectUsageModelCohorts(prepared.cohorts, options)
-              : undefined;
-          let task: UsageOverviewTask;
-          if (selection) {
-            const { indices, ...query } = selection;
-            const page = usageOverviewPage(
-              indices.map((index) => rows[index]!),
-              options,
-              options.sort && options.sort !== "recent"
-                ? (row) => {
-                    const ref = usage.refs.get(usageOverviewRowKey(row));
-                    return ref
-                      ? readUsageOverviewSortValue(
-                          usage.packed[ref[0]]!.batch,
-                          ref[1],
-                          options.sort,
-                        )
-                      : undefined;
-                  }
-                : undefined,
-            );
-            task = {
-              kind: "cohorts",
-              input: {
-                ...query,
-                rows: readUsageOverviewPage(
-                  usageOverviewReportInput({ rows: page, usage, options, dayBucket }),
-                ),
-              },
-              options,
-              dayBucket,
-            };
-          } else {
-            task = {
-              kind: "report",
-              input: usageOverviewReportInput({ rows, usage, options, dayBucket }),
-            };
-          }
-          report = {
-            members,
-            rows,
-            cohort: Boolean(selection),
-            slice: pool
-              .run(task, {
-                signal: getAsyncWorkSignal(),
-                // Admission conservatively charges the request snapshot retained until completion.
-                inputBytes: usageOverviewInputBytes(usage, rows.length),
-              })
-              .then((result) => {
-                if (result.kind !== "report") {
-                  throw new Error("Expected Usage report");
-                }
-                return result.value;
-              }),
+          task = {
+            kind: "report",
+            input: usageOverviewReportInput({ rows, usage, options, dayBucket }),
           };
         }
+        report = {
+          members,
+          slice: pool
+            .run(task, {
+              signal: getAsyncWorkSignal(),
+              // Admission conservatively charges the request snapshot retained until completion.
+              inputBytes: usageOverviewInputBytes(usage, rows.length),
+            })
+            .then((result) => {
+              if (result.kind !== "report") {
+                throw new Error("Expected Usage report");
+              }
+              return result.value;
+            }),
+        };
       }
       return report.slice;
     },
-    covers: (rows) => report?.members === usageOverviewMembers(rows),
+    covers: (rows) => report?.members === usageOverviewMembers(rows, contextAffectsQuery),
     local: (rows) =>
       buildUsageOverviewReport(usageOverviewReportInput({ rows, usage, options, dayBucket })),
   };

@@ -204,7 +204,14 @@ Doctor uses the same source checks and review before installing or adopting a re
 noninteractive repair, review and install the plugin with the explicit flag
 above, then rerun doctor.
 
-Chat installs and enablement use the same capability consent. When consent is
+You can also ask your regular agent to install a plugin in Telegram or another
+messaging channel. The `openclaw` setup tool keeps non-ClawHub source review and
+any required capability approval in that chat, then uses the Gateway's plugin
+lifecycle to install and apply the change. This does not require enabling the
+`/plugins` command. Conversation-access grants are separate config changes;
+accepting declared capabilities does not grant conversation access.
+
+The optional `/plugins` chat commands use the same capability consent. When consent is
 required, review the capabilities in the reply, then rerun the same command
 with `--accept-capabilities`:
 
@@ -521,6 +528,20 @@ page as the publishing reference:
 Package specs use ClawHub by default, with bare plugin-id shortcuts
 described in [Install plugins](/cli/plugins/install). Use `npm:`
 to install from npm, or `clawhub:` to select ClawHub explicitly.
+
+## OpenClaw ID Access page
+
+The bundled `openclaw-id-access` plugin is enabled by default when OpenClaw ID is
+on, subject to plugin policy. Activating OpenClaw ID through Labs, the config CLI,
+or setup adds only this plugin to a nonempty `plugins.allow`; an empty or absent
+allowlist needs no change. Disabling OpenClaw ID leaves the allowlist untouched.
+
+An explicit deny entry, disabled plugin entry, or `plugins.enabled: false` wins
+over activation and produces a warning instead of changing that policy. If you
+enable OpenClaw ID by editing the config file and the allowlist blocks Access,
+the Gateway warns without repairing the file. Run `openclaw doctor` to approve
+adding the plugin to the allowlist. Doctor never removes denies or enables
+explicitly disabled entries. Read-only files require their owner's write access.
 
 ## Related
 

@@ -1,4 +1,4 @@
-import type { ModelAuthStatusProfile } from "../../api/types.ts";
+import type { ModelAuthStatusProfile, ModelsProbeResult } from "../../api/types.ts";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { providerUsageAttention } from "../../components/solid/provider-usage.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
@@ -71,20 +71,6 @@ export function isProviderUsable(card: ModelProviderCard): boolean {
   );
 }
 
-/** Setup owns the page until a usable model exists; its call to action is the only one. */
-export function needsModelSetup(props: {
-  connected: boolean;
-  loading: boolean;
-  catalogDiscovering?: boolean;
-  configuredModels: readonly { available?: boolean }[];
-}): boolean {
-  return (
-    (props.connected || !props.loading) &&
-    !props.catalogDiscovering &&
-    !props.configuredModels.some((model) => model.available !== false)
-  );
-}
-
 export function needsAuthAttention(card: ModelProviderCard): boolean {
   if (card.auth?.kind === "missing") {
     return true;
@@ -114,7 +100,27 @@ export function hasVerifiedProvider(card: ModelProviderCard): boolean {
   return card.catalogStatus === "ready" && !needsAuthAttention(card);
 }
 
-export function renderProviderStatus(card: ModelProviderCard) {
+/** Codex samples one login; it doesn't report a pool shared by the other credentials. */
+export function hasSeparateAccountLimits(card: ModelProviderCard): boolean {
+  return (
+    card.id === "openai" &&
+    card.profiles.some((profile) => profile.type !== "api_key") &&
+    (card.profiles.length > 1 || Boolean(card.apiKey) || card.configApiKeys.length > 0)
+  );
+}
+
+export function probeStatus(result: ModelsProbeResult): {
+  kind: "ok" | "warn" | "danger";
+  label: string;
+} {
+  const partial = result.status === "ok" && result.results.some((target) => target.status !== "ok");
+  return {
+    kind: partial ? "warn" : result.status === "ok" ? "ok" : "danger",
+    label: t(`modelProviders.probe.status.${partial ? "partial" : result.status}`),
+  };
+}
+
+export function renderProviderStatus(card: ModelProviderCard, result?: ModelsProbeResult) {
   if (card.catalogStatus === "auth-rejected") {
     // The card-wide outcome does not identify which saved credential was rejected.
     return <SettingsStatus kind="danger" label={t("modelProviders.status.denied")} />;
@@ -125,10 +131,16 @@ export function renderProviderStatus(card: ModelProviderCard) {
   if (card.catalogStatus === "unavailable") {
     return <SettingsStatus kind={"warn"} label={t("modelProviders.status.modelsUnavailable")} />;
   }
+  // A successful catalog lists models; it does not prove inference access.
+  // No inference was attempted without a model; keep the known setup status.
+  const checked = result && result.status !== "no_model" && probeStatus(result);
+  if (checked && checked.kind !== "ok") {
+    return <SettingsStatus {...checked} />;
+  }
   if (!isProviderUsable(card)) {
     return renderAuthStatus(card.auth);
   }
-  const attention = providerUsageAttention(card.usage);
+  const attention = hasSeparateAccountLimits(card) ? undefined : providerUsageAttention(card.usage);
   if (attention) {
     return <SettingsStatus kind={attention.kind} label={attention.label} />;
   }

@@ -61,6 +61,7 @@ function resultBlock(card: ToolCard): Record<string, unknown> {
     details: card.details,
     isError: card.isError,
     exitCode: card.exitCode,
+    subagentCollectionErrors: card.subagentCollectionErrors,
     __openclaw: {
       id: card.resultMessageId,
       toolOutput: card.toolOutput,
@@ -184,6 +185,9 @@ function readProjections(item: MessageItem, index: number): Projection[] {
         ...(card?.details !== undefined ? { details: card.details } : {}),
         ...(!call && card?.isError !== undefined ? { isError: card.isError } : {}),
         ...(!call && card?.exitCode !== undefined ? { exitCode: card.exitCode } : {}),
+        ...(!call && card?.subagentCollectionErrors
+          ? { subagentCollectionErrors: card.subagentCollectionErrors }
+          : {}),
       },
     };
   });
@@ -301,16 +305,23 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       owners.forEach((source) => unchanged.delete(source));
     }
   }
+  const unchangedKeys = new Map<Source, string>();
   for (const invocation of invocations.values()) {
     const owner = invocation.call ?? invocation.result!;
+    // Hydration adds facts, not a new row. The unmerged source uses the same
+    // scoped invocation key as its eventual merged projection from the outset.
+    const itemKey = `${owner.source.item.key}:invocation:${identity(owner)}:${owner.name}`;
     if (unchanged.has(owner.source)) {
+      if (!unchangedKeys.has(owner.source)) {
+        unchangedKeys.set(owner.source, itemKey);
+      }
       continue;
     }
     const message = owner.source.message;
     const metadata = asRecord(message["__openclaw"]);
-    // History already composed durable activity. An earlier live echo must not
-    // drag it across an intervening stream or above its parent call.
-    const index = readTranscriptDisplayPosition(metadata?.transcriptPosition)?.activity
+    // Durable placement owns both the call and its children. An earlier live echo
+    // must not move a parent ahead of the narration in its persisted message.
+    const index = readTranscriptDisplayPosition(metadata?.transcriptPosition)
       ? owner.source.index
       : invocation.first;
     const result = invocation.result;
@@ -410,7 +421,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     }
     const item: ProjectedItem = {
       ...owner.source.item,
-      key: `${owner.source.item.key}:invocation:${identity(owner)}:${owner.name}`,
+      key: itemKey,
       message: {
         ...message,
         // Result media stays tool-owned when the invocation moves to its call row.
@@ -450,8 +461,11 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
   }
   const result = items.flatMap((item, index) => {
     const source = sources.get(index);
-    if (!source || unchanged.has(source)) {
+    if (!source) {
       return [item];
+    }
+    if (unchanged.has(source)) {
+      return [{ ...item, key: unchangedKeys.get(source)! }];
     }
     const row = rows.get(index) ?? [];
     if (source.remaining.length === 0) {

@@ -8,9 +8,21 @@ import {
 } from "../../../config/runtime-snapshot.js";
 import { startChatSendDiagnostics } from "../../../gateway/server-methods/chat-send-diagnostics.js";
 import {
+  getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
   rotateAgentEventLifecycleGeneration,
 } from "../../../infra/agent-events.js";
+import {
+  isAgentRunWaitingForCapacity,
+  registerAgentRunCapacityWait,
+} from "../../../infra/agent-run-capacity-wait.js";
+import {
+  claimAgentRunContext,
+  clearAgentRunContext,
+  getAgentRunContext,
+  registerAgentRunContext,
+  sweepStaleRunContexts,
+} from "../../../infra/agent-run-registry.js";
 import { withDiagnosticsTimelineObserver } from "../../../infra/diagnostics-timeline.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../../logging/diagnostic-run-activity.js";
 import { formatSessionActivityLogFields } from "../../../logging/diagnostic-session-attention.js";
@@ -27,6 +39,11 @@ import type {
 } from "../../../process/command-queue.types.js";
 import { createReplyOperation } from "../../../sessions/session-controller.js";
 import {
+  getExistingSessionControllerMailbox,
+  abortSessionControllerInput,
+} from "../../../sessions/session-controller.mailbox.js";
+import {
+  isReplyRunEvidenceStale,
   getSessionControllerOperation,
   readSessionControllerOperationState,
 } from "../../../sessions/session-controller.state.js";
@@ -46,6 +63,7 @@ import { claimAgentSessionWriter } from "./session-bootstrap.js";
 // mock-isolation: Deadline and custody tests exercise raw work without durable writer admission.
 vi.mock("./session-bootstrap.js", () => ({
   claimAgentSessionWriter: vi.fn(async () => undefined),
+  claimRunProviderState: vi.fn(() => undefined),
 }));
 
 beforeEach(() => {
@@ -856,4 +874,141 @@ describe("exact attempt deadline transfer", () => {
     expect(nextAbort).not.toHaveBeenCalled();
     expect(getCommandLaneSnapshot(attemptLane).activeCount).toBe(1);
   });
+});
+
+function queuedContext(runId: string, overrides: Partial<RunEmbeddedAgentParams> = {}) {
+  const state = create(runId, {
+    lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    ...overrides,
+  });
+  registerAgentRunContext(runId, {
+    lifecycleGeneration: state.getLifecycleGeneration(),
+    registeredAt: Date.now(),
+    sessionKey: key,
+  });
+  return state;
+}
+function holdPlacement(
+  execute?: Parameters<typeof installSessionPlacementAdmissionProvider>[0]["executeTurn"],
+) {
+  const entered = createDeferred(),
+    release = createDeferred();
+  const uninstall = installSessionPlacementAdmissionProvider({
+    assertCompactionSuccessorAllowed: () => {
+      throw new Error("Unexpected compaction successor");
+    },
+    executeLocalTurn: async (_claim, local) => await local(),
+    executeTurn: async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return execute ? await execute(...args) : await args[2]();
+    },
+  });
+  return { entered: entered.promise, release: release.resolve, uninstall };
+}
+it("retains context past the TTL while worker placement admission is pending", async () => {
+  const operation = replyOperation(),
+    state = queuedContext("queued-context", { replyOperation: operation }),
+    placement = holdPlacement();
+  const run = state.controller.enqueueSession(() => state.controller.enqueueGlobal(result));
+  try {
+    await placement.entered;
+    vi.setSystemTime(30 * 60000 + 1001);
+    expect(isReplyRunEvidenceStale(operation)).toBe(false);
+    expect(sweepStaleRunContexts()).toBe(0);
+    expect(getAgentRunContext("queued-context")).toBeDefined();
+    placement.release();
+    await run;
+    expect(getAgentRunContext("queued-context")?.lastActiveAt).toBe(Date.now());
+    vi.setSystemTime(60 * 60000 + 1002);
+    expect(sweepStaleRunContexts()).toBe(1);
+    expect(getAgentRunContext("queued-context")).toBeUndefined();
+  } finally {
+    placement.release();
+    await run.catch(() => {});
+    operation.complete();
+    placement.uninstall();
+  }
+});
+it("releases global waiting context when its source owner cancels", async () => {
+  const state = queuedContext("owner-cancelled-context"),
+    queued = createDeferred(),
+    execute = vi.fn(result);
+  setCommandLaneConcurrency(globalLane, 0);
+  const run = state.controller.enqueueSession(() =>
+    state.controller.enqueueGlobal(execute, { onQueued: () => queued.resolve() }),
+  );
+  const rejected = expect(run).rejects.toThrow();
+  try {
+    await queued.promise;
+    const cancelled = [...(getExistingSessionControllerMailbox(key)?.entries ?? [])].filter(
+      (input) =>
+        abortSessionControllerInput(input, new Error("source owner cancelled waiting work")),
+    );
+    expect(cancelled).toHaveLength(1);
+    expect(isAgentRunWaitingForCapacity("owner-cancelled-context")).toBe(false);
+    await rejected;
+    expect(getCommandLaneSnapshot(globalLane).queuedCount).toBe(0);
+    vi.setSystemTime(30 * 60000 + 1001);
+    expect(sweepStaleRunContexts()).toBe(1);
+    expect(getAgentRunContext("owner-cancelled-context")).toBeUndefined();
+    expect(execute).not.toHaveBeenCalled();
+  } finally {
+    setCommandLaneConcurrency(globalLane, 1);
+    await run.catch(() => {});
+  }
+});
+it.each(["local", "remote"] as const)(
+  "rejects %s execution when its lifecycle rotates during placement admission",
+  async (execution) => {
+    const state = queuedContext("placement-replaced", {
+        trigger: "user",
+        sessionPersistence: "detached",
+      }),
+      local = vi.fn(result),
+      placement = holdPlacement(async (_claim, _params, runLocal, onAdmitted) => {
+        if (execution === "remote") {
+          onAdmitted?.();
+          return await result();
+        }
+        return await runLocal();
+      });
+    const run = state.controller.enqueueSession(() => state.controller.enqueueGlobal(local)),
+      rejected = expect(run).rejects.toThrow("stale gateway lifecycle");
+    try {
+      await placement.entered;
+      vi.setSystemTime(30 * 60000 + 1001);
+      const lifecycleGeneration = rotateAgentEventLifecycleGeneration();
+      expect(sweepStaleRunContexts()).toBe(1);
+      const replacement = {
+        lifecycleGeneration,
+        sessionId: "replacement-session",
+        sessionKey: "agent:main:replacement",
+      };
+      registerAgentRunContext("placement-replaced", { ...replacement, registeredAt: Date.now() });
+      placement.release();
+      await rejected;
+      expect(getAgentRunContext("placement-replaced")).toMatchObject(replacement);
+      expect(local).not.toHaveBeenCalled();
+    } finally {
+      placement.release();
+      await run.catch(() => {});
+      placement.uninstall();
+    }
+  },
+);
+it("old wait releases cannot clear a recycled run after claim", () => {
+  const runId = "recycled-capacity-run",
+    lifecycleGeneration = getAgentEventLifecycleGeneration();
+  registerAgentRunContext(runId, { lifecycleGeneration });
+  const releaseOld = registerAgentRunCapacityWait(runId, lifecycleGeneration),
+    old = getAgentRunContext(runId);
+  clearAgentRunContext(runId);
+  claimAgentRunContext(runId, { ...old, lifecycleGeneration });
+  expect(isAgentRunWaitingForCapacity(runId)).toBe(false);
+  const releaseNew = registerAgentRunCapacityWait(runId, lifecycleGeneration);
+  releaseOld?.();
+  expect(isAgentRunWaitingForCapacity(runId)).toBe(true);
+  releaseNew?.();
+  expect(isAgentRunWaitingForCapacity(runId)).toBe(false);
 });

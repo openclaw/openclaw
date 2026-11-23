@@ -21,7 +21,7 @@ import { assignProviderModelOrder, compareModelCatalogEntries } from "./model-ca
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
-import { createConfiguredProviderCatalogModelIdNormalizer } from "./model-ref-shared.js";
+import { createConfiguredProviderCatalogModelIdNormalizer } from "./model-selection-normalize.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import type { AuthStorageData } from "./sessions/index.js";
@@ -367,7 +367,8 @@ export async function buildPreparedModelCatalogSnapshot(
     ),
   ]);
   // Runtime declarations describe possible models, not account entitlement.
-  // Only live registry or refreshed rows may publish those provider models.
+  // Only live registry or refreshed rows may publish those provider models; the registry
+  // already carries their catalog details (readGeneratedPluginModelCatalogProviders).
   const manifestKeyOf = createModelCatalogIdentityKeyResolver();
   const discoveredKeys = new Set(models.map(manifestKeyOf));
   const discoveredByRoute = new Map(

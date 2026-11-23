@@ -2,13 +2,19 @@ import { appendFileSync, existsSync, lstatSync, readFileSync } from "node:fs";
 import path, { matchesGlob } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveTestGitCommits } from "../.github/actions/git-owner/test-prerequisites.mjs";
-import { isTestFileTarget } from "./lib/changed-path-facts.mjs";
+import {
+  getChangedPathFacts as getHarnessChangedPathFacts,
+  isTestFileTarget,
+} from "./lib/changed-path-facts.mjs";
 import { blacksmithRunnerLabel } from "./lib/ci-blacksmith-capacity.mjs";
 import {
   formatIosSimulatorSelectionSummary,
   resolveIosSimulatorTestSelection,
 } from "./lib/ci-ios-smoke-plan.mjs";
-import { resolveBoatNodeTestCapacity } from "./lib/ci-node-test-capacity.mts";
+import {
+  BOAT_HOSTED_PREPARED_WORKSPACE,
+  resolveBoatNodeTestCapacity,
+} from "./lib/ci-node-test-capacity.mts";
 import { resolveSkillsPythonTargets } from "./lib/ci-skills-python-plan.mjs";
 import { resolveCiTestAuditConfig } from "./lib/ci-test-observations.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
@@ -504,6 +510,15 @@ let runUiRealGateway =
   (fullUiPullRequest || !ordinaryPullRequest) && selectUiE2eFamily("real-gateway");
 let runUiE2e = runControlUiE2e || runBrowserExtensionE2e;
 const nodeRunnerBackend = process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND || runnerProfile;
+const boatNodeJobLimit = process.env.OPENCLAW_CI_BOAT_NODE_JOB_LIMIT;
+let remainingBoatNodeJobs = boatNodeJobLimit ? Number(boatNodeJobLimit) : 0;
+if (
+  !Number.isSafeInteger(remainingBoatNodeJobs) ||
+  remainingBoatNodeJobs < 0 ||
+  remainingBoatNodeJobs > 20
+) {
+  throw new Error("Invalid Boat Node job allowance");
+}
 const usesHostedRunnerProfile = runnerProfile === "github" || runnerProfile === "hybrid";
 const supportsUiE2eProjects =
   existsSync("test/vitest/vitest.ui-e2e.config.ts") &&
@@ -672,6 +687,7 @@ const nodeVolumeContext =
     ? Object.freeze({
         revision: checkoutRevision,
         runtimePolicy: testRuntimeMode,
+        fullPlan: () => createFullNodeTestPlan(),
         environment: Object.freeze({ ...process.env }),
         eligibility: Object.freeze({
           changedPaths: Object.freeze([...changedPaths]),
@@ -750,7 +766,15 @@ let uiTestGroups =
         ...(uiE2eSelection ? { uiE2eFiles: uiE2eSelection.files } : {}),
       })
     : null;
-let uiTestShardCount = compatibilityTarget ? 1 : 3;
+// Reuse the target's own native UI shard invocation, not the current runner:
+// compatibility still owns discovery, isolation, workers, and test deadlines.
+const supportsUiNativeSharding =
+  /OPENCLAW_NODE_TEST_VITEST_ARGS_JSON:.*--shard=\{0\}\/\{1\}.*matrix\.shard, needs\.preflight\.outputs\.ui_test_shard_count/u.test(
+    targetWorkflow,
+  );
+// Explicit runtime overrides retain their existing compatibility runner envelope.
+let uiTestShardCount =
+  compatibilityTarget && (!supportsUiNativeSharding || dispatchRuntimePolicy) ? 1 : 3;
 if (selectedTestTargets) {
   if (!uiTestGroups) {
     throw new Error("Current PR CI requires UI target groups");
@@ -835,7 +859,7 @@ const uiWebkitOwners = [
   "ui/src/components/{session-hovercard*,solid/session-hovercard*}.{ts,tsx,css}",
   "ui/src/components/solid/{menu*.{ts,tsx},overlay.css}",
   "ui/src/app/app-shell-chrome.ts",
-  "ui/src/pages/{cron/view-jobs-filter,plugins/settings-editor,plugins/settings-view}.{ts,tsx,css}",
+  "ui/src/pages/plugins/{settings-editor,settings-view}.{ts,tsx,css}",
   "ui/src/pages/chat/chat-composer*.{ts,tsx}",
   "ui/src/pages/chat/components/chat-{composer*,picker-overlay*,model-picker*,effort-picker*}.{ts,tsx}",
   "ui/src/pages/chat/{chat-pane-header,components/chat-pane-header*}.{ts,tsx}",
@@ -935,6 +959,31 @@ const compactPlanMode = !isCanonicalRepository
       ? "push"
       : undefined;
 const nodeMatrixLimit = mainValidation ? 77 : compactPlanMode === "pull-request" ? 130 : 70;
+// Accounting and execution share the original unselected plan's inputs.
+function createFullNodeTestPlan(workerShardCount = 0) {
+  return createNodeTestPlan({
+    includeProofTests: runProofTier,
+    includeReleaseOnlyPluginShards: false,
+    includeReleaseOnlyToolingShards:
+      mainValidation || eventName === "workflow_dispatch" || !isCanonicalRepository,
+    includeReleaseOnlyRuntimeTests,
+    includePrExemptRuntimeTests,
+    ...(runtimePullRequest && changedPaths ? { changedPaths } : {}),
+    // Keep the legacy boolean for historical targets. Hourly main uses
+    // the complete compact inventory within its 77-row main-tier cap.
+    compact: compactPlanMode !== undefined,
+    compactMode: mainValidation
+      ? "pull-request"
+      : (compactPlanMode ??
+        (splitRuntimeJobs && testRuntimeMode !== "node" ? "pull-request" : undefined)),
+    mainValidation,
+    compactNodeJobCap:
+      splitRuntimeJobs && testRuntimeMode !== "node"
+        ? undefined
+        : nodeMatrixLimit - workerShardCount,
+    runnerBackend: nodeRunnerBackend,
+  });
+}
 let changedNodeTestShards = null;
 /** @type {string | undefined} */
 let changedNodeTestFallbackReason;
@@ -1158,6 +1207,9 @@ const postgresConformancePaths = [
   "src/gateway/server-methods/cron.ts",
   "src/gateway/server-methods/cron-add.ts",
   "src/gateway/server-methods/cron-run.ts",
+  "src/infra/gateway-lock.ts",
+  "src/infra/gateway-lock-recovery*.ts",
+  "src/infra/gateway-postgres-*.ts",
   "src/cli/gateway-cli/run.ts",
   "src/commands/*preflight*.ts",
   "src/commands/doctor-database-*.ts",
@@ -1305,31 +1357,7 @@ const nodeWorkerE2eShards =
 const rawNodeTestShards = runNodeFull
   ? changedNodeTestShards
     ? changedNodeTestShards
-    : [
-        ...createNodeTestPlan({
-          includeProofTests: runProofTier,
-          includeReleaseOnlyPluginShards: false,
-          includeReleaseOnlyToolingShards:
-            mainValidation || eventName === "workflow_dispatch" || !isCanonicalRepository,
-          includeReleaseOnlyRuntimeTests,
-          includePrExemptRuntimeTests,
-          ...(runtimePullRequest && changedPaths ? { changedPaths } : {}),
-          // Keep the legacy boolean for historical targets. Hourly main uses
-          // the complete compact inventory within its 77-row main-tier cap.
-          compact: compactPlanMode !== undefined,
-          compactMode: mainValidation
-            ? "pull-request"
-            : (compactPlanMode ??
-              (splitRuntimeJobs && testRuntimeMode !== "node" ? "pull-request" : undefined)),
-          mainValidation,
-          compactNodeJobCap:
-            splitRuntimeJobs && testRuntimeMode !== "node"
-              ? undefined
-              : nodeMatrixLimit - nodeWorkerE2eShards.length,
-          runnerBackend: nodeRunnerBackend,
-        }),
-        ...nodeWorkerE2eShards,
-      ]
+    : [...createFullNodeTestPlan(nodeWorkerE2eShards.length), ...nodeWorkerE2eShards]
   : [];
 if (
   ciQualification &&
@@ -1512,11 +1540,24 @@ const nodeTestShards = targetNodeTestShards
       !shard.requiresDist && splitRuntimeJobs
         ? testRuntimePolicy.ciTestShardRuntimes(shard, testRuntimeMode)
         : null;
-    // Node-hosted packaging proof also launches a pinned Bun child.
+    // Node-hosted packaging, retained-import, and native filesystem proofs launch pinned Bun children.
     const needsBunChild =
       !shard.requiresDist &&
-      shardRequiresTests(shard, ["test/scripts/bun-standalone-codegen.test.ts"], (plan) =>
-        plan.configs?.includes(goToolingConfig),
+      shardRequiresTests(
+        shard,
+        [
+          "test/scripts/bun-standalone-codegen.test.ts",
+          "src/infra/update-retained-runtime-imports.process.test.ts",
+          "src/agents/worktrees/filesystem-native.test.ts",
+        ],
+        (plan) =>
+          plan.configs?.some((config) =>
+            [
+              goToolingConfig,
+              "test/vitest/vitest.infra.config.ts",
+              "test/vitest/vitest.agents-support.config.ts",
+            ].includes(config),
+          ),
       );
     const minTotalMemoryBytes = Math.max(
       0,
@@ -1537,13 +1578,35 @@ const nodeTestShards = targetNodeTestShards
         : undefined);
     const packedGroups =
       groups?.length && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined;
-    const capacity =
-      process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat"
+    let targetVolumes;
+    try {
+      if (shard.targetVolumes?.length && nodeTestGroupsCodec) {
+        targetVolumes = encodeNodeTestGroups(shard.targetVolumes);
+      }
+    } catch {
+      // Missing accounting must not change or prevent the execution plan.
+    }
+    let capacity =
+      process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat" ||
+      (remainingBoatNodeJobs > 0 &&
+        !shard.requiresDist &&
+        ![
+          ...(shard.includePatterns ?? []),
+          ...(shard.targets ?? []),
+          ...(shard.groups ?? []).flatMap((group) => group.includePatterns ?? []),
+        ].includes(BOAT_HOSTED_PREPARED_WORKSPACE))
         ? resolveBoatNodeTestCapacity(shard.runner, shard.checkName, minTotalMemoryBytes, [
             ...(shard.includePatterns ?? []),
             ...(shard.groups ?? []).flatMap((group) => group.includePatterns ?? []),
           ])
         : undefined;
+    if (capacity && nodeRunnerBackend === "github") {
+      // Hosted packing assumes 16 GiB. Preserve that floor and its CPU envelope.
+      capacity =
+        capacity.runner === "boat"
+          ? undefined
+          : { ...capacity, cpuBudget: Math.min(capacity.cpuBudget, shard.cpuBudget ?? 4, 4) };
+    }
     const auditCliObservations =
       eventName === "schedule" &&
       isCanonicalRepository &&
@@ -1568,6 +1631,9 @@ const nodeTestShards = targetNodeTestShards
       shard_name: shard.shardName,
       groups_gzip_base64: packedGroups,
       groups: groups && !nodeTestGroupsCodec ? groups : undefined,
+      // Accounting is optional and must fit the same per-environment-string bound as group pools.
+      target_volumes_gzip_base64:
+        targetVolumes && targetVolumes.length <= 60_000 ? targetVolumes : undefined,
       configs: packedGroups ? undefined : shard.configs,
       env: shard.env,
       includePatterns: packedGroups ? undefined : shard.includePatterns,
@@ -1660,6 +1726,17 @@ const nodeTestShards = targetNodeTestShards
           }),
         )
       : [row];
+    if (boatNodeJobLimit && capacity) {
+      for (const runtimeRow of rows) {
+        if (remainingBoatNodeJobs > 0) {
+          remainingBoatNodeJobs -= 1;
+        } else {
+          runtimeRow.runner = shard.runner;
+          runtimeRow.runner_label = blacksmithRunnerLabel(shard.runner, minTotalMemoryBytes);
+          runtimeRow.cpu_budget = shard.cpuBudget;
+        }
+      }
+    }
     if (packedGroups) {
       packedNodeTestRows.push(...rows.map((runtimeRow) => ({ row: runtimeRow, groups })));
     }
@@ -1954,6 +2031,14 @@ const manifest = {
   run_pr_kysely_guardrails: runPrKyselyGuardrails,
   split_pr_guards: splitPrGuards,
   narrow_check_paths_json: runCheckPlan ? JSON.stringify(changedPaths) : "",
+  // Full lint shards exclude test/. Keep its changed inputs for the fallback
+  // lint step without changing compiler, guard, or extension planning.
+  changed_root_test_paths_json:
+    runCheck && runtimePullRequest && !frozenTarget && !compatibilityTarget
+      ? JSON.stringify(
+          (changedPaths ?? []).filter((file) => getHarnessChangedPathFacts(file).isRootTestSource),
+        )
+      : "[]",
   run_check_plan: runCheckPlan,
   check_plan_input_json: runCheckPlan
     ? JSON.stringify({
@@ -2211,7 +2296,7 @@ if (hybridHostedEligible) {
     "check-docs": count(manifest.run_check_docs),
     "postgres-conformance": count(
       manifest.run_postgres_conformance,
-      workflowEventName === "pull_request" ? 4 : 3,
+      workflowEventName === "pull_request" ? 5 : 4,
     ),
     "skills-python": count(manifest.run_skills_python_job),
     "checks-windows": count(

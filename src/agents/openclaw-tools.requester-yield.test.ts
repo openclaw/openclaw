@@ -595,12 +595,13 @@ describe("requester yield ownership", () => {
     { deadlineAtMs: Date.now() + 60_000, expected: "yielded" },
     { deadlineAtMs: undefined, expected: "error" },
   ])(
-    "awaits a wake-armed command its run started, bounded by its deadline ($expected)",
+    "awaits a wake-armed command of its chat, bounded by its deadline ($expected)",
     async ({ deadlineAtMs, expected }) => {
       const sessionKey = "agent:main:subagent:watcher";
       await seedNativeChild({ runId: "run-watcher", childSessionKey: sessionKey });
+      // No run owns the command: an earlier run on this chat may have started it.
       const process = Object.assign(backgroundProcess(sessionKey), {
-        originRunId: "run-watcher",
+        agentId: "main",
         notifyOnExit: true,
         notifyOnExitEmptySuccess: true,
         notifySessionTarget: {} as NonNullable<ProcessSession["notifySessionTarget"]>,
@@ -613,6 +614,12 @@ describe("requester yield ownership", () => {
       // Only an accepted yield arms the exit to resume this run.
       expect(onYield).toHaveBeenCalledTimes(expected === "yielded" ? 1 : 0);
       expect(process.resumesYieldedRun).toBe(expected === "yielded" ? true : undefined);
+      if (expected === "yielded") {
+        // The runner counts the armed exit wake as this turn's continuation source.
+        expect(onYield).toHaveBeenCalledWith("Turn yielded.", undefined, undefined, {
+          execWakeArmed: true,
+        });
+      }
     },
   );
 
@@ -629,6 +636,8 @@ describe("requester yield ownership", () => {
 
     await expectYield(tool, "yielded");
     expect(onYield).toHaveBeenCalledOnce();
+    // An unarmed background exec is not an exit wake for this yield.
+    expect(onYield).toHaveBeenCalledWith("Turn yielded.", undefined, undefined);
   });
 
   it("checks background exec after an awaited runtime completion claim", async () => {
@@ -753,6 +762,14 @@ describe("requester yield ownership", () => {
     expect(turn2Yield).not.toHaveBeenCalled();
     // Reporting must not disturb the armed wake or claim the child for turn 2.
     expect(getSubagentRunByRunId(child.runId)).toEqual(settled);
+
+    const acknowledgment =
+      "The existing task is still running. I will report back when it finishes.";
+    const waiting = await turn2.execute("yield-waiting-reply", { acknowledgment });
+    expect(waiting.details).toMatchObject({ status: "yielded", acknowledgment });
+    expect(turn2Yield).toHaveBeenCalledExactlyOnceWith("Turn yielded.", acknowledgment, undefined);
+    expect(getSubagentRunByRunId(child.runId)).toEqual(settled);
+    turn2Yield.mockClear();
 
     // The completion owner stays dispatching until its requester continuation returns.
     assert(settled?.requesterSettleWake);

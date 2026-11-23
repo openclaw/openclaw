@@ -72,6 +72,7 @@ export type TranscriptAttachmentEntry = {
   /** Timestamp of the message that carried the media, when the transcript recorded one. */
   timestamp?: number;
   options: ImageRenderOptions;
+  onShowMessage?: () => void;
   onOpenSidebar: (content: SidebarContent) => void;
 } & ({ kind: "image"; image: ImageBlock } | { kind: "attachment"; item: AssistantAttachmentItem });
 

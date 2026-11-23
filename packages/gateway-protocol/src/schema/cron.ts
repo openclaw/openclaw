@@ -531,6 +531,8 @@ export const CronJobSchema = closedObject({
   updatedAtMs: CronDateTimestampMsSchema,
   /** Opaque Gateway-computed token for the job definition, excluding scheduler state. */
   configRevision: Type.Optional(CronConfigRevisionSchema),
+  /** Gateway-computed: the account-scoped tool cap cannot resolve its creator channel. */
+  reauthorizationRequired: Type.Optional(Type.Boolean()),
   schedule: CronScheduleSchema,
   pacing: Type.Optional(CronPacingSchema),
   activeHours: Type.Optional(CronActiveHoursSchema),
@@ -580,6 +582,12 @@ export const CronStatusParamsSchema = closedObject({});
 
 /** Looks up a job by stable id or legacy jobId alias. */
 export const CronGetParamsSchema = cronIdOrJobIdParams({});
+
+/** Acknowledge only the observed failure, including a paused job during local migration. */
+export const CronAcknowledgeFailureParamsSchema = Type.Union([
+  closedObject({ id: NonEmptyString, failedAtMs: Type.Integer({ minimum: 0 }) }),
+  closedObject({ id: NonEmptyString, adopt: Type.Literal(true) }),
+]);
 
 export const CronScratchSchema = closedObject({
   content: Type.String({ maxLength: 262144 }),

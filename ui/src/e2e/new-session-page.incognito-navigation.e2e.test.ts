@@ -4,6 +4,7 @@ import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { navigationAgents } from "./new-session-page.navigation-fixtures.test-support.ts";
 import {
+  captureUiProof,
   installMockGateway,
   navigateInApp,
   pollAttribute,
@@ -66,6 +67,10 @@ suite.define(() => {
           await incognito.click();
           await pollAttribute(incognito, "aria-checked").toBe("false");
         }
+        const permission = page.locator('[data-chat-permission-select="true"]');
+        await permission.click();
+        await page.locator('[data-chat-permission-option="read-only"]').click();
+        await pollAttribute(permission, "data-chat-select-value").toBe("read-only");
         const remainsIncognito = scenario.incognito && !scenario.turnOff;
         await navigateInApp(
           page,
@@ -85,6 +90,9 @@ suite.define(() => {
         await page.locator("openclaw-new-session-page").evaluate(async (element) => {
           await Reflect.get(element, "updateComplete");
         });
+        if (scenario.name === "incognito-settings") {
+          await captureUiProof(suite, page, "incognito-permission-after-return.png");
+        }
         const requests = await gateway.getRequests();
         expect
           .soft(
@@ -92,6 +100,7 @@ suite.define(() => {
               text: await message.inputValue(),
               attachments: await attachments.allTextContents(),
               incognito: await incognito.getAttribute("aria-checked"),
+              permission: await permission.getAttribute("data-chat-select-value"),
               agent: new URL(page.url()).searchParams.get("agent"),
               errors,
               sends: requests.filter(
@@ -104,6 +113,7 @@ suite.define(() => {
             text,
             attachments: expect.arrayContaining([filename]),
             incognito: String(remainsIncognito),
+            permission: "read-only",
             agent: "main",
             errors: [],
             sends: [],
