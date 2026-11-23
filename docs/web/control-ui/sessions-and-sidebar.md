@@ -588,7 +588,9 @@ After token or device-token authentication, the sidebar can show its cached sess
 
 Switching agents refreshes the session list even while other conversations are active. A session action finishing for another agent keeps the selected agent’s filtered sidebar and pagination active. Confirmed permission changes remain visible if their follow-up list refresh fails. Read acknowledgments for known sessions update unread and attention state from their committed receipt without reloading the roster. Older responses cannot undo confirmed read state; newer activity or a later manual unread mark still takes effect.
 
-Reading a parent acknowledges its hidden subagent runs in sequential batches of up to 100. Each run keeps its conditional unread guard, so a manual reminder added during acknowledgement survives. Pending reads clear optimistically and settle from acknowledgement outcomes and admitted Gateway row events. Failed implicit hidden-run reads stay silent; an explicit **Mark as read** action reports its hidden-run failures together.
+A session becomes unread when a visible run completes, a channel message arrives, or a background or scheduled result is delivered into it. A hidden turn, such as a parent answering its child's `sessions_send` message, or an internal wake does not mark it unread.
+
+Reading a parent acknowledges its hidden subagent runs in sequential batches of up to 100. Failed and timed-out hidden runs keep their failure on the child card and do not count toward the parent's unread state. Each run keeps its conditional unread guard, so a manual reminder added during acknowledgement survives. Pending reads clear optimistically and settle from acknowledgement outcomes and admitted Gateway row events. Failed implicit hidden-run reads stay silent; an explicit **Mark as read** action reports its hidden-run failures together.
 
 **Load more sessions** stays disabled while the sidebar list is refreshing or loading another page. It becomes available again when the read finishes and more sessions remain.
 
