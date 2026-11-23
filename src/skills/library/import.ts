@@ -12,6 +12,7 @@ import {
 import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
+import { assertSkillMutationsEnabled } from "../deployment-policy.js";
 import { installSkillFromClawHub } from "../lifecycle/clawhub.js";
 import { SkillLibraryError } from "../skill-library-error.js";
 import {
@@ -56,6 +57,7 @@ export async function importSkillLibrary(
   params: SkillsLibraryImportParams,
   options: OpenClawStateDatabaseOptions = {},
 ) {
+  assertSkillMutationsEnabled();
   const access = captureSkillLibraryAccess(authority, options);
   await access.read("profile", undefined);
   return withTempWorkspace(
@@ -87,6 +89,7 @@ export async function uploadSkillLibrary(
   params: SkillsLibraryUploadParams,
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<SkillsLibraryUploadResult> {
+  assertSkillMutationsEnabled();
   const access = captureSkillLibraryAccess(authority, options);
   if (params.action !== "commit") {
     return access.write("skillLibrary.upload", { params });

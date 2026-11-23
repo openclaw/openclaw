@@ -112,6 +112,34 @@ async function admitted(
 }
 
 describe("human personal namespace authority", () => {
+  it("retains direct model Library reads while refusing deployment-disabled publication, mutation, and activation", async () => {
+    const { alice, request } = await setup();
+    const owner = request(alice.id);
+    const saved = await saveSkillLibrary(libraryAuthority(owner), {
+      slug: "ordinary",
+      content,
+      expectedRevision: null,
+    });
+    const capability = await authoring(owner);
+    using run = await admitted(capability);
+    const tool = createSkillLibraryTool(capability);
+    vi.stubEnv("OPENCLAW_DISABLE_SKILL_INSTALLS", "1");
+
+    expect(textResult(await run.execute(tool, { action: "list" })).entries).toHaveLength(1);
+    expect(
+      textResult(await run.execute(tool, { action: "read", skill_id: saved.entry.skillId })),
+    ).toMatchObject({ slug: "ordinary" });
+    for (const input of [
+      { action: "create", name: "blocked", proposal_content: content },
+      { action: "share", skill_id: saved.entry.skillId, expected_revision: saved.entry.revision },
+      { action: "activate", skill_id: saved.entry.skillId },
+    ]) {
+      await expect(run.execute(tool, input)).rejects.toThrow("Skill mutations are disabled");
+    }
+    expect((await listSkillLibrary(libraryAuthority(owner))).entries).toMatchObject([
+      { skillId: saved.entry.skillId, shared: false },
+    ]);
+  });
   it("checks workspace authority from committed profile facts without a main-thread read", async () => {
     const { alice, request } = await setup();
     const owner = request(alice.id);
