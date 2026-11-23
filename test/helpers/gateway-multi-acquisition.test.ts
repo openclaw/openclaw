@@ -126,6 +126,7 @@ it.each(["none", "gateway", "both"] as const)(
         stopAndWait: stopClient,
       }),
     );
+    // mock-isolation: Inject owned fixtures instead of creating real Gateway state or processes.
     vi.doMock("./openclaw-test-instance.js", () => ({
       createOpenClawTestInstance: async () => instances[nextInstance++],
     }));
@@ -218,6 +219,7 @@ it.each(["server", "node"] as const)(
     };
     let serverIndex = 0;
     mockHarness(boundary === "node" ? acquire : vi.fn());
+    // mock-isolation: Control late acquisition without creating real Gateway state or processes.
     vi.doMock("./openclaw-test-instance.js", () => ({
       createOpenClawTestInstance:
         boundary === "server" ? acquire : async () => servers[serverIndex++],
