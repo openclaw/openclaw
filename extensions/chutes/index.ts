@@ -102,6 +102,24 @@ export default definePluginEntry({
           label: "Chutes OAuth",
           hint: "Browser sign-in",
           kind: "oauth",
+          matchesSharedAccount: (credential, existing) => {
+            // Chutes login stores the subject from its fixed, authenticated UserInfo endpoint.
+            // These credentials have no explicit issuer; do not adopt one from another source.
+            return (
+              credential.type === "oauth" &&
+              existing.type === "oauth" &&
+              credential.provider === PROVIDER_ID &&
+              existing.provider === PROVIDER_ID &&
+              credential.issuer === undefined &&
+              existing.issuer === undefined &&
+              Boolean(
+                credential.accountId?.trim() &&
+                credential.accountId === existing.accountId &&
+                credential.clientId?.trim() &&
+                credential.clientId === existing.clientId,
+              )
+            );
+          },
           wizard: {
             choiceId: "chutes",
             choiceLabel: "Chutes (OAuth)",
