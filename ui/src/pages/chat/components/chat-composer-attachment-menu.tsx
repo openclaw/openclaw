@@ -70,9 +70,9 @@ export function handleComposerAttachmentSelection(
     try {
       return overlay.request(false, "none") && !surface.matches(":popover-open");
     } finally {
-      for (const { name, value, priority } of presentation) {
-        if (value) {
-          surface.style.setProperty(name, value, priority);
+      for (const { name, value: previousValue, priority } of presentation) {
+        if (previousValue) {
+          surface.style.setProperty(name, previousValue, priority);
         } else {
           surface.style.removeProperty(name);
         }
