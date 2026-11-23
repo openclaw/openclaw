@@ -124,7 +124,7 @@ export const mcpEventsHandlers: GatewayRequestHandlers = {
       client?.connectionSignal?.throwIfAborted();
       options.sessionMutationCommitGuard?.();
       if (context.getGatewayMethodRegistry?.() !== registry) {
-        throw new Error("The MCP Events plugin runtime was replaced. Retry the catalog request.");
+        throw new Error("The MCP Events plugin restarted. Retry the catalog request.");
       }
     };
     try {
