@@ -26,6 +26,8 @@ export type ChatPendingInputView = {
   readonly loading: boolean;
   error?: string;
   request?: PendingInputRequest;
+  /** Queued inputs with an outstanding cancellation (distinct from dismissing retired inputs). */
+  cancelling?: Set<string>;
   /** Optimistic dismissals keyed to the request that owns each; failure restores only its own. */
   dismissing?: Map<string, object>;
   /** Gateway-confirmed dismissals hide late pages read before the tombstone committed. */
