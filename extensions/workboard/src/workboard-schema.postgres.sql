@@ -175,6 +175,7 @@ CREATE TABLE "workboard_cards" (
   "execution_started_at" bigint,
   "execution_updated_at" bigint,
   "automation_json" text COLLATE "C",
+  "common_work_json" text COLLATE "C",
   "claim_json" text COLLATE "C",
   "template_id" text COLLATE "C",
   "archived_at" bigint,

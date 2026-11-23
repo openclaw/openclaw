@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const WORKBOARD_SCHEMA_SQL = `
     CREATE TABLE IF NOT EXISTS workboard_schema_migrations (
@@ -61,6 +61,7 @@ export const WORKBOARD_SCHEMA_SQL = `
       execution_started_at INTEGER,
       execution_updated_at INTEGER,
       automation_json TEXT,
+      common_work_json TEXT,
       claim_json TEXT,
       template_id TEXT,
       archived_at INTEGER,

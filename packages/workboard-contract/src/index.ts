@@ -1,4 +1,8 @@
+import type { CommonWorkRecord } from "./common-work.js";
 import type { WorkboardSessionsBoardSpec } from "./sessions-board.js";
+export * from "./common-work.js";
+export * from "./common-work-objective.js";
+export * from "./common-work-guards.js";
 
 export type WorkboardDatabasePortApi<Database, Input> = {
   postgres: string;
@@ -402,6 +406,8 @@ export type WorkboardNotificationSubscription = {
 };
 
 export type WorkboardMetadata = {
+  /** Canonical common-work lifecycle facts; Workboard remains the single persistence owner. */
+  commonWork?: CommonWorkRecord;
   attempts?: WorkboardRunAttempt[];
   comments?: WorkboardComment[];
   links?: WorkboardLink[];

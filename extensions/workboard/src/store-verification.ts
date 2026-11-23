@@ -114,6 +114,7 @@ export function normalizeWithoutVerifications(
 ): WorkboardMetadata {
   return normalizeMetadata(patch, splitVerifications(existing).metadata, {
     automationLaunch: options.automationLaunch,
+    commonWork: options.commonWork,
     allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
     preserveProofId: options.preserveProofId,
     preserveNotificationId: options.preserveNotificationId,

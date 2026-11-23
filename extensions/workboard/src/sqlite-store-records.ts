@@ -356,6 +356,8 @@ function readMetadata(
   const protocol = workerProtocolRow(db, cardId, preloaded);
   // SAFETY: insertCard serializes WorkboardMetadata.automation unchanged.
   const automation = parseJson(row.automation_json) as WorkboardMetadata["automation"] | undefined;
+  // SAFETY: insertCard serializes WorkboardMetadata.commonWork unchanged.
+  const commonWork = parseJson(row.common_work_json) as WorkboardMetadata["commonWork"] | undefined;
   // SAFETY: insertCard serializes WorkboardMetadata.claim unchanged.
   const claim = parseJson(row.claim_json) as WorkboardMetadata["claim"] | undefined;
   // SAFETY: insertCard serializes WorkboardMetadata.stale unchanged.
@@ -380,6 +382,7 @@ function readMetadata(
           })
         : undefined,
       automation: automation || undefined,
+      commonWork: commonWork || undefined,
       claim: claim || undefined,
       diagnostics,
       notifications,

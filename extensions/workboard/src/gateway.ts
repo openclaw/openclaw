@@ -19,6 +19,7 @@ import {
 import { z } from "zod";
 import type { OpenClawPluginApi } from "../api.js";
 import { redactClaimToken, redactDispatchResult } from "./card-redaction.js";
+import { dispatchCommonWorkOperation } from "./common-work-gateway-schema.js";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { WorkboardSessionsBoardService } from "./sessions-board.js";
 import { resolveWorkboardSqliteWorkerModuleUrl } from "./sqlite-store-paths.js";
@@ -458,6 +459,13 @@ export function registerWorkboardGatewayMethods(params: {
       );
     });
   }
+  register("workboard.commonWork.transition", WRITE_SCOPE, async ({ params: input }) => {
+    const id = readId(input);
+    const result = await dispatchCommonWorkOperation(input.operation, (operation) =>
+      store.transitionCommonWork(id, operation),
+    );
+    return { ...result, card: redactClaimToken(result.card) };
+  });
   register("workboard.cards.update", WRITE_SCOPE, async (request) => {
     const patch = await prepareWorkspaceInput(request, readPatch(request.params), "patch");
     assertSupportedMetadataKeys(patch.metadata);

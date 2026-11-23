@@ -65,6 +65,7 @@ import type {
   WorkboardProofInput,
   WorkboardWorkerLogInput,
 } from "./store-inputs.js";
+import type { NormalizeMetadataOptions } from "./store-metadata-options.js";
 import { isAbsoluteWorkspacePath } from "./workspace-path.js";
 
 export function normalizeBoardId(value: unknown, fallback?: string): string | undefined {
@@ -757,15 +758,9 @@ function normalizeList<T>(
 export function normalizeMetadata(
   value: unknown,
   fallback: WorkboardMetadata = {},
-  options: {
-    allowDependencyLinks?: boolean;
-    allowArchivedAt?: boolean;
-    automationLaunch?: WorkboardLaunchState;
-    preserveProofId?: string;
-    preserveNotificationId?: string;
-  } = {},
+  options: NormalizeMetadataOptions = {},
 ): WorkboardMetadata {
-  if (!isRecord(value) && !options.automationLaunch) {
+  if (!isRecord(value) && !options.automationLaunch && !options.commonWork) {
     return trimMetadataToBudget(fallback, options);
   }
   const record = isRecord(value) ? value : {};
@@ -796,6 +791,7 @@ export function normalizeMetadata(
           })()
         : links.slice(-MAX_CARD_LINKS);
   const normalized = {
+    commonWork: options.commonWork ?? fallback.commonWork,
     attempts: normalizeList(
       record.attempts,
       normalizeAttempt,

@@ -1,4 +1,5 @@
 import type {
+  CommonWorkRecord,
   WorkboardAttachment,
   WorkboardBoardMetadata,
   WorkboardCard,
@@ -12,6 +13,7 @@ import type {
 } from "@openclaw/workboard-contract";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { applyCommonWorkOperation, type CommonWorkOperation } from "./common-work-adapter.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import {
   buildWorkerContext,
@@ -158,6 +160,36 @@ function executionAssociationPatch(
 
 // Capability layers share persistence handles and the runtime's mutation ordering.
 export class WorkboardStore extends WorkboardNotificationStore {
+  async transitionCommonWork(
+    id: string,
+    operation: CommonWorkOperation,
+  ): Promise<{ card: WorkboardCard; changed: boolean; terminalRelayComplete: boolean }> {
+    return await this.enqueueMutation(async () => {
+      const current = await this.requireCard(id);
+      const next = applyCommonWorkOperation(current.metadata?.commonWork, operation, Date.now());
+      const updated =
+        next === current.metadata?.commonWork
+          ? current
+          : await this.updateCard(
+              current,
+              { metadata: { ...current.metadata, commonWork: next } },
+              { commonWork: next, expectedUpdatedAt: current.updatedAt },
+            );
+      const result = { updated: updated.updatedAt !== current.updatedAt };
+      // Ordered authoritative read-back is the completion boundary. A transport
+      // receipt alone never declares the terminal relay complete.
+      const card = await this.requireCard(id);
+      const record: CommonWorkRecord | undefined = card.metadata?.commonWork;
+      return {
+        card,
+        changed: result.updated,
+        terminalRelayComplete: Boolean(
+          record?.responsibility === "settled" && record.callbackReceipt && record.deliveryReceipt,
+        ),
+      };
+    });
+  }
+
   async prepareExecutionLaunch(
     id: string,
     input: {
