@@ -1,0 +1,2 @@
+# Both native package layouts reject the missing Bazel runfiles path before normalization.
+4

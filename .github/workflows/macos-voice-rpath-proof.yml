@@ -1,0 +1,34 @@
+name: macOS voice rpath proof (45095807853)
+
+# One-off trusted branch proof; remove with the proof branch after release recovery.
+on:
+  push:
+    branches: [openclaw/macos-voice-proof-45095807853]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-voice-rpath-45095807853
+  cancel-in-progress: false
+
+jobs:
+  native-proof:
+    if: github.repository == 'openclaw/openclaw'
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact proof commit without retained credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Setup isolated Node environment without shared caches
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.22.1"
+          install-bun: "false"
+          cache-mode: off
+      - name: Prove baseline failure, repair, and pinned x64 package portability
+        run: node scripts/proof-macos-voice-rpath.mjs
