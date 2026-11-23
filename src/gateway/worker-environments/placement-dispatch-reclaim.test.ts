@@ -592,14 +592,14 @@ describe("worker placement dispatch reclaim", () => {
     const resume = createDeferredCore();
     const harness = await createHarness(database, placementStore, {
       runReclaimBarrier: async ({ beforeDrain, begin, reclaim, authorize }) => {
-        authorize?.();
         entered.resolve();
         await resume.promise;
+        authorize?.();
         beforeDrain?.();
-        const placement = await begin();
+        const placement = await begin(authorize);
         return placement.state === "reclaimed"
           ? placement
-          : await reclaim({ kind: "local", path: "/gateway/workspace" }, placement);
+          : await reclaim({ kind: "local", path: "/gateway/workspace" }, placement, authorize);
       },
     });
     const active = await harness.service.dispatch(REQUEST);
@@ -731,17 +731,17 @@ describe("worker placement dispatch reclaim", () => {
       reconcileChanged: false,
       reconcileCommitsManifest: false,
       runReclaimBarrier: async ({ authorize, beforeDrain, begin, reclaim }) => {
-        authorize?.();
         queued.resolve();
         return await runSessionMutation({
           scope,
           identities,
           run: async () => {
+            authorize?.();
             beforeDrain?.();
-            const placement = await begin();
+            const placement = await begin(authorize);
             return placement.state === "reclaimed"
               ? placement
-              : await reclaim({ kind: "local", path: root }, placement);
+              : await reclaim({ kind: "local", path: root }, placement, authorize);
           },
         });
       },

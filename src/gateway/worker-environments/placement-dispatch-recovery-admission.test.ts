@@ -146,9 +146,9 @@ describe("placement recovery session admission with persisted placements", () =>
     const environmentBarrier = barrier();
     const harness = await harnessFor({
       workspacePath: support.testState.root,
-      runReclaimPreparation: async ({ run }) => {
+      runReclaimPreparation: async ({ run, authorize }) => {
         await stopBarrier.wait();
-        return run();
+        return run(authorize);
       },
     });
     const active = await seedActive(harness);

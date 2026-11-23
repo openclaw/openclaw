@@ -626,7 +626,7 @@ src/boards/sqlite-board-store.kernel.ts	2
 src/channels/draft-stream-controls.ts	2
 src/channels/message/ingress-queue.ts	1
 src/channels/message/live.ts	4
-src/channels/plugins/message-action-dispatch.ts	1
+src/channels/plugins/message-action-dispatch.ts	3
 src/channels/status-reactions.ts	1
 src/channels/turn/admitting-gateway-delivery.ts	1
 src/channels/turn/direct-delivery-active.ts	2

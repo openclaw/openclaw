@@ -338,7 +338,7 @@ function prepareMessageActionReadContext(
           assertDashboardReadCurrent?.();
           scheduledAccess?.assertCurrent();
           if (!authority?.()) {
-            throw new Error(`Plugin ${ctx.channel} registration ended. Retry the action.`);
+            throw new Error(`Plugin ${ctx.channel} read authority is no longer active.`);
           }
         }
       : undefined;
@@ -361,7 +361,7 @@ function prepareMessageActionReadContext(
           ? undefined
           : resolveChannelPluginRegistration(ctx.channel, { loadedOnly: true });
       if (current?.plugin !== registration.plugin || current.origin !== registration.origin) {
-        throw new Error(`Plugin ${ctx.channel} registration ended. Retry the action.`);
+        throw new Error(`Plugin ${ctx.channel} alias authority is no longer active.`);
       }
     },
   };

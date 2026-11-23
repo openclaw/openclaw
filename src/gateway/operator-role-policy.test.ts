@@ -579,7 +579,7 @@ describe("operator role policy", () => {
       expectModel(narrowed.authority, "b", true);
       expectModel(narrowed.authority, "c", true);
       fallbackExecution.release();
-      expect(fallbackExecution.assertCurrent).toThrow("Operator execution ended.");
+      expect(fallbackExecution.assertCurrent).toThrow("no longer active");
     }));
 
   it("reads committed role changes and deletion without a role cache or main-thread SQL", () =>

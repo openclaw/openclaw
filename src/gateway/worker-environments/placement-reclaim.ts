@@ -122,7 +122,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
         reportPlacementTransition(onTransition, draining);
         return draining;
       },
-      reclaim: async (workspace, current, assertSessionCurrent) => {
+      reclaim: async (workspace, current, reauthorize) => {
         if (current.state === "reclaimed") {
           return current;
         }
@@ -143,12 +143,12 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
               owner: placementTurnOwner(current),
             },
             undefined,
-            assertSessionCurrent,
+            reauthorize,
           );
-          assertSessionCurrent?.();
+          reauthorize?.();
           await placements.acceptWorkspaceResult(claim);
           await placements.closeWorkerTurnToolState(claim);
-          assertSessionCurrent?.();
+          reauthorize?.();
           // Destroy stops the worker and releases its private state, never the user-owned folder.
           await environments.destroy(current.environmentId);
           const completed = await completeWorkerWorkspaceTeardown({
@@ -180,13 +180,13 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
               owner: placementTurnOwner(current),
             },
             undefined,
-            assertSessionCurrent,
+            reauthorize,
           );
           try {
             const completed = await options.withPreparedRecovery(
               current,
               () => {
-                assertSessionCurrent?.();
+                reauthorize?.();
                 if (!placements.validateWorkspaceResultClaim(claim)) {
                   throw new Error("Repository disk move lost its durable result owner");
                 }
@@ -227,12 +227,12 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
             owner: placementTurnOwner(current),
           },
           undefined,
-          assertSessionCurrent,
+          reauthorize,
         );
         return await options.withPreparedRecovery(
           current,
           () => {
-            assertSessionCurrent?.();
+            reauthorize?.();
             if (!placements.validateWorkspaceResultClaim(reclaimClaim)) {
               throw new Error("Cloud worker stop lost its durable result owner");
             }
@@ -291,7 +291,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                   await placements.cancelWorkspaceResultAndReleaseTurn(
                     reclaimClaim,
                     undefined,
-                    assertSessionCurrent,
+                    reauthorize,
                   );
                 }
               });
@@ -299,7 +299,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
             try {
               const pending = await journal.load();
               if (pending) {
-                assertSessionCurrent?.();
+                reauthorize?.();
                 if (workspace.kind !== "local") {
                   throw new Error(
                     "Repository checkpoints cannot own a local reconciliation journal",
@@ -310,7 +310,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                   journal: pending,
                   assertCurrent: recovery.assertCurrent,
                 });
-                assertSessionCurrent?.();
+                reauthorize?.();
                 await journal.abort();
               }
               recovery.assertCurrent();
@@ -321,10 +321,11 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
               const reclaimed = await options.workspaceOperations.run(
                 current.environmentId,
                 async () => {
-                  // Retain the workspace result owner across remote and filesystem waits.
+                  // Lock acquisition and every remote/filesystem step may yield; stale callers must
+                  // fail before the next reclaim effect, not only after teardown has completed.
                   const assertCurrent = () => {
                     recovery.assertCurrent();
-                    assertSessionCurrent?.();
+                    reauthorize?.();
                     const owned = placements.preparedWorkspaceResultPlacement(reclaimClaim);
                     if (
                       owned?.state !== "draining" ||
@@ -375,7 +376,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                       throw new Error("Cloud worker stop did not commit its reconciled workspace");
                     }
                     assertCurrent();
-                    await placements.acceptWorkspaceResult(reclaimClaim, assertSessionCurrent);
+                    await placements.acceptWorkspaceResult(reclaimClaim, reauthorize);
                     const recordedStagedResultRef = (
                       await findPendingWorkerWorkspaceResult(placements, reclaimClaim)
                     )?.stagedResultRef;
@@ -387,7 +388,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                       recovery.resolveConflict,
                       current,
                     );
-                    assertSessionCurrent?.();
+                    reauthorize?.();
                     const conflictRetained = await finalizeWorkspaceResultConflicts({
                       assertCurrent: recovery.assertCurrent,
                       placements,
@@ -400,7 +401,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                       workspace,
                       report: recovery.reportConflict,
                     });
-                    assertSessionCurrent?.();
+                    reauthorize?.();
                     await adoptReclaimedWorkspaceHistory({
                       ...recovery,
                       assertCurrent,

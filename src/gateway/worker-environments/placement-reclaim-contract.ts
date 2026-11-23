@@ -48,9 +48,10 @@ export type WorkerPlacementPendingOperations = {
 export type WorkerPlacementReclaimBarriers = {
   runReclaimPreparation: (
     params: WorkerPlacementReclaimRequest & {
+      authorize?: WorkerPlacementAuthorization;
       beforeDrain?: WorkerPlacementAuthorization;
       pendingOperations?: WorkerPlacementPendingOperations;
-      run: (assertCurrent?: () => void) => Promise<WorkerReclaimPlacement>;
+      run: (authorize?: WorkerPlacementAuthorization) => Promise<WorkerReclaimPlacement>;
     },
   ) => Promise<WorkerReclaimPlacement>;
   runReclaimBarrier: (
@@ -61,13 +62,14 @@ export type WorkerPlacementReclaimBarriers = {
       reclaim: (
         workspace: WorkerSessionWorkspace,
         placement: WorkerReclaimStartPlacement,
-        assertCurrent?: () => void,
+        authorize?: WorkerPlacementAuthorization,
       ) => Promise<WorkerReclaimPlacement>;
     },
   ) => Promise<WorkerReclaimPlacement>;
   runFailedReclaimBarrier: (
     params: WorkerPlacementReclaimRequest & {
-      reclaim: () => Promise<WorkerReclaimPlacement>;
+      authorize?: WorkerPlacementAuthorization;
+      reclaim: (authorize?: WorkerPlacementAuthorization) => Promise<WorkerReclaimPlacement>;
     },
   ) => Promise<WorkerReclaimPlacement>;
 };

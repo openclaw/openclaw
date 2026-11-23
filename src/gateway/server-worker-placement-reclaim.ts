@@ -209,6 +209,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
     sessionId,
     sessionKey,
     agentId,
+    authorize,
     beforeDrain,
     pendingOperations,
     run,
@@ -236,7 +237,20 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         );
       }
     };
-    const assertCurrent = assertTargetCurrent;
+    const assertCurrent = Object.assign(
+      () => {
+        authorize?.();
+        assertTargetCurrent();
+      },
+      {
+        // Transport waits keep caller custody; both write grants check the retained generation.
+        assertWorkerLifetime: () => (authorize?.assertWorkerLifetime ?? authorize)?.(),
+        assertWorkerGrant: () => {
+          (authorize?.assertWorkerGrant ?? authorize)?.();
+          assertTargetCurrent();
+        },
+      },
+    );
     const placement = await params.placements.getAsync(sessionId);
     assertCurrent();
     beforeDrain?.();
@@ -304,7 +318,6 @@ export function createGatewayWorkerPlacementReclaimBarriers(
     begin,
     reclaim,
   }) => {
-    authorize?.();
     using context = await resolveLifecycleContext({
       sessionId,
       sessionKey,
@@ -332,6 +345,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
           beforeDrain?.();
           const resolved = (preparedTarget = await resolveReclaimTarget());
           const placement = await params.placements.getAsync(sessionId);
+          authorize?.();
           resolved.assertBindingCurrent(getRuntimeConfig());
           if (
             placement?.state !== "active" &&
@@ -343,6 +357,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
             );
           }
           assertBindingCurrent = () => {
+            authorize?.();
             resolved.assertBindingCurrent(getRuntimeConfig());
           };
           await cancelAndDrain(lifecycle.closeWorkAdmissions, assertBindingCurrent);
@@ -353,6 +368,10 @@ export function createGatewayWorkerPlacementReclaimBarriers(
           }
           assertBindingCurrent();
           using resolved = await resolveReclaimTarget();
+          // Sharing mutations use this lifecycle fence too. Reauthorize after every wait and
+          // immediately before drain so revoked callers cannot commit stale placement authority.
+          assertBindingCurrent();
+          // Eligibility ends at this operation's drain, unlike caller authority during teardown.
           beforeDrain?.();
           resolved.assertCurrent(getRuntimeConfig());
           const assertDrainCurrent = () => {
@@ -369,7 +388,10 @@ export function createGatewayWorkerPlacementReclaimBarriers(
               assertDrainCurrent();
               return;
             }
-            // The held lifecycle may move its repository binding; retain the session generation.
+            // This held lifecycle may replace its own repository binding with a managed
+            // worktree. Keep caller/session generation here; prepared recovery retains
+            // the writer independently, rather than retaining the pre-handoff cwd.
+            authorize?.();
             const entry = context.readCurrentTarget().entry;
             if (
               entry?.sessionId !== sessionId ||
@@ -395,7 +417,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
   };
 
   const runFailedReclaimBarrier: WorkerPlacementReclaimBarriers["runFailedReclaimBarrier"] =
-    async ({ sessionId, sessionKey, agentId, reclaim }) => {
+    async ({ sessionId, sessionKey, agentId, authorize, reclaim }) => {
       using context = await resolveLifecycleContext({
         sessionId,
         sessionKey,
@@ -415,6 +437,9 @@ export function createGatewayWorkerPlacementReclaimBarriers(
             `Session ${sessionKey} changed before failed cloud worker cleanup. Retry.`,
           );
         }
+        // Failed teardown is still a session mutation: reauthorize inside the shared lifecycle
+        // fence before provider cleanup or the failed-to-local transition becomes durable.
+        authorize?.();
       };
       return await runSessionMutation({
         diagnosticLabel: "placement-failed-reclaim",
@@ -431,7 +456,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         },
         run: async () => {
           assertCurrent();
-          return await reclaim();
+          return await reclaim(authorize);
         },
       });
     };

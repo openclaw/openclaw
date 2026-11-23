@@ -376,9 +376,7 @@ it.each(["caller", "registration"] as const)("rechecks %s after alias proof", as
       }
     },
   });
-  const expected = expect(pending).rejects.toThrow(
-    revoked === "caller" ? "no longer active" : "registration ended",
-  );
+  const expected = expect(pending).rejects.toThrow("no longer active");
   if (revoked === "caller") {
     callerCurrent = false;
   } else {

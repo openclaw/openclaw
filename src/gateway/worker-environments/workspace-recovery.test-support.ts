@@ -22,9 +22,9 @@ export type WorkerWorkspaceRecoveryFailureReport = WorkerSessionPlacementIdentit
 };
 
 export const runReclaimPreparation: WorkerPlacementReclaimBarriers["runReclaimPreparation"] =
-  async ({ run, pendingOperations }) => {
+  async ({ run, authorize, pendingOperations }) => {
     await pendingOperations?.settled;
-    return await run();
+    return await run(authorize);
   };
 
 export function createWorkerWorkspaceRecoveryFixture(options: {
