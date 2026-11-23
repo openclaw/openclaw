@@ -484,9 +484,7 @@ registerModelsAuthRuntimeStagingTests({
   loginFlow,
   setProviderAuthResult: (result) => runProviderAuth.mockResolvedValueOnce(result),
   getConfig: () => currentConfig,
-  setConfig: (config) => {
-    currentConfig = config;
-  },
+  setConfig: (config) => void (currentConfig = config),
   repairModelSelectionRuntimePlugins: mocks.repairModelSelectionRuntimePlugins,
 });
 
