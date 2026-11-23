@@ -309,10 +309,9 @@ export function mergeIdentityMarkdownContent(
   const conservative = edit(original, true);
   if (!valid(conservative)) {
     throw new Error(
-      "Identity update was not saved because it would change fenced Markdown content or field values. " +
-        "Correct the conflicting identity value. For a multiline theme, run " +
-        "`openclaw agents set-identity --agent <id> --theme <single-line-value>` on the Gateway host " +
-        "with the Gateway's profile and config. Then retry the original update.",
+      "Identity update was not saved. Markdown fences or fields would change. Fix and retry. " +
+        "For a multiline theme, run `openclaw agents set-identity --agent <id> --theme <single-line>` " +
+        "on the Gateway host with its profile and config.",
     );
   }
   const normalized = edit(conservative);

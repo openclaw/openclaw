@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi, type Mock } from "vitest";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
+import { formatForLog } from "../ws-log.js";
 import {
   expectRecordFields,
   expectRespondErrorContaining,
@@ -152,8 +153,10 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
         },
       });
       readIdentities({ "/workspace/test-agent/IDENTITY.md": "```md\n- Name: Example\n```\n" });
-      await expect(update({ name: "Nova" })).rejects.toThrow(
-        /Identity update was not saved.*openclaw agents set-identity --agent <id> --theme <single-line-value>.*Gateway host.*profile and config.*retry the original update/,
+      // Gateway dispatch formats errors before sending them to the CLI.
+      const message = await update({ name: "Nova" }).catch(formatForLog);
+      expect(message).toMatch(
+        /Identity update was not saved.*Fix and retry.*openclaw agents set-identity --agent <id> --theme <single-line>.*Gateway host with its profile and config\.$/,
       );
       expectUncalled(mocks.rootWrite, mocks.writeConfigFile);
     });

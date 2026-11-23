@@ -191,7 +191,7 @@ it.each([
 it("refuses an update that introduces a fence before writing the existing example", () => {
   const content = "```md\n- Name: Example\n```\n";
   expect(() => mergeIdentityMarkdownContent(content, { theme: "steady\n```" })).toThrow(
-    /Identity update was not saved.*openclaw agents set-identity --agent <id> --theme <single-line-value>.*Gateway host.*profile and config.*retry the original update/,
+    /Identity update was not saved.*Markdown fences or fields would change.*Fix and retry/,
   );
 });
 
