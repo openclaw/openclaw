@@ -178,7 +178,6 @@ export async function runSessionCompactionIfNeeded(params: {
       rawBytes: undefined,
       runtime: params.followupRun.run,
       maxBytes: maxActiveTranscriptBytes,
-      contextTokenBudget: contextWindowTokens,
       signal: params.abortSignal,
     });
 

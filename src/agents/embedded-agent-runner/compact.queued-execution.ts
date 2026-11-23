@@ -243,7 +243,6 @@ export async function executeQueuedContextEngineCompaction(input: {
             rawBytes: undefined,
             maxBytes: maxActiveTranscriptBytes,
             runtime: preparedParams,
-            contextTokenBudget,
             signal: params.abortSignal,
           });
           assertCallerActive();

@@ -12,6 +12,10 @@ import { createAnthropicMessagesTransportStreamFn } from "../../../../packages/a
 import { createAssistantOutput } from "../../../../packages/ai/src/transports/assistant-output.js";
 import { convertResponsesMessages } from "../../../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  selectBoundedModelRequests,
+  type ModelContextRequest,
+} from "../../../config/sessions/session-model-context-window.js";
 import { freezeTranscriptSnapshot } from "../../../config/sessions/transcript-snapshot.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import {
@@ -31,6 +35,7 @@ import { createPromptCacheRequestObserver } from "../prompt-cache-request-observ
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
+import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js";
 
 // mock-isolation: Count repeated history hashing while preserving native digests.
 vi.mock("node:crypto", { spy: true });
@@ -438,3 +443,47 @@ it.each([
     }
   },
 );
+
+it("keeps the history prefix beyond the old token-derived hydration cut", () => {
+  const messages: AgentMessage[] = Array.from({ length: 40 }, (_, index) => ({
+    role: "user",
+    content: "turn-" + index + ":" + "x".repeat(32_768),
+    timestamp: index + 1,
+  }));
+  const requests: ModelContextRequest[] = messages.map((message, index) => ({
+    entry: {
+      type: "message",
+      id: String(index),
+      parentId: index ? String(index - 1) : null,
+      timestamp: new Date(index + 1).toISOString(),
+      message,
+      seq: index,
+    },
+    omitCheckpoint: false,
+  }));
+  const read = (rows: ModelContextRequest[]) =>
+    selectBoundedModelRequests(
+      rows,
+      (selected) =>
+        new Map(selected.map((row) => [row.entry, Buffer.byteLength(JSON.stringify(row.entry))])),
+      resolveEmbeddedSessionContextLimits({}),
+    ).map((row) => (row.entry.type === "message" ? row.entry.message : undefined));
+  const first = read(requests);
+  expect(first).toEqual(messages);
+  const next: ModelContextRequest = {
+    entry: {
+      type: "message",
+      id: "40",
+      parentId: "39",
+      timestamp: new Date(41).toISOString(),
+      message: { role: "user", content: "next", timestamp: 41 },
+      seq: 40,
+    },
+    omitCheckpoint: false,
+  };
+  expect(read([...requests, next]).slice(0, first.length)).toEqual(first);
+  expect(
+    resolveEmbeddedSessionContextLimits({ operation: "settled-tool-finalization" })
+      .toolResultOverflow,
+  ).toBe("omit");
+});
