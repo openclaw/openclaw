@@ -1,6 +1,9 @@
 import { performance } from "node:perf_hooks";
 import { GATEWAY_CLIENT_NAMES } from "../../../packages/gateway-protocol/src/client-info.js";
-import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import {
+  getActiveAgentRunDelegatedAuthority,
+  getAgentRunContext,
+} from "../../infra/agent-run-registry.js";
 import { QUESTION_COMPOSER_REPLACEMENT } from "../../shared/question-composer-replacement.js";
 import { canSelectQuestion } from "../question-access.js";
 import {
@@ -32,15 +35,14 @@ export function captureChatSendQuestionReplacement(
     return undefined;
   }
   const manager = options.context.questionManager;
-  const run = getAgentRunContext(runId)?.delegatedAuthority?.operationalRunInstance;
-  if (!manager || !run) {
+  const authority = getAgentRunContext(runId)?.delegatedAuthority;
+  if (!manager || !authority) {
     return undefined;
   }
   const receivedAtMs = performance.timeOrigin + request.chatSendReceivedAtMs;
-  const [question] = manager.list(
+  const questions = manager.list(
     (record) =>
       record.sessionKey === sessionKey &&
-      record.runId === runId &&
       record.createdAtMs <= receivedAtMs &&
       (record.questions.length > 1 ||
         record.questions.some(
@@ -51,32 +53,32 @@ export function captureChatSendQuestionReplacement(
         )) &&
       canSelectQuestion(manager, record.id, options.client),
   );
-  if (!question) {
-    return undefined;
+  for (const question of questions) {
+    const observation = manager.observe(question.id, question);
+    // Host decisions and MCP forms keep their own input/consent contracts.
+    if (
+      !observation?.requesterRun ||
+      observation.authorizeClient ||
+      question.questions.some((item) => item.presentation === "form") ||
+      getActiveAgentRunDelegatedAuthority(observation.requesterRun) !== authority
+    ) {
+      continue;
+    }
+    const authorization = prepareQuestionAuthorization(options, observation, question.id, "mutate");
+    return async (assertCurrent: () => void) => {
+      await withPreparedQuestionSessions(
+        options,
+        [authorization.target],
+        ([prepared]) => {
+          assertCurrent();
+          authorization.assertCurrent();
+          if (!authorization.authorize(prepared) && manager.get(question.id) === question) {
+            manager.cancel(question.id, QUESTION_COMPOSER_REPLACEMENT);
+          }
+        },
+        { assertCurrent: authorization.assertCurrent },
+      );
+    };
   }
-  const observation = manager.observe(question.id, question);
-  // Host decisions and MCP forms keep their own input/consent contracts.
-  if (
-    !observation ||
-    observation.authorizeClient ||
-    observation.requesterRun?.instanceId !== run.instanceId ||
-    question.questions.some((item) => item.presentation === "form")
-  ) {
-    return undefined;
-  }
-  const authorization = prepareQuestionAuthorization(options, observation, question.id, "mutate");
-  return async (assertCurrent: () => void) => {
-    await withPreparedQuestionSessions(
-      options,
-      [authorization.target],
-      ([prepared]) => {
-        assertCurrent();
-        authorization.assertCurrent();
-        if (!authorization.authorize(prepared) && manager.get(question.id) === question) {
-          manager.cancel(question.id, QUESTION_COMPOSER_REPLACEMENT);
-        }
-      },
-      { assertCurrent: authorization.assertCurrent },
-    );
-  };
+  return undefined;
 }
