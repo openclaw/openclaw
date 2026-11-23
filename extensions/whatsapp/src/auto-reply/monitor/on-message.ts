@@ -229,8 +229,7 @@ export function createWebOnMessageHandler(params: {
         return;
       }
       try {
-        preflightAudioTranscript =
-          (await transcribeWhatsAppAudioMessage(cfg, msg, route.accountId)) ?? null;
+        preflightAudioTranscript = (await transcribeWhatsAppAudioMessage(cfg, msg, route)) ?? null;
       } catch {
         // Non-fatal: store null so per-agent retries are suppressed.
         preflightAudioTranscript = null;

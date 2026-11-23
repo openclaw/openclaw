@@ -287,31 +287,39 @@ describe("createWebOnMessageHandler audio preflight", () => {
     expect(processMessageMock).not.toHaveBeenCalled();
   });
 
-  it("passes routing ctx fields to transcribeFirstAudio so echoTranscript can deliver (#79778)", async () => {
-    let capturedCtx: unknown;
-    transcribeFirstAudioMock.mockImplementation(async ({ ctx }: { ctx: unknown }) => {
-      capturedCtx = ctx;
-      return "transcribed voice note";
-    });
-    const handler = makeHandler();
+  it.each([
+    ["direct", makeAudioMsg, "+15550000002"],
+    ["group", makeGroupAudioMsg, "1203630@g.us"],
+  ] as const)(
+    "passes %s echo routing and scope facts to preflight",
+    async (kind, makeMsg, from) => {
+      let capturedCtx: unknown;
+      transcribeFirstAudioMock.mockImplementation(async ({ ctx }: { ctx: unknown }) => {
+        capturedCtx = ctx;
+        return "transcribed voice note";
+      });
+      const handler = makeHandler();
 
-    await handler(makeAudioMsg());
+      await handler(makeMsg());
 
-    expect(capturedCtx).toEqual({
-      media: [
-        {
-          path: "/tmp/voice.ogg",
-          contentType: "audio/ogg; codecs=opus",
-          kind: "audio",
-        },
-      ],
-      From: "+15550000002",
-      To: "+15550000001",
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      OriginatingChannel: "whatsapp",
-      OriginatingTo: "+15550000002",
-      AccountId: "default",
-    });
-  });
+      expect(capturedCtx).toEqual({
+        media: [
+          {
+            path: "/tmp/voice.ogg",
+            contentType: "audio/ogg; codecs=opus",
+            kind: "audio",
+          },
+        ],
+        From: from,
+        To: "+15550000001",
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        OriginatingChannel: "whatsapp",
+        OriginatingTo: from,
+        AccountId: "default",
+        ChatType: kind,
+        SessionKey: "agent:main:whatsapp:+15550000002",
+      });
+    },
+  );
 });

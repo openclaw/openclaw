@@ -250,6 +250,7 @@ export async function resolveTelegramInboundBody(params: {
         AccountId: accountId,
         MessageSid: String(msg.message_id),
         ChatType: isGroup ? "group" : "direct",
+        SessionKey: sessionKey,
         MessageThreadId: replyThreadId,
         media: materializedMedia,
       };

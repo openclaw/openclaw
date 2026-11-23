@@ -20,15 +20,23 @@ vi.mock("openclaw/plugin-sdk/media-understanding-runtime", async (importOriginal
 import { resolveDiscordPreflightAudioMentionContext } from "./preflight-audio.js";
 
 const cfg = {} as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
+const scopeFacts = (chatType: string) => ({
+  Provider: "discord",
+  Surface: "discord",
+  ChatType: chatType,
+  SessionKey: `agent:main:discord:${chatType}:1`,
+});
 
 function preflight(
   message: Parameters<typeof resolveDiscordPreflightAudioMentionContext>[0]["message"],
+  chatType: "direct" | "group" | "channel" = "direct",
 ) {
   return resolveDiscordPreflightAudioMentionContext({
     message,
-    isDirectMessage: true,
-    shouldRequireMention: false,
-    mentionRegexes: [],
+    chatType,
+    sessionKey: `agent:main:discord:${chatType}:1`,
+    shouldRequireMention: chatType !== "direct",
+    mentionRegexes: chatType === "direct" ? [] : [/openclaw/i],
     cfg,
   });
 }
@@ -38,17 +46,20 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
     transcribeFirstAudioMock.mockReset();
   });
 
-  it("preflights DM audio by filename without requiring a mention", async () => {
-    const url = "https://cdn.discordapp.com/attachments/voice.opus";
-    transcribeFirstAudioMock.mockResolvedValue("hello from dm");
-    const result = await preflight({ attachments: [{ url, filename: "voice.opus" }] });
-    expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
-      ctx: { media: [{ url, contentType: "audio/opus" }] },
-      cfg,
-      agentDir: undefined,
-    });
-    expect(result).toEqual({ hasTypedText: false, transcript: "hello from dm" });
-  });
+  it.each(["direct", "group", "channel"] as const)(
+    "scopes %s audio preflight",
+    async (chatType) => {
+      const url = "https://cdn.discordapp.com/attachments/voice.opus";
+      transcribeFirstAudioMock.mockResolvedValue("hello from dm");
+      const result = await preflight({ attachments: [{ url, filename: "voice.opus" }] }, chatType);
+      expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
+        ctx: { media: [{ url, contentType: "audio/opus" }], ...scopeFacts(chatType) },
+        cfg,
+        agentDir: undefined,
+      });
+      expect(result).toEqual({ hasTypedText: false, transcript: "hello from dm" });
+    },
+  );
 
   it.each([
     {
@@ -95,7 +106,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
     });
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
-      ctx: { media: [{ url, contentType: "audio/ogg" }] },
+      ctx: { media: [{ url, contentType: "audio/ogg" }], ...scopeFacts("direct") },
       cfg,
       agentDir: undefined,
     });

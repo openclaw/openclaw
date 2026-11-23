@@ -382,11 +382,11 @@ describe("preflightDiscordMessage", () => {
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
     expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        ctx: {
-          media: [
-            { url: "https://cdn.discordapp.com/attachments/voice.ogg", contentType: "audio/ogg" },
-          ],
-        },
+        ctx: expect.objectContaining({
+          media: [{ url: VOICE_ATTACHMENT.url, contentType: "audio/ogg" }],
+          ChatType: "direct",
+          SessionKey: result?.route.sessionKey,
+        }),
       }),
     );
     const preflight = expectPreflightResult(result);

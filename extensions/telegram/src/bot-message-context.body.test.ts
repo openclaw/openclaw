@@ -526,6 +526,7 @@ it("preserves named-account DM topic voice echo routing without a group mention"
       AccountId: "atlas",
       MessageSid: "901",
       ChatType: "direct",
+      SessionKey: agentInput()?.SessionKey,
       MessageThreadId: 77,
     },
     '[Audio transcript (machine-generated, untrusted)]: "hello from a voice note"',
