@@ -399,13 +399,20 @@ for (const scenario of [
               .parse(await operator.request("users.list", {}));
             const profile = listed.profiles.find((item) => item.emails.includes(WRITER));
             assert(profile);
-            await operator.request("users.setRole", { profileId: profile.id, role: "revoked" });
+            const closed = createDeferredCore<number>();
+            writer.once("close", closed.resolve);
+            await expect(
+              operator.request("users.setRole", { profileId: profile.id, role: "revoked" }),
+            ).resolves.toMatchObject({ profile: { id: profile.id, role: "revoked" } });
+            // The old socket cannot start more work, but its admitted turn can finish.
+            await expect(withinTest(closed.promise, signal)).resolves.toBe(4001);
           } else if (scenario === "cancelled-before-successor") {
             const aborted = await request(writer, "chat.abort", { sessionKey: key, runId }, signal);
             expect(aborted.ok, JSON.stringify(aborted.error)).toBe(true);
           }
           release.resolve();
-          if (scenario === "allowed") {
+          const admitted = scenario !== "cancelled-before-successor";
+          if (admitted) {
             await withinTest(activeProvider.waitForHeld(marker), signal);
             const observed = launches();
             expect(observed.length).toBe(1);
@@ -455,7 +462,7 @@ for (const scenario of [
                 scenario,
                 requestCompletedBeforeEffect: true,
                 launches: launches().length,
-                installedProfileObserved: scenario === "allowed",
+                installedProfileObserved: admitted,
                 profilesAfterSettlement: 0,
               }),
           );

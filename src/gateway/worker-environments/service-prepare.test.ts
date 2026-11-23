@@ -10,6 +10,7 @@ import { createCoreGatewayMethodDescriptors } from "../methods/core-method-polic
 import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { environmentsHandlers } from "../server-methods/environments.js";
+import { invokeEnvironment, mockContext } from "../server-methods/environments.test-support.js";
 import { dispatchGatewayMethodInProcess } from "../server-plugin-in-process-dispatch.js";
 import {
   createContext,
@@ -157,6 +158,55 @@ describe("on-demand prepared worker admission", () => {
     }
   });
 
+  it("requires fresh deletion admission if prepared cancellation commits nothing", async () => {
+    const f = await fixture();
+    const intent = await f.service.prepareProjectIntent("development", {
+      projectPath: f.projectPath,
+      executionMode: "worker-turn",
+      setupAuthorized: true,
+    });
+    const { store } = support.testState;
+    const { environmentId } = await store.createIntent({
+      environmentId: "unretired-reserve",
+      provisionOperationId: "unretired-reserve-operation",
+      providerId: intent.providerId,
+      profileId: "development",
+      profileSnapshot: intent.profileSnapshot,
+      preparation: {
+        purpose: "reserve",
+        key: intent.profileSnapshot.project!.preparation!.key,
+        demandAtMs: 1_000,
+        expiresAtMs: 11_000,
+      },
+    });
+    let current = true;
+    const authorize = vi.fn(() => current);
+    const requestPreparedDestroy = store.requestPreparedDestroy.bind(store);
+    vi.spyOn(store, "requestPreparedDestroy").mockImplementationOnce(async (input) => {
+      // The store checks authority but declines a stale reservation without a write.
+      const result = await requestPreparedDestroy({
+        ...input,
+        preparationKey: "stale-reservation",
+      });
+      expect(result).toBeUndefined();
+      current = false;
+      return result;
+    });
+    const result = await invokeEnvironment(
+      "environments.destroy",
+      { environmentId },
+      mockContext(f.service),
+      null,
+      authorize,
+    );
+    expect(result[0]).toBe(false);
+    expect(authorize).toHaveBeenCalledTimes(2);
+    expect(store.get(environmentId)).toMatchObject({
+      state: "requested",
+      destroyRequestedAtMs: null,
+    });
+  });
+
   it.each(["current", "removed before acceptance", "removed after acceptance"])(
     "cancels an in-flight reserve with requester %s while retaining cleanup ownership",
     async (requester) => {
@@ -215,7 +265,7 @@ describe("on-demand prepared worker admission", () => {
           return requestPreparedDestroy(input);
         });
       let current = true;
-      const destroyed = f.service.destroyUnattached(environmentId, () => {
+      const destroyed = f.service.destroyUnattached(environmentId, () => () => {
         if (!current) {
           throw new Error("Deletion requester removed");
         }
