@@ -217,6 +217,34 @@ describe("running installation replacement", () => {
     expect(copiedModule.getGatewayInstallationReplacement()?.onDisk?.buildId).toBe("build-after");
   });
 
+  it("waits for the package lifecycle before restarting into a package manager's write", async () => {
+    const handoff = registerReplacement();
+    const marker = path.join(fixture.root, ".openclaw-lifecycle-pending");
+    // npm extracts the pending marker first and build metadata long before the remaining tree.
+    await fs.writeFile(marker, "");
+    await writeIdentity();
+    await owner.checkGatewayInstallationReplacement();
+    expectPending(handoff);
+    expect(owner.classifyGatewayStaleInstall(missingChunk("dist/cron-old.js"))).not.toBeNull();
+    expectPending(handoff);
+    await fs.unlink(marker);
+    await owner.checkGatewayInstallationReplacement();
+    expect(handoff).toHaveBeenCalledOnce();
+    expect(owner.getGatewayInstallationReplacement()?.onDisk?.buildId).toBe("build-after");
+  });
+
+  it("stops waiting for a lifecycle that blocked package scripts never complete", async () => {
+    const handoff = registerReplacement();
+    await fs.writeFile(path.join(fixture.root, ".openclaw-lifecycle-pending"), "");
+    await writeIdentity();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    await owner.checkGatewayInstallationReplacement();
+    expectPending(handoff);
+    now.mockReturnValue(1_000_000 + 10 * 60_000);
+    await owner.checkGatewayInstallationReplacement();
+    expect(handoff).toHaveBeenCalledOnce();
+  });
+
   it("leaves a replaced installation to the update run that holds it", async () => {
     // The handoff worker resolves the same coordination store from TMPDIR.
     vi.stubEnv("TMPDIR", directories.make("openclaw-update-lease-"));

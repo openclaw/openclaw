@@ -15,6 +15,7 @@ import {
   errorShape,
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
+import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   resolveOpenClawInstallationRootSync,
@@ -78,7 +79,21 @@ type InstallationObserver = {
   replacement?: GatewayInstallationReplacement;
   check?: Promise<void>;
   trialSettled?: boolean;
+  /** When a tick first saw the installation's package lifecycle pending. */
+  lifecyclePendingSince?: number;
 };
+
+// Package managers write the tree before lifecycle scripts remove the pending marker; a
+// restart before then lands on a half-written tree (#203897). Installs with blocked scripts
+// keep the marker until the launcher completes it, so stop waiting after this bound.
+const INSTALLATION_LIFECYCLE_SETTLE_MS = 10 * 60_000;
+
+function isInstallationSettling(observer: InstallationObserver): boolean {
+  return (
+    observer.lifecyclePendingSince !== undefined &&
+    Date.now() - observer.lifecyclePendingSince < INSTALLATION_LIFECYCLE_SETTLE_MS
+  );
+}
 
 // SDK chunks and the Gateway share one process owner without loading restart machinery.
 const installationState = resolveGlobalSingleton<{ observer?: InstallationObserver }>(
@@ -205,8 +220,22 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
   if (observer.check) {
     return observer.check;
   }
-  observer.check = readInstallationMetadata(path.join(root, "dist", "build-info.json"))
-    .then(async (value) => {
+  observer.check = Promise.all([
+    readInstallationMetadata(path.join(root, "dist", "build-info.json")),
+    fs.access(path.join(root, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH)).then(
+      () => true,
+      () => false,
+    ),
+  ])
+    .then(async ([value, lifecyclePending]) => {
+      if (!lifecyclePending) {
+        observer.lifecyclePendingSince = undefined;
+      } else {
+        observer.lifecyclePendingSince ??= Date.now();
+        if (isInstallationSettling(observer)) {
+          return;
+        }
+      }
       const metadata = asNullableRecord(value);
       const version = normalizeNullableString(metadata?.version);
       const buildId = normalizeNullableString(metadata?.buildId);
@@ -276,7 +305,8 @@ export function classifyGatewayStaleInstall(error: unknown): {
   if (!missingRuntime) {
     return null;
   }
-  if (observer) {
+  // While a package manager is still writing, the maintenance tick restarts once it settles.
+  if (observer && !isInstallationSettling(observer)) {
     recordReplacement(observer);
   }
   const restartCommand = formatCliCommand("openclaw gateway restart");
