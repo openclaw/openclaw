@@ -190,6 +190,29 @@ class ChatControllerSessionActionsTest {
     }
 
   @Test
+  fun rosterTimestampSchedulesSnoozeRefreshOnBothFastAndSlowHandsets() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = controller(this, gateway)
+      for (skew in listOf(-300_000L, 300_000L)) {
+        val beforeRead = System.currentTimeMillis()
+        val serverNow = beforeRead + skew
+        val rawDeadline = serverNow + 5000L
+        gateway.respondWith("sessions.list", """{"ts":$serverNow,"sessions":[{"key":"custom","snoozedUntil":$rawDeadline,"pinned":false}]}""")
+        controller.refreshSessions()
+        runCurrent()
+        val row = controller.sessions.value.single()
+        val afterRead = System.currentTimeMillis()
+        assertEquals(rawDeadline, row.snoozedUntil)
+        val wake = requireNotNull(SessionSnooze.nextWakeMs(listOf(row), beforeRead))
+        assertTrue(wake in (beforeRead + 5000L)..(afterRead + 5000L))
+        assertTrue(row.isSnoozed(wake - 1L))
+        assertFalse(row.isSnoozed(wake))
+        assertNull(SessionSnooze.nextWakeMs(listOf(row), wake))
+      }
+    }
+
+  @Test
   fun sessionListParsesSnoozeAndEventsPreserveOmissionsButApplyNullClears() =
     runTest {
       val gateway = ScriptedGateway(json)

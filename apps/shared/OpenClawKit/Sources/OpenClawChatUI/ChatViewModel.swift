@@ -190,6 +190,7 @@ public final class OpenClawChatViewModel {
     // Capped or filtered rosters can omit the active row. Reset this projection with session-owned state.
     var retainedActiveSession: OpenClawChatSessionEntry?
     var legacySessions: [OpenClawChatSessionEntry] = []
+    var rosterClock = OpenClawChatSessionSnooze.RosterClock()
 
     public internal(set) var sidebarData: OpenClawChatSessionSidebarData?
 
@@ -1112,6 +1113,7 @@ extension OpenClawChatViewModel {
             }
             if let sidebarData, sidebarRead?.scope != sidebarData.scopeRevision { continue }
             self.latestAppliedSessionsFetchRequestID = sessionsFetchRequestID
+            self.rosterClock = .init(timestamp: res.ts)
             let organized = OpenClawChatSessionListOrganizer.organize(res.sessions)
             for session in organized {
                 self.unreadPatchGuard.observe(
@@ -1177,6 +1179,7 @@ extension OpenClawChatViewModel {
     }
 
     func invalidateSessionMetadataReadiness() {
+        self.rosterClock = .init()
         self.sessionMetadataGeneration &+= 1
         self.readySessionMetadataGeneration = nil
     }

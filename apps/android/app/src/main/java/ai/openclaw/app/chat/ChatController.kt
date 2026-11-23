@@ -7679,10 +7679,13 @@ class ChatController internal constructor(
     val root =
       json.parseToJsonElement(jsonString).asObjectOrNull()
         ?: return SessionListResult(emptyList(), isTruncated = false)
+    // Selection and pinned:false used the Gateway's clock. Refresh only after that
+    // same clock reaches the deadline, even on a handset whose wall clock is fast.
+    val snoozeClockOffset = root["ts"].asLongOrNull()?.let { System.currentTimeMillis() - it } ?: 0L
     val sessions =
       root["sessions"]
         .asArrayOrNull()
-        ?.mapNotNull { item -> parseSessionEntry(item.asObjectOrNull()) }
+        ?.mapNotNull { item -> parseSessionEntry(item.asObjectOrNull(), snoozeClockOffset = snoozeClockOffset) }
         .orEmpty()
     val totalCount = root["totalCount"].asLongOrNull()
     val loadedEnd = requestedOffset + sessions.size
@@ -7697,6 +7700,7 @@ class ChatController internal constructor(
   private fun parseSessionEntry(
     obj: JsonObject?,
     fallbackKey: String? = null,
+    snoozeClockOffset: Long = 0L,
   ): ChatSessionEntry? {
     if (obj == null) return null
     val key =
@@ -7742,6 +7746,7 @@ class ChatController internal constructor(
       markedUnreadAt = obj["markedUnreadAt"].asLongOrNull(),
       hasMarkedUnreadMetadata = "markedUnreadAt" in obj,
       snoozedUntil = obj["snoozedUntil"].asLongOrNull(),
+      snoozeClockOffsetMs = if (obj["snoozedUntil"].asLongOrNull() != null) snoozeClockOffset else 0L,
       snoozedAt = obj["snoozedAt"].asLongOrNull(),
       hasSnoozedUntilMetadata = "snoozedUntil" in obj,
       hasSnoozedAtMetadata = "snoozedAt" in obj,

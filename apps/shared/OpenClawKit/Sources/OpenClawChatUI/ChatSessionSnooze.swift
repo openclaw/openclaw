@@ -6,6 +6,25 @@ public enum OpenClawChatSnoozePatch: Sendable {
 }
 
 public enum OpenClawChatSessionSnooze: Sendable {
+    /// The roster's timestamp is the same sample the Gateway used for pin eligibility.
+    struct RosterClock {
+        let offset: TimeInterval
+
+        init(timestamp: Double? = nil, receivedAt: Date = .now) {
+            self.offset = timestamp
+                .flatMap { $0.isFinite && $0 > 0 ? $0 / 1000 - receivedAt.timeIntervalSince1970 : nil } ?? 0
+        }
+
+        func gatewayDate(at local: Date) -> Date {
+            local.addingTimeInterval(self.offset)
+        }
+
+        func localWake(in entries: [OpenClawChatSessionEntry], at local: Date) -> Date? {
+            OpenClawChatSessionSnooze.nextWake(in: entries, now: self.gatewayDate(at: local))?
+                .addingTimeInterval(-self.offset)
+        }
+    }
+
     public struct Preset: Sendable {
         public let id: String
         public let title: String

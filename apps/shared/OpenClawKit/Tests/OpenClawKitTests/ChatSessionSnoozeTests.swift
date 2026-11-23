@@ -110,6 +110,19 @@ struct ChatSessionSnoozeTests {
         #expect(OpenClawChatSessionSnooze.nextWake(in: [], now: now) == nil)
     }
 
+    @Test(arguments: [300.0, -300.0])
+    func `remote snooze becomes eligible at the local refresh deadline despite clock skew`(skew: Double) throws {
+        let server = Date(timeIntervalSince1970: 1000)
+        let received = server.addingTimeInterval(skew)
+        let clock = OpenClawChatSessionSnooze.RosterClock(timestamp: 1_000_000, receivedAt: received)
+        let row = Self.entry(snoozedUntil: 1_005_000)
+        let deadline = try #require(clock.localWake(in: [row], at: received))
+        #expect(deadline == received.addingTimeInterval(5))
+        #expect(row.isSnoozed(at: clock.gatewayDate(at: deadline.addingTimeInterval(-0.01))))
+        #expect(!row.isSnoozed(at: clock.gatewayDate(at: deadline)))
+        #expect(clock.localWake(in: [row], at: deadline) == nil)
+    }
+
     @Test func `session list decoding preserves snooze facts and omitted fields`() throws {
         let response = try OpenClawChatGatewayPayloadCodec.decodeSessionsList(Data(#"""
         {"sessions":[

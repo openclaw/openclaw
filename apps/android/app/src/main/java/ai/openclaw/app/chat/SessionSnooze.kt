@@ -91,6 +91,6 @@ object SessionSnooze {
     entries
       .asSequence()
       .filter { it.isSnoozed(nowMs) }
-      .mapNotNull { it.snoozedUntil }
+      .mapNotNull { it.localSnoozeWakeMs }
       .minOrNull()
 }
