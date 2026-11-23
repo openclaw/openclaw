@@ -201,10 +201,11 @@ An aborted agent run cancels its pending Gateway question. A graceful Gateway
 restart keeps an ordinary question pending until its original deadline. Answering it
 after the restart continues the conversation in a new turn that carries the answer; if
 it expires or is skipped instead, the new turn says so. Answers sent while the Gateway
-is shutting down are refused; answer again after it reconnects. Secret, form, and
-host-authorized questions are never saved, so they do not survive a restart, and no
-question survives a crash. Clients get `QUESTION_NOT_FOUND` for those, and the Control
-UI shows "Expired — Gateway restarted".
+is shutting down are refused; answer again after it reconnects. Secret, form,
+host-authorized, and child-session questions are not restored. Crash recovery is not
+supported. Clients get `QUESTION_NOT_FOUND` for missing questions, and the Control UI
+shows "Unavailable". An eligible question reappears when the Gateway announces its
+restoration.
 
 In the Control UI, sending a new ordinary prompt from the composer supersedes
 the Gateway questions already docked in that conversation, including child-session
