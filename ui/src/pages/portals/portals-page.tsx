@@ -208,7 +208,7 @@ function PortalPreview(props: {
           </span>
           <div class="session-panel-rail__identity portals-embedded__identity">
             <span class="portals-embedded__name" title={props.portal.title}>
-              {props.portal.title}
+              <bdi>{props.portal.title}</bdi>
             </span>
             <span
               class="portals-embedded__origin"
@@ -554,7 +554,9 @@ export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) 
                             aria-current={portal().id === selectedPortal()!.id ? "true" : undefined}
                             onClick={() => props.model.selectPortal(portal())}
                           >
-                            <span class="portals-rail__title">{portal().title}</span>
+                            <span class="portals-rail__title" title={portal().title}>
+                              <bdi>{portal().title}</bdi>
+                            </span>
                             <span class="portals-rail__port">
                               {t("portalsPage.portLabel", { port: String(portal().port) })}
                             </span>

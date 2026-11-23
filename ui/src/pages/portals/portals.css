@@ -81,8 +81,17 @@ openclaw-portals-page:not([embedded]) > .portals-layout {
   white-space: nowrap;
 }
 
+.portals-rail__title,
+.portals-page--embedded[data-mobile] .portals-embedded__name {
+  min-width: 0;
+  overflow: hidden;
+  direction: rtl;
+  text-align: match-parent;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .portals-rail__title {
-  overflow-wrap: anywhere;
   color: var(--text-strong);
   font-size: var(--control-ui-text-md);
   font-weight: var(--list-row-title-weight);
@@ -338,13 +347,9 @@ openclaw-portals-page[embedded],
 }
 
 .portals-page--embedded[data-mobile] .portals-embedded__name {
-  display: -webkit-box;
-  overflow: hidden;
+  display: block;
   font-size: var(--control-ui-text-md);
   line-height: max(20px, 1.3em);
-  overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
 }
 
 .portals-page--embedded[data-mobile] .portals-preview__frame {

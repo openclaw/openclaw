@@ -11,17 +11,21 @@ import {
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
 
-function titleFits(label: Element) {
+function endingFitsOnOneLine(label: Element) {
+  const text = label.querySelector("bdi")?.firstChild;
+  if (!(text instanceof Text) || text.data !== label.getAttribute("title")) {
+    return false;
+  }
   const range = document.createRange();
-  range.selectNodeContents(label);
-  const text = range.getBoundingClientRect();
+  range.selectNodeContents(text);
+  // Chromium can report the ellipsized text and its visible fragment on the same line.
+  if (new Set(Array.from(range.getClientRects(), (rect) => rect.top)).size !== 1) {
+    return false;
+  }
+  range.setStart(text, text.data.lastIndexOf(" ") + 1);
+  const ending = range.getBoundingClientRect();
   const bounds = label.getBoundingClientRect();
-  return (
-    text.width > 0 &&
-    text.left >= bounds.left - 1 &&
-    text.right <= bounds.right + 1 &&
-    text.bottom <= bounds.bottom + 1
-  );
+  return ending.width > 0 && ending.left >= bounds.left - 1 && ending.right <= bounds.right + 1;
 }
 
 const suite = createControlUiE2eSuite({ name: "Control UI Portals layout" });
@@ -80,7 +84,7 @@ suite.define(() => {
           .getByRole("button");
         expect(await choices.count()).toBe(2);
         for (const name of await choices.locator(".portals-rail__title").all()) {
-          expect(await name.evaluate(titleFits)).toBe(true);
+          expect(await name.evaluate(endingFitsOnOneLine)).toBe(true);
         }
         await choices.nth(1).focus();
         await page.keyboard.press("Enter");
@@ -157,7 +161,7 @@ suite.define(() => {
             ".portals-page--embedded[data-mobile] .portals-embedded__name",
           );
           expect(await headerName.textContent()).toBe(second.title);
-          expect(await headerName.evaluate(titleFits)).toBe(true);
+          expect(await headerName.evaluate(endingFitsOnOneLine)).toBe(true);
           expect(await headerName.evaluate((label) => getComputedStyle(label).fontSize)).toBe(
             "19.6px",
           );
