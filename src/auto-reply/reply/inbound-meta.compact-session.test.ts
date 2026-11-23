@@ -39,8 +39,8 @@ describe("compact inbound history and session transcript rows", () => {
 
   it("still removes a session row that repeats a native row of the same window", () => {
     const projection = buildWithWindow([
-      { message_id: "session:u1", sender: "User", body: "same text" },
-      { message_id: "native-1", sender: "Alice", body: "same text" },
+      { message_id: "session:u1", sender: "User", body: "same text", timestamp_ms: 1_000 },
+      { message_id: "native-1", sender: "Alice", body: "same text", timestamp_ms: 1_000 },
     ]);
 
     expect(projection.text).not.toContain("session:u1");
@@ -63,7 +63,7 @@ describe("compact inbound history and session transcript rows", () => {
           timestamp: 1,
         },
         { messageId: "session:u1", sender: "User", body: "same text", timestamp: 2 },
-        { messageId: "native-1", sender: "Alice", body: "same text", timestamp: 3 },
+        { messageId: "native-1", sender: "Alice", body: "same text", timestamp: 2 },
       ],
     } as TemplateContext);
 
@@ -71,5 +71,33 @@ describe("compact inbound history and session transcript rows", () => {
     expect(projection.text).not.toContain("session:u1");
     expect(projection.text).toContain("#native-1 Alice: same text");
     expect(projection.removedSessionMessages).toBe(1);
+  });
+
+  it("keeps a transcript-only assistant row whose body equals a native row of another speaker", () => {
+    const projection = buildWithWindow([
+      { message_id: "100", sender: "alice", body: "ok", timestamp_ms: 1_000 },
+      { message_id: "session:x", sender: "Assistant", body: "ok", timestamp_ms: 1_500 },
+    ]);
+
+    expect(projection.text).toContain("#100 alice: ok");
+    expect(projection.text).toContain("#session:x Assistant: ok");
+    expect(projection.removedSessionMessages).toBe(0);
+  });
+
+  it("keeps a session row of InboundHistory that only shares its body with a native entry", () => {
+    const projection = buildCompactInboundUserContextPrefix({
+      ChatType: "direct",
+      MessageSid: "current",
+      SenderName: "Onur",
+      SenderId: "user-1",
+      Timestamp: 2_000,
+      InboundHistory: [
+        { messageId: "100", sender: "alice", body: "ok", timestamp: 1 },
+        { messageId: "session:x", sender: "Assistant", body: "ok", timestamp: 5 },
+      ],
+    } as TemplateContext);
+
+    expect(projection.text).toContain("#session:x Assistant: ok");
+    expect(projection.removedSessionMessages).toBe(0);
   });
 });

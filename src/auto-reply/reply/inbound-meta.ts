@@ -326,6 +326,19 @@ function readCompactMessageId(value: unknown): string | undefined {
   return isRecord(value) ? sanitizeTranscriptText(value["message_id"]) : undefined;
 }
 
+// A session row repeats a native row only when both carry the same timestamp and body, the key
+// the transcript window merge uses. A body alone also matches a different speaker's message.
+function readCompactDuplicateKey(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const timestamp = value["timestamp_ms"];
+  const body = sanitizeTranscriptText(value["body"], "body");
+  return typeof timestamp === "number" && Number.isFinite(timestamp) && body
+    ? `${timestamp}:${body}`
+    : undefined;
+}
+
 function formatCompactHistoryMessage(value: unknown): string | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -437,14 +450,14 @@ export function buildCompactInboundUserContextPrefix(
   const historyLines: string[] = [];
   let removedSessionMessages = 0;
   let deduplicatedMessages = 0;
-  const addHistoryMessage = (value: unknown, nativeBodies?: ReadonlySet<string>) => {
+  const addHistoryMessage = (value: unknown, nativeKeys?: ReadonlySet<string>) => {
     const id = readCompactMessageId(value);
     if (id?.startsWith("session:")) {
       // A window row that only the session transcript holds (a delivered cron close-out, a
       // message-tool source reply) is not replayed to the provider, so it stays. Only a row
-      // that repeats a native row of the same window is a duplicate.
-      const body = isRecord(value) ? sanitizeTranscriptText(value["body"], "body") : undefined;
-      if (!nativeBodies || (body && nativeBodies.has(body))) {
+      // that repeats a native row of the same window, same timestamp and body, is a duplicate.
+      const key = readCompactDuplicateKey(value);
+      if (!nativeKeys || (key && nativeKeys.has(key))) {
         removedSessionMessages += 1;
         return;
       }
@@ -468,20 +481,18 @@ export function buildCompactInboundUserContextPrefix(
       const windowMessages: unknown[] = Array.isArray(entry.payload["messages"])
         ? entry.payload["messages"]
         : [];
-      const nativeBodies = new Set<string>();
+      const nativeKeys = new Set<string>();
       for (const message of windowMessages) {
         if (readCompactMessageId(message)?.startsWith("session:")) {
           continue;
         }
-        const body = isRecord(message)
-          ? sanitizeTranscriptText(message["body"], "body")
-          : undefined;
-        if (body) {
-          nativeBodies.add(body);
+        const key = readCompactDuplicateKey(message);
+        if (key) {
+          nativeKeys.add(key);
         }
       }
       for (const message of windowMessages) {
-        addHistoryMessage(message, nativeBodies);
+        addHistoryMessage(message, nativeKeys);
       }
       continue;
     }
@@ -495,15 +506,16 @@ export function buildCompactInboundUserContextPrefix(
 
   const boundedHistory = selectInboundHistoryContext(ctx).boundedHistory;
   // A session row of this history is removed only when a native row of the same history repeats
-  // its body. A transcript-only row (a close-out, a message-tool reply) is not replayed.
-  const nativeHistoryBodies = new Set<string>();
+  // its timestamp and body. A transcript-only row (a close-out, a message-tool reply) is not
+  // replayed.
+  const nativeHistoryKeys = new Set<string>();
   for (const entry of boundedHistory) {
     if (entry.messageId?.startsWith("session:")) {
       continue;
     }
-    const body = sanitizeTranscriptText(entry.body, "body");
-    if (body) {
-      nativeHistoryBodies.add(body);
+    const key = readCompactDuplicateKey({ timestamp_ms: entry.timestamp, body: entry.body });
+    if (key) {
+      nativeHistoryKeys.add(key);
     }
   }
   for (const entry of boundedHistory) {
@@ -512,13 +524,14 @@ export function buildCompactInboundUserContextPrefix(
         message_id: entry.messageId,
         sender: entry.sender,
         body: entry.body,
+        timestamp_ms: entry.timestamp,
         media_type:
           buildInboundHistoryMediaPromptPayload(entry.media)
             .map((media) => media["content_type"])
             .filter((value): value is string => typeof value === "string")
             .join(", ") || undefined,
       },
-      nativeHistoryBodies,
+      nativeHistoryKeys,
     );
   }
   const historyBlockIndex = historyLines.length > 0 ? blocks.length : -1;

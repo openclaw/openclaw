@@ -930,9 +930,9 @@ describe("buildInboundUserContextPrefix", () => {
           type: "chat_window",
           payload: {
             messages: [
-              { message_id: "session:u1", sender: "User", body: "same text" },
-              { message_id: "native-1", sender: "Alice", body: "same text" },
-              { message_id: "native-2", sender: "Bob", body: "same text" },
+              { message_id: "session:u1", sender: "User", body: "same text", timestamp_ms: 1_000 },
+              { message_id: "native-1", sender: "Alice", body: "same text", timestamp_ms: 1_000 },
+              { message_id: "native-2", sender: "Bob", body: "same text", timestamp_ms: 2_000 },
             ],
           },
         },

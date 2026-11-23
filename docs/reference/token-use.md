@@ -366,7 +366,7 @@ history and shortens current-turn metadata. The built-in `openclaw/small` Agent
 Profile selects `compact`; `openclaw/base` keeps `default`.
 
 `/context detail` shows the selected value, its source, serialized character
-counts, durable-ID removal counts, and provider input tokens when available.
+counts, duplicate removal counts, and provider input tokens when available.
 It does not show raw message content.
 
 The opt-in target-Qwen measurement is:

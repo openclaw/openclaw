@@ -170,8 +170,8 @@ The profile keeps `exec` directly visible. Normal tool policy, sandboxing, and
 exec approvals still apply.
 
 The profile selects `contextSerialization: "compact"` from its `openclaw.ai`
-section. Compact serialization removes active-session copies from channel history
-only when their durable message IDs prove that they are duplicates. It keeps unmatched backlog, ambiguous entries,
+section. Compact serialization removes an active-session copy from channel history
+only when a native entry of the same history has the same timestamp and body. It keeps unmatched backlog, ambiguous entries,
 speaker attribution, reply and thread facts, mentions, delivery facts, tool
 calls, and tool results. It also replaces the verbose current-turn metadata
 wrapper with a short block. Delivery and room-event instructions stay
@@ -184,7 +184,7 @@ representation.
 selection source in the stored system-prompt report. They also show the direct
 tool schemas used for the request. Detailed context reports show the context
 serialization value and source, default and serialized character counts,
-durable-ID removal counts, and provider input tokens when the provider reports
+duplicate removal counts, and provider input tokens when the provider reports
 them. They also show the resolved workspace-context budget and per-section
 allocation or truncation status. Reports do not include private message or
 workspace-file content.
