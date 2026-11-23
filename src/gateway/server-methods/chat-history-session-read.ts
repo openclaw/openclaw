@@ -1,10 +1,17 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import type {
+  ChatHistoryPage,
+  ChatHistoryPageParams,
+} from "../../config/sessions/session-history-types.js";
 import { readSessionHistoryPageInWorker } from "../../config/sessions/session-history-worker-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isIncognitoSessionKey, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
+import { prepareChatHistoryResponsePage } from "../chat-history-response-page.js";
+import { SerializedJsonArray } from "../serialized-json.js";
+import { registerDeflatedSegment } from "../server/ws-compression.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
@@ -23,8 +30,65 @@ import {
   resolveSessionVisibility,
 } from "../session-sharing.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
-import { respondChatHistoryUnavailable, type ChatHistoryMethod } from "./chat-history-recovery.js";
+import { readChatHistoryPage, type ChatHistoryMessageProjector } from "./chat-history-pages.js";
+import {
+  respondChatHistoryReadError,
+  respondChatHistoryUnavailable,
+  type ChatHistoryMethod,
+} from "./chat-history-recovery.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+
+/** Prepare the admitted RPC page, keeping worker-encoded messages opaque for publication. */
+export async function readChatHistoryRequestPage(
+  params: ChatHistoryPageParams,
+  request: Pick<GatewayRequestHandlerOptions, "respond" | "signal"> & {
+    cfg: OpenClawConfig;
+    method: ChatHistoryMethod;
+    deltaCursor?: string;
+    projectMentions: ChatHistoryMessageProjector;
+  },
+) {
+  const { cfg, method, respond, signal, deltaCursor, projectMentions } = request;
+  let historyPage: ChatHistoryPage;
+  try {
+    historyPage =
+      deltaCursor !== undefined
+        ? { messages: [] }
+        : await measureDiagnosticsTimelineSpan(
+            `gateway.${method}.history_page`,
+            () => readChatHistoryPage(params, signal, projectMentions),
+            {
+              config: cfg,
+              phase: method,
+              attributes: {
+                limit: params.max,
+                hasMessageId: Boolean(params.messageId),
+                hasOffset: params.offset !== undefined,
+              },
+            },
+          );
+  } catch (error) {
+    respondChatHistoryReadError(method, respond, error);
+    return undefined;
+  }
+  const { encodedResponse, encodedMessagesDeflate, messageModelIndex } = historyPage;
+  if (!encodedResponse) {
+    return { historyPage, responsePage: prepareChatHistoryResponsePage(historyPage, params) };
+  }
+  if (encodedMessagesDeflate) {
+    registerDeflatedSegment(encodedResponse.messages, encodedMessagesDeflate);
+  }
+  return {
+    historyPage,
+    responsePage: {
+      ...encodedResponse,
+      messages: new SerializedJsonArray(encodedResponse.messages, messageModelIndex),
+      activity: encodedResponse.activity
+        ? new SerializedJsonArray(encodedResponse.activity)
+        : undefined,
+    },
+  };
+}
 
 /** Select and revalidate history metadata through its prepared row and sharing owners. */
 export async function prepareChatHistorySessionRead({

@@ -6,6 +6,7 @@ import {
   normalizeToolApprovalReview,
 } from "../../../../src/shared/tool-approval-reviews.js";
 import type { ChatGuardianNotice, ToolApprovalReview } from "../../lib/chat/chat-types.ts";
+import { readContentBlockText } from "../../lib/chat/message-extract.ts";
 import {
   readToolApprovalReviewOutcome,
   readToolApprovalReviews,
@@ -27,7 +28,7 @@ import { getChatRunOwner, getChatRunProjection } from "./history-merge.ts";
 import { observedRunInputSendId } from "./stream-causal-boundary.ts";
 import type { AgentEventPayload, ToolStreamEntry, ToolStreamHost } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
-import { handlePreambleProgress } from "./tool-stream-preamble.ts";
+import { bindTextBeforeRootTool, handlePreambleProgress } from "./tool-stream-preamble.ts";
 import {
   cancelToolStreamSync,
   refreshToolStreamMessage,
@@ -53,47 +54,19 @@ function isPolicyState(value: unknown): value is keyof typeof PROVIDER_POLICY_PR
   return typeof value === "string" && Object.hasOwn(PROVIDER_POLICY_PRECEDENCE, value);
 }
 
-function extractToolOutputText(value: unknown): string | null {
-  const record = readRecord(value);
-  if (!record) {
-    return null;
-  }
-  if (typeof record.text === "string") {
-    return record.text;
-  }
-  if (!Array.isArray(record.content)) {
-    return null;
-  }
-  const parts: string[] = [];
-  for (const content of record.content) {
-    const entry = readRecord(content);
-    if (entry?.type === "text" && typeof entry.text === "string" && entry.text) {
-      parts.push(entry.text);
-    }
-  }
-  return parts.length > 0 ? parts.join("\n") : null;
-}
-
 function formatToolOutput(value: unknown): string | null {
-  if (value === null || value === undefined) {
+  if (value == null) {
     return null;
   }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  const contentText = extractToolOutputText(value);
-  let text: string;
-  if (typeof value === "string") {
-    text = value;
-  } else if (contentText !== null) {
-    text = contentText;
-  } else {
-    try {
-      text = JSON.stringify(value, null, 2);
-    } catch {
-      text = formatUnknownText(value);
-    }
-  }
+  const record = readRecord(value);
+  const text =
+    typeof record?.text === "string"
+      ? record.text
+      : (readContentBlockText(record?.content, (block) =>
+          block.type === "text" && typeof block.text === "string" && block.text
+            ? block.text
+            : undefined,
+        ) ?? formatUnknownText(value, 2));
   const truncated = truncateText(text, TOOL_OUTPUT_CHAR_LIMIT);
   if (!truncated.truncated) {
     return truncated.text;
@@ -466,6 +439,23 @@ export function handleAgentEvent(
     }
   }
 
+  const markActivity = () =>
+    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+  const createEntry = (identity: string, toolCallId: string, name: string, startedAt: number) => {
+    const entry: ToolStreamEntry = {
+      toolCallId,
+      runId: payload.runId,
+      name,
+      startedAt,
+      receivedAt: Date.now(),
+      afterUserSendId:
+        source === "live" ? observedRunInputSendId(host.chatMessages, payload.runId) : undefined,
+      message: {},
+    };
+    host.toolStreamById.set(identity, entry);
+    host.toolStreamOrder.push(identity);
+    return entry;
+  };
   if (payload.stream === "thinking") {
     const run = getChatRunProjection(host, payload.runId);
     if (
@@ -477,7 +467,7 @@ export function handleAgentEvent(
     }
     const changed = updateChatReasoning(host, payload);
     if (changed && payload.data.phase !== "persisted") {
-      reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+      markActivity();
     }
     return changed;
   }
@@ -501,25 +491,13 @@ export function handleAgentEvent(
     }
     const item = activityItem;
     if (item.kind === "tool" && item.phase === "start") {
-      reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+      markActivity();
     }
     const toolCallId = item.toolCallId ?? item.itemId;
     const identity = buildToolStreamIdentity(payload.runId, toolCallId);
-    let entry = host.toolStreamById.get(identity);
-    if (!entry) {
-      entry = {
-        toolCallId,
-        runId: payload.runId,
-        name: item.name ?? item.title,
-        startedAt: item.startedAt ?? payload.ts,
-        receivedAt: Date.now(),
-        afterUserSendId:
-          source === "live" ? observedRunInputSendId(host.chatMessages, payload.runId) : undefined,
-        message: {},
-      };
-      host.toolStreamById.set(identity, entry);
-      host.toolStreamOrder.push(identity);
-    }
+    const entry =
+      host.toolStreamById.get(identity) ??
+      createEntry(identity, toolCallId, item.name ?? item.title, item.startedAt ?? payload.ts);
     entry.activity = [
       ...(entry.activity ?? []).filter((previous) => previous.itemId !== item.itemId),
       item,
@@ -532,13 +510,13 @@ export function handleAgentEvent(
     return false;
   }
 
-  const data = payload.data ?? {};
-  const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : "";
-  if (!toolCallId) {
+  const data = payload.data;
+  const toolCallId = data.toolCallId;
+  if (typeof toolCallId !== "string" || !toolCallId) {
     return false;
   }
   let entry = host.toolStreamById.get(toolStreamIdentity);
-  const phase = typeof data.phase === "string" ? data.phase : "";
+  const phase = data.phase;
   const approvalReview = phase === "review" ? normalizeToolApprovalReview(data.review) : null;
   if (phase === "review" && !approvalReview) {
     return true;
@@ -550,91 +528,49 @@ export function handleAgentEvent(
       ? entry.name
       : (toTrimmedString(data.name) ?? entry?.name ?? "tool");
   if (payload.runId === host.chatRunId) {
-    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+    markActivity();
   }
-  const args = phase === "start" ? data.args : undefined;
   const parentToolCallId = toTrimmedString(data.parentToolCallId) ?? undefined;
-  const output =
-    phase === "update"
-      ? formatToolOutput(data.partialResult)
-      : phase === "result"
-        ? formatToolOutput(data.result)
-        : undefined;
-  const resultRecord = phase === "result" ? readRecord(data.result) : undefined;
-  const resultDetails = resultRecord?.details;
+  const isUpdate = phase === "update";
+  const isResult = phase === "result";
+  const value = isResult ? data.result : data.partialResult;
+  const result = isResult ? readRecord(value) : undefined;
+  const resultDetails = result?.details;
   const resultApprovalReviewOutcome =
     readToolApprovalReviewOutcome(data) ?? readToolApprovalReviewOutcome(resultDetails);
-  const initialResultDetails = resultApprovalReviewOutcome
-    ? withToolApprovalReviews(resultDetails, [], resultApprovalReviewOutcome)
-    : resultDetails;
-  const resultIsError =
-    phase === "result" && typeof data.isError === "boolean" ? data.isError : undefined;
-  const resultExitCode = resultRecord?.exitCode;
-  const exitCode =
-    typeof resultExitCode === "number" && Number.isInteger(resultExitCode)
-      ? resultExitCode
-      : undefined;
-  const liveDiffStat = phase === "input_delta" ? readLiveDiffStat(data.diff) : undefined;
   // Canvas output creates conversation items. Creation, identity adoption, and all
   // non-output facts retain the structural publication path, including terminal state.
   const outputOnly =
-    phase === "update" &&
+    isUpdate &&
     entry !== undefined &&
     entry.name === name &&
     entry.resultReceived !== true &&
     entry.message["__openclawToolStreamItemEnded"] !== true &&
     !resultApprovalReviewOutcome &&
     (!parentToolCallId || entry.parentToolCallId === parentToolCallId);
-  if (name === "session_status" && phase === "result") {
-    refreshSessionStatusModel(host, data);
-  }
 
-  const now = Date.now();
-  if (!entry) {
-    // Tool execution can overlap an unfinished assistant message. Only message
-    // persistence and user boundaries may retire its stream, never tool arrival.
-    entry = {
-      toolCallId,
-      runId: payload.runId,
-      name,
-      startedAt: typeof payload.ts === "number" ? payload.ts : now,
-      receivedAt: now,
-      afterUserSendId:
-        source === "live" ? observedRunInputSendId(host.chatMessages, payload.runId) : undefined,
-      message: {},
-    };
-    host.toolStreamById.set(toolStreamIdentity, entry);
-    host.toolStreamOrder.push(toolStreamIdentity);
-  }
+  // Execution can overlap unfinished text; only an explicit receipt identifies its boundary.
+  entry ??= createEntry(
+    toolStreamIdentity,
+    toolCallId,
+    name,
+    typeof payload.ts === "number" ? payload.ts : Date.now(),
+  );
   entry.name = name;
   entry.parentToolCallId ??= parentToolCallId;
   if (phase === "start" && !entry.parentToolCallId) {
-    // Bind completed commentary to the next root call, not to nested work or
-    // a replayed start that predates it. Saved call timestamps may be earlier.
-    const introducesCall = (segment: (typeof host.chatStreamSegments)[number]) =>
-      Boolean(segment.itemId) &&
-      !segment.toolCallId &&
-      segment.runId === payload.runId &&
-      (segment.afterUserSendId === undefined ||
-        segment.afterUserSendId === entry.afterUserSendId) &&
-      segment.ts <= entry.startedAt;
-    if (host.chatStreamSegments.some(introducesCall)) {
-      host.chatStreamSegments = host.chatStreamSegments.map((segment) =>
-        introducesCall(segment) ? { ...segment, toolCallId } : segment,
-      );
-    }
+    // History must match this receipt to the imported transcript, not to newer buffered prose.
+    bindTextBeforeRootTool(host, entry, source === "live" ? data.textLengthBeforeTool : undefined);
   }
-  if (args !== undefined) {
-    entry.args = args;
+  if (phase === "start" && data.args !== undefined) {
+    entry.args = data.args;
   }
-  if (output !== undefined) {
-    entry.output = output || undefined;
-  }
-  if (phase === "update" || phase === "result") {
-    const run = getChatRunProjection(host, payload.runId);
+  if (isUpdate || isResult) {
+    entry.output = formatToolOutput(value) || undefined;
+    const status = isUpdate ? getChatRunProjection(host, payload.runId)?.status : undefined;
     entry.liveOutput =
-      phase === "update" && (!run || run.status === "streaming")
-        ? readLiveToolOutput(readRecord(data.partialResult)?.liveOutput)
+      isUpdate && (!status || status === "streaming")
+        ? readLiveToolOutput(readRecord(value)?.liveOutput)
         : undefined;
   }
   if (resultDetails !== undefined || resultApprovalReviewOutcome) {
@@ -642,23 +578,30 @@ export function handleAgentEvent(
     const outcome =
       currentOutcome === "denied" ? "denied" : (resultApprovalReviewOutcome ?? currentOutcome);
     const reviews = readToolApprovalReviews(entry.details);
-    entry.details = reviews.length
-      ? withToolApprovalReviews(resultDetails, reviews, outcome)
-      : initialResultDetails;
+    entry.details =
+      reviews.length || resultApprovalReviewOutcome
+        ? withToolApprovalReviews(
+            resultDetails,
+            reviews,
+            reviews.length ? outcome : resultApprovalReviewOutcome,
+          )
+        : resultDetails;
   }
-  if (resultIsError !== undefined) {
-    entry.isError = resultIsError;
-  }
-  if (exitCode !== undefined) {
-    entry.exitCode = exitCode;
-  }
-  if (liveDiffStat) {
-    entry.liveDiffStat = liveDiffStat;
-  }
-  if (phase === "result") {
+  if (isResult) {
+    if (typeof data.isError === "boolean") {
+      entry.isError = data.isError;
+    }
+    if (typeof result?.exitCode === "number" && Number.isInteger(result.exitCode)) {
+      entry.exitCode = result.exitCode;
+    }
     entry.liveDiffStat = undefined;
     entry.resultReceived = true;
     entry.resultTimestamp ??= payload.ts;
+    if (name === "session_status") {
+      refreshSessionStatusModel(host, data);
+    }
+  } else if (phase === "input_delta") {
+    entry.liveDiffStat = readLiveDiffStat(data.diff) ?? entry.liveDiffStat;
   }
 
   if (approvalReview) {
@@ -687,17 +630,18 @@ export function handleAgentEvent(
         sequences.delete(toolReviewSequenceIdentity(ownerIdentity, candidate.id));
       }
     }
-    const reportedOutcome = readToolApprovalReviewOutcome(payload.data);
     const derivedOutcome = resolveToolApprovalReviewOutcome(retainedReviews);
     const currentOutcome = readToolApprovalReviewOutcome(entry.details);
     const nextOutcome =
-      currentOutcome === "denied" ? "denied" : (reportedOutcome ?? derivedOutcome ?? undefined);
+      currentOutcome === "denied"
+        ? "denied"
+        : (resultApprovalReviewOutcome ?? derivedOutcome ?? undefined);
     entry.details = withToolApprovalReviews(
       entry.details,
       retainedReviews,
       nextOutcome && payload.seq >= newestReviewSeq ? nextOutcome : currentOutcome,
     );
   }
-  publishToolStreamEntry(host, entry, phase === "result" || approvalReview !== null, outputOnly);
+  publishToolStreamEntry(host, entry, isResult || approvalReview !== null, outputOnly);
   return true;
 }

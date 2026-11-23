@@ -429,6 +429,10 @@ export function updateChatRunProgressSnapshot(
         phase,
         name: typeof data.name === "string" ? data.name : undefined,
         toolCallId,
+        // Replay needs the wire coordinate at this call, not text generated after it.
+        ...(phase === "start" && typeof data.textLengthBeforeTool === "number"
+          ? { textLengthBeforeTool: data.textLengthBeforeTool }
+          : {}),
         ...(phase === "update" && data.outputOnly === true ? { outputOnly: true } : {}),
       }
     : isAssistant

@@ -27,6 +27,7 @@ import { createChannelMentionProjector } from "../chat-display-projection.channe
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
 import {
   boundInFlightRunSnapshotForChatHistory,
+  type ChatHistoryPreambleSource,
   getMaxChatHistoryMessagesBytes,
   reportOmittedChatHistory,
 } from "../chat-history-budget.js";
@@ -34,14 +35,11 @@ import {
   decodeChatHistoryPageCursor,
   resolveChatHistorySelectorError,
 } from "../chat-history-page-cursor.js";
-import { prepareChatHistoryResponsePage } from "../chat-history-response-page.js";
 import { resolveInFlightRunSnapshot } from "../chat-inflight-snapshot.runtime.js";
 import { resolveClaudeCliBindingSessionId } from "../cli-session-history.claude.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
-import { SerializedJsonArray } from "../serialized-json.js";
 import { readPreparedGatewayModelMetadata } from "../server-model-catalog-view.js";
-import { registerDeflatedSegment } from "../server/ws-compression.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
@@ -53,14 +51,16 @@ import { buildGatewaySessionRow } from "../session-utils-row.js";
 import { getSessionDefaults, resolveSessionModelRef } from "../session-utils.js";
 import { withPreparedSessionResolve } from "../sessions-resolve.js";
 import { readChatHistoryDelta } from "./chat-history-delta.js";
-import { readChatHistoryPage } from "./chat-history-pages.js";
 import {
   resolveEmbeddedAgentRunRecoverySnapshot,
   respondChatHistoryUnavailable,
   respondChatHistoryReadError,
   type ChatHistoryMethod,
 } from "./chat-history-recovery.js";
-import { prepareChatHistorySessionRead } from "./chat-history-session-read.js";
+import {
+  prepareChatHistorySessionRead,
+  readChatHistoryRequestPage,
+} from "./chat-history-session-read.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import { captureQueuedChatInputRunIds, readChatPendingInputs } from "./chat-pending-inputs.js";
 import { withChatStartupDiagnostics } from "./chat-server-timing.js";
@@ -230,7 +230,6 @@ export async function handleChatHistoryRequest({
         : [],
     );
     const projectMentions = createChannelMentionProjector(context, client, canonicalKey);
-    let historyPage: Awaited<ReturnType<typeof readChatHistoryPage>>;
     // Internal adapters may inspect message objects before responding.
     const encodeResponse = acceptsSerializedJson && method === req.method;
     // Model projection replaces serialized messages, so their compressed bytes go unused.
@@ -238,79 +237,32 @@ export async function handleChatHistoryRequest({
       encodeResponse &&
       acceptsDeflatedSegments &&
       !resolveOperatorRolePolicy(client, context.getCommittedRuntimeConfig?.() ?? cfg)?.modelPolicy;
-    try {
-      historyPage =
-        deltaCursor !== undefined
-          ? { messages: [] }
-          : await measureDiagnosticsTimelineSpan(
-              `gateway.${method}.history_page`,
-              () =>
-                readChatHistoryPage(
-                  {
-                    encodeResponse,
-                    deflateResponse,
-                    includePluginSteering,
-                    entry: historyEntry,
-                    provider: resolvedSessionModel?.provider,
-                    sessionId,
-                    storePath,
-                    sessionAgentId,
-                    canonicalKey,
-                    max,
-                    maxHistoryBytes,
-                    responseHistoryBytes: maxResponseBytes,
-                    effectiveMaxChars,
-                    toolResultMaxChars,
-                    offset,
-                    messageId,
-                    ...(pageCursor ? { pageCursor } : {}),
-                  },
-                  signal,
-                  projectMentions,
-                ),
-              {
-                config: cfg,
-                phase: method,
-                attributes: {
-                  limit: max,
-                  hasMessageId: Boolean(messageId),
-                  hasOffset: offset !== undefined,
-                },
-              },
-            );
-    } catch (error) {
-      respondChatHistoryReadError(method, respond, error);
-      return;
-    }
-    if (historyPage.encodedResponse && historyPage.encodedMessagesDeflate) {
-      registerDeflatedSegment(
-        historyPage.encodedResponse.messages,
-        historyPage.encodedMessagesDeflate,
-      );
-    }
-    const { encodedResponse, messageModelIndex } = historyPage;
-    const responsePage = encodedResponse
-      ? {
-          ...encodedResponse,
-          messages: new SerializedJsonArray(encodedResponse.messages, messageModelIndex),
-          activity: encodedResponse.activity
-            ? new SerializedJsonArray(encodedResponse.activity)
-            : undefined,
-        }
-      : prepareChatHistoryResponsePage(historyPage, {
+    const readPage = (responseHistoryBytes: number) =>
+      readChatHistoryRequestPage(
+        {
+          encodeResponse,
+          deflateResponse,
+          includePluginSteering,
           entry: historyEntry,
+          provider: resolvedSessionModel?.provider,
+          sessionId,
+          storePath,
+          sessionAgentId,
+          canonicalKey,
+          max,
           maxHistoryBytes,
-          responseHistoryBytes: maxResponseBytes,
+          responseHistoryBytes,
+          effectiveMaxChars,
+          toolResultMaxChars,
+          offset,
           messageId,
-        });
-    const { messages, messagesBytes, responseHistoryBytes, omission, ...responseFields } =
-      responsePage;
-    if (omission) {
-      reportOmittedChatHistory({
-        ...omission,
-        maxHistoryBytes: responseHistoryBytes,
-        logDebug: (message) => context.logGateway.debug(message),
-      });
+          ...(pageCursor ? { pageCursor } : {}),
+        },
+        { cfg, method, respond, signal, deltaCursor, projectMentions },
+      );
+    const initialPage = await readPage(maxResponseBytes);
+    if (!initialPage) {
+      return;
     }
     const compatibilityOwnerAgentId = tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey);
     const startupProjection = await (startupProjectionPromise ?? readStartupProjection());
@@ -359,7 +311,12 @@ export async function handleChatHistoryRequest({
           cfg,
           entries: [{ agentId: sessionAgentId, sessionKey: canonicalKey, entry: undefined }],
         });
-    const presentRead = (read: SessionRowReadView) => {
+    type PreparedPage = NonNullable<Awaited<ReturnType<typeof readPage>>>;
+    let preambleReserve = 0;
+    let preambleSource: ChatHistoryPreambleSource | undefined;
+    const presentRead = (read: SessionRowReadView, { historyPage, responsePage }: PreparedPage) => {
+      const { messages, messagesBytes, responseHistoryBytes, omission, ...responseFields } =
+        responsePage;
       const scopedRuntime = { ...runtimeScope, physicalPaths: read.physicalPaths };
       const currentSharing = readCurrentSharing(read);
       if (!currentSharing) {
@@ -599,10 +556,33 @@ export async function handleChatHistoryRequest({
       }
       const boundedInFlightRun = boundInFlightRunSnapshotForChatHistory({
         snapshot: inFlightRun,
-        messages: [],
+        messages,
         getMessagesBytes: () => messagesBytes,
-        maxBytes: responseHistoryBytes,
+        maxBytes: maxResponseBytes,
+        preambleSource,
+        onPreambleBudgetMiss: (bytes, source) => {
+          if (
+            !messageId &&
+            !offset &&
+            sessionId === entry?.sessionId &&
+            responseHistoryBytes === maxResponseBytes &&
+            bytes + 2 <= maxResponseBytes
+          ) {
+            preambleReserve = bytes;
+            preambleSource = source;
+          }
+        },
       });
+      if (preambleReserve) {
+        return undefined;
+      }
+      if (omission) {
+        reportOmittedChatHistory({
+          ...omission,
+          maxHistoryBytes: responseHistoryBytes,
+          logDebug: (message) => context.logGateway.debug(message),
+        });
+      }
       const payload = {
         sessionKey,
         sessionId,
@@ -637,11 +617,22 @@ export async function handleChatHistoryRequest({
       respond(true, presentHistory(payload));
       return undefined;
     };
-    const publishDelta = await measureDiagnosticsTimelineSpan(
-      `gateway.${method}.projection_final`,
-      () => withReadySessionRows(rowProjection, queries, presentRead),
-    );
-    await publishDelta?.();
+    const presentPage = (page: PreparedPage) =>
+      measureDiagnosticsTimelineSpan(`gateway.${method}.projection_final`, () =>
+        withReadySessionRows(rowProjection, queries, (read) => presentRead(read, page)),
+      );
+    let publish = await presentPage(initialPage);
+    if (preambleReserve) {
+      // Only a verified prefix that cannot fit beside the normal newest page earns a smaller
+      // page. The same reader owns its back-scroll cursors; resolve the run and row again.
+      const page = await readPage(maxResponseBytes - preambleReserve);
+      if (!page) {
+        return;
+      }
+      preambleReserve = 0;
+      publish = await presentPage(page);
+    }
+    await publish?.();
   } finally {
     selection.release();
   }
