@@ -127,6 +127,7 @@ export function createChannelSetupMocks() {
     resolveChannelSelectionNoteLines: vi.fn(() => []),
     resolveChannelSetupSelectionOptions: vi.fn(() => []),
     resolveQuickstartDefault: vi.fn(() => undefined),
+    shouldPromptChannelAccountId: vi.fn(() => false),
   };
   const mocks = {
     ...agentScope,

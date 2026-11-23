@@ -16,6 +16,10 @@ import {
   shouldShowChannelInSetup,
 } from "../commands/channel-setup/discovery.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
+import {
+  hasMeaningfulChannelConfig,
+  resolveChannelConfigRecord,
+} from "../config/channel-config-activation.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -392,6 +396,24 @@ export async function noteChannelPrimer(
       ...channelLines,
     ].join("\n"),
     t("wizard.channelsPrimer.title"),
+  );
+}
+
+/**
+ * Asks which account to set up only once the channel has one saved. Account lists fall back
+ * to `default` when nothing is saved, so a first setup would offer an account that does not
+ * exist. Setup enables the channel before configuring it; `enabled` alone is not an account.
+ */
+export function shouldPromptChannelAccountId(
+  cfg: OpenClawConfig,
+  channel: ChannelChoice,
+  statusByChannel: Map<ChannelChoice, ChannelSetupStatus>,
+  options?: SetupChannelsOptions,
+): boolean {
+  return (
+    options?.promptAccountIds === true &&
+    (statusByChannel.get(channel)?.configured === true ||
+      hasMeaningfulChannelConfig(resolveChannelConfigRecord(cfg, channel), channel))
   );
 }
 

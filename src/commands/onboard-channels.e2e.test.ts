@@ -2,7 +2,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createExitThrowingRuntime, createWizardPrompter } from "../../test/helpers/auth-wizard.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
-import type { ChannelSetupWizardAdapter } from "../channels/plugins/setup-wizard-types.js";
+import type {
+  ChannelSetupWizard,
+  ChannelSetupWizardAdapter,
+} from "../channels/plugins/setup-wizard-types.js";
 import {
   ensureChannelSetupPluginInstalled,
   loadChannelSetupPluginRegistrySnapshotForChannel,
@@ -380,6 +383,59 @@ describe("setupChannels", () => {
           "Channel status",
         );
       }
+    },
+  );
+
+  it.each([
+    ["first setup", { enabled: true }, false],
+    ["saved account", { enabled: true, token: "synthetic-token" }, true],
+  ] as const)(
+    "asks which account to set up only when one is saved: %s",
+    async (_name, discord, expectAccountPrompt) => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "discord",
+            source: "test",
+            plugin: {
+              ...createChannelTestPluginBase({ id: "discord", label: "Discord" }),
+              setupWizard: {
+                channel: "discord",
+                status: {
+                  configuredLabel: "configured",
+                  unconfiguredLabel: "needs token",
+                  resolveConfigured: ({ cfg }) => Boolean(cfg.channels?.discord?.token),
+                },
+                credentials: [],
+              } satisfies ChannelSetupWizard,
+            },
+          },
+        ]),
+      );
+      const select = vi.fn(
+        async ({ message, options }: Parameters<WizardPrompter["select"]>[0]) => {
+          if (message === "Discord account") {
+            return "default";
+          }
+          if (message === "Discord already configured. What do you want to do?") {
+            return "update";
+          }
+          return options.find((option) => option.label === "Skip for now")?.value ?? "__done__";
+        },
+      ) as WizardPrompter["select"];
+      const prompter = createPrompter({ select });
+
+      await runSetupChannels({ channels: { discord } }, prompter, {
+        initialSelection: ["discord"],
+        finishAfterInitialSelection: true,
+        promptAccountIds: true,
+        skipDmPolicyPrompt: true,
+      });
+
+      const accountPrompts = vi
+        .mocked(select)
+        .mock.calls.filter(([prompt]) => prompt.message === "Discord account");
+      expect(accountPrompts).toHaveLength(expectAccountPrompt ? 1 : 0);
     },
   );
 
