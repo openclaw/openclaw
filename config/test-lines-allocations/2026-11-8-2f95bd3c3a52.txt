@@ -1,6 +1,16 @@
-65
+53
 # LOCAL 2026.11.8: row 61; source 2f95bd3c3a527b6cd3b87339419cb135f67ab776.
 # src/agents/runtime/proxy.ts streamProxy: replace cumulative stream charging with bounded outstanding-line accounting before decoding; preserve Unicode, cancellation, idle timeout and terminal handling.
 # Retains independently failing regressions at existing owners; measured growth 74 LF lines.
 # Credit reduced by 9 for the -8 OpenAI and -1 BytePlus test consolidation in this intake.
 # Full intake baseline: a28e4379464c4fc22b3b085cd1f8e7c709be9888; no scalar baseline change.
+# Further reduce 12 LF for previously unpooled contractions in this same full intake:
+# Row 2, 158655120203be61113f64371d8fd5649d2060cc: -1 counted LF.
+# Row 10, 38d023b4b97257985c20ab14c5985b0cdd00b379: -2 counted LF.
+# Row 34, c476178d23524836b0ebe26fb2890ec078648115: -1 counted LF.
+# Row 158, 2619ae2cad6a7c87badb688c182af8467dc6d7a2: -1 counted LF.
+# Row 176, c1bc83af6d22081cc75e2d5fecb0e9fbc29b1a5c: -2 counted LF.
+# Row 201, e05d58b23204bf6e7c790f295b7bf033e4c8a89c: -2 counted LF.
+# Row 206, 4c4fd914d561a2aefcc5c9e66c6709b1dc0918b4: -1 counted LF.
+# Row 208, 85e3efcb12d487cb5aadde9b71125ca487e937f8: -2 counted LF.
+# These offsets are consumed here once; the earlier row125/127 pool remains separate.

@@ -1,0 +1,4 @@
+2
+# Source 28783d784b1618e1c1c3e39ce7c95ae0b50a230b; canonical 992f36dc5caaadec9e5e7181f3842204224ed137.
+# Counted literal LF: REST scheduler +10, read authority +1, REST tests -16, send support +20, send tests -13 = +2.
+# Includes matching test-support; private 8cc62d6927de7ce70183ac0c61bc5bb6a11363ca was net 0 before canonical fixture extraction.
