@@ -935,6 +935,13 @@ openclaw-appearance-background .settings-background-preview .session-background_
   min-width: min(220px, 100%);
 }
 
+/* Keep the prediction model and its explanation in place when the selected label changes. */
+@media not all and (max-width: 640px) {
+  openclaw-labs-page .settings-row.settings-row--nested .settings-row__control > .settings-select {
+    inline-size: 18em;
+  }
+}
+
 /* Permission can replace System default with long hardware labels; keep the
    paired media pickers aligned instead of letting native intrinsic width win. */
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select--media-device {
