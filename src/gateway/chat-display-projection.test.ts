@@ -506,6 +506,12 @@ it("restores widgets from Claude CLI results coalesced into the tool-call messag
   expect(augmentChatHistoryWithCanvasBlocks(messages)[2]).toMatchObject({
     content: [text("Done."), { type: "canvas", preview: { viewId: "cv_cli", url: "/cv_cli" } }],
   });
+  // Parallel tool results stay separate user rows in Claude history; they are not a new prompt.
+  const parallelResult = { type: "tool_result", tool_use_id: "toolu_2", content: [text("ok")] };
+  const parallel = [...messages.slice(0, 2), { role: "user", content: [parallelResult] }];
+  expect(augmentChatHistoryWithCanvasBlocks([...parallel, messages[2]])[3]).toMatchObject({
+    content: [text("Done."), { type: "canvas", preview: { viewId: "cv_cli" } }],
+  });
   // A turn that ends before its visible reply keeps the widget off the previous answer.
   const earlier = assistant([text("Earlier answer.")], {});
   const unanswered = augmentChatHistoryWithCanvasBlocks([earlier, ...messages.slice(0, 2)]);

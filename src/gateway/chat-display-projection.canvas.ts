@@ -324,18 +324,18 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
       }
       continue;
     }
-    if (role === "user" && thinkingFallbackIndex >= 0) {
-      // A turn interrupted before its reply keeps its widgets; the next prompt's answer must not take them.
-      next[thinkingFallbackIndex] = appendChatCanvasBlocksToMessage(
-        readRecord(next[thinkingFallbackIndex]),
-        pending,
-      );
-      pending.length = 0;
-      thinkingFallbackIndex = -1;
-      changed = true;
-      continue;
-    }
     if (!messageContainsToolHistoryContent(entry)) {
+      // A turn interrupted before its reply keeps its widgets; the next prompt's answer must not
+      // take them. Tool result rows (parallel calls are not coalesced) still belong to this turn.
+      if (role === "user" && thinkingFallbackIndex >= 0) {
+        next[thinkingFallbackIndex] = appendChatCanvasBlocksToMessage(
+          readRecord(next[thinkingFallbackIndex]),
+          pending,
+        );
+        pending.length = 0;
+        thinkingFallbackIndex = -1;
+        changed = true;
+      }
       continue;
     }
     const preview = extractChatToolResultCanvasPreview(entry);
