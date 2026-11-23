@@ -500,7 +500,11 @@
   }
   .chat-processes__identity {
     display: block;
-    overflow-wrap: anywhere;
+    overflow-x: auto;
+    direction: rtl;
+    text-align: match-parent;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: var(--control-ui-text-md);
     font-weight: 600;
     line-height: 1.3;

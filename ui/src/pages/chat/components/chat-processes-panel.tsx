@@ -298,7 +298,11 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
       });
       const outputInfo = (row: SessionProcessSummary) => (
         <div class="chat-processes__output-info">
-          {props.mobile && <strong class="chat-processes__identity">{row.name}</strong>}
+          {props.mobile && (
+            <strong class="chat-processes__identity" title={row.name}>
+              <bdi>{row.name}</bdi>
+            </strong>
+          )}
           <div class="chat-processes__metadata" data-status={row.status}>
             <span class="chat-processes__status">{status(row)}</span>
             <span>{elapsed(row)}</span>

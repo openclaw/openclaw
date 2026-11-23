@@ -67,6 +67,36 @@ suite.define(() => {
         await open.press("Enter");
         const output = panel.getByLabel("Recent output", { exact: true });
         await output.waitFor();
+        const identity = panel.locator(".chat-processes__identity");
+        expect(await identity.getAttribute("title")).toBe(name);
+        const inspect = () =>
+          identity.evaluate((el) => {
+            const text = el.querySelector("bdi")!.firstChild!;
+            const range = document.createRange();
+            const value = text.textContent!;
+            const box = el.getBoundingClientRect();
+            const fits = (start: number, end: number) => {
+              range.setStart(text, start);
+              range.setEnd(text, end);
+              const rect = range.getBoundingClientRect();
+              return rect.left >= box.left - 1 && rect.right <= box.right + 1;
+            };
+            return {
+              ending: fits(value.lastIndexOf("/") + 1, value.length),
+              prefix: fits(0, 10),
+              height: box.height,
+              line: parseFloat(getComputedStyle(el).lineHeight),
+            };
+          });
+        const initial = await inspect();
+        expect(initial.ending).toBe(true);
+        expect(initial.height).toBeLessThanOrEqual(initial.line + 1);
+        await identity.hover();
+        await page.mouse.wheel(-2000, 0);
+        await expect.poll(async () => (await inspect()).prefix).toBe(true);
+        await page.mouse.wheel(2000, 0);
+        await expect.poll(async () => (await inspect()).ending).toBe(true);
+
         for (const line of ["Survey line 1", "Survey line 28"]) {
           if (line === "Survey line 28") {
             await output.focus();
