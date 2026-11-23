@@ -462,7 +462,6 @@ export const handleRestartCommand: CommandHandler = defineGatewayControlCommand(
         // pending session key to avoid cross-session overwrite (#86742).
         sessionKey: sentinelPayload?.sessionKey,
         emitHooks: {
-          assertCurrent: params.command.assertOwnerCurrent,
           beforeEmit: prepareSentinel,
           afterEmitRejected: clearSentinel,
         },

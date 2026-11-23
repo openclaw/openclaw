@@ -48,7 +48,7 @@ import {
   type ProviderPromptState,
   wrapStreamFnWithProviderPromptState,
 } from "../provider-prompt-state.js";
-import { applySessionForkRequest, sessionForkGatesHostedTools } from "../session-fork-request.js";
+import { applySessionForkRequest } from "../session-fork-request.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveEmbeddedAgentApiKey,
@@ -594,15 +594,14 @@ export async function prepareEmbeddedAttemptTransport(input: {
     });
   }
   const nativeWebSearchPolicyContext = {
-    // Hosted search executes before client-side gates, so it must honor the execution cap.
-    // Tool-free forks may keep it listed only when the provider blocks it with tool_choice none.
+    // Hosted search executes before client-side gates, so it honors the execution cap. A session
+    // fork lists it like its session, so the fork shares the session's cached tools prefix.
     webSearchEnabled:
       attempt.disableTools !== true &&
       attempt.toolOverrides?.webSearch !== false &&
       (!attempt.toolExecutionAllow ||
-        isToolExecutionAllowed(attempt.toolExecutionAllow, "web_search") ||
-        (attempt.sessionForkRequest !== undefined &&
-          sessionForkGatesHostedTools(attempt.model.api, attempt.toolExecutionAllow))),
+        attempt.sessionForkRequest !== undefined ||
+        isToolExecutionAllowed(attempt.toolExecutionAllow, "web_search")),
     runtimeToolAllowlist: attempt.toolsAllow,
     sessionKey: input.sandboxSessionKey,
     sandboxToolPolicy: input.sandbox?.tools,

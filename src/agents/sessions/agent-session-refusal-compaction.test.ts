@@ -1,12 +1,8 @@
 import http from "node:http";
-import type {
-  AssistantMessage,
-  Context,
-  Model,
-  SimpleStreamOptions,
-} from "openclaw/plugin-sdk/llm";
+import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { streamAnthropic } from "../../../packages/ai/src/providers/anthropic.js";
+import type { AssistantHistoryMessage } from "../../llm/types.js";
 import {
   appendHistory,
   collectCompactionEnds,
@@ -163,7 +159,7 @@ describe("AgentSession refusal compaction", () => {
         extension: handlers,
       });
       const compactions = collectCompactionEnds(session);
-      const assistants: AssistantMessage[] = [];
+      const assistants: AssistantHistoryMessage[] = [];
       session.subscribe((event) => {
         if (event.type === "message_end" && event.message.role === "assistant") {
           assistants.push(event.message);

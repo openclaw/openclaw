@@ -101,9 +101,6 @@ export const handleForkCommand: CommandHandler = defineAuthorizedTextCommand(
       assertCommandAuthorized?.();
       params.commandInvocationSignal?.throwIfAborted();
       params.opts?.abortSignal?.throwIfAborted();
-      if (params.command.senderIsOwner) {
-        params.command.assertOwnerCurrent?.();
-      }
     });
     const assertHostCurrent = composeSessionSourceAssertion([
       createDynamicSessionSourceAssertion(

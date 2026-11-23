@@ -18,7 +18,11 @@ import { SubagentName } from "./chat-subagent-badge.tsx";
 import { ChatToolIcon } from "./chat-tool-card-chrome.tsx";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
-import { resolveToolOperationLabel } from "./chat-tool-row-presentation.ts";
+import {
+  formatSessionLaunchLimit,
+  resolveToolOperationLabel,
+  SESSION_LAUNCH_LIMIT_STYLE,
+} from "./chat-tool-row-presentation.ts";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
@@ -142,6 +146,12 @@ export function LifecycleOperations(props: {
       };
     });
   const firstOutcome = () => resolveToolCardOutcome(first().group.card, first().options.runActive);
+  const firstLaunch = createMemo(() =>
+    props.kind === "launch"
+      ? resolveSessionLaunchPresentation(first().group.card, firstOutcome())
+      : null,
+  );
+  const limitMessage = () => formatSessionLaunchLimit(firstLaunch());
   const running = () =>
     props.operations.some(
       (operation) =>
@@ -157,10 +167,7 @@ export function LifecycleOperations(props: {
       );
     }
     return props.kind === "launch"
-      ? t(
-          "chat.toolCards.launch.subagent." +
-            resolveSessionLaunchPresentation(card, firstOutcome())!.phase,
-        )
+      ? t("chat.toolCards.launch.subagent." + firstLaunch()!.phase)
       : t(
           "chat.toolCards." +
             (readSubagentCancellation(card)?.stopped ? "stoppedSubagent" : "stopSubagent"),
@@ -179,7 +186,7 @@ export function LifecycleOperations(props: {
     const card = first().group.card;
     const confirmed =
       props.kind === "launch"
-        ? resolveSessionLaunchPresentation(card, firstOutcome())?.phase === "succeeded"
+        ? firstLaunch()?.phase === "succeeded"
         : readSubagentCancellation(card)?.stopped;
     return confirmed
       ? t(
@@ -198,8 +205,9 @@ export function LifecycleOperations(props: {
     }
     return new Intl.ListFormat(getLocale(), { type: "conjunction" }).formatToParts(names);
   };
+  const plainLabel = () => limitMessage() ?? unnamedLabel();
   const label = () =>
-    unnamedLabel() ??
+    plainLabel() ??
     (props.operations.length === 1
       ? resolveToolOperationLabel(
           first().group.card,
@@ -235,8 +243,15 @@ export function LifecycleOperations(props: {
         </Show>
         <span class="chat-tool-disclosure__content">
           <Show
-            when={!unnamedLabel()}
-            fallback={<span class="chat-tool-row__title">{unnamedLabel()}</span>}
+            when={!plainLabel()}
+            fallback={
+              <span
+                class={firstLaunch()?.capacity ? undefined : "chat-tool-row__title"}
+                style={firstLaunch()?.capacity ? SESSION_LAUNCH_LIMIT_STYLE : undefined}
+              >
+                {plainLabel()}
+              </span>
+            }
           >
             <span class="chat-tool-row__title">
               <span class="chat-tool-row__verb">{verb()}</span>{" "}

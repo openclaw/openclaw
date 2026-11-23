@@ -226,6 +226,33 @@ describe("POST /tools/invoke request cancellation", () => {
     );
   });
 
+  it("finishes an admitted tool when operator access is revoked mid-run", async () => {
+    const grant = new AbortController();
+    lifecycle.authorize.mockResolvedValueOnce({
+      cfg: {},
+      requestAuth: authorizedRequest({
+        operatorAccessAuthority: {
+          signal: grant.signal,
+          assertCurrent: () => grant.signal.throwIfAborted(),
+        },
+      }),
+      operatorScopes: [],
+    });
+    let abortedAfterRevoke: boolean | undefined;
+    lifecycle.execute.mockImplementationOnce(async (_toolCallId, _args, signal) => {
+      grant.abort();
+      await Promise.resolve();
+      abortedAfterRevoke = signal?.aborted;
+      return { ok: true };
+    });
+
+    const response = await invokeAbortProbe();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, result: { ok: true } });
+    expect(abortedAfterRevoke).toBe(false);
+  });
+
   it("retains each child's admitted authority after HTTP completion and grant revocation", async () => {
     const stateOptions = { label: "http-tool-child-authority", prepareProfileCatalog: true };
     await withOpenClawTestState(stateOptions, async () => {

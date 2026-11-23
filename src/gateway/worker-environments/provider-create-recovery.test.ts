@@ -129,7 +129,7 @@ describe("worker creation source recovery", () => {
           provisionSource: later.source,
           beforeProvision: laterAuthority.authority.assertCurrent,
         }),
-      ).rejects.toThrow("Worker creation authority changed");
+      ).rejects.toThrow("Worker creation was refused");
     } finally {
       laterAuthority.release();
     }

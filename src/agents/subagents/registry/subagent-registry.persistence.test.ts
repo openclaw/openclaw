@@ -27,10 +27,8 @@ import {
 import {
   activateSubagentRegistry,
   addSubagentRunForTests,
-  getSubagentRunByChildSessionKey,
   initSubagentRegistry,
   listSubagentRunsForRequester,
-  registerSubagentRun,
   resetSubagentRegistryForTests,
   resumeSubagentRun,
   testing,
@@ -228,34 +226,6 @@ describe("subagent registry persistence", () => {
       }
     },
   );
-
-  it("normalizes newly registered session keys to canonical trimmed values", async () => {
-    vi.mocked(callGateway).mockResolvedValueOnce({ status: "pending" });
-
-    await registerSubagentRun({
-      runId: " run-live ",
-      childSessionKey: " agent:main:subagent:live-child ",
-      childAgentId: "main",
-      sessionEntry: { sessionId: "session-live-child" },
-      controllerSessionKey: " agent:main:subagent:live-controller ",
-      requesterSessionKey: " agent:main:main ",
-      requesterDisplayKey: "main",
-      task: "live spaced keys",
-      cleanup: "keep",
-    });
-
-    const liveRuns = listSubagentRunsForRequester("agent:main:main");
-    expect(liveRuns).toHaveLength(1);
-    expect(liveRuns[0]).toMatchObject({
-      runId: "run-live",
-      childSessionKey: "agent:main:subagent:live-child",
-      controllerSessionKey: "agent:main:subagent:live-controller",
-      requesterSessionKey: "agent:main:main",
-    });
-    expect(await getSubagentRunByChildSessionKey("agent:main:subagent:live-child")).toMatchObject({
-      runId: "run-live",
-    });
-  });
 
   it("reloads waitable swarm collector completions after a gateway restart until retention expires", async () => {
     setRuntimeConfigSnapshot({

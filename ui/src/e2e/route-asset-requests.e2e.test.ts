@@ -6,6 +6,10 @@ import { startControlUiBenchGatewayServer } from "../../../scripts/lib/control-u
 import "../../../src/test-utils/prepare-compiled-subprocesses.ts";
 // Scenario probes use the action-timing owner's optional Window hook.
 import "../../../scripts/lib/control-ui-engine-action-timing.ts";
+import {
+  filterInstalledDiscoverySkills,
+  openInstalledDiscoverySkills,
+} from "../../../scripts/lib/control-ui-engine-page-interactions.ts";
 import { createEnginePageScenarios } from "../../../scripts/lib/control-ui-engine-page-scenarios.ts";
 import { frames } from "../../../scripts/lib/control-ui-interaction-navigation.ts";
 import {
@@ -149,27 +153,32 @@ suite.define(() => {
           expect(readerRequests).toBe(0);
         }
         if (route === "skills") {
-          await page.locator(".skill-installed-shelf").click();
+          await openInstalledDiscoverySkills(page);
+          await filterInstalledDiscoverySkills(page);
           expect(readerRequests, "Opening the installed list still does not load its reader").toBe(
             0,
           );
           const held = await holdModuleResponse(page, reader);
           try {
             await page
-              .getByRole("button", { name: "Open Data skill 0000 details", exact: true })
+              .getByRole("button", { name: "Open Data skill 0999 details", exact: true })
               .click();
             await held.request;
             expect(held.requests()).toBeGreaterThan(0);
             const title = page.getByRole("heading", {
               level: 1,
-              name: "Data skill 0000",
+              name: "Data skill 0999",
               exact: true,
             });
             await page.locator('.skill-page[aria-busy="true"]').waitFor({ state: "visible" });
             expect(await title.count()).toBe(0);
             held.release();
             await title.waitFor({ state: "visible" });
-            expect(new URL(page.url()).pathname).toContain("/skills/installed/");
+            expect(new URL(page.url()).pathname).toBe("/skills/installed/data-skill-0999");
+            await page
+              .locator(".skill-page")
+              .getByRole("heading", { name: "Data skill 0999 instructions", exact: true })
+              .waitFor();
           } finally {
             held.release();
           }

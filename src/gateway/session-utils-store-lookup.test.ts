@@ -688,14 +688,17 @@ it.each([
           { sessionId: `${agentId}-parent`, updatedAt: 1 },
         );
       }
+      // #203694 marks every new standalone root "default"; seed an unmarked parent so the
+      // child still has a physical parent selection to inherit.
       const foreignParent =
         layout === "cross-agent"
-          ? await invoke("sessions.create", {
-              agentId: "main",
-            })
+          ? { key: "agent:main:dashboard:foreign-parent", sessionId: "foreign-parent" }
           : undefined;
       if (foreignParent) {
-        expect(foreignParent.key).toMatch(/^agent:main:dashboard:/);
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey: foreignParent.key },
+          { sessionId: foreignParent.sessionId, updatedAt: 1 },
+        );
       }
       const created = await invoke("sessions.create", {
         agentId: "work",

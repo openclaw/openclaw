@@ -230,7 +230,11 @@ describe("personal USER.md self-service", () => {
       sessionKey,
       operationalRunInstance: { instanceId: sessionKey, runId: "personal-test-run" },
       operatorAuthority: authority,
-      receiptAuthority: () => active,
+      receiptAuthority: () => {
+        if (!active) {
+          throw new Error("agent tool caller authority is no longer active");
+        }
+      },
       gatewayContextResolver: () => context,
     };
     return {

@@ -173,7 +173,9 @@ describe.skipIf(!mixedAgentConnection)("attempt watched-session prompt refresh",
         await rename("Unaccepted room", 3);
         const late = await prepareRefresh();
         admission.close();
-        expect(() => late(systemPrompt)).toThrow("admitted run authority is no longer active");
+        expect(() => late(systemPrompt)).toThrow(
+          "This agent run is no longer active. Start a new turn to retry.",
+        );
         expect(prepared.runtimeContextFragments).toEqual(emptySnapshot);
         expect(deniedDatabaseCalls).toEqual([]);
       });
