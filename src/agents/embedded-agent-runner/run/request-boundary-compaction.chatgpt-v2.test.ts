@@ -4,6 +4,7 @@ import { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports"
 import type { Context, Model, StreamFn } from "@openclaw/llm-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveCompactionThreshold } from "../../../../packages/agent-core/src/harness/compaction/compaction-threshold.js";
 import { configureAiTransportHost, getAiTransportHost } from "../../../../packages/ai/src/host.js";
 import { streamSimpleOpenAICodexResponses } from "../../../../packages/ai/src/providers/openai-chatgpt-responses.js";
 import type { OpenAIResponsesOptions } from "../../../../packages/ai/src/transports/openai-responses-contracts.js";
@@ -398,7 +399,7 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     expect(reopened.execute).not.toHaveBeenCalled();
   });
 
-  it("compacts a settled 90% window before a large tool result reaches the next boundary", async () => {
+  it("compacts a settled window above the trigger before a large tool result reaches the next boundary", async () => {
     const f = await largeWindowFixture();
     const manager = f.sessionManager;
     f.execute.mockResolvedValue({
@@ -436,11 +437,9 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
   });
 
   it.each([
-    { window: 500_000, reserve: 20_000, tokens: 449_000, compact: false },
-    { window: 500_000, reserve: 20_000, tokens: 450_000, compact: true },
     { window: 32_000, reserve: 8_000, tokens: 23_900, compact: false },
     { window: 32_000, reserve: 8_000, tokens: 24_000, compact: true },
-  ])("uses the earlier V2 threshold at $tokens / $window tokens", async (test) => {
+  ])("caps the V2 threshold by the reserve at $tokens / $window tokens", async (test) => {
     const f = await fixture(SessionManager.inMemory(), false);
     const boundary = createRequestBoundaryCompaction({
       ...f.boundaryParams,
@@ -458,6 +457,42 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     expect(requests).toHaveLength(test.compact ? 1 : 0);
     expect(f.onFallback).not.toHaveBeenCalled();
   });
+
+  it.each(["native-checkpoint", "text"] as const)(
+    "%s boundary compaction starts at the client threshold on a 200k window",
+    async (variant) => {
+      const threshold = resolveCompactionThreshold({
+        contextWindowTokens: 200_000,
+        reserveTokensFloor: 20_000,
+      });
+      expect(threshold).toBe(160_000);
+      for (const tokens of [threshold - 1_000, threshold]) {
+        requests = [];
+        const f = await fixture(SessionManager.inMemory(), variant === "text");
+        // The text summary needs history older than the retained tail.
+        f.session.settingsManager.applyOverrides({ compaction: { keepRecentTokens: 500 } });
+        const boundary = createRequestBoundaryCompaction({
+          ...f.boundaryParams,
+          variant,
+          contextTokenBudget: 200_000,
+          reserveTokens: 20_000,
+        });
+        await boundary(
+          f.session.agent.streamFn,
+          { ...model, contextWindow: 200_000 },
+          { messages: [] },
+          { sessionId: f.session.sessionId },
+          { requestIndex: 1, messageCount: 0, contextTokens: tokens },
+        ).catch((error: unknown) => {
+          // The text variant ends the attempt after committing its summary.
+          if (!(error instanceof MidTurnPrecheckSignal)) {
+            throw error;
+          }
+        });
+        expect(requests, `${variant} at ${tokens}`).toHaveLength(tokens < threshold ? 0 : 1);
+      }
+    },
+  );
 
   it("skips soft compaction while tools are pending without lowering the client threshold", async () => {
     const f = await fixture(SessionManager.inMemory(), false);

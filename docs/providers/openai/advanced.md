@@ -371,12 +371,13 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     including after the session is restored.
 
     V2 starts when the known or projected request occupancy reaches
-    `min(context window - effective reserve, floor(0.9 × context window))`.
-    With a 500,000-token window and 20,000-token reserve, this is 450,000 tokens.
+    `min(context window - effective reserve, floor(0.8 × context window))`,
+    the same trigger as client maintenance on every other route.
+    With a 500,000-token window and 20,000-token reserve, this is 400,000 tokens.
     It uses completed-request usage when available and prices pending content at
-    the next normal request boundary. This earlier trigger leaves more room for
-    tool output; it does not lower the model's physical context limit or change
-    the public API-key route's 70% inline threshold.
+    the next normal request boundary. This earlier trigger leaves room for tool
+    output and the compaction request; it does not lower the model's physical
+    context limit or change the public API-key route's 70% inline threshold.
 
     The entire outgoing request must still fit that physical window. If one
     pending message or tool result crosses it before V2 can run, OpenClaw falls
