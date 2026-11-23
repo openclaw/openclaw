@@ -105,6 +105,42 @@ previous release, not manual edits made to the new one.
 
 ## Update implementation contract
 
+### Release updates
+
+`src/update/` owns updates of Git checkouts and npm, pnpm and Bun global installs.
+The Gateway's `update.run` and `openclaw update` both use one path:
+
+1. Preflight refuses before any change and names the reason.
+2. The target is prepared in its own release directory while the current Gateway
+   keeps serving.
+3. The new release checks itself with `update check-release`, from the directory
+   it serves from.
+4. The release is published, and the Gateway restarts one time.
+5. The resident launcher starts the new release as a trial. It commits when the
+   Gateway reports ready. After two failed starts, or when the trial budget ends,
+   it restores the previous release and the SQLite migration originals.
+6. The Gateway that serves after the switch records the outcome. Only a Gateway
+   that runs the target build records success.
+
+Rules for update changes:
+
+- Change update behavior in `src/update/`. Do no update work while the Gateway is
+  stopped: work that needs the new build runs in the new release.
+- Validate a release at the path, and with the loader, that it serves from.
+- Every update must end with a recorded outcome that names the serving version.
+  No run may stay running.
+- Shipped updaters (v2026.11.7, v2026.11.10-beta.1 and earlier) still run their
+  first update to a new release in place, with their own code, and call contracts
+  in the new release. A note below that says the installed updater must contain
+  a fix applies only to that first update. The contracts the new release keeps for
+  them, the update routes not yet moved to `src/update/`, and the rules for fixing
+  legacy update code are in `src/cli/update-cli/AGENTS.md`.
+
+### Recorded contract notes
+
+Add a note here when a change alters a contract. A note about the in-place update
+flow names the shipped-updater contract or unmoved route that it serves.
+
 Candidate Doctor removes empty snapshot directories left by cancellation between
 private directory creation and native-token acquisition, after its inspection
 workers have settled. Unconfirmed worker cleanup and unowned snapshot payloads
