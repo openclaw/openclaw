@@ -646,9 +646,13 @@ export async function dispatchChannelMessageAction(
           resolveBareTargetChannelNamespace(authorizedActionContext.params[key], plugin),
         );
       if (hasNamespaceTarget) {
-        if (prepared.assertReadAuthorityCurrent || isExternalDelegatedMessageActionRead(prepared)) {
-          enforceMessageActionConversationReadGate(gateParams);
-        }
+        const namespaceReadMatch = resolveMessageActionConversationReadGate(gateParams);
+        // Unfenced bundled aliases may defer identity proof, not provider/account admission.
+        enforceMessageActionConversationReadMatch(
+          gateParams,
+          namespaceReadMatch === true ||
+            (!prepared.assertReadAuthorityCurrent && typeof namespaceReadMatch === "function"),
+        );
         if (!admitAction()) {
           return null;
         }

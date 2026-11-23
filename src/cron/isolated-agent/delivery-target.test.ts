@@ -562,7 +562,11 @@ describe("resolveDeliveryTarget", () => {
           selectConfiguredMessageChannel,
         );
       } else {
-        setSessionEntry(NAMESPACE_SESSION_KEY, { channel: "alpha", to: "alpha" });
+        setSessionEntry(NAMESPACE_SESSION_KEY, {
+          channel: "alpha",
+          to: "alpha",
+          threadId: denied ? "old-thread" : undefined,
+        });
       }
       const result = await resolveTarget(
         {
@@ -595,6 +599,7 @@ describe("resolveDeliveryTarget", () => {
         expect(result).toMatchObject({
           ok: true,
           to: expected.startsWith("@") ? expected : `@${expected}`,
+          threadId: undefined,
         });
       }
     },

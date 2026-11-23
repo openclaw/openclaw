@@ -143,7 +143,7 @@ function registerOfficial(
     trustedOfficialInstall: options.trusted ?? true,
   });
   const handleAction = vi.fn(async (_ctx: ChannelMessageActionContext) => receipt);
-  const plugin: ChannelPlugin = {
+  const plugin: ChannelPlugin & { actions: Actions } = {
     ...createChannelTestPluginBase({ id: "configured-reader" }),
     actions: {
       ...(options.actions ?? {
@@ -262,6 +262,43 @@ describe("official plugin read-only authority", () => {
     );
     expect(fixture.handleAction.mock.calls[0]?.[0]).not.toHaveProperty("channelInferred");
     expect(listGroups).toHaveBeenCalledOnce();
+  });
+
+  it("admits bundled namespace lookup before directory I/O without rejecting deferred alias proof", async () => {
+    const fixture = registerOfficial({
+      origin: "bundled",
+      trusted: false,
+      fenced: false,
+      gates: [],
+    });
+    const matchAlias = vi.fn(async () => true);
+    const listGroups = vi.fn(async () => [
+      { kind: "group" as const, id: "channel:resolved", name: fixture.plugin.id },
+    ]);
+    fixture.plugin.directory = { listGroups };
+    fixture.plugin.actions.messageActionTargetAliases = {
+      read: {
+        deliveryTargetAliases: ["channelId"],
+        resolveDeliveryTarget: ({ args }) =>
+          typeof args.channelId === "string" ? args.channelId : undefined,
+        matchesCurrentConversationAsync: matchAlias,
+      },
+    };
+    fixture.register();
+    await expect(
+      fixture.dispatch({
+        channelInferred: true,
+        params: { channelId: fixture.plugin.id },
+        toolContext: { currentChannelProvider: "other-provider", currentChannelId: "current" },
+      }),
+    ).rejects.toThrow(exactConversation);
+    expect(listGroups).not.toHaveBeenCalled();
+    expect(fixture.handleAction).not.toHaveBeenCalled();
+    await expect(
+      fixture.dispatch({ channelInferred: true, params: { channelId: fixture.plugin.id } }),
+    ).resolves.toBe(receipt);
+    expect(listGroups).toHaveBeenCalledOnce();
+    expect(matchAlias).toHaveBeenCalledOnce();
   });
 
   it.each([

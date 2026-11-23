@@ -355,6 +355,7 @@ export async function resolveDeliveryTarget(
   });
 
   let effectiveAllowFrom: string[] | undefined;
+  let namespaceTarget: ResolvedMessagingTarget | undefined;
   if (mode === "implicit") {
     const { getLoadedChannelPluginForRead, mapAllowFromEntries } = deliveryTargetRuntime;
     const channelPlugin = getLoadedChannelPluginForRead(channel);
@@ -380,6 +381,7 @@ export async function resolveDeliveryTarget(
         allowFrom: effectiveAllowFrom,
         channelInferred,
       });
+      namespaceTarget = currentTargetResolution.namespaceTarget;
       if (!currentTargetResolution.ok) {
         if (currentTargetResolution.namespaceResolutionFailed) {
           return failTarget(currentTargetResolution.error);
@@ -420,7 +422,7 @@ export async function resolveDeliveryTarget(
     allowFrom: effectiveAllowFrom,
     channelInferred,
   });
-  const namespaceTarget = docked.ok ? docked.namespaceTarget : undefined;
+  namespaceTarget = docked.namespaceTarget ?? namespaceTarget;
   const preResolvedRouteTargetCandidate = docked.ok && namespaceTarget ? docked.to : toCandidate;
   if (!docked.ok) {
     if (!toCandidate || !isReservedTargetLiteralError(docked.error)) {

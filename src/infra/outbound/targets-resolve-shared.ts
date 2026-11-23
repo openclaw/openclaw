@@ -15,14 +15,10 @@ import { missingTargetError, reservedTargetLiteralError } from "./target-errors.
 import { resolveReservedTargetLiteral } from "./target-normalization.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
-export type OutboundTargetResolution =
-  | {
-      ok: true;
-      to: string;
-      /** Namespace identity before outbound policy; a policy rewrite may change the final `to`. */
-      namespaceTarget?: ResolvedMessagingTarget;
-    }
-  | { ok: false; error: Error; namespaceResolutionFailed?: true };
+export type OutboundTargetResolution = {
+  /** Namespace identity before outbound policy; a policy rewrite may change the final `to`. */
+  namespaceTarget?: ResolvedMessagingTarget;
+} & ({ ok: true; to: string } | { ok: false; error: Error; namespaceResolutionFailed?: true });
 
 /**
  * Inputs shared by direct and heartbeat outbound target resolution.
@@ -132,5 +128,5 @@ export async function resolveOutboundTargetWithPlugin(params: {
           ok: false,
           error: missingTargetError(plugin.meta.label, hint),
         };
-  return resolved.ok && namespaceTarget ? { ...resolved, namespaceTarget } : resolved;
+  return namespaceTarget ? { ...resolved, namespaceTarget } : resolved;
 }
