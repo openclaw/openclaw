@@ -142,9 +142,9 @@ function buildSoxOutputArguments(): string[] {
     "-b",
     "16",
     "-L",
-    // SoX 14.4.2 can mistake queued bytes on macOS socket stdin for the
-    // stream length. Its pipe input gives the raw reader a real pipe.
-    "|exec /bin/cat -u",
+    // SoX can mistake queued bytes on macOS socket stdin for the entire stream.
+    "--ignore-length",
+    "-",
     "-t",
     "coreaudio",
     FACETIME_FEED_DEVICE_NAME,
@@ -198,13 +198,6 @@ async function terminateProcess(proc: ChildProcess, signal: NodeJS.Signals = "SI
       return;
     }
   }
-}
-
-function terminatePlaybackProcess(proc: ChildProcess): Promise<void> {
-  // The pipe reader inherits stdin from SoX. Closing the writer lets it
-  // exit even if SoX is killed while the reader is waiting for more audio.
-  proc.stdin?.destroy();
-  return terminateProcess(proc, "SIGKILL");
 }
 
 function createAudioReadiness() {
@@ -315,7 +308,7 @@ export function startFaceTimeAudioPump(params: {
     outputProcess = spawnOutput();
     cancelDrainTimer();
     playbackClock.reset();
-    void terminatePlaybackProcess(previous);
+    void terminateProcess(previous, "SIGKILL");
   };
   const stop = async () => {
     if (stopped) {
@@ -336,7 +329,7 @@ export function startFaceTimeAudioPump(params: {
     stopped = true;
     await Promise.all([
       terminateProcess(captureProcess),
-      terminatePlaybackProcess(outputProcess),
+      terminateProcess(outputProcess, "SIGKILL"),
       wakeProcess ? terminateProcess(wakeProcess) : Promise.resolve(),
     ]);
   };
@@ -450,7 +443,7 @@ export function startFaceTimeAudioPump(params: {
         mediaSuspended = true;
         cancelDrainTimer();
         playbackClock.reset();
-        await terminatePlaybackProcess(outputProcess);
+        await terminateProcess(outputProcess, "SIGKILL");
       }
     },
     stop,
