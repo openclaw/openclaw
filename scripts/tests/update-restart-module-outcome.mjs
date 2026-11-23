@@ -448,6 +448,7 @@ async function fixture({
   values.recordFailedUpdateGatewayState =
     verificationOwner.namespace.recordFailedUpdateGatewayState;
   values.readFailedUpdateGatewayState = verificationOwner.namespace.readFailedUpdateGatewayState;
+  values.releaseLaunchedState = verificationOwner.namespace.releaseLaunchedState;
   const entry = modules.get("update-command-post-update.js");
   await entry.link(link);
   await entry.evaluate();

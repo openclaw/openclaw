@@ -1,5 +1,7 @@
 import { constants } from "node:os";
 import { performance } from "node:perf_hooks";
+import { createInterface } from "node:readline";
+import type { Readable } from "node:stream";
 import { printTimingSummary } from "./lib/check-timing-summary.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
@@ -41,8 +43,14 @@ export async function main(argv = process.argv.slice(2)) {
         return;
       }
       const check = checks[next++]!;
-      const output: Buffer[] = [];
       const started = performance.now();
+      // Stream each line as it arrives: a stuck check must show its last output before a deadline.
+      const prefix = (stream: Readable | null) =>
+        stream &&
+        createInterface({ input: stream, crlfDelay: Infinity }).on("line", (line) => {
+          console.log(`[${check.name}] ${line}`);
+        });
+      console.log(`[${check.name}] started`);
       let status = 1;
       try {
         status = await runManagedCommand({
@@ -52,8 +60,8 @@ export async function main(argv = process.argv.slice(2)) {
           requireProcessTreeExit: true,
           stdio: ["ignore", "pipe", "pipe"],
           onReady(child) {
-            child.stdout?.on("data", (chunk: Buffer) => output.push(chunk));
-            child.stderr?.on("data", (chunk: Buffer) => output.push(chunk));
+            prefix(child.stdout);
+            prefix(child.stderr);
           },
           onSignal(signal) {
             stop(128 + constants.signals[signal]);
@@ -61,18 +69,15 @@ export async function main(argv = process.argv.slice(2)) {
         });
       } catch (error) {
         if (!controller.signal.aborted) {
-          output.push(Buffer.from(`${String(error)}\n`));
+          console.log(`[${check.name}] ${String(error)}`);
         }
       }
       timings.push({ name: check.name, durationMs: performance.now() - started, status });
-      console.log(`::group::${check.name}`);
-      process.stdout.write(Buffer.concat(output));
       console.log(
         status === 0
           ? `[ok] ${check.name}`
           : `::error title=${check.name} failed::${check.name} failed (exit ${status})`,
       );
-      console.log("::endgroup::");
       if (status === 124 || status >= 128) {
         stop(status);
       }

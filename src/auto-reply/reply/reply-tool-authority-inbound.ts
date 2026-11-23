@@ -58,23 +58,6 @@ export function assertCurrentOperatorAuthority(
   }
 }
 
-/** Admission-only: effects retain their previously captured authority. */
-export function reauthorizeReplyToolAuthorityInput(
-  snapshot: ReplyToolAuthorityInput,
-  caller: ReplyToolAuthorityCaller | undefined,
-): void {
-  const participant = caller && "kind" in caller ? caller.caller : caller;
-  const incoming =
-    participant && !("requesterOrigin" in participant) ? participant.operatorAuthority : undefined;
-  const incumbent = snapshot.operatorAuthority;
-  assertCurrentOperatorAuthority(incumbent);
-  incumbent?.reauthorize?.();
-  if (incoming !== incumbent) {
-    assertCurrentOperatorAuthority(incoming);
-    incoming?.reauthorize?.();
-  }
-}
-
 /** Classify ordinary guidance without changing the selected execution's authority. */
 export function captureReplyToolAuthorityContinuation({
   snapshot,
@@ -163,11 +146,6 @@ export function captureReplyToolAuthorityContinuation({
           assertAdmittedRunOperatorAuthority(shared);
           shared.assertCurrent();
         }
-        if (!collaborative && owner?.isCurrent() !== true) {
-          throw new MessageInjectionAuthorityError({
-            cause: new Error("Channel owner authority is no longer current"),
-          });
-        }
       };
     })();
   const continuationKind = backgroundOwner
@@ -247,7 +225,6 @@ export function projectReplyToolAuthorityInput(
   ) {
     if (participant.operatorAuthority) {
       assertAdmittedRunOperatorAuthority(participant.operatorAuthority);
-      participant.operatorAuthority.assertCurrent();
     }
     return snapshot;
   }

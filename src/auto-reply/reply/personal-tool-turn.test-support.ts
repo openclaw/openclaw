@@ -1,11 +1,11 @@
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
-  createAdmittedRunOperatorAuthority,
   getAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
   type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import type { EmbeddedAgentQueueHandle } from "../../agents/embedded-agent-runner/run-state.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
@@ -159,7 +159,7 @@ export async function withPersonalToolTurn<T>(
   const modelPolicy = prepareOperatorModelPolicy({ cfg: {}, policy: {} });
   const authority = (person: Person, scopes = ["operator.read", "operator.write"]) =>
     person.operatorAuthority ??
-    createAdmittedRunOperatorAuthority({
+    createTestOperatorAuthority({
       profileId: person.profileId,
       scopes,
       gatewayAccessGrant: null,

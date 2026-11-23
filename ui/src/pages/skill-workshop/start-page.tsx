@@ -12,7 +12,6 @@ import { SettingsEmpty, SettingsSegmented } from "../../components/solid/setting
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { canRunWorkshopMutation } from "./access.ts";
-import { undoMutationFor } from "./api.ts";
 import { diffCounts } from "./diff.tsx";
 import { DraftContent } from "./draft-detail.tsx";
 import {
@@ -116,7 +115,7 @@ export function StartPage(props: StartProps & { query: string; onQuery: (query: 
           <Drafts view={props.view} reads={props.reads} page={props.page} drafts={drafts()} />
         </Show>
         <Show when={props.view().startView === "history"}>
-          <History view={props.view} reads={props.reads} page={props.page} changes={history()} />
+          <History view={props.view} page={props.page} changes={history()} />
         </Show>
         <Show when={props.view().startView === "skills"}>
           <LearnedSkills
@@ -197,7 +196,7 @@ function groupHistory(changes: readonly SkillWorkshopChange[]): HistoryGroup[] {
   return groups.filter((group) => group.changes.length > 0);
 }
 
-function History(props: StartProps & { changes: SkillWorkshopChange[] }) {
+function History(props: Pick<StartProps, "view" | "page"> & { changes: SkillWorkshopChange[] }) {
   const groups = createMemo(() => groupHistory(props.changes));
   return (
     <Show
@@ -215,14 +214,7 @@ function History(props: StartProps & { changes: SkillWorkshopChange[] }) {
               <h3 class="sw-group__title">{t(`skillWorkshop.history.${group().key}`)}</h3>
               <div class="sw-list__rows sw-queue">
                 <For each={group().changes} keyed={(change) => change.id}>
-                  {(change) => (
-                    <HistoryRow
-                      change={change()}
-                      view={props.view}
-                      reads={props.reads}
-                      page={props.page}
-                    />
-                  )}
+                  {(change) => <HistoryRow change={change()} view={props.view} page={props.page} />}
                 </For>
               </div>
             </section>
@@ -233,9 +225,8 @@ function History(props: StartProps & { changes: SkillWorkshopChange[] }) {
   );
 }
 
-/** A row is a skill's latest change; Undo stays on the row because the row is the change. */
-function HistoryRow(props: StartProps & { change: SkillWorkshopChange }) {
-  const undo = () => undoMutationFor(props.change, props.view().snapshot!.list);
+/** A row opens the individual skill's History, where changes can be compared or undone. */
+function HistoryRow(props: Pick<StartProps, "view" | "page"> & { change: SkillWorkshopChange }) {
   return (
     <div class="sw-row sw-row--history">
       <button
@@ -243,6 +234,7 @@ function HistoryRow(props: StartProps & { change: SkillWorkshopChange }) {
         class="sw-row__main"
         onClick={() => {
           props.view().onSelectSkill(props.change.skillName);
+          props.view().onTab("history");
           props.page.open();
         }}
       >
@@ -259,19 +251,6 @@ function HistoryRow(props: StartProps & { change: SkillWorkshopChange }) {
         </span>
         <span class="sw-row__when">{formatRelativeTimestamp(props.change.createdAtMs)}</span>
       </button>
-      <div class="sw-row__aside sw-row__aside--history">
-        <Show when={undo()}>
-          {(mutation) => (
-            <MutationButton
-              view={props.view}
-              label={t("skillWorkshop.changes.undo")}
-              title={t("skillWorkshop.changes.undoTitle", { name: props.change.skillName })}
-              mutation={mutation()}
-              actionKey={`undo:${props.change.id}`}
-            />
-          )}
-        </Show>
-      </div>
     </div>
   );
 }
@@ -372,7 +351,7 @@ function LearnedSkills(
   );
 }
 
-/** A learned skill: what it is and how much it is used. Changes and Undo live in History. */
+/** A learned skill: what it is and how much it is used. */
 function SkillRow(props: { skill: SkillRowEntry; view: WorkshopView; page: WorkshopPage }) {
   const live = () => ("versions" in props.skill ? null : props.skill);
   const archived = () => ("versions" in props.skill ? props.skill : null);
@@ -516,7 +495,7 @@ function DraftRow(props: {
           <span class="sw-row__text">
             <span class="sw-row__title">
               <span class="sw-row__name">{props.draft.skillName}</span>
-              <span class="sw-tag">
+              <span class={["sw-tag", { "sw-tag--new": !liveSkill() }]}>
                 {t(liveSkill() ? "skillWorkshop.drafts.update" : "skillWorkshop.drafts.newSkill")}
               </span>
               <Show when={counts()}>
@@ -546,18 +525,17 @@ function DraftRow(props: {
       </div>
       <Show when={open()}>
         <div class="sw-row__body" id={bodyId}>
-          <div class="sw-row__preview">
+          <div
+            class="sw-row__preview"
+            role="group"
+            aria-label={t("skillWorkshop.drafts.preview")}
+            tabindex={0}
+          >
             <DraftContent reads={props.reads} />
           </div>
           <div class="sw-row__foot">
-            <Show when={canApply()}>
-              <span class="sw-row__note">
-                {t(
-                  liveSkill()
-                    ? "skillWorkshop.drafts.savedFirst"
-                    : "skillWorkshop.drafts.archiveLater",
-                )}
-              </span>
+            <Show when={liveSkill() && canApply()}>
+              <span class="sw-row__note">{t("skillWorkshop.drafts.savedFirst")}</span>
             </Show>
             <button type="button" class="btn btn--sm oc-action" onClick={() => props.page.open()}>
               {t("skillWorkshop.drafts.open")}

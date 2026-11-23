@@ -13,7 +13,7 @@ import type { SkillLibraryAuthoringCapability } from "../skills/library/authorin
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
-import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import {
   applyCodeModeCatalog,
@@ -133,7 +133,7 @@ it.each(["browser", "cli", "acp"] as const)(
         prompt: buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? []),
       };
     };
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "prefix-operator",
       scopes: ["operator.write"],
       signal: new AbortController().signal,
@@ -218,7 +218,7 @@ it.each([true, false])(
         prompt: buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? []),
       };
     };
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "prefix-operator",
       scopes: ["operator.write"],
       assertCurrent: () => {},

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import { createDiagnosticLogRecordCapture } from "../../logging/test-helpers/diagnostic-log-capture.js";
@@ -295,7 +295,7 @@ describe("generateConversationLabelWithFallback", () => {
         ).agents.defaults,
       },
     };
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "label-reader",
       scopes: ["operator.write"],
       assertCurrent: () => {},

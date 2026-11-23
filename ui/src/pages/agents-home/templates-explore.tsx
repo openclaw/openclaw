@@ -102,12 +102,14 @@ function TemplateCard(
             class="installed-plugins-card__art plugin-catalog-card__art template-art agents-home__template-art"
             aria-hidden="true"
           >
-            <TemplateArtwork src={props.entry.iconUrl} />
+            <TemplateArtwork src={props.entry.iconUrl} packageName={props.entry.packageName} />
           </span>
           <div class="plugin-catalog-row__text">
             <div class="plugin-card-title-row agents-home__template-identity">
-              <h3>{props.entry.displayName}</h3>
-              {props.entry.official ? renderPluginOfficialBadge() : undefined}
+              <div class="agents-home__template-name">
+                <h3>{props.entry.displayName}</h3>
+                {props.entry.official ? renderPluginOfficialBadge() : undefined}
+              </div>
               <span class="plugin-card-author">{`@${props.entry.ownerHandle}`}</span>
             </div>
             {/* Reserve the line even when a Template has no summary. */}

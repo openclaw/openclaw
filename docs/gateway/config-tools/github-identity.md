@@ -9,6 +9,16 @@ title: "Configuration — GitHub identity for agent tools"
 
 `tools.github` selects the shared managed GitHub CLI identity used by agent execution, and defines which execution paths receive its credential.
 
+## File an issue from a project conversation
+
+Ask the agent to file an issue in the conversation’s registered GitHub project.
+The `github_publish` action `create_issue` takes a title and optional body, not a
+repository URL. The Gateway checks the requester’s session and project access
+and posts with the agent’s selected GitHub account. A guest can use it from
+their own conversation in a public project without a worktree, a PR, or GitHub
+credentials in the sandbox. Success returns the issue URL. If the result is
+unconfirmed, check the project’s issues before trying again.
+
 ## Session GitHub App reader
 
 A configured `tools.github` (or complete agent override) with

@@ -52,6 +52,14 @@ export const ArtifactsListParamsSchema = closedObject({
 /** List response containing artifact summaries only. */
 export const ArtifactsListResultSchema = closedObject({
   artifacts: Type.Array(ArtifactSummarySchema),
+  /** Files view of this physical session. No chat text or inline file contents. */
+  attachments: Type.Optional(
+    closedObject({
+      sessionId: NonEmptyString,
+      messages: Type.Array(Type.Unknown()),
+      truncated: Type.Optional(Type.Boolean()),
+    }),
+  ),
   nextCursor: Type.Optional(NonEmptyString),
   omittedOversized: Type.Optional(Type.Boolean()),
 });

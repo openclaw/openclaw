@@ -238,6 +238,7 @@ export function writeSessionSqliteMigrationManifest(
 ): void {
   fs.mkdirSync(path.dirname(activeRun.manifestPath), { recursive: true, mode: 0o700 });
   replaceFile.replaceFileAtomicSync({
+    allowDrvfsRenameRecovery: true,
     filePath: activeRun.manifestPath,
     content: `${JSON.stringify(activeRun.manifest, null, 2)}\n`,
     dirMode: 0o700,

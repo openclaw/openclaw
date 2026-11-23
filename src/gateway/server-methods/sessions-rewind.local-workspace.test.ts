@@ -217,7 +217,7 @@ it.each([
           cut.respond,
           method === "sessions.rewind" ? { editorText: "What did I say?" } : {},
         );
-        expect(() => original.assertCurrent()).toThrow("authority changed");
+        expect(() => original.assertCurrent()).toThrow("Local sandbox workspace changed");
         let committed = expectDefined(
           await readSessionEntryReadOnlyInWorker(scope),
           "committed session",

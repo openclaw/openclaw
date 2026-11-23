@@ -284,6 +284,7 @@ export async function prepareCodexAttemptTurnRequest(
               personaInstructions: workspaceBootstrapContext.personaInstructions,
               skillsInstructions: context.skillsInstructions,
               memoryInstructions: workspaceBootstrapContext.memoryInstructions,
+              sessionProjectGuidance: workspaceBootstrapContext.sessionProjectGuidance,
             }) ?? undefined),
         turnState.promptBuild.turnDeveloperInstructions,
         buildCodexConversationTurnInstructions(

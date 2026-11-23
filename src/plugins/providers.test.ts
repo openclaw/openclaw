@@ -239,6 +239,33 @@ describe("resolvePluginProviders", () => {
     expect(setupLoader).not.toHaveBeenCalled();
   });
 
+  it("resolves the shipped device-code method alias to the declared personal device-code sign-in", async () => {
+    const { resolvePersonalAccountAuthMethod } = await import("./personal-account-auth.js");
+    const bundled = manifest("personal-provider");
+    bundled.providerAuthChoices = [
+      {
+        provider: "personal-provider",
+        method: "oauth",
+        choiceId: "personal-code",
+        personalAccount: true,
+        appGuidedAuth: "device-code",
+      },
+    ];
+    setManifestPlugins([bundled]);
+    const oauth = {
+      id: "oauth",
+      label: "Code sign-in",
+      kind: "device_code" as const,
+      run: vi.fn(),
+    };
+    setupLoader.mockReturnValue(
+      providerRegistry({ id: "personal-provider", label: "Personal", auth: [oauth] }),
+    );
+    expect(await resolvePersonalAccountAuthMethod({}, "personal-provider", "device-code")).toBe(
+      oauth,
+    );
+  });
+
   it.each([true, false])(
     "resolves installed owners with prepared manifest metadata: %s",
     (prepared) => {

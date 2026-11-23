@@ -28,6 +28,18 @@ export function SkillPageShell(props: {
     <div class="skill-page">
       <PluginDetailShell
         id="skill-page"
+        registerHeading={(heading) => {
+          const document = heading.ownerDocument;
+          const active = document.activeElement;
+          // A late detail may replace the loading shell after the user has moved on.
+          if (
+            active === document.body ||
+            (active?.classList.contains("skills-detail-surface") && active.contains(heading))
+          ) {
+            heading.tabIndex = -1;
+            heading.focus();
+          }
+        }}
         name={props.name}
         summary={props.summary}
         backHref={props.view.listHref}

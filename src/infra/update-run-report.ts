@@ -213,6 +213,15 @@ function recoveryHints(run: ReportInput, nextAction?: string): string[] {
   if (run.status !== "failed") {
     return [];
   }
+  if (
+    run.verification.rollbackOutcome?.status === "succeeded" &&
+    run.verification.serviceRunning &&
+    run.verification.coreReady
+  ) {
+    return [
+      "Retry the update. If it fails again, choose Report update failure in Settings → Updates.",
+    ];
+  }
   const refusalNextAction = updateRepairRefusalNextAction(run.reason);
   if (refusalNextAction) {
     return nextAction ? [] : [refusalNextAction];
@@ -319,10 +328,26 @@ export function renderUpdateRunReport(
   let headline: string;
   switch (run.status) {
     case "succeeded": {
-      // A skipped post-swap step keeps the version change; the headline must not read as clean.
+      // Supplemental failures need attention without changing a successful core outcome.
+      let attentionCount = warnings.length;
+      for (const step of run.steps) {
+        if (step.status !== "failed" || PHASES.has(step.step)) {
+          continue;
+        }
+        const warningStep = `warning:${step.step}`;
+        const warned = run.steps.some(
+          (warning) =>
+            warning.step === warningStep &&
+            warning.status === "completed" &&
+            Boolean(warning.detail),
+        );
+        if (!warned) {
+          attentionCount++;
+        }
+      }
       const attention =
-        warnings.length > 0
-          ? `; ${warnings.length} warning${warnings.length === 1 ? " needs" : "s need"} attention`
+        attentionCount > 0
+          ? `; ${attentionCount} warning${attentionCount === 1 ? " needs" : "s need"} attention`
           : "";
       headline = repairRun
         ? `✅ OpenClaw repair completed${after ? ` for ${after}` : ""}${attention}.`
@@ -578,7 +603,7 @@ export function renderUpdateRunReport(
             ),
           ];
   // The terminal record owner stamps the cause; the Control UI loads this renderer.
-  if (run.status !== "succeeded" && run.origin.cause) {
+  if (run.status !== "succeeded" && run.origin.cause && run.origin.cause !== "unknown") {
     lines.unshift(`Cause: ${run.origin.cause}`);
   }
   const repairedDetail = run.steps.find((step) => step.step === UPDATE_RUN_REPAIRED_STEP)?.detail;

@@ -346,7 +346,7 @@ describe("Control UI release-only inventories", () => {
     const desktop = "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts";
     const serial = [
       "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
-      "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts",
+      "ui/src/e2e/guest-sidebar-pins.real-gateway.e2e.test.ts",
       "ui/src/e2e/plugin-inline-view.real-gateway.e2e.test.ts",
     ];
     const parallel = [

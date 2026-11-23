@@ -165,7 +165,9 @@ describe("AppSidebar automatic list scope replacement", () => {
       mainParent.childSessions![0],
     );
     const expand = childToggle(sidebar, nextParent.key);
-    expect(expand?.getAttribute("aria-expanded")).toBe("true");
+    expect(expand?.getAttribute("aria-expanded")).toBe("false");
+    expand!.click();
+    await settleLitElement(sidebar);
     expect(sidebar.textContent).toContain(`${nextParent.key} child`);
     expect(parents).toHaveLength(2);
   });
@@ -293,10 +295,8 @@ describe("AppSidebar automatic list scope replacement", () => {
         expect(parents).toEqual([mainParent, researchParent]);
         const expand = childToggle(sidebar, researchParent);
         expect(expand).not.toBeNull();
-        expect(expand?.getAttribute("aria-expanded")).toBe(nextAgent === "main" ? "false" : "true");
-        if (nextAgent === "main") {
-          expand!.click();
-        }
+        expect(expand?.getAttribute("aria-expanded")).toBe("false");
+        expand!.click();
         await settleLitElement(sidebar);
         await vi.advanceTimersByTimeAsync(0);
         expect(sidebar.textContent).toContain("Next child");

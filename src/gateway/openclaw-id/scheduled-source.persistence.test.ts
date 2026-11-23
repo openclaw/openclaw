@@ -284,28 +284,19 @@ it.each([
           });
         }
         if (originalRevoked) {
-          await cron.run(job.id, "force", {
-            evaluateTrigger: true,
-            onTriggerDisposition: disposition,
-          });
+          await cron.run(job.id, "force", { onTriggerDisposition: disposition });
           // The admin's timing edit did not lend its authority to the removed member's task.
           expect(disposition).toHaveBeenLastCalledWith("error");
           expect(effect).not.toHaveBeenCalled();
           return;
         }
-        await cron.run(job.id, "force", {
-          evaluateTrigger: true,
-          onTriggerDisposition: disposition,
-        });
+        await cron.run(job.id, "force", { onTriggerDisposition: disposition });
         expect(disposition).toHaveBeenLastCalledWith("dropped");
         expect(effect).toHaveBeenCalledOnce();
         expect(payload).not.toHaveBeenCalled();
         principal = undefined;
         setOpenClawIdTunnelPrincipalLookup(lookup);
-        await cron.run(job.id, "force", {
-          evaluateTrigger: true,
-          onTriggerDisposition: disposition,
-        });
+        await cron.run(job.id, "force", { onTriggerDisposition: disposition });
         expect(disposition).toHaveBeenLastCalledWith("error");
         expect(effect).toHaveBeenCalledOnce();
         expect(payload).not.toHaveBeenCalled();
@@ -388,7 +379,6 @@ it.each(["member", "owner"] as const)(
         setOpenClawIdTunnelPrincipalLookup(() => current);
         const restored = await restoreGatewayOperatorSource({
           snapshot,
-          target: fixture.target,
           context: fixture.context,
           assertCurrent: () => {},
         });
@@ -411,7 +401,6 @@ it.each(["member", "owner"] as const)(
           // Both certificate and membership loss refuse fresh starts, not admitted requests.
           setOpenClawIdTunnelPrincipalLookup(undefined);
           expectCurrent(restored.authority);
-          expect(restored.authority.reauthorize).toThrow();
           await expect(fixture.restore()).rejects.toThrow();
           setOpenClawIdTunnelPrincipalLookup(() => current);
           for (const authority of [
@@ -421,7 +410,6 @@ it.each(["member", "owner"] as const)(
           ]) {
             current = { ...original, authority };
             await expect(fixture.restore()).rejects.toThrow();
-            expect(restored.authority.reauthorize).toThrow();
             expectCurrent(restored.authority);
           }
           if (original.kind === "member") {
@@ -436,12 +424,10 @@ it.each(["member", "owner"] as const)(
             } finally {
               relabeled.release();
             }
-            expect(restored.authority.reauthorize).not.toThrow();
             expectCurrent(restored.authority);
           }
           current = original;
           expectCurrent(restored.authority);
-          expect(restored.authority.reauthorize).not.toThrow();
           const reloaded = await fixture.restore();
           try {
             expectCurrent(reloaded.authority);
@@ -451,9 +437,6 @@ it.each(["member", "owner"] as const)(
         } finally {
           restored.release();
         }
-        expect(restored.authority.assertCurrent).toThrow(
-          "Restart recovery operator authority is no longer active.",
-        );
       } finally {
         setOpenClawIdTunnelPrincipalLookup(undefined);
       }

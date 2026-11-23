@@ -152,6 +152,13 @@ the update runs against a private extraction. Only upstream main push,
 scheduled, and manual runs prepare and save missing seeds, before any candidate
 executes. A missing seed retains the ordinary published npm install path.
 
+For candidates at or above 2026.11.5 on non-frozen lines, a separate step in
+this job uses the same candidate tarball with the published 2026.11.5 npm
+updater and an isolated PostgreSQL 17 service. It measures both store schema
+versions before and after the update and reads the original transcript through
+the candidate Gateway. This step uses foreground Gateways and updates with
+`--no-restart`.
+
 The retained main and release cell initializes synthetic state with its initial
 Doctor repair pass. Readiness keeps its 100 ms interval, 30-second overall
 limit, and one-second per-request limit. Managed update, recorded-run, restart,

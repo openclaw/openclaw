@@ -281,7 +281,7 @@ describe("before_tool_call receipts", () => {
   afterEach(() => {
     clear();
   });
-  const admission = (assertAuthority: () => boolean | void = () => true) => ({
+  const admission = (assertAuthority: () => void = () => {}) => ({
     token: createExecutionIdentityAdmissionToken("run-hook", {
       contextId: "context-hook",
       executionId: "execution-hook",
@@ -375,12 +375,9 @@ describe("before_tool_call receipts", () => {
     },
   );
 
-  it.each([
-    { settlement: "resolve", authority: "reports stale" },
-    { settlement: "reject", authority: "throws" },
-  ] as const)(
-    "suppresses a deferred $settlement receipt when authority $authority",
-    async ({ settlement, authority }) => {
+  it.each(["resolve", "reject"] as const)(
+    "suppresses a deferred %s receipt when authority throws",
+    async (settlement) => {
       const pending = createDeferred<PluginHookBeforeToolCallResult>();
       const runner = toolRunner([{ pluginId: "deferred-plugin", handler: () => pending.promise }], {
         failurePolicyByHook: { before_tool_call: "fail-closed" },
@@ -389,10 +386,7 @@ describe("before_tool_call receipts", () => {
         event,
         ctx,
         admission(() => {
-          if (authority === "throws") {
-            throw new Error("stale receipt authority");
-          }
-          return false;
+          throw new Error("stale receipt authority");
         }),
       );
       if (settlement === "resolve") {

@@ -240,7 +240,9 @@ export function hasConsumedRequesterInput(entry: SubagentRunRecord): boolean {
 export function hasPrivateRequesterInput(entry: SubagentRunRecord): boolean {
   return (
     entry.requesterSettleWake?.yieldedFinalDeliverable !== true &&
-    (entry.completionTarget === "parent" || entry.requesterSettleWake?.privateInput !== undefined)
+    (entry.completionTarget === "parent" ||
+      (entry.requesterSettleWake?.privateInput !== undefined &&
+        entry.requesterSettleWake.privateInput.privateOnly !== false))
   );
 }
 

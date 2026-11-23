@@ -467,14 +467,17 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       completionChannel: directOrigin?.channel,
       requesterOrigin: directOrigin,
       retainedMessage:
-        parentOnly && state.privateInput?.runId === directIdempotencyKey
-          ? state.privateInput.message
-          : undefined,
+        state.privateInput?.runId === directIdempotencyKey ? state.privateInput.message : undefined,
       retryMissingResult: !parentOnly && knownNondelivery && state.attemptCount > 0,
     });
-    const dispatchState = parentOnly
-      ? { ...state, privateInput: { runId: directIdempotencyKey, message: wakeMessage } }
-      : state;
+    const dispatchState = {
+      ...state,
+      privateInput: {
+        runId: directIdempotencyKey,
+        message: wakeMessage,
+        ...(!parentOnly ? { privateOnly: false as const } : {}),
+      },
+    };
     controllerInput = await reserveSubagentControllerSource(
       settledBatch[0]!,
       batchKey,

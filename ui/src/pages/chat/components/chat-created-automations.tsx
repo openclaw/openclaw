@@ -1,10 +1,12 @@
 import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { pathForRoute } from "../../../app-route-paths.ts";
+import { AutomationCard, AutomationCardClock } from "../../../components/automation-card.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Switch } from "../../../components/solid/switch.tsx";
 import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { registerCronEnglish } from "../../../i18n/locales/en-cron.ts";
 import type { AutomationCreationCardPlan } from "../../../lib/chat/automation-creation-card.ts";
+import { automationCardSchedule } from "../../../lib/cron/session-automation-schedule.ts";
 import {
   watchCronJobDefinition,
   type CronJobObservation,
@@ -12,19 +14,10 @@ import {
 import { handleNavigationClick } from "../../../lib/navigation-click.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { sessionAutomationSchedule } from "./session-automation-schedule.ts";
 import "../../../styles/chat/created-automations.css";
 
 registerEnglishCatalog(registerChatSessionOptionalEnglish);
 registerEnglishCatalog(registerCronEnglish);
-
-function ClockTile() {
-  return (
-    <span class="chat-created-automations__clock" aria-hidden="true">
-      <Icon name="clock" />
-    </span>
-  );
-}
 
 function LiveAutomation(props: { jobId: string; name: string }) {
   const app = useOptionalApplication();
@@ -45,13 +38,7 @@ function LiveAutomation(props: { jobId: string; name: string }) {
   const name = () => job()?.displayName ?? job()?.name ?? props.name;
   const schedule = createMemo(() => {
     const value = job()?.schedule;
-    if (!value) {
-      return "";
-    }
-    const label = sessionAutomationSchedule(value);
-    return value.kind === "cron" && value.tz
-      ? t("cron.scheduleLabel.withTimeZone", { value: label, timeZone: value.tz })
-      : label;
+    return value ? automationCardSchedule(value) : "";
   });
   const search = () => `?${new URLSearchParams({ job: props.jobId, tab: "settings" })}`;
   return (
@@ -60,18 +47,20 @@ function LiveAutomation(props: { jobId: string; name: string }) {
         when={job()}
         fallback={
           <>
-            <div class="chat-created-automations__copy" role="status">
+            <div class="automation-card__copy chat-created-automations__copy" role="status">
               <strong>{props.name}</strong>
               <small>
                 {t(
-                  state().loading
-                    ? "chat.sessionAutomation.created"
-                    : "chat.sessionAutomation.unavailable",
+                  state().readFailure === "not-found"
+                    ? "chat.sessionAutomation.removed"
+                    : state().loading
+                      ? "chat.sessionAutomation.created"
+                      : "chat.sessionAutomation.unavailable",
                 )}
               </small>
             </div>
             <span class="chat-created-automations__action">
-              <Show when={state().retryable && !state().loading}>
+              <Show when={state().readFailure === "retryable" && !state().loading}>
                 <button
                   type="button"
                   class="chat-created-automations__retry"
@@ -89,7 +78,7 @@ function LiveAutomation(props: { jobId: string; name: string }) {
         {(loaded) => (
           <>
             <a
-              class="chat-created-automations__copy chat-created-automations__link"
+              class="automation-card__copy chat-created-automations__copy chat-created-automations__link"
               href={pathForRoute("cron", app?.basePath ?? "") + search()}
               onClick={(event) =>
                 app &&
@@ -127,14 +116,17 @@ function LiveAutomation(props: { jobId: string; name: string }) {
 export function ChatCreatedAutomations(props: { plan: AutomationCreationCardPlan }) {
   const single = () => !props.plan.grouped;
   return (
-    <div
-      class={["chat-created-automations", { "chat-created-automations--single": single() }]}
-      role="group"
-      aria-label={t("chat.sessionDetails.automations")}
+    <AutomationCard
+      class={
+        single()
+          ? "chat-created-automations chat-created-automations--single"
+          : "chat-created-automations"
+      }
+      label={t("chat.sessionDetails.automations")}
     >
       <Show when={!single()}>
         <h3 class="chat-created-automations__heading">
-          <ClockTile />
+          <AutomationCardClock class="chat-created-automations__clock" />
           {t("chat.sessionDetails.automations")}
         </h3>
       </Show>
@@ -147,13 +139,13 @@ export function ChatCreatedAutomations(props: { plan: AutomationCreationCardPlan
               data-job-id={row().jobId}
             >
               <Show when={single()}>
-                <ClockTile />
+                <AutomationCardClock class="chat-created-automations__clock" tile />
               </Show>
               <LiveAutomation jobId={row().jobId} name={row().name} />
             </li>
           )}
         </For>
       </ul>
-    </div>
+    </AutomationCard>
   );
 }

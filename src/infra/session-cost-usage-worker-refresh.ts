@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { setTimeout as delay } from "node:timers/promises";
+import { setTimeout as delay, setImmediate as yieldImmediate } from "node:timers/promises";
 import type { ModelCostConfig } from "@openclaw/llm-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -40,6 +40,8 @@ import type {
 import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 import { readThreadDiskReadBytes } from "./thread-disk-io.js";
 
+const USAGE_READ_BYTES_PER_SECOND = 16 * 1024 * 1024;
+
 /** Read bounded transcript pages and release native custody before pacing the next read. */
 export function createUsageCostTranscriptReader(params: {
   target: (agentId: string, storePath: string) => UsageCostWorkerDatabase;
@@ -47,27 +49,66 @@ export function createUsageCostTranscriptReader(params: {
   readFacts: (marker: SqliteSessionFileMarker) => { cold: boolean } | undefined;
   control: WorkerTaskControl;
   env: NodeJS.ProcessEnv;
+  cooperativePacing?: boolean;
 }) {
-  const { target, readStore, readFacts, control, env } = params;
+  const { target, readStore, readFacts, control, env, cooperativePacing } = params;
   let previousReadBytes = readThreadDiskReadBytes();
-  const yieldRead = async (bytes: number, startedAt: number) => {
+  let residentPayloadDue = 0;
+  const yieldOptions = { signal: control.signal };
+  const yieldRead = async (
+    bytes: number,
+    startedAt: number,
+    kind: "payload" | "stats" = "payload",
+  ) => {
     control.throwIfCancelled();
     const readBytes = readThreadDiskReadBytes();
     const physicalBytes =
-      readBytes !== undefined && previousReadBytes !== undefined
-        ? Math.max(0, readBytes - previousReadBytes)
-        : 0;
+      readBytes !== undefined && previousReadBytes !== undefined && readBytes >= previousReadBytes
+        ? readBytes - previousReadBytes
+        : undefined;
     previousReadBytes = readBytes;
-    // No idle credit: each completed page yields native custody to foreground work.
-    await delay(
-      Math.max(
-        1,
-        (Math.max(bytes, physicalBytes) / (16 * 1024 * 1024)) * 1000 -
-          (performance.now() - startedAt),
-      ),
-      undefined,
-      { signal: control.signal },
-    );
+    if (!cooperativePacing || physicalBytes !== 0) {
+      // Keep the per-page timer and unknown-accounting fallback. Time still owed to
+      // an earlier resident payload cannot also pay for this page's physical reads.
+      const pacedBytes =
+        kind === "stats" && physicalBytes === 0 ? 0 : Math.max(bytes, physicalBytes ?? 0);
+      const pacedStart = Math.max(startedAt, residentPayloadDue);
+      await delay(
+        Math.max(
+          1,
+          (pacedBytes / USAGE_READ_BYTES_PER_SECOND) * 1000 - (performance.now() - pacedStart),
+        ),
+        undefined,
+        yieldOptions,
+      );
+    } else if (kind === "stats") {
+      // Resident scalar reads have no byte budget due but still yield native custody.
+      await yieldImmediate(undefined, yieldOptions);
+    } else {
+      // Charge this page from its start, or the last unpaid deadline. Idle time cannot
+      // buy credit, and after yielding at most a sub-millisecond byte budget carries over.
+      residentPayloadDue =
+        Math.max(residentPayloadDue, startedAt) + (bytes / USAGE_READ_BYTES_PER_SECOND) * 1000;
+      let waitMs = residentPayloadDue - performance.now();
+      if (waitMs < 1) {
+        await yieldImmediate(undefined, yieldOptions);
+      } else {
+        do {
+          await delay(waitMs, undefined, yieldOptions);
+          waitMs = residentPayloadDue - performance.now();
+        } while (waitMs >= 1);
+      }
+    }
+    control.throwIfCancelled();
+  };
+  const settleReadPacing = async () => {
+    // Don't leave a final fractional budget unpaid when the refresh task yields its slot.
+    let waitMs = residentPayloadDue - performance.now();
+    while (waitMs > 0) {
+      control.throwIfCancelled();
+      await delay(Math.ceil(waitMs), undefined, yieldOptions);
+      waitMs = residentPayloadDue - performance.now();
+    }
     control.throwIfCancelled();
   };
   const readRows = async (
@@ -139,7 +180,7 @@ export function createUsageCostTranscriptReader(params: {
     await yieldRead(bytes, startedAt);
     return resultSeq;
   };
-  return { readRows, yieldRead };
+  return { readRows, yieldRead, settleReadPacing };
 }
 
 /** Reuse resolved model prices across the bounded pages of one worker operation. */

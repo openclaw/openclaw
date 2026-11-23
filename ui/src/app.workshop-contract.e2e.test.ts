@@ -265,13 +265,15 @@ suite.define(() => {
           .getByRole("button", { name: "History", exact: true })
           .getAttribute("aria-pressed"),
       ).toBe("true");
-      await page.getByRole("button", { name: /^Learned skills/ }).click();
-      const liveRow = page.locator(".sw-grid .sw-row").filter({ hasText: skillName });
-      expect(await liveRow.textContent()).toContain("7 uses");
-      await liveRow.locator(".sw-row__main").click();
+      expect(
+        await page
+          .locator(".sw-history-list")
+          .getByRole("button", { name: "Undo", exact: true })
+          .count(),
+      ).toBe(0);
       await page
-        .locator(".sw-tabs")
-        .getByRole("button", { name: /History/ })
+        .locator(".sw-history-list")
+        .getByRole("button", { name: new RegExp(skillName) })
         .click();
       const retained = page
         .locator(".sw-timeline__item")
@@ -314,11 +316,101 @@ suite.define(() => {
         note: "Disable Skill Workshop learning",
       });
       await page.keyboard.press("Escape");
-      // Back on the start page, Learned skills is still the open view.
+      // Back on the start page, browse both filters in Learned skills.
+      await page.getByRole("button", { name: /^Learned skills/ }).click();
+      expect(
+        await page.locator(".sw-grid .sw-row").filter({ hasText: skillName }).textContent(),
+      ).toContain("7 uses");
       await page.getByRole("button", { name: /^Archived/ }).click();
       await page.locator(".sw-row").filter({ hasText: archivedName }).waitFor();
       expect(await page.locator(".sw-row").filter({ hasText: skillName }).count()).toBe(0);
     });
+  });
+
+  it("contains the inline new-skill preview and keeps its last instruction reachable", async () => {
+    await suite.withPage(
+      { colorScheme: "light", viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        const newName = "prepare-release-notes";
+        const draftId = newName + "-1a2b3c4d";
+        const steps = [
+          "Read the release brief and group changes by the outcome users will notice.",
+          "Check merged changes against their final descriptions. Include only work that is in the release.",
+          "Put required actions before optional improvements. Say who needs to act and by when.",
+          "Describe fixes in terms of the problem users saw. Leave out internal implementation details.",
+          "Keep examples short, and check that each example matches what users see in the product today.",
+          "Verify every link against the release branch. Replace references that point to outdated instructions.",
+          "Ask the release owner to review any remaining uncertainty before publishing.",
+          "Check that headings describe the changes beneath them and that the most important change leads each section.",
+          "Read the notes once without the release brief. Add missing context wherever an instruction would otherwise be ambiguous.",
+          "Check the supported upgrade paths. Include a migration or rollback link only where a reader needs it.",
+          "Verify the release number and the date in the heading against the release owner’s checklist.",
+          "Double-check that any quoted error or UI label matches the software exactly.",
+          "Share the draft with the release owner for review before publishing it.",
+          "Save the approved notes with the release checklist.",
+        ];
+        await openWorkshop(page, ["operator.admin"], {
+          "skills.workshop.list": {
+            ...list,
+            mode: "propose",
+            drafts: [
+              {
+                id: skillName + "-1a2b3c4d",
+                skillName,
+                summary: "Check the rollback plan before starting a deployment.",
+                createdAtMs: timestamp - 1000,
+              },
+              {
+                id: draftId,
+                skillName: newName,
+                summary: "Turn a release brief and merged changes into user-facing notes.",
+                createdAtMs: timestamp,
+              },
+            ],
+          },
+          "skills.workshop.read": {
+            cases: [
+              {
+                match: { draftId },
+                response: {
+                  name: newName,
+                  filePath: "SKILL.md",
+                  files: ["SKILL.md"],
+                  content:
+                    "# Prepare release notes\n\n" +
+                    steps.map((step, index) => `${index + 1}. ${step}`).join("\n\n"),
+                },
+              },
+              ...methodResponses["skills.workshop.read"].cases,
+            ],
+          },
+          "skills.workshop.applyDraft": { changes: [] },
+        });
+        const row = page.locator(".sw-row--draft").filter({ hasText: newName });
+        await row.getByRole("heading", { name: "Prepare release notes" }).waitFor();
+        expect(await row.getByText("You can archive it later.", { exact: true }).count()).toBe(0);
+        const preview = row.getByRole("group", { name: "Draft preview" });
+        await row.locator(".sw-row__main").focus();
+        await page.keyboard.press("Tab");
+        await expect
+          .poll(() => preview.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+        await page.keyboard.press("End");
+        await expect
+          .poll(() =>
+            preview.evaluate((element) => {
+              const bounds = element.getBoundingClientRect();
+              const lastStep = element.querySelector("li:last-child")!.getBoundingClientRect();
+              return (
+                element.scrollTop > 0 &&
+                lastStep.top >= bounds.top &&
+                lastStep.bottom <= bounds.bottom
+              );
+            }),
+          )
+          .toBe(true);
+      },
+    );
   });
 
   it("reviews waiting drafts as a diff against the live skill and applies or discards them", async () => {

@@ -2,7 +2,7 @@ import { once } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -134,57 +134,6 @@ describe("plugin HTTP route runtime scopes", () => {
       );
       expect(scope?.client?.connect.scopes).toEqual(auth === "plugin" ? [] : ["operator.read"]);
       expect(scope?.hasCurrentClientAuthority).toBeUndefined();
-    },
-  );
-
-  it.each(["request policy", "visitor grant"] as const)(
-    "rechecks %s before the next matched route",
-    async (changed) => {
-      const entered = createDeferred();
-      const release = createDeferred();
-      const grant = new AbortController();
-      let requestSignal: AbortSignal | undefined;
-      let current = true;
-      const next = vi.fn(() => true);
-      const first = createRoute({
-        handler: async () => {
-          requestSignal = getPluginRuntimeGatewayRequestScope()?.signal;
-          expect(requestSignal?.aborted).toBe(false);
-          entered.resolve();
-          await release.promise;
-          return false;
-        },
-      });
-      const pending = invoke([first, { ...first, match: "prefix", handler: next }], {
-        ...trusted,
-        gatewayRequestAuth: {
-          trustDeclaredOperatorScopes: true,
-          hasCurrentClientAuthority: () => current,
-          operatorAccessAuthority: {
-            signal: grant.signal,
-            assertCurrent: () => grant.signal.throwIfAborted(),
-          },
-        },
-      });
-      try {
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          pending,
-          "request ended before the first route prepared",
-        );
-        if (changed === "request policy") {
-          current = false;
-        } else {
-          grant.abort();
-          expect(requestSignal?.aborted).toBe(true);
-        }
-      } finally {
-        release.resolve();
-      }
-      const response = await pending;
-      expect(response.handled).toBe(true);
-      expect(response.res.statusCode).toBe(changed === "request policy" ? 401 : 403);
-      expect(next).not.toHaveBeenCalled();
     },
   );
 

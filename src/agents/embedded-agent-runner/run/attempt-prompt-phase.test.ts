@@ -743,7 +743,9 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       expect(mocks.submitPrompt).not.toHaveBeenCalled();
       expect(mocks.handlePromptError).toHaveBeenCalledWith(
         expect.objectContaining({
-          error: expect.objectContaining({ message: "admitted run authority is no longer active" }),
+          error: expect.objectContaining({
+            message: "This agent run is no longer active. Start a new turn to retry.",
+          }),
         }),
       );
     } finally {
