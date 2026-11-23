@@ -45,6 +45,8 @@ function fixture(snapshot: Partial<ApplicationGatewaySnapshot> = {}) {
     },
     sessionData: {
       resetSessionList: vi.fn(),
+      synchronizeSessionScope: vi.fn(),
+      refreshSessionCatalogs: vi.fn(() => Promise.resolve()),
       refreshSidebarSessions: vi.fn(() => Promise.resolve()),
       scheduleSidebarSessions: vi.fn(() => Promise.resolve()),
     },

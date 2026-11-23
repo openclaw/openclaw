@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   databaseWorkerCoreTestFiles,
@@ -5,6 +6,10 @@ import {
 } from "../vitest/vitest.database-worker-core-paths.mjs";
 
 describe("database-worker test routing registry", () => {
+  it("routes only existing test files", () => {
+    expect(databaseWorkerCoreTestFiles.filter((file) => !existsSync(file))).toEqual([]);
+  });
+
   it("contains no duplicate file routes", () => {
     expect(new Set(databaseWorkerCoreTestFiles).size).toBe(databaseWorkerCoreTestFiles.length);
   });
