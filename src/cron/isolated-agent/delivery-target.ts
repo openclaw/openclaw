@@ -5,11 +5,11 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { stripTargetProviderPrefix } from "../../infra/outbound/channel-target-prefix.js";
+import { MessageActionDeniedError } from "../../infra/outbound/message-action-denial.js";
 import type { OutboundSessionRoute } from "../../infra/outbound/outbound-session.js";
 import { isReservedTargetLiteralError } from "../../infra/outbound/target-errors.js";
 import type { ResolvedMessagingTarget } from "../../infra/outbound/target-resolver.js";
 import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loaded.js";
-import type { OutboundTargetResolution } from "../../infra/outbound/targets-resolve-shared.js";
 import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { chatRef } from "../../sessions/chat-ref.js";
@@ -66,7 +66,7 @@ const targetsRuntimeLoader = createLazyImportLoader(
 
 async function resolveOutboundTargetWithRuntime(
   params: Parameters<typeof tryResolveLoadedOutboundTarget>[0],
-): Promise<OutboundTargetResolution> {
+) {
   try {
     const loaded = await tryResolveLoadedOutboundTarget(params);
     if (loaded) {
@@ -277,7 +277,7 @@ export async function resolveDeliveryTarget(
 
   let fallbackChannel: string | undefined;
   let channelInferred: true | undefined =
-    requestedChannel === "last" && !explicitTo ? true : undefined;
+    requestedChannel === "last" && preliminary.mode === "implicit" ? true : undefined;
   let channelResolutionError: Error | undefined;
   if (!preliminary.channel) {
     if (preliminary.lastChannel) {
@@ -355,7 +355,6 @@ export async function resolveDeliveryTarget(
   });
 
   let effectiveAllowFrom: string[] | undefined;
-  let namespaceTarget: ResolvedMessagingTarget | undefined;
   if (mode === "implicit") {
     const { getLoadedChannelPluginForRead, mapAllowFromEntries } = deliveryTargetRuntime;
     const channelPlugin = getLoadedChannelPluginForRead(channel);
@@ -381,9 +380,11 @@ export async function resolveDeliveryTarget(
         allowFrom: effectiveAllowFrom,
         channelInferred,
       });
-      namespaceTarget = currentTargetResolution.namespaceTarget;
       if (!currentTargetResolution.ok) {
-        if (currentTargetResolution.namespaceResolutionFailed) {
+        if (
+          currentTargetResolution.error instanceof MessageActionDeniedError &&
+          currentTargetResolution.error.policyRef === "message-target:destination-required"
+        ) {
           return failTarget(currentTargetResolution.error);
         }
         toCandidate = allowFromOverride[0];
@@ -413,6 +414,7 @@ export async function resolveDeliveryTarget(
     );
   }
 
+  const preResolvedRouteTargetCandidate = toCandidate;
   const docked = await resolveOutboundTargetWithRuntime({
     channel,
     to: toCandidate,
@@ -422,8 +424,6 @@ export async function resolveDeliveryTarget(
     allowFrom: effectiveAllowFrom,
     channelInferred,
   });
-  namespaceTarget = docked.namespaceTarget ?? namespaceTarget;
-  const preResolvedRouteTargetCandidate = docked.ok && namespaceTarget ? docked.to : toCandidate;
   if (!docked.ok) {
     if (!toCandidate || !isReservedTargetLiteralError(docked.error)) {
       return failTarget(docked.error);
@@ -431,16 +431,13 @@ export async function resolveDeliveryTarget(
   } else {
     toCandidate = docked.to;
   }
-  const targetResolution =
-    namespaceTarget && namespaceTarget.to === toCandidate
-      ? { ok: true as const, target: namespaceTarget }
-      : await deliveryTargetRuntime.resolveChannelTargetForDelivery({
-          cfg,
-          channel,
-          agentId,
-          input: toCandidate,
-          accountId,
-        });
+  const targetResolution = await deliveryTargetRuntime.resolveChannelTargetForDelivery({
+    cfg,
+    channel,
+    agentId,
+    input: toCandidate,
+    accountId,
+  });
   if (!targetResolution.ok) {
     return failTarget(targetResolution.error);
   }
@@ -511,8 +508,8 @@ export async function resolveDeliveryTarget(
   }
   let canUseSessionThread = false;
   if (options?.inheritSessionThread !== false && isNonEmptyThreadId(resolved.threadId)) {
-    if (explicitTo || namespaceTarget) {
-      // Resolved namespaces also need route evidence before borrowing the old peer's thread.
+    if (explicitTo) {
+      // Only explicit targets need the previous route to prove same-peer thread inheritance.
       const lastTo = resolved.lastTo;
       const lastRoute =
         lastTo && resolved.lastChannel === channel

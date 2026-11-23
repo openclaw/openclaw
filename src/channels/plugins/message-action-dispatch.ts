@@ -1,6 +1,5 @@
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
-import { resolveBareTargetChannelNamespace } from "../../infra/outbound/channel-target-prefix.js";
 import { assertOutboundHandoffCurrent } from "../../infra/outbound/deliver-handoff.js";
 import { validateExplicitMessageAccountSelection } from "../../infra/outbound/message-account-selection.js";
 import { enforceMessageActionAllowlist } from "../../infra/outbound/outbound-policy.js";
@@ -84,8 +83,6 @@ type ServerOwnedConversationReadOrigin = ReturnType<
 
 type ChannelMessageActionDispatchContext = Omit<ChannelMessageActionContext, "action"> & {
   action: unknown;
-  /** Host-only route provenance, removed before invoking any plugin callback. */
-  channelInferred?: true;
   /** Host-only authority, removed before invoking any plugin callback. */
   messageActionAuthorization?: MessageActionAuthorization;
 };
@@ -289,11 +286,6 @@ function prepareMessageActionReadContext(
   if (!registration) {
     return undefined;
   }
-  const accountId =
-    ctx.accountId ??
-    (ctx.channelInferred
-      ? resolveChannelDefaultAccountId({ plugin: registration.plugin, cfg: ctx.cfg })
-      : undefined);
   const action = ctx.action as ChannelMessageActionName;
   const authority = registration.captureReadAuthority?.();
   const hasRegistrationAuthority = authority?.() === true;
@@ -311,7 +303,7 @@ function prepareMessageActionReadContext(
           authorization: ctx.messageActionAuthorization,
           action,
           channel: ctx.channel,
-          accountId,
+          accountId: ctx.accountId,
         })
       : undefined;
   const origin = (
@@ -321,14 +313,9 @@ function prepareMessageActionReadContext(
         : "delegated"
       : normalizeConversationReadInvocationOrigin(ctx.conversationReadOrigin)
   ) as ServerOwnedConversationReadOrigin;
-  const {
-    messageActionAuthorization: _authorization,
-    channelInferred: _channelInferred,
-    ...pluginContext
-  } = ctx;
+  const { messageActionAuthorization: _authorization, ...pluginContext } = ctx;
   const actionContext: ChannelMessageActionContext = {
     ...pluginContext,
-    accountId,
     action,
     conversationReadOrigin: origin,
   };
@@ -629,58 +616,6 @@ export async function dispatchChannelMessageAction(
         ctx: authorizedActionContext,
         ...prepared,
       };
-      const admitAction = () => {
-        if (
-          actions.requiresTrustedRequesterSender?.({
-            action: authorizedActionContext.action,
-            toolContext: authorizedActionContext.toolContext,
-          }) &&
-          !authorizedActionContext.requesterSenderId?.trim()
-        ) {
-          throw new Error(
-            `Trusted sender identity is required for ${authorizedActionContext.channel}:${authorizedActionContext.action} in tool-driven contexts.`,
-          );
-        }
-        return (
-          !actions.supportsAction ||
-          actions.supportsAction({ action: authorizedActionContext.action })
-        );
-      };
-      const hasNamespaceTarget =
-        ctx.channelInferred &&
-        ["to", "channelId"].some((key) =>
-          resolveBareTargetChannelNamespace(authorizedActionContext.params[key], plugin),
-        );
-      if (hasNamespaceTarget) {
-        // Bundled names need source context here and exact-recipient proof after lookup.
-        enforceMessageActionConversationReadMatch(
-          gateParams,
-          (prepared.enforcement.pluginTrust === "bundled" &&
-            !prepared.assertReadAuthorityCurrent &&
-            hasMatchingCurrentProviderContext(authorizedActionContext) &&
-            hasMatchingCurrentAccountContext(authorizedActionContext) &&
-            hasCurrentConversationTarget(authorizedActionContext)) ||
-            resolveMessageActionConversationReadGate(gateParams) === true,
-        );
-        if (!admitAction()) {
-          return null;
-        }
-        const { resolveMessageTarget } =
-          await import("../../infra/outbound/message-action-routing.js");
-        // Fenced reads already own this scope; other actions lend their admitted handoff guard.
-        await withChannelReadAuthority(
-          prepared.assertReadAuthorityCurrent
-            ? undefined
-            : authorizedActionContext.assertDirectAdapterHandoff,
-          () =>
-            resolveMessageTarget({
-              ...authorizedActionContext,
-              args: authorizedActionContext.params,
-              channelInferred: true,
-              plugin,
-            }),
-        );
-      }
       // This writer passed the private job/account gate and declared provider target checks.
       const match =
         scheduledWrite &&
@@ -696,7 +631,25 @@ export async function dispatchChannelMessageAction(
         matches = match;
       }
       enforceMessageActionConversationReadMatch(gateParams, matches);
-      if (!hasNamespaceTarget && !admitAction()) {
+      // Some plugin actions depend on the sender identity to enforce channel-local
+      // trust. Reject tool-driven calls before invoking the action without it.
+      if (
+        plugin.actions?.requiresTrustedRequesterSender?.({
+          action: authorizedActionContext.action,
+          toolContext: authorizedActionContext.toolContext,
+        }) &&
+        !authorizedActionContext.requesterSenderId?.trim()
+      ) {
+        throw new Error(
+          `Trusted sender identity is required for ${authorizedActionContext.channel}:${authorizedActionContext.action} in tool-driven contexts.`,
+        );
+      }
+      // `handleAction` may be broad; `supportsAction` lets plugins cheaply decline
+      // action names before the dispatcher enters channel-specific behavior.
+      if (
+        actions.supportsAction &&
+        !actions.supportsAction({ action: authorizedActionContext.action })
+      ) {
         return null;
       }
       try {

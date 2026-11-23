@@ -85,8 +85,6 @@ export type MessageActionInput = Pick<
   workspaceReadiness?: AgentWorkspaceReadiness;
   /** @internal Host-owned route plan computed before broadcast SecretRef resolution. */
   broadcastAccountPlan?: MessageBroadcastAccountPlan;
-  /** @internal Carries inferred channel provenance while the target is deferred to the Gateway. */
-  channelInferred?: true;
   /**
    * Authorization facts resolved from the host-issued current-turn capability.
    * Presence means ambient routing fields must not be used as identity.

@@ -143,7 +143,7 @@ function registerOfficial(
     trustedOfficialInstall: options.trusted ?? true,
   });
   const handleAction = vi.fn(async (_ctx: ChannelMessageActionContext) => receipt);
-  const plugin: ChannelPlugin & { actions: Actions } = {
+  const plugin: ChannelPlugin = {
     ...createChannelTestPluginBase({ id: "configured-reader" }),
     actions: {
       ...(options.actions ?? {
@@ -226,102 +226,6 @@ describe("official plugin read-only authority", () => {
     await expect(fixture.dispatch(authorized)).rejects.toThrow("dashboard admission closed");
     expect(fixture.handleAction).toHaveBeenCalledOnce();
   });
-
-  it("admits inferred namespace reads before directory I/O and dispatches the canonical recipient", async () => {
-    const fixture = registerOfficial();
-    const listGroups = vi.fn(async () => [
-      { kind: "group" as const, id: "channel:resolved", name: fixture.plugin.id },
-    ]);
-    fixture.plugin.directory = { listGroups };
-    fixture.plugin.actions = {
-      ...fixture.plugin.actions,
-      requiresTrustedRequesterSender: () => true,
-      supportsAction: ({ action }) => action === "read",
-    };
-    fixture.register();
-    const context: Partial<Context> = {
-      params: { channelId: fixture.plugin.id },
-      channelInferred: true,
-    };
-    await expect(
-      fixture.dispatch({ ...context, requesterAccountId: "another-account" }),
-    ).rejects.toThrow("requires current provider and account context");
-    expect(listGroups).not.toHaveBeenCalled();
-    expect(fixture.handleAction).not.toHaveBeenCalled();
-    await expect(fixture.dispatch(context)).rejects.toThrow("Trusted sender identity");
-    expect(listGroups).not.toHaveBeenCalled();
-    await expect(
-      fixture.dispatch({ ...context, action: "search", requesterSenderId: "trusted-sender" }),
-    ).resolves.toBeNull();
-    expect(listGroups).not.toHaveBeenCalled();
-    await expect(
-      fixture.dispatch({ ...context, requesterSenderId: "trusted-sender" }),
-    ).resolves.toBe(receipt);
-    expect(fixture.handleAction).toHaveBeenCalledWith(
-      expect.objectContaining({ params: expect.objectContaining({ channelId: "resolved" }) }),
-    );
-    expect(fixture.handleAction.mock.calls[0]?.[0]).not.toHaveProperty("channelInferred");
-    expect(listGroups).toHaveBeenCalledOnce();
-  });
-
-  it.each([false, true])(
-    "keeps bundled namespace lookup behind context admission (deferred alias=%s)",
-    async (deferredAlias) => {
-      const fixture = registerOfficial({
-        origin: "bundled",
-        trusted: false,
-        fenced: false,
-        gates: [],
-      });
-      const matchAlias = vi.fn(async () => true);
-      const listGroups = vi.fn(async () => [
-        { kind: "group" as const, id: "channel:resolved", name: fixture.plugin.id },
-      ]);
-      fixture.plugin.directory = { listGroups };
-      fixture.plugin.config.defaultAccountId = () => "ops";
-      fixture.plugin.config.listAccountIds = () => ["ops", "default"];
-      if (deferredAlias) {
-        fixture.plugin.actions.messageActionTargetAliases = {
-          read: {
-            aliases: ["channelId"],
-            deliveryTargetAliases: ["channelId"],
-            resolveDeliveryTarget: ({ args }) =>
-              typeof args.channelId === "string" ? args.channelId : undefined,
-            matchesCurrentConversationAsync: matchAlias,
-          },
-        };
-      }
-      fixture.register();
-      const context: Partial<Context> = {
-        channelInferred: true,
-        accountId: undefined,
-        requesterAccountId: "ops",
-        params: { channelId: fixture.plugin.id },
-        toolContext: {
-          currentChannelProvider: fixture.plugin.id,
-          currentChannelId: deferredAlias ? "current" : "channel:resolved",
-        },
-      };
-      await expect(
-        fixture.dispatch({
-          ...context,
-          toolContext: { currentChannelProvider: "other-provider", currentChannelId: "current" },
-        }),
-      ).rejects.toThrow(exactConversation);
-      await expect(fixture.dispatch({ ...context, requesterAccountId: "default" })).rejects.toThrow(
-        exactConversation,
-      );
-      expect(listGroups).not.toHaveBeenCalled();
-      expect(fixture.handleAction).not.toHaveBeenCalled();
-      await expect(fixture.dispatch(context)).resolves.toBe(receipt);
-      expect(listGroups).toHaveBeenCalledOnce();
-      expect(listGroups).toHaveBeenCalledWith(expect.objectContaining({ accountId: "ops" }));
-      expect(fixture.handleAction).toHaveBeenCalledWith(
-        expect.objectContaining({ accountId: "ops" }),
-      );
-      expect(matchAlias).toHaveBeenCalledTimes(deferredAlias ? 1 : 0);
-    },
-  );
 
   it.each([
     { trusted: false },

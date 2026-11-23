@@ -156,7 +156,6 @@ function expectTargetError(
 }
 
 const AGENT_ID = "agent-b";
-const NAMESPACE_SESSION_KEY = `agent:${AGENT_ID}:namespace`;
 const DEFAULT_TARGET = { channel: "forum" as const, to: "room:default" };
 
 function setSessionEntry(sessionKey: string, context: DeliveryContext) {
@@ -451,90 +450,31 @@ describe("resolveDeliveryTarget", () => {
     expect(result).toMatchObject({ ok: true, to: "63448508", threadId: "42" });
   });
 
-  it("preserves a namespace directory identity through cron session routing", async () => {
-    setSessionEntry(NAMESPACE_SESSION_KEY, {
-      channel: "alpha",
-      to: "alpha",
-      threadId: "old-thread",
-    });
-    setPlugins(
-      plugin(
-        "alpha",
-        {
-          capabilities: { chatTypes: ["direct", "group"] },
-          messaging: {
-            targetResolver: { looksLikeId: (raw) => /^C\d+$/.test(raw) },
-            resolveOutboundSessionRoute: ({ cfg, agentId, target, resolvedTarget }) =>
-              buildChannelOutboundSessionRoute({
-                cfg,
-                agentId,
-                channel: "alpha",
-                peer: { kind: resolvedTarget?.kind === "user" ? "direct" : "channel", id: target },
-                chatType: resolvedTarget?.kind === "user" ? "direct" : "channel",
-                from: `alpha:${target}`,
-                to: `channel:${target.replace(/^channel:/, "")}`,
-              }),
-          },
-        },
-        {
-          directory: {
-            listGroups: async () => [{ kind: "group", id: "C12345678", name: "alpha" }],
-          },
-        },
-      ),
-    );
-    const result = await resolveTarget(
-      { channel: "last", sessionKey: NAMESPACE_SESSION_KEY },
-      makeCfg({ channels: { alpha: {} } }),
-    );
-    expect(result).toMatchObject({
-      ok: true,
-      to: "channel:C12345678",
-      threadId: undefined,
-      sessionRoute: { to: "channel:C12345678", peer: { kind: "channel", id: "C12345678" } },
-    });
-  });
-
   it.each([
     { channel: "last", expected: "missing" },
-    { channel: "last", expected: new Error("directory unavailable") },
-    { channel: "last", destination: "allowed-room", expected: "allowed-room" },
-    {
-      channel: "last",
-      destination: "allowed-room",
-      ambiguous: true,
-      expected: "ambiguous",
-    },
+    { channel: "last", explicitTo: "   ", expected: "missing" },
     { channel: "last", explicitTo: true, expected: "@alpha" },
-    { channel: "last", destination: "denied-room", denied: true, expected: "@operator" },
-    {
-      channel: "last",
-      explicitTo: "@denied-room",
-      destination: "denied-room",
-      denied: true,
-      expected: "denied",
-    },
-    { channel: "alpha", destination: "allowed-room", expected: "@alpha" },
-    {
-      channel: "last",
-      explicitTo: true,
-      noSource: true,
-      expected: "missing",
-    },
+    { channel: "alpha", expected: "@alpha" },
+    { channel: "last", explicitTo: true, noSource: true, expected: "missing" },
+    { channel: "last", storedTo: "@denied-room", denied: true, expected: "@operator" },
+    { channel: "last", explicitTo: "@denied-room", denied: true, expected: "denied" },
   ])(
-    "resolves cron namespace with $channel channel ($expected)",
-    async ({ channel, explicitTo, noSource, destination, ambiguous, denied, expected }) => {
+    "keeps cron namespace and native target intent ($channel, $expected)",
+    async ({ channel, explicitTo, noSource, storedTo, denied, expected }) => {
       const normalizeTarget = vi.fn((raw: string) => (raw.startsWith("@") ? raw : `@${raw}`));
       const resolveNative = vi.fn(({ to, allowFrom }: { to?: string; allowFrom?: string[] }) =>
         denied && to === "@denied-room" && allowFrom?.includes("operator")
           ? { ok: false as const, error: new Error("cron target denied") }
           : { ok: true as const, to: to ?? "" },
       );
+      const listGroups = vi.fn(async () => [
+        { kind: "group" as const, id: "real-room", name: "alpha" },
+      ]);
       setPlugins(
         plugin(
           "alpha",
           {
-            outbound: { deliveryMode: "direct", resolveTarget: resolveNative },
+            outbound: { deliveryMode: "gateway", resolveTarget: resolveNative },
             messaging: { normalizeTarget, targetResolver: { looksLikeId: () => true } },
           },
           {
@@ -544,64 +484,40 @@ describe("resolveDeliveryTarget", () => {
               isConfigured: () => true,
               resolveAllowFrom: () => ["operator"],
             },
-            directory: {
-              listGroups: async () => {
-                if (expected instanceof Error) {
-                  throw expected;
-                }
-                return [destination, ...(ambiguous ? ["other-room"] : [])].flatMap((id) =>
-                  id ? [{ kind: "group" as const, id, name: "alpha" }] : [],
-                );
-              },
-            },
+            directory: { listGroups },
           },
         ),
       );
+      const sessionKey = `agent:${AGENT_ID}:namespace`;
       if (noSource) {
         vi.mocked(resolveMessageChannelSelection).mockImplementationOnce(
           selectConfiguredMessageChannel,
         );
       } else {
-        setSessionEntry(NAMESPACE_SESSION_KEY, {
-          channel: "alpha",
-          to: "alpha",
-          threadId: denied ? "old-thread" : undefined,
-        });
+        setSessionEntry(sessionKey, { channel: "alpha", to: storedTo ?? "alpha" });
       }
       const result = await resolveTarget(
         {
           channel,
-          sessionKey: NAMESPACE_SESSION_KEY,
+          sessionKey,
           ...(explicitTo ? { to: typeof explicitTo === "string" ? explicitTo : "alpha" } : {}),
         },
         makeCfg({ channels: { alpha: {} } }),
       );
-      if (expected === "ambiguous") {
+      if (expected === "missing") {
         expect(result).toMatchObject({
           ok: false,
-          error: { reasonCode: "message_target_ambiguous" },
+          to: undefined,
+          error: { reasonCode: "message_target_missing" },
         });
+        expect(normalizeTarget).not.toHaveBeenCalled();
         expect(resolveNative).not.toHaveBeenCalled();
-      } else if (expected instanceof Error || expected === "missing" || expected === "denied") {
-        expectTargetError(
-          result,
-          expected instanceof Error
-            ? expected.message
-            : expected === "missing"
-              ? "does not specify a destination"
-              : "cron target denied",
-        );
-        if (expected !== "denied") {
-          expect(normalizeTarget).not.toHaveBeenCalled();
-          expect(resolveNative).not.toHaveBeenCalled();
-        }
+      } else if (expected === "denied") {
+        expectTargetError(result, "cron target denied");
       } else {
-        expect(result).toMatchObject({
-          ok: true,
-          to: expected.startsWith("@") ? expected : `@${expected}`,
-          threadId: undefined,
-        });
+        expect(result).toMatchObject({ ok: true, to: expected });
       }
+      expect(listGroups).not.toHaveBeenCalled();
     },
   );
 });

@@ -21,6 +21,7 @@ import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
+import { resolveChannelNamespaceTargetError } from "./channel-target-prefix.js";
 import { validateExplicitMessageAccountSelection } from "./message-account-selection.js";
 import type { MessageActionInput } from "./message-action-contracts.js";
 import {
@@ -181,7 +182,6 @@ type PreparedMessageRoute = {
   accountId?: string | null;
   dryRun: boolean;
   defersExternalTargetResolution: boolean;
-  channelInferred?: true;
   assertReadAuthorityCurrent?: () => void;
   assertTargetAuthorityCurrent?: () => void;
 };
@@ -241,6 +241,14 @@ export async function prepareMessageRoute(params: {
     // aliases still normalize above and remain subject to the shared cross-context policy.
     allowResourceOnly: input.conversationReadOrigin === "direct-operator",
   });
+  if (selection.channelInferred) {
+    for (const key of ["to", "channelId"] as const) {
+      const error = resolveChannelNamespaceTargetError(actionParams[key], channelPlugin);
+      if (error) {
+        throw error;
+      }
+    }
+  }
   let accountId = explicitAccountId ?? input.defaultAccountId;
   if (!accountId && agentId) {
     const target = readTrimmedStringAlias(actionParams, ["to", "channelId"]);
@@ -351,7 +359,6 @@ export async function prepareMessageRoute(params: {
     accountId,
     dryRun,
     defersExternalTargetResolution,
-    channelInferred: input.channelInferred ?? selection.channelInferred,
     assertReadAuthorityCurrent,
     assertTargetAuthorityCurrent,
   };
@@ -366,7 +373,6 @@ export async function resolveMessageTarget(params: {
   toolContext?: ChannelThreadingToolContext;
   agentId?: string | null;
   deferExternalTargetResolution?: boolean;
-  channelInferred?: true;
   plugin?: ChannelPlugin;
 }): Promise<ResolvedMessagingTarget | undefined> {
   let resolvedTarget: ResolvedMessagingTarget | undefined;
@@ -381,7 +387,6 @@ export async function resolveMessageTarget(params: {
         channel: params.channel,
         input,
         accountId: params.accountId ?? undefined,
-        channelInferred: params.channelInferred,
         plugin: params.plugin,
         ...(key === "channelId" ? { preferredKind: "group" as const } : {}),
       });

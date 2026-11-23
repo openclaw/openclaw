@@ -2,6 +2,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
 import { listRuntimeVisibleChannelPlugins } from "./runtime-visible-channels.js";
+import { missingChannelDestinationError } from "./target-errors.js";
 
 const TARGET_KIND_PREFIXES: readonly string[] = [
   "channel",
@@ -68,11 +69,11 @@ export function resolveTargetPrefixedChannel(raw?: string | null): string | unde
   return resolveChannelTargetProviderPrefix(raw)?.channel;
 }
 
-/** Finds a bare target that names the selected channel instead of a destination. */
-export function resolveBareTargetChannelNamespace(
+/** Rejects a bare channel namespace when channel selection supplied no destination intent. */
+export function resolveChannelNamespaceTargetError(
   raw: unknown,
   plugin?: ChannelPlugin,
-): string | undefined {
+): Error | undefined {
   const normalized = normalizeOptionalLowercaseString(raw);
   if (!normalized || !plugin) {
     return undefined;
@@ -82,7 +83,12 @@ export function resolveBareTargetChannelNamespace(
     ...(plugin.meta?.aliases ?? []),
     ...(plugin.messaging?.targetPrefixes ?? []),
   ].some((candidate) => normalizeOptionalLowercaseString(candidate) === normalized)
-    ? normalized
+    ? missingChannelDestinationError(
+        plugin.meta.label,
+        normalized,
+        plugin.id,
+        plugin.messaging?.targetResolver?.hint,
+      )
     : undefined;
 }
 

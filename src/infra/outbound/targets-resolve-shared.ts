@@ -8,17 +8,13 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import {
-  resolveBareTargetChannelNamespace,
+  resolveChannelNamespaceTargetError,
   validateTargetProviderPrefix,
 } from "./channel-target-prefix.js";
 import { missingTargetError, reservedTargetLiteralError } from "./target-errors.js";
 import { resolveReservedTargetLiteral } from "./target-normalization.js";
-import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
-export type OutboundTargetResolution = {
-  /** Namespace identity before outbound policy; a policy rewrite may change the final `to`. */
-  namespaceTarget?: ResolvedMessagingTarget;
-} & ({ ok: true; to: string } | { ok: false; error: Error; namespaceResolutionFailed?: true });
+export type OutboundTargetResolution = { ok: true; to: string } | { ok: false; error: Error };
 
 /**
  * Inputs shared by direct and heartbeat outbound target resolution.
@@ -53,6 +49,11 @@ export async function resolveOutboundTargetWithPlugin(params: {
   if (!plugin) {
     return undefined;
   }
+  const namespaceError =
+    params.target.channelInferred && resolveChannelNamespaceTargetError(params.target.to, plugin);
+  if (namespaceError) {
+    return { ok: false, error: namespaceError };
+  }
 
   // Plugin defaults and allowlists can be account-scoped; resolve them before target validation.
   const allowFromRaw =
@@ -66,7 +67,7 @@ export async function resolveOutboundTargetWithPlugin(params: {
       : undefined);
   const allowFrom = allowFromRaw ? mapAllowFromEntries(allowFromRaw) : undefined;
 
-  let effectiveTo =
+  const effectiveTo =
     params.target.to?.trim() ||
     (params.target.cfg && plugin.config.resolveDefaultTo
       ? plugin.config.resolveDefaultTo({
@@ -81,26 +82,6 @@ export async function resolveOutboundTargetWithPlugin(params: {
   if (targetPrefixError) {
     return { ok: false, error: targetPrefixError };
   }
-  let namespaceTarget: ResolvedMessagingTarget | undefined;
-  if (params.target.channelInferred && resolveBareTargetChannelNamespace(effectiveTo, plugin)) {
-    const { resolveChannelTarget } = await import("./target-resolver.js");
-    const namespaceResolution = await resolveChannelTarget({
-      cfg: params.target.cfg ?? {},
-      channel: params.target.channel,
-      input: effectiveTo ?? "",
-      accountId: params.target.accountId,
-      channelInferred: params.target.channelInferred,
-      plugin,
-    }).catch((err: unknown) => ({
-      ok: false as const,
-      error: err instanceof Error ? err : new Error(String(err)),
-    }));
-    if (!namespaceResolution.ok) {
-      return { ...namespaceResolution, namespaceResolutionFailed: true };
-    }
-    namespaceTarget = namespaceResolution.target;
-    effectiveTo = namespaceTarget.to;
-  }
   const hint = plugin.messaging?.targetResolver?.hint;
   // Heartbeats defer reserved literals to the async resolver so directory hits can win.
   if (params.target.mode !== "heartbeat") {
@@ -114,7 +95,7 @@ export async function resolveOutboundTargetWithPlugin(params: {
   }
 
   const resolveTarget = plugin.outbound?.resolveTarget;
-  const resolved: OutboundTargetResolution = resolveTarget
+  return resolveTarget
     ? resolveTarget({
         cfg: params.target.cfg,
         to: effectiveTo,
@@ -128,5 +109,4 @@ export async function resolveOutboundTargetWithPlugin(params: {
           ok: false,
           error: missingTargetError(plugin.meta.label, hint),
         };
-  return namespaceTarget ? { ...resolved, namespaceTarget } : resolved;
 }

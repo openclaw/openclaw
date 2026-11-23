@@ -354,10 +354,6 @@ async function resolveDeliveryTargetWithPolicy(
   if (!resolved?.ok) {
     return rejectDelivery(ownerMode ? "no-route" : "no-target");
   }
-  const namespaceTarget = resolved.namespaceTarget;
-  if (namespaceTarget?.kind === "user" && policy?.directPolicy === "block") {
-    return rejectDelivery("dm-blocked");
-  }
 
   // Chat type belongs to the stored channel/account/destination.
   // A dropped reply thread still shares its parent conversation's chat type.
@@ -374,25 +370,9 @@ async function resolveDeliveryTargetWithPolicy(
       ? normalizeChatType(entry?.chatType)
       : undefined;
   const deliveryChatType =
-    (namespaceTarget ? undefined : sessionChatTypeHint) ??
-    inferChatTypeFromTarget({
-      channel: resolvedTarget.channel,
-      to:
-        namespaceTarget && plugin
-          ? stripTargetProviderPrefix(
-              resolved.to,
-              plugin.id,
-              ...(plugin.messaging?.targetPrefixes ?? []),
-            )
-          : resolved.to,
-      plugin,
-      resolvedKind: namespaceTarget?.to === resolved.to ? namespaceTarget.kind : undefined,
-    });
-  // Directory kinds describe their exact recipient, not an opaque policy rewrite.
-  if (
-    policy?.directPolicy === "block" &&
-    (deliveryChatType === "direct" || (namespaceTarget && !deliveryChatType))
-  ) {
+    sessionChatTypeHint ??
+    inferChatTypeFromTarget({ channel: resolvedTarget.channel, to: resolved.to, plugin });
+  if (deliveryChatType === "direct" && policy?.directPolicy === "block") {
     return rejectDelivery("dm-blocked");
   }
   if (
@@ -429,7 +409,6 @@ async function resolveDeliveryTargetWithPolicy(
     Boolean(resolvedTarget.to) &&
     Boolean(resolvedTarget.lastTo) &&
     resolvedTarget.to === resolvedTarget.lastTo &&
-    (!namespaceTarget || resolved.to === resolvedTarget.to) &&
     normalizeChatType(entry?.chatType) === "group"
       ? resolvedTarget.lastThreadId
       : undefined;
@@ -498,7 +477,6 @@ async function resolveDeliveryTargetWithPolicyAndSessionRoute(
     input: deliveryTo,
     accountId: delivery.accountId,
     unknownTargetMode: "normalized",
-    channelInferred: policy?.target === "last" && !policy.to?.trim() ? true : undefined,
     plugin,
   }).catch(() => null);
   if (targetResolution?.ok) {
@@ -550,7 +528,6 @@ function inferChatTypeFromTarget(params: {
   channel: string;
   to: string;
   plugin?: ChannelPlugin;
-  resolvedKind?: ResolvedMessagingTarget["kind"];
 }): ChatType | undefined {
   const to = params.to.trim();
   if (!to) {
@@ -565,9 +542,6 @@ function inferChatTypeFromTarget(params: {
   }
   if (/^group:/i.test(to)) {
     return "group";
-  }
-  if (params.resolvedKind) {
-    return params.resolvedKind === "user" ? "direct" : params.resolvedKind;
   }
   const plugin =
     params.plugin ??

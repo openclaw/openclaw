@@ -3,7 +3,6 @@ import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createDirectOutboundTestAdapter } from "../../test-utils/channel-plugins.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
-import { resetDirectoryCache } from "./target-resolver.js";
 import { resolveOutboundTarget, resolveProactiveDeliveryTarget } from "./targets.js";
 import {
   createGenericTargetTestPlugin,
@@ -11,23 +10,12 @@ import {
 } from "./targets.test-helpers.js";
 
 let plugin: ChannelPlugin;
-
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
-  resetDirectoryCache();
   plugin = createGenericTargetTestPlugin("alpha");
   setActivePluginRegistry(createTargetsTestRegistry([plugin]));
 });
 afterEach(() => resetPluginRuntimeStateForTest());
-
-const entry = {
-  sessionId: "namespace-source",
-  updatedAt: 1,
-  chatType: "group" as const,
-  delivery: normalizeSessionDeliveryState({
-    context: { channel: "alpha", to: "alpha", threadId: "old-thread" },
-  }),
-};
 
 it.each([
   ["alpha", "alpha"],
@@ -43,6 +31,16 @@ it.each([
   });
 });
 
+it("keeps a channel-configured default destination explicit", async () => {
+  plugin.config.resolveDefaultTo = () => "alpha";
+  expect(
+    await resolveOutboundTarget({ cfg: {}, channel: "alpha", channelInferred: true }),
+  ).toMatchObject({
+    ok: true,
+    to: "alpha",
+  });
+});
+
 it.each([
   { target: "last", explicitTo: false },
   { target: "alpha", explicitTo: true },
@@ -52,13 +50,21 @@ it.each([
   async ({ target, explicitTo }) => {
     const normalizeTarget = vi.fn((raw: string) => `@${raw}`);
     const resolveTarget = vi.fn(({ to }: { to?: string }) => ({ ok: true as const, to: to ?? "" }));
+    const listGroups = vi.fn(async () => [
+      { kind: "group" as const, id: "real-room", name: "alpha" },
+    ]);
+    const listPeers = vi.fn(async () => []);
     plugin.messaging = { normalizeTarget, targetResolver: { looksLikeId: () => true } };
     plugin.outbound = createDirectOutboundTestAdapter({ channel: "alpha", resolveTarget });
-
+    plugin.directory = { listGroups, listPeers };
     const result = await resolveProactiveDeliveryTarget({
       cfg: {},
-      entry,
-      policy: { target, ...(explicitTo ? { to: "alpha" } : { directPolicy: "block" as const }) },
+      entry: {
+        sessionId: "namespace-source",
+        updatedAt: 1,
+        delivery: normalizeSessionDeliveryState({ context: { channel: "alpha", to: "alpha" } }),
+      },
+      policy: { target, ...(explicitTo ? { to: "alpha" } : {}) },
     });
 
     expect(result).toMatchObject(
@@ -68,69 +74,7 @@ it.each([
       expect(normalizeTarget).not.toHaveBeenCalled();
       expect(resolveTarget).not.toHaveBeenCalled();
     }
+    expect(listGroups).not.toHaveBeenCalled();
+    expect(listPeers).not.toHaveBeenCalled();
   },
 );
-
-it.each([
-  { kind: "group" as const, id: "group:42", rewritten: "group:42", expected: "alpha" },
-  { kind: "user" as const, id: "peer-42", rewritten: "peer-42", expected: "dm-blocked" },
-  { kind: "group" as const, id: "group:42", rewritten: "42", expected: "dm-blocked" },
-  { kind: "group" as const, id: "room-42", rewritten: "opaque-peer", expected: "dm-blocked" },
-  { kind: "group" as const, id: "denied-room", rewritten: "denied-room", expected: "no-target" },
-  {
-    kind: "group" as const,
-    id: "alpha:group:42",
-    rewritten: "alpha:user:42",
-    expected: "dm-blocked",
-  },
-])(
-  "checks namespace $kind/$id → $rewritten against existing delivery policy",
-  async ({ kind, id, rewritten, expected }) => {
-    const resolveTarget = vi.fn(({ to, allowFrom }: { to?: string; allowFrom?: string[] }) =>
-      to === "denied-room" && allowFrom?.includes("operator")
-        ? { ok: false as const, error: new Error("recipient not allowed") }
-        : { ok: true as const, to: to === id ? rewritten : (to ?? "") },
-    );
-    plugin.messaging = {
-      targetPrefixes: ["alpha"],
-      preserveHeartbeatThreadIdForGroupRoute: true,
-      inferTargetChatType: ({ to }) =>
-        to === "42" ? "direct" : to.startsWith("alpha:") ? "group" : undefined,
-    };
-    plugin.outbound = createDirectOutboundTestAdapter({ channel: "alpha", resolveTarget });
-    plugin.directory = {
-      listGroups: async () => (kind === "group" ? [{ kind, id, name: "alpha" }] : []),
-      listPeers: async () => (kind === "user" ? [{ kind, id, name: "alpha" }] : []),
-    };
-    plugin.config = { ...plugin.config, resolveAllowFromAsync: async () => ["operator"] };
-
-    const result = await resolveProactiveDeliveryTarget({
-      cfg: {},
-      entry,
-      policy: { target: "last", directPolicy: "block" },
-    });
-
-    expect(result).toMatchObject(
-      expected === "alpha"
-        ? { channel: "alpha", to: rewritten, chatType: "group", threadId: undefined }
-        : { channel: "none", reason: expected },
-    );
-    if (expected === "no-target") {
-      expect(resolveTarget).toHaveBeenCalledWith(
-        expect.objectContaining({ to: "denied-room", allowFrom: ["operator"], mode: "heartbeat" }),
-      );
-    }
-  },
-);
-
-it("fails closed when namespace directory lookup fails", async () => {
-  plugin.directory = {
-    listGroups: async () => {
-      throw new Error("directory unavailable");
-    },
-  };
-
-  expect(
-    await resolveProactiveDeliveryTarget({ cfg: {}, entry, policy: { target: "last" } }),
-  ).toMatchObject({ channel: "none", reason: "no-target" });
-});

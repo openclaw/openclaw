@@ -8,13 +8,11 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { captureChannelReadAuthority } from "../../shared/channel-read-authority.js";
-import { resolveBareTargetChannelNamespace } from "./channel-target-prefix.js";
 import { buildDirectoryCacheKey, DirectoryCache } from "./directory-cache.js";
 // Message CLI actions use scoped registries without activating the process-root registry.
 import { getRuntimeVisibleChannelPlugin } from "./runtime-visible-channels.js";
 import {
   ambiguousTargetError,
-  missingChannelDestinationError,
   missingTargetError,
   reservedTargetLiteralError,
   unknownTargetError,
@@ -223,7 +221,6 @@ export async function resolveChannelTarget(params: {
   preferredKind?: ChannelDirectoryEntryKind;
   runtime?: RuntimeEnv;
   unknownTargetMode?: "error" | "normalized";
-  channelInferred?: true;
   plugin?: ChannelPlugin;
 }): Promise<ResolveMessagingTargetResult> {
   const raw = params.input.trim();
@@ -236,13 +233,8 @@ export async function resolveChannelTarget(params: {
       error: missingTargetError(providerLabel, hint),
     };
   }
-  const channelNamespace = params.channelInferred
-    ? resolveBareTargetChannelNamespace(raw, plugin)
-    : undefined;
   const kind = detectTargetKind(params.channel, raw, params.preferredKind, plugin);
-  const normalizedInput = channelNamespace
-    ? undefined
-    : resolveNormalizedTargetInput(params.channel, raw, plugin);
+  const normalizedInput = resolveNormalizedTargetInput(params.channel, raw, plugin);
   const normalized = normalizedInput?.normalized ?? raw;
   const reservedLiteral = resolveReservedTargetLiteral({ raw, plugin });
   const normalizedResult = (): ResolveMessagingTargetResult => ({
@@ -271,17 +263,16 @@ export async function resolveChannelTarget(params: {
     return target ? { ok: true, target } : normalizedResult();
   }
   const query = stripTargetPrefixes(raw, params.channel, plugin);
-  const directoryKinds: ChannelDirectoryEntryKind[] =
-    channelNamespace && !params.preferredKind
-      ? ["group", "user"]
-      : [kind === "user" ? "user" : "group"];
-  const entries = (
-    await Promise.all(
-      directoryKinds.map((entryKind) =>
-        getDirectoryEntries({ ...params, kind: entryKind, query, preferLiveOnMiss: true, plugin }),
-      ),
-    )
-  ).flat();
+  const entries = await getDirectoryEntries({
+    cfg: params.cfg,
+    channel: params.channel,
+    accountId: params.accountId,
+    kind: kind === "user" ? "user" : "group",
+    query,
+    runtime: params.runtime,
+    preferLiveOnMiss: true,
+    plugin,
+  });
   const normalizedQuery = query.toLowerCase();
   const matches = normalizedQuery
     ? entries.filter((entry) => {
@@ -293,9 +284,7 @@ export async function resolveChannelTarget(params: {
           value ? stripTargetPrefixes(value, params.channel, plugin).toLowerCase() : "",
         );
         return candidates.some((value) =>
-          reservedLiteral || channelNamespace
-            ? value === normalizedQuery
-            : value.includes(normalizedQuery),
+          reservedLiteral ? value === normalizedQuery : value.includes(normalizedQuery),
         );
       })
     : [];
@@ -305,7 +294,7 @@ export async function resolveChannelTarget(params: {
       ok: true,
       target: {
         to: normalizeDirectoryEntryId(params.channel, entry, plugin),
-        kind: channelNamespace ? entry.kind : kind,
+        kind,
         display:
           entry.name ?? entry.handle ?? stripTargetPrefixes(entry.id, params.channel, plugin),
         source: "directory",
@@ -323,12 +312,6 @@ export async function resolveChannelTarget(params: {
   // Directory misses are the fail-closed boundary for reserved literals.
   if (reservedLiteral) {
     return { ok: false, error: reservedTargetLiteralError(providerLabel, reservedLiteral, hint) };
-  }
-  if (channelNamespace) {
-    return {
-      ok: false,
-      error: missingChannelDestinationError(providerLabel, channelNamespace, params.channel, hint),
-    };
   }
   const resolvedFallbackTarget = await resolvePluginTarget();
   if (resolvedFallbackTarget) {
