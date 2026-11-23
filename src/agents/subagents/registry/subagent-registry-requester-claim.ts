@@ -5,10 +5,7 @@ import {
   retireAcceptedSessionSpawnCompletionForRun,
 } from "../../accepted-session-spawn.js";
 import type { OperationalRunInstanceRef } from "../../admitted-run-context.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "../../tools/gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { getSubagentRunsForRequesterSession, subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { resumeSubagentRun, settleRequesterAfterSessionSpawns } from "./subagent-registry.js";
@@ -21,7 +18,6 @@ export async function acknowledgeSubagentResultForRequesterTurn(params: {
   requesterAgentId: string;
   requesterTurnRunId: string;
 }): Promise<void> {
-  const assertCurrent = captureGatewayToolCallerAssertion();
   const instance = getGatewayToolCallerIdentity()?.operationalRunInstance;
   const accepted = await mutateSubagentRuns(
     [params.runId],
@@ -55,7 +51,7 @@ export async function acknowledgeSubagentResultForRequesterTurn(params: {
         postimages: new Map([[entry.runId, next]]),
       };
     },
-    { runs: subagentRuns, assertCurrent },
+    { runs: subagentRuns },
   );
   if (instance) {
     retireAcceptedSessionSpawnCompletionForRun(instance, accepted.receipt);
@@ -101,7 +97,6 @@ export async function reconcileRequesterTurnClaimForRun(params: {
   const entries = subagentRuns.selectCompletionAuthorityBatch(owned, acceptedEntry);
   return subagentRuns.runWithCompletionBatchAuthority(entries, async () => {
     const custody = await captureOperatorToolGatewayContinuationContext();
-    const assertCurrent = custody?.assertCurrent ?? captureGatewayToolCallerAssertion();
     try {
       const current = subagentRuns.selectCompletionAuthorityBatch(ownedEntries(), acceptedEntry);
       if (!current.includes(acceptedEntry)) {
@@ -119,7 +114,7 @@ export async function reconcileRequesterTurnClaimForRun(params: {
               childSessionKey: entry.childSessionKey,
               expectsCompletionMessage: true,
             })),
-            assertCurrent: () => assertCurrent?.(),
+            assertCurrent: () => custody?.assertCurrent(),
           });
         return custody ? custody.runWithRequester(settle, params.requesterAgentId) : settle();
       });

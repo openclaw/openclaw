@@ -1,18 +1,11 @@
-import fs from "node:fs";
 import { ServerResponse } from "node:http";
-import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import * as deviceTokens from "../infra/device-pairing-tokens.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
-import { readJsonBodyWithLimit } from "../infra/http-body.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "./control-ui-bootstrap-contract.js";
-import { handleControlUiHttpRequest } from "./control-ui.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
@@ -29,14 +22,12 @@ import {
   AUTH_TOKEN,
   createRequest,
   createResponse,
-  dispatchRequest,
   sendRequest,
   withGatewayServer,
 } from "./server-http.test-harness.js";
 import { createGatewayTestRegistry } from "./server/__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
-import { makeMockHttpResponse } from "./test-http-response.js";
 
 function profileRequest(token: string, method = "PUT", headers: Record<string, string> = {}) {
   return { path: "/profile", method, authorization: `Bearer ${token}`, headers };
@@ -69,12 +60,10 @@ function expectUnauthorized(response: ReturnType<typeof createResponse>) {
 }
 
 it.each(["operator.admin", "operator.read"])(
-  "createGatewayHttpServer plugin PUT/POST revalidates paired %s authority after reading the body",
+  "createGatewayHttpServer plugin PUT/POST enforces paired %s scopes and refuses revoked tokens",
   async (scope) => {
     await withOpenClawTestState({ label: "plugin-device-auth" }, async () => {
       const token = await pairBrowser([scope]);
-      const bodyStarted = createDeferred();
-      let effects = 0;
       const registry = createGatewayTestRegistry();
       registry.httpRoutes.push({
         pluginId: "profile",
@@ -83,19 +72,10 @@ it.each(["operator.admin", "operator.read"])(
         match: "exact",
         auth: "gateway",
         gatewayRuntimeScopeSurface: "trusted-operator",
-        handler: async (req, res) => {
+        handler: async (_req, res) => {
           const runtime = getPluginRuntimeGatewayRequestScope();
           const granted = runtime?.client?.connect.scopes ?? [];
-          if (req.headers["content-type"] === "application/json") {
-            const body = readJsonBodyWithLimit(req, { maxBytes: 1024 });
-            bodyStarted.resolve();
-            expect((await body).ok).toBe(true);
-          }
-          await runtime?.revalidate?.();
           const allowed = authorizeOperatorScopesForMethod("set-heartbeats", granted).allowed;
-          if (allowed) {
-            effects += 1;
-          }
           res.statusCode = allowed ? 200 : 403;
           res.end(JSON.stringify({ scopes: granted }));
           return true;
@@ -125,22 +105,7 @@ it.each(["operator.admin", "operator.read"])(
             expect(response.res.statusCode).toBe(isAdmin ? 200 : 403);
             expect(JSON.parse(response.getBody())).toEqual({ scopes: expectedScopes });
           }
-          const pending = createRequest(
-            profileRequest(token, "PUT", { "content-type": "application/json" }),
-          );
-          const response = createResponse();
-          Object.defineProperty(response.res, "writableEnded", {
-            get: () => response.res.writableFinished,
-          });
-          const dispatch = dispatchRequest(server, pending, response.res);
-          await bodyStarted.promise;
-          const previousEffects = effects;
           await deviceTokens.revokeDeviceToken({ deviceId: "browser", role: "operator" });
-          pending.emit("data", Buffer.from("{}"));
-          pending.emit("end");
-          await dispatch;
-          expectUnauthorized(response);
-          expect(effects).toBe(previousEffects);
           for (const credential of [token, "wrong-token"]) {
             const rejected = await sendRequest(server, profileRequest(credential));
             expectUnauthorized(rejected);
@@ -151,7 +116,6 @@ it.each(["operator.admin", "operator.read"])(
   },
 );
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
   setDeviceTokenBindingOwner(undefined);
@@ -280,41 +244,5 @@ it("authenticates remote HTTP reads only from the grant and refuses reusable cre
         req.destroy();
       }
     }
-  });
-});
-
-it("keeps the public shell when a paired token is revoked during bootstrap admission", async () => {
-  await withOpenClawTestState({ label: "bootstrap-revoked-device" }, async () => {
-    const root = dirs.make("bootstrap-revoked-device-");
-    fs.writeFileSync(
-      join(root, "index.html"),
-      "<!doctype html><html><head></head><body><openclaw-app></openclaw-app></body></html>",
-    );
-    const token = await pairBrowser(["operator.read"]);
-    const verify = deviceTokens.verifyDeviceToken;
-    vi.spyOn(deviceTokens, "verifyDeviceToken").mockImplementationOnce(async (params) => {
-      const result = await verify(params);
-      await deviceTokens.revokeDeviceToken({ deviceId: "browser", role: "operator" });
-      return result;
-    });
-
-    const req = createRequest({
-      path: "/control/chat/main/topic",
-      authorization: `Bearer ${token}`,
-    });
-    const response = makeMockHttpResponse();
-    await handleControlUiHttpRequest(req, response.res, {
-      basePath: "/control",
-      root: { kind: "resolved", path: root },
-      config: {},
-      getRuntimeConfig: () => ({}),
-      auth: AUTH_TOKEN,
-      sessionEntryPath: req.url,
-      isSessionEntryCurrent: () => true,
-    });
-    expect(response.res.statusCode).toBe(200);
-    const body = String(response.end.mock.calls[0]?.[0] ?? "");
-    expect(body).toContain("<openclaw-app");
-    expect(body).not.toContain(CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE);
   });
 });

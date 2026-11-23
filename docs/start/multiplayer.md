@@ -120,7 +120,7 @@ For coding work, verified GitHub identity pays off at the commit: with **Git co-
 
 Teammates can add their own provider accounts under **Settings → Profile → Connected accounts**, using the sign-in methods offered by each provider. Their new sessions prefer that account without making it a Gateway-wide default. Collaborators use the session's selected account, and shared same-provider failover can still apply - see [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
 
-To let teammates read selected sessions from a personal Gateway without controlling that machine, use [Session Share](/plugins/session-share). The source operator chooses session groups and pairs a node that advertises only the two read-only session commands. Shared transcripts appear under that node in the team Control UI; viewing requires permission to view others' sessions, and does not allow continuing the source session.
+To let teammates read selected sessions from a personal Gateway without controlling that machine, use [Session Share](/plugins/session-share). The source operator chooses session groups and pairs a node that advertises only the read-only session commands: the two base commands, plus an optional catalog pair for relationship filters and **Open original**. Shared transcripts appear under that node in the team Control UI; viewing requires permission to view others' sessions, and does not allow continuing the source session.
 
 ### Step 5: Bound what each person can do
 
@@ -725,7 +725,9 @@ openclaw connect <join-url> --service \
 ```
 
 Approve the intended device on the receiver and confirm the two-command
-allowlist. Move selected source sessions into the **Team** group. Subagents and
+allowlist. For relationship filters and **Open original**, add the optional
+catalog pair as described in [Session Share](/plugins/session-share#open-original-on-a-paired-node).
+Move selected source sessions into the **Team** group. Subagents and
 incognito sessions remain excluded. Removing the group revokes new reads but
 cannot retract text someone already read.
 
@@ -800,17 +802,17 @@ to establish that the service can complete work.
 
 ## Troubleshooting
 
-| Symptom                                                       | Check                                                                                                            |
-| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Browser works; agent cannot provide session links             | Set this server's `gateway.publicOrigin`; prepare a new turn after reload.                                       |
-| Access succeeds but Gateway rejects the connection            | Check loopback trust, forwarded client addresses, required identity headers, and `allowedOrigins`.               |
-| Administrator signs in as an observer                         | Assign the real profile's administrative role and grant the verified identity `operator.admin`, then reconnect.  |
-| OIDC migration creates another person                         | Verify the sign-in email and explicitly link its alias to the existing profile.                                  |
-| GitHub login looks right but publication uses another account | Check the system/agent/personal publication selection and repository Git authentication separately.              |
-| Chat works but widgets fail                                   | Check the distinct sandbox origin, tunnel port, and absence of an interactive Access challenge on that hostname. |
-| Node join receives HTTP 302                                   | Supply machine Access authentication on every required route.                                                    |
-| Shared sessions are missing or names do not link              | Check source group, node account/state, two-command allowlist, receiver role, and verified numeric GitHub IDs.   |
-| Update fails despite free disk                                | Check service temporary-space quota, filesystem metadata, and retained snapshots before retrying.                |
+| Symptom                                                       | Check                                                                                                              |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Browser works; agent cannot provide session links             | Set this server's `gateway.publicOrigin`; prepare a new turn after reload.                                         |
+| Access succeeds but Gateway rejects the connection            | Check loopback trust, forwarded client addresses, required identity headers, and `allowedOrigins`.                 |
+| Administrator signs in as an observer                         | Assign the real profile's administrative role and grant the verified identity `operator.admin`, then reconnect.    |
+| OIDC migration creates another person                         | Verify the sign-in email and explicitly link its alias to the existing profile.                                    |
+| GitHub login looks right but publication uses another account | Check the system/agent/personal publication selection and repository Git authentication separately.                |
+| Chat works but widgets fail                                   | Check the distinct sandbox origin, tunnel port, and absence of an interactive Access challenge on that hostname.   |
+| Node join receives HTTP 302                                   | Supply machine Access authentication on every required route.                                                      |
+| Shared sessions are missing or names do not link              | Check source group, node account/state, session command allowlist, receiver role, and verified numeric GitHub IDs. |
+| Update fails despite free disk                                | Check service temporary-space quota, filesystem metadata, and retained snapshots before retrying.                  |
 
 ## When to split things up
 

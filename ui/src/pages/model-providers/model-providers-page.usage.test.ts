@@ -56,6 +56,7 @@ describe("ModelProvidersPage usage convergence", () => {
     });
     const plan = () => page.querySelector(".provider-row__plan")?.textContent;
     await waitForSolid(() => expect(plan()).toBe("Original"));
+    await waitForProviders(page);
     expect(requestCount(harness.request, "usage.status")).toBe(0);
     harness.request.mockClear();
 
@@ -311,6 +312,7 @@ describe("ModelProvidersPage usage convergence", () => {
     expectNoProviderReads();
     page.loaderPending = true;
     publishRouteData(page, createApiKeyProviderData());
+    page.routeData = { ...page.routeData!, provider: "openai" };
     await waitForSolid(() => expectPresent(page, '[data-provider-id="openai"]'));
     expect(usageReads).toBe(0);
     expect(requestCount(harness.request, "sessions.usage")).toBe(0);

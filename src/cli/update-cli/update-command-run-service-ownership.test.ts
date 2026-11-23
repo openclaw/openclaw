@@ -18,11 +18,9 @@ import {
   resolveSystemdUnitPath,
 } from "../../daemon/systemd-service-files.js";
 import { systemdManagerVersionProbe } from "../../daemon/systemd-user-bus.test-support.js";
-import * as databaseEngine from "../../infra/database-engine/config.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
-import * as baselineCapture from "../../infra/update-recovery-baseline-capture.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import * as updateRunLedger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
@@ -39,7 +37,6 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as shared from "./shared.js";
 import { snapshotUpdateFixtureTree } from "./update-command-filesystem-snapshot.test-support.js";
-import * as commandRun from "./update-command-run.js";
 import {
   admitUpdateCommandRun,
   prepareUpdateCommand,
@@ -226,47 +223,10 @@ it.each([
       expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
     };
     if (scenario === "owned-command") {
-      const resolve = vi.spyOn(commandRun, "resolveUpdateCommandAdmissionEnv");
-      const admission = vi.spyOn(commandRun, "admitUpdateCommandRun");
-      const engine = vi.spyOn(databaseEngine, "resolveDatabaseEngineSelection");
-      const capture = vi.spyOn(baselineCapture, "captureUpdateRecoveryBaseline");
-      const inspection = vi.spyOn(servicePlan, "readManagedGatewayServiceForUpdate");
-      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-      vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-      await expect(
-        updateCommand({ tag: "main", yes: true, json: true, restart: false }),
-      ).rejects.toEqual(new ExitError(1));
-      expect(resolve).toHaveBeenCalledOnce();
-      expect(admission).toHaveBeenCalledOnce();
-      const selectedEnv = await resolve.mock.results[0]!.value;
-      const run = await admission.mock.results[0]!.value;
-      expect(selectedEnv).toMatchObject(serviceOverrides);
-      expect(admission.mock.calls[0]?.[0].env).toBe(selectedEnv);
-      expect(run.env).toBe(selectedEnv);
-      expect(engine).toHaveBeenCalledWith(
-        expect.objectContaining({ update: { channel: "beta" }, database: { engine: "sqlite" } }),
-        expect.objectContaining(serviceOverrides),
-      );
-      // The refused update changed nothing in either profile, so it copied nothing.
-      expect(capture).not.toHaveBeenCalled();
-      expect(run.originalRecoveryCapture).toBeUndefined();
-      expect(
-        inspection.mock.calls.filter(
-          ([, selectedRoot, allowInstallRootChange]) =>
-            selectedRoot === root && allowInstallRootChange === true,
-        ),
-      ).toHaveLength(1);
-      expect(getUpdateRun(run.runId, { env: serviceEnv })).toMatchObject({
-        status: "failed",
-        phase: "finished",
-        reason: "unsupported-package-target",
-      });
+      await expectAdmitted(true);
       expect(
         fs.existsSync(resolveOpenClawStateSqlitePath({ ...process.env, ...callerOverrides })),
       ).toBe(false);
-      expect(output).toHaveBeenCalledWith(
-        expect.objectContaining({ runId: run.runId, reason: "unsupported-package-target" }),
-      );
     } else if (scenario === "owned" || scenario === "stale-install" || scenario === "absent") {
       const usesServiceState = scenario !== "absent";
       await expectAdmitted(usesServiceState);

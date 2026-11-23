@@ -380,6 +380,8 @@ Session details share concurrent reads across the sidebar, chat, and resource pa
 
 Sidebar pull-request indicators reuse the last known snapshot. Subscriptions acknowledge the requested sessions immediately; session preparation and fresh pull-request snapshots arrive through background updates. Recorded pull requests update when their receipts or session access and lineage change, without polling passive rows or rechecking unrelated audiences on owner-certified metadata-only updates. Delivery still checks each recipient’s current access. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
 
+Successful GitHub publications appear in **Details → Changes** without an automatic assistant message. Publication failures and requests for confirmation appear as system notices in chat.
+
 Changes summaries share identical concurrent polls and reuse unchanged checkout results when file metadata can establish freshness. Summary reads have a separate worker queue from full patches and PR statistics, with priority inside the shared Git child limit. Running Git commands still finish normally, and background work keeps making progress.
 
 Environment change totals request counts without patches or branch history. Opening Review loads patches separately.

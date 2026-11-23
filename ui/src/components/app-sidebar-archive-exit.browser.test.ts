@@ -55,29 +55,37 @@ it.each([
       expect(sidebar.querySelectorAll("[data-session-key]").length).toBeGreaterThan(1),
     );
     await document.fonts.ready;
+    const scroller = sidebar.querySelector<HTMLElement>(".sidebar-shell__body")!;
     if (scrolled) {
-      const scroller = sidebar.querySelector<HTMLElement>(".sidebar-shell__body")!;
       scroller.style.cssText = "height:400px;flex:none;overflow:auto";
+      await waitForSolid(() =>
+        expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight),
+      );
       scroller.scrollTop = 800;
-      scroller.dispatchEvent(new Event("scroll"));
-      await waitForSolid(() => {
-        const first = sidebar.querySelector<HTMLElement>("[data-session-window-key]")!;
-        expect(Number.parseFloat(first.style.marginBlockStart)).toBeGreaterThan(0);
-      });
     }
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
     });
-    const rows = [...sidebar.querySelectorAll<HTMLElement>("[data-session-key]")];
-    const row = rows[0]!;
-    if (scrolled) {
-      const viewport = sidebar.querySelector<HTMLElement>(".sidebar-shell__body")!;
-      expect(row.getBoundingClientRect().bottom).toBeLessThanOrEqual(
-        viewport.getBoundingClientRect().top,
+    const { row, next } = await waitForSolid(() => {
+      const rows = [...sidebar.querySelectorAll<HTMLElement>("[data-session-key]")];
+      if (!scrolled) {
+        expect(rows.length).toBeGreaterThan(1);
+        return { row: rows[0]!, next: rows[1]! };
+      }
+      expect(scroller.scrollTop).toBeGreaterThan(0);
+      const viewport = scroller.getBoundingClientRect();
+      const clippedRow = rows.findLast(
+        (candidate) => candidate.getBoundingClientRect().bottom <= viewport.top,
       );
-    }
+      const visibleAnchor = rows.find((candidate) => {
+        const bounds = candidate.getBoundingClientRect();
+        return bounds.bottom > viewport.top && bounds.top < viewport.bottom;
+      });
+      expect(clippedRow).toBeDefined();
+      expect(visibleAnchor).toBeDefined();
+      return { row: clippedRow!, next: visibleAnchor! };
+    });
     const archivedKey = row.dataset.sessionKey!;
-    const next = rows[1]!;
     expect(next.getBoundingClientRect().top).toBeGreaterThan(row.getBoundingClientRect().top);
     const beforeTop = next.getBoundingClientRect().top;
     const beforeRowTop = row.getBoundingClientRect().top;

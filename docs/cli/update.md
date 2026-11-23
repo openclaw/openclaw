@@ -13,9 +13,17 @@ title: "Update"
 
 Update OpenClaw and switch between stable/extended-stable/beta/dev channels.
 
-If you installed via **npm/pnpm/bun** (global install, no git metadata),
-updates go through the package-manager flow described in
-[Updating](/install/updating).
+Git checkouts and **npm/pnpm/Bun global installs** use the same release updater:
+prepare beside the serving version, check with the new code, maintain plugins,
+then start a trial under a resident launcher. A candidate that cannot start rolls
+back automatically. See [Updating](/install/updating).
+
+`--no-restart` leaves the Gateway running and activates the trial at its next
+start, with the same rollback protection. The new Gateway performs state
+migrations at boot; plugin failures are reported without failing the core update.
+
+The older admission, in-place replacement, and recovery details on this page
+remain relevant to the first hop performed by an older installed updater.
 
 Temporary workspaces require a private root and safe ancestor permissions. If the
 selected system temp root has a group- or world-writable ancestor without sticky
@@ -1023,16 +1031,16 @@ Use `openclaw update status` and Doctor for recovery guidance.
 
 | Flag                                             | Description                                                                                                                                                                                                                                                                                                                                                                                      |
 | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--no-restart`                                   | Skip the updater's managed restart and trailing Gateway readiness wait, including failure recovery; also applies with `--json`. A running package Gateway (npm/pnpm/bun global) restarts itself when it detects the replaced installation. Git checkouts retain operator-controlled restart behavior. Doctor still restores a service it stopped for maintenance.                                |
-| `--channel <stable\|extended-stable\|beta\|dev>` | Set the update channel and persist it after core update success. Extended-stable is package-only.                                                                                                                                                                                                                                                                                                |
+| `--no-restart`                                   | Prepare the new release without restarting the running Gateway. Its next start activates the pending trial with automatic rollback protection.                                                                                                                                                                                                                                                   |
+| `--channel <stable\|extended-stable\|beta\|dev>` | Set and save the update channel after any required downgrade confirmation, before preparing the release. Extended-stable is package-only.                                                                                                                                                                                                                                                        |
 | `--tag <dist-tag\|version\|spec>`                | Override the package target for this update only. On `extended-stable`, an explicit target overrides the default verified selection without replacing the saved channel; normal compatibility checks still apply. Package installs reject the `main` shorthand; use `--channel dev` for the supported checkout and build flow. Other explicit package specs keep their package-manager behavior. |
 | `--dry-run`                                      | Preview planned actions (channel/tag/target/restart flow) without writing config, installing, syncing plugins, or restarting.                                                                                                                                                                                                                                                                    |
 | `--admission <auto\|installed>`                  | Choose candidate admission when supported (`auto`, the default), or force installed admission checks. This option has no environment-variable form. Dry runs always use installed checks.                                                                                                                                                                                                        |
-| `--json`                                         | Print machine-readable `UpdateRunResult` JSON. Includes `postUpdate.plugins.warnings` when a managed plugin needs repair, beta-channel plugin fallback details, and `postUpdate.plugins.integrityDrifts` when npm plugin artifact drift is detected during post-update sync.                                                                                                                     |
-| `--timeout <seconds>`                            | Optional overall update budget in seconds, shared by activation, readiness, recovery, and native service commands. Without it, package installation and deferred lifecycle scripts have no work deadline; candidate Doctor, checks, and recovery retain their step bounds.                                                                                                                       |
+| `--json`                                         | Print the durable run record as JSON, including steps, outcome, and plugin-maintenance notes.                                                                                                                                                                                                                                                                                                    |
+| `--timeout <seconds>`                            | Overall update budget in seconds, including target resolution, preparation, and following the restart. Without it, release preparation has a 45-minute deadline; checks and the launcher trial retain their own bounds.                                                                                                                                                                          |
 | `--drain-timeout <seconds>`                      | Immutable installations only: override the drain budget before interruption, independently of candidate check and readiness deadlines. Also accepted by `update recover`; healthy recovery never stops the process.                                                                                                                                                                              |
 | `--yes`                                          | Skip confirmation prompts (for example downgrade confirmation).                                                                                                                                                                                                                                                                                                                                  |
-| `--reapply-local-overrides`                      | Replay trusted local packaged `dist` edits when the new package has the same baseline. Otherwise preserve them for manual recovery.                                                                                                                                                                                                                                                              |
+| `--reapply-local-overrides`                      | Currently refused by prepared-release updates. Save edits, update without the flag, then [reapply overrides manually](/install/updating#local-packaged-code-overrides).                                                                                                                                                                                                                          |
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes during post-update sync. This acknowledges the exact staged capability surface; it does not disable capability checks or establish future trust.                                                                                                                                                                                                |
 | `--full-integrity-check`                         | Request full SQLite integrity checks during candidate migrations, including Doctor subprocesses. Also accepted by `update repair` and `update wizard`.                                                                                                                                                                                                                                           |
 
@@ -1046,33 +1054,16 @@ for channel, availability, and the latest durable update report. Gateway console
 file log level (`logging.level: "debug"`/`"trace"`) are independent knobs; see
 [Gateway logging](/gateway/logging).
 
-For global package installs (npm, pnpm, or bun), `--no-restart` skips only the
-updater's managed restart. The running Gateway restarts itself when its watcher
-detects the replaced installation, because the old runtime can lose required
-chunks during the package swap. Before publication, the updater prints this
-warning and includes it in JSON update history. It checks the observed Gateway
-version and, when available, the expected build ID without waiting for startup.
-A same-version Gateway on a different build is not verified as the replacement.
-Unavailable readiness or an identity that has not switched yet leaves the package
-update successful with a warning. State
-verification blocked by another process or handed off to the newer schema is
-deferred to the candidate. Keep recovery backups and run `openclaw update status`
-and `openclaw doctor` after startup completes. Unrelated update failures retain
-their failure diagnostics.
+For Git checkouts and global npm, pnpm, or Bun installs, `--no-restart` leaves the
+serving release selected. The next Gateway start selects the pending release,
+and the launcher rolls back if it cannot become ready. Existing package files
+are not replaced under the running Gateway.
 
-For Git checkouts and immutable preparation-only updates, `--no-restart` leaves
-activation to the operator. An in-use Git runtime is protected from replacement;
-the flag does not authorize overwriting files a running Gateway still needs.
-Restart through the installation's service owner when ready to activate it. A Git
-checkout that runs from releases builds the new release and leaves the serving one
-selected; the next service start selects the new release. If the managed service
-still starts the checkout, the updater stages the release launcher without starting
-or restarting the Gateway. The next OpenClaw restart or boot/login uses that
-definition; staging failures remain visible as an owed service-definition refresh.
-That operator start has no updater to confirm it, so it does not get the automatic
-switch-back after two failed starts that an update with a restart gets.
-After a successful update with changed plugins, the final report reminds you to
-restart to activate them, including when the core version also changed.
+During the first conversion, existing package entry points forward to the
+launcher and an owned user service's definition is staged with its existing
+arguments, environment, runtime pin, and a definition backup. Staging does not
+start or restart the Gateway. System-owned definitions continue through the
+forwarding entries.
 
 Interactive updates show phase transitions, the current step, and elapsed time.
 The phases match the Control UI: requested, staging, validating, activating,
@@ -1218,11 +1209,12 @@ freshness or dependencies. Those checks run when you apply the update; use
 ## `update plugins`
 
 Plugin maintenance for the release this command runs from: channel sync, plugin
-updates and repair, the same work `openclaw update` does after a core update. On a
-Git install, `openclaw update` runs it from the new release before the restart, so
-the new core chooses its plugins, and from the serving release when the checkout is
-already current. A plugin problem is reported as a warning and never fails the update;
-`openclaw plugins update` retries it. You do not normally run this command yourself.
+updates and repair, the same work `openclaw update` does after a core update.
+For Git and global package installs, `openclaw update` runs it from the new
+release before the restart, so the new core chooses its plugins, and from the
+serving release when the core is already current. A plugin problem is reported
+as a warning and never fails the update; `openclaw plugins update` retries it.
+You do not normally run this command yourself.
 
 | Flag                    | Default  | Description                                |
 | ----------------------- | -------- | ------------------------------------------ |

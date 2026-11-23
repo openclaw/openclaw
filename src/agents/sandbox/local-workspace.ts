@@ -20,6 +20,7 @@ import {
   setWorktreePreparationTemplate,
   startWorktreePreparationPhase,
 } from "../worktrees/preparation-timing.js";
+import { isLocalSandboxWorkspaceBackend } from "./config.js";
 import { bindSandboxInputStager, getSandboxInputStager } from "./input-staging.js";
 import {
   bindSandboxPersistentExecCapability,
@@ -30,7 +31,7 @@ import type { SandboxStateOwnerPath } from "./state-owner-path.js";
 import type { SandboxConfig, SandboxContext } from "./types.js";
 
 export function assertLocalSandboxWorkspaceBackend(backend: SandboxConfig["backend"]) {
-  if (backend !== "docker" && backend !== "podman") {
+  if (!isLocalSandboxWorkspaceBackend(backend)) {
     throw new Error(
       "Managed guest projects require a local Docker or Podman sandbox; this backend cannot safely reconcile a local managed checkout",
     );

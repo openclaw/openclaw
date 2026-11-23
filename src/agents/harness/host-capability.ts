@@ -405,11 +405,13 @@ export function createAgentHarnessHostCapabilities(params: {
   ) => {
     assertCurrent();
     const effectiveOptions = { ...options, ...requiredWorkspace?.apply(options) };
+    const resourceSnapshot = skillResourceSnapshot(options);
     return {
       options: {
         ...effectiveOptions,
         // Availability belongs to this prepared host, not mutable plugin inputs.
         githubPublicationAvailable,
+        sessionProjectMoveEligible: attempt.sessionProjectMoveEligible,
         // Native harnesses own creation-time listings and have no embedded prompt pin.
         githubPublicationConfigurationAware: undefined,
         // One host owns selection and launch. A plugin's mutable config or exec
@@ -432,10 +434,7 @@ export function createAgentHarnessHostCapabilities(params: {
         // Tool creation cannot certify the harness's additional execution gates.
         unverifiedExecutionPolicy: true as const,
       },
-      skillReadResources: resolveSkillResourceCandidates(
-        skillResourceSnapshot(options),
-        libraryEntries,
-      ),
+      skillReadResources: resolveSkillResourceCandidates(resourceSnapshot, libraryEntries),
     };
   };
   const bindCreatedTools = (

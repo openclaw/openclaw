@@ -6,6 +6,8 @@ import { transformMessages } from "../../packages/ai/src/transcript-transform.js
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { sanitizeSessionHistory } from "../agents/embedded-agent-runner/replay-history.js";
+import { normalizeMessagesForLlmBoundary } from "../agents/embedded-agent-runner/run/attempt-llm-boundary.js";
+import type { Agent } from "../agents/runtime/index.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -93,6 +95,15 @@ async function createTarget() {
 const lookupCall = { role: "assistant", content: [{ type: "toolCall", id: "lookup-call" }] };
 const lookupResult = { role: "toolResult", toolCallId: "lookup-call", isError: false };
 const automationResult = { role: "assistant", model: "automation-result" };
+const BACKGROUND_RESULT_LABEL = "[OpenClaw background result]";
+
+// Embedded attempts project model context at dispatch (attempt-session-prepare.ts).
+// This harness session runs without an attempt, so install the same boundary.
+function dispatchThroughLlmBoundary(agent: Agent) {
+  const convert = agent.convertToLlm.bind(agent);
+  agent.convertToLlm = (messages) =>
+    convert(normalizeMessagesForLlmBoundary(messages, { includeTimestamp: false }));
+}
 
 it("deduplicates background output without breaking live or replayed tool results", async ({
   signal,
@@ -130,6 +141,7 @@ it("deduplicates background output without breaking live or replayed tool result
       },
     ],
   });
+  dispatchThroughLlmBoundary(session.agent);
   const updates: unknown[] = [];
   const turn = withSessionTurn(target, () => session.prompt("Run lookup"));
   try {
@@ -157,7 +169,7 @@ it("deduplicates background output without breaking live or replayed tool result
       { role: "user" },
       lookupCall,
       lookupResult,
-      automationResult,
+      { role: "user", content: expect.stringContaining(BACKGROUND_RESULT_LABEL) },
     ]);
     const reopened = await SessionManager.openAsync(target.scope);
     const stored = reopened.buildSessionContext().messages;
@@ -209,7 +221,10 @@ it("deduplicates background output without breaking live or replayed tool result
         content: [{ type: "text", text: "Actual lookup result" }],
         isError: false,
       },
-      automationResult,
+      {
+        role: "user",
+        content: [{ type: "text", text: expect.stringContaining(BACKGROUND_RESULT_LABEL) }],
+      },
       { role: "assistant" },
     ]);
     const call = transformed[1];
@@ -357,6 +372,7 @@ it.each(["tool", "stream"])(
       },
     ];
     const { session } = await createTestSession({ sessionManager: manager, customTools });
+    dispatchThroughLlmBoundary(session.agent);
     const turn = withSessionTurn(target, () => session.prompt("Run two lookups"));
     if (arrival === "stream") {
       try {
@@ -376,6 +392,7 @@ it.each(["tool", "stream"])(
 
     const reopened = await SessionManager.openAsync(target.scope);
     const { session: next } = await createTestSession({ sessionManager: reopened, customTools });
+    dispatchThroughLlmBoundary(next.agent);
     next.agent.state.messages = await sanitizeSessionHistory({
       messages: next.messages,
       sessionManager: reopened,
@@ -417,9 +434,10 @@ it.each(["tool", "stream"])(
     expect(
       JSON.stringify(
         await captureInput(
-          reopened
-            .buildSessionContext()
-            .messages.filter(
+          normalizeMessagesForLlmBoundary(reopened.buildSessionContext().messages, {
+            includeTimestamp: false,
+          })
+            .filter(
               (message): message is Message =>
                 message.role === "user" ||
                 message.role === "assistant" ||

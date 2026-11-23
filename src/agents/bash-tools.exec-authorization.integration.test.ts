@@ -455,82 +455,49 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     expect(result.details.aggregated).toBe("CUSTOMIZED\n");
   });
 
-  it.each(["auto", "human-always", "current-policy"] as const)(
-    "revalidates %s after asynchronous shell preparation",
-    async (authority) => {
-      vi.stubEnv("OPENCLAW_EXEC_SHELL_SNAPSHOT", "0");
-      fs.writeFileSync(path.join(root, "approved.txt"), "fixture");
-      setPolicy("allowlist", authority === "current-policy");
-      const review = reviewer();
-      approve(authority === "human-always" ? "allow-always" : "allow-once");
-      boundary.prepare.mockImplementation(async () => setPolicy("deny"));
-      const mode =
-        authority === "current-policy" ? "allowlist" : authority === "auto" ? "auto" : "ask";
-      const pending = tool(review, mode).execute("policy-revalidation", {
-        command: "/bin/ls approved.txt",
-      });
-      await expect(pending).rejects.toThrow("Exec approval changed before execution");
-      expect(boundary.spawn.mock.calls.length).toBe(0);
-      expect(review.mock.calls.length).toBe(authority === "auto" ? 1 : 0);
-      expect(boundary.prepare.mock.calls.length).toBe(1);
-      expect(loadExecApprovalsReadOnly().defaults?.security).toBe("deny");
-    },
-  );
-
-  it("rechecks policy after deferred supervisor admission", async () => {
-    let started = 0;
+  it("finishes an admitted launch when policy is revoked during supervisor admission", async () => {
+    fs.writeFileSync(path.join(root, "approved.txt"), "fixture");
     const liveSupervisor = supervisor!;
     boundary.spawn.mockImplementation(async (input) => {
       await Promise.resolve();
       setPolicy("deny");
+      return await liveSupervisor.spawn(input);
+    });
+    // The commit checked policy once; the revoke applies to the next command.
+    const result = await tool(reviewer()).execute("deferred-admission", {
+      command: "/bin/ls approved.txt",
+    });
+    if (result.details.status !== "completed") {
+      throw new Error(`Unexpected exec status: ${result.details.status}`);
+    }
+    expect(result.details.aggregated).toBe("approved.txt\n");
+    expect(loadExecApprovalsReadOnly().defaults?.security).toBe("deny");
+  });
+
+  it("preserves human allow-always through PTY fallback", async () => {
+    fs.writeFileSync(path.join(root, "approved.txt"), "fixture");
+    approve("allow-always");
+    const liveSupervisor = supervisor!;
+    let started = 0;
+    boundary.spawn.mockImplementation(async (input) => {
+      if (input.mode === "pty") {
+        throw new Error("fixture PTY unavailable");
+      }
       const run = await liveSupervisor.spawn(input);
       started += 1;
       return run;
     });
-    await expect(
-      tool(reviewer()).execute("deferred-admission", { command: "/bin/ls" }),
-    ).rejects.toThrow("Exec approval changed before execution");
-    expect(started).toBe(0);
+    const result = await tool(reviewer(), "ask").execute("pty-revalidation", {
+      command: "/bin/ls approved.txt",
+      pty: true,
+    });
+    if (result.details.status !== "completed") {
+      throw new Error(`Unexpected exec status: ${result.details.status}`);
+    }
+    expect(result.details.aggregated).toBe("approved.txt\n");
+    expect(started).toBe(1);
+    expect((loadExecApprovalsReadOnly().agents?.main?.allowlist ?? []).length).toBeGreaterThan(0);
   });
-
-  it.each([false, true])(
-    "preserves human allow-always through PTY fallback (revoked=%s)",
-    async (revoked) => {
-      fs.writeFileSync(path.join(root, "approved.txt"), "fixture");
-      approve("allow-always");
-      const liveSupervisor = supervisor!;
-      let started = 0;
-      boundary.spawn.mockImplementation(async (input) => {
-        if (input.mode === "pty") {
-          if (revoked) {
-            setPolicy("deny");
-          }
-          throw new Error("fixture PTY unavailable");
-        }
-        const run = await liveSupervisor.spawn(input);
-        started += 1;
-        return run;
-      });
-      const pending = tool(reviewer(), "ask").execute("pty-revalidation", {
-        command: "/bin/ls approved.txt",
-        pty: true,
-      });
-      if (revoked) {
-        await expect(pending).rejects.toThrow("Exec approval changed before execution");
-        expect(started).toBe(0);
-      } else {
-        const result = await pending;
-        if (result.details.status !== "completed") {
-          throw new Error(`Unexpected exec status: ${result.details.status}`);
-        }
-        expect(result.details.aggregated).toBe("approved.txt\n");
-        expect(started).toBe(1);
-        expect((loadExecApprovalsReadOnly().agents?.main?.allowlist ?? []).length).toBeGreaterThan(
-          0,
-        );
-      }
-    },
-  );
 
   // A program file started from a shell chain: the command text does not show what runs.
   describe.skipIf(path.basename(nodeBinary) !== "node")("opaque interpreter programs", () => {

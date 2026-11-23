@@ -33,9 +33,13 @@ const cleanStaleGatewayProcessesSync = vi.hoisted(() =>
   vi.fn<(port?: number, options?: CleanStaleGatewayProcessesOptions) => number[]>(() => []),
 );
 const nativeServiceMembership = vi.hoisted(() => vi.fn<() => "inside" | "outside" | "unknown">());
+const nativeListenerMembership = vi.hoisted(() =>
+  vi.fn<typeof import("./service-process-membership.js").inspectLaunchdProcessMembershipSync>(),
+);
 vi.mock("./service-process-membership.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./service-process-membership.js")>()),
   inspectServiceProcessMembershipSync: nativeServiceMembership,
+  inspectLaunchdProcessMembershipSync: nativeListenerMembership,
 }));
 const getSelfAndAncestorPidsSync = vi.hoisted(() => vi.fn<() => Set<number>>());
 const launchdCallerPids = vi.hoisted(() => {
@@ -326,6 +330,7 @@ beforeEach(() => {
   });
   getSelfAndAncestorPidsSync.mockReset().mockReturnValue(new Set([...launchdCallerPids, 1]));
   nativeServiceMembership.mockReset().mockReturnValue("outside");
+  nativeListenerMembership.mockReset().mockReturnValue("unknown");
   cleanStaleGatewayProcessesSync.mockReset().mockImplementation((_port, options) => {
     state.cleanupProtectedPids.push(options?.resolveProtectedPid?.() ?? options?.protectedPid);
     return [];
@@ -351,6 +356,7 @@ beforeEach(() => {
 
 export {
   nativeServiceMembership,
+  nativeListenerMembership,
   launchdRestartHandoffState,
   launchdSystemState,
   cleanStaleGatewayProcessesSync,

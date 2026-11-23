@@ -106,6 +106,34 @@ export function projectChatSystemNotice(
   },
 ): ChatItem[] {
   const raw = asRecord(item.message);
+  if (
+    raw?.role === "assistant" &&
+    raw.provider === "openclaw" &&
+    typeof raw.responseId === "string" &&
+    raw.responseId.startsWith("github-publication:")
+  ) {
+    const status = raw.openclawGitHubPublicationStatus;
+    const text = extractTextCached(item.message)?.trim() ?? "";
+    // Older persisted receipts have the Gateway's response ID but no status field.
+    if (
+      !text ||
+      status === "published" ||
+      status === "requested" ||
+      status === "publishing" ||
+      (status === undefined && text.startsWith("Published "))
+    ) {
+      return [];
+    }
+    return [
+      {
+        kind: "notice",
+        key: item.key,
+        icon: "gitPullRequest",
+        text,
+        timestamp: (normalized ?? safeNormalizeMessage(item.message))?.timestamp ?? 0,
+      },
+    ];
+  }
   if (raw?.role === "custom" && raw.customType === "session-model-change") {
     const details = asRecord(raw.details);
     if (typeof details?.from === "string" && typeof details.to === "string") {

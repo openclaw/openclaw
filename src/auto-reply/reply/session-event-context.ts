@@ -232,7 +232,7 @@ export function buildSessionEventContext(params: {
   text: string;
   options: Pick<
     SessionEventOptions,
-    "source" | "sourceTurnId" | "sourceRunId" | "scheduledAutomation"
+    "source" | "sourceTurnId" | "sourceRunId" | "completedToolCall" | "scheduledAutomation"
   >;
   readmissionAttempt?: number;
   occurrenceId: string;
@@ -261,6 +261,9 @@ export function buildSessionEventContext(params: {
     InputProvenance: {
       kind: "internal_system",
       sourceTool: automation ? CRON_EXECUTION_SOURCE_TOOL : options.source,
+      ...(!automation && options.source === "tool_handoff" && options.completedToolCall
+        ? { completedToolCall: options.completedToolCall }
+        : {}),
       ...(automation && automation.job.state.runningAtMs !== undefined
         ? {
             jobId: automation.job.id,

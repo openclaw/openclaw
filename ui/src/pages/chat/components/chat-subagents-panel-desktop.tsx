@@ -69,12 +69,14 @@ function groupFor(row: SubagentsPanelRow): Group {
 
 function DesktopRow(props: {
   row: SubagentsPanelRow;
+  branch?: { hasChildren: boolean; rails: readonly number[] };
   onOpen: (row: SubagentsPanelRow, source: HTMLButtonElement) => void;
   createStop: ReturnType<typeof createSubagentsPresentation>["createStop"];
   renderElapsed: ChatSubagentsPanelDesktopProps["renderElapsed"];
   registerOpen: (key: string, button: HTMLButtonElement) => () => void;
 }) {
   const stop = props.createStop(() => props.row);
+  const depth = () => props.row.depth ?? 0;
   const name = () => resolveSessionDisplayName(props.row.session.key, props.row.session);
   const group = () => groupFor(props.row);
   const ended = () => endedWithoutFinishing(props.row.session);
@@ -102,11 +104,23 @@ function DesktopRow(props: {
     <div
       class="subagents-desktop__row"
       data-session-key={props.row.session.key}
-      data-depth={props.row.depth ?? 0}
-      style={{ "--subagent-depth": props.row.depth ?? 0 }}
+      data-depth={depth()}
+      data-has-children={props.branch?.hasChildren ? "" : undefined}
+      data-branch-continues={props.branch?.rails.includes(depth()) ? "" : undefined}
+      style={{ "--subagent-depth": depth() }}
       data-group={group()}
       role="listitem"
     >
+      <For each={props.branch?.rails}>
+        {(level) => (
+          <span
+            class="subagents-desktop__branch-rail"
+            aria-hidden="true"
+            data-current-depth={level === depth() ? "" : undefined}
+            style={{ "--subagent-rail-depth": level }}
+          />
+        )}
+      </For>
       <button
         class="subagents-desktop__open"
         ref={[elementRef(props.registerOpen.bind(undefined, props.row.session.key))]}
@@ -232,6 +246,26 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
     },
   );
   const allDone = () => props.doneExpanded ?? navigation.showAllDone;
+  const branchLayout = createMemo(() => {
+    const layout = new Map<string, { hasChildren: boolean; rails: readonly number[] }>();
+    const continuing = new Set<number>();
+    let nextDepth = 0;
+    // The rows are in depth-first order. A shallower row ends the deeper sibling rails.
+    for (const row of props.rows.toReversed()) {
+      const depth = row.depth ?? 0;
+      for (const level of continuing) {
+        if (level > depth) {
+          continuing.delete(level);
+        }
+      }
+      layout.set(row.session.key, { hasChildren: nextDepth > depth, rails: [...continuing] });
+      if (depth > 0) {
+        continuing.add(depth);
+      }
+      nextDepth = depth;
+    }
+    return layout;
+  });
   const families = createMemo(() => {
     const result: Array<[SubagentsPanelRow, ...SubagentsPanelRow[]]> = [];
     for (const row of props.rows) {
@@ -340,6 +374,7 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
                           {(row) => (
                             <DesktopRow
                               row={row()}
+                              branch={branchLayout().get(row().session.key)}
                               onOpen={open}
                               createStop={props.createStop}
                               renderElapsed={props.renderElapsed}
