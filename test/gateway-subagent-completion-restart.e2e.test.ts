@@ -608,7 +608,7 @@ it
               : expect.stringMatching(/^(pending|delivered)$/),
           },
         });
-        if (readRun(capturedRunId).delivery?.status === "delivered") {
+        if (asRecord(readRun(capturedRunId).delivery).status === "delivered") {
           expect(readCapturedInputs()).toHaveLength(1);
         }
         if (unconsumedAnnounce) {
@@ -699,8 +699,8 @@ it
             }
             if (kind === "captured" || kind === "stale-settle-requester") {
               expect(readRun(childRunId!)).toMatchObject({ delivery: { status: "delivered" } });
-              // A stopped child's visible outcome may be a committed notice rather
-              // than another model request after the earlier result finished the turn.
+              // A stopped-child outcome may be a notice instead of another model request.
+              // Batch metadata names one member; match this child's rendered status.
               expect(
                 rootReceivedChildError ||
                   readRequesterEvents()?.some(
@@ -708,10 +708,13 @@ it
                       isRecord(event) &&
                       event.type === "custom_message" &&
                       event.display === true &&
-                      isRecord(event.details) &&
-                      event.details.childRunId === childRunId &&
                       typeof event.content === "string" &&
-                      event.content.includes("Interrupted by Gateway restart; not resumed."),
+                      (event.content.includes(
+                        `(run ${childRunId})\nInterrupted by Gateway restart; not resumed.`,
+                      ) ||
+                        event.content.includes(
+                          `(run ${childRunId})\n\nInterrupted by Gateway restart; not resumed.`,
+                        )),
                   ),
               ).toBe(true);
             }

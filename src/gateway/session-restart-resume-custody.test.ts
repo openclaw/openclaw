@@ -7,7 +7,9 @@ import { settleRestartInterruptedSubagentRun } from "../agents/subagents/registr
 import { observeRootWork } from "../agents/subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { readSessionQueuedInputPage } from "../config/sessions/session-pending-input-history.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
@@ -19,12 +21,107 @@ import {
   pairedOperator,
 } from "./operator-run-recovery.test-support.js";
 import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
+import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { prepareRestartCompletionCustody } from "./session-restart-resume-custody.js";
 import { prepareRestartStores } from "./session-restart-resume-discovery.js";
 
 type WokenAs = { profileId?: string; scopes?: readonly string[] };
+
+it.each([false, true])("leaves recovered settle input to its owner unless ended=%s", (ended) =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    const target = {
+      agentId: "main",
+      physicalAgentId: "main",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+      sessionKey: "agent:main:dashboard:queued-completion",
+      sessionId: "queued-completion",
+    };
+    const entry = { sessionId: target.sessionId, updatedAt: 1 };
+    replaceSessionEntrySync(target, entry);
+    const child = createSubagentRunRecord({
+      runId: "queued-child",
+      childSessionKey: "agent:main:subagent:queued-child",
+      requesterSessionKey: target.sessionKey,
+      requesterAgentId: target.agentId,
+      requesterStorePath: target.storePath,
+      completionTarget: "parent",
+      expectsCompletionMessage: true,
+      endedAt: 1,
+      delivery: { status: "pending" },
+      requesterSettleWake: {
+        status: "dispatching",
+        attemptCount: 1,
+        batchRunIds: ["queued-child"],
+      },
+    });
+    const runId = `announce:requester-settle:main:${target.sessionKey}:${child.runId}`;
+    const input = await stageSessionPendingInput(target, {
+      runId,
+      message: {
+        role: "user",
+        content: "Accepted completion",
+        timestamp: 1,
+        idempotencyKey: `${runId}:user`,
+        provenance: {
+          kind: "inter_session",
+          sourceTool: "subagent_settle",
+          sourceSessionKey: child.childSessionKey,
+        },
+      },
+      assertCurrent() {},
+    });
+    expect(input).toBeDefined();
+    input!.relinquish();
+    await input!.settled?.();
+    subagentRuns.set(child.runId, child);
+    subagentRuns.retireCompletionAuthority(child);
+    try {
+      const context = createContext();
+      context.resolveGatewayContext = () => context;
+      const restart = { context, signal: new AbortController().signal, log: { warn: vi.fn() } };
+      const custody = await prepareRestartCompletionCustody(restart, {
+        target,
+        entries: [{ sessionKey: target.sessionKey, entry }],
+      });
+      const before = (await readSessionQueuedInputPage(target)).rows;
+      expect(before).toHaveLength(1);
+      const row = before[0]!;
+      expect(custody.ownsInput(row, target.agentId)).toBe(true);
+      expect(
+        custody.ownsInput(
+          { ...row, run_id: `${runId}:other`, idempotency_key: `${runId}:other:user` },
+          target.agentId,
+        ),
+      ).toBe(false);
+      expect(custody.ownsInput({ ...row, session_id: "replaced" }, target.agentId)).toBe(false);
+      expect(custody.ownsInput(row, "other-agent")).toBe(false);
+      const foreignSource = JSON.parse(row.message_json);
+      foreignSource.provenance.sourceSessionKey = "agent:main:subagent:unrelated";
+      expect(
+        custody.ownsInput({ ...row, message_json: JSON.stringify(foreignSource) }, target.agentId),
+      ).toBe(false);
+      await continueSessionQueuedInputs(context, target, {
+        ...restart,
+        assertCurrent: custody.assertCurrent,
+        ownsInput: (queued) => custody.ownsInput(queued, target.agentId),
+        ...(ended ? { endCause: "restart-unrecoverable" as const } : {}),
+      });
+      expect((await readSessionQueuedInputPage(target)).rows).toEqual(ended ? [] : before);
+      expect(context.logGateway.warn).not.toHaveBeenCalled();
+      subagentRuns.retireCompletionAuthority(child);
+      expect(custody.ownsInput(row, target.agentId)).toBe(false);
+      const replacement = { ...child, generation: (child.generation ?? 0) + 1 };
+      subagentRuns.set(child.runId, replacement);
+      expect(subagentRuns.isCompletionAuthorityRetired(replacement)).toBe(false);
+      expect(custody.ownsInput(row, target.agentId)).toBe(false);
+    } finally {
+      subagentRuns.delete(child.runId);
+    }
+  }),
+);
 
 /** Restores one owed child after a restart and returns the authority its woken parent turn had. */
 async function deliverOwedNoticeAfterRestart(params: {
