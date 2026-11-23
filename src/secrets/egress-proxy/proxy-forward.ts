@@ -47,7 +47,7 @@ export function sendHttpRefusal(res: ServerResponse, status = 502, body = REFUSA
   res.end(body);
 }
 
-export function handleUpgradeRequest(
+function handleUpgradeRequest(
   handler: RequestHandler,
   request: IncomingMessage,
   head: Buffer,
