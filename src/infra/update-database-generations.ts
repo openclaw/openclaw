@@ -333,10 +333,15 @@ export function readUpdateDatabaseGeneration(
       observation: {
         generation: fingerprint(change, checksum),
         physical: serializePhysicalGeneration(current, after),
-        // An index rebuilt over these frames binds the same identity, content, and
-        // last commit checksum; only iChange restarts.
-        ...(after !== null && (generation.wal?.size ?? 0n) !== 0n && change !== "00000000"
-          ? { rebuiltIndexAlternate: fingerprint("00000000", checksum) }
+        // Rebuilding an index resets iChange. With no frames left after a checkpoint,
+        // it also clears the commit checksum; identity and committed content stay bound.
+        ...(after !== null && !generation.journal && change !== "00000000"
+          ? {
+              rebuiltIndexAlternate: fingerprint(
+                "00000000",
+                (generation.wal?.size ?? 0n) === 0n ? "0000000000000000" : checksum,
+              ),
+            }
           : {}),
         // The first read-only native open can create this zero-write WAL index;
         // closing the last writer can remove it. Neither changes committed content.
