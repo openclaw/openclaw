@@ -25,6 +25,7 @@ import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 import {
   CodexAdoptedThreadActiveError,
   CodexThreadBindingConflictError,
+  CodexNativeChildSettlementRequired,
 } from "./thread-lifecycle-errors.js";
 import { resumeExistingCodexThread } from "./thread-lifecycle-io.js";
 import {
@@ -55,6 +56,32 @@ export async function withCodexThreadLifecycleBinding(
     authority: CodexBindingAuthority,
   ) => Promise<CodexAppServerThreadLifecycleBinding>,
   onFailure?: (error: unknown) => Promise<never>,
+): Promise<CodexAppServerThreadLifecycleBinding> {
+  while (true) {
+    try {
+      return await prepareCodexThreadLifecycleBinding(params, run, onFailure);
+    } catch (error) {
+      if (!(error instanceof CodexNativeChildSettlementRequired)) {
+        throw error;
+      }
+      try {
+        // Child inference persists assignments through the same binding key.
+        // Both the native mutation queue and binding lease must be free here.
+        await error.waitForSettlement();
+      } catch (waitError) {
+        if (onFailure) {
+          return await onFailure(waitError);
+        }
+        throw waitError;
+      }
+    }
+  }
+}
+
+async function prepareCodexThreadLifecycleBinding(
+  params: CodexStartOrResumeThreadParams,
+  run: Parameters<typeof withCodexThreadLifecycleBinding>[1],
+  onFailure: Parameters<typeof withCodexThreadLifecycleBinding>[2],
 ): Promise<CodexAppServerThreadLifecycleBinding> {
   const identity = sessionBindingIdentity({
     sessionId: params.params.sessionId,
@@ -117,7 +144,11 @@ export async function withCodexThreadLifecycleBinding(
         ? await withCodexAppServerThreadMutation(snapshot.threadId, runWithLease)
         : await runWithLease();
   } catch (error) {
-    // Failed publication still owns cleanup, including failures settling the lease.
+    // Warm publication cleanup still needs this authority. Only a prewrite
+    // child wait may leave its scope without running failure cleanup.
+    if (error instanceof CodexNativeChildSettlementRequired) {
+      throw error;
+    }
     if (onFailure) {
       return await onFailure(error);
     }

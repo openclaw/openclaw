@@ -80,12 +80,31 @@ export type CodexAppServerLiveThreadOwnership = {
 
 export type ThreadOwnershipState = {
   closed: boolean;
+  onThreadOwnershipChange?: () => void;
   threadOwnershipListeners?: Set<() => void>;
   retainedThreads: Map<string, RetainedLiveThread>;
   claimedThreads: Map<string, ThreadOwnerToken>;
   releasingThreads: Map<string, ThreadReleaseTransition>;
   protectedThreads: Map<string, number>;
 };
+
+/** Notify ownership waiters before scheduling expiry of unprotected subscriptions. */
+export function refreshThreadOwnership(runtime: ThreadOwnershipState): number | undefined {
+  for (const listener of runtime.threadOwnershipListeners ?? []) {
+    listener();
+  }
+  if (runtime.closed) {
+    return undefined;
+  }
+  runtime.onThreadOwnershipChange?.();
+  let expiresAt = Number.POSITIVE_INFINITY;
+  for (const [threadId, thread] of runtime.retainedThreads) {
+    if (!runtime.protectedThreads.has(threadId)) {
+      expiresAt = Math.min(expiresAt, thread.expiresAt);
+    }
+  }
+  return expiresAt;
+}
 
 export function createThreadOwnerToken(
   threadId: string,

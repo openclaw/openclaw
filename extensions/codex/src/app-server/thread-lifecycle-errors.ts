@@ -9,6 +9,14 @@ export class CodexThreadStartRequestError extends Error {
   }
 }
 
+/** Lifecycle admission must release its binding lease before waiting for a child. */
+export class CodexNativeChildSettlementRequired extends Error {
+  constructor(readonly waitForSettlement: () => Promise<void>) {
+    super("Codex continuation requires native child settlement");
+    this.name = "CodexNativeChildSettlementRequired";
+  }
+}
+
 export class CodexThreadClientReplacementError extends AgentHarnessPreflightError {
   constructor() {
     super(
