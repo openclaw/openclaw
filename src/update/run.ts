@@ -35,7 +35,11 @@ import { stageReleaseService } from "./convert-service.js";
 import { writeLauncher } from "./launcher.js";
 import { preflight } from "./preflight.js";
 import { prepareGit, type PrepareResult } from "./prepare-git.js";
-import { preparePackage } from "./prepare-package.js";
+import {
+  RESTART_INTERRUPTED_MESSAGE,
+  RESTART_INTERRUPTED_REASON,
+  preparePackage,
+} from "./prepare-package.js";
 import {
   acquireUpdateLock,
   allocateStaging,
@@ -305,7 +309,9 @@ export async function prepareUpdate(params: {
     if (!prepared.ok) {
       return await fail(
         prepared.reason,
-        "The new version could not be built. The current version is still running.",
+        prepared.reason === RESTART_INTERRUPTED_REASON
+          ? `${RESTART_INTERRUPTED_MESSAGE} The current version is still running.`
+          : "The new version could not be built. The current version is still running.",
         prepared.stderrTail,
       );
     }

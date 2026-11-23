@@ -5,7 +5,9 @@ import { isBunRuntime } from "../daemon/runtime-binary.js";
 import { extractArchive } from "../infra/archive.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
+import type { SpawnResult } from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { SpawnBrokerError } from "../process/spawn-broker/protocol.js";
 import type { PrepareResult } from "./prepare-git.js";
 
 const PROJECT_ONLY_INSTALL_SCRIPTS = [
@@ -14,6 +16,34 @@ const PROJECT_ONLY_INSTALL_SCRIPTS = [
   "prepare",
   "postprepare",
 ] as const;
+
+export const RESTART_INTERRUPTED_REASON = "restart-interrupted";
+export const RESTART_INTERRUPTED_MESSAGE =
+  "The update was interrupted by a Gateway restart and can be retried.";
+
+/**
+ * Preparation runs inside the Gateway process, so a Gateway restart kills
+ * in-flight prepare commands. A dead spawn broker or a signal-terminated
+ * command (not a deadline) means restart, not a broken package.
+ */
+export function isPrepareInterruptedByRestart(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 10 && current instanceof Error; depth += 1) {
+    if (current instanceof SpawnBrokerError) {
+      return true;
+    }
+    current = current.cause;
+  }
+  return false;
+}
+
+export function isSignalTerminated(result: SpawnResult): boolean {
+  return (
+    (result.killed || result.signal !== null) &&
+    result.termination !== "timeout" &&
+    result.termination !== "no-output-timeout"
+  );
+}
 
 export async function preparePackage(params: {
   spec: string;
@@ -50,6 +80,10 @@ export async function preparePackage(params: {
       },
     );
     if (packed.code !== 0 || packed.killed || packed.signal) {
+      if (isSignalTerminated(packed)) {
+        reason = RESTART_INTERRUPTED_REASON;
+        throw new Error(RESTART_INTERRUPTED_MESSAGE);
+      }
       throw new Error(packed.stderr || packed.stdout || `npm pack exited ${packed.code}`);
     }
     // The owned staging directory, not npm's potentially large/truncated stdout, owns the archive.
@@ -101,6 +135,10 @@ export async function preparePackage(params: {
         runtime.signal ||
         !satisfies(runtime.stdout.trim(), manifest.engines.node, { includePrerelease: true })
       ) {
+        if (isSignalTerminated(runtime)) {
+          reason = RESTART_INTERRUPTED_REASON;
+          throw new Error(RESTART_INTERRUPTED_MESSAGE);
+        }
         reason = "node-engine-mismatch";
         throw new Error(
           `The new release requires Node ${manifest.engines.node}; the service uses ${runtime.stdout.trim() || params.node}. Upgrade the service's Node and retry.`,
@@ -145,6 +183,10 @@ export async function preparePackage(params: {
       },
     );
     if (result.code !== 0 || result.killed || result.signal) {
+      if (isSignalTerminated(result)) {
+        reason = RESTART_INTERRUPTED_REASON;
+        throw new Error(RESTART_INTERRUPTED_MESSAGE);
+      }
       throw new Error(
         result.stderr || result.stdout || `${bun ? "bun" : "npm"} exited ${result.code}`,
       );
@@ -153,6 +195,13 @@ export async function preparePackage(params: {
     return { ok: true, releaseRoot, version, ...(buildId ? { buildId } : {}) };
   } catch (error) {
     await fs.rm(params.staging, { recursive: true, force: true });
+    if (isPrepareInterruptedByRestart(error)) {
+      return {
+        ok: false,
+        reason: RESTART_INTERRUPTED_REASON,
+        stderrTail: RESTART_INTERRUPTED_MESSAGE,
+      };
+    }
     return {
       ok: false,
       reason,
