@@ -167,27 +167,45 @@ suite.define(() => {
   });
 
   it("shows browser access unavailability without opening another surface", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: ["browser.request"],
-        operatorScopes: ["operator.read", "operator.sessions.write"],
-        deferredMethods: ["connect"],
-        awaitInitialRoster: false,
-      });
-      await page.goto(
-        `${suite.server.baseUrl}focus/browser?sessionKey=agent%3Amain%3Awork&target=host&profile=work&targetId=existing`,
-      );
-      await page.locator("openclaw-browser-document .connect-splash").waitFor();
-      await gateway.waitForRequest("connect");
-      await gateway.resolveDeferred("connect");
-      await page
-        .getByText(
-          "Browser control is unavailable for this connection. Reconnect with browser access.",
-        )
-        .waitFor();
-      expect(await gateway.getRequests("browser.request")).toEqual([]);
-      expect(await page.locator("openclaw-app-shell, openclaw-desktop-panel").count()).toBe(0);
-    });
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 390, height: 844 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["browser.request"],
+          operatorScopes: ["operator.read", "operator.sessions.write"],
+          deferredMethods: ["connect"],
+          awaitInitialRoster: false,
+        });
+        await page.goto(
+          `${suite.server.baseUrl}focus/browser?sessionKey=agent%3Amain%3Awork&target=host&profile=work&targetId=existing`,
+        );
+        await page.locator("openclaw-browser-document .connect-splash").waitFor();
+        await gateway.waitForRequest("connect");
+        await gateway.resolveDeferred("connect");
+        await page
+          .getByText(
+            "Browser control is unavailable for this connection. Reconnect with browser access.",
+          )
+          .waitFor();
+        await page.keyboard.press("Tab");
+        const back = page.getByRole("button", { name: "Back", exact: true });
+        const ringFits = await back.evaluate((button) => {
+          const rect = button.getBoundingClientRect();
+          const style = getComputedStyle(button);
+          const ring =
+            Number.parseFloat(style.outlineWidth) + Number.parseFloat(style.outlineOffset);
+          return (
+            button.matches(":focus-visible") &&
+            ring > 0 &&
+            rect.left >= ring &&
+            rect.right + ring <= innerWidth
+          );
+        });
+        expect(ringFits).toBe(true);
+        expect(await gateway.getRequests("browser.request")).toEqual([]);
+        expect(await page.locator("openclaw-app-shell, openclaw-desktop-panel").count()).toBe(0);
+      },
+    );
   });
 
   it.each([true, false])(
