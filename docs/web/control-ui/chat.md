@@ -1522,7 +1522,10 @@ Closing the sheet hides it without clearing the conversation or its draft.
 On wide chat panes it opens automatically as a docked right-hand column, with
 the transcript and composer centered in the remaining space. Docking uses the
 space left after navigation, split panes, and other panels—not the window width
-alone. The column scrolls independently and never covers the conversation.
+alone. Details and the Home agent sidebar can both stay open if the remaining
+chat pane fits its default reading column and Details. The column scrolls
+independently and never covers the conversation. If the session has no details
+to show, the open panel says so instead of leaving an empty column.
 
 When the pane becomes too narrow, automatically opened Details collapses. Select
 **Details** to open it as an overlay on narrower screens. Closing it explicitly
