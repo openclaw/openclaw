@@ -30,7 +30,7 @@ import type { SessionControllerWatchdogAttempt } from "../../sessions/session-co
 import { AsyncContext } from "../../shared/async-context.js";
 import { runWithAsyncStore } from "../../shared/async-store.js";
 import {
-  captureAdmittedRunActiveAssertion,
+  resolveAdmittedRunActiveAssertion,
   getAdmittedRunDelegatedAuthority,
   readAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
@@ -203,8 +203,7 @@ export function createAdmittedGatewayToolCallerIdentity(
       getGatewayContextResolver(params.admittedRunContext),
     ),
     receiptAuthority: composeReceiptAuthority(
-      (delegatedAuthority &&
-        captureAdmittedRunActiveAssertion(params.admittedRunContext, delegatedAuthority)) ??
+      resolveAdmittedRunActiveAssertion(params.admittedRunContext) ??
         (() => {
           throw new Error("agent tool caller authority is no longer active");
         }),
@@ -384,7 +383,7 @@ export async function prepareGatewayToolCallerAssertion(): Promise<{
   release(): void;
 }> {
   const caller = getGatewayToolCallerIdentity();
-  const assertion = captureGatewayToolCallerAssertion();
+  const stopSignals = caller?.operationalRunInstance ? caller.approvalSignals : undefined;
   const admissions = [...new Set(caller?.receiptAdmissions ?? [])];
   const prepared = await Promise.all(admissions.map((admission) => admission.prepare()));
   const predicates = new Map(
@@ -395,7 +394,9 @@ export async function prepareGatewayToolCallerAssertion(): Promise<{
     if (!active) {
       throw new Error("agent tool caller admission is no longer active");
     }
-    runWithAsyncStore(receiptAdmissionStorage, predicates, () => assertion?.());
+    runWithAsyncStore(receiptAdmissionStorage, predicates, () =>
+      stopSignals?.forEach((signal) => signal.throwIfAborted()),
+    );
   };
   assertCurrent();
   return {

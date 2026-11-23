@@ -175,6 +175,10 @@ found that earlier receipts did not prove what they claimed.
 Add a note here when a change alters a contract. A note about the in-place update
 flow names the shipped-updater contract or unmoved route that it serves.
 
+At Gateway start, a preparation lock whose owner is dead or has the new Gateway's
+PID is released after its run is recorded as failed with reason `interrupted`.
+A live preparation owner in another process is left untouched.
+
 Shipped in-place updaters leave their running code in an `openclaw-update-runtime-*`
 directory and promise that the next update removes it. On the release path,
 `openclaw update` now does: after the update succeeds or finds nothing to do, the command
@@ -1211,9 +1215,14 @@ archives retain full integrity checks.
 To request full integrity checking across every table and index during migration:
 
 ```bash
-openclaw update --full-integrity-check
 openclaw doctor --fix --full-integrity-check
 ```
+
+Prepared-release updates (Git and npm, pnpm or Bun installs) refuse
+`openclaw update --full-integrity-check` before creating an update run. They do
+not support this selection. Run the Doctor command above separately when you
+need full migration checks, then update without the flag. Doctor does not turn
+an already-current database into a separate verification job.
 
 The default can miss an index/table mismatch in an untouched table. Use the full
 check when you need that coverage; it can take considerably longer on large
