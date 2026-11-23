@@ -186,15 +186,62 @@ describe("scripts/pr prepare mode preflight", () => {
           expectUntouched();
         }
       }
-      // Valid coverage selectors reach the ordinary GitHub owner; its refusal
-      // still releases the operation lock without retiring preparation proof.
+      const dispatched = join(root, "dispatched");
+      const runUrl = "https://github.com/openclaw/openclaw/actions/runs/99";
+      writeFileSync(
+        join(bin, "gh"),
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$PR_TEST_GH_CALLS"
+case "$1 $2" in
+  "auth token") printf 'fixture-token\\n' ;;
+  "browse ") printf 'https://github.com/fixture/repo\\n' ;;
+  "api --hostname")
+    printf '%s\\n' '${JSON.stringify({
+      base: { sha: "b".repeat(40), repo: { id: 1 } },
+      head: { sha: head, ref: "fixture/coverage", repo: { id: 1 } },
+    })}' ;;
+  "api repos/openclaw/openclaw/pulls/123") printf '%s\\n' '${head}' ;;
+  "workflow run") : > "$PR_TEST_DISPATCHED" ;;
+  "api --method")
+    test "$4" = repos/openclaw/openclaw/actions/workflows/ci.yml/runs || exit 97
+    if [ -e "$PR_TEST_DISPATCHED" ]; then
+      printf '%s\\n' '${JSON.stringify({
+        workflow_runs: [
+          { id: 99, head_branch: "fixture/coverage", head_sha: head, html_url: runUrl },
+        ],
+      })}'
+    else
+      printf '{"workflow_runs":[]}\\n'
+    fi ;;
+  *) exit 98 ;;
+esac
+`,
+      );
+      // Exercise both parsers and the locked public handoff, not just admission:
+      // dropped selectors would otherwise silently dispatch default coverage.
       const accepted = spawnSync(
         join(root, "scripts/pr"),
         ["ci-dispatch", "123", "--test-runtime-policy", "dual-all", "--ci-shape", "main"],
-        { cwd: root, encoding: "utf8", env: { ...env, PR_TEST_GH_CALLS: ghCalls } },
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            ...env,
+            OPENCLAW_GH_BIN: join(bin, "gh"),
+            PR_TEST_GH_CALLS: ghCalls,
+            PR_TEST_DISPATCHED: dispatched,
+          },
+        },
       );
-      expect(accepted.status, accepted.stdout + accepted.stderr).not.toBe(0);
-      expect(readFileSync(ghCalls, "utf8").trim()).not.toBe("");
+      expect(accepted.status, accepted.stdout + accepted.stderr).toBe(0);
+      expect(accepted.stdout).toContain(`observed_run_url=${runUrl}`);
+      const calls = readFileSync(ghCalls, "utf8").trim().split("\n");
+      expect(calls.filter((line) => line.startsWith("workflow run "))).toEqual([
+        `workflow run ci.yml --ref fixture/coverage -f target_ref=${head} -f release_gate=true -f pull_request_number=123 -f runner_backend=hybrid -f ci_shape=main -f test_runtime_policy=dual-all`,
+      ]);
+      expect(
+        calls.filter((line) => line === "api repos/openclaw/openclaw/pulls/123 --jq .head.sha"),
+      ).toHaveLength(2);
       expect(readFileSync(evidence, "utf8")).toBe("previous exact-head proof\n");
       expect(readdirSync(evidenceRoot)).toEqual(originalArtifacts);
       expect(git("for-each-ref", "--format=%(refname)", "refs/openclaw/pr-operation-locks")).toBe(
