@@ -157,12 +157,18 @@ describe("link reader document content", () => {
         commit: "abcdef0123456789",
       },
     });
-    const checks = container.querySelector<HTMLDetailsElement>(".lr-checks")!;
-    expect(checks.querySelector("summary strong")?.textContent).toBe("Checks passed");
-    expect(checks.open).toBe(false);
+    const checks = container.querySelector<HTMLElement>(".lr-checks")!;
+    const toggle = checks.querySelector<HTMLButtonElement>(".lr-checks-summary")!;
+    expect(toggle.querySelector("strong")?.textContent).toBe("Checks passed");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(checks.textContent).toContain("Provider-owned result");
+    expect(checks.querySelector(".lr-check")).toBeNull();
+    toggle.click();
+    flush();
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(checks.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("In progress");
-    const run = checks.querySelector<HTMLAnchorElement>(".lr-check-copy a")!;
+    expect(checks.querySelector(".lr-check-detail")?.textContent).toBe("Queued");
+    const run = checks.querySelector<HTMLAnchorElement>("a.lr-check-row")!;
     expect(run.href).toBe("https://github.com/acme/project/actions/runs/1");
     expect(run.rel).toContain("noreferrer");
     expect(run.hasAttribute("data-link-reader-external")).toBe(true);
@@ -183,14 +189,20 @@ describe("link reader document content", () => {
       },
     });
     expect(container.querySelector(".lr-checks-meter")).toBeNull();
-    expect(container.querySelector(".lr-checks summary strong")?.textContent).toBe(
+    expect(container.querySelector(".lr-checks-summary strong")?.textContent).toBe(
       "Checks unavailable",
     );
-    expect(container.querySelector<HTMLDetailsElement>(".lr-checks")?.open).toBe(false);
+    // A failed run stays visible while the full list is collapsed.
+    expect(container.querySelector(".lr-checks-summary")?.getAttribute("aria-expanded")).toBe(
+      "false",
+    );
     expect(container.querySelector(".lr-checks a, .lr-checks script")).toBeNull();
-    expect(container.querySelector(".lr-check-copy")?.textContent).toContain(
+    expect(container.querySelector(".lr-check-list--attention .lr-check-name")?.textContent).toBe(
       "<script>unsafe</script>",
     );
+    container.querySelector<HTMLButtonElement>(".lr-checks-summary")!.click();
+    flush();
+    expect(container.querySelector(".lr-checks a, .lr-checks script")).toBeNull();
     expect(container.querySelector(".lr-checks")?.textContent).toContain(
       "Couldn’t show all checks. Open the original to see them.",
     );
@@ -432,7 +444,10 @@ describe("link reader document content", () => {
         authorUrl: "https://forge.example/users/alex",
         coAuthors: [{ name: "Sam" }, { name: "Noor" }],
         coAuthorCount: 3,
-        metadata: [{ label: "Build", value: "Passed", tone: "positive" }],
+        metadata: [
+          { label: "Build", value: "Passed", tone: "positive" },
+          { label: "Additions", value: "+12", tone: "positive" },
+        ],
         body: "[Next change](C43)",
         partial: true,
         bodyTruncated: true,
@@ -464,12 +479,18 @@ describe("link reader document content", () => {
       link,
     );
     expect(container.querySelector("h1")?.textContent).toBe("Change C42");
-    expect(container.querySelector(".lr-metric dt")?.textContent).toBe("Build");
-    expect(container.querySelector(".lr-item-meta a")?.getAttribute("href")).toBe(
+    const labels = [...container.querySelectorAll(".lr-fact dt")];
+    expect(labels.map((label) => [label.textContent, label.classList.contains("sr-only")])).toEqual(
+      [
+        ["Build", false],
+        ["Additions", true],
+      ],
+    );
+    expect(container.querySelector(".lr-byline a")?.getAttribute("href")).toBe(
       "https://forge.example/users/alex",
     );
     expect(container.querySelector(".lr-coauthors")?.textContent).toBe("Co-authors: Sam, Noor +1");
-    expect(container.querySelector(".lr-metric--positive dd")?.textContent).toBe("Passed");
+    expect(container.querySelector(".lr-fact--positive dd")?.textContent).toBe("Passed");
     expect(container.querySelector(".lr-state--attention")?.textContent).toBe("Needs review");
     expect(container.querySelector('a[href="https://forge.example/changes/C43"]')).not.toBeNull();
     expect(
@@ -491,7 +512,15 @@ it("renders document dates in the UI locale and leaves invalid external dates ve
   const createdAt = "2026-01-02T12:34:56Z";
   const container = mount({ ...detail("Example"), createdAt });
   try {
-    expect(container.textContent).toContain(new Date(createdAt).toLocaleString("de"));
+    // Older dates stay absolute, without seconds; the full timestamp remains in the title.
+    const time = container.querySelector("time")!;
+    expect(time.textContent).toBe(
+      new Date(createdAt).toLocaleString("de", { dateStyle: "medium" }),
+    );
+    expect(time.title).toBe(new Date(createdAt).toLocaleString("de"));
+    const recent = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    update(container, { ...detail("Example"), createdAt: recent });
+    expect(container.querySelector("time")?.textContent).toBe("vor 2 Std.");
     update(container, { ...detail("Example"), createdAt: "external date" });
     expect(container.textContent).toContain("external date");
   } finally {

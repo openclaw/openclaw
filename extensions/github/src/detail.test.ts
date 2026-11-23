@@ -207,12 +207,9 @@ describe("GitHub detail selected read identity", () => {
     expect(first.comments).toHaveLength(kind === "pull" ? 2 : 1);
     if (kind === "pull") {
       expect(first.checks).toMatchObject({ state: "neutral", commit: sha, items: [] });
-      expect(first.metadata).toEqual(
-        expect.arrayContaining([
-          { label: "Files", value: "1" },
-          { label: "Comments", value: "1" },
-        ]),
-      );
+      // Section counts belong to navigation, not to the change metadata.
+      expect(first).toMatchObject({ filesTotal: 1, commentsTotal: 2 });
+      expect(first.metadata?.map(({ label }) => label)).not.toContain("Files");
     }
     expect(await read()).toBe(first);
     expect(selected.revalidate).toHaveBeenCalledTimes(fetchMock.mock.calls.length + 2);

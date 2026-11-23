@@ -1,4 +1,5 @@
 import { parseCanonicalIpAddress } from "@openclaw/net-policy/ip";
+import type { JSX } from "@solidjs/web";
 import createDOMPurify from "dompurify";
 import { createMemo, For, onSettled } from "solid-js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
@@ -74,6 +75,10 @@ const passiveTags = [
   "tr",
   "ul",
 ];
+
+export function ReaderLink(props: JSX.IntrinsicElements["a"]) {
+  return <a {...props} target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" />;
+}
 
 export function documentUrl(value: string, base: string): URL | null {
   if (!value.trim()) {

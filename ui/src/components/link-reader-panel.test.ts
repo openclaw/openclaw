@@ -213,7 +213,7 @@ describe("Plugin link reader panel", () => {
     const time = panel.querySelector(".lr-content:not([hidden]) time");
     const expected = timestamp ?? document.createdAt;
     expect(time?.getAttribute("datetime")).toBe(expected);
-    expect(time?.textContent?.trim()).toBe(new Date(expected).toLocaleString());
+    expect(time?.getAttribute("title")).toBe(new Date(expected).toLocaleString());
     expect(panel.querySelector(".lr-state")?.textContent?.trim()).toBe(label);
   });
 

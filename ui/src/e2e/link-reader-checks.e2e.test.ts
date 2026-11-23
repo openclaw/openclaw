@@ -35,9 +35,7 @@ it("keeps check navigation, refresh, and long content usable in a narrow native 
       await panel.getByText("Checks in progress", { exact: true }).waitFor();
       await button("Checks 2").focus();
       await page.keyboard.press("Enter");
-      expect(
-        await panel.locator(".lr-checks").evaluate((node) => (node as HTMLDetailsElement).open),
-      ).toBe(true);
+      expect(await panel.locator(".lr-checks-summary").getAttribute("aria-expanded")).toBe("true");
       await panel.getByText("Integration tests", { exact: true }).waitFor();
       await button("Files 1").click();
       expect(await content.evaluate((node) => node.scrollTop)).toBeGreaterThan(100);

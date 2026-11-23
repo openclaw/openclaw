@@ -476,12 +476,7 @@ async function loadGitHubDetailWithIdentity(
           ? await fetchPullChecks(repositoryUrl, head.sha, url + "/checks", readPage)
           : undefined;
       const view = githubPreviewView(preview, host);
-      const metadata = githubChangeMetadata(
-        preview.additions,
-        preview.deletions,
-        preview.changedFiles,
-        preview.comments,
-      );
+      const metadata = githubChangeMetadata(preview.additions, preview.deletions);
       const headRef = readOptionalGitHubString(head, "ref")?.slice(0, 256);
       const baseRef = readOptionalGitHubString(base, "ref")?.slice(0, 256);
       return {
@@ -496,8 +491,19 @@ async function loadGitHubDetailWithIdentity(
         ...(section === "overview" ? { deferredSections } : {}),
         ...content,
         ...(checks ? { checks } : {}),
-        ...(includeDiscussion ? { comments, commentsTotal, commentsTruncated } : {}),
-        ...(includeFiles ? { files, filesTotal, filesTruncated } : {}),
+        // Section counts are known up front, so navigation shows them before a section loads.
+        ...(includeDiscussion
+          ? { comments, commentsTotal, commentsTruncated }
+          : {
+              commentsTotal:
+                requiredCount(value, "comments") +
+                (parsed.kind === "pull" ? requiredCount(value, "review_comments") : 0),
+            }),
+        ...(includeFiles
+          ? { files, filesTotal, filesTruncated }
+          : parsed.kind === "pull"
+            ? { filesTotal }
+            : {}),
         partial:
           content.bodyTruncated ||
           commentsTruncated ||
