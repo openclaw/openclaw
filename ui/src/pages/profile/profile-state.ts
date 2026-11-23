@@ -1,10 +1,7 @@
 import type {
   UserProfile,
-  UsersLinkChannelIdentityResult,
-  UsersListChannelIdentitiesResult,
   UsersSetAvatarResult,
   UsersSetDisplayNameResult,
-  UsersUnlinkChannelIdentityResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import {
   GATEWAY_OWNER_PROFILE_ID,
@@ -30,25 +27,15 @@ import { assertUploadsEnabled } from "../../lib/uploads.ts";
 import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
 import type { ModelAccountsTargetSource } from "./model-accounts-state.ts";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
+import {
+  linkChannelIdentity,
+  loadChannelIdentityLinks,
+  sameChannelIdentity,
+  unlinkChannelIdentity,
+  type ChannelIdentityLink,
+  type ChannelIdentityMutation,
+} from "./profile-channel-identity-actions.ts";
 import { sameConnectionScopes } from "./profile-connection-scopes.ts";
-
-type ChannelIdentityLink = UsersListChannelIdentitiesResult["links"][number];
-type ChannelIdentity = ChannelIdentityLink["identity"];
-type ChannelIdentityMutation = {
-  kind: "link" | "unlink";
-  profileId: string;
-  identity: ChannelIdentity;
-};
-type ChannelIdentityTarget = {
-  client: GatewayBrowserClient;
-  profileId: string;
-  identityRequestId: number;
-};
-
-const sameChannelIdentity = (left: ChannelIdentity, right: ChannelIdentity) =>
-  left.channelId === right.channelId &&
-  left.accountId === right.accountId &&
-  left.senderId === right.senderId;
 
 export type IdentityChange =
   | { kind: "display-name" }
@@ -57,8 +44,8 @@ export type IdentityChange =
 
 export class ProfileState {
   private publishTarget?: () => void;
-  private channelIdentityListRequestId = 0;
-  private channelIdentityMutationId = 0;
+  channelIdentityListRequestId = 0;
+  channelIdentityMutationId = 0;
   private refreshAccounts?: () => void;
   readonly modelAccountsTarget: ModelAccountsTargetSource = {
     read: () => ({
@@ -546,241 +533,16 @@ export class ProfileState {
     this.publish();
   }
 
-  async loadChannelIdentityLinks() {
-    const target = this.currentChannelIdentityTarget();
-    if (!target || this.channelIdentityMutation) {
-      return;
-    }
-    const requestId = ++this.channelIdentityListRequestId;
-    this.channelIdentityLoading = true;
-    this.channelIdentityError = null;
-    this.channelIdentityStatus = null;
-    this.publish();
-    try {
-      const result = await target.client.request<UsersListChannelIdentitiesResult>(
-        "users.listChannelIdentities",
-        { profileId: target.profileId },
-      );
-      if (
-        !this.isCurrentChannelIdentityTarget(target) ||
-        requestId !== this.channelIdentityListRequestId
-      ) {
-        return;
-      }
-      this.channelIdentityLinks = result.links.filter(
-        (link) => link.profileId === target.profileId,
-      );
-    } catch (error) {
-      if (
-        this.isCurrentChannelIdentityTarget(target) &&
-        requestId === this.channelIdentityListRequestId
-      ) {
-        this.channelIdentityError = formatUiError(
-          error,
-          t("profilePage.channelIdentities.loadFailed"),
-        );
-      }
-    } finally {
-      if (
-        this.isCurrentChannelIdentityTarget(target) &&
-        requestId === this.channelIdentityListRequestId
-      ) {
-        this.channelIdentityLoading = false;
-        this.publish();
-      }
-    }
+  loadChannelIdentityLinks() {
+    return loadChannelIdentityLinks(this);
   }
 
-  async linkChannelIdentity() {
-    const target = this.currentChannelIdentityTarget();
-    const identity: ChannelIdentity = {
-      channelId: this.channelId,
-      accountId: this.accountId,
-      senderId: this.senderId,
-    };
-    if (
-      !target ||
-      this.identityLoading ||
-      this.identityBusy ||
-      this.channelIdentityLoading ||
-      this.channelIdentityLinks === null ||
-      this.channelIdentityMutation ||
-      !identity.channelId.trim() ||
-      !identity.accountId.trim() ||
-      !identity.senderId.trim()
-    ) {
-      return;
-    }
-    const mutationId = ++this.channelIdentityMutationId;
-    this.channelIdentityListRequestId += 1;
-    let mutationStatus: string | null = null;
-    let mutationError: string | null = null;
-    this.channelIdentityMutation = { kind: "link", profileId: target.profileId, identity };
-    this.channelIdentityError = null;
-    this.channelIdentityStatus = null;
-    this.publish();
-    try {
-      const result = await target.client.request<UsersLinkChannelIdentityResult>(
-        "users.linkChannelIdentity",
-        { profileId: target.profileId, identity },
-      );
-      const currentTarget = await this.waitForCurrentChannelIdentityTarget(target);
-      if (
-        mutationId !== this.channelIdentityMutationId ||
-        !currentTarget ||
-        !this.isCurrentChannelIdentityTarget(currentTarget)
-      ) {
-        return;
-      }
-      if (
-        result.profileId !== target.profileId ||
-        !sameChannelIdentity(result.identity, identity)
-      ) {
-        throw new Error(t("profilePage.channelIdentities.linkFailed"));
-      }
-      const links = this.channelIdentityLinks ?? [];
-      this.channelIdentityLinks = links.some((link) => sameChannelIdentity(link.identity, identity))
-        ? links
-        : [...links, result];
-      this.channelId = "";
-      this.accountId = "";
-      this.senderId = "";
-      mutationStatus = t("profilePage.channelIdentities.linked");
-    } catch (error) {
-      const currentTarget = await this.waitForCurrentChannelIdentityTarget(target);
-      if (mutationId === this.channelIdentityMutationId && currentTarget) {
-        mutationError = formatUiError(error, t("profilePage.channelIdentities.linkFailed"));
-      }
-    } finally {
-      await this.settleChannelIdentityMutation(target, mutationId, mutationStatus, mutationError);
-    }
+  linkChannelIdentity() {
+    return linkChannelIdentity(this);
   }
 
-  async unlinkChannelIdentity(link: ChannelIdentityLink) {
-    const target = this.currentChannelIdentityTarget();
-    if (
-      !target ||
-      link.profileId !== target.profileId ||
-      this.identityLoading ||
-      this.identityBusy ||
-      this.channelIdentityLoading ||
-      this.channelIdentityMutation
-    ) {
-      return;
-    }
-    const mutationId = ++this.channelIdentityMutationId;
-    this.channelIdentityListRequestId += 1;
-    let mutationStatus: string | null = null;
-    let mutationError: string | null = null;
-    this.channelIdentityMutation = {
-      kind: "unlink",
-      profileId: target.profileId,
-      identity: link.identity,
-    };
-    this.channelIdentityError = null;
-    this.channelIdentityStatus = null;
-    this.publish();
-    try {
-      await target.client.request<UsersUnlinkChannelIdentityResult>("users.unlinkChannelIdentity", {
-        profileId: target.profileId,
-        identity: link.identity,
-      });
-      const currentTarget = await this.waitForCurrentChannelIdentityTarget(target);
-      if (
-        mutationId !== this.channelIdentityMutationId ||
-        !currentTarget ||
-        !this.isCurrentChannelIdentityTarget(currentTarget)
-      ) {
-        return;
-      }
-      if (this.channelIdentityLinks !== null) {
-        this.channelIdentityLinks = this.channelIdentityLinks.filter(
-          (candidate) => !sameChannelIdentity(candidate.identity, link.identity),
-        );
-      }
-      mutationStatus = t("profilePage.channelIdentities.unlinked");
-    } catch (error) {
-      const currentTarget = await this.waitForCurrentChannelIdentityTarget(target);
-      if (mutationId === this.channelIdentityMutationId && currentTarget) {
-        mutationError = formatUiError(error, t("profilePage.channelIdentities.unlinkFailed"));
-      }
-    } finally {
-      await this.settleChannelIdentityMutation(target, mutationId, mutationStatus, mutationError);
-    }
-  }
-
-  private async settleChannelIdentityMutation(
-    target: ChannelIdentityTarget,
-    mutationId: number,
-    mutationStatus: string | null,
-    mutationError: string | null,
-  ) {
-    if (mutationId === this.channelIdentityMutationId && target.client === this.client) {
-      const reloadTarget = this.currentChannelIdentityTarget();
-      this.channelIdentityMutation = null;
-      if (reloadTarget) {
-        await this.loadChannelIdentityLinks();
-      }
-      if (
-        mutationId === this.channelIdentityMutationId &&
-        reloadTarget &&
-        this.isCurrentChannelIdentityTarget(reloadTarget)
-      ) {
-        if (mutationStatus) {
-          this.channelIdentityStatus = mutationStatus;
-        }
-        if (mutationError) {
-          this.channelIdentityError = mutationError;
-        }
-        this.publish();
-      }
-    }
-  }
-
-  private currentChannelIdentityTarget(): ChannelIdentityTarget | null {
-    const profile = this.ownProfile;
-    const client = this.client;
-    if (
-      !client ||
-      !this.canManageChannelIdentities() ||
-      !this.canRead ||
-      !this.channelIdentityProfileReady ||
-      !profile
-    ) {
-      return null;
-    }
-    return { client, profileId: profile.id, identityRequestId: this.identityRequestId };
-  }
-
-  private async waitForCurrentChannelIdentityTarget(
-    target: ChannelIdentityTarget,
-  ): Promise<ChannelIdentityTarget | null> {
-    if (this.isCurrentChannelIdentityTarget(target)) {
-      return target;
-    }
-    if (target.client !== this.client || this.ownProfile?.id !== target.profileId) {
-      return null;
-    }
-    const requestId = this.identityRequestId;
-    if (this.identityLoading) {
-      await this.identityReceipt.result;
-    }
-    if (requestId !== this.identityRequestId) {
-      return null;
-    }
-    const current = this.currentChannelIdentityTarget();
-    return current?.client === target.client && current.profileId === target.profileId
-      ? current
-      : null;
-  }
-
-  private isCurrentChannelIdentityTarget(target: ChannelIdentityTarget) {
-    const current = this.currentChannelIdentityTarget();
-    return (
-      current?.client === target.client &&
-      current.profileId === target.profileId &&
-      current.identityRequestId === target.identityRequestId
-    );
+  unlinkChannelIdentity(link: ChannelIdentityLink) {
+    return unlinkChannelIdentity(this, link);
   }
 
   private resetChannelIdentityState(targetChanged: boolean, retireMutation = false) {
