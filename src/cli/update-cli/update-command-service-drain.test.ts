@@ -643,8 +643,8 @@ it.each(["authority", "boot"] as const)(
 
 // The resident launcher (release installs, and runtime recovery of a Gateway whose
 // Node fails admission) is systemd's main process; its child serves (#202954).
-// When the listener cannot be attributed (for example without lsof or ss), the
-// kernel parent of the reporting process still binds it to the service.
+// When no listener names its process (no lsof or ss, or ss cannot see the owner),
+// the kernel parent of the reporting process still binds it to the service.
 const unattributedPort: PortUsage = {
   port: 18789,
   status: "busy",
@@ -666,6 +666,19 @@ it.each([
   { port: unattributedPort, parent: 7, explicit: false, stops: false },
   { port: unattributedPort, parent: 7, explicit: true, stops: false },
   { port: unattributedPort, parent: null, explicit: false, stops: false },
+  // ss lists the socket but cannot name its owner (another account's process).
+  {
+    port: portUsage("busy", [{ address: "127.0.0.1:18789" }]),
+    parent: 42,
+    explicit: false,
+    stops: true,
+  },
+  {
+    port: portUsage("busy", [{ address: "127.0.0.1:18789" }, { pid: 44, ppid: 42 }]),
+    parent: 42,
+    explicit: false,
+    stops: false,
+  },
 ])(
   "drains resident 43 under launcher 42: listeners $port.listeners, kernel parent $parent (explicit=$explicit, stops=$stops)",
   async ({ port, parent, explicit, stops }) => {

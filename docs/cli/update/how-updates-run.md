@@ -174,10 +174,11 @@ the Gateway's runtime check, which OpenClaw reruns under a compatible Node it
 finds, such as its private runtime in `~/.openclaw/tools/cli-node`. Maintenance
 drain, which Doctor and `openclaw update repair` also use, accepts the child as
 the service's Gateway only when every listener on the Gateway port is that
-process and its parent is the service's main process. When the listener cannot
-be attributed to a process, for example on a Linux host without `lsof` or `ss`,
-the drain instead requires the kernel parent of the process the Gateway reports
-to be the service's main process. Stopping the service stops both.
+process and its parent is the service's main process. When no listener names
+its process, for example on a Linux host without `lsof` or `ss` or when `ss`
+cannot see the owner, the drain instead requires the kernel parent of the
+process the Gateway reports to be the service's main process. Stopping the
+service stops both.
 
 With `--no-restart`, the package is replaced under a running Gateway, and that
 Gateway restarts itself when its installation check sees the new files. On a

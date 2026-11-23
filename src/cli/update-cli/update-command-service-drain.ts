@@ -24,10 +24,7 @@ import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { readLinuxProcessStat } from "../../shared/pid-alive.js";
 import { sleep } from "../../utils/sleep.js";
 import { resolveGatewayRestartProbeContext } from "../daemon-cli/restart-health-probe.js";
-import {
-  allListenersOwnedByRuntimePid,
-  hasListenerAttributionGap,
-} from "../daemon-cli/restart-port-ownership.js";
+import { allListenersOwnedByRuntimePid } from "../daemon-cli/restart-port-ownership.js";
 import { resolveUpdatedGatewayRestartPort } from "./update-command-service-plan.js";
 
 /** Keep short-budget residents behind their own admission fence until stop or release. */
@@ -208,15 +205,17 @@ export async function withGatewayMaintenanceDrain<T>(
     }
     const usage = await inspectPortUsage(connection.port, { probeHosts: ["127.0.0.1"] });
     assertResidentCurrent();
-    if (hasListenerAttributionGap(usage)) {
-      // The listener is unattributed (for example without lsof or ss). The Gateway
-      // that answered reported its own PID; its kernel parent ties it to the service.
+    if (usage.status !== "busy") {
+      return false;
+    }
+    if (usage.listeners.every((listener) => listener.pid === undefined)) {
+      // No listener names its process (no lsof or ss, or ss cannot see the owner).
+      // The Gateway that answered reported its own PID; its kernel parent ties it
+      // to the service.
       return readLinuxProcessStat(pid)?.parentPid === runtimePid;
     }
-    return (
-      usage.status === "busy" &&
-      usage.listeners.length > 0 &&
-      usage.listeners.every((listener) => listener.pid === pid && listener.ppid === runtimePid)
+    return usage.listeners.every(
+      (listener) => listener.pid === pid && listener.ppid === runtimePid,
     );
   };
   const call = async <R>(
