@@ -43,8 +43,7 @@
     height: 20px;
   }
 
-  & :is(.mobile-header__incognito, .mobile-header__dashboard),
-  & .mobile-header__dashboard:hover {
+  & .mobile-header__incognito {
     color: var(--accent);
   }
 

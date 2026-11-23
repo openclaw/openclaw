@@ -556,7 +556,10 @@ function ChatAudioPlayerContent(
           <AttachmentCardHeader {...card()} visualMode="preview-with-favicon" />
         </Show>
         <Show
-          when={sourceState.read().readiness !== "preparing"}
+          when={
+            sourceState.read().readiness !== "preparing" &&
+            sourceState.read().readiness !== "checking"
+          }
           fallback={
             <div class="chat-assistant-attachment-card__reason chat-media-preparing">
               {t("chat.mediaPlayer.preparing")}

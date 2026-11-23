@@ -30,7 +30,6 @@ import {
   readToolStringParam,
 } from "./common.js";
 import {
-  captureGatewayToolCallerAssertion,
   resolveGatewayToolOperatorSelection,
   wrapGatewayPersonalToolExecution,
 } from "./gateway-caller-context.js";
@@ -154,7 +153,6 @@ export function createSessionsListTool(opts?: {
     outputSchema: SessionsListOutputSchema,
     execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
-      const assertCallerCurrent = captureGatewayToolCallerAssertion();
       const gatewayContext = getInProcessGatewayToolContext();
       if (params.activeOnly === true && opts?.supportsActiveOnly === false) {
         throw new Error("activeOnly requires a Gateway-backed inventory with live run state");
@@ -643,7 +641,6 @@ export function createSessionsListTool(opts?: {
 
       const finalize = (visible: readonly boolean[]) => {
         signal?.throwIfAborted();
-        assertCallerCurrent?.("sessions.list");
         if (gatewayContext && getInProcessGatewayToolContext() !== gatewayContext) {
           throw new Error("Gateway instance unavailable for sessions.list");
         }

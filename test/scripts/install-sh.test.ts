@@ -3692,6 +3692,79 @@ exit 0
         : '"$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?',
     );
   });
+
+  // #203460: a terminal stdin under sudo-rs use_pty with redirected output stops apt with SIGTTOU.
+  it.each([
+    { gum: false, verbose: "0" },
+    { gum: true, verbose: "0" },
+    { gum: true, verbose: "1" },
+  ])(
+    "quiet steps never hand terminal stdin to the command (gum=$gum, verbose=$verbose)",
+    ({ gum, verbose }) => {
+      const dir = tempDirs.make("openclaw-install-sh-quiet-stdin-");
+      const gumPath = join(dir, "gum");
+      const commandPath = join(dir, "command");
+      const stdinLog = join(dir, "stdin-source");
+      const stdinPath = join(dir, "stdin");
+      writeFileSync(stdinPath, "terminal input\n");
+      writeFileSync(
+        gumPath,
+        '#!/usr/bin/env bash\nwhile [[ "$#" -gt 0 && "$1" != "--" ]]; do shift; done\nshift\n"$@"\n',
+        { mode: 0o755 },
+      );
+      writeFileSync(
+        commandPath,
+        `#!/usr/bin/env bash
+if [[ /dev/fd/0 -ef /dev/null ]]; then echo "devnull" > "${stdinLog}"; else echo "other" > "${stdinLog}"; fi
+`,
+        { mode: 0o755 },
+      );
+
+      const result = runInstallShell(
+        `
+      set -euo pipefail
+      exec < "$STDIN_FIXTURE_PATH"
+      source "${SCRIPT_PATH}"
+      needs_stdin_isolation() { return 1; }
+      gum_is_tty() { return ${gum ? 0 : 1}; }
+      GUM="${gum ? gumPath : ""}"
+      VERBOSE="${verbose}"
+      run_quiet_step "Configuring NodeSource repository" "${commandPath}"
+    `,
+        { STDIN_FIXTURE_PATH: stdinPath },
+      );
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(stdinLog, "utf8").trim()).toBe("devnull");
+    },
+  );
+
+  it("keeps the interactive Homebrew bootstrap on the terminal", () => {
+    const dir = tempDirs.make("openclaw-install-sh-homebrew-stdin-");
+    const stdinLog = join(dir, "stdin-source");
+    const stdinPath = join(dir, "stdin");
+    writeFileSync(stdinPath, "terminal input\n");
+
+    const result = runInstallShell(
+      `
+      set -euo pipefail
+      exec < "$STDIN_FIXTURE_PATH"
+      source "${SCRIPT_PATH}"
+      OS=macos
+      needs_stdin_isolation() { return 1; }
+      is_macos_admin_user() { return 0; }
+      command() { [[ "$1" == "-v" && "$2" == "brew" ]] && return 1; builtin command "$@"; }
+      run_remote_bash() {
+        if [[ /dev/fd/0 -ef /dev/null ]]; then echo "devnull" > "${stdinLog}"; else echo "other" > "${stdinLog}"; fi
+      }
+      install_homebrew
+    `,
+      { STDIN_FIXTURE_PATH: stdinPath },
+    );
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(stdinLog, "utf8").trim()).toBe("other");
+  });
 });
 
 describe("install.sh duplicate OpenClaw install detection", () => {

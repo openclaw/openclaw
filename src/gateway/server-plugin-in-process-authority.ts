@@ -60,7 +60,6 @@ import {
   runWithOperatorToolGatewayCleanupContext,
 } from "./server-plugin-runtime-client.js";
 import { createSessionContinuationLifetime } from "./session-continuation-lifetime.js";
-import { resolveSessionRuntimeAuthority } from "./session-runtime-authority.js";
 import {
   cancelSubagentCompletionToolHandoff,
   registerSubagentCompletionToolHandoff,
@@ -142,7 +141,6 @@ export function captureOperatorToolGatewayContinuationContextInternal(
   }
   // Use the normal dispatch owner to intersect scopes and validate the live caller
   // before transferring its source. A cleanup scope alone retains request lifetime.
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
   const method = options?.request?.method ?? "agent";
   if (options?.request && method !== "plugins.reload") {
     throw new Error("Request-bound continuation only supports plugin reload");
@@ -168,7 +166,9 @@ export function captureOperatorToolGatewayContinuationContextInternal(
       captured?.authority.assertCurrent();
       resolved.assertContextCurrent();
       resolved.assertInvocationCurrent();
-      assertCallerCurrent?.(method);
+      for (const signal of caller?.approvalSignals ?? []) {
+        signal.throwIfAborted();
+      }
       const continuationScope = runWithOperatorToolGatewayCleanupContext(() => ({
         ...getPluginRuntimeGatewayRequestScope(),
         client: captured
@@ -359,12 +359,6 @@ export function resolveInProcessGatewayDispatch(
       ? composeSessionSourceAssertion([assertSettleWakeCurrent, operatorRunAuthority.assertCurrent])
       : undefined;
   assertTransferredSettleWakeCurrent?.();
-  const runtimeAuthority = assertTransferredSettleWakeCurrent
-    ? { assertCurrent: assertTransferredSettleWakeCurrent }
-    : resolveSessionRuntimeAuthority({
-        method,
-        runtimeIdentity: agentRuntimeIdentity ?? scope?.client?.internal?.agentRuntimeIdentity,
-      });
   const assertCallerCurrent = captureGatewayToolCallerAssertion(method);
   const transfersCreatedInput =
     method === "sessions.create" &&
@@ -383,7 +377,6 @@ export function resolveInProcessGatewayDispatch(
     // none may outlive or broaden a recovered service operation's tool ceiling.
     service?.assertCurrent,
     selection?.assertCurrent,
-    runtimeAuthority?.assertCurrent,
     assertSettleWakeCurrent,
     !isHostOwnedAgentRun || !operatorRunAuthority
       ? composeSessionSourceAssertion(
@@ -699,7 +692,6 @@ export function resolveInProcessGatewayDispatch(
     assertContextCurrent: composeSessionSourceAssertion([
       service?.assertCurrent,
       selection?.assertCurrent,
-      runtimeAuthority?.assertCurrent,
       assertSourceCurrent,
       method !== "agent" ? assertCallerCurrent : undefined,
       transfersCreatedInput ? options.agentToolCaller?.assertCurrent : undefined,

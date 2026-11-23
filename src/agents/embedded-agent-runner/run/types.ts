@@ -124,6 +124,9 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   compactionForbidden?: boolean;
   sessionReadScopeKey?: string;
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
+  /** Looks up move destinations under the admitted requester when the harness offers session_project. */
+  prepareSessionProjectGuidance?: () => Promise<string | undefined>;
+  sessionProjectMoveEligible?: boolean;
   /**
    * Run-owned start timestamp captured by the embedded-run orchestrator before
    * admission. Flows onto the queue handle so recovery can project the active
@@ -485,6 +488,8 @@ export type EmbeddedRunAttemptResult = {
   yieldAcknowledgment?: string;
   /** The registry accepted this attempt's explicit incoming-message wait. */
   yieldMessageWaitRegistered?: boolean;
+  /** This attempt's sessions_yield armed background commands whose exit resumes the session. */
+  yieldExecWakeArmed?: boolean;
   /**
    * True when code mode owned this attempt's model tool surface. Absent means
    * the harness did not report engagement (treated as not engaged), which is

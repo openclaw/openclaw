@@ -133,6 +133,13 @@ The verifier reads the original leaf log and requires completed invocation
 evidence before accepting it. Changed or additional errors, incomplete logs, and
 setup failures remain blocking; aggregate causes are also checked exactly.
 
+An explicitly approved cancellation uses `cancelledStep` instead of
+`testFailures`. It matches only a completed job whose raw conclusion is
+`cancelled`; its only unsuccessful step must have that exact name and also be
+cancelled. It does not accept a different cancelled step, another failed step,
+a timed-out job, or a cancelled workflow. Ordinary failure grants never accept
+cancellation. The original job conclusion remains visible as cancelled, not passed.
+
 Plain-output native extension batches in CI retain separate invocation streams and emit a
 completion receipt only after every planned invocation and its descendants settle.
 An ordinary test failure does not skip later planned batches. Historical logs

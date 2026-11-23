@@ -1,7 +1,5 @@
 import { performance } from "node:perf_hooks";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
-import { resolveChannelMessageActionFacts } from "../channels/plugins/message-action-names.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { withDiagnosticsTimelineObserver } from "../infra/diagnostics-timeline.js";
@@ -331,8 +329,7 @@ export async function handleGatewayRequest(
             "setup",
           )
         : undefined;
-    const runtimeAuthority = resolveSessionRuntimeAuthorityRequest(opts);
-    if (runtimeAuthority === null) {
+    if (!resolveSessionRuntimeAuthorityRequest(opts)) {
       return;
     }
     const profileBinding =
@@ -349,32 +346,7 @@ export async function handleGatewayRequest(
       profileBinding && !opts.expectedProfileBinding
         ? profileBinding.guardResponse(opts.respond)
         : opts.respond;
-    const messageActionFacts =
-      req.method === "message.action" && isRecord(req.params)
-        ? resolveChannelMessageActionFacts(req.params.action)
-        : undefined;
-    // The message-operation owner fences new effects and preserves accepted write receipts.
-    // Reads still require current authority when their contents are released.
-    const preserveMessageWriteOutcome =
-      req.method === "send" || (messageActionFacts !== undefined && !messageActionFacts.readOnly);
-    let acceptedAgentRun = false;
-    const respondUnobserved: GatewayRequestOptions["respond"] = runtimeAuthority
-      ? (ok, ...response) => {
-          if (ok && !preserveMessageWriteOutcome && !acceptedAgentRun) {
-            runtimeAuthority.assertCurrent();
-          }
-          profileRespond(ok, ...response);
-          // Accepted execution owns its final outcome after the submitting turn closes.
-          if (
-            req.method === "agent" &&
-            ok &&
-            isRecord(response[0]) &&
-            response[0].status === "accepted"
-          ) {
-            acceptedAgentRun = true;
-          }
-        }
-      : profileRespond;
+    const respondUnobserved = profileRespond;
     respondCancelled = respondUnobserved;
     const respond: GatewayRequestOptions["respond"] = observation
       ? (...response) => {
@@ -404,12 +376,10 @@ export async function handleGatewayRequest(
         hasCurrentClientAuthority,
         markSessionSubscribePhase: subscribeDiagnostics?.mark ?? workboardDiagnostics?.mark,
         assertInvocationCurrent: () => {
-          runtimeAuthority?.assertCurrent();
           profileBinding?.assertCurrent();
           requestMutationAuthority.assertCurrent();
         },
         assertPreparationCurrent: () => {
-          runtimeAuthority?.assertCurrent();
           profileBinding?.assertCurrent();
           requestMutationAuthority.assertPreparationCurrent();
         },
@@ -445,11 +415,9 @@ export async function handleGatewayRequest(
           hasCurrentClientAuthority,
           admitted: true,
           assertInvocationCurrent: () => {
-            runtimeAuthority?.assertCurrent();
             requestMutationAuthority.assertCurrent();
           },
           assertPreparationCurrent: () => {
-            runtimeAuthority?.assertCurrent();
             requestMutationAuthority.assertPreparationCurrent();
           },
           consumeSessionTurn: {
@@ -471,10 +439,7 @@ export async function handleGatewayRequest(
       }
       const sessionMutationAuthorization = withSessionMutationCommitGuard(
         authorization.sessionMutationAuthorization,
-        composeSessionSourceAssertion([
-          runtimeAuthority?.assertCurrent,
-          requestMutationAuthority.assertCurrent,
-        ]),
+        composeSessionSourceAssertion([requestMutationAuthority.assertCurrent]),
         profileBinding?.assertCurrent,
         requestMutationAuthority.assertAdmittedInputCurrent,
       );
@@ -531,12 +496,7 @@ export async function handleGatewayRequest(
             },
             profileBinding,
             authorization.sessionScope,
-            profileBinding || runtimeAuthority
-              ? composeSessionSourceAssertion([
-                  profileBinding?.assertCurrent,
-                  runtimeAuthority?.assertCurrent,
-                ])
-              : undefined,
+            profileBinding?.assertCurrent,
           );
         handlerOptions.copySessionCatalogToGateway = async (source) => {
           if (!sessionMutationAuthorization) {
@@ -604,7 +564,6 @@ export async function handleGatewayRequest(
             if (sharing) {
               // Shared reads cannot commit a write; their failed delivery stays retryable.
               return dispatchSharedRead(preparedHandler, handlerOptions, sharing, () => {
-                runtimeAuthority?.assertCurrent();
                 profileBinding?.assertCurrent();
                 requestMutationAuthority.assertCurrent();
                 authorization.sessionAccessAuthority?.assertCurrent();
