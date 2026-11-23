@@ -53,11 +53,14 @@ export type GatewayCall = {
 
 export function observeSubagentChange(ready: () => boolean) {
   const done = createDeferredCore();
-  const stop = subscribeSubagentRunChanges("persistence", () => {
+  const check = () => {
     if (ready()) {
       done.resolve();
     }
-  });
+  };
+  const stop = subscribeSubagentRunChanges("persistence", check);
+  // A prior action can already have committed the state this fixture is awaiting.
+  check();
   return { ...done, stop };
 }
 

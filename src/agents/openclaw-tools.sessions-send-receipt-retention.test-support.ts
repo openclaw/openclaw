@@ -255,6 +255,12 @@ export function registerSessionsSendReceiptRetentionTests({
             run,
           ),
       );
+    const earlyTerminal =
+      mode === "history-deadline"
+        ? observeSubagentChange(
+            () => getSubagentRunByRunId(executionRunIds[0]!)?.execution.status === "terminal",
+          )
+        : undefined;
     try {
       if (deliveredEarly && !pausedResume) {
         // Diagnostic contrast: an admitted system run can outlive its reply controller.
@@ -322,6 +328,9 @@ export function registerSessionsSendReceiptRetentionTests({
         vi.useRealTimers();
         expect(early.details).toMatchObject({ status: "timeout" });
         releaseHistory.resolve();
+        // A terminal can already be committed when the inline history wait returns.
+        // Exercise that ordering before the fixture begins its next state wait.
+        await earlyTerminal!.promise;
       } else {
         expect(early.details).not.toHaveProperty("error");
       }
@@ -569,6 +578,7 @@ export function registerSessionsSendReceiptRetentionTests({
         expect(getSubagentRunByRunId(runId)).toBeUndefined();
       }
     } finally {
+      earlyTerminal?.stop();
       vi.useRealTimers();
       releaseHistory.resolve();
       if (adoptedRun) {
