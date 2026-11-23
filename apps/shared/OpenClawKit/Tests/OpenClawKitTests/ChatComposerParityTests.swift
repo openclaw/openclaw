@@ -93,6 +93,69 @@ struct ChatComposerStateTests {
         case detached
     }
 
+    enum TalkDraft: CaseIterable {
+        case empty
+        case text
+        case attachment
+    }
+
+    @Test(arguments: [false, true], TalkDraft.allCases)
+    func `Talk placement keeps call ending separate from run and draft actions`(
+        runActive: Bool,
+        draft: TalkDraft)
+    {
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
+        defer { vm.detachTransport() }
+        vm.pendingRuns = runActive ? ["accepted-run"] : []
+        vm.input = draft == .text ? "Keep this draft" : ""
+        if draft == .attachment {
+            vm.attachments = [OpenClawPendingAttachment(
+                url: nil,
+                data: Data([1, 2, 3]),
+                fileName: "image.png",
+                mimeType: "image/png",
+                preview: nil)]
+        }
+        for talkActive in [false, true] {
+            let composer = OpenClawChatComposer(
+                viewModel: vm,
+                style: .standard,
+                showsSessionSwitcher: false,
+                userAccent: nil,
+                composerChrome: .clean,
+                isComposerEnabled: true,
+                isAttachmentInputEnabled: true,
+                messagePlaceholder: nil,
+                talkControl: OpenClawChatTalkControl(
+                    isEnabled: talkActive,
+                    isListening: talkActive,
+                    isSpeaking: false,
+                    isGatewayConnected: true,
+                    statusText: "",
+                    providerLabel: "",
+                    toggle: { _ in }),
+                dictationControl: nil,
+                voiceNoteControl: nil)
+
+            // These are the production decisions used by both footer slots.
+            // iOS keeps exactly one End Talk even with Stop or a draft;
+            // other clients retain their existing primary-slot presentation.
+            #if os(iOS)
+            #expect(composer.cleanShowsSeparateTalkControl == talkActive)
+            if talkActive {
+                #expect(composer.cleanPrimaryControl == (runActive || draft != .empty ? .send : .none))
+            } else {
+                #expect(composer.cleanPrimaryControl == (!runActive && draft == .empty ? .talk : .send))
+            }
+            #else
+            #expect(!composer.cleanShowsSeparateTalkControl)
+            #expect(composer.cleanPrimaryControl == (!runActive && draft == .empty ? .talk : .send))
+            #endif
+            #expect(vm.pendingRunCount == (runActive ? 1 : 0))
+            #expect(vm.hasDraftToSend == (draft != .empty))
+        }
+    }
+
     @Test(arguments: [false, true])
     func `closed model pickers defer catalog projection`(clean: Bool) {
         let vm = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())

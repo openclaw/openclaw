@@ -69,7 +69,11 @@ struct ChatTalkButton: View {
         }
         .buttonStyle(.plain)
         .disabled(!self.control.isGatewayConnected && !self.control.isEnabled)
+        #if os(iOS)
+        .accessibilityLabel(self.control.isEnabled ? "End Talk" : "Start realtime chat")
+        #else
         .accessibilityLabel(self.control.isEnabled ? "Stop realtime chat" : "Start realtime chat")
+        #endif
         .accessibilityValue(self.accessibilityValue)
         .accessibilityIdentifier("chat-realtime-control")
         .help(self.helpText)
@@ -113,9 +117,15 @@ struct ChatTalkButton: View {
         HStack(spacing: 6) {
             ChatTalkButtonGlyph(control: self.control)
                 .font(OpenClawChatTypography.captionSemiBold)
+            #if os(iOS)
+            Text(self.control.isEnabled ? "End Talk" : "Talk")
+                .font(OpenClawChatTypography.captionSemiBold)
+                .lineLimit(1)
+            #else
             Text(self.control.isEnabled ? "Stop" : "Talk")
                 .font(OpenClawChatTypography.captionSemiBold)
                 .lineLimit(1)
+            #endif
         }
         .foregroundStyle(self.control.isEnabled ? .white : .primary)
         .padding(.horizontal, 10)

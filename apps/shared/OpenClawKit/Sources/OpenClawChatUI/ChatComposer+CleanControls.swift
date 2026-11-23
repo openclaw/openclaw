@@ -131,10 +131,15 @@ extension OpenClawChatComposer {
     private func cleanInlineControls(compactModel: Bool) -> some View {
         HStack(spacing: CleanChatComposerMetrics.footerControlGap) {
             self.cleanContextUsageMenu
-            // Camera switching only displaces settings in the compact iOS footer.
+            // The active call control takes the settings space in the compact iOS footer.
             #if os(macOS)
             self.cleanInlineModelPicker(compact: compactModel)
             self.cleanInlineEffortMenu
+            #elseif os(iOS)
+            if !self.cleanShowsSeparateTalkControl {
+                self.cleanInlineModelPicker(compact: compactModel)
+                self.cleanInlineEffortMenu
+            }
             #else
             if !self.cleanShowsCameraFlip {
                 self.cleanInlineModelPicker(compact: compactModel)
@@ -343,7 +348,7 @@ extension OpenClawChatComposer {
     var showsModelSignInRow: Bool {
         #if os(iOS)
         guard self.composerChrome == .clean else { return true }
-        return self.viewModel.composerModelAvailabilityMessage != nil || self.cleanShowsCameraFlip ||
+        return self.viewModel.composerModelAvailabilityMessage != nil || self.cleanShowsSeparateTalkControl ||
             self.voiceNoteControl?.recorder.isRecording == true
         #else
         !self.usesDesktopModelMenu
@@ -422,18 +427,26 @@ extension OpenClawChatComposer {
                 })
         }
 
+        #if os(iOS)
+        if let talkControl, self.cleanShowsSeparateTalkControl {
+            self.compactTalkButton(talkControl)
+        }
+        #else
         if let talkControl, self.cleanShowsCameraFlip {
             ChatCameraFlipButton(
                 control: talkControl,
                 controlHeight: self.cleanControlHeight,
                 visualSize: self.cleanIconControlSize)
         }
+        #endif
 
         self.cleanTrailingControl
     }
 
+    #if !os(iOS)
     private var cleanShowsCameraFlip: Bool {
         guard let talkControl = self.talkControl else { return false }
         return ChatCameraFlipButton.isAvailable(for: talkControl)
     }
+    #endif
 }

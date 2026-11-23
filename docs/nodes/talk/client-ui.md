@@ -11,6 +11,9 @@ sidebarTitle: "Client UI"
 
 ## iOS UI
 
+- During an active call, the composer keeps **End Talk** beside the separate
+  Send or **Stop** response control, including while work is running or a draft
+  is present. The Talk composer no longer shows a camera-flip button.
 - Ending Talk stops listening and playback without canceling accepted agent work.
   Its answer can still finish in chat history. To cancel the work, use the chat
   run's **Stop** control or say "cancel" before ending the call.

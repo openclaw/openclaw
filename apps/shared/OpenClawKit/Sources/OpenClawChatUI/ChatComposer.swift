@@ -678,12 +678,14 @@ struct OpenClawChatComposer: View {
                         sessionKey: self.viewModel.sessionKey,
                         helpText: self.talkHelpText(talkControl),
                         style: .full)
+                    #if !os(iOS)
                     if ChatCameraFlipButton.isAvailable(for: talkControl) {
                         ChatCameraFlipButton(
                             control: talkControl,
                             controlHeight: 32,
                             visualSize: 32)
                     }
+                    #endif
                 }
                 if self.style == .standard {
                     ChatConnectionPill(
@@ -803,27 +805,54 @@ struct OpenClawChatComposer: View {
         }
     }
 
-    /// iMessage-style trailing control: the talk (mic) affordance while the
-    /// draft is empty, swapping to the send button once the user types.
+    /// Starting Talk shares the primary slot with Send/Stop. On iOS, ending an
+    /// active call has its own slot so sending or canceling work cannot hide it.
     @ViewBuilder
     var cleanTrailingControl: some View {
-        if Self.showsCompactTalkControl(
-            hasDraftToSend: self.viewModel.hasDraftToSend,
-            hasBlockingRunActivity: self.viewModel.hasBlockingRunActivity,
-            isLocalVoiceCaptureActive: self.isLocalVoiceCaptureActive),
-            let talkControl
-        {
-            ChatTalkButton(
-                control: talkControl,
-                sessionKey: self.viewModel.sessionKey,
-                helpText: self.talkHelpText(talkControl),
-                style: .compact(
-                    controlHeight: self.cleanControlHeight,
-                    iconControlSize: self.cleanIconControlSize))
-        } else {
+        switch self.cleanPrimaryControl {
+        case .talk:
+            if let talkControl { self.compactTalkButton(talkControl) }
+        case .send:
             sendButton
                 .frame(width: cleanControlHeight, height: cleanControlHeight)
+        case .none:
+            EmptyView()
         }
+    }
+
+    enum CleanPrimaryControl {
+        case talk
+        case send
+        case none
+    }
+
+    var cleanShowsSeparateTalkControl: Bool {
+        #if os(iOS)
+        self.talkControl?.isEnabled == true
+        #else
+        false
+        #endif
+    }
+
+    var cleanPrimaryControl: CleanPrimaryControl {
+        if self.cleanShowsSeparateTalkControl {
+            return self.viewModel.hasDraftToSend || self.viewModel.hasBlockingRunActivity ? .send : .none
+        }
+        let showsTalk = Self.showsCompactTalkControl(
+            hasDraftToSend: self.viewModel.hasDraftToSend,
+            hasBlockingRunActivity: self.viewModel.hasBlockingRunActivity,
+            isLocalVoiceCaptureActive: self.isLocalVoiceCaptureActive)
+        return showsTalk && self.talkControl != nil ? .talk : .send
+    }
+
+    func compactTalkButton(_ talkControl: OpenClawChatTalkControl) -> some View {
+        ChatTalkButton(
+            control: talkControl,
+            sessionKey: self.viewModel.sessionKey,
+            helpText: self.talkHelpText(talkControl),
+            style: .compact(
+                controlHeight: self.cleanControlHeight,
+                iconControlSize: self.cleanIconControlSize))
     }
 
     private var isLocalVoiceCaptureActive: Bool {
@@ -834,6 +863,9 @@ struct OpenClawChatComposer: View {
     }
 
     private func talkHelpText(_ talkControl: OpenClawChatTalkControl) -> String {
+        #if os(iOS)
+        if talkControl.isEnabled { return String(localized: "End Talk") }
+        #endif
         if !talkControl.isGatewayConnected, !talkControl.isEnabled {
             return "Connect the gateway before starting realtime chat"
         }

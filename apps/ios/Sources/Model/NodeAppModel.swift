@@ -3249,11 +3249,6 @@ extension NodeAppModel {
         UserDefaults.standard.set(facing.rawValue, forKey: Self.preferredCameraFacingKey)
     }
 
-    func flipPreferredCameraFacing() {
-        self.setPreferredCameraFacing(self.preferredCameraFacing == .front ? .back : .front)
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-    }
-
     private func showCameraHUD(
         ownerID: String,
         text: String,

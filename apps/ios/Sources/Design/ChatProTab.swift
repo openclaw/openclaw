@@ -383,10 +383,6 @@ struct ChatProTab: View {
             selectInputDevice: { deviceID in
                 appModel.talkMode.selectInputDevice(deviceID)
             },
-            cameraFacing: appModel.preferredCameraFacing == .front ? .front : .back,
-            flipCamera: {
-                appModel.flipPreferredCameraFacing()
-            },
             toggle: { sessionKey in
                 appModel.focusChatSession(sessionKey)
                 appModel.setTalkEnabled(!appModel.talkMode.isEnabled)
