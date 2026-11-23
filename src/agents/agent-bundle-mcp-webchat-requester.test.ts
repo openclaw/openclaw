@@ -108,7 +108,7 @@ async function withTurn<T>(
     });
     try {
       return await withPreparedEmbeddedRunToolAuthority(
-        { admittedRunContext, replyOperation: operation },
+        { admittedRunContext, replyOperation: operation, mcpRequesterProfileId: profileId },
         { ...input, toolAuthorityFingerprint: fingerprint },
         undefined,
         async (prepared) =>
@@ -203,7 +203,11 @@ it("keeps turn guards off cached runtimes and fences every MCP operation", async
     check!();
     return {};
   });
-  const runtime = makeManagerRuntime({ sessionId: "shared", workspaceDir: "/workspace" });
+  const runtime = makeManagerRuntime({
+    sessionId: "shared",
+    workspaceDir: "/workspace",
+    requesterScope: { requesterSenderId: "ada-profile" },
+  });
   for (const name of [
     "getCatalog",
     "callTool",
@@ -216,9 +220,10 @@ it("keeps turn guards off cached runtimes and fences every MCP operation", async
   ] as const) {
     Object.assign(runtime, { [name]: request });
     const view = createMcpRunView(runtime, assertion);
-    await Reflect.apply(view[name]!, view, []);
+    const args = name === "getCatalog" ? [] : ["calendar"];
+    await Reflect.apply(view[name]!, view, args);
     current = false;
-    await expect(Reflect.apply(view[name]!, view, [])).rejects.toThrow("turn ended");
+    await expect(Reflect.apply(view[name]!, view, args)).rejects.toThrow("turn ended");
     expect(runtime[name]).toBe(request);
     current = true;
   }
@@ -405,9 +410,7 @@ it.each([
             release.resolve();
             expect(await settled).toMatchObject({
               message: expect.stringContaining(
-                change === "revoked"
-                  ? "admitted run authority is no longer active"
-                  : "Several people have steered",
+                change === "revoked" ? "source revoked" : "Several people have steered",
               ),
             });
             expect(paths).toHaveLength(1);
