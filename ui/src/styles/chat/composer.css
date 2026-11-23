@@ -1774,6 +1774,10 @@
   color: var(--muted);
 }
 
+.chat-attachment-file__icon {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
 .chat-attachment-file__icon svg {
   width: 16px;
   height: 16px;
