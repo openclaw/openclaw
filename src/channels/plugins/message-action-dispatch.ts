@@ -289,6 +289,11 @@ function prepareMessageActionReadContext(
   if (!registration) {
     return undefined;
   }
+  const accountId =
+    ctx.accountId ??
+    (ctx.channelInferred
+      ? resolveChannelDefaultAccountId({ plugin: registration.plugin, cfg: ctx.cfg })
+      : undefined);
   const action = ctx.action as ChannelMessageActionName;
   const authority = registration.captureReadAuthority?.();
   const hasRegistrationAuthority = authority?.() === true;
@@ -306,7 +311,7 @@ function prepareMessageActionReadContext(
           authorization: ctx.messageActionAuthorization,
           action,
           channel: ctx.channel,
-          accountId: ctx.accountId,
+          accountId,
         })
       : undefined;
   const origin = (
@@ -323,6 +328,7 @@ function prepareMessageActionReadContext(
   } = ctx;
   const actionContext: ChannelMessageActionContext = {
     ...pluginContext,
+    accountId,
     action,
     conversationReadOrigin: origin,
   };

@@ -278,6 +278,8 @@ describe("official plugin read-only authority", () => {
         { kind: "group" as const, id: "channel:resolved", name: fixture.plugin.id },
       ]);
       fixture.plugin.directory = { listGroups };
+      fixture.plugin.config.defaultAccountId = () => "ops";
+      fixture.plugin.config.listAccountIds = () => ["ops", "default"];
       if (deferredAlias) {
         fixture.plugin.actions.messageActionTargetAliases = {
           read: {
@@ -290,26 +292,33 @@ describe("official plugin read-only authority", () => {
         };
       }
       fixture.register();
+      const context: Partial<Context> = {
+        channelInferred: true,
+        accountId: undefined,
+        requesterAccountId: "ops",
+        params: { channelId: fixture.plugin.id },
+        toolContext: {
+          currentChannelProvider: fixture.plugin.id,
+          currentChannelId: deferredAlias ? "current" : "channel:resolved",
+        },
+      };
       await expect(
         fixture.dispatch({
-          channelInferred: true,
-          params: { channelId: fixture.plugin.id },
+          ...context,
           toolContext: { currentChannelProvider: "other-provider", currentChannelId: "current" },
         }),
       ).rejects.toThrow(exactConversation);
+      await expect(fixture.dispatch({ ...context, requesterAccountId: "default" })).rejects.toThrow(
+        exactConversation,
+      );
       expect(listGroups).not.toHaveBeenCalled();
       expect(fixture.handleAction).not.toHaveBeenCalled();
-      await expect(
-        fixture.dispatch({
-          channelInferred: true,
-          params: { channelId: fixture.plugin.id },
-          toolContext: {
-            currentChannelProvider: fixture.plugin.id,
-            currentChannelId: deferredAlias ? "current" : "resolved",
-          },
-        }),
-      ).resolves.toBe(receipt);
+      await expect(fixture.dispatch(context)).resolves.toBe(receipt);
       expect(listGroups).toHaveBeenCalledOnce();
+      expect(listGroups).toHaveBeenCalledWith(expect.objectContaining({ accountId: "ops" }));
+      expect(fixture.handleAction).toHaveBeenCalledWith(
+        expect.objectContaining({ accountId: "ops" }),
+      );
       expect(matchAlias).toHaveBeenCalledTimes(deferredAlias ? 1 : 0);
     },
   );
