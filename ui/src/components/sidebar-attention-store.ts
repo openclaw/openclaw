@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { CronCompactJob, CronJob, ModelAuthStatusResult } from "../api/types.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { createMentionsCapability, type MentionsCapability } from "../app/mentions.ts";
@@ -21,7 +22,9 @@ import { modelAuthEventInvalidates } from "../lib/model-auth-request-state.ts";
 import { loadModelAuthStatus, nextModelAuthStatusRefreshAt } from "../lib/model-auth.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import {
+  deferredCronFailurePrefix,
   dismissSidebarAttention,
+  hasDeferredCronFailure,
   isSidebarAttentionDismissed,
   loadDismissals,
   reconcileSidebarAttentionDismissals,
@@ -93,6 +96,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
   private loadedAgentScope = { ...this.sources.agentSelection.state };
   #dismissalKey: string | null = null;
   #dismissed: SidebarAttentionDismissals = {};
+  #cronDismissalImport: { key: string; client: GatewayBrowserClient } | null = null;
   readonly #reviewedOutbox = new Set<string>();
   #loadGeneration = 0;
   #cronRefresh: { generation: number; requested: boolean } | null = null;
@@ -517,6 +521,43 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
     });
   }
 
+  #importCronDismissals(): void {
+    const gateway = this.sources.gateway;
+    const { client } = gateway.snapshot;
+    const key = resolveSidebarAttentionKey(gateway);
+    const revision = gateway.connectionRevision;
+    const isCurrent = () =>
+      !this.#disposed &&
+      gateway.snapshot.client === client &&
+      gateway.connectionRevision === revision &&
+      resolveSidebarAttentionKey(gateway) === key &&
+      isGatewayAvailable(gateway.snapshot) &&
+      hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null);
+    if (
+      !client ||
+      !key ||
+      !isCurrent() ||
+      (this.#cronDismissalImport?.key === key && this.#cronDismissalImport.client === client) ||
+      (!this.#dismissed.cronFailed?.length && !hasDeferredCronFailure(key))
+    ) {
+      return;
+    }
+    const pending = { key, client };
+    this.#cronDismissalImport = pending;
+    void import("./sidebar-cron-failure-dismissals.ts")
+      .then(({ importCronFailureDismissals }) =>
+        importCronFailureDismissals(client, key, isCurrent),
+      )
+      .catch(() => {
+        // The browser records remain available if the lazy import fails.
+      })
+      .finally(() => {
+        if (this.#cronDismissalImport === pending) {
+          this.#cronDismissalImport = null;
+        }
+      });
+  }
+
   #synchronizeGateway(): void {
     const snapshot = this.sources.gateway.snapshot;
     const scope = gatewayPresentationScope(this.sources.gateway);
@@ -533,7 +574,8 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       (snapshot.phase !== "connected" || identityPending) && !identityChanged
         ? this.#dismissalKey
         : resolveSidebarAttentionKey(this.sources.gateway);
-    if (key !== this.#dismissalKey) {
+    const dismissalKeyChanged = key !== this.#dismissalKey;
+    if (dismissalKeyChanged) {
       this.#dismissalKey = key;
       this.#dismissed = loadDismissals(key);
     }
@@ -567,6 +609,9 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       this.loadedClient = null;
       this.#scheduleHealthRefresh();
       return;
+    }
+    if (dismissalKeyChanged || snapshot.client !== this.loadedClient) {
+      this.#importCronDismissals();
     }
     const owner = this.#owner();
     const agentScope = this.sources.agentSelection.state;
@@ -631,8 +676,12 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
   };
 
   readonly #syncDismissalsFromStorage = (event: StorageEvent) => {
-    if (this.#dismissalKey && (event.key === null || event.key === this.#dismissalKey)) {
+    const key = this.#dismissalKey;
+    if (key && (event.key === null || event.key === key)) {
       this.syncDismissals();
+      this.#importCronDismissals();
+    } else if (key && event.key?.startsWith(deferredCronFailurePrefix(key))) {
+      this.#importCronDismissals();
     }
   };
 

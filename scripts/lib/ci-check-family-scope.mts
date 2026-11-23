@@ -41,6 +41,7 @@ export function hasProtocolGenerationInput(paths: string[]) {
       (file) => !isCiDocumentationPath(file) && file.startsWith("packages/gateway-protocol/"),
     ) ||
     paths.includes("src/gateway/methods/core-descriptors.ts") ||
+    paths.includes("src/gateway/methods/core-descriptors.appended.ts") ||
     hasProtocolEventCoverageInput(paths)
   );
 }

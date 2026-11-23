@@ -438,6 +438,13 @@ openclaw-appearance-background .settings-background-preview .session-background_
   color: var(--muted);
 }
 
+/* Keep the language and font pickers on one column as their selections change. */
+@media not all and (max-width: 640px) {
+  #settings-appearance-typography .settings-row__control:has(> .settings-select) {
+    width: 220px;
+  }
+}
+
 .settings-typography-preview {
   width: 100%;
 }
@@ -557,6 +564,22 @@ openclaw-appearance-background .settings-background-preview .session-background_
   align-items: center;
   gap: var(--space-2);
   flex: 0 0 auto;
+}
+
+/* Schema section help is a row action: keep its touch box inside the scrolling panel. */
+@media (pointer: coarse), (max-width: 640px) {
+  #config-section-panel
+    .settings-section__header:has(
+      > .settings-section__actions > .settings-section__docs:only-child
+    ) {
+    > .settings-section__copy {
+      align-self: center;
+    }
+
+    > .settings-section__copy + .settings-section__actions .settings-section__help-button {
+      margin-block: 0;
+    }
+  }
 }
 
 .settings-section__docs {
@@ -910,6 +933,13 @@ openclaw-appearance-background .settings-background-preview .session-background_
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select {
   width: auto;
   min-width: min(220px, 100%);
+}
+
+/* Keep the prediction model and its explanation in place when the selected label changes. */
+@media not all and (max-width: 640px) {
+  openclaw-labs-page .settings-row.settings-row--nested .settings-row__control > .settings-select {
+    inline-size: 18em;
+  }
 }
 
 /* Permission can replace System default with long hardware labels; keep the
@@ -1959,9 +1989,22 @@ openclaw-approvals-page .data-table-pagination__info {
   color: var(--muted);
 }
 
+/* The translated pending label must not narrow the command or move the history below it. */
 .standing-grants__revoke {
+  display: inline-grid;
   grid-area: 1 / 2 / span 3;
   align-self: start;
+  place-items: center;
+}
+
+.standing-grants__revoke::before,
+.standing-grants__revoke > span {
+  grid-area: 1 / 1;
+}
+
+.standing-grants__revoke::before {
+  content: attr(data-alternate-label);
+  visibility: hidden;
 }
 
 /* Quiet-hours details stay connected to their toggle without changing row controls. */

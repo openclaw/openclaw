@@ -279,7 +279,9 @@ export function usePrefixStabilityJourney() {
         slowSteps.add(slow);
         return {
           tool: "exec",
-          args: { command: `until [ -f '${gate}' ]; do sleep 0.1; done; echo slow-finished` },
+          args: {
+            command: `touch '${gate}.entered'; until [ -f '${gate}' ]; do sleep 0.1; done; echo slow-finished`,
+          },
         };
       }
       if (latest.includes("STEP-EXEC")) {
@@ -462,11 +464,17 @@ export function usePrefixStabilityJourney() {
           });
         }
       };
-      const start = (sessionKey: string, message: string, queueMode?: "steer") =>
+      const start = (
+        sessionKey: string,
+        message: string,
+        queueMode?: "steer",
+        attachments?: Array<Record<string, string>>,
+      ) =>
         client.request<{ runId?: string }>("chat.send", {
           sessionKey,
           message,
           ...(queueMode ? { queueMode } : {}),
+          ...(attachments ? { attachments } : {}),
           deliver: false,
           idempotencyKey: `prefix-stability-${api}-${++ordinal}`,
         });
@@ -482,9 +490,9 @@ export function usePrefixStabilityJourney() {
         await wait(`${sessionKey} ${message}`, await start(sessionKey, message));
         await settle();
       };
-      const reached = async (predicate: () => boolean) => {
+      const reached = async (predicate: () => boolean | Promise<boolean>) => {
         const deadline = Date.now() + 60_000;
-        while (!predicate()) {
+        while (!(await predicate())) {
           expect(Date.now(), seen.join("\n")).toBeLessThan(deadline);
           await new Promise((resolve) => {
             setTimeout(resolve, 100);
@@ -498,6 +506,39 @@ export function usePrefixStabilityJourney() {
       const sentToTarget = (marker: string) => targetRequests.some((r) => r.text.includes(marker));
 
       try {
+        step = "mid-turn fork";
+        const midTurn = await start(TARGET, "STEP-SLOW mid turn fork");
+        const midTurnGate = path.join(fixture.workspaceDir, "release-0");
+        await reached(() =>
+          fs.access(`${midTurnGate}.entered`).then(
+            () => true,
+            () => false,
+          ),
+        );
+        const liveParentRequest = targetRequests.at(-1)!;
+        const midTurnForkAt = forkRequests.length;
+        try {
+          const midTurnFork = await client.request<{ status: string; value?: unknown }>(
+            "prefixfork.run",
+            { sessionKey: TARGET, latest: true },
+            { timeoutMs: 65_000 },
+          );
+          expect(midTurnFork).toMatchObject({ status: "settled", value: "fork-settled" });
+          expect(forkRequests.length).toBeGreaterThan(midTurnForkAt);
+          const forkRequest = forkRequests[midTurnForkAt]!;
+          expect(forkRequest.system).toBe(liveParentRequest.system);
+          expect(forkRequest.tools).toBe(liveParentRequest.tools);
+          expect(
+            forkRequest.messages.slice(0, liveParentRequest.messages.length),
+            JSON.stringify(prefixBreaks([liveParentRequest, forkRequest]), null, 2),
+          ).toEqual(liveParentRequest.messages);
+          expect(targetRequests.at(-1)).toBe(liveParentRequest);
+        } finally {
+          await fs.writeFile(midTurnGate, "");
+        }
+        await wait("mid-turn fork parent", midTurn);
+        await settle();
+        step = "first turn";
         await send(TARGET, "TARGET first user turn");
         step = "background fork between two parent turns";
         const beforeFork = targetRequests.at(-1)!;
@@ -539,15 +580,26 @@ export function usePrefixStabilityJourney() {
         await client.request("sessions.subscribe", {});
         const steered = await start(TARGET, "STEP-SLOW steer target");
         await reached(() => sentToTarget("STEP-SLOW steer target"));
-        // A steer from the chat composer; the tool is held until the run has taken it.
-        await start(TARGET, "STEER-INPUT arrives mid tool call", "steer");
+        // A steer from the chat composer with a document; the tool is held until the run has
+        // taken it. Later runs must replay the document text the model saw, not drop it.
+        await start(TARGET, "STEER-INPUT arrives mid tool call", "steer", [
+          {
+            type: "file",
+            mimeType: "text/plain",
+            fileName: "steer-notes.txt",
+            content: Buffer.from("STEER-DOC-BODY notes for the steered run").toString("base64"),
+          },
+        ]);
         await reached(() => steersTaken > 0);
-        await fs.writeFile(path.join(fixture.workspaceDir, "release-0"), "");
+        await fs.writeFile(path.join(fixture.workspaceDir, "release-1"), "");
         await wait("steer", steered);
         await until(() => sentToTarget("STEER-INPUT"));
-        // The steered input joins the same run, right after the tool result it waited for.
+        // The steered input joins the same run, right after the tool result it waited for, with
+        // its document text.
         expect(
-          targetRequests.some((r) => /slow-finished[\s\S]*STEER-INPUT/.test(lastMessage(r))),
+          targetRequests.some((r) =>
+            /slow-finished[\s\S]*STEER-INPUT[\s\S]*STEER-DOC-BODY/.test(lastMessage(r)),
+          ),
         ).toBe(true);
         step = "cron";
         const cronJob = {
@@ -615,7 +667,7 @@ export function usePrefixStabilityJourney() {
         await client.request("sessions.compact", { key: OTHER }, { timeoutMs: 65_000 });
         // The target tool call is still held open.
         expect(targetRequests.length).toBe(busyAt);
-        await fs.writeFile(path.join(fixture.workspaceDir, "release-1"), "");
+        await fs.writeFile(path.join(fixture.workspaceDir, "release-2"), "");
         await wait("busy", busy);
         await settle();
         const otherCompactionAt = otherRequests.length;

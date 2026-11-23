@@ -33,6 +33,7 @@ Read only the references needed for the selected phase:
 - Backport discovery and porting: [candidate inventory and worker brief](references/backport-discovery.md). For extended-stable also read [backport preparation](references/extended-stable-backports.md); SDK/config changes need a visible maintenance-risk warning and maintainer decision.
 - Extended-stable `.33+` Gateway publication: [extended-stable publication](references/extended-stable-publish.md). Use the shared publisher with extended-stable inputs; its non-Latest GitHub Release carries evidence without native-app or ClawHub publication.
 - Validation selection or failed proof: [validation and confidence](references/validation.md), with `$release-openclaw-ci` for workflow execution and immutable manifests.
+- Failed validation sealing/collection after checks finish: assess [receipt-backed aggregate recovery](../release-openclaw-ci/SKILL.md#receipt-backed-aggregate-recovery) before replacing the FRV; this is distinct from same-parent continuation and publication recovery.
 - Interrupted publication or registry promotion: [publication recovery](references/publication-recovery.md).
 - Native assets: [platform publication](references/platform-publication.md), with `$release-openclaw-mac` for macOS operations.
 - Stable postpublish synchronization and the exact-SHA deployment handoff:
@@ -77,6 +78,26 @@ new validation failures and their resolution. Parallel release owners may need
 the same fix or adaptation before this release finishes. If access is
 unavailable, keep each pending update in local evidence and sync later. This is
 recommended bookkeeping, not another release gate.
+
+## Fast-track approval is human-only
+
+**NEVER approve your own or another agent's fast-track request. NEVER use an
+available maintainer token to impersonate human approval.** Obtain explicit
+approval from another human member of the normal release-managers group for the
+exact request/digest, candidate, artifacts, publication scope, run/attempt,
+expiry and explicit skip/incomplete-validation action. Preparation authority,
+generic publish authority, silence and previous approvals do not qualify.
+If approval is missing, rejected, expired or ambiguous, stop the fast-track path
+and ask that human. Changed contents require a new request and approval.
+
+Preserve the human decision's permalink, identity and timestamp with the exact
+request and original FRV results. Keep the normal `npm-release` environment
+approval and existing release receipt. Shared tokens make this a procedural
+rule, not a technical guarantee of human independence. There is no Google Chat
+app, Firebase service or alternate approval API. See
+[fast-track approval](../../../docs/reference/fast-track-release-approval.md).
+Request preparation does not enable skipping: until existing publishers support
+these policies, use the ordinary validation/waiver path below.
 
 ## Shared release boundaries
 
@@ -227,8 +248,13 @@ product source changes. Missing contracts need a deliberate Q repair or candidat
 backport, never a moving-main fallback. Follow the
 [qualification-tooling recovery procedure](../../../docs/reference/full-release-validation/dispatch.md#recover-qualification-tooling-without-changing-the-candidate)
 and the CI skill's [C ≠ Q decision and command guide](../release-openclaw-ci/SKILL.md#repair-release-tooling-without-changing-the-product-c--q).
-Use new Q for workflow/harness/collector repairs, P for admission/verifier/publisher
-repairs, and new C only for changed product bytes. Reuse the explicitly qualified
+Use new Q for changed qualification workflow/harness behavior, P for admission/aggregate/verifier/publisher
+repairs, and new C only for changed product bytes. For a drained FRV with a sealing/collector
+defect, first assess [receipt-backed aggregate recovery](../release-openclaw-ci/SKILL.md#receipt-backed-aggregate-recovery):
+a reviewed P-only repair may authenticate the original admission, C/Q, child receipts,
+and unchanged artifact bytes without a fresh test run, even when same-parent continuation
+cannot restore its plan. Require a successful authenticated recovery aggregate; never
+relabel the original failed parent or bypass publication verification. Reuse the explicitly qualified
 parent through the checklist's `--full-release-validation-run-id` and `--skip-dispatch`;
 its `--workflow-sha` still selects P, and its fresh qualification defaults to Q=C.
 

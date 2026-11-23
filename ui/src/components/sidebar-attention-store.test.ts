@@ -19,6 +19,7 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
+  deferredCronFailurePrefix,
   dismissSidebarAttention,
   loadDismissals,
   resolveSidebarAttentionKey,
@@ -363,6 +364,52 @@ describe("sidebar attention source publication", () => {
       await waitLabels(...(boundary === "reconnect" ? [] : ["Anthropic"]));
     },
   );
+
+  it("imports saved automation dismissals without showing failures in the Inbox", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    const legacyImport = pending({ acknowledgedAtMs: 17 });
+    const deferredImport = pending({ acknowledgedAtMs: 23 });
+    const request = respond({
+      "cron.list": () => cronPage("archive"),
+      "cron.status": () => ({ enabled: true, triggersEnabled: true, jobs: 1 }),
+      "models.authStatus": () => emptyAuth(),
+      "users.prefs.get": () => ({ status: "ok", entries: {} }),
+      "cron.acknowledgeFailure": (params) =>
+        isRecord(params) && params.id === "paused" ? legacyImport.promise : deferredImport.promise,
+    });
+    const harness = gateway(request, true);
+    const key = resolveSidebarAttentionKey(harness.gateway)!;
+    const deferredKey = deferredCronFailurePrefix(key) + "index";
+    localStorage.setItem(
+      key,
+      JSON.stringify({ cronFailed: ["paused"], openClawIdRecoveryUse: ["existing"] }),
+    );
+    localStorage.setItem(deferredKey, "23");
+    store = activate(harness);
+
+    await waitForFast(() => {
+      expect(request).toHaveBeenCalledWith("cron.acknowledgeFailure", {
+        id: "paused",
+        adopt: true,
+      });
+      expect(store?.hasFailedAutomation).toBe(true);
+    });
+    expectLabels();
+    expect(loadDismissals(key).cronFailed).toEqual(["paused"]);
+    legacyImport.resolve({ acknowledgedAtMs: 17 });
+
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("cron.acknowledgeFailure", {
+        id: "index",
+        failedAtMs: 23,
+      }),
+    );
+    expect(localStorage.getItem(deferredKey)).toBe("23");
+    deferredImport.resolve({ acknowledgedAtMs: 23 });
+
+    await waitForFast(() => expect(localStorage.getItem(deferredKey)).toBeNull());
+    expect(loadDismissals(key)).toEqual({ openClawIdRecoveryUse: ["existing"] });
+  });
 
   it("keeps a saved account dismissal while its auth status is unavailable", async () => {
     vi.useFakeTimers();
