@@ -72,3 +72,49 @@ it("freezes only the hook-enriched current user projection before native dispatc
     __openclaw: { modelPromptProjection: { version: 1, text: expected } },
   });
 });
+
+it("keeps a projection an earlier embedded fallback attempt froze", async () => {
+  setRuntimeConfigSnapshot({});
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([
+      {
+        hookName: "before_prompt_build",
+        handler: () => ({ prependContext: "codex attempt context" }),
+      },
+    ]),
+  );
+  const params = createParams(path.join(tempDir, "frozen.jsonl"), tempDir);
+  const target = {
+    agentId: "main",
+    sessionId: "frozen",
+    sessionKey: "agent:main:frozen",
+    storePath: path.join(tempDir, "frozen.sqlite"),
+  };
+  await attachSqliteSessionTarget(params, target.storePath, target.sessionId);
+  const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+  const recorder = createRecorder({
+    input: {
+      text: params.prompt,
+      idempotencyKey: "frozen:user",
+      provenance: { kind: "internal_system", sourceTool: "test" },
+    },
+    target: { ...target, sessionEntry: undefined },
+  });
+  await recorder.persistApproved();
+  // The embedded candidate froze its own prompt before the provider rejected it.
+  const frozen = "embedded attempt context\n\nhello";
+  await recorder.captureModelPromptProjection!(frozen, () => {});
+  params.userTurnTranscriptRecorder = recorder;
+  await bindProductionHarnessHostCapabilitiesForTest(params);
+  let dispatchProjection: unknown;
+  const harness = createStartedThreadHarness(async (method) => {
+    if (method === "turn/start") {
+      dispatchProjection = recorder.getPersistedMessage?.()?.["__openclaw"]?.modelPromptProjection;
+    }
+  });
+  const run = runCodexAppServerAttempt(params);
+  await run.waitForTurnAccepted();
+  await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+  await run;
+  expect(dispatchProjection).toEqual({ version: 1, text: frozen });
+});
