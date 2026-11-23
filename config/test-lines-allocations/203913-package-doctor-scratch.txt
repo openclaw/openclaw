@@ -1,0 +1,2 @@
+# Regression for #203913: preserve installation selectors while sending package Doctor to the admitted fallback scratch volume.
+42

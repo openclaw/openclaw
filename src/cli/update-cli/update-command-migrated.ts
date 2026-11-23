@@ -51,6 +51,7 @@ import {
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service-env.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
+import { resolveUpdateSnapshotScratch } from "./update-command-snapshot-scratch.js";
 import {
   deferMigratedUpdateCommandTerminalResult,
   recordUpdatePackageCompletion,
@@ -87,12 +88,13 @@ export async function inspectActivatedUpdateState(
         : [],
     ),
   );
+  const scratch = resolveUpdateSnapshotScratch(result.steps, env);
   let blocked: FinishUpdateParams["rollbackBlockedReason"];
   try {
     const current = await readUpdateStateSchemaVersions({
       stateDir: resolveStateDir(env),
       config,
-      env,
+      env: scratch ? { ...env, TMPDIR: scratch } : env,
       root: result.root ?? null,
       nodeRunner: params.packageUpdateNodeRunner,
       timeoutMs: params.timeoutMs,
@@ -224,7 +226,9 @@ export async function continueMigratedUpdateInFreshProcess(
   assertCurrent();
   const windowsRecovery = params.preManagedServiceStop?.windowsTaskAutoStartRecovery;
   const result = params.result;
-  const scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-migrated-"));
+  const updateEnv = params.ownedManagedUpdateEnv ?? run.env;
+  const scratchRoot = resolveUpdateSnapshotScratch(result.steps, updateEnv) ?? os.tmpdir();
+  const scratchDir = await fs.mkdtemp(path.join(scratchRoot, "openclaw-update-migrated-"));
   try {
     const root = result.root;
     if (!root) {
@@ -244,7 +248,7 @@ export async function continueMigratedUpdateInFreshProcess(
       env: {
         ...stripGatewayServiceMarkerEnv(
           resolveUpdatedInstallCommandEnv({
-            processEnv: params.ownedManagedUpdateEnv ?? run.env,
+            processEnv: updateEnv,
           }),
         ),
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
