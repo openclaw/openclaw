@@ -168,8 +168,9 @@ export async function recoverChatModelSwitch(
   nextModel: string,
   runtimeSelection: string | null | undefined,
   selection: ChatModelSelection,
+  canSwitch: () => boolean = () => true,
 ): Promise<boolean> {
-  if (!selection.ownsSelection()) {
+  if (!selection.ownsSelection() || !canSwitch()) {
     return false;
   }
   const restriction =
@@ -186,6 +187,6 @@ export async function recoverChatModelSwitch(
     targetSessionKey,
     nextModel,
     selection,
-    () => !runtimeSelection || runtimeSelection === restriction.runtimeId,
+    () => canSwitch() && (!runtimeSelection || runtimeSelection === restriction.runtimeId),
   );
 }
