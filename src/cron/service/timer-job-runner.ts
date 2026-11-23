@@ -351,7 +351,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
       onLaneWait: watchdog && deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
       // Trigger and preflight keep the cron deadline; the heartbeat gets its own.
       onHeartbeatExecutionStarted:
-        watchdog && resolveHeartbeatTimeoutMs
+        watchdog && resolveHeartbeatTimeoutMs && job.payload.kind !== "command"
           ? (heartbeat) => {
               const heartbeatTimeoutMs = resolveHeartbeatTimeoutMs(heartbeat);
               // The queue owns admission and retries; only attempts spend the deadline.

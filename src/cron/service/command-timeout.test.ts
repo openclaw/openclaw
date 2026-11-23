@@ -22,6 +22,36 @@ import { executeJobCoreWithTimeout } from "./timer-job-runner.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("scheduled command timeouts", () => {
+  it("does not resolve agent heartbeat timeouts for command jobs", async () => {
+    const job = createIsolatedRegressionJob({
+      id: "command-startup-admission",
+      name: "command startup admission",
+      scheduledAt: Date.now(),
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "command", argv: [process.execPath, "-e", ""] },
+    });
+    const resolveHeartbeatTimeoutMs = vi.fn(() => {
+      throw new Error("agent database admission is still pending");
+    });
+    const runCommandJob = vi.fn(async () => ({ status: "ok" as const }));
+    const state = createCronRegressionState({
+      storePath: path.join(tempDirs.make("command-startup-admission-"), "jobs.json"),
+      runCommandJob,
+      resolveHeartbeatTimeoutMs,
+    });
+
+    const activeJobMarker = markCronJobActive(job.id);
+    try {
+      await expect(
+        executeJobCoreWithTimeout(state, job, { runId: job.id, activeJobMarker }),
+      ).resolves.toMatchObject({ status: "ok" });
+      expect(runCommandJob).toHaveBeenCalledOnce();
+      expect(resolveHeartbeatTimeoutMs).not.toHaveBeenCalled();
+    } finally {
+      clearCronJobActive(job.id, activeJobMarker);
+    }
+  });
+
   it.each(["deadline", "operator cancellation"] as const)(
     "settles a real command after %s without late delivery",
     async (interruption) => {
