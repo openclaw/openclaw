@@ -262,7 +262,8 @@ function prepareExecExitWake(
 }
 
 /**
- * Wakes a chat from its stored exec result; admission captures the chat's current target.
+ * Wakes a chat from its stored exec result, with the producer's captured target when it still
+ * holds one; otherwise admission captures the chat's current target (restart recovery).
  * Its settlement ends the row if this stored wake also fails.
  */
 export function wakeOwedExec(
@@ -359,10 +360,14 @@ async function notifyOnExit(
       const wakeOptions = { ...eventOptions, sourceRunId: session.startedByRunId };
       const receipt = enqueueExecExitNotification(eventText, target, instanceId, wakeOptions);
       recordNotifyOnExitRemoval(session, receipt.cancel);
-      // The retry keeps the request owners and takes over the removal handle.
+      // The retry keeps the captured target, so admission revalidates the requester's authority
+      // and store, and the request owners; it takes over the removal handle.
       void receipt.settled.then((outcome) =>
         settleOwedExecWake(owed, outcome, (stored) =>
-          recordNotifyOnExitRemoval(session, wakeOwedExec(stored, wakeOptions).cancel),
+          recordNotifyOnExitRemoval(
+            session,
+            wakeOwedExec(stored, { ...wakeOptions, expectedTarget: target }).cancel,
+          ),
         ),
       );
     } catch (error) {
