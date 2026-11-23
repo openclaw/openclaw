@@ -7,6 +7,22 @@ const text = (container: ParentNode, selector: string) =>
   container.querySelector(selector)?.textContent;
 
 it.each([
+  [{ live: true }, "Checking goal"],
+  [{ completed: true }, "Checked goal"],
+  [{ completed: true, isError: true }, "Check goal"],
+  [{}, "Check goal"],
+] as const)(
+  "describes a goal lookup without implying pursuit or completion: %j",
+  async (state, label) => {
+    const container = await mountCard(
+      { id: "goal-lookup", name: "mcp__openclaw__get_goal", args: {}, ...state },
+      { messageKey: "goal-lookup", expanded: false, runActive: true },
+    );
+    expect(text(container, ".chat-tool-row__title")).toBe(label);
+  },
+);
+
+it.each([
   ["wait", { runId: "cm_test" }, "Wait"],
   ["ask_user", { questions: [{ question: "Do not repeat this prompt" }] }, "Asked you a question"],
   ["tool_call", { id: "openclaw:core:wait", args: { runId: "cm_test" } }, "Wait"],

@@ -465,11 +465,11 @@ export const iconData = {
     ["rect", { x: "14", y: "4", width: "4", height: "16", rx: "1" }],
     ["rect", { x: "6", y: "4", width: "4", height: "16", rx: "1" }],
   ]),
-  target: strokeIconData([
-    ["circle", { cx: "12", cy: "12", r: "10" }],
-    ["circle", { cx: "12", cy: "12", r: "6" }],
-    ["circle", { cx: "12", cy: "12", r: "2" }],
-  ]),
+  target: strokePathData(
+    "M12 13V2l8 4-8 4",
+    "M20.561 10.222a9 9 0 1 1-12.55-5.29",
+    "M8.002 9.997a5 5 0 1 0 8.9 2.02",
+  ),
   switchCamera: strokePathData(
     "M11 19H6.5a4.5 4.5 0 0 1 0-9H8",
     "m8 16 3 3-3 3",

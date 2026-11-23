@@ -125,6 +125,9 @@ export function resolveToolOperationLabel(
   }
   const display = resolveToolDisplayIdentity(call.name);
   const name = call.name.trim().toLowerCase();
+  if (name === "get_goal") {
+    return t(`chat.toolCards.${byOutcome(outcome, "checkingGoal", "checkedGoal", "checkGoal")}`);
+  }
   if (PATCH_TOOL_NAMES.has(name)) {
     return t(
       `chat.toolCards.${byOutcome(outcome, "changingFiles", "changedFiles", "fileChanges")}`,
