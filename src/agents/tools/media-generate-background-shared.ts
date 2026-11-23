@@ -5,6 +5,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
+  composePreparedOnlySessionSource,
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
@@ -54,10 +55,7 @@ import {
 import { tryResolveSubagentRequesterAgentId } from "../subagents/announce/subagent-announce-delivery.runtime.js";
 import { resolveAnnounceOrigin } from "../subagents/announce/subagent-announce-origin.js";
 import { resolveRequesterStoreKey } from "../subagents/announce/subagent-requester-store-key.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   hasMediaGenerationCustodyObligation,
   retainBlockedMediaCompletion,
@@ -177,9 +175,8 @@ export function captureMediaGenerationAdmission(
 ): SessionSourceAssertion {
   const generation = getAgentRunLifecycleGeneration();
   const env = captureSessionTranscriptStorageEnvironment(process.env);
-  const assertGatewayCallerCurrent = captureGatewayToolCallerAssertion();
   return composeSessionSourceAssertion(
-    [assertGatewayCallerCurrent, assertSourceCurrent],
+    [composePreparedOnlySessionSource(getGatewayToolCallerIdentity()), assertSourceCurrent],
     (assertSource) => {
       assertSource();
       if (

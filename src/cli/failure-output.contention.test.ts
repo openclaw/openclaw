@@ -18,7 +18,9 @@ it("preserves a worker migration refusal and its recovery command", () => {
 });
 
 it.each([
-  new DoctorUnreadableStateDatabaseError("/state/openclaw.sqlite", "unreadable"),
+  new DoctorUnreadableStateDatabaseError("/state/openclaw.sqlite", "corrupt", {
+    cause: Object.assign(new Error("malformed"), { errcode: 11 }),
+  }),
   new OpenClawDatabaseSchemaPreflightError([
     { kind: "state", path: "/state/openclaw.sqlite", foundVersion: 20, supportedVersion: 19 },
   ]),

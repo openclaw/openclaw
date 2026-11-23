@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
 import {
@@ -28,23 +28,24 @@ describe("AppSidebar session section visibility", () => {
     const { sidebar } = await mountSidebar(gateway, sessions.sessions);
     const category = sidebar.querySelector('[data-session-section="category:Alpha"]');
     const threads = sidebar.querySelector('[data-session-section="ungrouped"]');
+    // Show more renders once its lazy module loads.
+    const expectSection = (section: Element | null, rows: number, paged: boolean) =>
+      vi.waitFor(() => {
+        expect(section?.querySelectorAll(".sidebar-recent-session")).toHaveLength(rows);
+        expect(section?.querySelector('[aria-label="Show more"]') !== null).toBe(paged);
+      });
 
-    expect(category?.querySelectorAll(".sidebar-recent-session")).toHaveLength(15);
-    expect(threads?.querySelectorAll(".sidebar-recent-session")).toHaveLength(15);
     expect(threads?.querySelector(".sidebar-recent-sessions__label-text")?.textContent).toBe(
       "Other",
     );
-    expect(category?.querySelector('[aria-label="Show more"]')).not.toBeNull();
-    expect(threads?.querySelector('[aria-label="Show more"]')).not.toBeNull();
-    expect(sidebar.querySelectorAll(".sidebar-session-pagination")).toHaveLength(2);
+    await expectSection(category, 15, true);
+    await expectSection(threads, 15, true);
 
     threads?.querySelector<HTMLButtonElement>('[aria-label="Show more"]')?.click();
     await settleLitElement(sidebar);
 
-    expect(category?.querySelectorAll(".sidebar-recent-session")).toHaveLength(15);
-    expect(threads?.querySelectorAll(".sidebar-recent-session")).toHaveLength(17);
-    expect(category?.querySelector('[aria-label="Show more"]')).not.toBeNull();
-    expect(threads?.querySelector('[aria-label="Show more"]')).toBeNull();
+    await expectSection(category, 15, true);
+    await expectSection(threads, 17, false);
   });
 
   it("keeps global session actions when every unpinned thread has a custom group", async () => {

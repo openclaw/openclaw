@@ -46,10 +46,7 @@ import {
   authenticatedProfileUnavailableError,
   isGatewayClientProfilePending,
 } from "./gateway-client-identity.js";
-import {
-  readGatewayRequestMutationAuthority,
-  retainGatewayRequestMutationAuthority,
-} from "./session-mutation-guards.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import {
   runExclusiveSystemAgentSetupActivation,
   respondSetupAdmissionBusy,
@@ -160,22 +157,29 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       respond(true, await detectSetupInference(params.agentId), undefined);
     },
   ),
+  // Known choices from config and manifests answer before local discovery, so
+  // clients can offer sign-in and API keys while openclaw.setup.detect still probes.
+  "openclaw.setup.options": defineValidatedGatewayHandler(
+    "openclaw.setup.options",
+    validateSystemAgentSetupDetectParams,
+    async ({ params, respond }) => {
+      const { listManualSetupInferenceDetection } =
+        await import("../../system-agent/setup-inference.js");
+      respond(true, await listManualSetupInferenceDetection(params.agentId), undefined);
+    },
+  ),
   "openclaw.setup.auto": defineValidatedGatewayHandler(
     "openclaw.setup.auto",
     validateSystemAgentSetupAutoParams,
-    async (options) => {
-      const { context, respond } = options;
-      const authority = retainGatewayRequestMutationAuthority(options);
+    async ({ context, respond }) => {
       try {
         const { runGatewayAutomaticSetup } = await import("./system-agent-setup-auto.js");
-        respond(true, await runGatewayAutomaticSetup(context, authority.assertCurrent), undefined);
+        respond(true, await runGatewayAutomaticSetup(context), undefined);
       } catch (error) {
         if (!(error instanceof SetupAdmissionBusyError)) {
           throw error;
         }
         respondSetupAdmissionBusy(respond);
-      } finally {
-        authority.release();
       }
     },
   ),

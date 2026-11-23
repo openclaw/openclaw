@@ -273,6 +273,7 @@ async function writeClawHubTrackingJson(
 ): Promise<void> {
   assertCurrent?.();
   await replaceFileAtomic({
+    allowDrvfsRenameRecovery: true,
     filePath,
     content: `${JSON.stringify(value, null, 2)}\n`,
     mode: 0o600,

@@ -62,6 +62,8 @@ export async function continueSessionQueuedInputs(
     assertCurrent: () => void;
     /** Ends every row with this cause instead of replaying it. */
     endCause?: SessionPendingInputEndCause;
+    /** A recovered source owner, rather than human chat, resumes this exact input. */
+    ownsInput?: (row: SessionPendingInputRow) => boolean;
   },
 ): Promise<DeferredQueuedInputReplay | undefined> {
   const assertCurrent = () => {
@@ -88,6 +90,9 @@ export async function continueSessionQueuedInputs(
       if (readMessageClientSources(message).some(isBrowserCopilotClient)) {
         throw new Error("Browser-bound queued input requires a fresh browser send");
       }
+      if (options.ownsInput?.(row)) {
+        return undefined;
+      }
       if (sender?.type !== "profile") {
         throw new Error("Queued input sender has no current human principal");
       }
@@ -95,6 +100,7 @@ export async function continueSessionQueuedInputs(
         throw new Error("Queued input has no original operator source; submit a new request.");
       }
       admitted = await restoreGatewayQueuedOperatorRecovery({
+        agentId: target.agentId,
         context,
         source: decodeQueuedOperatorRecoverySource(JSON.parse(row.origin_source_json)),
         assertCurrent,

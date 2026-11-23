@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -36,7 +36,7 @@ async function prepareOperation(run: FollowupRun) {
 }
 
 function steeringRequester() {
-  return createAdmittedRunOperatorAuthority({
+  return createTestOperatorAuthority({
     profileId: "steering-requester",
     scopes: ["operator.read", "operator.write"],
     source: {},
@@ -71,7 +71,9 @@ it.each([false, true])(
       const cancellation = new AbortController();
       const failure = new Error("internal SDK assertion failure");
       run.abortSignal = cancellation.signal;
-      run.operatorAuthority = {
+      // Only the source cancellation below records revocation, not this assertion.
+      const authority = {
+        canonicalIdentity: null,
         profileId: "steering-requester",
         scopes: ["operator.write"],
         signal: new AbortController().signal,
@@ -84,13 +86,14 @@ it.each([false, true])(
           }
         },
       };
+      run.operatorAuthority = authority;
       const followup = vi.fn(async () => {});
       try {
         await expect(
           runActiveReplySteer(createSteerParams(key, run, operation, { runFollowup: followup })),
         ).rejects.toBe(failure);
         const input = run.controllerInput!;
-        expect(run.operatorAuthority.signal?.aborted).toBe(false);
+        expect(authority.signal?.aborted).toBe(false);
         if (!cancelled) {
           expect(input.retirementRequested).toBeUndefined();
           expect(input.phase).toBe("waiting");

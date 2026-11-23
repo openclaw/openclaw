@@ -297,6 +297,9 @@ reuse those records. Compact file fingerprints let a restarted Gateway reuse
 unchanged hashes while detecting same-size edits and files moved by directory
 renames. Initialization retains the identities and timestamp eligibility observed
 while hashing its private checkout, so the first reuse can use those same facts.
+Fresh sandbox projections also include producer-created protected skill directories
+in that initial baseline. A prepared template supplies the unchanged file inventory;
+adding the mount directories does not require another whole-workspace checkpoint.
 Filesystem discovery still checks for additions and deletions on every
 scan. Existing projections convert one at a time during reconciliation; database
 open does not rewrite their inventories. Local checkpoint acceptance reuses the
@@ -422,6 +425,10 @@ accounting, including macOS clones, increment `nativeCloneUnmeasuredCount` inste
 of reporting zero. Native copies require cloning; unsupported clones fail rather
 than silently copying the tree.
 
+Bulk template cleanup and interrupted projection replacement run in a bounded
+child process, leaving the Gateway's shared filesystem threadpool available for
+session reads and writes. Cleanup still finishes before the path is reused.
+
 Repository-backed creation discovers unmanaged Git branches and checkout paths before waiting for capacity admission. Reservation still checks current managed names, owners, and pending slots under the allocation lease. Git enforces branch and path conflicts when creating the checkout, including external changes after discovery. Each admission retry refreshes its Git inventory.
 
 If a registered project's checkout is busy, creation releases allocation before waiting for that project. Other repositories can continue reserving and creating workspaces. Once project access is available, creation releases it and retries the reservation with current source, owner, name, and capacity checks. Registered-source waits share the existing 30-minute creation contention budget, including source checks before checkout and before final session binding. The accepted request stays pending and cancellable while waiting; it continues when access becomes available without another request. Source contention after checkout or setup waits at that stage without repeating completed work.
@@ -473,6 +480,16 @@ The Gateway keeps one prepared checkout per active repository, destination root,
 
 Preparation logs include `templateDetails` with the backend, selection or failure reason, clone-byte estimate, and an error code when available. Reasons distinguish disabled acceleration, empty or profiled checkouts, native probing, ACL rejection, checkout policy, missing or stale templates, template creation, and disk admission.
 
+When a managed or sandbox refresh selects a cold rebuild, `refreshRejectReason`
+distinguishes a missing template directory, failed old-generation validation,
+changed `.gitattributes`, incompatible checkout policy, or a failed Git diff probe.
+`validationFailure` identifies checkout policy, status-probe failure, malformed
+status output, dirty files, or a mismatched HEAD. Failed probes include the bounded
+`refreshErrorClass`: `exit-nonzero`, `timeout`, `no-output-timeout`, `signal`, or
+`output-truncated`. These facts survive through the final preparation outcome;
+they contain no command output or paths. `missReason=commit-changed` still describes
+why selection missed, separately from why incremental refresh was rejected.
+
 Preparation phases are inclusive. For sandbox dependency preparation, `checkout`,
 `setup`, and a concurrent caller's `mutationWait` are inside `templatePrepare`;
 `templateApply` measures each private clone separately. A warm caller waiting
@@ -483,6 +500,12 @@ to `templateApply`. Sub-phases separate registration metadata and inspection, co
 The `workspaceWait` phase records waits for private sandbox workspace reconciliation custody and for an already-running preparation. It includes waits behind another caller's dependency-template build, even when the waiting caller ultimately reuses the prepared workspace without selecting a template itself.
 
 Slow chat startup details under `attempt.setup.sandbox.workspace_selection.prepare.reconcile` also name source admission, reservation, initialization, baseline persistence, and checkpoint synchronization. Checkpoint children separate directory validation, rejected-result repair, canonical export, and projection import; warm reuse reports these children under `reuse.reconcile`. These fixed, cumulative phase names appear on the existing slow chat line, including preparation during media staging. Initial projection custody waits precede `prepare.reconcile` in `prepare.acquire`; nested template selection and cloning remain inclusive, so do not add parent and child durations.
+
+Under `attempt.setup.sandbox`, `layout.skills_sync` measures skill synchronization,
+while `layout.mount_sources` and `layout.checkpoint` identify subsequent mount preparation
+and reconciliation. `workspace_selection.owner.session`, `.owner.registry`, and
+`.owner.handoff` distinguish owner-resolution waits; `workspace_selection.baseline.prepare`
+and `.baseline.accept` separate manifest preparation from accepted baseline publication.
 
 The `provision` phase includes ignored-file selection (`provisionInspect`), copy admission and worker preparation (`provisionCopyWait`), safe file copying (`provisionCopy`), and repository script execution (`setup`). Selection includes the Git worker queue. `provisionCopyWait` includes filesystem worker queueing, startup, and eligibility checks before the first authorized mutation; `provisionCopy` covers the remaining copy work and safety checks. Copying runs in a filesystem worker so other sessions remain responsive; the new worktree waits for copying to finish before becoming ready. `provisionCopy` starts at the first authorized copy-directory or file admission. Safe copying requests copy-on-write cloning when supported and falls back to ordinary copying otherwise; destination files remain independent of their source. On Linux with procfs and GNU `cp`, selected directories are admitted once and retained by descriptor; batches of up to 128 pinned files are reflinked through private staging while preserving nanosecond timestamps. One small helper runs those batches, so each batch does not fork the Gateway's resident address space. Other systems retain the portable guarded copier. `copyDetails` records the selected copier and fallback reason, admitted source bytes, batch and Gateway-child counts, synchronous spawn time, child wait time, and live-authority check count/time. Source bytes describe selected content, not exclusive disk usage; reflinks can share those bytes. These bounded diagnostics include no file paths. Creation records the provisioned file paths; later recovery snapshots may replace that ledger with file modes and chunk counts. Those snapshot fields describe recovery storage, not whether initial provisioning used a reflink. Source custody waits and disk admission also occur inside `provision`; `diskAdmission` accumulates space checks across the entire preparation, so it is not exclusively a provisioning sub-phase. These timings do not log paths or setup output.
 
@@ -785,14 +808,26 @@ writer, so unrelated queued writes do not delay stopping that session. Committed
 policy changes invalidate the prepared source. The archive mutation still joins
 the writer queue and rechecks the current session and permissions before committing.
 
-Unarchiving, or an authorized human message that reopens the archived session, restores the original branch HEAD plus saved dirty and untracked files before admitting work. A restore failure leaves the session archived. If the original repository or its snapshot is missing, or the 30-day snapshot retention has expired, recover the original repository/snapshot or start a new task; OpenClaw does not substitute an empty checkout for the saved work.
+Explicit unarchiving restores the original branch HEAD plus saved dirty and untracked files before admitting work. A restore failure leaves the session archived. An incoming message can reopen an archived session only while its workspace is available; a removed workspace requires explicit restoration first. If the original repository or its snapshot is missing, or the 30-day snapshot retention has expired, recover the original repository/snapshot or start a new task; OpenClaw does not substitute an empty checkout for saved work during unarchiving.
 
-If an unarchived session's worktree was removed by cleanup or deletion, a new chat
-turn reports the removal before sandbox preparation. Use **Restore** on
-**Settings > Worktrees** (`worktrees.restore`), or start a new session. Sending
-another message does not automatically restore a removed checkout.
-Opening Review (`sessions.diff`) for a removed or missing worktree reports the
-same Restore guidance instead of an ownership-change error.
+If a conversation's worktree was removed by cleanup or deletion, the Control UI
+shows a restore prompt in place of the message composer. Your chat history stays
+visible, and your draft returns with the composer. Choose **Restore workspace**
+to recover its snapshot, including saved uncommitted work. If the registry record
+has no snapshot, **Restore fresh checkout** recreates its recorded branch, or its
+recorded base if that branch is gone. Invalid saved snapshots report an error;
+they never silently fall back to a fresh checkout.
+
+The button uses the existing admin-authorized `worktrees.restore` operation,
+also available in **Settings > Worktrees**. Progress stays visible during restore;
+failure includes a typed reason and recovery guidance. Restore has a five-minute
+budget, including lease waits, and joins started Git cleanup before returning.
+Concurrent restores serialize through the worktree lifecycle. An expired registry
+record or unavailable source repository requires recovery or a new conversation.
+
+Channels, API callers, task sessions, subagents, and Review (`sessions.diff`)
+receive the same Restore guidance until explicit restoration completes. Sending
+a prompt never restores a removed workspace or starts the agent there.
 
 `sessions.create` may include an absolute `cwd` to run directly in another Gateway folder or to choose the source checkout together with `worktree: true`. Connections with `operator.write` may use a Gateway `cwd` contained in any configured agent workspace; realpath containment prevents symlinks from escaping that boundary. Gateway paths outside those workspaces require `operator.admin`. Ordinary worktree chat creation remains `operator.write` and stays anchored to the configured workspace. For a Gateway source, New Session dispatches the completed worktree session to paired devices or cloud profiles instead of passing a paired-node working directory to creation. The separate `repository: { url, ref? }` create input starts a remote-owned repository session without a Gateway path or `worktree: true`.
 
@@ -1263,16 +1298,16 @@ their specific input error and exit with code 1 before cleanup or removal.
 
 ## Gateway methods
 
-| Method                     | Purpose                                                                 |
-| -------------------------- | ----------------------------------------------------------------------- |
-| `worktrees.list`           | List active and restorable worktree records.                            |
-| `worktrees.branches`       | List local and remote branches of a repository for base-ref pickers.    |
-| `worktrees.create`         | Create or reuse a named managed worktree.                               |
-| `worktrees.remove`         | Snapshot and remove a worktree. Forced removals report `snapshotError`. |
-| `worktrees.restore`        | Restore a removed worktree from its snapshot.                           |
-| `worktrees.gc`             | Queue cleanup and read progress.                                        |
-| `worktrees.recoverRemoval` | Complete an interrupted removal from the exact pending snapshot.        |
-| `worktrees.retireSnapshot` | Retire one redundant snapshot with exact retained-source guards.        |
+| Method                     | Purpose                                                                      |
+| -------------------------- | ---------------------------------------------------------------------------- |
+| `worktrees.list`           | List active and restorable worktree records.                                 |
+| `worktrees.branches`       | List local and remote branches of a repository for base-ref pickers.         |
+| `worktrees.create`         | Create or reuse a named managed worktree.                                    |
+| `worktrees.remove`         | Snapshot and remove a worktree. Forced removals report `snapshotError`.      |
+| `worktrees.restore`        | Restore a snapshot, or a fresh recorded branch/base when no snapshot exists. |
+| `worktrees.gc`             | Queue cleanup and read progress.                                             |
+| `worktrees.recoverRemoval` | Complete an interrupted removal from the exact pending snapshot.             |
+| `worktrees.retireSnapshot` | Retire one redundant snapshot with exact retained-source guards.             |
 
 `worktrees.list` requires `operator.write` because it returns every session's worktree paths, repository roots, and branches. `worktrees.create` and `worktrees.branches` require `operator.write` for configured agent workspaces and registered projects; arbitrary host paths still require `operator.admin`. All creation disables repository Git hooks; write-scoped creation also skips `.openclaw/worktree-setup.sh`. Removing, restoring, and garbage-collecting worktrees remain admin-only. Branch listing reads existing refs only and never fetches. Unchanged inventories are reused after checking checkout, ref, configuration, and object-storage metadata, including repositories with large pack directories; changed metadata refreshes the inventory. Remote-only branches come back remote-qualified (`origin/feature-a`) so every returned name resolves as a base ref. New Session can also request a typed repository status from this method; a plain directory or unavailable checkout returns no branches instead of forcing the UI to infer Git capability from an error string.
 

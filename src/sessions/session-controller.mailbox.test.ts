@@ -215,7 +215,9 @@ describe("controller mailbox scheduling", () => {
     async (owner) => {
       let failure: Error | undefined;
       const signal = new AbortController().signal;
+      // This source assertion fails without recording operator revocation.
       const authority = {
+        canonicalIdentity: null,
         profileId: "queued-person",
         scopes: ["operator.write"],
         signal,

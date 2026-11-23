@@ -2,7 +2,6 @@ import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { writeHostFile } from "../../agents/host-file-write.js";
-import { captureGatewayToolReceiptAssertion } from "../../agents/tools/gateway-caller-context.js";
 import {
   bindCommandOwnerAuthority,
   captureCommandOwnerAssertion,
@@ -214,9 +213,7 @@ it("writes under prepared generation and command-owner authority without synchro
   });
   const receiptAuthority = captureCommandOwnerAssertion(context);
   expect(receiptAuthority).toBeDefined();
-  const prepareMutation =
-    receiptAuthority &&
-    captureGatewayToolReceiptAssertion(receiptAuthority).prepareSessionSourceStorageEffect;
+  const prepareMutation = receiptAuthority?.prepareSessionSourceStorageEffect;
   expect(prepareMutation).toBeTypeOf("function");
   const file = `${database.path}.effect.txt`;
   await fs.promises.writeFile(file, "original");

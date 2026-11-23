@@ -58,7 +58,7 @@ export function retainSessionPlacementRead(
         change.nativeSettlement ? [change.nativeSettlement] : [],
       );
       if (pending.some((change) => change.indeterminate) || settlements.length !== pending.length) {
-        throw new Error(`Session ${sessionId} placement authority changed`);
+        throw new Error(`Session ${sessionId} placement changed. Retry.`);
       }
       if (settlements.length === 0) {
         return undefined;
@@ -83,7 +83,7 @@ export function retainSessionPlacementRead(
           (change) => change.kind === "claim" && change.sessionId === sessionId,
         )
       ) {
-        throw new Error(`Session ${sessionId} placement authority changed`);
+        throw new Error(`Session ${sessionId} placement changed. Retry.`);
       }
       return freezeJsonSnapshot(published.placement);
     },

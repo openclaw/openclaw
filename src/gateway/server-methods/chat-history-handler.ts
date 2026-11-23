@@ -251,7 +251,7 @@ export async function handleChatHistoryRequest({
                     deflateResponse,
                     includePluginSteering,
                     entry: historyEntry,
-                    provider: resolvedSessionModel.provider,
+                    provider: resolvedSessionModel?.provider,
                     sessionId,
                     storePath,
                     sessionAgentId,

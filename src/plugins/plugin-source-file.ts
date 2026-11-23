@@ -141,7 +141,7 @@ function withPluginSourceFile<T>(
   try {
     return acquirePluginSource(() => read(opened.fd), false);
   } finally {
-    acquirePluginSource(() => fs.closeSync(opened.fd), false);
+    acquirePluginSource(() => (opened.close ? opened.close() : fs.closeSync(opened.fd)), false);
   }
 }
 

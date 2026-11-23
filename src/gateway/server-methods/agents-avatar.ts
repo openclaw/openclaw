@@ -9,7 +9,7 @@ import {
   BlobsterUnsupportedRuntimeError,
 } from "../../agents/blobster-generation-errors.js";
 import { isLlmOperatorAuthorizationError } from "../../plugins/runtime/runtime-llm-error.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
 
 export const agentAvatarGenerateHandler = defineValidatedGatewayMethod(
@@ -22,7 +22,7 @@ export const agentAvatarGenerateHandler = defineValidatedGatewayMethod(
         throw new BlobsterGenerationAuthorityChangedError();
       }
     };
-    const operator = await captureGatewayOperatorRunAuthority({
+    const operator = await prepareGatewayOperatorRunAuthority({
       client,
       context,
       hasCurrentClientAuthority,

@@ -330,7 +330,7 @@ describe("a launched subagent", () => {
     const waiting = [{ ...c, activeRunIds: ["run"] }];
     const waited = { details: { completed, pending: [] } };
     expect(headline("agents_wait", { ids: ["run"] }, "Wait for Agents", waiting, waited)).toBe(
-      "Wait for subagents",
+      "Waiting for subagents",
     );
     // An unlabeled launch is named by the session its result names.
     const spawn = { outputText: accepted(c.key) };
@@ -416,6 +416,25 @@ it("coalesces adjacent active and confirmed lifecycle calls without changing the
   expect(
     await render(unnamed.map((id) => pair(id, "subagents", { action: "cancel", runId: id }))),
   ).toEqual(["Stopping 3 agents"]);
+});
+
+it.each([true, false])("explains a capacity rejection with runActive=%s", async (runActive) => {
+  const { container, render } = harness();
+  const key = "agents.defaults.subagents.maxChildrenPerAgent";
+  const receipt =
+    '{"status":"forbidden","error":"sessions_spawn has reached max active children for this session (5/5; agents.defaults.subagents.maxChildrenPerAgent)."}';
+  const groups = single(
+    pair("cap", "sessions_spawn", { label: "Worker 6" }, receipt),
+    runActive ? { __openclawToolStreamLive: true, __openclawToolStreamResultReceived: true } : {},
+  );
+
+  expect(await render(groups, { runActive })).toEqual([
+    "Worker 6 couldn't start. This session has 5 of 5 active subagents. Wait for one to finish, then retry.",
+  ]);
+  expect(container.textContent).not.toContain(key);
+
+  await render(groups, { runActive, isToolExpanded: () => true });
+  expect(container.textContent).toContain(key);
 });
 
 it("names a stop from the roster or its recorded launch, keeping its outcome", async () => {

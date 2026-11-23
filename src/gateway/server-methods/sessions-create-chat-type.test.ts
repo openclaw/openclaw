@@ -47,7 +47,7 @@ async function create(
 // without a message and later driven by sessions_send or cron must not lack it,
 // whichever dmScope or session scope the Gateway uses.
 test.each([
-  { name: "dmScope main", sessionConfig: undefined, parent: "agent:main:main" },
+  { name: "dmScope main", sessionConfig: undefined },
   { name: "dmScope per-channel-peer", sessionConfig: { dmScope: "per-channel-peer" } },
   { name: "global session scope", sessionConfig: { scope: "global" } },
 ])("records an operator-created root as a direct chat under $name", async (params) => {
@@ -56,8 +56,7 @@ test.each([
   expect(created.entry.chatType).toBe("direct");
   const entry = loadSessionEntry({ agentId: "main", storePath, sessionKey: created.key });
   expect(entry).toMatchObject({ createdVia: "operator", chatType: "direct" });
-  // Grouping under main keeps its own dmScope gate.
-  expect(entry?.parentSessionKey).toBe(params.parent);
+  expect(entry?.parentSessionKey).toBeUndefined();
 });
 
 test("a per-channel-peer operator root resolves memory audience from the turn's owner status", async () => {

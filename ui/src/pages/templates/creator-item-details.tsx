@@ -1,8 +1,8 @@
 import type { TemplateDraftReviewItem } from "@openclaw/gateway-protocol";
 import { createMemo, Errored, For, Loading, Match, refresh, Show, Switch } from "solid-js";
 import { FilePreviewDocument } from "../../components/file-preview-document.tsx";
+import { createSessionAutomationSchedule } from "../../lib/cron/session-automation-schedule-loader.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { createSessionAutomationSchedule } from "../chat/components/session-automation-schedule-loader.ts";
 import type { TemplatePackagePreview } from "./creator-publication.ts";
 type PackagePreviewReader = (
   item: TemplateDraftReviewItem,

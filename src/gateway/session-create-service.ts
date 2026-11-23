@@ -65,9 +65,9 @@ import {
 import { prepareGatewaySessionFork } from "./session-create-fork.js";
 import {
   inheritSessionCreateParentFields,
+  isStandaloneSessionCreate,
   prepareSessionCreateParent,
   resolveSessionCreateInheritance,
-  resolveSessionCreateRoot,
   resolveSessionCreateSpawnPolicy,
 } from "./session-create-inheritance.js";
 import {
@@ -349,13 +349,12 @@ async function createGatewaySessionInScope(
       return initializingSessionFailure();
     }
   }
-  const { standalone: standaloneRoot, mainParentSessionKey: dashboardParentSessionKey } =
-    resolveSessionCreateRoot(params, {
-      parentSessionKey,
-      incognito,
-      targetSessionKey,
-      mainSessionKey: resolveAgentMainSessionKey({ cfg: params.cfg, agentId }),
-    });
+  const standaloneRoot = isStandaloneSessionCreate(params, {
+    parentSessionKey,
+    incognito,
+    targetSessionKey,
+    mainSessionKey: resolveAgentMainSessionKey({ cfg: params.cfg, agentId }),
+  });
 
   const authorityTargets = params.operatorAuthority
     ? [
@@ -889,12 +888,12 @@ async function createGatewaySessionInScope(
             parent: currentParentSessionEntry,
             overrides: params,
             newExplicitChild: createdNewEntry && Boolean(canonicalParentSessionKey),
-            newDashboardRoot: newStandaloneRoot && Boolean(dashboardParentSessionKey),
+            newStandaloneRoot,
             newOperatorRoot: newStandaloneRoot && creation?.via === "operator",
             selectedModel: initializedEntry.modelOverride,
           }),
           ...buildSessionParentLink({
-            parentSessionKey: explicitParentSessionKey ?? dashboardParentSessionKey,
+            parentSessionKey: explicitParentSessionKey,
             parent: canonicalParentSessionKey ? currentParentSessionEntry : undefined,
             captureSpawnAuthority:
               createdNewEntry && params.creation?.via === "spawn" && Boolean(spawnToolPolicy),
@@ -1119,8 +1118,8 @@ async function createGatewaySessionInScope(
       agentId: target.agentId,
       entry: projectPublicSessionEntry(created.entry),
       resolved: {
-        modelProvider: selectedModel.provider,
-        model: selectedModel.model,
+        modelProvider: selectedModel?.provider,
+        model: selectedModel?.model,
       },
       resetExisting: false,
     };

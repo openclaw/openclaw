@@ -235,7 +235,7 @@ suite.define(() => {
         await page.locator(".sidebar-issues-button:visible").click();
         const card = updateCard(page);
         await card.locator("summary").click();
-        await card.locator(".sidebar-update-card__action").click();
+        await button(card, "View update details").click();
         await waitForConfirmModal(page);
 
         if (owner === "native") {
@@ -532,7 +532,7 @@ suite.define(() => {
       await page.locator(".sidebar-issues-button").click();
       const updateIssue = updateCard(page);
       await updateIssue.locator("summary").click();
-      await updateIssue.locator(".sidebar-update-card__action").click();
+      await button(updateIssue, "View update details").click();
       await confirmationCopy(page).locator("openclaw-update-run-view").waitFor();
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
     }, 720);

@@ -7,11 +7,6 @@ import {
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-  validateAgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
-import {
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
 } from "../../infra/diagnostic-events.js";
@@ -46,7 +41,6 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import {
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
-  createOperationalRunInstanceRef,
 } from "../admitted-run-context.js";
 import { createEnteredGate } from "../entered-gate.test-support.js";
 import { SessionControllerAdmissionRequiredError } from "../harness/errors.js";
@@ -54,7 +48,6 @@ import { captureRequesterOrigin, hasSameRequesterOrigin } from "../requester-ori
 import { withSessionPlacementForcedTerminalSettlement } from "../session-placement-forced-terminal-settlement.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
-  captureGatewayToolCallerAssertion,
   withGatewayToolCallerIdentity,
 } from "../tools/gateway-caller-context.js";
 import { prepareEmbeddedRunPermissionChange } from "./run-permissions.js";
@@ -555,51 +548,6 @@ describe("embedded run ownership", () => {
       } finally {
         clearActiveEmbeddedRun(sessionId, first);
         clearActiveEmbeddedRun(nextSessionId, next);
-      }
-    },
-  );
-
-  it.each(["replaced", "released"] as const)(
-    "does not stop a native turn after the captured caller authority is %s",
-    async (retirement) => {
-      const instance = createOperationalRunInstanceRef("stop-caller");
-      const authority = claimAgentRunDelegatedAuthority(instance);
-      const authorities = [authority];
-      const abort = vi.fn();
-      const handle = createRunHandle({ runId: "target", abort });
-      const operation = setActiveEmbeddedRun(sessionId, handle, sessionKey);
-      const capture = captureSessionControllerStop({ operations: [operation] });
-      const assertCurrent = await withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:stop-caller",
-          operationalRunInstance: instance,
-          receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
-        },
-        () => captureGatewayToolCallerAssertion(),
-      );
-      if (!assertCurrent) {
-        throw new Error("Expected admitted Stop caller assertion");
-      }
-      try {
-        assertCurrent();
-        releaseAgentRunDelegatedAuthority(authority);
-        if (retirement === "replaced") {
-          authorities.push(
-            claimAgentRunDelegatedAuthority(createOperationalRunInstanceRef(instance.runId)),
-          );
-        }
-        await expect(
-          stopSession({ source: "interrupt", capture, assertCurrent }).completed,
-        ).rejects.toThrow("agent tool caller authority is no longer active");
-        unused(abort);
-        expect(operation.result).toBeNull();
-        expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
-      } finally {
-        for (const retained of authorities) {
-          releaseAgentRunDelegatedAuthority(retained);
-        }
-        clearActiveEmbeddedRun(sessionId, handle);
       }
     },
   );

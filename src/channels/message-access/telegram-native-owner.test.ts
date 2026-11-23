@@ -102,7 +102,8 @@ it("rejects stale native plugin owner authority after demotion", () =>
     }
   }));
 
-it.each([false, true])("checks live owner authority during login (revoke=%s)", (revoke) =>
+// Authority is checked once when /login starts; a started sign-in may finish (root AGENTS.md).
+it("lets a started login finish after the owner is demoted", () =>
   withTelegramNativeOwners(async ({ cfg, admins, driver }) => {
     cfg.agents = { defaults: { model: "openai/gpt-5.5" } };
     const finish = createDeferredCore();
@@ -118,7 +119,7 @@ it.each([false, true])("checks live owner authority during login (revoke=%s)", (
         writes += 1;
         return {
           providerId: "openai",
-          methodId: "device-code",
+          methodId: "oauth",
           authRefresh: "refreshed",
           profiles: [],
         };
@@ -126,22 +127,19 @@ it.each([false, true])("checks live owner authority during login (revoke=%s)", (
       onResult: () => notified.resolve(),
     });
     try {
-      await driver.invoke({ command: "login", match: "openai/openai-device-code" });
+      await driver.invoke({ command: "login", match: "openai/openai" });
       expect(calls).toBe(1);
-      if (revoke) {
-        setUserProfileRole(admins[0]!.profile.id, "member");
-      }
+      setUserProfileRole(admins[0]!.profile.id, "member");
       finish.resolve();
       await notified.promise;
-      expect(writes).toBe(revoke ? 0 : 1);
+      expect(writes).toBe(1);
     } finally {
       finish.resolve();
       if (calls > 0) {
         await notified.promise;
       }
     }
-  }),
-);
+  }));
 
 const unavailable = "Configured ACP binding is unavailable right now. Please try again.";
 

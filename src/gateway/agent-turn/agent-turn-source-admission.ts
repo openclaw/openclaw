@@ -57,6 +57,8 @@ export async function authorizeAgentTurnSession({
 /** Transfer live session sharing into the retained caller, releasing any failed handoff. */
 export async function retainAgentTurnOperatorRun({
   assertInputCurrent,
+  cfg,
+  sessionEntry,
   resolvedSessionKey,
   activeSessionAgentId,
   getAdmittedSessionId,
@@ -68,6 +70,8 @@ export async function retainAgentTurnOperatorRun({
   Pick<
     PrepareAgentRunDispatchParams,
     | "context"
+    | "cfg"
+    | "sessionEntry"
     | "resolvedSessionKey"
     | "activeSessionAgentId"
     | "getAdmittedSessionId"
@@ -132,10 +136,22 @@ export async function retainAgentTurnOperatorRun({
           agentId: activeSessionAgentId,
         })?.delivery.returnedResult);
     try {
-      retained = await retainGatewayOperatorRun({ ...operator, invocationAuthority });
-      if (returnedResult) {
-        retained.authority?.reauthorize?.();
-      }
+      retained = await retainGatewayOperatorRun({
+        ...operator,
+        agentId: activeSessionAgentId,
+        invocationAuthority,
+        abortSession:
+          operator.abortSession ??
+          (resolvedSessionKey
+            ? {
+                cfg,
+                storePath: lifecycleStorePath,
+                entry: sessionEntry,
+                canonicalKey: resolvedSessionKey,
+                agentId: activeSessionAgentId,
+              }
+            : undefined),
+      });
     } catch (error) {
       if (
         returnedResult &&

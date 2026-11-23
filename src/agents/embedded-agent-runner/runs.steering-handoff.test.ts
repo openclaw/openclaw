@@ -215,7 +215,9 @@ describe("captured question and drain ownership", () => {
           setActiveEmbeddedRun(sessionId, replacement);
         }
         released.resolve();
-        await expect(result).rejects.toThrow("Message injection authority is no longer current");
+        await expect(result).rejects.toThrow(
+          "The message input is no longer available. Start a new turn to retry.",
+        );
         unused(queueMessage);
       } finally {
         released.resolve();

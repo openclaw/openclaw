@@ -90,7 +90,11 @@ function runAsCaller<T>(run: () => Promise<T>, localEmbedded = false) {
       ...source,
       operationalRunInstance,
       gatewayContextResolver: () => context,
-      receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+      receiptAuthority: () => {
+        if (!validateAgentRunDelegatedAuthority(authority)) {
+          throw new Error("agent tool caller authority is no longer active");
+        }
+      },
     },
     run,
   );

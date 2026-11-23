@@ -24,8 +24,6 @@ Referral link for MiniMax Coding Plan (10% off): [MiniMax Coding Plan](https://p
 | `MiniMax-M3`                 | Chat (reasoning) | Default hosted reasoning model             |
 | `MiniMax-M3.1-Flash`         | Chat (reasoning) | Adjustable effort, 1M context              |
 | `MiniMax-M3.1-Flash-Preview` | Chat (reasoning) | Legacy Preview id for saved configurations |
-| `MiniMax-M2.7`               | Chat (reasoning) | Previous hosted reasoning model            |
-| `MiniMax-M2.7-highspeed`     | Chat (reasoning) | Faster M2.7 reasoning tier                 |
 | `MiniMax-VL-01`              | Vision           | Image understanding model                  |
 | `image-01`                   | Image generation | Text-to-image and image-to-image editing   |
 | `MiniMax-H3-Image`           | Image generation | Text-to-image and multi-image editing      |
@@ -150,24 +148,6 @@ MiniMax M3 and M3.1 Flash are preferred [Code Mode](/tools/code-mode) models on 
                 compat: { codeMode: "preferred" },
                 cost: { input: 0.6, output: 2.4, cacheRead: 0.12, cacheWrite: 0 },
                 contextWindow: 1000000,
-                maxTokens: 131072,
-              },
-              {
-                id: "MiniMax-M2.7",
-                name: "MiniMax M2.7",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
-                contextWindow: 204800,
-                maxTokens: 131072,
-              },
-              {
-                id: "MiniMax-M2.7-highspeed",
-                name: "MiniMax M2.7 Highspeed",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0.6, output: 2.4, cacheRead: 0.06, cacheWrite: 0.375 },
-                contextWindow: 204800,
                 maxTokens: 131072,
               },
             ],
@@ -314,10 +294,10 @@ The MiniMax plugin registers image understanding separately from the text catalo
 
 | Provider ID      | Default image model | PDF text extraction |
 | ---------------- | ------------------- | ------------------- |
-| `minimax`        | `MiniMax-VL-01`     | `MiniMax-M2.7`      |
-| `minimax-portal` | `MiniMax-VL-01`     | `MiniMax-M2.7`      |
+| `minimax`        | `MiniMax-VL-01`     | `MiniMax-M3`        |
+| `minimax-portal` | `MiniMax-VL-01`     | `MiniMax-M3`        |
 
-That is why automatic media routing can use MiniMax image understanding even when the bundled text-provider catalog also includes M3 image-capable chat refs. PDF understanding uses `MiniMax-M2.7` for text extraction only; MiniMax does not register a PDF-to-image conversion path.
+That is why automatic media routing can use MiniMax image understanding even when the bundled text-provider catalog also includes M3 image-capable chat refs. PDF understanding uses `MiniMax-M3` for text extraction only; MiniMax does not register a PDF-to-image conversion path.
 
 ### Web search
 
@@ -374,7 +354,7 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
   </Accordion>
 
   <Accordion title="Fallback example">
-    **Best for:** keep your strongest latest-generation model as primary, fail over to MiniMax M2.7. Example below uses Opus as a concrete primary; swap to your preferred latest-gen primary model.
+    **Best for:** keep your strongest latest-generation model as primary, fail over to MiniMax M3. Example below uses Opus as a concrete primary; swap to your preferred latest-gen primary model.
 
     ```json5
     {
@@ -383,11 +363,11 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
         defaults: {
           models: {
             "anthropic/claude-opus-4-6": { alias: "primary" },
-            "minimax/MiniMax-M2.7": { alias: "minimax" },
+            "minimax/MiniMax-M3": { alias: "minimax" },
           },
           model: {
             primary: "anthropic/claude-opus-4-6",
-            fallbacks: ["minimax/MiniMax-M2.7"],
+            fallbacks: ["minimax/MiniMax-M3"],
           },
         },
       },
@@ -408,8 +388,7 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
 
 ## Notes
 
-- Default chat model: `MiniMax-M3`. Alternate chat models: `MiniMax-M3.1-Flash`, `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`
-- Onboarding and direct API-key setup write model definitions for M3 and both M2.7 variants
+- Default chat model: `MiniMax-M3`. Alternate chat model: `MiniMax-M3.1-Flash`. MiniMax retired the M2 generation (M2 through M2.7); requests to those ids return 404, and OpenClaw no longer lists them even though MiniMax's `/models` still does
 - Image understanding uses the plugin-owned `MiniMax-VL-01` media provider
 - Update pricing values in `models.json` if you need exact cost tracking
 - Use `openclaw models list` to confirm the current provider id, then switch with `openclaw models set minimax/MiniMax-M3` or `openclaw models set minimax-portal/MiniMax-M3`
@@ -430,8 +409,8 @@ See [Model providers](/concepts/model-providers) for provider rules.
 
     Make sure the model id is **case-sensitive**:
 
-    - API-key path: `minimax/MiniMax-M3`, `minimax/MiniMax-M2.7`, or `minimax/MiniMax-M2.7-highspeed`
-    - OAuth path: `minimax-portal/MiniMax-M3`, `minimax-portal/MiniMax-M2.7`, or `minimax-portal/MiniMax-M2.7-highspeed`
+    - API-key path: `minimax/MiniMax-M3` or `minimax/MiniMax-M3.1-Flash`
+    - OAuth path: `minimax-portal/MiniMax-M3` or `minimax-portal/MiniMax-M3.1-Flash`
 
     Then recheck with:
 

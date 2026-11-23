@@ -135,7 +135,7 @@ describe("reconciliation continuation authority", () => {
           expect(runLocal).toHaveBeenCalledOnce();
           expect(runWorkspaceCommand).toHaveBeenCalled();
         } else {
-          await expect(run).rejects.toThrow(/authority/);
+          await expect(run).rejects.toThrow(/authority revoked|no longer active/);
           expect(abort.signal.aborted).toBe(false);
           const transferred = revokeAt === "init" || revokeAt === "write";
           if (transferred) {

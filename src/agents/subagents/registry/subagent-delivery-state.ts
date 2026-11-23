@@ -240,7 +240,9 @@ export function hasConsumedRequesterInput(entry: SubagentRunRecord): boolean {
 export function hasPrivateRequesterInput(entry: SubagentRunRecord): boolean {
   return (
     entry.requesterSettleWake?.yieldedFinalDeliverable !== true &&
-    (entry.completionTarget === "parent" || entry.requesterSettleWake?.privateInput !== undefined)
+    (entry.completionTarget === "parent" ||
+      (entry.requesterSettleWake?.privateInput !== undefined &&
+        entry.requesterSettleWake.privateInput.privateOnly !== false))
   );
 }
 
@@ -294,6 +296,20 @@ export function recordRequesterHandoff(entry: SubagentRunRecord, blockingRunId?:
     state: "waiting",
     blockingRunId: blockingRunId ?? entry.delivery?.requesterDelivery?.blockingRunId,
   });
+}
+
+export function isDeliveryTerminalForRequesterSettle(
+  entry: Pick<SubagentRunRecord, "delivery" | "pauseReason">,
+): boolean {
+  return (
+    isDeliverySuspended(entry) ||
+    entry.delivery?.status === "delivered" ||
+    (entry.delivery?.status === "not_required" && entry.pauseReason !== "sessions_yield") ||
+    entry.delivery?.status === "discarded" ||
+    entry.delivery?.disposition === "delivered" ||
+    entry.delivery?.disposition === "intentional_non_delivery" ||
+    entry.delivery?.disposition === "permanent_failure"
+  );
 }
 
 export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">): boolean {

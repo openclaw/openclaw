@@ -87,6 +87,8 @@ const teamShaped = periodicRefresh || providers > 1;
 const providerIds = Array.from({ length: providers }, (_, index) =>
   index === 0 ? "fixture-provider" : `fixture-provider-${index}`,
 );
+const remoteCatalogSourceUrl = "https://catalog.invalid/catalog.json";
+const remoteProviderId = "fixture-remote";
 assert(Number.isSafeInteger(rows) && rows > 0);
 assert(Number.isSafeInteger(configuredModels) && configuredModels > 0);
 assert(Number.isSafeInteger(workspaces) && workspaces > 0);
@@ -200,9 +202,21 @@ if (values["runtime-plugin"]) {
     path.join(pluginDir, "openclaw.plugin.json"),
     JSON.stringify({
       id: "catalog-retention-fixture",
-      providers: providerIds,
+      providers: [...providerIds, remoteProviderId],
       modelCatalog: {
-        discovery: Object.fromEntries(providerIds.map((provider) => [provider, "runtime"])),
+        // A nonempty manifest declaration owns the remote overlay without adding its
+        // provider to the fixture's runtime discovery or credential scope.
+        providers: {
+          [remoteProviderId]: {
+            api: "openai-completions",
+            baseUrl: "https://remote.invalid/v1",
+            models: [{ id: "fixture-manifest-seed", name: "Manifest seed" }],
+          },
+        },
+        discovery: {
+          [remoteProviderId]: "static",
+          ...Object.fromEntries(providerIds.map((provider) => [provider, "runtime"])),
+        },
         runtimeAugment: true,
       },
       configSchema: {
@@ -252,6 +266,7 @@ const config = {
     : { enabled: false },
   models: {
     mode: values["runtime-plugin"] ? ("merge" as const) : ("replace" as const),
+    catalogRefresh: { url: remoteCatalogSourceUrl },
     providers: {
       "fixture-provider": {
         baseUrl: "https://fixture.invalid/v1",
@@ -342,6 +357,7 @@ const requests: Array<{
   elapsedMs: number;
   entries: number;
   configuredEntries: number;
+  remoteEntries: number;
   runtimeModels: number;
   hash: string;
   runtimeHash: string;
@@ -452,11 +468,11 @@ async function sample(
 }
 function createRemoteCatalog(revision: number) {
   return {
-    sourceUrl: "https://catalog.invalid/catalog.json",
+    sourceUrl: remoteCatalogSourceUrl,
     revision: `synthetic-revision-${revision}`,
     generatedAt: revision,
     providers: {
-      "fixture-remote": {
+      [remoteProviderId]: {
         api: "openai-completions" as const,
         baseUrl: "https://remote.invalid/v1",
         models: Array.from({ length: rows }, (_, index) => ({
@@ -509,6 +525,34 @@ async function runRevision(revision: number, count = workspaces, timed = false) 
     const runtimeById = new Map(
       result.runtimeModels.get("fixture-provider")?.map((model) => [model.id, model]),
     );
+    const remoteIdPrefix = `fixture-remote-${revision}-`;
+    const firstRemoteId = `${remoteIdPrefix}0`;
+    const lastRemoteId = `${remoteIdPrefix}${rows - 1}`;
+    let remoteEntries = 0;
+    let firstRemote = false;
+    let lastRemote = false;
+    for (const entry of result.snapshot.entries) {
+      if (entry.provider !== remoteProviderId || !entry.id.startsWith(remoteIdPrefix)) {
+        continue;
+      }
+      remoteEntries++;
+      const first = entry.id === firstRemoteId;
+      const last = entry.id === lastRemoteId;
+      if (first || last) {
+        assert.equal(entry.name, `Synthetic model ${revision} ${first ? 0 : rows - 1}`);
+        assert.equal(entry.contextWindow, 128000);
+        assert.equal(entry.api, "openai-completions");
+        assert.equal(entry.baseUrl, "https://remote.invalid/v1");
+        firstRemote ||= first;
+        lastRemote ||= last;
+      }
+    }
+    assert.equal(remoteEntries, values["runtime-plugin"] ? rows : 0);
+    if (values["runtime-plugin"]) {
+      assert(firstRemote && lastRemote, "Missing remote revision boundary models");
+    }
+    // Catalog inventory does not authorize an otherwise unselected runtime provider.
+    assert.equal(result.runtimeModels.get(remoteProviderId)?.length ?? 0, 0);
     for (const model of config.models.providers["fixture-provider"].models) {
       assert(configuredIds.has(model.id));
       const runtimeModel = runtimeById.get(model.id);
@@ -534,6 +578,7 @@ async function runRevision(revision: number, count = workspaces, timed = false) 
       elapsedMs,
       entries: result.snapshot.entries.length,
       configuredEntries: configuredEntries.length,
+      remoteEntries,
       runtimeModels: [...result.runtimeModels.values()].reduce(
         (total, models) => total + models.length,
         0,

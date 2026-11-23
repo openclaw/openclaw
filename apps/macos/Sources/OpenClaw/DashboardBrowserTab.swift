@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import QuartzCore
 import WebKit
 
 @MainActor
@@ -18,11 +19,13 @@ final class DashboardBrowserTab {
     static let automaticReloadLimit = 2
 
     let webView: WKWebView
+    let presentationView = DashboardBrowserPresentationView()
     let requestedURL: URL
     var representedURL: URL?
     var title: String?
     var favicon: String?
     var faviconGeneration: UInt64 = 0
+    var faviconRefreshPending = false
     var navigationWasUserActivated = false
     var observations: [NSKeyValueObservation] = []
     /// WebKit's reload replays the last committed item, which a failed first load never
@@ -45,6 +48,8 @@ final class DashboardBrowserTab {
         self.webView.setValue(true, forKey: "drawsBackground")
         self.requestedURL = requestedURL
         self.representedURL = requestedURL
+        self.presentationView.wantsLayer = true
+        self.presentationView.addSubview(self.webView)
     }
 
     var requestedURLAlias: URL? {
@@ -188,6 +193,54 @@ final class DashboardBrowserTab {
         self.webView.uiDelegate = nil
         self.webView.stopLoading()
         self.webView.removeFromSuperview()
+        self.presentationView.removeFromSuperview()
+    }
+}
+
+/// Paint and hit-test the same holes so toast actions go to the dashboard, not the webpage.
+@MainActor
+final class DashboardBrowserPresentationView: NSView {
+    private let visibilityMask = CAShapeLayer()
+    private var holes: CGPath?
+
+    func applyCutouts(_ cutouts: [DashboardBrowserCutout], dashboardFrame: CGRect) {
+        let holes = CGMutablePath()
+        for cutout in cutouts {
+            let rect = cutout.rect
+            let local = CGRect(
+                x: dashboardFrame.minX + rect.x - self.frame.minX,
+                y: dashboardFrame.maxY - rect.y - rect.height - self.frame.minY,
+                width: rect.width,
+                height: rect.height)
+            guard local.intersects(self.bounds) else { continue }
+            if cutout.radius == 0 {
+                holes.addRect(local)
+            } else {
+                holes.addRoundedRect(in: local, cornerWidth: cutout.radius, cornerHeight: cutout.radius)
+            }
+        }
+        if holes.isEmpty {
+            self.holes = nil
+            self.layer?.mask = nil
+            return
+        }
+        self.holes = holes
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        self.visibilityMask.frame = self.bounds
+        // Subtract the union: overlapping toast cards still form one hole.
+        self.visibilityMask.path = CGPath(rect: self.bounds, transform: nil).subtracting(holes)
+        self.layer?.mask = self.visibilityMask
+        CATransaction.commit()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if self.holes?.contains(self.convert(point, from: self.superview)) == true {
+            return nil
+        }
+        // This wrapper must never claim clicks itself, including on a hidden tab.
+        let hit = super.hitTest(point)
+        return hit === self ? nil : hit
     }
 }
 
