@@ -2,7 +2,7 @@
 import { realpathSync } from "node:fs";
 import { isDirectRunUrl } from "./direct-run.mjs";
 
-function parseTimeoutMs(value) {
+export function parseTimeoutMs(value) {
   const match = /^([0-9]+(?:\.[0-9]+)?)(ms|s|m|h)?$/u.exec(String(value ?? "").trim());
   if (!match) {
     throw new Error(`unsupported timeout value: ${value}`);
