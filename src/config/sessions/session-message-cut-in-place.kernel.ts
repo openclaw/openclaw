@@ -5,7 +5,11 @@
 // transcript into the worker heap, then appends one `leaf` control row.
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+} from "../../infra/kysely-sync.js";
 import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { scanSessionTranscriptNavigationTree } from "./session-accessor.sqlite-branch-summaries.js";
@@ -186,6 +190,8 @@ function createSessionMessageCutReader(
         .where("identity.session_id", "=", sessionId)
         .where("identity.event_id", "=", entryId),
     );
+  const canonicalBranchPath = (leafEventId: string) =>
+    selectSessionTranscriptTreePathNodes(resolve(leafEventId), leafEventId);
   return {
     readTarget(entryId) {
       const row = readIdentity(entryId);
@@ -201,9 +207,8 @@ function createSessionMessageCutReader(
       };
     },
     readEditorMessage(entryId) {
-      // The one payload an in-place cut reads, after the selection is validated:
-      // the rewind's editor text and attachments. Oversized rows are refused with
-      // the shared read-budget error instead of entering the worker heap.
+      // Only the rewind's editor message body is read. Oversized rows are
+      // refused with the shared read-budget error.
       const row = readIdentity(entryId);
       if (!row) {
         return undefined;
@@ -245,9 +250,63 @@ function createSessionMessageCutReader(
       // planned control's target, so an ordinary cut answers without the scan.
       return !hasResetAfterSelection(targetId) || resolve(targetId).leafId === targetId;
     },
+    hasDegradedCompaction(targetId) {
+      if (targetId === null) {
+        return false;
+      }
+      const activePosition = readIdentity(targetId)?.active_position;
+      // The earliest legacy rows may lack identity facts. The canonical tree
+      // still has their sequence and type, as it does for off-path branches.
+      const firstEvent = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("transcript_events as event")
+          .leftJoin("transcript_event_identities as identity", (join) =>
+            join
+              .onRef("identity.session_id", "=", "event.session_id")
+              .onRef("identity.seq", "=", "event.seq"),
+          )
+          .select("identity.seq as indexed_seq")
+          .where("event.session_id", "=", sessionId)
+          .orderBy("event.seq", "asc")
+          .limit(1),
+      );
+      const compactionSeqs =
+        activePosition == null || firstEvent?.indexed_seq == null
+          ? canonicalBranchPath(targetId).flatMap(({ entry }) =>
+              entry?.type === "compaction" ? [entry.seq] : [],
+            )
+          : executeSqliteQuerySync(
+              database.db,
+              db
+                .selectFrom("transcript_event_identities as identity")
+                .innerJoin("session_transcript_active_events as active", (join) =>
+                  join
+                    .onRef("active.session_id", "=", "identity.session_id")
+                    .onRef("active.event_seq", "=", "identity.seq"),
+                )
+                .select("identity.seq")
+                .where("identity.session_id", "=", sessionId)
+                .where("identity.event_type", "=", "compaction")
+                .where("active.active_position", "<=", activePosition),
+            ).rows.map(({ seq }) => seq);
+      // Fetch only bodies on the selected path and only one at a time.
+      return compactionSeqs.some((seq) => {
+        const row = executeSqliteQueryTakeFirstSync(
+          database.db,
+          db
+            .selectFrom("transcript_events")
+            .select(["event_json", "event_zstd", "event_utf8_bytes"])
+            .where("session_id", "=", sessionId)
+            .where("seq", "=", seq),
+        );
+        const event = row && asRecord(JSON.parse(readTranscriptPayload(row)));
+        return parseCompactionDetails(event?.details)?.qualityDegraded === true;
+      });
+    },
     canonicalBranchPathSeqs(leafEventId) {
-      return selectSessionTranscriptTreePathNodes(resolve(leafEventId), leafEventId).flatMap(
-        (node) => (typeof node.entry?.seq === "number" ? [node.entry.seq] : []),
+      return canonicalBranchPath(leafEventId).flatMap(({ entry }) =>
+        typeof entry?.seq === "number" ? [entry.seq] : [],
       );
     },
     activeLeafEventId,
@@ -290,7 +349,7 @@ export function inPlaceSessionMessageCutPreflightNeedsWrite(
 
 /**
  * Rewind and branch switch append one `leaf` control row to the existing
- * transcript, so their cost does not depend on transcript size.
+ * transcript, so they do not copy the selected history.
  *
  * Consumers that previously detected the cut through a new session id now see
  * the rotated transcript generation, and stale writers that captured the
@@ -320,6 +379,8 @@ export function installInPlaceSessionMessageCut(
   if (plan.status !== "prepared") {
     return plan;
   }
+  plan.result.entry.compactionQualityDegraded =
+    reader.hasDegradedCompaction(plan.leafTargetId) || undefined;
   commitSqliteSessionDeletion(params.sourceKey, currentEntry);
   rotateTranscriptGenerationInTransaction(database, sessionId);
   // Plan the projection difference against the still-clean projection; the append

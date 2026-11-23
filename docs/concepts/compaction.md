@@ -297,7 +297,9 @@ required preflight compaction before a turn that no longer fits. That compaction
 instead keeps the prepared recent history without a summary, as after a refusal,
 and the reply continues. It commits on the route that failed rather than trying the
 model fallback chain. Channels show the degraded-compaction warning, and the
-session status reports degraded history. Without this, every turn in that session
+session status reports degraded history. After rewinding or switching branches,
+the status reflects whether the selected history still includes a degraded
+compaction. Without the fallback, every turn in that session
 fails with `Preflight compaction required but failed` until the summarizer recovers.
 
 Each failed or cancelled safeguard attempt is saved in the session transcript as an

@@ -241,6 +241,45 @@ describe("memory actor fork and cut", () => {
     ).toHaveLength(4);
   });
 
+  it("reevaluates degraded compaction when navigating incognito history", async () => {
+    const { parent, acquire } = await fixture();
+    committed(
+      await mutateMemory(storage(parent), "session.event.append", {
+        scope: { agentId: "main", sessionKey: parentKey, storePath, sessionId: "parent-session" },
+        eventJson: JSON.stringify({
+          type: "compaction",
+          id: "lossy-summary",
+          parentId: "a2",
+          timestamp: "2026-01-01T00:00:05.000Z",
+          firstKeptEntryId: "u2",
+          summary: "Partial summary",
+          tokensBefore: 10,
+          details: { readFiles: [], modifiedFiles: [], qualityDegraded: true },
+        }),
+      }),
+    );
+    const navigate = async (mode: "rewind" | "switch", entryId: string) =>
+      commitMemory(storage(await acquire()), "session.messageCut", {
+        intent: {
+          canonicalSourceKey: parentKey,
+          sourceKey: parentKey,
+          targetKey: parentKey,
+          mode,
+          entryId,
+        },
+      });
+    const readDegraded = async () =>
+      (await readMemory(storage(await acquire()), "session.entry.read", {}))
+        ?.compactionQualityDegraded;
+    expect(await readDegraded()).toBe(true);
+
+    expect(await navigate("rewind", "u2")).toMatchObject({ status: "created" });
+    expect(await readDegraded()).toBeUndefined();
+
+    expect(await navigate("switch", "lossy-summary")).toMatchObject({ status: "created" });
+    expect(await readDegraded()).toBe(true);
+  });
+
   it("forks only the prefix before a user message and preserves source identity", async () => {
     const { parent, child } = await fixture({
       thinkingLevel: "high",

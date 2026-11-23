@@ -612,7 +612,7 @@ type SessionEntryCore = SessionEntryProvenance &
     contextTokensSource?: "runtime" | "runtime-configured" | "resolved" | "resolved-v1";
     contextBudgetStatus?: SessionContextBudgetStatus;
     compactionCount?: number;
-    /** A committed lossy compaction affected this history; cleared with a new session. */
+    /** The selected history includes a committed lossy compaction. */
     compactionQualityDegraded?: true;
     memoryFlush?: MemoryFlushState;
     cliSessionIds?: Record<string, string>;
