@@ -142,10 +142,9 @@ it("selects and delivers the deployment-pinned Gateway skill over a remote works
     ]),
   });
   const forged = structuredClone(compact);
-  forged.skills.find((skill) => skill.name === "available")!.source = {
-    filePath: pinnedFile,
-    fileHost: "workspace",
-  };
+  // Simulate an untrusted persisted snapshot carrying a forged source field.
+  const forgedSkill = forged.skills.find((skill) => skill.name === "available")!;
+  Object.assign(forgedSkill, { source: { filePath: pinnedFile, fileHost: "workspace" } });
   await expect(prepareSkillResourceDelivery(forged, () => {}, [], gateway)).rejects.toThrow(
     "deployment-pinned Gateway source",
   );
