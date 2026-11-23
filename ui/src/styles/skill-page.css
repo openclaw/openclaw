@@ -44,6 +44,30 @@
   overflow-wrap: anywhere;
 }
 
+.skill-page__publisher {
+  min-width: 0;
+  max-width: 100%;
+}
+.skill-page__publisher summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.skill-page__publisher summary > .plugin-metadata__middle {
+  display: inline-flex;
+  max-width: calc(100% - 1.5em);
+  vertical-align: bottom;
+}
+.skill-page__publisher > :not(summary) {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.skill-page .plugin-catalog-detail__title-row h1:has(> .plugin-metadata__middle) {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .skill-page__byline strong {
   color: var(--text-strong);
   font-weight: 550;

@@ -95,6 +95,7 @@ export function renderPluginDetailShell(props: {
   registerHeading?: (heading: HTMLHeadingElement) => void | (() => void);
   id: string;
   name: string;
+  headingContent?: JSX.Element;
   summary?: string;
   backHref: string;
   backLabel: string;
@@ -141,7 +142,7 @@ export function renderPluginDetailShell(props: {
           <div class="plugin-catalog-detail__name">
             <div class="plugin-catalog-detail__title-row">
               <h1 id={titleId()} ref={(element) => (heading = element)}>
-                {props.name}
+                {props.headingContent ?? props.name}
               </h1>
             </div>
             {props.identity}

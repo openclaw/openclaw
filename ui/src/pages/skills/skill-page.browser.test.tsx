@@ -125,12 +125,14 @@ describe.runIf(browserMode)("skill page layout", () => {
     const { page } = await import("vitest/browser");
     await page.viewport(390, 844);
     createContainer();
+    const selected: string[] = [];
     const owner = {
       displayName: "InternationalResearchOperationsAndRegulatoryReporting",
       handle: "international-research-operations-team",
     };
     renderSkills(
       createProps({
+        onClawHubInstall: (ref) => selected.push(ref),
         clawhubDetailRef: "@" + owner.handle + "/field-notebook",
         clawhubDetail: {
           skill: {
@@ -145,17 +147,15 @@ describe.runIf(browserMode)("skill page layout", () => {
       container!,
     );
     const detail = await renderedPage();
-    const byline = query(".skill-page__byline", detail);
-    const action = query(".plugin-catalog-detail__actions", detail).getBoundingClientRect();
-    for (const child of byline.children) {
-      expect(child.clientWidth).toBeGreaterThan(0);
-      expect(child.scrollWidth).toBeLessThanOrEqual(child.clientWidth + 1);
-      const range = document.createRange();
-      range.selectNodeContents(child);
-      for (const line of range.getClientRects())
-        expect(line.right).toBeLessThanOrEqual(action.left);
-    }
-    expect(byline.textContent).toBe(owner.displayName + "@" + owner.handle);
+    const publisher = query(".skill-page__publisher", detail);
+    const summary = query("summary", publisher);
+    expect(summary.textContent).toBe("@" + owner.handle);
+    summary.click();
+    expect(publisher.hasAttribute("open")).toBe(true);
+    expect(query("strong", publisher).textContent).toBe(owner.displayName);
+    expect(query("span:last-child", publisher).textContent).toBe("@" + owner.handle);
+    query("button.skill-page__cta", detail).click();
+    expect(selected).toEqual(["@" + owner.handle + "/field-notebook"]);
   });
 
   it.each(["success", "error"] as const)(

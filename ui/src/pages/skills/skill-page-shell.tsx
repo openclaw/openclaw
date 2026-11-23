@@ -16,6 +16,7 @@ import type { SkillsProps } from "./view-types.ts";
 export function SkillPageShell(props: {
   view: SkillsProps;
   name: string;
+  headingContent?: JSX.Element;
   icon: JSX.Element;
   identity?: JSX.Element;
   actions?: JSX.Element;
@@ -41,6 +42,7 @@ export function SkillPageShell(props: {
           }
         }}
         name={props.name}
+        headingContent={props.headingContent}
         summary={props.summary}
         backHref={props.view.listHref}
         backLabel={t("tabs.skills")}
