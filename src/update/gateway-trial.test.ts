@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,8 +12,15 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
-import { settleRunFromTrial } from "./gateway-trial.js";
-import { readTrial, resolvePrefix, writeTrial, type Trial } from "./store.js";
+import { announceReady, settleRunFromTrial } from "./gateway-trial.js";
+import {
+  acquireUpdateLock,
+  readTrial,
+  readUpdateLock,
+  resolvePrefix,
+  writeTrial,
+  type Trial,
+} from "./store.js";
 
 const notices = vi.hoisted(() => [] as Array<{ runId: string; kind: string; status: string }>);
 vi.mock("../gateway/update-run-notice.runtime.js", async (importOriginal) => ({
@@ -124,5 +133,62 @@ it.each([true, false])(
     expect(notices).toEqual(
       acknowledged ? [{ runId: run.runId, kind: "finished", status: "failed" }] : [],
     );
+  },
+);
+
+it.each(["dead", "same-pid", "live"] as const)(
+  "settles interrupted preparation at Gateway start without taking a live CLI lock (%s)",
+  async (ownerState) => {
+    const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-"));
+    directories.push(state);
+    vi.stubEnv("OPENCLAW_STATE_DIR", state);
+    vi.stubEnv("OPENCLAW_LAUNCHER_IPC", "");
+    const options = { env: process.env };
+    openOpenClawStateDatabase(options);
+    const run = await createUpdateRunAsync(
+      { trigger: ownerState === "live" ? "cli" : "control-ui" },
+      options,
+    );
+    await recordUpdateRunStepAsync(
+      run.runId,
+      { step: "prepare:install", status: "in_progress", startedAtMs: Date.now() },
+      options,
+    );
+    const owner = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+      stdio: ["pipe", "ignore", "ignore"],
+    });
+    await once(owner, "spawn");
+    try {
+      if (ownerState === "dead") {
+        const exited = once(owner, "exit");
+        owner.kill("SIGKILL");
+        await exited;
+      }
+      await acquireUpdateLock({
+        runId: run.runId,
+        pid: ownerState === "same-pid" ? process.pid : owner.pid!,
+        deadlineMs: 60_000,
+      });
+
+      await announceReady(null);
+
+      if (ownerState === "live") {
+        expect(await getUpdateRunAsync(run.runId, options)).toMatchObject({ status: "running" });
+        expect(await readUpdateLock()).toMatchObject({ runId: run.runId, pid: owner.pid });
+      } else {
+        expect(await getUpdateRunAsync(run.runId, options)).toMatchObject({
+          status: "failed",
+          phase: "finished",
+          reason: "interrupted",
+        });
+        expect(await readUpdateLock()).toBeNull();
+      }
+    } finally {
+      if (owner.exitCode === null && owner.signalCode === null) {
+        const exited = once(owner, "exit");
+        owner.kill("SIGKILL");
+        await exited;
+      }
+    }
   },
 );

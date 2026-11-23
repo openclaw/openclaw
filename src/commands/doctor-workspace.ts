@@ -257,6 +257,7 @@ async function migrateLegacyRootMemoryFile(
     // and continues to reject a symlink at the final MEMORY.md path.
     const publicationDir = await fs.promises.realpath(detection.workspaceDir);
     await replaceFileAtomic({
+      allowDrvfsRenameRecovery: true,
       filePath: path.join(publicationDir, CANONICAL_ROOT_MEMORY_FILENAME),
       content: merged,
       dirMode: (await fs.promises.stat(publicationDir)).mode & 0o7777,

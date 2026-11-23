@@ -5,15 +5,13 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerRetirementReason } from "@openclaw/worker-runtime";
 import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type {
-  DiagnosticMemoryUsage,
-  WorkerGcStorm,
-  WorkerMemorySample,
-} from "./diagnostic-process-types.js";
+import type { DiagnosticMemoryUsage, WorkerMemorySample } from "./diagnostic-process-types.js";
 import type { GcSample } from "./gc-observer.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
+import { resolveProcessRuntimeWorkerFile } from "./runtime-worker-process-generation.js";
 import * as sqliteReaderMetrics from "./sqlite-reader-metrics.js";
 import { buildWorkerCensus, type WorkerPoolPolicy } from "./worker-census.js";
+import type { WorkerCpuHandle, WorkerMemoryMessage } from "./worker-cpu-types.js";
 import { MAX_DIAGNOSTIC_WORKER_SLOTS, workerScriptName } from "./worker-diagnostic-script.js";
 import {
   canObserveWorkerMessages,
@@ -30,22 +28,6 @@ import {
 } from "./worker-postgres-bridge-census.js";
 
 const gcStorm = channel("openclaw.code-mode.gc-storm");
-
-type WorkerCpuHandle = {
-  readonly threadId: number;
-  cpuUsage: Worker["cpuUsage"];
-  getHeapStatistics: Worker["getHeapStatistics"];
-  once(event: "exit", listener: () => void): unknown;
-};
-
-type WorkerMemoryMessage =
-  | WorkerMemorySample
-  | { flushed: true; heapUsed: number }
-  | { gc: GcSample[] }
-  | { gcStorm: WorkerGcStorm }
-  | { postgresBridgeCounters: PostgresBridgeCounter[] }
-  | { sqliteReaderCounter: sqliteReaderMetrics.SqliteReaderCounter }
-  | { retireWorkerId: string };
 
 type WorkerSource = {
   script: string;
@@ -107,7 +89,7 @@ export function createCpuTrackedWorker(
 ): Worker {
   const worker = runWithMainThreadTask(
     `worker:${workerScriptName(filename, options?.eval)}`,
-    () => new Worker(filename, options),
+    () => new Worker(options?.eval ? filename : resolveProcessRuntimeWorkerFile(filename), options),
   );
   trackNativeWorkerForCpu(worker, filename, options?.eval);
   Object.assign(trackedWorkers.workers.get(worker)!, { internalMessages: true, requestClass });

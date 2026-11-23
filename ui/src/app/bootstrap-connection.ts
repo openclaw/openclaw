@@ -91,7 +91,10 @@ export function prepareApplicationStartup() {
       : loadGatewaySessionSelection(startup.settings.gatewayUrl);
   const settings = startupTargetSelection
     ? {
-        ...startup.settings,
+        // Native startup may retarget a remembered browser connection. Appearance
+        // belongs to the target Gateway; only the resolved credentials travel with it.
+        ...loadSettings(startup.settings.gatewayUrl),
+        token: startup.settings.token,
         ...startupTargetSelection,
         selectedAgentId: startupTargetSelection.selectedAgentId,
       }

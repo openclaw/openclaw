@@ -10,6 +10,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { expandSidebarSessions } from "./sidebar-session-pagination.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI sidebar dev branch badge E2E",
@@ -75,7 +76,7 @@ suite.define(() => {
         const body = sidebar.locator(".sidebar-shell__body");
         await body.waitFor();
         await sidebar.locator(".sidebar-identity-card").waitFor();
-        await sidebar.getByRole("button", { name: "Show more", exact: true }).click();
+        await expandSidebarSessions(body, 20);
         const last = sidebar.getByText("CI timer", { exact: true });
         await expect
           .poll(async () => {

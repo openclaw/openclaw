@@ -99,7 +99,11 @@ it.each([
               sessionKey: requesterSessionKey,
               operationalRunInstance,
               approvalAuthority,
-              receiptAuthority: () => runs.validateAgentRunDelegatedAuthority(approvalAuthority),
+              receiptAuthority: () => {
+                if (!runs.validateAgentRunDelegatedAuthority(approvalAuthority)) {
+                  throw new Error("agent tool caller authority is no longer active");
+                }
+              },
             },
             () =>
               runWithCronCreatorAuthorityCapability(capability, () =>

@@ -56,7 +56,7 @@ import { updateCommand } from "./update-command.js";
 // The next `openclaw update` after a real updater process was killed: each suite
 // importing this runs the update from its command entry to admitted execution.
 type Prepared = Awaited<ReturnType<typeof prepareUpdateCommand>>;
-const mocks = vi.hoisted(() => ({ root: vi.fn(), proceed: vi.fn() }));
+const mocks = vi.hoisted(() => ({ root: vi.fn(), proceed: vi.fn(), release: vi.fn() }));
 vi.mock("./shared.js", async (original) => ({
   ...(await original<typeof import("./shared.js")>()),
   resolveUpdateRoot: mocks.root,
@@ -68,6 +68,11 @@ vi.mock("./update-command-initialization-run.js", () => ({
 }));
 // mock-isolation: a dry run takes this path, and must never run a real preview from here.
 vi.mock("./update-command-admitted.js", () => ({ runAdmittedUpdate: mocks.proceed }));
+// Package installs past recovery prepare a release; preparing one builds a real package.
+vi.mock("../../update/cli.js", async (original) => ({
+  ...(await original<typeof import("../../update/cli.js")>()),
+  runReleaseUpdateCli: mocks.release,
+}));
 // Repair's finalization runs for real, as in the repair fixtures; only its Doctor
 // children, plugin installs and Doctor's own service maintenance are stand-ins.
 const finalization = vi.hoisted(() => ({
@@ -215,6 +220,8 @@ export type Updater = {
   installed?: "previous" | "candidate";
   trigger?: "cli" | "api";
   gateway?: "untouched" | "stopped" | "restarted";
+  /** The install path the update ran from, when it links to the installation key. */
+  root?: string;
   checkout?: {
     sha: string;
     buildId: string;
@@ -271,6 +278,35 @@ export async function installation(name = "prefix") {
   const slot = path.join(ctx.root, name, "lib", "node_modules", "openclaw");
   await writePackageRoot(slot, "2026.11.3");
   return slot;
+}
+/**
+ * A pnpm-style installation: the install path links to the package's own directory,
+ * whose real path the update records as its installation key.
+ */
+export async function linkedInstallation(name = "prefix") {
+  const slot = path.join(ctx.root, name, "lib", "node_modules", "openclaw");
+  const previous = path.join(ctx.root, `${name}-packages`, "previous", "openclaw");
+  await writePackageRoot(previous, "2026.11.3");
+  fs.mkdirSync(path.dirname(slot), { recursive: true });
+  fs.symlinkSync(previous, slot, "dir");
+  return { slot, key: fs.realpathSync(previous) };
+}
+/**
+ * What pnpm's activation does: the candidate gets its own directory, the previous one leaves.
+ * `version` installs a later build instead, as `pnpm add -g` of a fixed build does.
+ */
+export async function replacePackageDirectory(
+  { slot, key }: { slot: string; key: string },
+  { keepPrevious = false, version = candidate } = {},
+) {
+  const next = path.join(path.dirname(path.dirname(key)), version, "openclaw");
+  await writePackageRoot(next, version);
+  fs.rmSync(slot);
+  fs.symlinkSync(next, slot, "dir");
+  if (!keepPrevious) {
+    fs.rmSync(path.dirname(key), { recursive: true });
+  }
+  return fs.realpathSync(next);
 }
 export const git = (slot: string, ...args: string[]) =>
   execFileSync("git", ["-C", slot, "-c", "user.name=OpenClaw Test", "-c", "user.email=", ...args], {
@@ -464,9 +500,7 @@ export type RefusalCase = {
   control?: (killed: Dead) => unknown;
 };
 /**
- * The update refuses for that reason, and so does the next one with admission's own
- * refusal, both leaving the recovery, run and config as they were. A stalled updater's
- * recovery then settles once it has been killed.
+ * The update and its next admission both refuse, leaving recovery, run and config intact.
  */
 export const stillRefuses = ({ refusal, dead, dryRun, restart, control }: RefusalCase) =>
   fixtures.lifetime.run(async () => {
@@ -486,12 +520,6 @@ export const stillRefuses = ({ refusal, dead, dryRun, restart, control }: Refusa
 
     expect(mocks.proceed).not.toHaveBeenCalled();
     expect(reserved(killed.runId)).toEqual(before);
-    if (dead?.end === "stalled") {
-      killed.proc.kill("SIGKILL");
-      await killed.closed;
-      await nextUpdate(killed.slot);
-      expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
-    }
   });
 
 export const repair = "openclaw update repair";

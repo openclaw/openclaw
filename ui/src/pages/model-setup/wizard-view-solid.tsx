@@ -28,6 +28,7 @@ export type WizardViewProps = {
   refreshWarning: string | null;
   doneMessage?: string;
   doneDescription?: string;
+  doneContent?: JSX.Element;
   doneAction?: { label: string; disabled?: boolean; onClick: () => void };
   cancellationNotice?: string | null;
   cancellationFeedback?: JSX.Element;
@@ -194,6 +195,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                     <Show when={props.doneDescription}>
                       <p class="model-setup-wizard__success-description">{props.doneDescription}</p>
                     </Show>
+                    {props.doneContent}
                   </div>
                 </Match>
                 <Match when={errorState()}>

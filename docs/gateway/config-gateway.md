@@ -412,6 +412,22 @@ replaces the whole shared host: every hosted endpoint's in-flight work fails wit
 explicit error, and the next request starts a new host. Neither profile is a memory cap or
 OOM guarantee.
 
+### Lean startup
+
+Lean also lowers memory use while the Gateway starts:
+
+- **Post-ready work waits for a quiet Gateway.** Standard starts post-ready maintenance
+  500 ms after startup settles. That covers session reconcile, disk-budget and archive
+  sweeps, worktree maintenance, the skills refresh, cron start, prewarming and the
+  restart-sentinel wake. Lean first checks 2 seconds after startup settles. If requests
+  are still running, such as a first agent turn, it checks again every second until
+  they finish. After 60 seconds it starts the work anyway, so a busy Gateway can't
+  postpone maintenance indefinitely. Requests never wait for this work.
+- **Command children spawn directly.** Lean doesn't start the Linux spawn broker, the
+  same as hosts with 1 GiB or less. Commands and SQLite readers spawn from the
+  Gateway, trading some fork latency for the broker's memory. The plugin
+  native-resource broker still starts when plugins first need it.
+
 ### Lean worker memory admission
 
 In `lean`, the Gateway admits extra workers only while they fit a memory budget.

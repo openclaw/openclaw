@@ -60,8 +60,9 @@ totals.
 The Control UI checks incomplete provider usage again after 5, 10, and 20 seconds.
 Session usage refreshes as its background projection publishes progress. Until a
 cold cache has any usage data, the page shows a loading placeholder instead of
-zero totals. Available partial totals stay visible; if a refresh fails, select
-**Refresh** to try again.
+zero totals. Session rows without a usage summary show **—**, not zero; measured
+zero values remain visible as zero. Available partial totals stay visible; if a
+refresh fails, select **Refresh** to try again.
 
 In a selected session's conversation details, search ignores case and matches
 canonically equivalent composed and decomposed Unicode text. Filtering does not

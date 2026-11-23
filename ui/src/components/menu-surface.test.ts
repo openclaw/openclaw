@@ -54,7 +54,10 @@ function positioned<K extends keyof HTMLElementTagNameMap>(tag: K, x: number, si
 function observe(size: number) {
   bridge.available = true;
   const changes = vi.fn();
-  unsubscribe = subscribeNativeOverlayOcclusion(changes, () => new DOMRect(0, 0, size, size));
+  unsubscribe = subscribeNativeOverlayOcclusion(
+    (value) => changes(value !== "live"),
+    () => new DOMRect(0, 0, size, size),
+  );
   return (...values: boolean[]) =>
     expect(changes.mock.calls).toEqual(values.map((value) => [value]));
 }

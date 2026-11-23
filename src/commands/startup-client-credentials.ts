@@ -198,6 +198,21 @@ export async function prepareStartupClientCredentials(
         return;
       }
     }
+    const { getExistingOpenClawStateSchemaPath } =
+      await import("../state/openclaw-state-db-schema-policy.js");
+    const managedStatePath = getExistingOpenClawStateSchemaPath();
+    if (managedStatePath) {
+      // A managed node runtime may not take repair ownership; retrying would loop forever.
+      if (preparation === "upgrade") {
+        runtime.error(
+          "Client credential metadata upgrade deferred to the installation that owns shared state; existing credentials remain available.",
+        );
+        return;
+      }
+      throw new ClientCredentialMigrationRequiredError(
+        `Client credentials for ${managedStatePath} need repair by the installation that owns it; run openclaw doctor --fix with that installation. The managed node retries automatically.`,
+      );
+    }
     const { beginDoctorMaintenance } = await import("./doctor-maintenance.js");
     let maintenance: Awaited<ReturnType<typeof beginDoctorMaintenance>>;
     try {

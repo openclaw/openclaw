@@ -9,7 +9,7 @@ import {
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { raceWithTimeout } from "../../../packages/retry/src/index.js";
-import { captureGatewayToolCallerAssertion } from "../../agents/tools/gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
@@ -144,14 +144,8 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       return null;
     }
     // Admitted runs can use their tools while startup retains external input admission.
-    try {
-      const assertCallerCurrent = captureGatewayToolCallerAssertion(params.method);
-      if (assertCallerCurrent) {
-        assertCallerCurrent();
-        return null;
-      }
-    } catch {
-      return errorShape(ErrorCodes.FORBIDDEN, "agent tool caller authority is no longer active");
+    if (getGatewayToolCallerIdentity()?.operationalRunInstance) {
+      return null;
     }
     return !(
       params.method === "chat.send" &&

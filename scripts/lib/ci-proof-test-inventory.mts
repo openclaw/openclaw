@@ -1374,7 +1374,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/tools/nodes-tool.test.ts",
   "src/agents/tools/pdf-tool.auth-routing.test.ts",
   "src/agents/tools/pdf-tool.model-config.test.ts",
-  "src/agents/tools/pdf-tool.static-runtime.test.ts",
+  "src/agents/tools/pdf-tool.resources.test.ts",
   "src/agents/tools/pdf-tool.test.ts",
   "src/agents/tools/sessions-history-tool.anchor-budget.test.ts",
   "src/agents/tools/sessions-history-tool.test.ts",

@@ -55,12 +55,14 @@ it.skipIf(process.platform === "win32")(
     });
     await instance.startGateway();
     expect(await instance.entrypoint()).toEqual([expect.stringMatching(/^dist\/index\.m?js$/u)]);
-    // Startup work still loading at SIGTERM is not shutdown's import; stop after it settles.
+    // Retention starts independently of post-ready maintenance and loads its own worker.
+    // Let both startup paths settle before measuring shutdown's first imports.
     await vi.waitFor(
-      () =>
-        expect(instance?.logs()).toMatch(
-          /startup (?:phase|trace): post-ready\.startup-maintenance \d/u,
-        ),
+      () => {
+        const logs = instance?.logs();
+        expect(logs).toMatch(/startup (?:phase|trace): post-ready\.startup-maintenance \d/u);
+        expect(logs).toContain("Session registry maintenance completed");
+      },
       { timeout: 60_000, interval: 250 },
     );
     const child = instance.child;

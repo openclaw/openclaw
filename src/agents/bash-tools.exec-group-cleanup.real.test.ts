@@ -9,6 +9,7 @@ import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
+import { createWorkerPlacementTools } from "../worker/worker-placement-tools.js";
 import {
   registerOneShotExecScopeCleanup,
   stopSessionExecProcesses,
@@ -36,7 +37,10 @@ vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => {
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => supervisor,
 }));
-const memoryOwner = vi.hoisted(() => ({ resetBudget: () => {} }));
+const memoryOwner = vi.hoisted(() => ({
+  resetBudget: () => {},
+  setBudget: (_bytes: number) => {},
+}));
 vi.mock("../shared/global-singleton.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../shared/global-singleton.js")>();
   return {
@@ -46,6 +50,9 @@ vi.mock("../shared/global-singleton.js", async (importOriginal) => {
       if (args[0] === Symbol.for("openclaw.hostExecMemory") && owner && typeof owner === "object") {
         memoryOwner.resetBudget = () => {
           Object.assign(owner, { budget: undefined });
+        };
+        memoryOwner.setBudget = (memoryBytes) => {
+          Object.assign(owner, { budget: { memoryBytes, swapBytes: 0 } });
         };
       }
       return owner;
@@ -784,5 +791,66 @@ setTimeout(() => process.stdout.write(allocation[0] === 1 ? "memory-fit" : "corr
         aggregated: "memory-fit",
       });
     });
+  },
+);
+
+it.skipIf(process.platform !== "linux")(
+  "honors admitted Sandbox memory authority through worker exec while ignoring tool overrides",
+  async () => {
+    const cwd = tempDirs.make("worker-exec-memory-");
+    vi.stubGlobal("WORKER_DEPLOY_BUILD", true);
+    memoryOwner.setBudget(1);
+    try {
+      await withEnvAsync(testEnv(cwd), async () => {
+        for (const memoryBoundary of ["sandbox", undefined] as const) {
+          const exec = createWorkerPlacementTools({
+            policy: {
+              workspaceOnly: true,
+              readOnly: false,
+              applyPatchEnabled: false,
+              applyPatchWorkspaceOnly: true,
+              imageSanitization: {},
+            },
+            cwd,
+            containmentRoot: cwd,
+            permissionMode: "full",
+            execAuthority: { host: "gateway", security: "full", ask: "off", memoryBoundary },
+            agentId: "main",
+            sessionKey: "worker:memory-proof",
+            sessionId: "memory-proof",
+            runId: "memory-proof",
+            github: {
+              credentialScrubEnv: {},
+              localIdentityEnv: {},
+              excludedStoreNames: [],
+              managedLocalIdentity: true,
+            },
+          }).find((tool) => tool.name === "exec")!;
+          const result = await exec.execute("memory-proof", {
+            command: "printf worker-before; sleep 2; printf worker-after",
+            awaitResults: true,
+            memoryBoundary: "sandbox",
+            env: { WORKER_DEPLOY_BUILD: "true" },
+          });
+          if (memoryBoundary === "sandbox") {
+            expect(result.details).toMatchObject({
+              status: "completed",
+              exitCode: 0,
+              aggregated: "worker-beforeworker-after",
+            });
+          } else {
+            expect(result.details).toMatchObject({ status: "failed" });
+            expect(result.details).toMatchObject({
+              aggregated: expect.stringContaining("shared host exec memory budget"),
+            });
+            expect(result.details).toMatchObject({
+              aggregated: expect.not.stringContaining("worker-after"),
+            });
+          }
+        }
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   },
 );
