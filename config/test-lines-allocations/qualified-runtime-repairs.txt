@@ -2,5 +2,5 @@
 # retained updater aliases, provider auth navigation, receipt replay, and claimed-child handoff.
 # Six independently scoped source fixes share one PR allowance; original history credit stays separate.
 # CI follow-up: historical-vs-live fixtures, generic callbacks, admitted-policy assertions,
-# and retained-import coverage aligned with recorded immutable exports (+64).
-940
+# immutable-export coverage and committed Goal notification replay (+72).
+948
