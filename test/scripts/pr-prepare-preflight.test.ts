@@ -68,6 +68,9 @@ describe("scripts/pr prepare mode preflight", () => {
       linkPrWrapperDependencies(root);
       const bin = join(root, "bin");
       mkdirSync(bin);
+      writeFileSync(join(bin, "rg"), "#!/bin/sh\necho 'Unexpected rg call' >&2\nexit 99\n", {
+        mode: 0o755,
+      });
       const env = {
         HOME: root,
         TMPDIR: root,
