@@ -12,6 +12,20 @@
       "hosts": ["ai-gateway.vercel.sh"]
     }
   ],
+  "contracts": {
+    "mediaUnderstandingProviders": ["vercel-ai-gateway"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "vercel-ai-gateway": {
+      "capabilities": ["audio"],
+      "defaultModels": {
+        "audio": "openai/gpt-transcribe"
+      },
+      "autoPriority": {
+        "audio": 35
+      }
+    }
+  },
   "modelCatalog": {
     "modelsDev": {
       "vercel-ai-gateway": "vercel"

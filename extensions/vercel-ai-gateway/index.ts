@@ -3,6 +3,7 @@ import {
   runLiveProviderCatalog,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { vercelAiGatewayMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { VERCEL_AI_GATEWAY_BASE_URL, vercelAiGatewayFetchGuard } from "./models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
@@ -72,5 +73,8 @@ export default defineSingleProviderPluginEntry({
       }
       return undefined;
     },
+  },
+  register(api) {
+    api.registerMediaUnderstandingProvider(vercelAiGatewayMediaUnderstandingProvider);
   },
 });
