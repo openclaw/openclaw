@@ -1115,15 +1115,28 @@ const enSettings = {
       sessionExpired:
         "This sign-in session ended. Close this dialog and refresh Models to check the result.",
     },
-    accessTitle: "Provider access",
-    accessDescription: "Accounts for {agent}. Defaults above apply to all agents.",
+    accessTitle: "Providers",
+    accessDescription: "Accounts for {agent}. Model defaults apply to all agents.",
     search: "Search providers…",
+    searchConnected: "Filter providers…",
+    catalog: {
+      firstTitle: "Connect a provider",
+      firstDescription:
+        "Sign in with your account or add an API key. Your agents use its models right away.",
+      title: "Add a provider",
+      description: "Sign in or add an API key for {agent}.",
+      browserSignIn: "Sign in with browser",
+      token: "Access token",
+      connect: "Connect",
+      connected: "Connected",
+      showAll: "Show all {count} providers",
+      showPopular: "Show popular providers",
+      discover: "Find local models",
+    },
     noMatches: "No providers match your search.",
     updated: "Updated {time}",
     refreshing: "Refreshing…",
     disconnected: "Connect to the gateway to see configured model providers.",
-    emptyTitle: "No model providers configured",
-    emptySubtitle: "Sign in to a provider or add an API key, then refresh.",
     status: {
       ok: "Signed in",
       ready: "Ready",
@@ -1247,14 +1260,8 @@ const enSettings = {
       },
     },
     readiness: {
-      title: "AI setup",
-      heading: "Set up a model",
       signedInNoModels:
         "You’re signed in, but this account has no usable models. Choose another provider or account.",
-      notConfigured: "Add a provider and test the model OpenClaw will use.",
-      noModels: "No models available",
-      modelRequired: "Model required",
-      chooseProvider: "Choose another provider",
     },
     logout: {
       action: "Sign out",
@@ -1324,7 +1331,9 @@ const enSettings = {
       clearFallbacks: "No fallback model (remove all {count})",
       moreFallbackOne: "1 more fallback after this one",
       moreFallbacks: "{count} more fallbacks after this one",
-      selectModel: "Select a model",
+      selectModel: "Not set",
+      agentModel: "{agent} uses {model}, set on the agent.",
+      moreSettings: "More settings",
       discoveringMore: "Looking for more models in the background…",
       savedDiscoveringMore: "Saved. Looking for more models in the background…",
       discoverFailed: "Couldn’t load more models. Try again.",
@@ -1354,7 +1363,7 @@ const enSettings = {
       unverifiedHint:
         "Check this app’s custom launch command on the computer running OpenClaw, then check again.",
       notDetected:
-        "Not found on the computer running OpenClaw: {names}. Install one, then check again.",
+        "None found on the computer running OpenClaw. Supported apps: {names}. Install one, then check again.",
       disabledHint: "Enable this app to include its models in the picker.",
       signInHint:
         "Open {name} on the computer running OpenClaw and check its sign-in, then check again.",

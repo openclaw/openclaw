@@ -316,7 +316,7 @@ src/agents/command/post-run.ts	9
 src/agents/command/session-store.ts	8
 src/agents/command/session.ts	8
 src/agents/command/transcript-persistence.ts	4
-src/agents/cron-creator-authority-context.ts	41
+src/agents/cron-creator-authority-context.ts	39
 src/agents/embedded-agent-runner/cli-backend-dispatch-transcript.ts	3
 src/agents/embedded-agent-runner/cli-backend-dispatch.ts	3
 src/agents/embedded-agent-runner/compact.queued-execution.ts	8
@@ -509,7 +509,7 @@ src/agents/tools/computer-tool-request.ts	1
 src/agents/tools/cron-tool-write.ts	1
 src/agents/tools/cron-tool.ts	1
 src/agents/tools/embedded-gateway-stub.ts	2
-src/agents/tools/gateway-caller-context.ts	5
+src/agents/tools/gateway-caller-context.ts	2
 src/agents/tools/image-generate-review-actions.ts	7
 src/agents/tools/media-generate-background-completion.ts	4
 src/agents/tools/media-generate-background-shared.ts	1
@@ -946,7 +946,7 @@ src/gateway/server-methods/nodes.invoke.ts	2
 src/gateway/server-methods/plugin-approval.ts	3
 src/gateway/server-methods/plugins-mutations.ts	1
 src/gateway/server-methods/projects-session-store.ts	2
-src/gateway/server-methods/request-authorization.ts	7
+src/gateway/server-methods/request-authorization.ts	6
 src/gateway/server-methods/requester-model-catalog.ts	2
 src/gateway/server-methods/session-active-runs.ts	4
 src/gateway/server-methods/session-activity-summary.ts	4

@@ -18,13 +18,13 @@ const suite = createControlUiE2eSuite({
 });
 const plugin: ThemeCatalogEntry = {
   id: "winter/evergreen",
-  name: "Evergreen",
+  name: "Northern Lights Evergreen",
   description: "Forest green with warm gold controls.",
   source: "plugin",
   pluginId: "winter",
   modes: ["light", "dark"],
   definition: {
-    name: "Evergreen",
+    name: "Northern Lights Evergreen",
     description: "Forest green with warm gold controls.",
     dark: createThemePaletteFixture({
       background: "#10251c",
@@ -191,5 +191,22 @@ suite.define(() => {
     await failure.getByRole("button", { name: "Retry", exact: true }).click();
     await expect.poll(() => failure.count()).toBe(0);
     expect((await colors(plugin.id)).accent).toBe("rgb(37, 113, 70)");
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const label = card(plugin.id).locator(".settings-theme-card__label");
+    await expect
+      .poll(() =>
+        label.evaluate((element) => {
+          const name = document.createRange();
+          name.selectNodeContents(element);
+          const bounds = element.getBoundingClientRect();
+          const lines = [...name.getClientRects()];
+          return (
+            lines.length > 1 &&
+            lines.every((line) => line.left >= bounds.left - 1 && line.right <= bounds.right + 1)
+          );
+        }),
+      )
+      .toBe(true);
   });
 });

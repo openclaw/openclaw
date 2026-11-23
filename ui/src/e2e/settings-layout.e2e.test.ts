@@ -134,7 +134,7 @@ suite.define(() => {
         const settingsResponses: Response[] = [];
         const stopCapturing: Array<() => void> = [];
         const settingsOnlyCopy = [
-          "Global model defaults and provider access for your agents.",
+          "Connect providers and choose the models your agents use.",
           "Find saved accounts or set up a local model for {agent}. This changes only this agent’s model, not the defaults for other agents.",
         ];
         // Keep each cold-boot document alive through the final assertions: replacing
@@ -168,10 +168,11 @@ suite.define(() => {
           stopCapturing.push(() => page.off("response", captureScript));
           await page.goto(`${suite.server.baseUrl}${pathname}`);
           const ready = isSettings
-            ? page.getByRole("heading", { name: /^Provider access\b/ })
+            ? page.getByRole("heading", { name: /^Providers\b/ })
             : page.locator(".agent-chat__composer-combobox textarea");
           await ready.waitFor();
           if (isSettings) {
+            await page.locator("[data-models-more-settings]").click();
             expect(await page.locator(".model-providers__defaults").textContent()).toContain(
               "Utility model",
             );

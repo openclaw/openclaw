@@ -3,6 +3,9 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
+import { NODE_SERVICE_KIND } from "../../daemon/constants.js";
+import { resolveNodeService } from "../../daemon/node-service.js";
+import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import { getScopedDatabaseEngineSelection } from "../../infra/database-engine/context.js";
 import { resolveDatabaseFamilyEngines } from "../../infra/database-engine/registry.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
@@ -18,6 +21,7 @@ import {
   resolveUpdateStateTargetVersion,
 } from "../../infra/update-candidate-state.versions.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
+import { resolveUpdateSqlitePath } from "../../infra/update-database-path.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
 import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
@@ -614,5 +618,38 @@ export async function assertPendingMigrationsAdmitted(params: {
   throw new UpdatePreMutationError(
     "database-migration-owner-live",
     `This update must migrate ${stores}, which needs exclusive access to the state, but a Gateway (PID ${owner.pid}) still owns it and this update does not stop that Gateway. Stop it through its service manager, or press Ctrl+C in its terminal, then rerun ${formatCliCommand("openclaw update", params.env)}. No package replacement was attempted.`,
+  );
+}
+
+/**
+ * Update Doctor takes native exclusion of the shared state on every activation, and
+ * updates stop Gateways, not node services. A running node host keeps that state open.
+ */
+export async function assertNodeServiceReleasesUpdateState(params: {
+  env: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+}): Promise<void> {
+  const service = resolveNodeService();
+  const options = { timeoutMs: params.timeoutMs };
+  // Unreadable service state leaves the decision to Doctor's own admission.
+  const [command, runtime] = await Promise.all([
+    service.readCommand(params.env, options).catch(() => null),
+    service.readRuntime(params.env, options).catch(() => undefined),
+  ]);
+  // The service resolves its state without this CLI's selectors; aliases name one directory.
+  const serviceEnv = mergeGatewayServiceEnv(params.env, command);
+  if (
+    !command ||
+    runtime?.status !== "running" ||
+    serviceEnv.OPENCLAW_SERVICE_KIND !== NODE_SERVICE_KIND ||
+    resolveUpdateSqlitePath(resolveStateDir(serviceEnv)) !==
+      resolveUpdateSqlitePath(resolveStateDir(params.env))
+  ) {
+    return;
+  }
+  const pid = runtime.pid ? ` (PID ${runtime.pid})` : "";
+  throw new UpdatePreMutationError(
+    "database-migration-owner-live",
+    `This update's Doctor needs exclusive access to ${resolveOpenClawStateSqlitePath(params.env)}, but the node host service${pid} keeps it open and updates do not stop node services. Run ${formatCliCommand("openclaw node stop", params.env)}, rerun ${formatCliCommand("openclaw update", params.env)}, then run ${formatCliCommand("openclaw node start", params.env)}. Nothing was stopped or replaced.`,
   );
 }

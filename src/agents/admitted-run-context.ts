@@ -443,14 +443,13 @@ export function captureAdmittedRunActiveAssertion(
     );
   };
   const source = captureAgentRunDelegatedSourceAssertion(authority, refuse);
-  if (!lease || lease.foregroundClosed || lease.authority !== authority || !source) {
+  if (!lease || lease.foregroundClosed || !source) {
     return undefined;
   }
   const assertLocalCurrent = (assertSource: () => void) => {
     if (
       signal?.aborted ||
       context.operationalRunInstance !== operationalRunInstance ||
-      delegatedAuthorityLeases.get(context) !== lease ||
       lease.foregroundClosed
     ) {
       refuse();
@@ -458,11 +457,9 @@ export function captureAdmittedRunActiveAssertion(
     assertSource();
   };
   return Object.assign(
-    composeSessionSourceAssertion(
-      [source.assertCurrent],
-      scopeOperatorAccessDecisions(assertLocalCurrent),
-      { synchronousCheck: true },
-    ),
+    composeSessionSourceAssertion([source.assertCurrent], assertLocalCurrent, {
+      synchronousCheck: true,
+    }),
     {
       assertScopeCurrent: () => assertLocalCurrent(source.assertBinding),
     },
@@ -569,13 +566,12 @@ export function prepareAgentRunAdmission(params: {
   if (operatorAuthority !== undefined) {
     assertAdmittedRunOperatorAuthority(operatorAuthority);
   }
-  const assertOperatorCurrent = operatorAuthority?.assertCurrent;
   const releaseOperatorAuthority = operatorAuthority?.retain?.();
   let sourceFailure: Error | undefined;
   const assertSourceCurrent =
-    (sourceAssertion || assertOperatorCurrent) &&
+    sourceAssertion &&
     composeSessionSourceAssertion(
-      [sourceAssertion, assertOperatorCurrent],
+      [sourceAssertion],
       scopeOperatorAccessDecisions((assertSources: () => void) => {
         if (sourceFailure) {
           throw sourceFailure;

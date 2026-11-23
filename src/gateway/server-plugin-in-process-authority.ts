@@ -142,7 +142,6 @@ export function captureOperatorToolGatewayContinuationContextInternal(
   }
   // Use the normal dispatch owner to intersect scopes and validate the live caller
   // before transferring its source. A cleanup scope alone retains request lifetime.
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
   const method = options?.request?.method ?? "agent";
   if (options?.request && method !== "plugins.reload") {
     throw new Error("Request-bound continuation only supports plugin reload");
@@ -168,7 +167,9 @@ export function captureOperatorToolGatewayContinuationContextInternal(
       captured?.authority.assertCurrent();
       resolved.assertContextCurrent();
       resolved.assertInvocationCurrent();
-      assertCallerCurrent?.(method);
+      for (const signal of caller?.approvalSignals ?? []) {
+        signal.throwIfAborted();
+      }
       const continuationScope = runWithOperatorToolGatewayCleanupContext(() => ({
         ...getPluginRuntimeGatewayRequestScope(),
         client: captured

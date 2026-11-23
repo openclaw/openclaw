@@ -218,7 +218,6 @@ it("restricts invited members to their own approvals across generic lookup, reso
               body: { id: approval.record.id, decision: "deny" },
               client: reviewer,
               context,
-              transport: "websocket",
             }).invoke();
             expect(outcome).toMatchObject({ ok: true });
             expect(await approval.decision).toBe("deny");

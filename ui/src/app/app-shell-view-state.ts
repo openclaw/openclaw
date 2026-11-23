@@ -62,6 +62,7 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   readonly runtime: ApplicationRuntime | undefined;
   readonly activeSessionKey: string;
   readonly custodianMinimizeRequestId: number;
+  readonly firstUse: boolean;
   readonly desktopNavigationExpanded: boolean;
   readonly nativeHistoryState: () => NativeHistoryState;
   readonly navDrawerOpen: boolean;
@@ -169,7 +170,6 @@ export function readShellView(host: ShellViewHost) {
       activeRoute === "cron");
   const settingsTakeover = settingsRoute && !host.onboardingMode && !nativeEmbed;
   const onboarding = host.onboardingMode;
-  const memoryImportActive = onboarding && activeRoute !== "custodian";
   // Drawer motion invalidates only the bindings that read its presentation.
   const navDrawerOpen = () => {
     host.navigationRevision();
@@ -288,6 +288,7 @@ export function readShellView(host: ShellViewHost) {
         : APP_ROUTE_IDS.filter((routeId) => routeId !== "templates"),
     sessionKey: host.routeState.sessionRouteNotice ? "" : host.activeSessionKey,
     connected: gatewayConnected,
+    communityInviteAllowed: host.shellNavigation.communityInviteAllowed,
     connectionStatus,
     footerControlsOverlap: host.shellLayout.footerControlsOverlap,
     storedOutboxes: host.storedOutboxes,
@@ -369,7 +370,11 @@ export function readShellView(host: ShellViewHost) {
     onRefresh: host.refreshControlUi,
     onNavigate: host.shellNavigation.navigate,
   };
+  const registeredPluginTitle = () => pluginPageLabel(context, host.routeState.location);
   const settingsSidebarProps: SettingsSidebarFallbackProps = {
+    get embeddedPluginTitle() {
+      return nativeEmbed && activeRoute === "plugin" ? registeredPluginTitle() : undefined;
+    },
     presentation: nativeEmbed ? (embedSettingsRoot ? "embed-list" : "embed-page") : "sidebar",
     activeRouteId: activeRoute,
     pluginTabs: gatewaySnapshot.hello?.controlUiTabs?.filter((tab) => tab.placement === "settings"),
@@ -415,6 +420,7 @@ export function readShellView(host: ShellViewHost) {
     desktopPanelAvailable,
     homePanelAvailable,
     custodianPanelAvailable,
+    firstUse: host.firstUse,
     activeRoute,
     workboardLayout,
     sessionRoute,
@@ -427,7 +433,6 @@ export function readShellView(host: ShellViewHost) {
     embedSettings,
     settingsTakeover,
     onboarding,
-    memoryImportActive,
     get navDrawerOpen() {
       return navDrawerOpen();
     },
@@ -443,8 +448,10 @@ export function readShellView(host: ShellViewHost) {
       // The brand alone: "Ask OpenClaw" has no centered room beside History's three-button pill.
       return activeRoute === "custodian"
         ? currentThemeBranding().brandName
-        : pageTitleForRoute(activeRoute, context.nativeDeviceSettings?.snapshot, () =>
-            pluginPageLabel(context, host.routeState.location),
+        : pageTitleForRoute(
+            activeRoute,
+            context.nativeDeviceSettings?.snapshot,
+            registeredPluginTitle,
           );
     },
     get navCollapsed() {
