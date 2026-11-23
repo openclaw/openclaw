@@ -136,6 +136,7 @@ export function createChatSendMessageInjectionStarter(params: {
   const { agentId, cfg, entry, sessionKey, storePath, clientRunId, resolvedSessionModel } =
     params.session;
   const { ctx, isInternalTextSlashCommandTurn, replyOptionImages, replyOptionMedia } = params.turn;
+  let originalMediaUrls: Array<string | undefined> | undefined;
   return async function start(
     assertSendNowCurrent?: () => void,
   ): Promise<ReplyMessageInjectionAttempt | undefined> {
@@ -284,6 +285,8 @@ export function createChatSendMessageInjectionStarter(params: {
         });
         return undefined;
       }
+      // Staging can rewrite URLs while keeping the original attachment slots.
+      originalMediaUrls ??= ctx.media?.map((fact) => fact.url);
       if (ctx.media?.some((fact) => fact.path) && !hasStagedMediaFacts(ctx.media)) {
         phase?.mark("detail.run_admission.steer_attachments");
         const { stageReplyMedia } = await import("../../auto-reply/reply/stage-reply-media.js");
@@ -308,7 +311,9 @@ export function createChatSendMessageInjectionStarter(params: {
       let text = baseText;
       if (ctx.media?.length || documentContext || params.documentContext?.status === "failed") {
         const mediaNote = buildInboundMediaNoteProjection(ctx);
-        const describedRefs = new Set(mediaNote.media.map((fact) => fact.url));
+        const describedRefs = new Set(
+          mediaNote.mediaIndexes.map((index) => originalMediaUrls?.[index]),
+        );
         const steerBody = stripOffloadedMediaMarkers(
           baseText,
           params.offloadedRefs?.filter((ref) => describedRefs.has(ref.mediaRef)) ?? [],
