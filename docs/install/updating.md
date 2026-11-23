@@ -2155,12 +2155,12 @@ When the new release would migrate state, its check stops that update before the
 switched, leaves the Gateway untouched, and prints a one-time rebuild to run from the checkout:
 
 ```sh
-git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force; openclaw gateway start
+git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force || openclaw gateway start
 ```
 
 The rebuild moves the service back to the checkout, which ends the startup failure above. The
-rebuilt Gateway migrates state when the service starts, and `openclaw gateway start` waits until
-it is ready.
+reinstalled service starts the rebuilt Gateway, which migrates state at boot. If an earlier step
+fails, the command starts the previous service again.
 Later `openclaw update` runs use the rebuilt checkout's updater; their first trial falls back to
 the rebuilt checkout. The older layout's `git-install/lib/node_modules/openclaw` link and the
 release it names stay on disk (about 4.6 GiB) and are no longer used. To free that space, remove

@@ -74,7 +74,7 @@ it("refuses a schema change for the early release updater and names the rebuild"
   // The early updater redacts state and home paths out of this output; the step names none.
   const rebuild = refusal?.split("\n").at(-1);
   expect(rebuild).toBe(
-    "git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force; openclaw gateway start",
+    "git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force || openclaw gateway start",
   );
   expect(rebuild).not.toMatch(/[\s~]\//u);
 });
