@@ -167,6 +167,13 @@
           "exactCauses": true
         }
       ]
+    },
+    {
+      "targetVersion": "2026.11.8",
+      "childRole": "productPerformance",
+      "jobName": "Kova mock provider performance",
+      "reason": "Operator accepts memory threshold findings and short-lived CPU threshold spikes for this release; latency, correctness, crashes, isolation, data integrity and execution/evidence failures remain blocking. Preserve raw measurements.",
+      "aggregates": []
     }
   ]
 }
