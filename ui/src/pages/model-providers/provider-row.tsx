@@ -612,7 +612,12 @@ export function ProviderRow(props: ProviderRowProps) {
           <Show when={card().voiceApiKeyRequired}>
             <CredentialRow
               title={t("modelProviders.voice.title")}
-              detail={t("modelProviders.voice.detail", { provider: providerName(card()) })}
+              detail={t(
+                card().id === "openai"
+                  ? "modelProviders.voice.detail"
+                  : "modelProviders.voice.providerDetail",
+                { provider: providerName(card()) },
+              )}
               action={<SettingsStatus kind="warn" label={t("modelProviders.voice.status")} />}
             />
           </Show>

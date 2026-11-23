@@ -82,13 +82,13 @@ function mount(options: Parameters<typeof MessageActions>[0]["options"] = {}) {
 it("uses the failed speech provider and the settings agent of the pane that played it", async () => {
   const selectAgent = vi.fn();
   const navigate = vi.fn();
+  const openAiCatalog = { speech: { providers: [{ id: "openai", apiKeyRequired: true }] } };
+  const betaCatalog = createDeferred<typeof openAiCatalog>();
   const scopedRequest = vi.fn(async (method: string, params?: { sessionKey?: string }) => {
     if (method === "talk.catalog") {
-      return {
-        speech: {
-          providers: [{ id: "openai", apiKeyRequired: params?.sessionKey === "agent:beta:main" }],
-        },
-      };
+      return params?.sessionKey === "agent:beta:main"
+        ? betaCatalog.promise
+        : { speech: { providers: [{ id: "xai", apiKeyRequired: true }] } };
     }
     throw new GatewayRequestError({
       code: "UNAVAILABLE",
@@ -106,7 +106,12 @@ it("uses the failed speech provider and the settings agent of the pane that play
   );
   readButton(beta).click();
   await waitForSolid(() =>
-    expect(beta.getByRole("status").textContent).toContain("OpenAI speech needs an API key"),
+    expect(scopedRequest).toHaveBeenCalledWith("talk.catalog", { sessionKey: "agent:beta:main" }),
+  );
+  expect(beta.queryByRole("status")).toBeNull();
+  betaCatalog.resolve(openAiCatalog);
+  await waitForSolid(() =>
+    expect(beta.getByRole("status").textContent).toContain("Read aloud needs an OpenAI API key."),
   );
   expect(alpha.queryByRole("button", { name: "Configure" })).toBeNull();
   beta.getByRole<HTMLButtonElement>("button", { name: "Configure" }).click();

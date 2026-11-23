@@ -35,7 +35,9 @@ it("shows voice guidance only on the recording with a captured key failure", asy
       );
       expect(earlier?.textContent).toBeDefined();
       expect(earlier?.textContent).not.toContain("transcribe this recording");
-      expect(failed?.textContent).toContain("Couldn’t transcribe this recording with OpenAI");
+      expect(failed?.textContent).toContain(
+        "Couldn’t transcribe this recording. It needs an OpenAI API key.",
+      );
     });
   } finally {
     transcript.dispose();

@@ -13,12 +13,12 @@ export type VoiceApiKeyNoticeProps = {
   class?: string;
 };
 
-export function voiceApiKeyTitle(kind: VoiceApiKeyNoticeProps["kind"], provider: string): string {
-  return t(`chat.voiceApiKey.${kind}`, { provider: providerDisplayLabel(provider) });
-}
-
-export function voiceApiKeyDetail(): string {
-  return t("chat.voiceApiKey.detail");
+export function voiceApiKeyMessage(kind: VoiceApiKeyNoticeProps["kind"], provider: string): string {
+  const apiKey =
+    provider === "openai"
+      ? t("chat.voiceApiKey.openaiKey")
+      : t("chat.voiceApiKey.providerKey", { provider: providerDisplayLabel(provider) });
+  return t(`chat.voiceApiKey.${kind}`, { apiKey });
 }
 
 export function VoiceApiKeyNotice(props: VoiceApiKeyNoticeProps) {
@@ -26,7 +26,6 @@ export function VoiceApiKeyNotice(props: VoiceApiKeyNoticeProps) {
     <InlineAlert
       tone="warning"
       class={props.class}
-      title={voiceApiKeyTitle(props.kind, props.provider)}
       onDismiss={props.onDismiss}
       action={
         props.onConfigure ? (
@@ -40,7 +39,7 @@ export function VoiceApiKeyNotice(props: VoiceApiKeyNoticeProps) {
         ) : undefined
       }
     >
-      {voiceApiKeyDetail()}
+      {voiceApiKeyMessage(props.kind, props.provider)}
     </InlineAlert>
   );
 }

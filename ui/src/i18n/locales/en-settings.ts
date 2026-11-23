@@ -1246,6 +1246,8 @@ const enSettings = {
       title: "Talk, speech, and transcription",
       detail:
         "Sign in with ChatGPT doesn’t include {provider} voice. API usage is billed separately from your ChatGPT plan.",
+      providerDetail:
+        "Signing in with {provider} doesn’t include voice. Voice API usage is billed separately.",
       status: "API key needed",
     },
     probe: {

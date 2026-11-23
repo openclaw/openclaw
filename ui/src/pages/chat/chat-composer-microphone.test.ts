@@ -301,8 +301,8 @@ it("points a sign-in without voice to its provider's API key", async () => {
     onOpenTalkSettings: vi.fn(),
     onOpenDictationSettings: vi.fn(),
   });
-  const voice = "OpenAI voice needs an API key";
-  const talk = "OpenAI Talk needs an API key";
+  const voice = "Talk and Dictation need an OpenAI API key.";
+  const talk = "Talk needs an OpenAI API key.";
   // Tapping Talk explains the missing key in place instead of opening the picker.
   await waitForSolid(() => {
     button(v.root, copy("startVoiceInput")).click();

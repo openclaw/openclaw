@@ -4,12 +4,13 @@ import { en } from "./en.ts";
 const enChatVoiceApiKey = {
   chat: {
     voiceApiKey: {
-      talk: "{provider} Talk needs an API key",
-      dictation: "{provider} dictation needs an API key",
-      voice: "{provider} voice needs an API key",
-      speech: "{provider} speech needs an API key",
-      recording: "Couldn’t transcribe this recording with {provider}",
-      detail: "Sign in with ChatGPT doesn’t include voice.",
+      talk: "Talk needs {apiKey}.",
+      dictation: "Dictation needs {apiKey}.",
+      voice: "Talk and Dictation need {apiKey}.",
+      speech: "Read aloud needs {apiKey}.",
+      recording: "Couldn’t transcribe this recording. It needs {apiKey}.",
+      openaiKey: "an OpenAI API key",
+      providerKey: "an API key for {provider}",
     },
   },
 } satisfies TranslationMap;

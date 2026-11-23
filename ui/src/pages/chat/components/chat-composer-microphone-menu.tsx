@@ -8,7 +8,7 @@ import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { MicrophonePickerProps } from "../composer-microphone-picker.ts";
 import { type RealtimeTalkDeviceIssue, realtimeTalkDeviceIssueMessage } from "../talk/input.ts";
-import { voiceApiKeyDetail, voiceApiKeyTitle } from "../voice-api-key-notice.tsx";
+import { voiceApiKeyMessage } from "../voice-api-key-notice.tsx";
 
 export function MicrophoneMenu(props: {
   picker: MicrophonePickerProps;
@@ -34,8 +34,8 @@ export function MicrophoneMenu(props: {
           ? {
               key,
               status,
-              label: voiceApiKeyTitle(key === "realtime" ? "talk" : "dictation", provider),
-              unavailableReason: voiceApiKeyDetail(),
+              label: voiceApiKeyMessage(key === "realtime" ? "talk" : "dictation", provider),
+              unavailableReason: undefined,
               canConfigure: true,
               provider,
             }
@@ -65,7 +65,7 @@ export function MicrophoneMenu(props: {
         capabilities = [
           {
             ...capabilities[1]!,
-            label: voiceApiKeyTitle("voice", capabilities[1]!.provider),
+            label: voiceApiKeyMessage("voice", capabilities[1]!.provider),
           },
         ];
       }
@@ -201,7 +201,7 @@ export function MicrophoneMenu(props: {
                 ) : null}
                 <span>{capability.label}</span>
               </strong>
-              <span>{detail}</span>
+              {detail && <span>{detail}</span>}
             </span>
           ),
           details: capability.canConfigure ? (
