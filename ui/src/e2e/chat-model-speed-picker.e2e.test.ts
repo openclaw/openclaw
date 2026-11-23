@@ -89,7 +89,10 @@ suite.define(() => {
           expect(await gptRow.locator(".chat-controls__model-speed").textContent()).toBe(
             "Standard",
           );
-          expect(await remembered.textContent()).toContain("Fast · Last used");
+          expect(await remembered.textContent()).toBe("Use Fast");
+          expect(await remembered.getAttribute("aria-label")).toBe(
+            "Use Fast on GPT-5.5 (last used)",
+          );
           expect(await patches()).not.toContainEqual(expect.objectContaining({ fastMode: true }));
           if (chooseFast) {
             await remembered.press("Enter");

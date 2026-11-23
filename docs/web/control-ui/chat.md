@@ -894,7 +894,7 @@ During a model change, model and effort controls wait for the new model’s supp
 settings. Fast mode and context-window changes remain unavailable during an active
 reply. Read-only, disconnected, and unavailable-backend protections still apply.
 In an existing chat, the model picker shows the speed that a model choice will use.
-An earlier Fast choice can appear beside the model as a **Last used** shortcut while
+An earlier Fast choice can appear beside the model as a **Use Fast** shortcut while
 the chat is open. It only applies if you select it, and is not saved across reloads.
 Sending does not reload the cached model catalog; catalog loading and refresh
 feedback stays in the picker.

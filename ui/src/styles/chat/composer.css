@@ -2788,27 +2788,32 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   color: var(--muted);
 }
 
-.chat-controls__model-speed,
-.chat-controls__model-last-speed {
+.chat-controls__model-speed-choices {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   flex: 0 0 auto;
   order: 1;
+  margin-inline-start: auto;
+  padding-inline: 8px 10px;
   white-space: nowrap;
   font-size: 11px;
   line-height: 1.25;
 }
 
 .chat-controls__model-speed {
-  margin-inline-start: auto;
-  padding-inline: 8px;
   color: var(--muted);
 }
 
 .chat-controls__model-last-speed {
   color: var(--text);
   background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 3px 6px;
+  border: 0;
+  border-radius: var(--radius-menu-item);
+  min-height: 28px;
+  padding-inline: 7px;
+  font: inherit;
+  font-weight: 600;
   cursor: var(--cursor-action);
 }
 

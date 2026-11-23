@@ -84,7 +84,7 @@ export function createChatModelPickerSpeed(read: () => PickerState) {
         lastUsed: eligible
           ? {
               value: remembered,
-              label: t("chat.modelControls.rememberedSpeed", { speed: speedLabel(remembered) }),
+              label: speedLabel(remembered),
               disabled: state.disabled,
             }
           : undefined,

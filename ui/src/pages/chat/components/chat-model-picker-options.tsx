@@ -444,28 +444,32 @@ function ModelOptionButton(
         </span>
       </span>
       <Show when={!blocked() && props.speed?.label}>
-        {(label) => <span class="chat-controls__model-speed">{label()}</span>}
-      </Show>
-      <Show when={!blocked() && props.speed?.lastUsed}>
-        {(lastUsed) => (
-          <button
-            type="button"
-            class="chat-controls__model-last-speed"
-            data-chat-model-last-speed
-            aria-label={t("chat.modelControls.selectRememberedSpeed", {
-              model: props.presentation.modelLabel,
-              speed: lastUsed().label,
-            })}
-            disabled={lastUsed().disabled}
-            onKeyDown={(event) => {
-              if (event.key === " " || event.key === "Enter") {
-                event.stopPropagation();
-              }
-            }}
-            onClick={(event) => props.onSelect(props.entry, event, lastUsed().value)}
-          >
-            {lastUsed().label}
-          </button>
+        {(label) => (
+          <span class="chat-controls__model-speed-choices">
+            <span class="chat-controls__model-speed">{label()}</span>
+            <Show when={props.speed?.lastUsed}>
+              {(lastUsed) => (
+                <button
+                  type="button"
+                  class="chat-controls__model-last-speed"
+                  data-chat-model-last-speed
+                  aria-label={t("chat.modelControls.selectRememberedSpeed", {
+                    model: props.presentation.modelLabel,
+                    speed: lastUsed().label,
+                  })}
+                  disabled={lastUsed().disabled}
+                  onKeyDown={(event) => {
+                    if (event.key === " " || event.key === "Enter") {
+                      event.stopPropagation();
+                    }
+                  }}
+                  onClick={(event) => props.onSelect(props.entry, event, lastUsed().value)}
+                >
+                  {t("chat.modelControls.useRememberedSpeed", { speed: lastUsed().label })}
+                </button>
+              )}
+            </Show>
+          </span>
         )}
       </Show>
       <span class="chat-controls__model-favorite-slot">
