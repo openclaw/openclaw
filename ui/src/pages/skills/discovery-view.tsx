@@ -281,6 +281,11 @@ export function SkillDiscovery(props: SkillsProps) {
     );
   });
   const hasInstalled = createMemo(() => catalog().installed.length > 0);
+  // Retried taxonomy can change overflow without resizing the retained strip.
+  const chipsRevision = createMemo(() => ({
+    categories: props.readCategories()?.categories,
+    installed: hasInstalled(),
+  }));
   // During a search, installed matches that ClawHub also returned stay in the registry's ranking.
   const installedRows = createMemo(() =>
     scope() === "installed" ? installed() : installed().filter((entry) => !entry.remote),
@@ -386,7 +391,7 @@ export function SkillDiscovery(props: SkillsProps) {
           {props.state.clawhubInstallMessage!.text}
         </InlineAlert>
       )}
-      <CatalogDiscoveryChips label={t("skillsPage.categories")}>
+      <CatalogDiscoveryChips label={t("skillsPage.categories")} revision={chipsRevision()}>
         <CatalogDiscoveryChip
           icon={<Icon name="layoutGrid" />}
           active={scope() === "all" && !category()}
