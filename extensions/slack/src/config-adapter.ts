@@ -12,6 +12,21 @@ import {
   type SlackConfigAccessorAccount,
 } from "./accounts.js";
 import { SLACK_CHANNEL } from "./setup-shared.js";
+import { parseSlackTarget } from "./target-parsing.js";
+
+function formatSlackAllowFrom(allowFrom: Array<string | number>): string[] {
+  return formatAllowFromLowercase({ allowFrom }).map((entry) => {
+    try {
+      const target = parseSlackTarget(entry.replace(/^slack:(?=user:)/, ""));
+      if (target?.kind === "user" && !target.teamId && /^[uw][a-z0-9]+$/.test(target.id)) {
+        return target.id;
+      }
+    } catch {
+      // Preserve invalid entries for the caller's policy handling.
+    }
+    return entry;
+  });
+}
 
 export const slackBaseConfigAdapter = createScopedChannelConfigAdapter<
   ResolvedSlackAccount,
@@ -24,6 +39,6 @@ export const slackBaseConfigAdapter = createScopedChannelConfigAdapter<
   defaultAccountId: resolveDefaultSlackAccountId,
   clearBaseFields: ["botToken", "appToken", "userToken", "signingSecret", "name"],
   resolveAllowFrom: (account) => account.allowFrom,
-  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
+  formatAllowFrom: formatSlackAllowFrom,
   resolveDefaultTo: (account) => account.defaultTo,
 });

@@ -29,6 +29,28 @@ it("writes canonical enabled entries for setup-generated channel allowlists", ()
 });
 
 describe("slackConfigAdapter", () => {
+  it("normalizes typed Slack users to current sender IDs", () => {
+    expect(
+      slackConfigAdapter.formatAllowFrom?.({
+        cfg: {},
+        accountId: "default",
+        allowFrom: [
+          "user:U123OWNER",
+          "slack:user:W456OWNER",
+          "team:T123:user:U789OWNER",
+          "channel:C123",
+          "user:B123BOT",
+        ],
+      }),
+    ).toEqual([
+      "u123owner",
+      "w456owner",
+      "team:t123:user:u789owner",
+      "channel:c123",
+      "user:b123bot",
+    ]);
+  });
+
   it("clears user-identity credentials when deleting the root account", () => {
     const cfg = config({
       identity: "user",
