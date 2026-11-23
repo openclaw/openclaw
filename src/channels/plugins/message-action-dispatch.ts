@@ -646,12 +646,15 @@ export async function dispatchChannelMessageAction(
           resolveBareTargetChannelNamespace(authorizedActionContext.params[key], plugin),
         );
       if (hasNamespaceTarget) {
-        const namespaceReadMatch = resolveMessageActionConversationReadGate(gateParams);
-        // Unfenced bundled aliases may defer identity proof, not provider/account admission.
+        // Bundled names need source context here and exact-recipient proof after lookup.
         enforceMessageActionConversationReadMatch(
           gateParams,
-          namespaceReadMatch === true ||
-            (!prepared.assertReadAuthorityCurrent && typeof namespaceReadMatch === "function"),
+          (prepared.enforcement.pluginTrust === "bundled" &&
+            !prepared.assertReadAuthorityCurrent &&
+            hasMatchingCurrentProviderContext(authorizedActionContext) &&
+            hasMatchingCurrentAccountContext(authorizedActionContext) &&
+            hasCurrentConversationTarget(authorizedActionContext)) ||
+            resolveMessageActionConversationReadGate(gateParams) === true,
         );
         if (!admitAction()) {
           return null;

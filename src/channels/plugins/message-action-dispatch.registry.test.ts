@@ -264,42 +264,55 @@ describe("official plugin read-only authority", () => {
     expect(listGroups).toHaveBeenCalledOnce();
   });
 
-  it("admits bundled namespace lookup before directory I/O without rejecting deferred alias proof", async () => {
-    const fixture = registerOfficial({
-      origin: "bundled",
-      trusted: false,
-      fenced: false,
-      gates: [],
-    });
-    const matchAlias = vi.fn(async () => true);
-    const listGroups = vi.fn(async () => [
-      { kind: "group" as const, id: "channel:resolved", name: fixture.plugin.id },
-    ]);
-    fixture.plugin.directory = { listGroups };
-    fixture.plugin.actions.messageActionTargetAliases = {
-      read: {
-        deliveryTargetAliases: ["channelId"],
-        resolveDeliveryTarget: ({ args }) =>
-          typeof args.channelId === "string" ? args.channelId : undefined,
-        matchesCurrentConversationAsync: matchAlias,
-      },
-    };
-    fixture.register();
-    await expect(
-      fixture.dispatch({
-        channelInferred: true,
-        params: { channelId: fixture.plugin.id },
-        toolContext: { currentChannelProvider: "other-provider", currentChannelId: "current" },
-      }),
-    ).rejects.toThrow(exactConversation);
-    expect(listGroups).not.toHaveBeenCalled();
-    expect(fixture.handleAction).not.toHaveBeenCalled();
-    await expect(
-      fixture.dispatch({ channelInferred: true, params: { channelId: fixture.plugin.id } }),
-    ).resolves.toBe(receipt);
-    expect(listGroups).toHaveBeenCalledOnce();
-    expect(matchAlias).toHaveBeenCalledOnce();
-  });
+  it.each([false, true])(
+    "keeps bundled namespace lookup behind context admission (deferred alias=%s)",
+    async (deferredAlias) => {
+      const fixture = registerOfficial({
+        origin: "bundled",
+        trusted: false,
+        fenced: false,
+        gates: [],
+      });
+      const matchAlias = vi.fn(async () => true);
+      const listGroups = vi.fn(async () => [
+        { kind: "group" as const, id: "channel:resolved", name: fixture.plugin.id },
+      ]);
+      fixture.plugin.directory = { listGroups };
+      if (deferredAlias) {
+        fixture.plugin.actions.messageActionTargetAliases = {
+          read: {
+            aliases: ["channelId"],
+            deliveryTargetAliases: ["channelId"],
+            resolveDeliveryTarget: ({ args }) =>
+              typeof args.channelId === "string" ? args.channelId : undefined,
+            matchesCurrentConversationAsync: matchAlias,
+          },
+        };
+      }
+      fixture.register();
+      await expect(
+        fixture.dispatch({
+          channelInferred: true,
+          params: { channelId: fixture.plugin.id },
+          toolContext: { currentChannelProvider: "other-provider", currentChannelId: "current" },
+        }),
+      ).rejects.toThrow(exactConversation);
+      expect(listGroups).not.toHaveBeenCalled();
+      expect(fixture.handleAction).not.toHaveBeenCalled();
+      await expect(
+        fixture.dispatch({
+          channelInferred: true,
+          params: { channelId: fixture.plugin.id },
+          toolContext: {
+            currentChannelProvider: fixture.plugin.id,
+            currentChannelId: deferredAlias ? "current" : "resolved",
+          },
+        }),
+      ).resolves.toBe(receipt);
+      expect(listGroups).toHaveBeenCalledOnce();
+      expect(matchAlias).toHaveBeenCalledTimes(deferredAlias ? 1 : 0);
+    },
+  );
 
   it.each([
     { trusted: false },
