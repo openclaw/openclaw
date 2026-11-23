@@ -387,7 +387,7 @@ export async function runTalkNodePermissionParity({
                 context,
                 hasCurrentClientAuthority: source.isCurrent,
               }),
-            ).rejects.toThrow("Gateway caller authority is no longer active.");
+            ).rejects.toThrow("Gateway request could not start.");
             expect(
               (
                 await rpcReq(reviewer, "exec.approval.resolve", {

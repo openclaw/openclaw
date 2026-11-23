@@ -200,7 +200,7 @@ export function captureOperatorToolGatewayContinuationContextInternal(
         if (lifetime.signal.aborted) {
           return;
         }
-        lifetime.abort(new Error("Gateway continuation authority is no longer active"));
+        lifetime.abort(new Error("Gateway continuation ended. Start a new request."));
         for (const signal of signals) {
           signal.removeEventListener("abort", release);
         }

@@ -279,7 +279,9 @@ describe("Mattermost registered message reads", () => {
     checkRead(
       {},
       OTHER,
-      /no longer active/,
+      owner === "turn"
+        ? "message action turn capability is no longer active"
+        : "Plugin mattermost was reloaded during the read. Retry the action.",
       at === metadataPath ? [metadataPath] : [metadataPath, postsPath(OTHER)],
       [owner, at, status],
     ),
@@ -295,7 +297,9 @@ describe("Mattermost registered message reads", () => {
             revoke("plugin");
           }
         };
-        await expect(read(OTHER)).rejects.toThrow(/no longer active/);
+        await expect(read(OTHER)).rejects.toThrow(
+          "Plugin mattermost was reloaded during the read. Retry the action.",
+        );
         expect(lookups).toBeGreaterThan(0);
         expect(requests).toEqual(beforePosts ? [metadataPath] : []);
         preparation.afterLookup = undefined;

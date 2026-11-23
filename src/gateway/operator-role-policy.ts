@@ -269,10 +269,11 @@ export function resolveOperatorRolePolicy(
   cfg: OpenClawConfig,
 ): GatewayOperatorRoleDefinition | undefined {
   const actor = resolveGatewayOperatorRoleActor(client);
+  const authority = client?.internal?.operatorRunAuthority;
   const principal = client?.internal?.openclawIdPrincipal;
   if (principal) {
-    if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
-      throw new Error("OpenClaw ID membership authority changed");
+    if (!authority && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
+      throw new Error("OpenClaw ID membership changed. Reconnect before starting a request.");
     }
     client?.internal?.operatorRunAuthority?.assertCurrent();
     if (principal.kind !== "member") {
@@ -282,7 +283,6 @@ export function resolveOperatorRolePolicy(
   if (actor?.kind === "system") {
     return undefined;
   }
-  const authority = client?.internal?.operatorRunAuthority;
   if (actor?.kind === "operator" && authority) {
     assertAdmittedRunOperatorAuthority(authority);
     const roleFacts = authority.readCurrentRoleFacts?.();
@@ -294,9 +294,6 @@ export function resolveOperatorRolePolicy(
     }
     // A linked owner device's run keeps the owner's authority under its person's profile.
     if (authority.openclawIdPrincipal?.kind === "owner") {
-      if (!isOpenClawIdTunnelPrincipalCurrent(authority.openclawIdPrincipal)) {
-        throw new Error("OpenClaw ID membership authority changed");
-      }
       authority.assertCurrent();
       return undefined;
     }
@@ -348,7 +345,7 @@ export function resolveOperatorRolePolicy(
   );
 }
 
-/** A retained caller cannot keep grants removed by the current named role. */
+/** Admit the request against its prepared role or the connection's current named role. */
 export function authorizeCurrentOperatorRoleScopes(
   client: GatewayClient | null,
   cfg: OpenClawConfig,
