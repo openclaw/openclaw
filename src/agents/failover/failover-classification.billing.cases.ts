@@ -60,5 +60,10 @@ export const billingCases = [
       id: "billing-periodic-limit-402",
       message: "402 Payment Required: Weekly/Monthly Limit Exhausted",
     },
+    {
+      id: "billing-claude-cli-out-of-usage-credits",
+      message:
+        "You're out of usage credits. Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.",
+    },
   ]),
 ] satisfies readonly FailoverClassificationCorpusRow[];
