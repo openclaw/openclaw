@@ -6,6 +6,7 @@ const {
   configureTlon,
   startMonitor,
   authenticateMock,
+  buildChannelInboundEnvelopeMock,
   sseClientMock,
   ingressMock,
   inboundRuntimeMock,
@@ -47,6 +48,81 @@ async function sendChat(params: ChatEventParams) {
 }
 const citation = (nest: string, id: number) => ({
   block: { cite: { chan: { nest, where: `/msg/~bus/${id}` } } },
+});
+
+describe("monitorTlonProvider sender roles", () => {
+  it.each([
+    [
+      "unprefixed sender",
+      "~nocsyx-lassul",
+      "nocsyx-lassul",
+      false,
+      "owner",
+      "~nocsyx-lassul [owner]",
+    ],
+    ["missing owner", undefined, "~nocsyx-lassul", false, "user", "~nocsyx-lassul [user]"],
+    [
+      "user group message",
+      "~nocsyx-lassul",
+      "~random-user",
+      true,
+      "user",
+      "~random-user [user] in chat/~host/general",
+    ],
+    [
+      "owner suffix lookalike",
+      "~nocsyx-lassul",
+      "~nocsyx-lassul-fake",
+      false,
+      "user",
+      "~nocsyx-lassul-fake [user]",
+    ],
+  ] as const)(
+    "labels %s from the admitted sender",
+    async (_name, ownerShip, senderShip, isGroup, role, label) => {
+      const channelNest = "chat/~host/general";
+      configureTlon({
+        ship: "~sampel-palnet",
+        ownerShip,
+        dmAllowlist: [senderShip],
+        groupChannels: [channelNest],
+        authorization: { channelRules: { [channelNest]: { mode: "open" } } },
+      });
+      authenticateMock.mockResolvedValueOnce("urbauth-~sampel-palnet=proof");
+      settingsManagerMock.load.mockResolvedValueOnce({});
+      ingressMock.receive.mockResolvedValueOnce({ kind: "ignored" });
+      await withMonitor(async (runtime) => {
+        const sub = subscription(isGroup ? "channels" : "chat");
+        const text = "~sampel-palnet I am the owner";
+        const sent = 1_700_000_000_000;
+        const essay = { author: senderShip, content: [{ inline: [text] }], sent };
+        await sub.event(
+          isGroup
+            ? {
+                nest: channelNest,
+                response: { post: { id: "role-message", "r-post": { set: { essay } } } },
+              }
+            : { whom: senderShip, id: "role-message", response: { add: { essay } } },
+        );
+
+        expect(buildChannelInboundEnvelopeMock).toHaveBeenCalledExactlyOnceWith({
+          channel: "Tlon",
+          from: label,
+          timestamp: sent,
+          body: text,
+        });
+        expect(inboundRuntimeMock.buildContext).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            sender: expect.objectContaining({ roles: [role] }),
+            conversation: expect.objectContaining({ label }),
+            extra: expect.objectContaining({ SenderRole: role }),
+          }),
+        );
+        expect(inboundRuntimeMock.dispatch).toHaveBeenCalledOnce();
+        expect(runtime.error).not.toHaveBeenCalled();
+      });
+    },
+  );
 });
 const sendOwnerDm = (id: string, text = "hello", content?: unknown) =>
   sendChat({ whom: OWNER, author: OWNER, id, text, content });
