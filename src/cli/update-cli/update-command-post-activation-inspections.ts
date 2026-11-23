@@ -167,7 +167,7 @@ export async function runPostActivationInspections(params: {
         message:
           warnings.length > 0
             ? `Doctor inspections reported ${warnings.length} advisory finding${warnings.length === 1 ? "" : "s"} after restart. Run \`openclaw doctor --lint --all --severity-min info\` to inspect them.`
-            : "Doctor inspections completed with informational findings.",
+            : "Doctor inspections completed with informational findings. Run `openclaw doctor --lint --all --severity-min info` to see them.",
       };
     }
     return { ...params.result, steps: [...params.result.steps, step] };
