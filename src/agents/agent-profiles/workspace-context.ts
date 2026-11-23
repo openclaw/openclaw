@@ -254,11 +254,13 @@ export async function prepareAgentProfileWorkspaceContext(params: {
 
   const managedContextFiles = entries
     .filter((entry) => entry.finalContent.length > 0)
-    .map((entry) => ({
-      path: entry.source.path,
-      content: entry.finalContent,
-      ...(entry.source.personalUser === true ? { personalUser: true as const } : {}),
-    }));
+    .map((entry) => {
+      const file: EmbeddedContextFile = { path: entry.source.path, content: entry.finalContent };
+      if (entry.source.personalUser === true) {
+        file.personalUser = true;
+      }
+      return file;
+    });
   const managedChars = managedContextFiles.reduce((sum, file) => sum + file.content.length, 0);
   const remainingOperatorChars = operatorTotalMaxChars - managedChars;
   const passthroughContextFiles =

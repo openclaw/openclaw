@@ -23,7 +23,6 @@ import {
   createTestMcpLoopbackServer,
   createTestMcpLoopbackServerConfig,
 } from "../cli-runner.test-helpers.js";
-import { hashCliSessionText } from "../cli-session.js";
 import { resetContextWindowCacheForTest } from "../context.test-support.js";
 import { buildMediaTaskRuntimeContext } from "../media-generation-task-status.js";
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
