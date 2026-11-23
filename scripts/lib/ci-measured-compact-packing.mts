@@ -335,7 +335,10 @@ export function rebalanceMeasuredSerialJobs(
               candidate.jobs[0]!.timeoutMinutes === job.timeoutMinutes) &&
             options.canShare([...candidate.jobs.flatMap((entry) => entry.groups), ...job.groups]),
         )
-        .toSorted((a, b) => a.seconds - b.seconds)[0];
+        // Fill compatible hosted bins first so family constraints do not fragment spare slots.
+        .toSorted((a, b) =>
+          profile === "hosted-hourly" ? b.seconds - a.seconds : a.seconds - b.seconds,
+        )[0];
       if (!bin) {
         return false;
       }

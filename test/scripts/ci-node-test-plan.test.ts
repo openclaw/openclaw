@@ -1070,6 +1070,48 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expectEvery(native, (job) => job.predictedSeconds === 220);
   });
 
+  it("avoids fragmented hosted slots while preserving measured job prices", () => {
+    const template = measuredToolingFixture()[0]!;
+    const rows: Array<[number, number, number[]]> = [
+      [4, 300, [6, 11]],
+      [5, 300, [12, 14]],
+      [6, 300, [2, 3]],
+      [7, 300, [8, 1]],
+      [8, 300, [7, 9]],
+      [12, 234, [10, 5]],
+      [13, 292, [11, 14, 9]],
+      [18, 170, [8, 4]],
+    ];
+    const before = rows.map(([id, seconds, families]) =>
+      Object.assign({}, template, {
+        checkName: `fragment-${String(id).padStart(2, "0")}`,
+        shardName: `fragment-${id}`,
+        predictedSeconds: seconds,
+        groups: families.map((family) =>
+          Object.assign({}, template.groups[0]!, {
+            shard_name: `core-tooling-${family}-hosted-${id}`,
+            includePatterns: [`test/scripts/fragment-${family}-${id}.test.ts`],
+          }),
+        ),
+      }),
+    );
+    const after = rebalanceMeasuredSerialJobs(before, {
+      ...measuredPackingOptions,
+      profile: "hosted-hourly",
+      estimateGroup: () => ({ seconds: 0, complete: true }),
+    });
+    expect(after).toHaveLength(4);
+    expect(sortedGroups(after)).toEqual(sortedGroups(before));
+    expect(sumSeconds(after)).toBe(2196);
+    expectEvery(
+      after,
+      (job) =>
+        job.predictedSeconds! <= 660 &&
+        job.timeoutMinutes === template.timeoutMinutes &&
+        measuredPackingOptions.canShare(job.groups),
+    );
+  });
+
   it.each([
     { tailSeconds: 460, tailRunner: DEFAULT_NODE_TEST_RUNNER, expectedJobs: 1 },
     { tailSeconds: 461, tailRunner: DEFAULT_NODE_TEST_RUNNER, expectedJobs: 2 },

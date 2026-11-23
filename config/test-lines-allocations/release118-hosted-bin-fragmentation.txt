@@ -1,0 +1,2 @@
+# Frozen measured-job regression preserves hosted capacity, family isolation, and measured prices.
+42
