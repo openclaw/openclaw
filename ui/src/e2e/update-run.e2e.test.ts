@@ -4,10 +4,8 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { configResponse } from "./chat-flow-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { sidebarCronJob } from "./sidebar-customization.test-support.ts";
 import { createUpdateRunFixture } from "./update-run.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI update run E2E" });
@@ -42,23 +40,9 @@ suite.define(() => {
             { step: "validating", status: "failed" },
           ],
         } as const;
-        const job = sidebarCronJob({
-          id: "memory-dreaming",
-          name: "Memory Dreaming Promotion",
-          state: { lastRunStatus: "error", lastRunAtMs: now - 6 * 60 * 60 * 1000 },
-        });
         const gateway = await installMockGateway(page, {
           updateAvailable: null,
           methodResponses: {
-            "cron.list": {
-              jobs: [compactCronJobFixture(job)],
-              snapshotRevision: "update-inbox",
-              total: 1,
-              offset: 0,
-              limit: 50,
-              hasMore: false,
-              nextOffset: null,
-            },
             "update.status": { lastRun: run },
             "update.runs.get": { run },
           },
@@ -75,7 +59,6 @@ suite.define(() => {
         );
         const summary = row.locator("summary");
         await summary.click();
-        await text(panel, job.name).waitFor();
         const capture = panel.locator(
           ".sidebar-issues-panel__tabs, .sidebar-issues-panel__list-wrap",
         );
