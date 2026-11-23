@@ -129,10 +129,10 @@ it("preserves a near-end reader when a deferred measurement shrinks the native r
   expect(distanceFromEnd()).toBe(4);
 });
 
-it.each(["settled", "scrolling", "start", "start-growth", "programmatic"] as const)(
+it.each(["settled", "scrolling", "growth", "start", "start-growth", "programmatic"] as const)(
   "reconciles first predecessor measurements while %s",
   async (phase) => {
-    const estimate = phase === "start-growth" ? 60 : 120;
+    const estimate = phase.endsWith("growth") ? 60 : 120;
     const offset = phase.startsWith("start") ? 0 : 500;
     const viewport = document.body.appendChild(document.createElement("div"));
     viewport.style.cssText = "height:400px;width:400px;overflow:auto;overflow-anchor:none";
@@ -230,6 +230,12 @@ it.each(["settled", "scrolling", "start", "start-growth", "programmatic"] as con
     if (phase === "scrolling") {
       expect(viewport.scrollTop).toBe(500);
       viewport.scrollTop = 40;
+      anchor.settle();
+      expect(viewport.scrollTop).toBe(0);
+      expect(column.style.marginTop).toBe("");
+    } else if (phase === "growth") {
+      // Growth held above a reader who reaches native zero would hide the transcript's start.
+      viewport.scrollTop = 0;
       anchor.settle();
       expect(viewport.scrollTop).toBe(0);
       expect(column.style.marginTop).toBe("");

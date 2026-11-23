@@ -571,8 +571,9 @@ export class TranscriptReaderAnchor {
     }
     const element = this.host.scrollElement;
     const offset = element?.scrollTop ?? 0;
-    // A held negative shift cannot be reached by native scrolling past zero.
-    const reachesStart = shift < 0 && offset + shift <= 0;
+    // Native zero is the reader's start. A held negative shift cannot be reached by native
+    // scrolling past zero; held growth above zero would hide the transcript's start.
+    const reachesStart = shift < 0 ? offset + shift <= 0 : offset === 0;
     if (!force && this.holdsNativeOffset() && !reachesStart) {
       return;
     }
@@ -583,7 +584,10 @@ export class TranscriptReaderAnchor {
     this.columnShift = 0;
     this.shiftVirtual(-shift);
     this.syncColumn();
-    this.scrollBy(shift);
+    // At native zero, growth above the reader reveals the start instead of moving the reader.
+    if (shift < 0 || offset > 0) {
+      this.scrollBy(shift);
+    }
   }
 
   /** A moved pane keeps its mounted rows observed; only pending corrections are retired. */
