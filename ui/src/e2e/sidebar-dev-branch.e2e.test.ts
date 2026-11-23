@@ -10,6 +10,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { expandSidebarSessions } from "./sidebar-session-pagination.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI sidebar dev branch badge E2E",
@@ -17,10 +18,10 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const DEV_BRANCH = "feat/dev-branch-badge";
+const DEV_BRANCH = "fix/control-ui-model-picker-capability-badge-and-sidebar-state-styling";
 
 suite.define(() => {
-  it("renders the dev checkout branch and its tooltip in the footer", async () => {
+  it("truncates a long dev branch on one line and keeps its full name in the tooltip", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installMockGateway(page, { devGitBranch: DEV_BRANCH });
 
@@ -40,6 +41,14 @@ suite.define(() => {
           }),
         )
         .toEqual({ name: DEV_BRANCH, description: DEV_BRANCH });
+      const name = badge.locator(".sidebar-footer-branch__name");
+      const layout = await name.evaluate((element) => ({
+        height: element.getBoundingClientRect().height,
+        lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
+        clipped: element.scrollWidth > element.clientWidth,
+      }));
+      expect(layout.height).toBeLessThanOrEqual(layout.lineHeight + 1);
+      expect(layout.clipped).toBe(true);
     });
   });
 
@@ -67,7 +76,7 @@ suite.define(() => {
         const body = sidebar.locator(".sidebar-shell__body");
         await body.waitFor();
         await sidebar.locator(".sidebar-identity-card").waitFor();
-        await sidebar.getByRole("button", { name: "Show more", exact: true }).click();
+        await expandSidebarSessions(body, 20);
         const last = sidebar.getByText("CI timer", { exact: true });
         await expect
           .poll(async () => {

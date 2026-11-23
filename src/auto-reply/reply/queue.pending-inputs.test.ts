@@ -13,14 +13,16 @@ import {
   readSessionSubmittedInput,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import * as pendingInputs from "../../config/sessions/session-accessor.pending-inputs.js";
+import { readSessionQueuedInputPage } from "../../config/sessions/session-pending-input-history.js";
 import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { captureGatewayRootWorkReleaseObserver } from "../../process/gateway-work-admission.js";
 import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import {
   createUserTurnTranscriptRecorder,
-  type PersistedUserTurnMessage,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import {
@@ -82,7 +84,7 @@ describe("followup queue durable input consumption", () => {
   afterEach(async () => {
     clearFollowupQueue(sessionKey);
     for (const recorder of recorders.splice(0)) {
-      recorder.finishPendingInput?.("interrupted");
+      recorder.finishPendingInput?.("interrupted", "failed");
     }
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
@@ -269,6 +271,130 @@ describe("followup queue durable input consumption", () => {
     [await createStagedRun("first"), await createStagedRun("second")] as const;
   const collected = (...texts: string[]) =>
     `[Queued messages while agent was busy]\n\n${texts.map((text, i) => `---\nQueued #${i + 1}\n${text}`).join("\n\n")}`;
+
+  it("rejects a different run ID when reattaching a relinquished native queued input", async () => {
+    const message = {
+      role: "user",
+      content: "Retain the original accepted native run identity.",
+      idempotencyKey: "native-run-identity:user",
+      timestamp: 1,
+    } satisfies PersistedUserTurnMessage;
+    const receipts: pendingInputs.SessionPendingInputReceipt[] = [];
+    try {
+      const original = await pendingInputs.stageSessionPendingInput(scope(), {
+        runId: "native-original",
+        message,
+        assertCurrent() {},
+      });
+      assert(original, "Expected the original native receipt");
+      receipts.push(original);
+      original.relinquish();
+      await original.settled?.();
+      await expect(
+        pendingInputs
+          .stageSessionPendingInput(scope(), {
+            runId: "native-different",
+            message,
+            reattachInputId: original.inputId,
+            assertCurrent() {},
+          })
+          .then((receipt) => {
+            if (receipt) {
+              receipts.push(receipt);
+            }
+            return receipt;
+          }),
+      ).rejects.toThrow("Pending input idempotency key conflicts with the accepted input");
+      await expect(
+        pendingInputs.stageSessionPendingInput(scope(), {
+          runId: "native-original",
+          message,
+          reattachInputId: "another-queued-input",
+          assertCurrent() {},
+        }),
+      ).rejects.toThrow("Pending input ownership ended");
+      expect((await pending()).items).toMatchObject([
+        { runId: "native-original", state: "queued", message },
+      ]);
+      expect((await readSessionQueuedInputPage(scope())).rows).toMatchObject([
+        { run_id: "native-original", state: "queued" },
+      ]);
+      expect(await loadMessages()).toEqual([]);
+    } finally {
+      for (const receipt of receipts) {
+        if (receipt.state === "consumed") {
+          receipt.release();
+        } else {
+          receipt.relinquish();
+        }
+        await receipt.settled?.();
+      }
+    }
+  });
+
+  it("admits one native owner when authorized retries race to reattach a relinquished queued input", async () => {
+    const runId = "native-reattach-race";
+    const message = {
+      role: "user",
+      content: "Execute the accepted native input exactly once.",
+      idempotencyKey: `${runId}:user`,
+      timestamp: 1,
+    } satisfies PersistedUserTurnMessage;
+    const receipts: pendingInputs.SessionPendingInputReceipt[] = [];
+    try {
+      const original = await pendingInputs.stageSessionPendingInput(scope(), {
+        runId,
+        message,
+        assertCurrent() {},
+      });
+      assert(original, "Expected the original native receipt");
+      receipts.push(original);
+      original.relinquish();
+      await original.settled?.();
+      const attempts = await Promise.allSettled(
+        [scope(), scope()].map((target) =>
+          pendingInputs.stageSessionPendingInput(target, {
+            runId,
+            message,
+            reattachInputId: original.inputId,
+            assertCurrent() {},
+          }),
+        ),
+      );
+      const admitted = attempts.flatMap((result) =>
+        result.status === "fulfilled" && result.value ? [result.value] : [],
+      );
+      receipts.push(...admitted);
+      const refused = attempts.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      expect(admitted).toHaveLength(1);
+      expect(refused).toHaveLength(1);
+      expect(refused[0]).toMatchObject({
+        message: expect.stringMatching(/already admitted|already has a live owner/u),
+      });
+      const winner = admitted[0];
+      assert(winner, "Expected one native reattachment owner");
+      const execute = vi.fn(async () => appendTranscriptMessage(scope(), { message }));
+      await winner.run(execute);
+      expect(execute).toHaveBeenCalledOnce();
+      winner.release();
+      await winner.settled?.();
+      const messages = await loadMessages();
+      expect(messages).toHaveLength(1);
+      expect(messages).toMatchObject([{ message }]);
+      expect((await pending()).items).toEqual([]);
+    } finally {
+      for (const receipt of receipts) {
+        if (receipt.state === "consumed") {
+          receipt.release();
+        } else {
+          receipt.relinquish();
+        }
+        await receipt.settled?.();
+      }
+    }
+  });
 
   it("preserves the committed prefix when a native batch falls back after a later source write fails", async () => {
     const [first, second] = await pair();

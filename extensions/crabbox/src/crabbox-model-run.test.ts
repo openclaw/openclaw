@@ -93,6 +93,14 @@ it("runs an upgraded native job with a host-only proxy grant and sentinel-only a
   await run();
   expect(process.exitCode).toBe(7);
   expect(mocks.run.mock.calls.map(([argv]) => argv[0])).toEqual([binary, binary]);
+  expect(mocks.version.mock.calls.map(([, params]) => params.cwd)).toEqual([
+    process.cwd(),
+    process.cwd(),
+  ]);
+  expect(mocks.run.mock.calls.map(([, params]) => params.cwd)).toEqual([
+    process.cwd(),
+    process.cwd(),
+  ]);
 
   const fixture = `const fs = require('fs'); console.log(JSON.stringify({
       key: process.env.OPENAI_API_KEY, baseUrl: process.env.OPENAI_BASE_URL,

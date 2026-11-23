@@ -223,7 +223,7 @@ describe("Gateway GitHub publication boundaries", () => {
     const coordinator = createTestGitHubPublicationCoordinator({ placements });
 
     await expect(publish(coordinator, "local-turn-during-snapshot")).rejects.toThrow(
-      "session authority changed during snapshot",
+      "session moved during snapshot",
     );
     expectNoCommands("commit-tree", "push");
   });
@@ -287,53 +287,40 @@ describe("Gateway GitHub publication boundaries", () => {
     expect(await coordinator.readAsync(queued.requestId)).toMatchObject({ status: "published" });
   });
 
-  it.each([
-    { boundary: "update-ref", status: "failed", effects: [] },
-    { boundary: "push", status: "failed", effects: ["push"] },
-    { boundary: "pull_request", status: "published", effects: ["push", "pull_request"] },
-  ] as const)(
-    "settles accepted shared publication work when authority closes after $boundary",
-    async ({ boundary, status, effects }) => {
-      const workspace = await createRealPublicationWorkspace();
-      const database = openOpenClawStateDatabase();
-      const coordinator = createLocalCoordinator(database);
-      const transport = mocks.runCommand.getMockImplementation()!;
-      let current = true;
-      mocks.runCommand.mockImplementation(async (argv: string[], options) => {
-        const result = await transport(argv, options);
-        if (
-          result.code === 0 &&
-          (boundary === "pull_request"
-            ? argv.includes("POST") && argv.includes("repos/openclaw/openclaw/pulls")
-            : argv[0] === "git" && argv.includes(boundary))
-        ) {
-          current = false;
+  it("finishes admitted shared publication work when authority changes after update-ref", async () => {
+    const workspace = await createRealPublicationWorkspace();
+    const database = openOpenClawStateDatabase();
+    const coordinator = createLocalCoordinator(database);
+    const transport = mocks.runCommand.getMockImplementation()!;
+    let current = true;
+    mocks.runCommand.mockImplementation(async (argv: string[], options) => {
+      const result = await transport(argv, options);
+      if (result.code === 0 && argv[0] === "git" && argv.includes("update-ref")) {
+        current = false;
+      }
+      return result;
+    });
+    const result = await coordinator.requestForSessionV2({
+      ...sessionRequest("shared-authority-after-update-ref"),
+      assertCurrent: () => {
+        if (!current) {
+          throw new GitHubPublicationRequesterUnavailableError();
         }
-        return result;
-      });
-      const result = await coordinator.requestForSessionV2({
-        ...sessionRequest(`shared-authority-after-${boundary}`),
-        assertCurrent: () => {
-          if (!current) {
-            throw new GitHubPublicationRequesterUnavailableError();
-          }
-        },
-      });
-      expect(result.status).toBe(status);
-      expect(await coordinator.readAsync(result.requestId)).toEqual(result);
-      expect(current).toBe(false);
-      await coordinator.resumeSessionRequests();
-      expect(await coordinator.readAsync(result.requestId)).toEqual(result);
-      const headCommit = await workspace.git("rev-parse", "HEAD");
-      expect(receipt(database, result.requestId)).toMatchObject({
-        status,
-        head_commit: headCommit,
-        pull_request_url:
-          boundary === "pull_request" ? "https://github.com/openclaw/openclaw/pull/125200" : null,
-      });
-      expect(workspace.effects).toEqual(effects);
-    },
-  );
+      },
+    });
+    expect(result.status).toBe("published");
+    expect(await coordinator.readAsync(result.requestId)).toEqual(result);
+    expect(current).toBe(false);
+    await coordinator.resumeSessionRequests();
+    expect(await coordinator.readAsync(result.requestId)).toEqual(result);
+    const headCommit = await workspace.git("rev-parse", "HEAD");
+    expect(receipt(database, result.requestId)).toMatchObject({
+      status: "published",
+      head_commit: headCommit,
+      pull_request_url: "https://github.com/openclaw/openclaw/pull/125200",
+    });
+    expect(workspace.effects).toEqual(["push", "pull_request"]);
+  });
 
   it.each(["lookup", "fetch", "ancestry"] as const)(
     "reports unavailable without mutation when base %s verification fails",

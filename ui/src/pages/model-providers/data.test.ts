@@ -313,6 +313,27 @@ it.each([
     ],
   },
   {
+    name: "filters an unselected model by global base readiness without alternatives",
+    models: [
+      model("global-ready", {
+        available: false,
+        defaultModelRuntimes: {
+          base: { agentRuntime: { id: "openclaw", source: "model" }, available: true },
+          alternatives: [],
+        },
+      }),
+      model("scoped-only-ready", {
+        available: true,
+        defaultModelRuntimes: {
+          base: { agentRuntime: { id: "openclaw", source: "model" }, available: false },
+          alternatives: [],
+        },
+      }),
+    ],
+    selection: modelSelection("openai/saved"),
+    expected: ["openai/global-ready", "openai/saved"],
+  },
+  {
     name: "preserves alias-valued and bare model defaults",
     models: [model("claude-opus", { provider: "anthropic", alias: "Opus", available: true })],
     selection: modelSelection("opus", ["unknown-model"]),

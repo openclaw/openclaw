@@ -76,8 +76,7 @@ type OpenClawPluginToolContextBase = {
   runId?: string;
   /**
    * Host-stamped origin of this turn's input, when its producer supplied one. A background
-   * exec completion wake names the run that started the command, or the run that continued
-   * its paused subagent task:
+   * exec completion wake names the run that started the command:
    * `{ kind: "internal_system", sourceTool: "exec", runId }`. A fact for plugin-owned
    * policy; it never grants owner identity.
    */

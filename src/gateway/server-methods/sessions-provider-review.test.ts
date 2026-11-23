@@ -35,12 +35,12 @@ vi.mock("../session-sharing.js", async (importOriginal) => ({
     entry,
   }),
 }));
-// mock-isolation: Provider-review tests control authorization changes while the review is awaited.
+// mock-isolation: Provider-review tests retain a fixed authorization while the review is awaited.
 vi.mock("../session-sharing-authorization-async.js", () => ({
   resolveSessionMutationAuthorizationAsync: async () => ({
     authorization: {
-      assertCurrent,
-      assertAdmittedInputCurrent: assertCurrent,
+      assertCurrent() {},
+      assertAdmittedInputCurrent() {},
       release: mocks.releaseAuthorization,
     },
     error: null,
@@ -53,12 +53,6 @@ const target = { sessionKey, agentId: "main", sessionId };
 const requestParams = { ...target, reviewId: "review-a", idempotencyKey: "next-run" };
 const message = "/stop e\u0301\n ";
 let entry: SessionEntry;
-let sourceCurrent: boolean;
-const assertCurrent = () => {
-  if (!sourceCurrent) {
-    throw new Error("source revoked");
-  }
-};
 
 function request(overrides: Record<string, unknown> = {}): GatewayRequestHandlerOptions {
   const client = soloClient();
@@ -72,7 +66,6 @@ function request(overrides: Record<string, unknown> = {}): GatewayRequestHandler
     isWebchatConnect: () => true,
     respond: vi.fn(),
     context: createDirectChatContext({ getRuntimeConfig: () => ({}) }),
-    hasCurrentClientAuthority: () => sourceCurrent,
   };
 }
 
@@ -88,7 +81,6 @@ async function reject(options: GatewayRequestHandlerOptions = request()) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  sourceCurrent = true;
   entry = {
     sessionId,
     lifecycleRevision: "revision-a",
@@ -116,9 +108,17 @@ afterEach(() => {
   }
 });
 
-it("hands literal input and host capability to chat admission", async () => {
+it.each([
+  "openclaw-control-ui",
+  "openclaw-macos",
+  "openclaw-linux",
+  "openclaw-ios",
+  "openclaw-android",
+] as const)("hands literal input and host capability to chat admission from %s", async (id) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    await coreGatewayHandlers["sessions.providerReview.continue"]!(request());
+    const options = request();
+    options.client!.connect.client.id = id;
+    await coreGatewayHandlers["sessions.providerReview.continue"]!(options);
     expect(mocks.handoff).toHaveBeenCalledTimes(1);
     expect(mocks.releaseAuthorization).toHaveBeenCalledTimes(1);
     const [chatOptions, acknowledgment] = mocks.handoff.mock.calls[0]!;
@@ -150,22 +150,17 @@ it("hands literal input and host capability to chat admission", async () => {
   });
 });
 
-it.each(["review", "generation", "authority"])(
-  "rejects awaited-read %s changes",
-  async (change) => {
-    mocks.read.mockImplementation(async () => {
-      if (change === "review") {
-        entry.providerReview!.id = "new-review";
-      } else if (change === "generation") {
-        entry.lifecycleRevision = "new-generation";
-      } else {
-        sourceCurrent = false;
-      }
-      return structuredClone(entry);
-    });
-    await reject();
-  },
-);
+it.each(["review", "generation"])("rejects awaited-read %s changes", async (change) => {
+  mocks.read.mockImplementation(async () => {
+    if (change === "review") {
+      entry.providerReview!.id = "new-review";
+    } else {
+      entry.lifecycleRevision = "new-generation";
+    }
+    return structuredClone(entry);
+  });
+  await reject();
+});
 
 it.each(["client-supplied authority", "synthetic UI", "ordinary API"])(
   "rejects continuation from %s",

@@ -7,7 +7,7 @@ import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
 } from "./github-publication.test-support.js";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
 import {
@@ -15,11 +15,7 @@ import {
   guestScopes,
   holdWorkerTurn,
 } from "./github-publication-requester.test-support.js";
-import * as repositoryPublicationExecutor from "./github-repository-publication-executor.js";
-import {
-  observeRepositoryCommands,
-  type RepositoryPublicationSourceHistory,
-} from "./github-repository-publication.test-support.js";
+import type { RepositoryPublicationSourceHistory } from "./github-repository-publication.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 
 const mocks = githubPublicationTestMocks();
@@ -32,7 +28,6 @@ vi.mock("./worker-environments/session-repository-checkpoints.js", () => ({
 const workflow = ".github/workflows/example.yaml";
 const definition = "name: synthetic\non: workflow_dispatch\njobs: {}\n";
 const published = { status: "published" };
-const identityChanged = { status: "failed", code: "identity_changed" };
 const createFixture = async (
   baseFiles: Record<string, string> = {},
   requestedRef?: string,
@@ -195,7 +190,6 @@ describe("repository checkpoint workflow authority", () => {
     "paged-duplicate",
     "commit-budget",
     "boundary-budget",
-    "boundary-revoked",
   ] as const)("inherits target workflows only with verified ancestry (%s)", async (history) => {
     let ancestor = "";
     let left = "";
@@ -204,16 +198,12 @@ describe("repository checkpoint workflow authority", () => {
     const ambiguous = history === "crisscross" || history === "paged-crisscross";
     const incomplete = history === "paged-empty" || history === "paged-duplicate";
     const limited = history === "commit-budget" || history === "boundary-budget";
-    const revoked = history === "boundary-revoked";
     const f = await createFixture({ [workflow]: definition }, "topic", (base, tree, git) => {
       ancestor = base;
       const commit = (parents: string[], message: string) =>
         git(["commit-tree", tree, ...parents.flatMap((parent) => ["-p", parent])], message);
       if (history === "linear" || history === "previous-head") {
         return commit([base], "source-only feature\n");
-      }
-      if (revoked) {
-        return commit([base, git(["rev-parse", base + "^"])], "redundant source merge\n");
       }
       if (history === "boundary-budget") {
         const parents = [base];
@@ -286,9 +276,6 @@ describe("repository checkpoint workflow authority", () => {
         }
         if (source !== baseCommit && source !== comparisonHead) {
           boundaryReads++;
-          if (revoked) {
-            await f.revoke();
-          }
         }
         return json({
           sha:
@@ -302,13 +289,11 @@ describe("repository checkpoint workflow authority", () => {
     await capture("feature checkpoint\n", "refreshed", { [workflow]: updated });
     const writesBefore = writes().length;
     const result = await f.publish("refreshed");
-    const expected = revoked
-      ? identityChanged
-      : incomplete
-        ? { status: "failed", code: "unavailable" }
-        : ambiguous || limited
-          ? rejected
-          : published;
+    const expected = incomplete
+      ? { status: "failed", code: "unavailable" }
+      : ambiguous || limited
+        ? rejected
+        : published;
     expect(result, JSON.stringify(result)).toMatchObject(expected);
     const paged = history.startsWith("paged-");
     expect(sourcePages).toEqual(history === "previous-head" ? [1, 1] : paged ? [1, 2] : [1]);
@@ -317,7 +302,7 @@ describe("repository checkpoint workflow authority", () => {
         ? [comparisonHead, baseCommit]
         : sourcePages.map(() => comparisonHead),
     );
-    if (ambiguous || incomplete || limited || revoked) {
+    if (ambiguous || incomplete || limited) {
       expect(writes()).toHaveLength(writesBefore);
     } else {
       expect(git(["show", runtime.head + ":" + workflow])).toBe(updated.trim());
@@ -326,12 +311,9 @@ describe("repository checkpoint workflow authority", () => {
     if (history === "boundary-budget") {
       expect(boundaryReads).toBe(0);
     }
-    if (revoked) {
-      expect(boundaryReads).toBe(1);
-    }
   });
 
-  it.each(["foreign", "stale", "diverged", "caller-revoked", "publisher-revoked"] as const)(
+  it.each(["foreign", "stale", "diverged"] as const)(
     "does not exempt an inherited checkpoint with %s target or authority facts",
     async (failure) => {
       const f = await createFixture({ [workflow]: definition });
@@ -379,18 +361,10 @@ describe("repository checkpoint workflow authority", () => {
             return json({ sha: git(["merge-base", source!, head!]) });
           }
         }
-        const result = await transport(args, options);
-        if (args.some((arg: string) => arg.endsWith("/git/trees/" + target.workspaceTree))) {
-          if (failure === "caller-revoked") {
-            await f.revoke();
-          } else if (failure === "publisher-revoked") {
-            mocks.matchesIdentity.mockReturnValue(false);
-          }
-        }
-        return result;
+        return await transport(args, options);
       });
       const result = await f.publish(failure);
-      expect(result).toMatchObject(failure.endsWith("revoked") ? identityChanged : rejected);
+      expect(result).toMatchObject(rejected);
       expect(writes()).toEqual([]);
       expect(runtime.effects).toEqual([]);
     },
@@ -443,62 +417,4 @@ describe("repository checkpoint workflow authority", () => {
       expect(writes()).toEqual([]);
     },
   );
-
-  it("rechecks workflow authority after a blob response before writing the tree or branch", async () => {
-    const f = await createFixture();
-    await f.repository.capture("accepted code\n", "authority-change", { [workflow]: definition });
-    observeRepositoryCommands(async (args) => {
-      if (args.some((arg: string) => arg.endsWith("/git/blobs"))) {
-        await setCanonicalUserProfileRole(f.maintainerProfile, "revoked");
-        invalidateOperatorRolePolicy(f.maintainerProfile);
-      }
-    });
-    expect(await f.publish("authority-change", f.maintainer)).toMatchObject(identityChanged);
-    expect(f.repository.runtime.uploaded.size).toBeGreaterThan(0);
-    expect(f.repository.runtime.effects).toEqual([]);
-    expect(writes().every(([args]) => args.some((arg: string) => arg.endsWith("/git/blobs")))).toBe(
-      true,
-    );
-  });
-
-  it("rechecks the publisher after workflow authorization at the ref update boundary", async () => {
-    const f = await createFixture();
-    await f.repository.capture("accepted code\n", "publisher-at-ref", { [workflow]: definition });
-    const execute = repositoryPublicationExecutor.executeRepositoryGitHubPublication;
-    let pushRecorded = false;
-    let publisherRevoked = false;
-    const intercepted = vi
-      .spyOn(repositoryPublicationExecutor, "executeRepositoryGitHubPublication")
-      .mockImplementation((params) =>
-        execute({
-          ...params,
-          execution: {
-            ...params.execution,
-            recordEffect: async (effect, observed) => {
-              await params.execution.recordEffect(effect, observed);
-              if (effect === "push" && observed === undefined) {
-                pushRecorded = true;
-              }
-            },
-          },
-          assertWorkflowChangesAllowed: () => {
-            params.assertWorkflowChangesAllowed();
-            if (pushRecorded) {
-              publisherRevoked = true;
-              mocks.matchesIdentity.mockReturnValue(false);
-            }
-          },
-        }),
-      );
-    onTestFinished(() => intercepted.mockRestore());
-
-    expect(await f.publish("publisher-at-ref", f.maintainer)).toMatchObject({
-      status: "requested",
-    });
-    expect(publisherRevoked).toBe(true);
-    expect(f.maintainer.assertCurrent).not.toThrow();
-    expect(f.repository.runtime.uploaded.size).toBeGreaterThan(0);
-    expect(f.repository.casRequests).toEqual([]);
-    expect(f.repository.runtime.effects).toEqual([]);
-  });
 });

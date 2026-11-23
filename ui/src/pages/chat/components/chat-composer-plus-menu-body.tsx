@@ -1,4 +1,5 @@
 import { createMemo, createSignal, lazy, onSettled, Show } from "solid-js";
+import PluginArtwork from "../../../components/plugin-artwork.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuEntry, MenuItem } from "../../../components/solid/menu.tsx";
 import { registerChatComposerMenuEnglish } from "../../../i18n/locales/en-chat-composer-menu.ts";
@@ -17,6 +18,7 @@ import {
 } from "./chat-composer-attachment-menu.tsx";
 import {
   menuChevron,
+  renderBackRow,
   renderCapabilityMenuState,
   renderCapabilityToggleRow,
   menuDivider,
@@ -35,7 +37,14 @@ const Subview = lazy(() => import("./chat-composer-plus-menu-subview.tsx"), {
 
 function rootRenderInputs(menu: ChatComposerPlusMenuContentProps) {
   const inputs: unknown[] = [i18nRevision()];
-  inputs.push(uploadsEnabled(menu.attachments.uploadConfig), menu.showCapabilities);
+  for (const action of menu.pluginActions ?? []) {
+    inputs.push(action.pluginId, action.pluginName);
+  }
+  inputs.push(
+    uploadsEnabled(menu.attachments.uploadConfig),
+    menu.showCapabilities,
+    Boolean(menu.capabilityMenu),
+  );
   for (const toggle of menu.rootToggles ?? []) {
     inputs.push(
       toggle.value,
@@ -61,15 +70,44 @@ function rootRenderInputs(menu: ChatComposerPlusMenuContentProps) {
 function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
   const entries: MenuEntry[] = [];
   const attachments = composerAttachmentMenuItems(menu);
-  const finish = () => [
-    ...attachments,
-    ...(entries.length && attachments.length ? [menuDivider("attachment-divider")] : []),
-    ...entries,
-  ];
+  const plugins = Array.from(
+    new Map(menu.pluginActions?.map((action) => [action.pluginId, action.pluginName])),
+    ([id, label]): MenuItem => ({
+      id: `plugin:${id}`,
+      label,
+      icon: <PluginArtwork pluginId={id} fallback={<Icon name="plug" />} />,
+      details: menuChevron(),
+      class: "agent-chat__capability-menu-item",
+      closeOnSelect: false,
+    }),
+  );
+  const finish = (): MenuEntry[] => {
+    if (plugins.length) {
+      if (entries.length) {
+        entries.push(menuDivider("plugin-actions-divider"));
+      }
+      entries.push(...plugins);
+    }
+    if (!entries.length) {
+      return attachments;
+    }
+    if (attachments.length) {
+      entries.push(menuDivider("attachment-divider"));
+    }
+    // Capabilities can arrive mid-click. Grow their scroll region above the
+    // attachment controls so those controls stay at the menu's anchored edge.
+    return [
+      { kind: "group", id: "root-list", class: "chat-plugin-menu-scroll", items: entries },
+      ...attachments,
+    ];
+  };
   if (menu.showCapabilities || menu.rootToggles?.length) {
     entries.push(...(menu.rootToggles ?? []).map(renderCapabilityToggleRow));
   }
   if (!menu.showCapabilities) {
+    if (menu.capabilityMenu && !attachments.length && !entries.length && !plugins.length) {
+      entries.push({ id: "plus-menu-loading", label: t("common.loading"), disabled: true });
+    }
     return finish();
   }
   for (const view of ["skills", "connectors"] as const) {
@@ -176,6 +214,21 @@ export function ChatComposerPlusMenuBody(props: ChatComposerPlusMenuResolvedProp
     if (handleComposerAttachmentSelection(value, event, props.readMenu(), menu)) {
       return;
     }
+    if (value.startsWith("plugin:")) {
+      event.preventDefault();
+      changeView(`plugin:${value.slice("plugin:".length)}`);
+      return;
+    }
+    if (value === "back") {
+      event.preventDefault();
+      changeView("root");
+      return;
+    }
+    const action = menu.pluginActions?.find((entry) => `action:${entry.key}` === value);
+    if (action && !action.disabled) {
+      action.run();
+      return;
+    }
     const rootToggle = menu.rootToggles?.find((toggle) => toggle.value === value);
     if (rootToggle) {
       event.preventDefault();
@@ -226,7 +279,36 @@ export function ChatComposerPlusMenuBody(props: ChatComposerPlusMenuResolvedProp
         previous.values.every((value, index) => Object.is(value, next.values[index])),
     },
   );
-  const items = createMemo(() => rootItems(rootInputs().menu), { lazy: true });
+  const items = createMemo(
+    (): MenuEntry[] => {
+      if (!props.view.startsWith("plugin:")) {
+        return rootItems(rootInputs().menu);
+      }
+      const actions = props.menu.pluginActions?.filter(
+        (entry) => entry.pluginId === props.view.slice("plugin:".length),
+      );
+      if (!actions?.length) {
+        return rootItems(rootInputs().menu);
+      }
+      return [
+        renderBackRow(actions[0]!.pluginName),
+        menuDivider("plugin-header-divider"),
+        {
+          kind: "group",
+          id: "plugin-options",
+          class: "chat-plugin-menu-scroll",
+          items: actions.map((action) => ({
+            id: `action:${action.key}`,
+            label: action.running ? `${t("common.cancel")}: ${action.label}` : action.label,
+            disabled: action.disabled,
+            icon: <Icon name={action.running ? "square" : action.icon} />,
+            class: "agent-chat__capability-menu-item",
+          })),
+        },
+      ];
+    },
+    { lazy: true },
+  );
   onSettled(() => {
     if (props.readMenu().overlay.open) {
       props.menu.onLoadSkills();
@@ -234,7 +316,7 @@ export function ChatComposerPlusMenuBody(props: ChatComposerPlusMenuResolvedProp
   });
   return (
     <Show
-      when={props.view === "root"}
+      when={props.view === "root" || props.view.startsWith("plugin:")}
       fallback={
         <Subview
           {...props}

@@ -21,7 +21,6 @@ import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db
 import { prepareApprovalChannelCustody } from "../approval-channel-custody.js";
 import { normalizeControlUiBasePath } from "../control-ui-shared.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
-import { canAccessOperatorApproval } from "../operator-approval-authorization.js";
 import { projectOperatorApprovalSnapshot } from "../operator-approval-snapshot.js";
 import {
   listTerminalOperatorApprovals,
@@ -35,7 +34,10 @@ import {
   type ExecApprovalIosPushDelivery,
   type PluginApprovalIosPushDelivery,
 } from "./approval-publication.js";
-import { prepareApprovalSessionAccess } from "./approval-record-lookup.js";
+import {
+  prepareApprovalSessionAccess,
+  readOperatorApprovalRequestSource,
+} from "./approval-record-lookup.js";
 import { createApprovalRequestAuthority } from "./approval-request-authority.js";
 import { respondApprovalStorageUnavailable } from "./approval-shared.js";
 import { loadVisibleApproval } from "./approval-visible-record.js";
@@ -221,13 +223,13 @@ export function createApprovalHandlers(
       using sessionAccess = await prepareApprovalSessionAccess({
         client,
         getCfg: context.getRuntimeConfig,
-        sources: history.records.map((record) => record.source),
+        sources: history.records.map(readOperatorApprovalRequestSource),
       });
       authority.assertCurrent();
       const cfg = context.getRuntimeConfig();
       const controlUiBasePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
       const items = history.records.flatMap((record) => {
-        if (!sessionAccess.canAccess(record.source)) {
+        if (!sessionAccess.canAccess(readOperatorApprovalRequestSource(record))) {
           return [];
         }
         const snapshot = buildApprovalSnapshot(record, controlUiBasePath);
@@ -380,16 +382,10 @@ export function createApprovalHandlers(
       const assertCurrent = () => {
         approvalGuard.assertCurrent();
         if (
-          client?.invalidated ||
-          !canAccessOperatorApproval({
-            client,
-            allowApprovalRuntime: true,
-            binding: { reviewerDeviceIds: record.reviewerDeviceIds },
-          }) ||
           (approvalGuard.family === "native-compatibility" && !readCurrent()) ||
           (resolveParams?.reviewer && (!liveRecord || !custody?.isCurrent(liveRecord)))
         ) {
-          throw new Error("approval resolver authority is no longer active");
+          throw new Error("The approval record changed. Look up the approval again.");
         }
       };
       let resolution: ApplyApprovalDecisionResult<ApprovalPayload>;

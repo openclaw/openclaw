@@ -1,7 +1,7 @@
 import {
   resolveIdentityPathViaExistingAncestor,
   resolveIdentityPathViaExistingAncestorSync,
-} from "../../infra/boundary-path.js";
+} from "../../infra/path-existence.js";
 import {
   captureSystemEventStoreCurrentCheck,
   getSystemEventStorePath,

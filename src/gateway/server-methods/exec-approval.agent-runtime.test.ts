@@ -219,8 +219,7 @@ describe("exec approval signed agent runtime", () => {
     });
   });
   it("binds the accepted expiry to the worker captured before registration yields", async (testContext) => {
-    let active = true;
-    const fixture = await createApproval(testContext, () => active);
+    const fixture = await createApproval(testContext);
     const { manager } = fixture;
     const runtimeIdentity = identity(false);
     const turnClaim = {
@@ -258,7 +257,7 @@ describe("exec approval signed agent runtime", () => {
       });
     try {
       await fixture.run(async () => {
-        const opts = requestOptions(runtimeIdentity, () => active);
+        const opts = requestOptions(runtimeIdentity);
         const requested = requestApproval(fixture, opts);
         await entered.promise;
         expect(beginApprovalWait).not.toHaveBeenCalled();
@@ -275,9 +274,6 @@ describe("exec approval signed agent runtime", () => {
         const isPending = beginApprovalWait.mock.calls[0]![1];
         expect(isPending()).toBe(true);
         expect(manager.isPending({ ...record })).toBe(false);
-        active = false;
-        expect(isPending()).toBe(false);
-        active = true;
         await manager.resolve(record.id, "allow-once", "operator");
         await pending;
         expect(isPending()).toBe(false);
@@ -291,7 +287,7 @@ describe("exec approval signed agent runtime", () => {
   });
 
   it.for([false, true])(
-    "checks live worker claims without host SQL in a registered approval (revoked: %s)",
+    "validates worker claims at admission without host SQL (closed after admission: %s)",
     async (revoked, testContext) => {
       const source = {
         sessionId: "worker-approval-session",
@@ -312,16 +308,7 @@ describe("exec approval signed agent runtime", () => {
           sql.restore();
         }
       };
-      const fixture = await createPreparedTestApprovalManager(testContext, {
-        validateAgentRuntimeDelegatedAuthority: (authority) =>
-          check({
-            kind: "agentRuntime",
-            agentId: source.agentId,
-            sessionKey: source.sessionKey,
-            operationalRunInstance: authority.operationalRunInstance,
-            delegatedAuthority: authority,
-          }),
-      });
+      const fixture = await createPreparedTestApprovalManager(testContext);
       await fixture.run(async () => {
         const database = openOpenClawStateDatabase(fixture.databaseOptions);
         const placements = createWorkerSessionPlacementStore({ database });
@@ -388,10 +375,8 @@ describe("exec approval signed agent runtime", () => {
           await fixture.manager.resolve(record.id, "allow-once");
           await pending;
           const snapshot = await fixture.manager.getSnapshot(record.id);
-          expect([snapshot?.status, snapshot?.decision]).toEqual(
-            revoked ? ["cancelled", undefined] : ["allowed", "allow-once"],
-          );
-          expect(guardCalls.length).toBeGreaterThan(1);
+          expect([snapshot?.status, snapshot?.decision]).toEqual(["allowed", "allow-once"]);
+          expect(guardCalls).toHaveLength(1);
           for (const calls of guardCalls) {
             expect(calls).toEqual([0, 0, 0, 0, 0, 0]);
           }
@@ -495,7 +480,7 @@ describe("exec approval signed agent runtime", () => {
 
       expect(await manager.listPendingRecords()).toHaveLength(0);
       expect(vi.mocked(opts.respond).mock.calls[0]?.[2]).toMatchObject({
-        message: expect.stringContaining("no longer active"),
+        message: expect.stringContaining("The approval run ended"),
       });
     });
   });
@@ -582,22 +567,6 @@ describe("exec approval signed agent runtime", () => {
       });
       await fixture.manager.resolve(record.id, "deny");
       await pending;
-    });
-  });
-
-  it("cancels an exec approval when authority closes after the handshake", async (testContext) => {
-    let active = true;
-    const fixture = await createApproval(testContext, () => active);
-    const { manager } = fixture;
-    await fixture.run(async () => {
-      const opts = requestOptions(identity(false), () => active);
-      const { pending } = await requestApproval(fixture, opts);
-      const record = await pendingRecord(fixture);
-      active = false;
-
-      await expect(manager.awaitDecision(record.id)).resolves.toBeNull();
-      await pending;
-      expect(await manager.getSnapshot(record.id)).toMatchObject({ status: "cancelled" });
     });
   });
 

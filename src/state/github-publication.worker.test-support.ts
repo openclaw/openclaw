@@ -1,28 +1,11 @@
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
-import { expect, vi } from "vitest";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
-import { prepareGitHubPublicationSource } from "../gateway/github-publication-source.js";
+import { vi } from "vitest";
 import { repositoryGitHubPublicationDigest } from "../gateway/github-repository-publication.kernel.js";
 import type { SqliteWorkerReply, SqliteWorkerRequest } from "../infra/sqlite-worker-contract.js";
-import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { publicationRowDefaults } from "./github-publication-fixtures.test-support.js";
 import type { RepositoryGitHubPublicationRow } from "./github-publication-read.types.js";
-import type { RepositoryPublicationMutation } from "./github-publication-worker.types.js";
-import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
-import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
-import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
-import { createSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
-
-export function publicationCommand(input: RepositoryPublicationMutation) {
-  const operationId = `${input.operation}-${"row" in input ? input.row.request_id : "report"}`;
-  return {
-    type: "githubPublications.repository" as const,
-    input: { ...input, operationId },
-  };
-}
 
 export function repositoryRow(requestId: string): RepositoryGitHubPublicationRow {
   const row: RepositoryGitHubPublicationRow = {
@@ -50,30 +33,7 @@ export function repositoryRow(requestId: string): RepositoryGitHubPublicationRow
   return row;
 }
 
-export async function expectNoMainThreadSql(operation: () => Promise<void>) {
-  const sql = observeMainThreadSql();
-  try {
-    sql.calibrate();
-    await operation();
-    sql.expectIdle();
-  } finally {
-    sql.restore();
-  }
-}
-
-export async function expectNoWorkerRequests(operation: () => Promise<void>) {
-  using requests = vi.spyOn(Worker.prototype, "postMessage");
-  await operation();
-  expect(requests).not.toHaveBeenCalled();
-}
-
 const heldReplies = new Set<() => void>();
-
-export function releaseHeldGitHubPublicationMessages() {
-  for (const release of heldReplies) {
-    release();
-  }
-}
 
 export function holdNextReply(
   commandType = "githubPublications.repository",
@@ -143,76 +103,4 @@ export function holdNextReply(
   };
   heldReplies.add(release);
   return { ready: ready.promise, release };
-}
-
-export function holdNextReceipt() {
-  const ready = createDeferredCore();
-  let deliver: (() => void) | undefined;
-  const observe = workerAdmission.observeSqliteWorkerCommittedFacts;
-  vi.spyOn(workerAdmission, "observeSqliteWorkerCommittedFacts").mockImplementationOnce(
-    (admission, observer) => {
-      observe(admission, (receipt) => {
-        deliver = () => observer(receipt);
-        ready.resolve();
-      });
-    },
-  );
-  const release = () => {
-    const send = deliver;
-    deliver = undefined;
-    heldReplies.delete(release);
-    send?.();
-  };
-  heldReplies.add(release);
-  return { ready: ready.promise, release };
-}
-
-export async function preparePublicationSourceFixture(
-  context: OpenClawStateWorkerContext,
-  requestId: string,
-  assertCurrent = () => {},
-  personalOwnerProfileId?: string,
-) {
-  const row = repositoryRow(requestId);
-  row.session_id = requestId;
-  row.session_key = `agent:main:${requestId}`;
-  const result = runOpenClawStateWriteTransaction(
-    ({ db }) =>
-      createSessionRepositoryWorkspaceInDatabase(
-        db,
-        {
-          agentId: row.agent_id,
-          sessionKey: row.session_key,
-          url: "https://github.com/example/repository",
-          branch: row.branch,
-        },
-        1000,
-      ),
-    { path: context.admission.databasePath },
-  );
-  row.workspace_id = result.workspaceId;
-  const entry = await upsertSessionEntryCore(
-    { agentId: row.agent_id, sessionKey: row.session_key },
-    { sessionId: row.session_id, updatedAt: 1000, repositoryWorkspaceId: row.workspace_id },
-  );
-  if (!entry) {
-    throw new Error("Publication source session was not created");
-  }
-  row.session_lifecycle_revision = entry.lifecycleRevision ?? null;
-  row.request_digest = repositoryGitHubPublicationDigest(row);
-  const source = await prepareGitHubPublicationSource({
-    sourcePath: resolveOpenClawAgentSqlitePath({ agentId: row.agent_id }),
-    selector: {
-      agentId: row.agent_id,
-      sessionKey: row.session_key,
-      sessionId: row.session_id,
-      lifecycleRevision: row.session_lifecycle_revision,
-      repositoryWorkspaceId: row.workspace_id,
-      repositoryBranch: row.branch,
-      personalOwnerProfileId,
-    },
-    signal: new AbortController().signal,
-    assertCurrent,
-  });
-  return { row, source };
 }

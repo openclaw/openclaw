@@ -10,7 +10,7 @@ import {
   createTranscriptIndexAppenderInTransaction,
   reconcileSessionTranscriptIndexInTransaction,
 } from "../../config/sessions/session-transcript-index.js";
-import { searchSessionTranscriptsReadOnlySync } from "../../config/sessions/session-transcript-search.js";
+import { searchSessionTranscriptsReadOnlySync } from "../../config/sessions/session-transcript-search.worker.js";
 import { buildSessionTranscriptTurnExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import type { SessionTurnPlan } from "../../config/sessions/session-turn.types.js";
 import {

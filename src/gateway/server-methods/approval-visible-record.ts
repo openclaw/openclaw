@@ -20,7 +20,11 @@ import type {
   OperatorApprovalRecord,
   OperatorApprovalStoreGuard,
 } from "../operator-approval-store.types.js";
-import { prepareApprovalSessionAccess } from "./approval-record-lookup.js";
+import {
+  prepareApprovalSessionAccess,
+  readApprovalRequestSource,
+  readOperatorApprovalRequestSource,
+} from "./approval-record-lookup.js";
 import type { ApprovalRequestAuthority } from "./approval-request-authority.js";
 import type { GatewayClient } from "./types.js";
 
@@ -63,13 +67,10 @@ export async function loadVisibleApproval(params: {
     : undefined;
   let sourceSessionKey = admittedRecord?.request.sessionKey;
   let sourceAgentId = admittedRecord?.request.agentId;
-  if (admittedRecord) {
-    params.authority.bindSource(admittedRecord.request);
-  }
   let sessionAccess = await prepareApprovalSessionAccess({
     client: params.client,
     getCfg: params.getCfg,
-    sources: liveRecord ? [liveRecord.request] : [],
+    sources: liveRecord ? [readApprovalRequestSource(liveRecord)] : [],
   });
   using sessionAccessLifetime = {
     retained: false,
@@ -82,10 +83,17 @@ export async function loadVisibleApproval(params: {
   params.authority.assertCurrent();
   // Config and policy callbacks can reenter; defer source and reviewer reads to their use sites.
   const canAccess = (
-    source: () => { sessionKey?: string | null; agentId?: string | null },
+    source: () => {
+      sessionKey?: string | null;
+      agentId?: string | null;
+      requestedByProfileId?: string | null;
+    },
     reviewerDeviceIds: () => readonly string[] | null | undefined,
+    invitationOnly = false,
   ) =>
-    sessionAccess.canAccess(source()) &&
+    (invitationOnly
+      ? sessionAccess.canAccessInvited(source())
+      : sessionAccess.canAccess(source())) &&
     canAccessOperatorApproval({
       client: params.client,
       allowApprovalRuntime: params.allowApprovalRuntime,
@@ -94,7 +102,7 @@ export async function loadVisibleApproval(params: {
   if (
     liveRecord &&
     !canAccess(
-      () => liveRecord.request,
+      () => readApprovalRequestSource(liveRecord),
       () => liveRecord.approvalReviewerDeviceIds,
     )
   ) {
@@ -105,14 +113,9 @@ export async function loadVisibleApproval(params: {
       admittedRecord &&
       (admittedManager?.getLocalSnapshot(bindingId) !== admittedRecord ||
         admittedRecord.request.sessionKey !== sourceSessionKey ||
-        admittedRecord.request.agentId !== sourceAgentId ||
-        !canAccessOperatorApproval({
-          client: params.client,
-          allowApprovalRuntime: params.allowApprovalRuntime,
-          binding: { reviewerDeviceIds: admittedRecord.approvalReviewerDeviceIds },
-        }))
+        admittedRecord.request.agentId !== sourceAgentId)
     ) {
-      throw new Error("Approval lookup authority is no longer active");
+      throw new Error("The approval record changed. Look up the approval again.");
     }
   };
   const lookupAuthority = {
@@ -187,7 +190,7 @@ export async function loadVisibleApproval(params: {
       sessionAccess = await prepareApprovalSessionAccess({
         client: params.client,
         getCfg: params.getCfg,
-        sources: [found.record.source],
+        sources: [readOperatorApprovalRequestSource(found.record)],
       });
     }
     if (!isLookupCurrent()) {
@@ -195,13 +198,12 @@ export async function loadVisibleApproval(params: {
     }
     if (
       !canAccess(
-        () => found.record.source,
+        () => readOperatorApprovalRequestSource(found.record),
         () => found.record.reviewerDeviceIds,
       )
     ) {
       return null;
     }
-    params.authority.bindSource(lookup.record.source);
     const manager =
       lookup.record.kind === "exec"
         ? params.execApprovalManager
@@ -218,11 +220,11 @@ export async function loadVisibleApproval(params: {
             lookup.record.source.sessionKey ||
           (normalizeOptionalString(current.request.agentId) ?? null) !==
             lookup.record.source.agentId ||
-          !canAccessOperatorApproval({
-            client: params.client,
-            allowApprovalRuntime: params.allowApprovalRuntime,
-            binding: { reviewerDeviceIds: current.approvalReviewerDeviceIds },
-          })
+          !canAccess(
+            () => readApprovalRequestSource(current),
+            () => current.approvalReviewerDeviceIds,
+            true,
+          )
         ) {
           return null;
         }
@@ -249,7 +251,7 @@ export async function loadVisibleApproval(params: {
         (reconciled.status !== "pending" || isLookupCurrent()) &&
         !params.client?.invalidated &&
         canAccess(
-          () => reconciled.source,
+          () => readOperatorApprovalRequestSource(reconciled),
           () => reconciled.reviewerDeviceIds,
         )
           ? reconciled

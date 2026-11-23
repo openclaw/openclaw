@@ -10,6 +10,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { formatFastModeCurrentStatus, resolveFastModeState } from "../../agents/fast-mode.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import {
   setChannelConversationBindingIdleTimeoutBySessionKeyAsync,
   setChannelConversationBindingMaxAgeBySessionKeyAsync,
@@ -256,6 +257,9 @@ export const handleFastCommand: CommandHandler = defineAuthorizedTextCommand(
   async (params, rawArgs) => {
     const rawMode = normalizeLowercaseStringOrEmpty(rawArgs);
     if (!rawMode || rawMode === "status") {
+      if (!params.model) {
+        return sessionCommandReply(NO_MODEL_CONFIGURED_MESSAGE);
+      }
       const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
       const state = resolveFastModeState({
         cfg: params.cfg,
@@ -458,7 +462,6 @@ export const handleRestartCommand: CommandHandler = defineGatewayControlCommand(
         // pending session key to avoid cross-session overwrite (#86742).
         sessionKey: sentinelPayload?.sessionKey,
         emitHooks: {
-          assertCurrent: params.command.assertOwnerCurrent,
           beforeEmit: prepareSentinel,
           afterEmitRejected: clearSentinel,
         },

@@ -88,7 +88,9 @@
 .chat-group-messages
   > :is(
     .chat-bubble--tool-shell + .chat-bubble:not(.chat-bubble--tool-shell),
-    .chat-bubble:not(.chat-bubble--tool-shell) + .chat-bubble--tool-shell
+    .chat-bubble:not(.chat-bubble--tool-shell) + .chat-bubble--tool-shell,
+    .chat-tool-msg-collapse + .chat-bubble:not(.chat-bubble--tool-shell),
+    .chat-bubble:not(.chat-bubble--tool-shell) + .chat-tool-msg-collapse
   ) {
   margin-block-start: var(--space-1);
 }
@@ -97,8 +99,10 @@
   > :is(
     .chat-bubble--tool-shell + .chat-bubble:not(.chat-bubble--tool-shell),
     .chat-bubble:not(.chat-bubble--tool-shell) + .chat-bubble--tool-shell,
-    .chat-bubble + .chat-activity-group,
-    .chat-activity-group + .chat-bubble,
+    .chat-tool-msg-collapse + .chat-bubble:not(.chat-bubble--tool-shell),
+    .chat-bubble:not(.chat-bubble--tool-shell) + .chat-tool-msg-collapse,
+    .chat-bubble:not(.chat-bubble--tool-shell) + .chat-activity-group,
+    .chat-activity-group + .chat-bubble:not(.chat-bubble--tool-shell),
     .chat-work-group + .chat-bubble,
     .chat-work-group + .chat-activity-group,
     .chat-bubble + .chat-work-group,
@@ -142,6 +146,8 @@
    whether its content is visible, hidden or absent, so revealing it never moves
    the next turn and every group ends the same distance above the turn gap. */
 .chat-group-footer {
+  -webkit-user-select: none;
+  user-select: none;
   --chat-action-gap: var(--chat-footer-offset);
   position: relative;
   display: flex;
@@ -1035,11 +1041,16 @@ img.chat-avatar {
 .chat-bubble--tool-shell {
   align-self: stretch;
   width: 100%;
-  max-width: var(--chat-message-max-width, 760px);
+  max-width: var(--chat-message-max-width, 100%);
   padding: 0;
   border: 0;
   background: transparent;
   box-shadow: none;
+}
+
+/* Assistant prose padding must not add space inside a standalone tool row. */
+.chat-group.assistant .chat-bubble.chat-bubble--tool-shell {
+  padding: 0;
 }
 
 .chat-group.assistant.chat-group--forwarded .chat-bubble {
@@ -1464,7 +1475,7 @@ button.chat-reply-attribution__target:disabled {
   --chat-bubble-background: var(--chat-participant-surface);
   background: var(--chat-bubble-background);
 
-  :where(.shell[data-background-managed]) & {
+  :where([data-background-painted]) & {
     background:
       linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
       var(--bg-content, var(--bg));
@@ -1492,7 +1503,7 @@ button.chat-reply-attribution__target:disabled {
   --chat-bubble-background: var(--chat-participant-surface);
   background: var(--chat-bubble-background);
 
-  :where(.shell[data-background-managed]) & {
+  :where([data-background-painted]) & {
     background:
       linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
       var(--bg-content, var(--bg));
@@ -1726,7 +1737,7 @@ button.chat-reply-attribution__target:disabled {
   border-radius: var(--radius-md);
   background: var(--chat-bubble-background);
 
-  :where(.shell[data-background-managed]) & {
+  :where([data-background-painted]) & {
     background:
       linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
       var(--bg-content, var(--bg));

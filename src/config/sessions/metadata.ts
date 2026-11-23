@@ -11,6 +11,7 @@ import {
   isInternalNonDeliveryChannel,
 } from "../../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
+import { WEBCHAT_PROMPT_REACTIONS_CAPABILITY } from "./client-capabilities.js";
 import { resolveGroupSessionKey } from "./group.js";
 import {
   mergeSessionOrigin,
@@ -111,7 +112,17 @@ export function prepareSessionMetaPatch(params: {
         params.ctx.InputProvenance.kind === "external_user") &&
       clientChannel !== undefined &&
       !isInternalNonDeliveryChannel(clientChannel)
-        ? [...new Set(params.ctx.GatewayClientCaps ?? [])].toSorted()
+        ? [
+            ...new Set([
+              ...(params.ctx.GatewayClientCaps ?? []).filter(
+                (cap) => cap !== WEBCHAT_PROMPT_REACTIONS_CAPABILITY,
+              ),
+              ...(sourceChannel === INTERNAL_MESSAGE_CHANNEL &&
+              params.ctx.GatewayClientCaps !== undefined
+                ? [WEBCHAT_PROMPT_REACTIONS_CAPABILITY]
+                : []),
+            ]),
+          ].toSorted()
         : undefined,
     group: prepareGroupSessionPatch(params),
     privateTelegramTopicName:

@@ -967,6 +967,11 @@
         "provider": "google",
         "model": "gemini-3.1-flash-lite-image",
         "reason": "Gemini image models are for image generation, not chat."
+      },
+      {
+        "provider": "google",
+        "model": "gemini-nano-banana-2.1",
+        "reason": "Gemini image models are for image generation, not chat."
       }
     ]
   },
@@ -1059,7 +1064,7 @@
       "choiceLabel": "Google AI Studio API key",
       "choiceHint": "Supported API-key access from aistudio.google.com/apikey",
       "groupId": "google",
-      "groupLabel": "Google",
+      "groupLabel": "Google AI Studio",
       "groupHint": "Supported API-key setup",
       "onboardingFeatured": true,
       "optionKey": "geminiApiKey",

@@ -1,7 +1,7 @@
 import { anthropicOAuthProvider } from "./anthropic.js";
 import { openaiCodexOAuthProvider } from "./openai-chatgpt.js";
 import type { OAuthCredentials, OAuthProviderId, OAuthProviderInterface } from "./types.js";
-export * from "./types.js";
+export type { OAuthCredentials, OAuthProviderId, OAuthProviderInterface } from "./types.js";
 
 const BUILT_IN_OAUTH_PROVIDERS: OAuthProviderInterface[] = [
   anthropicOAuthProvider,

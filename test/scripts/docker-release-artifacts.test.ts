@@ -278,6 +278,7 @@ async function createPublicationRetry(conclusion = "failure") {
   return {
     ...fixture,
     publisher: {
+      ...qualificationForDocker(fixture.manifest),
       publisherSha: toolingSha,
       publisherRunId: runId,
       publisherRunAttempt: String(fixture.run.run_attempt),
@@ -446,9 +447,30 @@ function publishPrepared(
   });
 }
 
+function qualificationForDocker(manifest: PreparedRelease["manifest"]) {
+  const qualification = candidatePublicationFixture({
+    candidateSha: manifest.sourceSha,
+    qualificationSha: manifest.toolingSha,
+    candidateVersion: manifest.version,
+    runId: "500",
+  });
+  qualification.manifest.publicationArtifacts.docker = {
+    preparedRunId: manifest.producer.runId,
+    preparedRunAttempt: manifest.producer.runAttempt,
+    preparedArtifactName: manifest.artifactName,
+    preparedManifestSha256: hash(JSON.stringify(manifest, null, 2) + "\n"),
+  };
+  return {
+    publisherSha: qualification.p,
+    publisherFullRef: qualification.publisherFullRef,
+    fullReleaseManifest: qualification.manifest,
+    evidenceClient: qualification.client,
+  };
+}
+
 function verifyPrepared(fixture: Awaited<ReturnType<typeof createPreparedRelease>>) {
   return verifyDockerReleaseProducer(fixture.manifest, {
-    publisherSha: toolingSha,
+    ...qualificationForDocker(fixture.manifest),
     readApi: fixture.readApi,
   });
 }
@@ -727,7 +749,26 @@ describe("prepared Docker publication", () => {
     fixture.manifest.producer.workflowRef = workflowRef("docker-image-refresh");
     fixture.run.path = workflowPath("docker-image-refresh");
     fixture.run.event = "schedule";
-    expect((await verifyPrepared(fixture)).manifest).toBe(fixture.manifest);
+    expect(
+      (
+        await verifyDockerReleaseProducer(fixture.manifest, {
+          publisherSha: toolingSha,
+          readApi: fixture.readApi,
+        })
+      ).manifest,
+    ).toBe(fixture.manifest);
+  });
+
+  it("rejects supplied FRV without authenticated admission instead of using ancestry", async () => {
+    const fixture = await createPreparedRelease(false);
+    const qualification = qualificationForDocker(fixture.manifest);
+    await expect(
+      verifyDockerReleaseProducer(fixture.manifest, {
+        ...qualification,
+        fullReleaseManifest: { ...qualification.fullReleaseManifest, sourceAdmission: undefined },
+        readApi: fixture.readApi,
+      }),
+    ).rejects.toThrow(/requires authenticated P admission/u);
   });
 
   it("rejects missing provenance and mismatched source labels in actual OCI bytes", async () => {
@@ -970,6 +1011,50 @@ describe("prepared Docker publication", () => {
       steps.findIndex((step) => step.uses?.startsWith("actions/upload-artifact@")),
     ).toBeGreaterThan(smoke);
     expect(prepare.jobs.seal.needs).toContain("build");
+  });
+
+  it("installs the complete trusted tooling before authenticating prepared Docker evidence", () => {
+    const steps = readWorkflow("docker-release").jobs.publish.steps as {
+      name?: string;
+      uses?: string;
+      if?: string;
+      run?: string;
+      "working-directory"?: string;
+      with?: Record<string, unknown>;
+    }[];
+    const checkout = steps.find((step) => step.name === "Checkout trusted Docker tooling");
+    expect(checkout?.with?.ref).toBe("${{ github.workflow_sha }}");
+    expect(checkout?.with?.["sparse-checkout"]).toBeUndefined();
+    const setup = steps.find(
+      (step) => step.name === "Setup trusted Docker tooling package manager",
+    );
+    expect(setup?.uses).toBe("./workflow-source/.github/actions/setup-pnpm-store-cache");
+    expect(setup?.with).toMatchObject({
+      "cache-mode": "off",
+      "package-manager-file": "workflow-source/package.json",
+      "lockfile-path": "workflow-source/pnpm-lock.yaml",
+    });
+    const install = steps.find(
+      (step) => step.name === "Install trusted Docker tooling dependencies",
+    );
+    expect(install?.if).toBeUndefined();
+    expect(install?.["working-directory"]).toBe("workflow-source");
+    expect(install?.run).toBe("pnpm install --frozen-lockfile --prefer-offline --ignore-scripts");
+    const index = (name: string) => steps.findIndex((step) => step.name === name);
+    expect(index("Setup trusted Docker tooling package manager")).toBeGreaterThan(
+      index("Setup supported Node runtime"),
+    );
+    expect(index("Install trusted Docker tooling dependencies")).toBeGreaterThan(
+      index("Setup trusted Docker tooling package manager"),
+    );
+    for (const consumer of [
+      "Verify focused release evidence after Docker approval",
+      "Acquire authenticated publication manifest",
+      "Verify exact prepared producer and payload identities",
+      "Copy exact OCI digests, verify attestations, and promote aliases",
+    ]) {
+      expect(index(consumer)).toBeGreaterThan(index("Install trusted Docker tooling dependencies"));
+    }
   });
 
   it("keeps preparation unable to publish and serializes the single approved writer", () => {

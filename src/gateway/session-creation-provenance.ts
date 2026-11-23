@@ -1,4 +1,5 @@
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import type { SessionRow } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { requesterCreatorProfileId, type RequesterOrigin } from "../agents/requester-origin.js";
 import { attributeDelegatedSessionCreator } from "../config/sessions/session-entry-provenance.js";
 import type {
@@ -12,7 +13,7 @@ import type { OpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.j
 export type TrustedSessionCreation = Partial<AgentRuntimeSessionSpawnContext> & {
   skillLibrarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
   via: SessionCreatedVia;
-  surface?: "plugin-dock";
+  surface?: SessionRow["createdSurface"];
   actor?: SessionCreatedActor;
   /** Creator-owned isolation requirement resolved only by the trusted Gateway boundary. */
   sandbox?: "required";

@@ -49,6 +49,11 @@ export function assertPortSelection(
   family?: DatabasePortFamily,
 ) {
   try {
+    if (to === "sqlite" && config.database?.postgres?.ownership === "installation") {
+      throw new Error(
+        'Database port to SQLite is incompatible with database.postgres.ownership "installation". Stop all writers. If a previous attempt left an active manifest, run --rollback <manifest> first. Then set ownership to "state-directory" or unset it before retrying.',
+      );
+    }
     const engines = resolveDatabaseFamilyEngines(config);
     if (
       !family &&

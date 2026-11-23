@@ -2,7 +2,6 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,35 +27,6 @@ import {
   sendMSTeamsMessages,
 } from "./messenger.js";
 import { createMockApp, createStoredReference } from "./messenger.test-helpers.js";
-import { setMSTeamsRuntime } from "./runtime.js";
-
-const chunkMarkdownText = (text: string, limit: number) => {
-  if (!text) {
-    return [];
-  }
-  if (limit <= 0 || text.length <= limit) {
-    return [text];
-  }
-  const chunks: string[] = [];
-  for (let index = 0; index < text.length; index += limit) {
-    chunks.push(text.slice(index, index + limit));
-  }
-  return chunks;
-};
-
-const runtimeStub = {
-  config: {
-    loadConfig: () => ({}),
-  },
-  channel: {
-    text: {
-      chunkMarkdownText,
-      chunkMarkdownTextWithMode: chunkMarkdownText,
-      resolveMarkdownTableMode: () => "code",
-      convertMarkdownTables: (text: string) => text,
-    },
-  },
-} as unknown as PluginRuntime;
 
 const createRecordedSendActivity = (
   sink: string[],
@@ -118,7 +88,6 @@ async function captureSend(params: Partial<SendParams> & Pick<SendParams, "messa
 
 describe("msteams messenger", () => {
   beforeEach(() => {
-    setMSTeamsRuntime(runtimeStub);
     graphUploadMockState.uploadAndShareSharePoint.mockReset();
     graphUploadMockState.getDriveItemProperties.mockReset();
   });
@@ -172,7 +141,8 @@ describe("msteams messenger", () => {
       });
     });
 
-    it("splits media into separate messages by default", () => {
+    // Late stream settlement renders fallbacks outside the plugin runtime slot.
+    it("splits media into separate messages without the plugin runtime", () => {
       const messages = renderReplyPayloadsToMessages(
         [{ text: "hi", mediaUrl: "https://example.com/a.png" }],
         { textChunkLimit: 4000, tableMode: "code" },

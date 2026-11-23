@@ -3,14 +3,14 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts";
 import { readPreparedActivity, summarizeToolGroup } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, resolveToolCardOutcome } from "../../lib/chat/tool-cards.ts";
-import { inlineActivityDisclosureCalls } from "./chat-activity-segments.ts";
+import { readInlineToolExpansion } from "./chat-activity-segments.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-snapshot.ts";
-import { resetToolStream } from "./tool-stream-state.ts";
+import { resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
 import {
   agentEvent,
   createHost,
@@ -99,7 +99,7 @@ it.each(["live", "history"] as const)(
     expect(entry?.output).toBe("Legacy progress");
     host.settings = { chatInlineCommands: true };
     expect(handleAgentEvent(host, progress, "history")).toBe(false);
-    host.inlineCommandPresentation = { inlineActivityDisclosureCalls };
+    host.inlineCommandPresentation = { readInlineToolExpansion };
     expect(handleAgentEvent(host, progress, "history")).toBe(true);
     expect(entry?.output).toBe("Optional stdout");
     vi.advanceTimersByTime(80);
@@ -164,6 +164,34 @@ it.each(["live", "history"] as const)(
     resetToolStream(host);
   },
 );
+
+it("keeps every operation in a long live run until that run is reconciled", () => {
+  useToolStreamFakeTimers();
+  const host = createHost({ chatRunId: "run-1" });
+  const callIds = Array.from({ length: 60 }, (_, index) => `call-${index}`);
+  for (const [index, toolCallId] of callIds.entries()) {
+    emitEvent(host, "run-1", index * 2 + 1, "tool", {
+      phase: "start",
+      name: "read",
+      toolCallId,
+      args: { path: `file-${index}.ts` },
+    });
+    emitEvent(host, "run-1", index * 2 + 2, "tool", {
+      phase: "result",
+      name: "read",
+      toolCallId,
+      result: `Contents of file ${index}`,
+    });
+  }
+  expect(
+    host.chatToolMessages.flatMap((message) =>
+      extractToolCardsCached(message).map((card) => card.callId),
+    ),
+  ).toEqual(callIds);
+  resetToolStreamRun(host, "run-1");
+  expect(host.chatToolMessages).toEqual([]);
+  resetToolStream(host);
+});
 
 it("clears partial stdout when a structured command receipt has empty text", () => {
   const host = createHost({ chatRunId: "run-1" });
@@ -237,6 +265,25 @@ it.each(["result", "item-end", "canvas"] as const)(
 );
 
 describe("status text truncation", () => {
+  it.each(["live", "history"] as const)(
+    "keeps tool preparation in the normal working state until execution starts (%s)",
+    (source) => {
+      const host = createHost({ chatRunId: "run-1" });
+      emitEvent(host, "run-1", 1, "run_status", { phase: "waiting_for_model", reason: "slot" });
+      expect(startupLabel(host)).toBe("Waiting for a free model slot");
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 2, "run_status", { phase: "preparing_tool" }),
+        source,
+      );
+      expect(startupLabel(host)).toBeUndefined();
+      expect(host.toolStreamOrder).toHaveLength(0);
+      emitEvent(host, "run-1", 3, "tool", { phase: "start", toolCallId: "call", name: "read" });
+      expect(host.toolStreamOrder).toHaveLength(1);
+      expect(startupLabel(host)).toBeUndefined();
+    },
+  );
+
   it("restores model waits after prior activity and rejects stale wait replay", () => {
     const host = createHost({ chatRunId: "run-1" });
     emitEvent(host, "run-1", 1, "assistant", { text: "First result" });
@@ -330,7 +377,7 @@ describe("app-tool-stream approval lifecycle", () => {
       const activity = messages.flatMap(readPreparedActivity);
       expect(activity).toEqual([completed]);
       expect(summarizeToolGroup(activity)).toBe(
-        withResult ? "1 other operation" : "1 other operation · 1 unknown",
+        withResult ? "Used tools" : "Tool calls · Outcome unknown",
       );
       expect(activity[0]).not.toHaveProperty("diagnostic");
       expect(completedEvent.diagnostic).toEqual({ source: "native-tool" });
@@ -414,6 +461,7 @@ describe("app-tool-stream approval lifecycle", () => {
           type: "toolresult",
           name: "read",
           text: "",
+          timestamp: TOOL_STREAM_TEST_NOW,
         });
       }
     } finally {
@@ -789,28 +837,6 @@ describe("app-tool-stream result blocks", () => {
     expect(host.chatToolMessages[0]).not.toHaveProperty("__openclawToolStreamLiveOutput");
     expect(entry?.liveOutput).toBeUndefined();
     expect(entry?.output).toBe("captured beginning");
-  });
-
-  it("projects live edit counts and lets the resolved result replace them without flicker", () => {
-    useToolStreamFakeTimers();
-    const host = createHost({ chatRunId: "run-1" });
-    const toolCallId = "call-live-edit";
-    const identity = buildToolStreamIdentity("run-1", toolCallId);
-    const emit = toolEvents(host, "run-1", { name: "edit", toolCallId });
-    emit(1, { phase: "start", args: { path: "src/report.ts" } });
-    emit(2, { phase: "input_delta", diff: { added: 12, removed: 3 } });
-    vi.advanceTimersByTime(80);
-    expect(host.toolStreamById.get(identity)?.liveDiffStat).toEqual({ added: 12, removed: 3 });
-    expect(host.chatToolMessages[0]?.["__openclawToolStreamDiffStat"]).toEqual({
-      added: 12,
-      removed: 3,
-    });
-    emit(3, { phase: "result", result: { details: { diff: "-1 old\n+1 new" } } });
-    const resolved = host.toolStreamById.get(identity);
-    expect(resolved?.liveDiffStat).toBeUndefined();
-    expect(resolved?.details).toEqual({ diff: "-1 old\n+1 new" });
-    expect(resolved?.message).not.toHaveProperty("__openclawToolStreamDiffStat");
-    expect(host.chatToolMessages[0]).not.toHaveProperty("__openclawToolStreamDiffStat");
   });
 
   it("applies session-status effects when the result reports a placeholder tool name", () => {

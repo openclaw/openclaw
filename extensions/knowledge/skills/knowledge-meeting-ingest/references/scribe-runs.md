@@ -9,7 +9,9 @@ plugin's tools ([source acquisition](source-acquisition.md)).
 The pending, checkpoint and completion rules below address the November 12, 2026
 live run that stopped after digesting a meeting instead of finishing ingestion:
 [#197890](https://github.com/openclaw/openclaw/pull/197890) and
-[#197391](https://github.com/openclaw/openclaw/pull/197391).
+[#197391](https://github.com/openclaw/openclaw/pull/197391). The per-run meeting
+target in step 5 addresses runs that ingested one meeting while others stayed
+pending ([#199744](https://github.com/openclaw/openclaw/pull/199744)).
 
 The prompt names which meetings (the owner's, or every meeting the account can
 read) and how far back to start (today, or the last 7 or 30 days, in the owner's
@@ -50,6 +52,11 @@ time zone).
    for one that has none. Record `done` only after verification passes. Write
    each line with `knowledge_edit_body` as soon as the meeting's outcome is
    known, so an interrupted run resumes instead of redoing or losing it.
+   Then start the next pending meeting. A scheduled run's message sets how many
+   meetings it ingests; without one, ingest every pending meeting. That number
+   is a target, not a limit: stop short only when no meeting is left that
+   nothing outside the run holds back. Compaction keeps what you published, so
+   a long run is no reason to stop.
 6. Count meetings ingested, already in Knowledge, left pending and without a
    transcript, and pages and claims written. If meetings are left pending, none
    was ingested and nothing outside the run held them back, the run did not do

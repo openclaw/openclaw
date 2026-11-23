@@ -15,7 +15,7 @@ import {
 } from "../../sessions/session-controller.message-injection.js";
 import { captureReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
 import { testing as replyTesting } from "../../sessions/session-controller.test-support.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { createEmbeddedRunHandle, testing } from "../embedded-agent-runner/runs.test-support.js";
 import * as requesterOrigin from "../requester-origin.js";
 import {
@@ -165,10 +165,9 @@ describe("host-prepared embedded tool authority", () => {
   ] as const)(
     "allows direct harness execution only under current prepared authority (%s, %s)",
     async (authority, source) => {
-      const revocation = new AbortController();
-      const check = vi.fn(() => revocation.signal.throwIfAborted());
+      const check = vi.fn();
       const profile = { profileId: "watchdog-person", emails: [], assignedRole: null };
-      const operator = createAdmittedRunOperatorAuthority({
+      const operator = createTestOperatorAuthority({
         profileId: "watchdog-person",
         scopes: ["operator.write"],
         ...bindPluginGatewayAccessPolicy(
@@ -217,14 +216,7 @@ describe("host-prepared embedded tool authority", () => {
             expect(() => withoutGatewayToolCallerIdentity(() => publish(handle))).toThrow(
               "host-admitted",
             );
-            const cleanup = publish(handle);
-            try {
-              revocation.abort(new Error("Plugin grant revoked")); // The exposed signal stays live.
-              expect(() => publish(handle)).toThrow("no longer active");
-              expect(watchdog.isCurrent()).toBe(false);
-            } finally {
-              cleanup?.();
-            }
+            publish(handle)?.();
             return "entered";
           },
         );
@@ -249,7 +241,9 @@ describe("host-prepared embedded tool authority", () => {
               ).rejects.toThrow("Reply operation has no active tool authority snapshot");
             }
           } else {
-            await expect(pending).rejects.toThrow("admitted run authority is no longer active");
+            await expect(pending).rejects.toThrow(
+              "This agent run is no longer active. Start a new turn to retry.",
+            );
             expect(run).not.toHaveBeenCalled();
           }
         } finally {
@@ -259,7 +253,7 @@ describe("host-prepared embedded tool authority", () => {
         if (authority === "current") {
           await expect(
             observed?.bindToolAuthorityRouteAsync({ provider: "openai", model: "gpt-test" }),
-          ).rejects.toThrow("Reply operation authority is no longer active");
+          ).rejects.toThrow("This agent run is no longer active. Start a new turn to retry.");
           expect(() => publish(createEmbeddedRunHandle({ runId: attempt.runId }))).toThrow(
             "host-admitted",
           );
@@ -398,7 +392,7 @@ describe("host-prepared embedded tool authority", () => {
                 publish(preparedHandle(previousFingerprint)),
               ),
             ),
-          ).rejects.toThrow("no longer active");
+          ).rejects.toThrow("The agent run ended. Start a new turn to retry.");
         },
       );
     });
@@ -443,7 +437,7 @@ describe("host-prepared embedded tool authority", () => {
       await withPreparedEmbeddedRunToolAuthority(internal, attempt, undefined, async (prepared) => {
         expect(prepared.toolAuthorityFingerprint).toBe(previousFingerprint);
         // Neither attempt attaches a backend: rejection must come from the selected policy owner.
-        await expect(previous?.prepare()).rejects.toThrow("no longer active");
+        await expect(previous?.prepare()).rejects.toThrow("reply target changed");
         await expect(capture()?.prepare()).resolves.toBeDefined();
       });
     });

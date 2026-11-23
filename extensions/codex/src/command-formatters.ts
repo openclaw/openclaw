@@ -18,6 +18,7 @@ import {
 } from "./app-server/rate-limits.js";
 import { isLikelyEmailAddress } from "./command-account-email.js";
 import type { CodexAccountAuthOverview } from "./command-account.js";
+import type { CodexReviewTarget } from "./command-handler-args.js";
 import type { readCodexStatusProbes, SafeValue } from "./command-rpc.js";
 
 export { escapeCodexChatText };
@@ -258,6 +259,27 @@ export function formatCodexAccountLine(value: string): string {
     .join("");
 }
 
+export const CODEX_REVIEW_USAGE =
+  "/codex review [--base <branch> | --commit <sha> | <instructions>]";
+
+export function formatStartedCodexReview(threadId: string, target: CodexReviewTarget): string {
+  const thread = `for thread ${formatCodexDisplayText(threadId)}.`;
+  switch (target.type) {
+    case "uncommittedChanges":
+      return `Started Codex review ${thread}`;
+    case "baseBranch":
+      return `Started Codex review of changes against ${formatCodexDisplayText(target.branch)} ${thread}`;
+    case "commit":
+      return `Started Codex review of commit ${target.sha} ${thread}`;
+    case "custom":
+      return `Started Codex review with custom instructions ${thread}`;
+    default: {
+      const exhaustive: never = target;
+      return exhaustive;
+    }
+  }
+}
+
 export function buildHelp(): string {
   return [
     "Codex commands:",
@@ -277,7 +299,7 @@ export function buildHelp(): string {
     "- /codex permissions [default|yolo|status]",
     "- /codex detach",
     "- /codex compact",
-    "- /codex review",
+    `- ${CODEX_REVIEW_USAGE} (only a leading unquoted --base or --commit selects a Git target)`,
     "- /codex diagnostics [note]",
     "- /codex computer-use [status|install]",
     "- /codex account",

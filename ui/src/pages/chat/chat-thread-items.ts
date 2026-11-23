@@ -3,6 +3,7 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
+import { messageSubagentCompletions } from "../../../../src/shared/subagent-completion.js";
 import { markdownVisibleText } from "../../components/markdown-visible-text.ts";
 import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { prepareChatMessageRender } from "../../lib/chat/message-display.ts";
@@ -26,6 +27,7 @@ import {
   resolveFullMessageRecovery,
   type ChatMessageRecovery,
 } from "./chat-message-recovery.ts";
+import { subagentCompletionText } from "./chat-spawned-subagent.ts";
 import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { copyLiveTerminalIdentity } from "./terminal-message-identity.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
@@ -87,6 +89,14 @@ export function createChatSearchMatcher(
   const sourceMatches = (markdown: string | null) =>
     normalizeLowercaseStringOrEmpty(markdown).normalize("NFC").includes(normalizedQuery);
   return (message) => {
+    const completions = messageSubagentCompletions(message);
+    if (
+      completions.length &&
+      (sourceMatches(completions.map((entry) => entry.label ?? "").join("\n")) ||
+        sourceMatches(subagentCompletionText(completions)))
+    ) {
+      return true;
+    }
     const role = recovery ? normalizeRoleForGrouping(normalizeMessage(message).role) : "";
     const expansion = recovery
       ? resolveFullMessageRecovery(message, role, {

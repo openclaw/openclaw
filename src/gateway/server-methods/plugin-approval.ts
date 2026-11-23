@@ -31,6 +31,7 @@ import {
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import { approvalReaderSessionPolicy } from "./approval-record-lookup.js";
 import {
   captureApprovalWorkerOwner,
   registerPendingApprovalRecord,
@@ -67,7 +68,7 @@ export function createPluginApprovalHandlers(
         manager,
         client,
         approvalKind: "plugin",
-        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
+        ...approvalReaderSessionPolicy(client, context.getRuntimeConfig),
       });
       authority.assertCurrent();
       respond(true, approvals, undefined);
@@ -99,7 +100,7 @@ export function createPluginApprovalHandlers(
           trustedAgentRuntime &&
           context.validateAgentRuntimeApprovalAuthority?.(trustedAgentRuntime) !== true
         ) {
-          reject("agent runtime approval authority is no longer active");
+          reject("The approval run ended. Start a new turn to request approval again.");
           return;
         }
 
@@ -260,7 +261,7 @@ export function createPluginApprovalHandlers(
         manager,
         inputId: params.id,
         client,
-        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
+        ...approvalReaderSessionPolicy(client, context.getRuntimeConfig),
         respond,
       });
     },

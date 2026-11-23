@@ -2,10 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "../agents/tools/gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { parseAgentSessionKey, isIncognitoSessionKey } from "../routing/session-key.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
@@ -18,7 +15,7 @@ import {
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicy,
 } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { readPluginSessionWorkAuthority } from "./plugin-session-work-authority.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
@@ -132,13 +129,13 @@ export async function prepareGatewaySessionAccessAuthority(request: {
   const tool = client?.internal?.agentToolCaller;
   const runtime = client?.internal?.agentRuntimeIdentity;
   const ambient = client?.internal?.syntheticClient ? getGatewayToolCallerIdentity() : undefined;
-  const assertAmbient = ambient ? captureGatewayToolCallerAssertion() : undefined;
   const service = readPluginSessionWorkAuthority();
   const serviceOwner =
     service && client?.internal?.pluginRuntimeOwnerId === service.pluginId
       ? service.target
       : undefined;
-  const owner = tool ?? runtime ?? (assertAmbient ? ambient : undefined) ?? serviceOwner;
+  const owner =
+    tool ?? runtime ?? (ambient?.operationalRunInstance ? ambient : undefined) ?? serviceOwner;
   const inherited = runtime?.sessionSpawnContext?.inheritedToolPolicy;
   const inheritedPolicy = inherited
     ? { allow: [...inherited.allow], deny: [...inherited.deny] }
@@ -157,16 +154,14 @@ export async function prepareGatewaySessionAccessAuthority(request: {
       }
     }
     tool?.assertCurrent?.();
-    if (ambient) {
-      if (
-        !assertAmbient ||
+    if (
+      ambient &&
+      (!ambient.operationalRunInstance ||
         ambient.agentId !== parsed.agentId ||
         ambient.sessionKey !== sessionKey ||
-        (ambient.gatewayContextResolver && ambient.gatewayContextResolver() !== params.context)
-      ) {
-        denied();
-      }
-      assertAmbient();
+        (ambient.gatewayContextResolver && ambient.gatewayContextResolver() !== params.context))
+    ) {
+      denied();
     }
     if (runtime && params.context.validateAgentRuntimeApprovalAuthority?.(runtime) !== true) {
       denied();
@@ -223,7 +218,7 @@ export async function prepareGatewaySessionAccessAuthority(request: {
       denied();
     }
   };
-  const captured = await captureGatewayOperatorRunAuthority({
+  const captured = await prepareGatewayOperatorRunAuthority({
     client,
     context: params.context,
     hasCurrentClientAuthority: params.hasCurrentClientAuthority,
@@ -447,7 +442,7 @@ export async function prepareGatewaySessionAccessAuthority(request: {
       );
       if (!sessionOnly) {
         releases.push(onUserProfilesChanged(check), onOperatorRolePolicyChanged(check));
-        const sourceSignal = captured?.authority.signal ?? originalGrant?.signal;
+        const sourceSignal = originalGrant?.signal ?? captured?.authority.signal;
         if (sourceSignal) {
           sourceSignal.addEventListener("abort", check, { once: true });
           releases.push(() => sourceSignal.removeEventListener("abort", check));

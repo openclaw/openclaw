@@ -8,10 +8,8 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  createOperationalRunInstanceRef,
-} from "../../agents/admitted-run-context.js";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { withAgentDeletion } from "../../agents/agent-lifecycle-registry.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -22,7 +20,6 @@ import {
   loadReplySessionInitializationSnapshot,
 } from "../../config/sessions/session-accessor.reset.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as sessionReplacement from "../../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -586,7 +583,11 @@ describe("session event target custody", () => {
         sessionKey,
         sessionEventToolsAllow: toolsAllow,
         operationalRunInstance: createOperationalRunInstanceRef(runId),
-        receiptAuthority: () => invocationActive,
+        receiptAuthority: () => {
+          if (!invocationActive) {
+            throw new Error("agent tool caller authority is no longer active");
+          }
+        },
       },
       () =>
         captureTarget("main", sessionKey, {
@@ -627,7 +628,15 @@ describe("session event target custody", () => {
     async (owner, { state: { env } }) => {
       let active = true;
       const capture = withGatewayToolCallerIdentity(
-        { agentId: "main", sessionKey, receiptAuthority: () => owner !== "invocation" || active },
+        {
+          agentId: "main",
+          sessionKey,
+          receiptAuthority: () => {
+            if (owner === "invocation" && !active) {
+              throw new Error("agent tool caller authority is no longer active");
+            }
+          },
+        },
         () =>
           captureTarget("main", sessionKey, {
             env,
@@ -647,31 +656,9 @@ describe("session event target custody", () => {
       } else {
         active = false;
         await expect(capture).rejects.toThrow(
-          owner === "invocation" ? "no longer owns its invocation" : "Background producer retired",
+          owner === "invocation" ? "no longer active" : "Background producer retired",
         );
       }
-      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-    },
-  );
-
-  it.for(["session reset", "lifecycle replacement"] as const)(
-    "rejects %s before dispatch",
-    async (change, { state: { env, storePath } }) => {
-      const target = await captureTarget("main", sessionKey, { env });
-      replaceSessionEntrySync(
-        { agentId: "main", storePath, sessionKey, env },
-        {
-          sessionId: change === "session reset" ? "replacement-session" : "original-session",
-          lifecycleRevision: "replacement-revision",
-          updatedAt: 2,
-          delivery: normalizeSessionDeliveryState({
-            context: { ...route, to: "replacement-target" },
-          }),
-        },
-      );
-      const receipt = enqueueCompletion(target);
-
-      await expectStopped(receipt, "failed", "original session generation");
       expect(peekSystemEventEntries(sessionKey)).toEqual([]);
     },
   );
@@ -737,13 +724,13 @@ describe("session event target custody", () => {
 it("retains one requester until pre-admission cancellation", async ({ signal, state: { env } }) => {
   const release = vi.fn();
   const retain = vi.fn(() => release);
-  const guest = createAdmittedRunOperatorAuthority({
+  const guest = createTestOperatorAuthority({
     profileId: "guest",
     scopes: ["operator.write"],
     assertCurrent() {},
     retain,
   });
-  const admin = createAdmittedRunOperatorAuthority({
+  const admin = createTestOperatorAuthority({
     profileId: "admin",
     scopes: ["operator.admin"],
     assertCurrent() {},

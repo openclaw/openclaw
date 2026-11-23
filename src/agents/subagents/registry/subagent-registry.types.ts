@@ -4,6 +4,7 @@ import type {
 } from "../../../config/sessions/session-entry-current.types.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { SubagentEndReason } from "../../../context-engine/types.js";
+import type { QueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.codec.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
 import type { OperationalRunInstanceRef } from "../../operational-run-instance.js";
@@ -106,8 +107,8 @@ export type RequesterSettleWakeState = {
   status: "pending" | "dispatching";
   /** Number of delivery attempts already admitted. */
   attemptCount: number;
-  /** Raw private input retained with its exact dispatch identity until this wake settles. */
-  privateInput?: { runId: string; message: string };
+  /** Raw dispatch bytes; the shipped field's absent privateOnly flag means private input. */
+  privateInput?: { runId: string; message: string; privateOnly?: false };
   /** Retained retry receipt from an admitted attempt; mailbox admission owns scheduling. */
   nextAttemptAt?: number;
   /** Frozen wave membership after delivery admission or requester-yield re-admission. */
@@ -179,6 +180,8 @@ export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "colle
   /** Completion-producing row retirement deferred until requesterTurnRunId settles. */
   retireAfterRequesterTurn?: boolean;
   requesterOrigin?: DeliveryContext;
+  /** Requester's source at spawn; restart re-admits it under current policy. Older rows lack it. */
+  requesterOperatorSource?: QueuedOperatorRecoverySource;
   /** Durable source locator for transport-neutral progress presentation. */
   progressOrigin?: SubagentProgressOrigin;
   requesterDisplayKey: string;
@@ -250,6 +253,7 @@ export type SubagentRunMaintenanceRecord = Pick<
   | "killReconciliation"
 > & {
   execution: Pick<SubagentExecutionState, "status" | "endedAt">;
+  requesterSettleWake?: Pick<RequesterSettleWakeState, "status">;
   delivery?: Pick<SubagentCompletionDeliveryState, "status" | "suspendedAt">;
 };
 

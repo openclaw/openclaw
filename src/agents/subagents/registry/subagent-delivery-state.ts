@@ -81,7 +81,8 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
 }
 
 export function shouldPreserveSubagentForMaintenance(entry: SubagentRunMaintenanceRecord): boolean {
-  if (entry.killReconciliation || entry.killIntent) {
+  if (entry.killReconciliation || entry.killIntent || entry.requesterSettleWake) {
+    // Requester settlement still reads child policy after child cleanup has completed.
     // Reconciliation tombstones own provider results until completion or cancellation settles.
     return true;
   }
@@ -107,6 +108,9 @@ export function projectSubagentRunForMaintenance(
     requesterSessionKey: entry.requesterSessionKey,
     createdAt: entry.createdAt,
     cleanupCompletedAt: entry.cleanupCompletedAt,
+    requesterSettleWake: entry.requesterSettleWake
+      ? { status: entry.requesterSettleWake.status }
+      : undefined,
     expectsCompletionMessage: entry.expectsCompletionMessage,
     killIntent: entry.killIntent ? { ...entry.killIntent } : entry.killIntent,
     killReconciliation: entry.killReconciliation
@@ -218,29 +222,70 @@ export function recordRequesterDelivery(
   if (delivery.requesterDelivery?.state !== "consumed") {
     delivery.requesterDelivery = fact;
   }
-  if (delivery.status === "pending" || delivery.status === "in_progress") {
+  if (
+    delivery.disposition !== "ambiguous" &&
+    (delivery.status === "pending" || delivery.status === "in_progress")
+  ) {
     delivery.disposition = undefined;
     delivery.lastError = undefined;
   }
 }
 
-export function hasConsumedPrivateRequesterInput(entry: SubagentRunRecord): boolean {
+/** A result committed to the requester transcript is never replayed. */
+export function hasConsumedRequesterInput(entry: SubagentRunRecord): boolean {
+  return entry.delivery?.requesterDelivery?.state === "consumed";
+}
+
+/** Captured private findings stay internal unless their admitted wake owes a visible final. */
+export function hasPrivateRequesterInput(entry: SubagentRunRecord): boolean {
   return (
-    entry.delivery?.requesterDelivery?.state === "consumed" &&
     entry.requesterSettleWake?.yieldedFinalDeliverable !== true &&
-    (entry.completionTarget === "parent" || entry.requesterSettleWake?.privateInput !== undefined)
+    (entry.completionTarget === "parent" ||
+      (entry.requesterSettleWake?.privateInput !== undefined &&
+        entry.requesterSettleWake.privateInput.privateOnly !== false))
   );
 }
 
-/** A cancelled private continuation cannot unconsume its committed input. */
+/** A committed private result can settle delivery when there is no uncertain send to resolve. */
+export function hasConsumedPrivateRequesterInput(entry: SubagentRunRecord): boolean {
+  return (
+    entry.delivery?.disposition !== "ambiguous" &&
+    hasConsumedRequesterInput(entry) &&
+    hasPrivateRequesterInput(entry)
+  );
+}
+
+// The requester turn itself stopped; no answer exists to deliver.
+const REQUESTER_TURN_FAILURES = new Set<SubagentAnnounceDeliveryResult["reason"]>([
+  "requester_aborted",
+  "requester_timed_out",
+  "requester_preparation_changed",
+  "requester_state_conflict",
+  "requester_transcript_conflict",
+  "visible_reply_missing",
+]);
+
+/**
+ * A committed result can cover a turn that failed before answering. An unconfirmed
+ * channel send keeps its own outcome even when the requester received the input.
+ */
 export function resolveRequesterDeliveryOutcome(
   entries: readonly SubagentRunRecord[],
   outcome: SubagentAnnounceDeliveryResult | undefined,
 ): SubagentAnnounceDeliveryResult | undefined {
+  const turnFailedBeforeAnswer =
+    outcome?.finalAssistantVisibleText === undefined &&
+    (outcome?.reason === undefined || REQUESTER_TURN_FAILURES.has(outcome.reason));
   return outcome &&
     !outcome.delivered &&
+    outcome.disposition !== "ambiguous" &&
     entries.length > 0 &&
-    entries.every(hasConsumedPrivateRequesterInput)
+    entries.every(
+      (entry) =>
+        entry.delivery?.disposition !== "ambiguous" &&
+        (hasConsumedPrivateRequesterInput(entry) ||
+          (turnFailedBeforeAnswer && hasConsumedRequesterInput(entry))),
+    )
     ? { delivered: true, path: "direct" }
     : outcome;
 }
@@ -251,6 +296,20 @@ export function recordRequesterHandoff(entry: SubagentRunRecord, blockingRunId?:
     state: "waiting",
     blockingRunId: blockingRunId ?? entry.delivery?.requesterDelivery?.blockingRunId,
   });
+}
+
+export function isDeliveryTerminalForRequesterSettle(
+  entry: Pick<SubagentRunRecord, "delivery" | "pauseReason">,
+): boolean {
+  return (
+    isDeliverySuspended(entry) ||
+    entry.delivery?.status === "delivered" ||
+    (entry.delivery?.status === "not_required" && entry.pauseReason !== "sessions_yield") ||
+    entry.delivery?.status === "discarded" ||
+    entry.delivery?.disposition === "delivered" ||
+    entry.delivery?.disposition === "intentional_non_delivery" ||
+    entry.delivery?.disposition === "permanent_failure"
+  );
 }
 
 export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">): boolean {
