@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  renderPresentationForDelivery,
+  type MessagePresentation,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 
@@ -43,10 +46,14 @@ const accountConfig = (account: string): OpenClawConfig => ({
 const { sendText, sendMedia, sendPayload, sendPoll, renderPresentation } = msteamsOutbound;
 assert(sendText && sendMedia && sendPayload && sendPoll && renderPresentation);
 
-const render = (payload: Parameters<typeof renderPresentation>[0]["payload"]) => {
+const render = (
+  payload: Parameters<typeof renderPresentation>[0]["payload"],
+  sourcePresentation?: MessagePresentation,
+) => {
   return renderPresentation({
     payload,
     presentation: payload.presentation!,
+    sourcePresentation,
     ctx: { ...defaultTarget, text: payload.text ?? "", mediaUrl: payload.mediaUrl, payload },
   });
 };
@@ -93,6 +100,107 @@ describe("msteamsOutbound cfg threading", () => {
       to: expectedTarget,
       text: "hello",
     });
+  });
+
+  it("sends native pie and bar charts alongside readable fallback in an Adaptive Card", async () => {
+    const presentation: MessagePresentation = {
+      blocks: [
+        {
+          type: "chart",
+          chartType: "pie",
+          title: "Traffic by source",
+          segments: [
+            { label: "Direct", value: 12 },
+            { label: "Search", value: 8 },
+          ],
+        },
+        {
+          type: "chart",
+          chartType: "bar",
+          title: "Deployments",
+          categories: ["May", "June"],
+          series: [{ name: "Successful", values: [3, 7] }],
+          xLabel: "Month",
+          yLabel: "Count",
+        },
+        {
+          type: "chart",
+          chartType: "bar",
+          title: "Deployments by environment",
+          categories: ["May", "June"],
+          series: [
+            { name: "Staging", values: [3, 7] },
+            { name: "Production", values: [2, 4] },
+          ],
+        },
+        {
+          type: "chart",
+          chartType: "area",
+          title: "Open requests",
+          categories: ["May", "June"],
+          series: [{ name: "Requests", values: [5, 4] }],
+        },
+      ],
+    };
+    const rendered = await renderPresentationForDelivery(
+      {
+        presentationCapabilities: msteamsPlugin.outbound?.presentationCapabilities,
+        renderPresentation: render,
+      },
+      { presentation },
+    );
+    await sendPayload({ ...defaultTarget, text: "", payload: rendered });
+
+    expect(mocks.sendAdaptiveCardMSTeams).toHaveBeenCalledWith(
+      expect.objectContaining({
+        card: expect.objectContaining({
+          version: "1.5",
+          body: [
+            expect.objectContaining({
+              type: "Chart.Pie",
+              title: "Traffic by source",
+              data: [
+                { legend: "Direct", value: 12 },
+                { legend: "Search", value: 8 },
+              ],
+            }),
+            expect.objectContaining({
+              type: "Chart.VerticalBar",
+              title: "Deployments",
+              xAxisTitle: "Month",
+              yAxisTitle: "Count",
+              data: [
+                { x: "May", y: 3 },
+                { x: "June", y: 7 },
+              ],
+            }),
+            expect.objectContaining({
+              type: "Chart.VerticalBar.Grouped",
+              data: [
+                {
+                  legend: "Staging",
+                  values: [
+                    { x: "May", y: 3 },
+                    { x: "June", y: 7 },
+                  ],
+                },
+                {
+                  legend: "Production",
+                  values: [
+                    { x: "May", y: 2 },
+                    { x: "June", y: 4 },
+                  ],
+                },
+              ],
+            }),
+            expect.objectContaining({
+              type: "TextBlock",
+              text: "Open requests (area chart)\n- Requests: May: 5; June: 4",
+            }),
+          ],
+        }),
+      }),
+    );
   });
 
   it("renders and sends presentation payloads as Adaptive Cards", async () => {

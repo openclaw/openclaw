@@ -86,6 +86,8 @@ Send semantic presentation payloads to Teams users or conversations using the `m
 
 The `presentation` parameter accepts semantic blocks. When `presentation` is provided, the message text is optional. Buttons render as Adaptive Card submit or URL actions. Select menus are not native in the Teams renderer, so OpenClaw downgrades them to readable text before delivery.
 
+Pie and bar charts render natively in Teams Adaptive Cards. Bar charts with multiple series use grouped bars. Line and area charts render as readable text with the chart labels and values.
+
 **Agent tool:**
 
 ```json5

@@ -170,28 +170,33 @@ describe("createMSTeamsReplyDispatcher", () => {
     });
   }
 
-  it.each([false, true])("resolves authored fallback before delivery (table=%s)", async (table) => {
+  const fallbackBlocks: NonNullable<ReplyPayload["presentation"]>["blocks"] = [
+    { type: "buttons", buttons: [{ label: "Deploy", value: "deploy" }] },
+    { type: "table", caption: "Targets", headers: ["State"], rows: [["Ready"]] },
+    {
+      type: "chart",
+      chartType: "area",
+      title: "Targets over time",
+      categories: ["May"],
+      series: [{ name: "Ready", values: [3] }],
+    },
+  ];
+  it.each(fallbackBlocks)("resolves authored fallback for $type replies", async (block) => {
     const messenger = await vi.importActual<typeof import("./messenger.js")>("./messenger.js");
     renderMessagesMock.mockImplementation(messenger.renderReplyPayloadsToMessages);
     sendMessagesMock.mockResolvedValue(["reply-id"]);
-    const dispatcher = createDispatcher(table ? "channel" : "personal", {
+    const dispatcher = createDispatcher(block.type === "buttons" ? "personal" : "channel", {
       streaming: { mode: "progress" },
     });
-    const presentation: NonNullable<ReplyPayload["presentation"]> = {
-      title: "Deployment",
-      blocks: table
-        ? [{ type: "table", caption: "Targets", headers: ["State"], rows: [["Ready"]] }]
-        : [{ type: "buttons", buttons: [{ label: "Deploy", value: "deploy" }] }],
-    };
     await dispatcher.send({
       text: "Authored fallback",
-      presentation,
+      presentation: { title: "Deployment", blocks: [block] },
       presentationTextMode: "fallback",
     });
     await dispatcher.dispatcherOptions.onSettled?.();
 
     expect(sendMessagesMock.mock.calls.map(([send]) => send.messages)).toEqual([
-      table
+      block.type !== "buttons"
         ? [{ text: "Authored fallback" }]
         : [
             {
@@ -216,7 +221,7 @@ describe("createMSTeamsReplyDispatcher", () => {
             },
           ],
     ]);
-    if (!table) {
+    if (block.type === "buttons") {
       expect(dispatcher.stream().emit).not.toHaveBeenCalled();
     }
   });

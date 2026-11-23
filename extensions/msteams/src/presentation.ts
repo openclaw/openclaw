@@ -1,7 +1,9 @@
 import {
   adaptMessagePresentationForChannel,
+  renderMessagePresentationChartFallbackText,
   resolveMessagePresentationButtonAction,
   type MessagePresentation,
+  type MessagePresentationChartBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ChannelOutboundAdapter } from "../runtime-api.js";
@@ -12,6 +14,7 @@ export const MSTEAMS_PRESENTATION_CAPABILITIES = {
   selects: false,
   context: true,
   divider: true,
+  charts: true,
   limits: {
     actions: {
       supportsStyles: false,
@@ -22,6 +25,24 @@ export const MSTEAMS_PRESENTATION_CAPABILITIES = {
     },
   },
 } satisfies ChannelOutboundAdapter["presentationCapabilities"];
+
+function supportsNativeChart(block: MessagePresentationChartBlock): boolean {
+  return block.chartType === "pie" || block.chartType === "bar";
+}
+
+// Core advertises charts as one capability. When all data falls back and there
+// are no controls, let core deliver the author's fallback text.
+export function hasOnlyFallbackMSTeamsCharts(presentation: MessagePresentation): boolean {
+  return (
+    presentation.blocks.some((block) => block.type === "chart") &&
+    !presentation.blocks.some(
+      (block) =>
+        block.type === "buttons" ||
+        block.type === "select" ||
+        (block.type === "chart" && supportsNativeChart(block)),
+    )
+  );
+}
 
 export function buildMSTeamsPresentationCard(params: {
   presentation: MessagePresentation;
@@ -50,7 +71,55 @@ export function buildMSTeamsPresentationCard(params: {
     });
   }
   const actions: Record<string, unknown>[] = [];
+  let version = "1.4";
   for (const block of presentation.blocks) {
+    if (block.type === "chart") {
+      if (!supportsNativeChart(block)) {
+        body.push({
+          type: "TextBlock",
+          text: renderMessagePresentationChartFallbackText(block),
+          wrap: true,
+          isSubtle: true,
+          size: "Small",
+        });
+        continue;
+      }
+      version = "1.5";
+      if (block.chartType === "pie") {
+        body.push({
+          type: "Chart.Pie",
+          title: block.title,
+          showTitle: true,
+          colorSet: "categorical",
+          data: block.segments.map(({ label, value }) => ({ legend: label, value })),
+        });
+        continue;
+      }
+      const axes = { xAxisTitle: block.xLabel, yAxisTitle: block.yLabel };
+      const [series] = block.series;
+      if (series && block.series.length === 1) {
+        body.push({
+          type: "Chart.VerticalBar",
+          title: block.title,
+          showTitle: true,
+          ...axes,
+          yAxisTitle: block.yLabel ?? series.name,
+          data: block.categories.map((x, index) => ({ x, y: series.values[index] })),
+        });
+      } else {
+        body.push({
+          type: "Chart.VerticalBar.Grouped",
+          title: block.title,
+          showTitle: true,
+          ...axes,
+          data: block.series.map(({ name, values }) => ({
+            legend: name,
+            values: block.categories.map((x, index) => ({ x, y: values[index] })),
+          })),
+        });
+      }
+      continue;
+    }
     if (block.type === "text" || block.type === "context") {
       body.push({
         type: "TextBlock",
@@ -99,7 +168,7 @@ export function buildMSTeamsPresentationCard(params: {
   }
   return {
     type: "AdaptiveCard",
-    version: "1.4",
+    version,
     body,
     ...(actions.length ? { actions } : {}),
   };
