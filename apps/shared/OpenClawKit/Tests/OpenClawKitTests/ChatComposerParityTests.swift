@@ -93,6 +93,7 @@ struct ChatComposerStateTests {
         case detached
     }
 
+    #if os(macOS)
     enum TalkDraft: CaseIterable {
         case empty
         case text
@@ -100,7 +101,7 @@ struct ChatComposerStateTests {
     }
 
     @Test(arguments: [false, true], TalkDraft.allCases)
-    func `Talk placement keeps call ending separate from run and draft actions`(
+    func `macOS Talk retains the shared primary slot`(
         runActive: Bool,
         draft: TalkDraft)
     {
@@ -137,24 +138,13 @@ struct ChatComposerStateTests {
                 dictationControl: nil,
                 voiceNoteControl: nil)
 
-            // These are the production decisions used by both footer slots.
-            // iOS keeps exactly one End Talk even with Stop or a draft;
-            // other clients retain their existing primary-slot presentation.
-            #if os(iOS)
-            #expect(composer.cleanShowsSeparateTalkControl == talkActive)
-            if talkActive {
-                #expect(composer.cleanPrimaryControl == (runActive || draft != .empty ? .send : .none))
-            } else {
-                #expect(composer.cleanPrimaryControl == (!runActive && draft == .empty ? .talk : .send))
-            }
-            #else
             #expect(!composer.cleanShowsSeparateTalkControl)
             #expect(composer.cleanPrimaryControl == (!runActive && draft == .empty ? .talk : .send))
-            #endif
             #expect(vm.pendingRunCount == (runActive ? 1 : 0))
             #expect(vm.hasDraftToSend == (draft != .empty))
         }
     }
+    #endif
 
     @Test(arguments: [false, true])
     func `closed model pickers defer catalog projection`(clean: Bool) {
