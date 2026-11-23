@@ -10,6 +10,11 @@ export const MODEL_APIS = [...MODEL_DATA_APIS] as const;
 
 export type ModelApi = (typeof MODEL_APIS)[number];
 
+/** Trusted total-parameter size classes used for Agent Profile selection. */
+export const MODEL_SIZE_CLASSES = ["tiny", "small", "medium", "large"] as const;
+
+export type ModelSizeClass = (typeof MODEL_SIZE_CLASSES)[number];
+
 export type SupportedThinkingFormat =
   | NonNullable<OpenAICompletionsCompat["thinkingFormat"]>
   | "deepseek"

@@ -12,17 +12,15 @@ export type { ModelCompatConfig } from "./zod-schema.model-compat.js";
 
 export {
   MODEL_APIS,
+  MODEL_SIZE_CLASSES,
   MODEL_THINKING_FORMATS,
   isModelThinkingFormat,
   type ModelApi,
+  type ModelSizeClass,
   type SupportedThinkingFormat,
 } from "./model-config-vocabulary.js";
 
 type ModelsSchemaInput = NonNullable<z.input<typeof ModelsConfigSchema>>;
-
-/** Trusted total-parameter size classes used for Agent Profile selection. */
-export const MODEL_SIZE_CLASSES = ["tiny", "small", "medium", "large"] as const;
-export type ModelSizeClass = (typeof MODEL_SIZE_CLASSES)[number];
 
 type ModelProviderSchemaInput = NonNullable<ModelsSchemaInput["providers"]>[string];
 
