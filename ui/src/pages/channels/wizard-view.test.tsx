@@ -145,7 +145,7 @@ describe("ChannelWizard", () => {
   it("links WhatsApp from the shown code without a separate wait action", () => {
     const done = { phase: "done", channel: "whatsapp", channels: ["whatsapp"], accounts: [] };
     const view = renderWizard(done as const, { whatsappBusy: true });
-    expect(view.container.querySelector('[role="status"]')?.textContent).toBe("Getting a code");
+    expect(view.container.querySelector('[role="status"]')?.textContent).toBe("Getting a QR code");
 
     view.update({ whatsappQrDataUrl: "data:image/png,qr" });
     expect(view.container.querySelector<HTMLImageElement>("img")?.alt).toBe("WhatsApp QR");
@@ -156,9 +156,9 @@ describe("ChannelWizard", () => {
 
     view.update({ whatsappQrDataUrl: null, whatsappBusy: false, whatsappMessage: "QR expired." });
     expect(view.container.querySelector('[role="alert"]')?.textContent).toBe(
-      "This code is no longer active.QR expired.",
+      "Couldn’t link WhatsAppQR expired.",
     );
-    button(view.container, "Get a new code").click();
+    button(view.container, "Get a new QR code").click();
     expect(view.onWhatsAppStart).toHaveBeenCalledWith(true);
   });
 
