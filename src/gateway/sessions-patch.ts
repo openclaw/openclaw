@@ -578,6 +578,7 @@ function* projectSessionPatchSteps(
       const runtime = resolveModelRuntimeDirective({
         cfg,
         provider: selection.provider,
+        previousProvider: previousModel?.provider,
         rawRuntime: patch.agentRuntime ?? undefined,
         sessionEntry: next,
       });

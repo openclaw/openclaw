@@ -13,10 +13,11 @@ type ModelRuntimeDirectiveResolution =
   | { kind: "set"; runtime: string }
   | { kind: "invalid"; runtime: string; errorText: string };
 
-/** Preserves compatible runtime pins and validates explicit runtime selections. */
+/** Keeps a compatible pin within its provider and validates explicit runtime selections. */
 export function resolveModelRuntimeDirective(params: {
   rawRuntime?: string;
   provider: string;
+  previousProvider?: string;
   cfg: OpenClawConfig;
   sessionEntry?: Pick<SessionEntry, "agentRuntimeOverride">;
 }): ModelRuntimeDirectiveResolution {
@@ -32,6 +33,13 @@ export function resolveModelRuntimeDirective(params: {
   }
 
   const provider = normalizeProviderId(params.provider);
+  if (
+    !requestedRuntime &&
+    params.previousProvider &&
+    normalizeProviderId(params.previousProvider) !== provider
+  ) {
+    return { kind: "clear" };
+  }
   const compatibleRuntime = resolveCompatibleAgentRuntimeForProvider({
     provider,
     runtime,
@@ -42,7 +50,7 @@ export function resolveModelRuntimeDirective(params: {
   }
 
   if (!requestedRuntime) {
-    // A pin from the previous provider must not block the selected model's configured route.
+    // A stored pin can outlive changes to the runtime's provider support.
     return { kind: "clear" };
   }
 
