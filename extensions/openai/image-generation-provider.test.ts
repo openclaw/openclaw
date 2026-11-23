@@ -579,14 +579,14 @@ describe("openai image generation provider", () => {
       providerOptions: { openai: { outputCompression: 60 } },
     });
     expect(jsonRequestCall().body).toEqual({
-      model: "gpt-image-1.5",
+      model: "gpt-image-2.6-sunburst",
       prompt: "Transparent sticker",
       n: 1,
       size: "1024x1024",
       output_format: "png",
       background: "transparent",
     });
-    expect(result.model).toBe("gpt-image-1.5");
+    expect(result.model).toBe("gpt-image-2.6-sunburst");
   });
 
   it("serializes multipart edits with reference names, geometry, output options, and SSRF policy", async () => {
@@ -880,13 +880,13 @@ describe("openai image generation provider", () => {
       expect(jsonRequestCall().body).toHaveProperty("tools", [
         {
           type: "image_generation",
-          model: "gpt-image-1.5",
+          model: "gpt-image-2.6-sunburst",
           size: "1024x1024",
           output_format: "png",
           background: "transparent",
         },
       ]);
-      expect(result.model).toBe("gpt-image-1.5");
+      expect(result.model).toBe("gpt-image-2.6-sunburst");
     });
 
     it("canonicalizes a legacy Codex endpoint", async () => {

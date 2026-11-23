@@ -2,7 +2,7 @@ import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generati
 import { OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL } from "./default-models.js";
 
 // OpenAI image model catalog and per-model request limits advertised to image generation.
-export const OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL = "gpt-image-1.5";
+export const OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL = "gpt-image-2.6-sunburst";
 export const OPENAI_SUPPORTED_SIZES = [
   "1024x1024",
   "1536x1024",
@@ -16,7 +16,7 @@ const OPENAI_LEGACY_IMAGE_SIZES = ["1024x1024", "1536x1024", "1024x1536"];
 export const OPENAI_IMAGE_SIZES_BY_MODEL: Record<string, string[]> = {
   "dall-e-2": ["256x256", "512x512", "1024x1024"],
   "dall-e-3": ["1024x1024", "1792x1024", "1024x1792"],
-  [OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL]: OPENAI_LEGACY_IMAGE_SIZES,
+  "gpt-image-1.5": OPENAI_LEGACY_IMAGE_SIZES,
   "gpt-image-1": OPENAI_LEGACY_IMAGE_SIZES,
   "gpt-image-1-mini": OPENAI_LEGACY_IMAGE_SIZES,
 };
@@ -37,7 +37,7 @@ const OPENAI_SUNBURST_FLARE_QUALITIES = ["low", "medium", "high", "xhigh", "max"
 export const OPENAI_IMAGE_MODELS = [
   DEFAULT_OPENAI_IMAGE_MODEL,
   ...OPENAI_SUNBURST_FLARE_IMAGE_MODELS,
-  OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL,
+  "gpt-image-1.5",
   "gpt-image-1",
   "gpt-image-1-mini",
 ] as const;
