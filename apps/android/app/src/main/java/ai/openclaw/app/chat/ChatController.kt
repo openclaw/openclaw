@@ -1348,6 +1348,10 @@ class ChatController internal constructor(
           if (unread != null) put("unread", JsonPrimitive(unread))
         }
       if (patch.isEmpty()) return@with false
+      if (pinned != null && patch.size != 1) {
+        updateErrorText("Change personal pins separately from shared session settings.")
+        return@with false
+      }
       val lifecycleSessionId = expectedSessionId?.trim()?.takeIf { it.isNotEmpty() }
       if ((archived != null || snoozedUntil != null || clearSnooze) && lifecycleSessionId == null) {
         updateErrorText("Session lifecycle action requires a durable session identity.")
@@ -1405,6 +1409,13 @@ class ChatController internal constructor(
               fallBackFromRetiredActiveSession(sessionKey)
             }
           }
+        } else if (pinned != null) {
+          val lease = captureRequestLease(requestCacheScope) ?: throw GatewayRequestNotEnqueued("not connected")
+          if (!lease.supportsCapability("personal-session-pins")) {
+            updateErrorText("Update the Gateway to change personal session pins.")
+            return@with false
+          }
+          lease.request("sessions.patch", params.toString())
         } else {
           requestGateway("sessions.patch", params.toString())
         }

@@ -166,7 +166,11 @@ export async function patchPersonalSessionPins(
         if (condition) {
           return condition;
         }
-        if (target.canonicalKey === "global" || target.canonicalKey === "unknown") {
+        if (
+          target.canonicalKey === "unknown" ||
+          (target.canonicalKey === "global" &&
+            context.getRuntimeConfig().session?.scope !== "global")
+        ) {
           return reject("Select an agent-qualified session to manage its sidebar pin.");
         }
         if (pinned && target.entry.archivedAt !== undefined) {

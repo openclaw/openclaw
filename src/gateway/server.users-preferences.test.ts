@@ -127,7 +127,10 @@ test("named preferences stay profile-scoped over authenticated multi-agent Gatew
         });
         expect(reply, JSON.stringify(reply.error)).toMatchObject({
           ok: true,
-          payload: { auth: { method: "trusted-proxy" } },
+          payload: {
+            auth: { method: "trusted-proxy" },
+            features: { capabilities: expect.arrayContaining(["personal-session-pins"]) },
+          },
         });
         expect(await rpcReq(ws, "sessions.subscribe", {})).toMatchObject({ ok: true });
         return ws;

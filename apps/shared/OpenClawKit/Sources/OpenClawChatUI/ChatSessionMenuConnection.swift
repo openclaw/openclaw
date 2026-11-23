@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import OpenClawProtocol
 
 @MainActor
@@ -6,6 +7,10 @@ public struct OpenClawSessionMenuConnection {
     public let hello: HelloOk
     private let methods: Set<String>
     private let scopes: Set<String>
+    public var supportsPersonalPins: Bool {
+        self.hello.supportsServerCapability(.personalSessionPins)
+    }
+
     public let local: Bool
     public var groupDefaultsBrowser: OpenClawGroupDefaultsBrowser?
     public let selfProfileID: String?

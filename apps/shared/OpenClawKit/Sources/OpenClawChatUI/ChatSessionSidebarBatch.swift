@@ -93,7 +93,8 @@ final class ChatSessionSidebarBatch {
 
     func refreshPins(_ connection: OpenClawSessionMenuConnection) async throws {
         try Task.checkCancellation()
-        guard connection.allows("users.prefs.get", scope: "operator.read") else { return }
+        guard connection.supportsPersonalPins,
+              connection.allows("users.prefs.get", scope: "operator.read") else { return }
         guard !self.writingPins else { return }
         let scope = self.scope
         let entries = try await self.pinEntries(connection)
@@ -128,6 +129,7 @@ final class ChatSessionSidebarBatch {
         after: Bool,
         connection: OpenClawSessionMenuConnection) async throws
     {
+        guard connection.supportsPersonalPins else { throw OpenClawPersonalPinError.unsupportedGateway }
         guard !self.writingPins,
               connection.allows("users.prefs.set") else { throw CancellationError() }
         let scope = self.scope

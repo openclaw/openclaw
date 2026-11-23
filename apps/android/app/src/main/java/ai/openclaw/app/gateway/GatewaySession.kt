@@ -434,6 +434,8 @@ class GatewaySession(
 
     fun supportsMethod(method: String): Boolean = method in advertisedMethods
 
+    fun supportsCapability(capability: String): Boolean = capability in advertisedCapabilities
+
     suspend fun closeTalkSession(
       sessionId: String,
       disposition: TalkSessionCloseDisposition,

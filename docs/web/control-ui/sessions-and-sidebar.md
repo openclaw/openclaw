@@ -193,7 +193,10 @@ After upgrading, pin the chats you want on your own sidebar. Historical shared p
 have no recorded pinner and are not copied into anyone's profile. Calls without a
 verified person can still list visible sessions without a pin filter; sign in to
 filter by pins or change them. The native compatibility path can be retired once
-supported clients no longer write pin order to shared configuration.
+supported clients no longer write pin order to shared configuration. Updated macOS
+and Android clients require the Gateway to advertise `personal-session-pins` before
+sending a personal edit; update the Gateway first. A Mac undoing an archive on an
+older Gateway can restore the legacy pin that the same archive just cleared.
 
 The browser keeps device-specific geometry and transient presentation, such as
 sidebar width and scroll position. Navigation changes on read-only connections

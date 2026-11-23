@@ -5,6 +5,7 @@ import {
   loadSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -19,7 +20,7 @@ import type { GatewayClient, GatewayRequestHandlerOptions, RespondFn } from "./t
 
 it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, legacy flags or other people", async () => {
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-    const cfg = { agents: { entries: { main: {} } } };
+    let cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const alice = identifiedClient(ensureProfileForEmail("alice@pins.test").id);
     const bob = identifiedClient(ensureProfileForEmail("bob@pins.test").id);
@@ -222,6 +223,32 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
       sessions: [{ key: a, pinned: true }],
     });
     expect(loadSessionEntry({ agentId: "main", sessionKey: a })?.pinnedAt).toBe(100);
+    // With global session scope, main is a real root stored in the sidebar's session:global slot.
+    cfg = { ...cfg, session: { scope: "global" } };
+    setRuntimeConfigSnapshot(cfg);
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: "global" },
+      { sessionId: "global-root", updatedAt: 1 },
+    );
+    await expect(
+      rpc(alice, "sessions.patch", {
+        key: "main",
+        agentId: "main",
+        pinned: true,
+        expectedSessionId: "global-root",
+      }),
+    ).resolves.toMatchObject({ entry: { pinned: true } });
+    await expect(rpc(alice, "users.prefs.get", { keys: [PREF] })).resolves.toMatchObject({
+      entries: { [PREF]: expect.arrayContaining(["session:global"]) },
+    });
+    await expect(
+      rpc(alice, "sessions.patch", {
+        key: "global",
+        agentId: "main",
+        pinned: false,
+        expectedSessionId: "global-root",
+      }),
+    ).resolves.toMatchObject({ entry: { pinned: false } });
     const anonymous: GatewayClient = { connect: alice.connect };
     await expect(list(anonymous, { pinned: false })).rejects.toThrow(/profile|requester/i);
     await expect(rpc(anonymous, "sessions.patch", { key: b, pinned: true })).rejects.toThrow(

@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -90,6 +91,37 @@ class ChatControllerSessionActionsTest {
       assertTrue(patches.all { it["expectedSessionId"] == JsonPrimitive("session-custom") })
       assertEquals(2, gateway.callCount("sessions.list"))
       assertEquals("main", controller.sessionKey.value)
+    }
+
+  @Test
+  fun personalPinWriteNeedsSupportOnItsOwnSocketAndCannotCarrySharedSettings() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith("sessions.patch", "{}")
+      gateway.respondWith("sessions.list", """{"sessions":[]}""")
+      var caps = emptySet<String>()
+      val controller = ChatController(
+        scope = this, json = json, commandOutbox = createChatCommandOutbox(),
+        cacheScope = { ChatCacheScope("gateway-test", 1L) }, requestGateway = gateway::request,
+        captureRequestLease = {
+          GatewaySession.RequestLease("gateway-test", advertisedCapabilities = caps) { method, params, _, enqueue ->
+            enqueue {}
+            gateway.request(method, params)
+          }
+        },
+      )
+      controller.outboxPresentationRestored.first { it }
+      val pin = ChatSessionPatch(key = "thread", ownerAgentId = "main", expectedSessionId = "thread-id", pinned = true)
+      assertFalse(controller.patchSession(pin))
+      assertEquals("Update the Gateway to change personal session pins.", controller.errorText.value)
+      caps = setOf("personal-session-pins")
+      assertFalse(controller.patchSession(pin.copy(archived = false)))
+      assertEquals(0, gateway.callCount("sessions.patch"))
+      assertTrue(controller.patchSession(pin))
+      val sent = gateway.calls.single { it.method == "sessions.patch" }
+      val params = json.parseToJsonElement(sent.paramsJson!!).jsonObject
+      assertEquals(JsonPrimitive(true), params["pinned"])
+      assertEquals(JsonPrimitive("thread-id"), params["expectedSessionId"])
     }
 
   @Test

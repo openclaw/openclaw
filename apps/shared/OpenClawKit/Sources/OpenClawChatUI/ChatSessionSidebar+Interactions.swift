@@ -314,6 +314,10 @@ extension ChatSessionSidebar {
         case let .mutation(fields)?: patch = fields
         case nil: return false
         }
+        if section == "pinned" || patch?["pinned"] != nil, !connection.supportsPersonalPins {
+            self.batch.notices = [OpenClawPersonalPinError.unsupportedGateway.localizedDescription]
+            return false
+        }
         if section == "pinned", !connection.allows("users.prefs.set") { return false }
         let owner = self.viewModel.sidebarData
         self.interact(refresh: patch != nil) { connection in

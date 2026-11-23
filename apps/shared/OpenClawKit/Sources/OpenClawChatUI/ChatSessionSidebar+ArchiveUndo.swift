@@ -101,7 +101,10 @@ extension ChatSessionSidebarBatch {
         var receipt: OpenClawChatSessionPatchReceipt?
         defer { owner?.finishMutation(token, receipt: receipt) }
         do {
-            let fields: [String: AnyCodable] = ["archived": .init(archived)]
+            // Only an old Gateway cleared the captured shared pin as part of archive.
+            let restoreLegacyPin = !archived && row.pinned == true && !connection.supportsPersonalPins
+            var fields: [String: AnyCodable] = ["archived": .init(archived)]
+            if restoreLegacyPin { fields["pinned"] = .init(true) }
             let request = OpenClawChatGatewayRequests.sessionMenu("sessions.patch", session: row, fields: fields)
             let data = try await connection.request(.init(
                 method: request.method, params: request.params, timeoutMs: archived ? 600_000 : 15000))
@@ -109,6 +112,7 @@ extension ChatSessionSidebarBatch {
             confirmed.agentID = OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId
             guard confirmed.matches(row) else { throw CocoaError(.coderReadCorrupt) }
             receipt = confirmed
+            if restoreLegacyPin { owner?.confirmFields(confirmed, target: row, fields: [.pinned]) }
             return true
         } catch {
             if connection.isCurrent() {

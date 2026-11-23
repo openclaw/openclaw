@@ -74,12 +74,16 @@ struct ChatSessionSidebarArchiveUndoTests {
     }
 
     func connection(
+        personal: Bool = true,
         current: @escaping () -> Bool = { true },
         request: @escaping (OpenClawChatGatewayRequest) async throws -> Data) throws -> OpenClawSessionMenuConnection
     {
         let hello = try JSONDecoder().decode(HelloOk.self, from: JSONSerialization.data(withJSONObject: [
             "type": "hello-ok", "protocol": 3, "server": [:],
-            "features": ["methods": ["sessions.patch", "sessions.patchMany", "sessions.delete"]],
+            "features": [
+                "capabilities": personal ? ["personal-session-pins"] : [],
+                "methods": ["sessions.patch", "sessions.patchMany", "sessions.delete"],
+            ],
             "snapshot": ["presence": [], "health": [:], "stateVersion": ["presence": 0, "health": 0], "uptimeMs": 0],
             "auth": ["scopes": ["operator.admin"]], "policy": [:],
         ]))
@@ -255,6 +259,22 @@ struct ChatSessionSidebarArchiveUndoTests {
         current.pinned = !pinned
         owner.receive([current], read: owner.beginRead())
         #expect(owner.row(key: row.key, agentID: "research")?.pinned == !pinned)
+    }
+
+    @Test func `undo restores the old shared pin only on a Gateway without personal pins`() async throws {
+        let batch = ChatSessionSidebarBatch()
+        let row = try self.row(pinned: true)
+        var sent: [OpenClawChatGatewayRequest] = []
+        let connection = try self.connection(personal: false) { request in
+            sent.append(request)
+            return try self.acknowledgement(row, archived: request.params["archived"]?.value as? Bool == true)
+        }
+        #expect(await batch.archive(row, mainKey: "main", connection: connection, owner: nil) != nil)
+        await self.undo(batch, owner: nil)
+        #expect(sent.count == 2)
+        #expect(sent.first?.params["pinned"] == nil)
+        #expect(sent.last?.params["archived"]?.value as? Bool == false)
+        #expect(sent.last?.params["pinned"]?.value as? Bool == true)
     }
 
     @Test func `replacement identity remains untouched and restore failure stays visible`() async throws {

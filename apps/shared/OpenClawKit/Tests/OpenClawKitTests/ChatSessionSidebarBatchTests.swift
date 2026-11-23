@@ -9,11 +9,12 @@ import Testing
 struct ChatSessionSidebarBatchTests {
     private func connection(
         scopes: [String] = ["operator.admin"],
+        personal: Bool = true,
         request: @escaping (OpenClawChatGatewayRequest) async throws -> Data) throws -> OpenClawSessionMenuConnection
     {
         let hello = try JSONDecoder().decode(HelloOk.self, from: JSONSerialization.data(withJSONObject: [
             "type": "hello-ok", "protocol": 3, "server": [:],
-            "features": ["methods": [
+            "features": ["capabilities": personal ? ["personal-session-pins"] : [], "methods": [
                 "sessions.patchMany",
                 "sessions.delete",
                 "sessions.groups.list",
@@ -56,6 +57,18 @@ struct ChatSessionSidebarBatchTests {
         let prefs = try #require(params["entries"] as? [String: [String]])
         #expect(Set(prefs.keys) == ["ui.railShortcuts"])
         return try #require(prefs["ui.railShortcuts"])
+    }
+
+    @Test func `old Gateway cannot save private order even when its preferences methods exist`() async throws {
+        let connection = try self.connection(personal: false) { _ in
+            Issue.record("Old Gateway must not receive a private order read or write")
+            return Data()
+        }
+        let batch = ChatSessionSidebarBatch()
+        try await batch.refreshPins(connection)
+        await #expect(throws: OpenClawPersonalPinError.self) {
+            try await batch.movePin(key: "one", target: "two", after: true, connection: connection)
+        }
     }
 
     @Test func `pin reordering permutes session slots without changing foreign bytes or positions`() {
