@@ -21,62 +21,72 @@ function writePackage(packageDir: string, manifest: Record<string, unknown>) {
   fs.writeFileSync(path.join(packageDir, "package.json"), JSON.stringify(manifest));
 }
 
-describe("registered Git plugin host links", () => {
-  it.each([
-    "owned",
-    "different record",
-    "local package copy",
-    "other host link",
-    "replaced during preparation",
-  ] as const)("rebinds only the recorded checkout's old release link (%s)", async (layout) => {
-    const home = fs.realpathSync(makeTempDir());
-    const stateDir = path.join(home, ".openclaw");
-    const prefix = path.join(stateDir, "git-install");
-    const hostA = path.join(prefix, "releases", "host-a", "openclaw");
-    const hostB = path.join(prefix, "releases", "host-b", "openclaw");
-    const otherHost = path.join(home, "other-host");
-    for (const host of [hostA, hostB, otherHost]) {
-      writePackage(host, { name: "openclaw" });
-    }
-    const gitUrl = "https://github.com/acme/peer-plugin.git";
-    const gitCommit = "a".repeat(40);
-    const spec = `git:${gitUrl}@${gitCommit}`;
-    const digest = createHash("sha256").update(spec).digest("hex").slice(0, 16);
-    const packageDir = path.join(stateDir, "git", `git-${digest}`, "repo");
-    writePackage(packageDir, { name: "peer-plugin", peerDependencies: { openclaw: "*" } });
-    fs.mkdirSync(path.join(packageDir, ".git"));
-    fs.writeFileSync(path.join(packageDir, ".git", "HEAD"), `${gitCommit}\n`);
-    const link = path.join(packageDir, "node_modules", "openclaw");
-    const previous = layout === "other host link" ? otherHost : hostA;
-    if (layout === "local package copy") {
-      writePackage(link, { name: "openclaw", version: "1.0.0" });
-    } else {
-      fs.mkdirSync(path.dirname(link));
-      fs.symlinkSync(previous, link, "junction");
-    }
+const layouts = [
+  "owned",
+  "different record",
+  "local package copy",
+  "other host link",
+  "replaced during preparation",
+] as const;
 
-    vi.stubGlobal("__openclawStandaloneRootUrl", new URL(`file://${hostB}/`).href);
+function gitPeerFixture(layout: (typeof layouts)[number] = "owned") {
+  const home = fs.realpathSync(makeTempDir());
+  const stateDir = path.join(home, ".openclaw");
+  const prefix = path.join(stateDir, "git-install");
+  const hostA = path.join(prefix, "releases", "host-a", "openclaw");
+  const hostB = path.join(prefix, "releases", "host-b", "openclaw");
+  const otherHost = path.join(home, "other-host");
+  for (const host of [hostA, hostB, otherHost]) {
+    writePackage(host, { name: "openclaw" });
+  }
+  const gitUrl = "https://github.com/acme/peer-plugin.git";
+  const gitCommit = "a".repeat(40);
+  const spec = `git:${gitUrl}@${gitCommit}`;
+  const digest = createHash("sha256").update(spec).digest("hex").slice(0, 16);
+  const packageDir = path.join(stateDir, "git", `git-${digest}`, "repo");
+  writePackage(packageDir, { name: "peer-plugin", peerDependencies: { openclaw: "*" } });
+  fs.mkdirSync(path.join(packageDir, ".git"));
+  fs.writeFileSync(path.join(packageDir, ".git", "HEAD"), `${gitCommit}\n`);
+  const link = path.join(packageDir, "node_modules", "openclaw");
+  const previous = layout === "other host link" ? otherHost : hostA;
+  if (layout === "local package copy") {
+    writePackage(link, { name: "openclaw", version: "1.0.0" });
+  } else {
+    fs.mkdirSync(path.dirname(link));
+    fs.symlinkSync(previous, link, "junction");
+  }
+
+  vi.stubGlobal("__openclawStandaloneRootUrl", new URL(`file://${hostB}/`).href);
+  const options = {
+    extensionsDir: path.join(stateDir, "extensions"),
+    managedNpmRoots: [],
+    installRecords: {
+      "peer-plugin": {
+        source: "git",
+        ...(layout === "different record"
+          ? { gitUrl: `${gitUrl}-other`, spec: `git:${gitUrl}-other@${gitCommit}` }
+          : { gitUrl, spec }),
+        gitRef: gitCommit,
+        gitCommit,
+        installPath: packageDir,
+      },
+    },
+    stateDir,
+    env: {
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+    },
+    logger: {},
+  } satisfies Parameters<typeof repairInstalledOpenClawHostLinks>[0];
+  return { options, link, hostB, previous };
+}
+
+describe("registered Git plugin host links", () => {
+  it.each(layouts)("rebinds only the recorded checkout's old release link (%s)", async (layout) => {
+    const { options, link, hostB, previous } = gitPeerFixture(layout);
     const result = await repairInstalledOpenClawHostLinks({
-      extensionsDir: path.join(stateDir, "extensions"),
-      managedNpmRoots: [],
-      installRecords: {
-        "peer-plugin": {
-          source: "git",
-          ...(layout === "different record"
-            ? { gitUrl: `${gitUrl}-other`, spec: `git:${gitUrl}-other@${gitCommit}` }
-            : { gitUrl, spec }),
-          gitRef: gitCommit,
-          gitCommit,
-          installPath: packageDir,
-        },
-      },
-      stateDir,
-      env: {
-        HOME: home,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-      },
-      logger: {},
+      ...options,
       beforePersistentEffect:
         layout === "replaced during preparation"
           ? () => {
@@ -100,4 +110,52 @@ describe("registered Git plugin host links", () => {
       expect(fs.realpathSync(link)).toBe(layout === "owned" ? hostB : previous);
     }
   });
+
+  it.each([false, true])(
+    "recovers after interrupted publication while preserving an intervening package (intervening=%s)",
+    async (intervening) => {
+      const { options, link, hostB } = gitPeerFixture();
+      const refusal = new Error("host link publication authority revoked");
+      const logger = { info: vi.fn(), warn: vi.fn() };
+
+      let effects = 0;
+      await expect(
+        repairInstalledOpenClawHostLinks({
+          ...options,
+          logger,
+          beforePersistentEffect: async () => {
+            if (++effects === 2) {
+              await expect(fs.promises.lstat(link)).rejects.toMatchObject({ code: "ENOENT" });
+              throw refusal;
+            }
+          },
+        }),
+      ).rejects.toBe(refusal);
+      expect(effects).toBe(2);
+      expect(logger.info).not.toHaveBeenCalled();
+      expect(logger.warn).not.toHaveBeenCalled();
+
+      const result = await repairInstalledOpenClawHostLinks({
+        ...options,
+        logger,
+        beforePersistentEffect: intervening
+          ? () => writePackage(link, { name: "openclaw", version: "2.0.0" })
+          : undefined,
+      });
+
+      expect(result.registeredRepaired).toBe(intervening ? 0 : 1);
+      if (intervening) {
+        expect(fs.lstatSync(link).isDirectory()).toBe(true);
+        expect(JSON.parse(fs.readFileSync(path.join(link, "package.json"), "utf8"))).toEqual({
+          name: "openclaw",
+          version: "2.0.0",
+        });
+        expect(logger.info).not.toHaveBeenCalled();
+      } else {
+        expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+        expect(fs.realpathSync(link)).toBe(hostB);
+        expect(logger.info).toHaveBeenCalledOnce();
+      }
+    },
+  );
 });

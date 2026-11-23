@@ -122,9 +122,11 @@ export async function linkOpenClawPeerDependency(params: {
     if (existing?.isSymbolicLink()) {
       previousTarget = path.resolve(nodeModulesDir, await fs.readlink(linkPath));
     }
+    // A repair interrupted after unlink can retry the exclusive symlink creation.
     if (
       params.gitReleasePrefix &&
-      (!existing?.isSymbolicLink() ||
+      existing &&
+      (!existing.isSymbolicLink() ||
         !previousTarget ||
         !isReleaseHostPath(
           (await safeRealpath(previousTarget)) ?? previousTarget,
