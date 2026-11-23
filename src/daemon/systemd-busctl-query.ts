@@ -11,6 +11,33 @@ import { decodeLegacyBusctlOutput } from "./systemd-busctl-legacy.js";
 import { execBusctlSystem, execBusctlUser, systemdInspectionError } from "./systemd-exec.js";
 import { resolveUnavailableSystemdInspectionReason } from "./systemd-unavailable.js";
 
+/**
+ * systemd 239 reports a missing unit without the `Call failed: ` prefix that
+ * systemd 245 uses. Normalize the prefix before matching so both formats are
+ * recognized, while unrelated bus errors still fail inspection.
+ */
+function isMissingUnitDetail(method: string, detail: string, unitName: string): boolean {
+  const normalized = detail.startsWith("Call failed: ")
+    ? detail.slice("Call failed: ".length)
+    : detail;
+  if (method === "LoadUnit") {
+    return normalized === `Unit ${unitName} not found.`;
+  }
+  if (method === "GetUnit") {
+    return (
+      normalized === `Unit ${unitName} not loaded.` ||
+      normalized === `Unit ${unitName} not found.`
+    );
+  }
+  if (method === "GetUnitFileState") {
+    return (
+      normalized === `Unit file ${unitName} does not exist.` ||
+      normalized === "No such file or directory"
+    );
+  }
+  return false;
+}
+
 export function createSystemdBusctlQuery(options: {
   env: GatewayServiceEnv;
   scope: "user" | "system";
@@ -98,13 +125,10 @@ export function createSystemdBusctlQuery(options: {
       const detail = stripAnsi(result.stderr).trim();
       if (
         result.termination === "exit" &&
-        ((args.includes("LoadUnit") && detail === `Call failed: Unit ${unitName} not found.`) ||
-          (args.includes("GetUnit") &&
-            (detail === `Call failed: Unit ${unitName} not loaded.` ||
-              detail === `Call failed: Unit ${unitName} not found.`)) ||
+        ((args.includes("LoadUnit") && isMissingUnitDetail("LoadUnit", detail, unitName)) ||
+          (args.includes("GetUnit") && isMissingUnitDetail("GetUnit", detail, unitName)) ||
           (args.includes("GetUnitFileState") &&
-            (detail === `Call failed: Unit file ${unitName} does not exist.` ||
-              detail === "Call failed: No such file or directory")))
+            isMissingUnitDetail("GetUnitFileState", detail, unitName)))
       ) {
         return null;
       }
