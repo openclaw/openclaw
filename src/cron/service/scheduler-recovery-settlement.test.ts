@@ -22,13 +22,14 @@ it.for(["replacement-loss", "stop-during-launch"] as const)(
     const finishStartup = createDeferred();
     let startupReturned = false;
     let completed = false;
-    const reconnected = createDeferred();
+    const reconnected = [createDeferred(), createDeferred()] as const;
+    let reconnectCount = 0;
     let stoppedDrain: Promise<void> | undefined;
     let stoppedDrainSettled = false;
     const log = createNoopLogger();
     log.info.mockImplementation((_fields, message) => {
       if (message === "cron: scheduler reconnected after native worker loss") {
-        reconnected.resolve();
+        reconnected[reconnectCount++]?.resolve();
       }
     });
     const runSessionEvent = vi.fn(async () => {
@@ -104,7 +105,7 @@ it.for(["replacement-loss", "stop-during-launch"] as const)(
       await withinTest(executing.promise, signal);
       expect(workers).toHaveLength(2);
       if (outcome === "stop-during-launch") {
-        await withinTest(reconnected.promise, signal);
+        await withinTest(reconnected[0].promise, signal);
         expect(startupReturned).toBe(true);
         expect(stoppedDrain).toBeDefined();
         expect(stoppedDrainSettled).toBe(false);
@@ -117,17 +118,10 @@ it.for(["replacement-loss", "stop-during-launch"] as const)(
         // Startup has committed and launched real work. Losing the replacement must not
         // stop timer recovery until that potentially long-running work completes.
         await workers[1]!.terminate();
-        await vi.waitFor(
-          () => {
-            expect(workers).toHaveLength(3);
-            expect(
-              log.info.mock.calls.filter(
-                ([, message]) => message === "cron: scheduler reconnected after native worker loss",
-              ),
-            ).toHaveLength(2);
-          },
-          { timeout: 3_000 },
-        );
+        // Observe host publication, not a runner-speed deadline after native dispatch.
+        await withinTest(reconnected[1].promise, signal);
+        expect(workers).toHaveLength(3);
+        expect(reconnectCount).toBe(2);
         expect(completed).toBe(false);
         expect(runSessionEvent).toHaveBeenCalledOnce();
         finishRun.resolve();
