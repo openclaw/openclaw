@@ -129,12 +129,22 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
       return;
     }
     const image = await loadBrowserPanelImage(reply.dataUrl).catch(() => null);
-    if (!image || backdrop !== capture || occlusion !== "backdrop" || !hasLiveStage()) {
+    const activeTab = controller.native.activeTab;
+    if (
+      !image ||
+      backdrop !== capture ||
+      (occlusion !== "backdrop" && occlusion !== "hidden-backdrop") ||
+      stage !== presentationStage ||
+      !hasLiveStage() ||
+      activeTab?.id !== tab.id ||
+      activeTab.url !== tab.url
+    ) {
       return;
     }
     image.className = "bp-native-backdrop";
     image.alt = "";
     image.draggable = false;
+    image.hidden = occlusion === "hidden-backdrop";
     stage.append(image);
     capture.image = image;
   }
@@ -237,9 +247,12 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
           occlusion = value;
           if (value === "hidden") {
             clearBackdrop();
+          } else if (backdrop?.image) {
+            // A modal covering the palette hides the frame without ending its lifetime.
+            backdrop.image.hidden = value === "hidden-backdrop";
           }
           if (
-            value === "backdrop" &&
+            (value === "backdrop" || value === "hidden-backdrop") &&
             isNativeMacWebChromeHost() &&
             presentationStage &&
             presentedTabId

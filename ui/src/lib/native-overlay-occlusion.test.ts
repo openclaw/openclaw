@@ -45,10 +45,16 @@ describe("native overlay occlusion", () => {
     const releasePalette = acquireNativeOverlayOcclusion(true);
     const releaseModal = acquireNativeOverlayOcclusion();
     cleanups.push(stop, releasePalette, releaseModal);
-    expect(changes.mock.calls).toEqual([["live"], ["backdrop"], ["hidden"]]);
+    expect(changes.mock.calls).toEqual([["live"], ["backdrop"], ["hidden-backdrop"]]);
     releasePalette();
     releaseModal();
-    expect(changes.mock.calls).toEqual([["live"], ["backdrop"], ["hidden"], ["live"]]);
+    expect(changes.mock.calls).toEqual([
+      ["live"],
+      ["backdrop"],
+      ["hidden-backdrop"],
+      ["hidden"],
+      ["live"],
+    ]);
   });
 
   it("stays occluded until every overlay releases and tolerates repeated releases", () => {

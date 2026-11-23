@@ -303,6 +303,32 @@ suite.define(() => {
     await expect.poll(() => backdrop.isVisible(), { timeout: 2_000 }).toBe(true);
     expect(await backdrop.evaluate((node) => getComputedStyle(node).pointerEvents)).toBe("none");
 
+    const capturedFrame = await backdrop.getAttribute("src");
+    await input.press("Tab");
+    await input.evaluate((element) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 8;
+      const encoded = canvas.toDataURL().split(",")[1]!;
+      const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
+      const clipboard = new DataTransfer();
+      clipboard.items.add(new File([bytes], "report.png", { type: "image/png" }));
+      element.dispatchEvent(
+        new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: clipboard }),
+      );
+    });
+    await page.getByRole("button", { name: "Open image report.png", exact: true }).click();
+    const preview = page.getByRole("dialog", { name: "Image preview: report.png", exact: true });
+    await preview.waitFor({ state: "visible" });
+    await expect.poll(() => backdrop.isVisible()).toBe(false);
+    await page.keyboard.press("Escape");
+    await preview.waitFor({ state: "hidden" });
+    await expect.poll(() => backdrop.isVisible()).toBe(true);
+    expect(await backdrop.getAttribute("src")).toBe(capturedFrame);
+    expect(await lastPresentation()).toMatchObject({ visible: false });
+    expect(
+      (await nativeBrowserMessages(page))?.filter((message) => message.type === "snapshot"),
+    ).toHaveLength(1);
+
     await page.keyboard.press("Escape");
     await expect.poll(lastPresentation).toMatchObject({ visible: true });
     await page.keyboard.press("ControlOrMeta+K");

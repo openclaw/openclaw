@@ -2,7 +2,7 @@ import { hasNativeBrowserBridge } from "../app/native-browser-host.ts";
 import { listen } from "./reactive/listener.ts";
 
 type SurfaceElements = () => Iterable<Element>;
-export type NativeOverlayOcclusion = "live" | "hidden" | "backdrop";
+export type NativeOverlayOcclusion = "live" | "hidden" | "backdrop" | "hidden-backdrop";
 const surfaces = new Set<SurfaceElements>();
 const listeners = new Set<() => void>();
 let activeOverlays = 0;
@@ -86,13 +86,14 @@ export function subscribeNativeOverlayOcclusion(
   const update = () => {
     const bounds = activeOverlays === 0 ? getBounds() : null;
     const occlusion =
-      activeOverlays > activeBackdrops
-        ? "hidden"
-        : activeBackdrops > 0
-          ? "backdrop"
-          : bounds && bounds.width > 0 && bounds.height > 0 && overlapsSurface(bounds)
-            ? "hidden"
-            : "live";
+      activeBackdrops > 0
+        ? activeOverlays > activeBackdrops
+          ? "hidden-backdrop"
+          : "backdrop"
+        : activeOverlays > 0 ||
+            (bounds && bounds.width > 0 && bounds.height > 0 && overlapsSurface(bounds))
+          ? "hidden"
+          : "live";
     if (occlusion !== previous) {
       previous = occlusion;
       listener(occlusion);
