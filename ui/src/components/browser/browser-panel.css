@@ -422,8 +422,12 @@ openclaw-browser-panel {
       display: inline-block;
       max-inline-size: 100%;
       padding-inline-end: 0.5em;
-      vertical-align: middle;
       overflow-wrap: anywhere;
+
+      /* The shared text baseline keeps this gap below the copy when the toggle wraps. */
+      &:not(:last-child) {
+        margin-block-end: 6px;
+      }
     }
 
     /* Keep the toggle in the message line; expanded diagnostics take a full line. */
@@ -433,7 +437,6 @@ openclaw-browser-panel {
 
     .lazy-view-error__summary {
       margin-block-start: 0;
-      vertical-align: middle;
     }
   }
 }
