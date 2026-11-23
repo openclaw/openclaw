@@ -407,7 +407,23 @@ it("wires the protected workflow only to evidence sealing, with read-only permis
   expect(job.steps[0].with.ref).toBe("${{ github.workflow_sha }}");
   expect(
     job.steps.filter((step: { run?: string }) => step.run).map((step: { run: string }) => step.run),
-  ).toEqual(["node scripts/release-ci-summary.mjs --seal-recovery"]);
+  ).toEqual([
+    "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
+    "node scripts/release-ci-summary.mjs --seal-recovery",
+  ]);
+  const setupIndex = job.steps.findIndex(
+    (step: { uses?: string }) => step.uses === "./.github/actions/setup-pnpm-store-cache",
+  );
+  const installIndex = job.steps.findIndex(
+    (step: { name?: string }) => step.name === "Install trusted recovery dependencies",
+  );
+  expect(setupIndex).toBeGreaterThan(0);
+  expect(installIndex).toBe(setupIndex + 1);
+  expect(job.steps[setupIndex].with).toEqual({
+    "node-version": "24.22.1",
+    "cache-mode": "off",
+  });
+  expect(job.steps[installIndex].env).toEqual({ CI: "true" });
 });
 
 it("substitutes original CI through the prepare/seal CLI without changing the immutable plan", async () => {

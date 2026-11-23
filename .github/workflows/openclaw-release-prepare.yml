@@ -56,6 +56,15 @@ jobs:
         with:
           node-version: "24.22.1"
           package-manager-cache: false
+      - name: Setup trusted recovery package manager
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          node-version: "24.22.1"
+          cache-mode: off
+      - name: Install trusted recovery dependencies
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
       - name: Verify and seal original qualification
         id: recovery
         env:

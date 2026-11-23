@@ -128,3 +128,33 @@ it("checks npm lineage in the full authentication process after selecting its pr
     '"$PREFLIGHT_WORKFLOW_PATH" != ".github/workflows/full-release-validation.yml" && "$PREFLIGHT_WORKFLOW_PATH" != ".github/workflows/full-release-artifacts.yml"',
   );
 });
+
+it("installs the exact verifier checkout dependencies before publication authentication", () => {
+  const workflow = parse(readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"));
+  const steps = workflow.jobs.resolve_release_target.steps;
+  const checkout = steps.find(
+    (step: { name?: string }) => step.name === "Checkout trusted release validation tooling",
+  );
+  expect(checkout.with.ref).toBe("${{ github.workflow_sha }}");
+  expect(checkout.with["sparse-checkout"]).toBeUndefined();
+  const setup = steps.findIndex(
+    (step: { name?: string }) => step.name === "Setup trusted validation package manager",
+  );
+  const install = steps.findIndex(
+    (step: { name?: string }) => step.name === "Install trusted validation dependencies",
+  );
+  const authenticate = steps.findIndex((step: { id?: string }) => step.id === "full_manifest");
+  expect(setup).toBeGreaterThan(0);
+  expect(install).toBe(setup + 1);
+  expect(install).toBeLessThan(authenticate);
+  expect(steps[setup].uses).toBe(
+    "./.release-validation-tooling/.github/actions/setup-pnpm-store-cache",
+  );
+  expect(steps[setup].with["package-manager-file"]).toBe(
+    ".release-validation-tooling/package.json",
+  );
+  expect(steps[install]["working-directory"]).toBe(".release-validation-tooling");
+  expect(steps[install].run).toBe(
+    "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
+  );
+});
