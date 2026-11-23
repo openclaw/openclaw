@@ -131,7 +131,8 @@ suite.define(() => {
         const ringFits = await back.evaluate((button) => {
           const rect = button.getBoundingClientRect();
           const style = getComputedStyle(button);
-          const ring = parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset);
+          const ring =
+            Number.parseFloat(style.outlineWidth) + Number.parseFloat(style.outlineOffset);
           return (
             button.matches(":focus-visible") &&
             ring > 0 &&
