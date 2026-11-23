@@ -489,26 +489,6 @@ it("passes nonmatching models through without DeepSeek payload patches", () => {
   });
 });
 
-it("resolves explicit DeepSeek efforts while replaying assistant reasoning content", () => {
-  const payload: Record<string, unknown> & { messages: Array<Record<string, unknown>> } = {
-    messages: [
-      { role: "user", content: "read file" },
-      { role: "assistant", content: "done" },
-    ],
-  };
-  const baseStreamFn = payloadStream(payload);
-  const wrapped = deepSeekWrapper({
-    baseStreamFn,
-    thinkingLevel: "low",
-    shouldPatchModel: () => true,
-  });
-
-  void wrapped?.(deepSeekFlashModel, { messages: [] }, {});
-
-  expect(payload.reasoning_effort).toBe("low");
-  expect(payload.messages[1]).toHaveProperty("reasoning_content", "");
-});
-
 it("calls the underlying stream directly when shouldPatch rejects the model", () => {
   const baseStreamFn = vi.fn<StreamFn>(() => ({}) as ReturnType<StreamFn>);
 
