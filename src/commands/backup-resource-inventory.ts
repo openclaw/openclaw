@@ -85,8 +85,7 @@ const MANAGED_STATE_ROOTS = [
   "git-install",
   "npm",
   "npm-runtime",
-  // Bundled-plugin dependency cache from releases before 2026.5.2. Kept on disk for other
-  // installs (#134099), but rebuildable and full of links into the package (#203082).
+  // Legacy bundled-plugin dependency cache (before 2026.5.2): never read, kept on disk.
   "plugin-runtime-deps",
   "tmp",
   "tools",
