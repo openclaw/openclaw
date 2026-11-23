@@ -379,16 +379,15 @@ describe("preflightDiscordMessage", () => {
       }),
     });
 
-    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
-    expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
+    expect(transcribeFirstAudioMock.mock.calls.flat()).toMatchObject([
+      {
+        ctx: {
           media: [{ url: VOICE_ATTACHMENT.url, contentType: "audio/ogg" }],
           ChatType: "direct",
           SessionKey: result?.route.sessionKey,
-        }),
-      }),
-    );
+        },
+      },
+    ]);
     const preflight = expectPreflightResult(result);
     expect(preflight.isDirectMessage).toBe(true);
     expect(preflight.preflightAudioTranscript).toBe("hello openclaw from dm audio");
@@ -879,6 +878,7 @@ describe("preflightDiscordMessage", () => {
         expect(result).toBeNull();
       }
       expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+      expect(transcribeFirstAudioMock.mock.calls[0]?.[0].ctx.ChatType).toBe("channel");
     },
   );
 
