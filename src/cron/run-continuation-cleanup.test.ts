@@ -49,15 +49,16 @@ async function seedContinuation() {
 const withContinuation = (run: (context: QueueContext) => Promise<void>) =>
   withOpenClawTestState({ scenario: "minimal" }, async () => run(await seedContinuation()));
 
-it("preserves an exact continuation while a profile pins it, without shared session metadata", () =>
+it("does not grant a private navigation reference authority over exact continuation cleanup", () =>
   withContinuation(async (context) => {
     const profile = ensureProfileForEmail("continuation@pins.test");
-    const set = (entries: string[]) =>
-      setCanonicalUserPreferences(profile.id, { "ui.railShortcuts": entries });
-    expect((await set([`session:${exact.sessionKey}`]))?.ok).toBe(true);
-    await removeIdle(exact.sessionKey, undefined, context);
-    expect(loadSessionEntry(exact)?.sessionId).toBe("run-123");
-    expect((await set([]))?.ok).toBe(true);
+    expect(
+      (
+        await setCanonicalUserPreferences(profile.id, {
+          "ui.railShortcuts": [`session:${exact.sessionKey}`],
+        })
+      )?.ok,
+    ).toBe(true);
     await removeIdle(exact.sessionKey, undefined, context);
     expect(loadSessionEntry(exact)).toBeUndefined();
     expect(loadSessionEntry(base)?.sessionId).toBe("run-123");

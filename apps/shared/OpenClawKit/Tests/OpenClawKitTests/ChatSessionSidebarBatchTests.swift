@@ -45,9 +45,9 @@ struct ChatSessionSidebarBatchTests {
         try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(request.params)) as? [String: Any])
     }
 
-    private func pinSnapshot(_ entries: [String], valid: Bool = true) throws -> Data {
+    private func pinSnapshot(_ entries: [String]) throws -> Data {
         try JSONSerialization.data(withJSONObject: [
-            "status": valid ? "ok" : "no_durable_identity", "entries": ["ui.railShortcuts": entries],
+            "status": "ok", "entries": ["ui.railShortcuts": entries],
         ])
     }
 
@@ -319,13 +319,25 @@ struct ChatSessionSidebarBatchTests {
         #expect(batch.errors[OpenClawChatSessionSidebarData.identity(ops)] != nil)
     }
 
-    @Test func `missing personal identity cannot replace the preference mirror`() async throws {
+    @Test func `missing personal identity clears the old display and refuses a drag without a write`() async throws {
         let batch = ChatSessionSidebarBatch()
         let initial = try self.connection { _ in try self.pinSnapshot(["session:a"]) }
         try await batch.refreshPins(initial)
-        let invalid = try self.connection { _ in try self.pinSnapshot([], valid: false) }
-        await #expect(throws: CocoaError.self) { try await batch.refreshPins(invalid) }
         #expect(batch.sidebarEntries == ["session:a"])
+        var methods: [String] = []
+        let profileless = try self.connection { request in
+            methods.append(request.method)
+            return Data(#"{"status":"no_durable_identity"}"#.utf8)
+        }
+        try await batch.refreshPins(profileless)
+        #expect(batch.sidebarEntries.isEmpty)
+        await #expect(throws: URLError(.userAuthenticationRequired)) {
+            try await batch.movePin(key: "a", target: nil, after: false, connection: profileless)
+        }
+        #expect(methods == ["users.prefs.get", "users.prefs.get"])
+
+        let malformed = try self.connection { _ in Data(#"{"status":"ok"}"#.utf8) }
+        await #expect(throws: CocoaError.self) { try await batch.refreshPins(malformed) }
     }
 
     @Test func `native range and toggle proposals keep only visible roots while plain child clicks navigate`() {

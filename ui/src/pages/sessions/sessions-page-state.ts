@@ -19,10 +19,8 @@ import { filterSessionRows } from "../../lib/sessions/navigation.ts";
 import type { SessionPatch } from "../../lib/sessions/patch.ts";
 import {
   resolveSessionPreferredFaceForKey,
-  resolveSessionNavigationAgentId,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
-import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import {
@@ -30,6 +28,7 @@ import {
   sessionAgentIds,
   sessionAgentIdentityById,
   sessionPathAgentId,
+  sessionTableNavigation,
 } from "./agent-scope.ts";
 import { createSessionsArchive } from "./archive-actions.ts";
 import { createSessionGroups } from "./custom-groups.ts";
@@ -554,12 +553,7 @@ export function createSessionsPage(
       onRetryDetails: details.retry,
       refreshDisabled: application.gateway.snapshot.phase !== "connected",
       basePath: application.basePath,
-      agentId: resolveSessionNavigationAgentId(application),
-      allAgentsScope: application.agentSelection.state.scopeId === null,
-      mainKey: resolveUiConfiguredMainKey({
-        agentsList: application.agents.state.agentsList,
-        hello: application.gateway.snapshot.hello,
-      }),
+      ...sessionTableNavigation(application),
       transcriptSearchAvailable: application.gateway.snapshot.phase === "connected",
       agentIdentityById: agentIdentityById(),
       personGroupingAvailable,

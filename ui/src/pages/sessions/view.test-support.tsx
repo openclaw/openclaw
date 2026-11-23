@@ -32,6 +32,7 @@ export function buildProps(result: SessionsListResult): SessionsProps {
   return {
     loading: false,
     roster: null,
+    personalSidebarEntries: null,
     detailsRead: () => undefined,
     detailsReadKey: () => null,
     onRetryDetails: () => undefined,

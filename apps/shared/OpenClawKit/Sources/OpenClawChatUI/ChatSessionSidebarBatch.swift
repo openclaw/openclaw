@@ -67,8 +67,15 @@ final class ChatSessionSidebarBatch {
     }
 
     private struct PinWrite: Decodable { let status: String }
-    private func pinEntries(_ connection: OpenClawSessionMenuConnection) async throws -> [AnyCodable] {
+    private func pinEntries(
+        _ connection: OpenClawSessionMenuConnection,
+        forDisplay: Bool = false) async throws -> [AnyCodable]
+    {
         let reply: PinSnapshot = try await connection.read("users.prefs.get", ["keys": .init([Self.pinKey])])
+        if reply.status == "no_durable_identity" {
+            guard forDisplay else { throw URLError(.userAuthenticationRequired) }
+            return []
+        }
         guard reply.status == "ok", let entries = reply.entries else { throw CocoaError(.coderReadCorrupt) }
         return entries[Self.pinKey] ?? ["route:cron", "route:plugins", "route:usage"].map(AnyCodable.init)
     }
@@ -111,7 +118,7 @@ final class ChatSessionSidebarBatch {
         let entries: [String]
         if connection.supportsPersonalPins {
             guard connection.allows("users.prefs.get", scope: "operator.read") else { return }
-            entries = try await self.pinEntries(connection).compactMap { $0.value as? String }
+            entries = try await self.pinEntries(connection, forDisplay: true).compactMap { $0.value as? String }
         } else {
             guard connection.allows("config.get", scope: "operator.read") else { return }
             let snapshot: LegacyPinOrder = try await connection.read("config.get")

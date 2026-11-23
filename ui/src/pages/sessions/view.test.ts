@@ -379,6 +379,32 @@ describe("sessions view", () => {
     expectTexts("tbody .session-data-row .session-key-cell__primary", ["pinned", "newer"]);
   });
 
+  it("keeps eligible personal pins in sidebar order before column sorting, including after a reorder", async () => {
+    const rows = [
+      createRow("rail", { updatedAt: 100 }),
+      createRow("a", { updatedAt: 50 }),
+      createRow("z", { updatedAt: 1 }),
+      createRow("archived", { updatedAt: 30, archived: true }),
+    ];
+    const selector = "tbody .session-data-row .session-key-cell__primary";
+    await renderSettled(rows, {
+      personalSidebarEntries: [
+        "session-rail:rail",
+        "session:missing",
+        "session:archived",
+        "session:z",
+        "session:a",
+      ],
+    });
+    expectTexts(selector, ["z", "a", "rail", "archived"]);
+    await renderSettled(rows, {
+      personalSidebarEntries: ["session:a", "session:z"],
+      sortColumn: "key",
+      sortDir: "asc",
+    });
+    expectTexts(selector, ["a", "z", "archived", "rail"]);
+  });
+
   it("keeps session filters in the header popover without a count badge", async () => {
     const onSearchChange = vi.fn();
     document.body.append(container);
