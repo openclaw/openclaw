@@ -59,6 +59,19 @@ describe.each(platforms)("legacy $platform maintenance", ({ platform, provable }
     } else {
       await expect(admission).rejects.toThrow("live or unverified owner");
       await expect(admission).rejects.toThrow("remove that file as the Gateway service account");
+      if (platform === "win32") {
+        await expect(admission).rejects.toThrow(
+          "If that process has stopped on this host and in every container",
+        );
+      } else {
+        // The manual-removal route names the exact PID verification first, so a
+        // reused PID is checked before the operator removes the record.
+        await expect(admission).rejects.toThrow("Confirm PID 2147483647 has stopped");
+        await expect(admission).rejects.toThrow("`ps -p 2147483647` finds no process");
+        await expect(admission).rejects.toThrow(
+          "`ps -o lstart=,command= -p 2147483647` shows a reused PID",
+        );
+      }
     }
     expect(fs.readFileSync(configLockPath, "utf8")).toBe(record);
   });
