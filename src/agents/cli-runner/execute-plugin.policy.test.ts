@@ -667,6 +667,60 @@ describe("plugin-owned CLI same-turn input", () => {
     }
     expect(captureCurrentReplyMessageInjectionTarget(operation.key)).toBeUndefined();
   });
+
+  it.each([
+    { acceptsImages: true, outcome: { status: "accepted" } },
+    {
+      acceptsImages: undefined,
+      outcome: { status: "rejected", reason: "image_input_unsupported" },
+    },
+  ])(
+    "steers an image into the running turn only when the sink accepts images ($acceptsImages)",
+    async ({ acceptsImages, outcome }) => {
+      const { context } = await createExecution();
+      const operation = attachReplyOperation(context);
+      operation.setPhase("running");
+      const ready = createDeferred();
+      const finish = createDeferred();
+      const received: { text: string; images?: readonly unknown[] }[] = [];
+      const run = runPlugin(context, async function* (execution) {
+        execution.registerMessageInjection?.({
+          isAvailable: () => true,
+          ...(acceptsImages ? { acceptsImages } : {}),
+          queueMessage: async (text, withCurrent, options) => {
+            await withCurrent(() => received.push({ text, images: options?.images }));
+          },
+        });
+        ready.resolve();
+        await finish.promise;
+        yield SUCCESS_RESULT;
+      });
+      try {
+        await awaitGateBeforeSettlement(
+          ready.promise,
+          run,
+          "CLI run ended before injection became ready",
+        );
+        const target = captureCurrentReplyMessageInjectionTarget(operation.key);
+        if (!target) {
+          throw new Error("running CLI backend did not expose a registry injection target");
+        }
+        const image = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };
+        const steered = await beginReplyMessageInjectionTarget(target, "look at this", {
+          images: [image],
+        });
+        await expect(steered.outcome).resolves.toEqual(outcome);
+        expect(received).toEqual(acceptsImages ? [{ text: "look at this", images: [image] }] : []);
+      } finally {
+        finish.resolve();
+        try {
+          await run;
+        } finally {
+          operation.complete();
+        }
+      }
+    },
+  );
 });
 
 describe("plugin turn assessments through the operation watchdog", () => {

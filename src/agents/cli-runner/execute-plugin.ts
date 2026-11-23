@@ -388,6 +388,9 @@ export async function executePluginOwnedProcess(params: {
       get turnStatus() {
         return turnStatus;
       },
+      get supportsQueueMessageImages() {
+        return messageInjection?.acceptsImages === true;
+      },
       supportsTranscriptCommitWait: true,
       messageInjectionV2: createSteeredCliMessageInjection({
         getInjection: () => messageInjection,
