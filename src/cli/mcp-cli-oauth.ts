@@ -10,12 +10,16 @@ import {
   startMcpOAuthAuthorization,
 } from "../agents/mcp-oauth.js";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   startOAuthLoopbackCallbackServer,
   type OAuthLoopbackCallbackServer,
 } from "../infra/oauth-loopback-callback.js";
 import { defaultRuntime } from "../runtime.js";
+import { secretRefKey } from "../secrets/ref-contract.js";
+import { materializeSecretInput } from "../secrets/resolve-secret-input-string.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { formatCliCommand } from "./command-format.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 
@@ -24,9 +28,42 @@ const MCP_OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60 * 1000;
 type McpLoginOptions = { code?: string; issuer?: string; callbackUrl?: string };
 
 type McpOAuthCommandDeps = {
-  loadServer: (name: string) => Promise<Record<string, unknown>>;
+  loadServer: (
+    name: string,
+  ) => Promise<{ config: OpenClawConfig; server: Record<string, unknown> }>;
   fail: (message: string) => never;
 };
+
+/**
+ * Gateway-stopped commands read the source config, where the Gateway's runtime snapshot has not
+ * resolved SecretRefs. Resolve a pre-registered client secret for this one command.
+ */
+export async function resolveMcpOAuthClientSecretLocally(
+  config: OpenClawConfig,
+  name: string,
+  server: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const oauth = asRecord(server.oauth);
+  if (oauth?.clientSecret === undefined) {
+    return server;
+  }
+  const path = `${appendConfigPathSegment("mcp.servers", name)}.oauth.clientSecret`;
+  const unresolved = (detail: string): never => {
+    throw new Error(
+      `MCP server "${name}": ${path} ${detail}. Make the secret available to this terminal, then run the command again.`,
+    );
+  };
+  const clientSecret = await materializeSecretInput({
+    config,
+    value: oauth.clientSecret,
+    env: process.env,
+    onResolveRefError: (error, ref) =>
+      unresolved(
+        `(${secretRefKey(ref)}) could not be resolved: ${formatErrorMessage(error).replace(/\.$/, "")}`,
+      ),
+  });
+  return { ...server, oauth: { ...oauth, clientSecret: clientSecret ?? unresolved("is empty") } };
+}
 
 /** A running Gateway owns shared sign-in; the local flows serve only a stopped Gateway. */
 export function registerMcpOAuthCommands(mcp: Command, { loadServer, fail }: McpOAuthCommandDeps) {
@@ -77,8 +114,15 @@ export function registerMcpOAuthCommands(mcp: Command, { loadServer, fail }: Mcp
           if (opts.callbackUrl !== undefined) {
             fail("--callback-url requires the Gateway that started sign-in to be running.");
           }
-          const server = await loadServer(name);
-          await loginMcpServer({ name, server, code: opts.code, issuer: opts.issuer, owner, fail });
+          const { config, server } = await loadServer(name);
+          await loginMcpServer({
+            name,
+            server: await resolveMcpOAuthClientSecretLocally(config, name, server),
+            code: opts.code,
+            issuer: opts.issuer,
+            owner,
+            fail,
+          });
         },
       }),
     );
@@ -97,7 +141,7 @@ export function registerMcpOAuthCommands(mcp: Command, { loadServer, fail }: Mcp
           defaultRuntime.log(terminalText`MCP OAuth credentials cleared for "${name}".`);
         },
         runLocal: async () => {
-          const server = await loadServer(name);
+          const { server } = await loadServer(name);
           if (asRecord(server.oauth)?.identity === "per-requester") {
             fail(
               `MCP server "${name}" uses per-requester OAuth. Remove or replace the server to clear requester credentials.`,

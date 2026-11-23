@@ -79,6 +79,15 @@ const cases: Array<[string, string[], Record<string, unknown>]> = [
   ["plugins.entries.typesafe.config", ["apiKey"], { "plugins.entries.typesafe.enabled": true }],
   ["gateway.auth", ["password"], { "gateway.auth.mode": "password" }],
   [
+    "mcp.servers.docs.oauth",
+    ["clientSecret"],
+    {
+      "mcp.servers.docs.url": "https://mcp.example.com/mcp",
+      "mcp.servers.docs.auth": "oauth",
+      "mcp.servers.docs.oauth.clientId": "docs-client",
+    },
+  ],
+  [
     "gateway.remote",
     ["token"],
     {

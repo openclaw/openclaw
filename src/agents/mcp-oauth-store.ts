@@ -23,6 +23,7 @@ import { isMcpOAuthAuthorizationReceipt } from "./mcp-oauth-authorization-facts.
 import {
   projectMcpOAuthCredentialsStatus,
   type McpOAuthPrincipalStatus,
+  type McpOAuthStatusQuery,
 } from "./mcp-oauth-status.js";
 import { retainMcpOAuthAuthorizationState } from "./mcp-oauth-store.authorization.js";
 import type { McpOAuthReadOnlyOperations } from "./mcp-oauth-store.kernel.js";
@@ -64,14 +65,14 @@ export async function readMcpOAuthStoreReadOnly(
 }
 
 export async function readMcpOAuthStoreStatuses(
-  storeKeys: readonly string[],
+  queries: readonly McpOAuthStatusQuery[],
   context: OpenClawStateWorkerContext = captureOpenClawStateWorkerContext(),
 ): Promise<McpOAuthPrincipalStatus[]> {
-  if (storeKeys.length === 0) {
+  if (queries.length === 0) {
     return [];
   }
-  const result = await readExisting(context, { type: "mcpOAuth.statuses", input: [...storeKeys] });
-  return result?.value ?? storeKeys.map(() => projectMcpOAuthCredentialsStatus({}));
+  const result = await readExisting(context, { type: "mcpOAuth.statuses", input: [...queries] });
+  return result?.value ?? queries.map(() => projectMcpOAuthCredentialsStatus({}));
 }
 
 /** List canonical store keys matching one server/principal prefix without creating state. */

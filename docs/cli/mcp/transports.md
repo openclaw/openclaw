@@ -115,7 +115,7 @@ have already changed state before the connection failed.
 
 OAuth is for HTTP MCP servers that advertise the MCP OAuth flow. Static `Authorization` headers are ignored for a server while `auth: "oauth"` is enabled. By default, OAuth credentials are shared and operator-managed. Credentials saved by `openclaw mcp login` work with embedded MCP, CLI runners, and the local Codex app-server.
 
-Native MCP OAuth sessions live in the owner-only shared SQLite database at `<state-dir>/state/openclaw.sqlite` (`mcp_oauth_stores`). The row can contain access and refresh tokens, dynamic client registration secrets, discovery metadata, and the temporary PKCE verifier. Refresh, login, and logout use the same SQLite lease, so parallel OpenClaw processes cannot consume one refresh token or resurrect a logged-out session.
+Native MCP OAuth sessions live in the owner-only shared SQLite database at `<state-dir>/state/openclaw.sqlite` (`mcp_oauth_stores`). The row can contain access and refresh tokens, dynamic client registration secrets, discovery metadata, and the temporary PKCE verifier. A [pre-registered client secret](#pre-registered-oauth-clients) is never written to this row. Refresh, login, and logout use the same SQLite lease, so parallel OpenClaw processes cannot consume one refresh token or resurrect a logged-out session.
 
 Upgrades from the retired `<state-dir>/mcp-oauth/*.json` store are handled only by `openclaw doctor --fix`. Runtime code never reads, writes, or falls back to those files.
 
@@ -225,6 +225,59 @@ The shared operator flow uses the following commands:
 </Steps>
 
 If the provider rotates tokens or the authorization state gets stuck, run `openclaw mcp logout <name>`, then repeat `login`. `logout` can clear credentials for a saved HTTP server even after `auth: "oauth"` has been removed from config, as long as the server name and URL still identify the credential store entry.
+
+### Pre-registered OAuth clients
+
+Some providers do not offer dynamic client registration and require an OAuth app that you register yourself. Others offer registration but you want a client with the least access. Set `oauth.clientId` to that app's client ID. OpenClaw then always signs in with it and never runs dynamic client registration or client ID metadata documents, even when the server advertises a registration endpoint.
+
+- `oauth.clientId` requires `auth: "oauth"`. It cannot be combined with `oauth.clientMetadataUrl` or `oauth.authProfileId`, and it is not yet supported with `oauth.identity: "per-requester"`.
+- `oauth.clientSecret` is optional and accepts only a SecretRef (`env`, `file`, `exec`, or `store`). Plaintext strings are rejected. There is no CLI flag for it, so the secret never appears in process arguments. Set it with:
+
+  ```bash
+  openclaw config set mcp.servers.docs.oauth.clientSecret \
+    --ref-source env --ref-provider default --ref-id DOCS_MCP_CLIENT_SECRET
+  ```
+
+  A running Gateway resolves the reference with its other secrets; after changing it, run `openclaw secrets reload`. With the Gateway stopped, `openclaw mcp login` and `openclaw mcp probe` resolve it in that terminal, so the variable must be set there. If the reference cannot be resolved, sign-in stops with an error that names the config path and the reference, never the value. `openclaw mcp probe` reports that error as the server's diagnostic, still checks the other servers, and exits nonzero.
+
+- OpenClaw sends the secret only to the provider's token endpoint, for both the code exchange and every refresh. It picks `client_secret_basic`, `client_secret_post`, or no client authentication from the provider's advertised `token_endpoint_auth_methods_supported`. The secret is not stored in the SQLite sign-in row, the sign-in URL, logs, or `openclaw mcp status --json`. PKCE (`S256`) stays on for every sign-in. For an app on your own machine, the client secret is a configuration value, not a security boundary.
+- Saved tokens belong to the client that obtained them. When `oauth.clientId` changes, existing tokens stop being used, `openclaw mcp status` reports `requires-authorization`, and an owner's direct chat offers the server's connect tool again. `openclaw mcp login <name>` signs in again with the new client.
+
+Register the exact callback URL that your sign-in uses. Providers often compare it byte for byte, so OpenClaw never retries with another loopback host for a pre-registered client:
+
+| Sign-in path                                                         | Callback to register                                                                                                         |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `openclaw mcp login` or a chat sign-in link with the Gateway running | `<gateway.publicOrigin>/oauth/mcp/callback`, or `http://127.0.0.1:<gateway-port>/oauth/mcp/callback` without a public origin |
+| **Settings → MCP** in the Control UI                                 | `<Control UI origin>/oauth/provider/callback`                                                                                |
+| `openclaw mcp login` with the Gateway stopped                        | `oauth.redirectUrl`, or `http://127.0.0.1:8989/oauth/callback` when it is not set                                            |
+
+If `oauth.redirectUrl` is set and differs from the callback a Gateway sign-in uses, that sign-in fails before contacting the provider and names both URLs. Register the Gateway callback and remove `oauth.redirectUrl` (or set it to that URL), or sign in from the terminal with the Gateway stopped.
+
+`oauth.authorizationParams` adds parameters to the sign-in URL. Only `access_type`, `prompt`, and `login_hint` are accepted; protocol parameters such as `redirect_uri`, `state`, and the PKCE challenge stay under OpenClaw's control. It works with or without `oauth.clientId`.
+
+For example, Google issues a refresh token only when the sign-in asks for offline access and consent. Without them, the sign-in expires after about an hour:
+
+```json5
+{
+  mcp: {
+    servers: {
+      workspace: {
+        url: "https://mcp.example.com/mcp",
+        transport: "streamable-http",
+        auth: "oauth",
+        oauth: {
+          clientId: "1234567890-example.apps.googleusercontent.com",
+          clientSecret: { source: "env", provider: "default", id: "GOOGLE_MCP_CLIENT_SECRET" },
+          scope: "openid email",
+          authorizationParams: { access_type: "offline", prompt: "consent" },
+        },
+      },
+    },
+  },
+}
+```
+
+Then add the matching callback from the table to the OAuth client's authorized redirect URIs and run `openclaw mcp login workspace`.
 
 ## Streamable HTTP transport
 

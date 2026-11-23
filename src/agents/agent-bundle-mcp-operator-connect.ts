@@ -53,9 +53,10 @@ async function createOperatorMcpConnect(
     return undefined;
   }
   const statuses = await readMcpOAuthCredentialsStatuses(
-    configured.map(({ serverName, resolved }) =>
-      operatorMcpOAuthIdentity(serverName, resolved.url, context.cfg),
-    ),
+    configured.map(({ serverName, resolved }) => ({
+      identity: operatorMcpOAuthIdentity(serverName, resolved.url, context.cfg),
+      oauth: resolved.oauth,
+    })),
   );
   const authorizedServerNames = configured
     .filter(

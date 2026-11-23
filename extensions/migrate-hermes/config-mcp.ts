@@ -60,17 +60,37 @@ const MCP_CONNECTION_FIELDS = [
   "requestTimeoutMs",
 ] as const;
 
+const HERMES_OAUTH_FIELDS = ["authProfileId", "scope", "redirectUrl", "clientMetadataUrl"];
+const HERMES_OAUTH_CLIENT_ID_FIELDS = ["client_id", "clientId"];
+const HERMES_OAUTH_CLIENT_SECRET_FIELDS = ["client_secret", "clientSecret"];
+
+function readHermesOAuthClientId(oauth: Record<string, unknown>): string | undefined {
+  return HERMES_OAUTH_CLIENT_ID_FIELDS.map((key) => normalizeOptionalString(oauth[key])).find(
+    Boolean,
+  );
+}
+
 function mapHermesMcpOauth(value: Record<string, unknown>): Record<string, unknown> | undefined {
   const oauth = asOptionalRecord(value.oauth);
   if (!oauth) {
     return undefined;
   }
   const mapped: Record<string, unknown> = {};
-  for (const key of ["authProfileId", "scope", "redirectUrl", "clientMetadataUrl"]) {
+  for (const key of HERMES_OAUTH_FIELDS) {
     const fieldValue = normalizeOptionalString(oauth[key]);
     if (fieldValue) {
       mapped[key] = fieldValue;
     }
+  }
+  const clientId = readHermesOAuthClientId(oauth);
+  // OpenClaw accepts a pre-registered client only with auth: "oauth" and one client source.
+  if (
+    clientId &&
+    normalizeOptionalString(value.auth) === "oauth" &&
+    mapped.authProfileId === undefined &&
+    mapped.clientMetadataUrl === undefined
+  ) {
+    mapped.clientId = clientId;
   }
   return Object.keys(mapped).length > 0 ? mapped : undefined;
 }
@@ -250,17 +270,27 @@ export function planHermesMcpServer(params: {
       `Run "openclaw mcp login ${name}" after migration.`,
     );
   }
+  const copiedClientId = asOptionalRecord(next.oauth)?.clientId !== undefined;
   if (
     oauth &&
     Object.keys(oauth).some(
       (keyName) =>
-        !["authProfileId", "scope", "redirectUrl", "clientMetadataUrl"].includes(keyName),
+        !HERMES_OAUTH_FIELDS.includes(keyName) &&
+        !HERMES_OAUTH_CLIENT_SECRET_FIELDS.includes(keyName) &&
+        !(copiedClientId && HERMES_OAUTH_CLIENT_ID_FIELDS.includes(keyName)),
     )
   ) {
     add(
       "oauth-client",
       `Hermes MCP server "${name}" uses pre-registered OAuth client settings that were not copied into OpenClaw config.`,
       `Run "openclaw mcp login ${name}" and configure supported OAuth metadata manually.`,
+    );
+  }
+  if (oauth && HERMES_OAUTH_CLIENT_SECRET_FIELDS.some((keyName) => oauth[keyName] !== undefined)) {
+    add(
+      "oauth-client-secret",
+      `Hermes MCP server "${name}" has an OAuth client secret that was not copied; OpenClaw stores it only as a SecretRef.`,
+      `Put the secret in an environment variable, then run "openclaw config set mcp.servers.${name}.oauth.clientSecret --ref-source env --ref-provider default --ref-id <ENV_VAR>".`,
     );
   }
 

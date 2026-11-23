@@ -1,0 +1,6 @@
+# MCP OAuth pre-registered clients (#116052): the CLI fixture sign-in/refresh matrix
+# (client_secret_basic, client_secret_post, registration endpoint present), the
+# unresolved-secret login failure, the client-switch status and owner connect bootstrap
+# check, and the probe partial-success check for one unresolvable client secret.
+# Exact measured net test-line growth above the 400-line allowance at the head.
+91

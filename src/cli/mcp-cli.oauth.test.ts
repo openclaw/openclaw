@@ -167,6 +167,26 @@ it("does not restore previous OAuth metadata after an explicit clear", async () 
   expect((await readServer()).oauth).toEqual({ scope: "docs.write" });
 });
 
+it("sets and clears a pre-registered OAuth client id", async () => {
+  await mcp(
+    "add",
+    "docs",
+    "--url",
+    "https://mcp.example.com",
+    "--auth",
+    "oauth",
+    "--oauth-client-id",
+    " registered-app ",
+  );
+  expect((await readServer()).oauth).toEqual({ clientId: "registered-app" });
+
+  await mcp("configure", "docs", "--oauth-client-id", "other-app", "--oauth-scope", "docs.read");
+  expect((await readServer()).oauth).toEqual({ clientId: "other-app", scope: "docs.read" });
+
+  await mcp("configure", "docs", "--clear-auth");
+  expect(await readServer()).not.toHaveProperty("oauth");
+});
+
 it.each(["login", "logout"] as const)(
   "rejects operator %s for per-requester OAuth",
   async (command) => {

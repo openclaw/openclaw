@@ -260,6 +260,7 @@ async function collectMcpDoctorIssues(params: {
         if (asRecord(server.oauth)?.identity !== "per-requester") {
           const authStatus = await readMcpOAuthCredentialsStatus(
             operatorMcpOAuthIdentity(name, resolved.url),
+            resolved.oauth,
           );
           if (authStatus.state !== "authorized") {
             const state =
@@ -404,7 +405,7 @@ async function buildMcpStatusEntries(
           hasCodeVerifier: Boolean(store.codeVerifier),
           hasDiscoveryState: Boolean(store.discoveryState),
           hasLastAuthorizationUrl: Boolean(store.lastAuthorizationUrl),
-          ...(await readMcpOAuthCredentialsStatus(identity, store)),
+          ...(await readMcpOAuthCredentialsStatus(identity, resolved.oauth, store)),
         };
       } else {
         entry.connectedPrincipals = await countConnectedMcpPrincipals(name, server);
@@ -701,6 +702,7 @@ export function registerMcpCli(program: Command) {
     .option("--oauth-scope <scope>", "OAuth scope")
     .option("--oauth-redirect-url <url>", "OAuth redirect URL")
     .option("--oauth-client-metadata-url <url>", "OAuth client metadata URL")
+    .option("--oauth-client-id <id>", "Pre-registered OAuth client ID (skips dynamic registration)")
     .option("--include <csv>", "Comma-separated MCP tool names or '*' globs to expose")
     .option("--exclude <csv>", "Comma-separated MCP tool names or '*' globs to hide")
     .option("--timeout <seconds>", "Per-request timeout in seconds")
@@ -852,6 +854,7 @@ export function registerMcpCli(program: Command) {
     .option("--oauth-scope <scope>", "OAuth scope")
     .option("--oauth-redirect-url <url>", "OAuth redirect URL")
     .option("--oauth-client-metadata-url <url>", "OAuth client metadata URL")
+    .option("--oauth-client-id <id>", "Pre-registered OAuth client ID (skips dynamic registration)")
     .option("--ssl-verify <boolean>", "Verify HTTPS certificates: true or false")
     .option("--client-cert <path>", "HTTP mutual TLS client certificate path")
     .option("--client-key <path>", "HTTP mutual TLS client key path")
@@ -913,7 +916,10 @@ export function registerMcpCli(program: Command) {
 
   registerMcpOAuthCommands(mcp, {
     fail,
-    loadServer: async (name) => requireMcpServer(await loadMcpConfig(), name),
+    loadServer: async (name) => {
+      const loaded = await loadMcpConfig();
+      return { config: loaded.config, server: requireMcpServer(loaded, name) };
+    },
   });
 
   mcp

@@ -362,6 +362,40 @@ describe("config cli SecretRef builder schema validation", () => {
   });
 });
 
+describe("config cli MCP OAuth client secret", () => {
+  it("stores a SecretRef for a pre-registered MCP OAuth client", async () => {
+    const server = {
+      url: "https://mcp.example.com/mcp",
+      auth: "oauth",
+      oauth: { clientId: "registered-app" },
+    };
+    const raw = `${JSON.stringify({ gateway: { mode: "local" }, mcp: { servers: { docs: server } } })}\n`;
+    await withFile("openclaw-config-cli-mcp-client-secret-", raw, async ({ configPath }) => {
+      await set(
+        "mcp.servers.docs.oauth.clientSecret",
+        "--ref-source",
+        "env",
+        "--ref-provider",
+        "default",
+        "--ref-id",
+        "DOCS_MCP_CLIENT_SECRET",
+      );
+      expect(readJson(configPath).mcp.servers.docs.oauth).toEqual({
+        clientId: "registered-app",
+        clientSecret: { source: "env", provider: "default", id: "DOCS_MCP_CLIENT_SECRET" },
+      });
+      expect(errors).toEqual([]);
+      // Plaintext would persist the secret in config, so only references are accepted.
+      await reject(set("mcp.servers.docs.oauth.clientSecret", "plaintext-value"));
+      expect(readJson(configPath).mcp.servers.docs.oauth.clientSecret).toEqual({
+        source: "env",
+        provider: "default",
+        id: "DOCS_MCP_CLIENT_SECRET",
+      });
+    });
+  });
+});
+
 describe("config CLI file imports", () => {
   // Windows normalizes trailing spaces, so these require distinct POSIX filenames.
   it.skipIf(process.platform === "win32").each([

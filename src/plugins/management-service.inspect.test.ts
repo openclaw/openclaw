@@ -312,9 +312,11 @@ describe("managed plugin inspection", () => {
     expect(mocks.mcpAuth).toHaveBeenCalledWith(
       states.map((state, i) =>
         expect.objectContaining({
-          serverName: `connection-${i}`,
-          serverUrl: `https://example.test/${state}`,
-          principal: "operator",
+          identity: expect.objectContaining({
+            serverName: `connection-${i}`,
+            serverUrl: `https://example.test/${state}`,
+            principal: "operator",
+          }),
         }),
       ),
     );

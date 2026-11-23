@@ -16,7 +16,10 @@ import {
   type McpOAuthIdentity,
 } from "./mcp-oauth-identity.js";
 import {
+  configuredMcpOAuthClientId,
   createMcpOAuthClientProvider,
+  isMcpOAuthStoreBoundToConfiguredClient,
+  McpOAuthClientConfigError,
   type McpOAuthConfig,
   type McpOAuthLoginLifecycle,
   withMcpOAuthLeaseSignal,
@@ -41,6 +44,7 @@ import {
   writeMcpOAuthPendingAuthorization,
   type McpOAuthStore,
 } from "./mcp-oauth-store.js";
+import { MCP_OAUTH_DEFAULT_REDIRECT_URL } from "./mcp-oauth-store.mutations.js";
 import type { ResolvedHttpMcpTransportConfig } from "./mcp-transport-config.js";
 
 export type { McpOAuthPrincipalStatus } from "./mcp-oauth-status.js";
@@ -98,7 +102,11 @@ function isStoredMcpOAuthAccessTokenUsable(
   params: ResolveMcpOAuthAccessTokenParams,
 ): boolean {
   const tokens = store.tokens;
-  if (!tokens?.access_token || params.rejectedAccessToken === tokens.access_token) {
+  if (
+    !tokens?.access_token ||
+    params.rejectedAccessToken === tokens.access_token ||
+    !isMcpOAuthStoreBoundToConfiguredClient(store, params.config)
+  ) {
     return false;
   }
   const tokenIsFresh =
@@ -148,7 +156,10 @@ export async function resolveMcpOAuthAccessToken(
       admitted = true;
       const store = await readMcpOAuthStore(storeKey, context);
       await lease.assertOwned();
-      const tokens = store.tokens;
+      // Tokens issued to another client are signed out for the configured one.
+      const tokens = isMcpOAuthStoreBoundToConfiguredClient(store, params.config)
+        ? store.tokens
+        : undefined;
       const rejectedCurrentToken = params.rejectedAccessToken === tokens?.access_token;
       const challengeAppliesToCurrentState = !tokens?.access_token || rejectedCurrentToken;
       if (params.authorizationChallenge === true && challengeAppliesToCurrentState) {
@@ -339,20 +350,29 @@ export async function countMcpOAuthPrincipals(identity: McpOAuthIdentity): Promi
   );
 }
 
-/** Read one ordered requester set within a single current storage lifetime. */
+/** A principal's stored sign-in, checked against its server's OAuth config. */
+export type McpOAuthStatusTarget = { identity: McpOAuthIdentity; oauth?: McpOAuthConfig };
+
+/** Read one ordered principal set within a single current storage lifetime. */
 export async function readMcpOAuthCredentialsStatuses(
-  identities: readonly McpOAuthIdentity[],
+  targets: readonly McpOAuthStatusTarget[],
 ): Promise<McpOAuthPrincipalStatus[]> {
-  return readMcpOAuthStoreStatuses(identities.map((identity) => identity.storeKey));
+  return readMcpOAuthStoreStatuses(
+    targets.map(({ identity, oauth }) => {
+      const clientId = configuredMcpOAuthClientId(oauth);
+      return clientId ? { storeKey: identity.storeKey, clientId } : { storeKey: identity.storeKey };
+    }),
+  );
 }
 
 /** Reads stored OAuth credential presence without exposing values or creating state. */
 export async function readMcpOAuthCredentialsStatus(
   identity: McpOAuthIdentity,
+  oauth?: McpOAuthConfig,
   preparedStore?: McpOAuthStore,
 ): Promise<McpOAuthPrincipalStatus> {
   const store = preparedStore ?? (await readMcpOAuthStoreReadOnly(identity.storeKey));
-  return projectMcpOAuthCredentialsStatus(store);
+  return projectMcpOAuthCredentialsStatus(store, configuredMcpOAuthClientId(oauth));
 }
 
 async function runMcpOAuthAuthorizationAttempt(
@@ -415,6 +435,22 @@ export async function startMcpOAuthAuthorization(
   opts: { redirectUrl?: string; login?: McpOAuthLoginLifecycle },
 ): Promise<McpOAuthAuthorizationStartResult> {
   const storeKey = identity.storeKey;
+  const preRegistered = normalizeOptionalString(config.oauth?.clientId) !== undefined;
+  const clientRedirectUrl = normalizeOptionalString(config.oauth?.redirectUrl);
+  const signInRedirectUrl = normalizeOptionalString(opts.redirectUrl);
+  // A pre-registered client accepts only its registered callback; fail before the provider does.
+  if (
+    preRegistered &&
+    clientRedirectUrl &&
+    signInRedirectUrl &&
+    clientRedirectUrl !== signInRedirectUrl
+  ) {
+    throw new McpOAuthClientConfigError(
+      `MCP server "${identity.serverName}" uses oauth.redirectUrl ${clientRedirectUrl}, but this sign-in returns to ${signInRedirectUrl}. ` +
+        `Register ${signInRedirectUrl} with the OAuth client, then remove oauth.redirectUrl or set it to that URL; ` +
+        "or sign in from the terminal with the Gateway stopped.",
+    );
+  }
   return await withMcpOAuthLease(
     storeKey,
     async (lease, context) => {
@@ -427,6 +463,7 @@ export async function startMcpOAuthAuthorization(
       if (
         opts.login &&
         store.tokens?.access_token &&
+        isMcpOAuthStoreBoundToConfiguredClient(store, config.oauth) &&
         !store.refreshClaim &&
         store.pendingAuthorizationChallenge?.requiresAuthorization !== true &&
         (store.tokenExpiresAt === undefined ||
@@ -438,7 +475,11 @@ export async function startMcpOAuthAuthorization(
       const configuredRedirectUrl =
         normalizeOptionalString(opts.redirectUrl) ??
         normalizeOptionalString(config.oauth?.redirectUrl);
-      const redirectUrl = configuredRedirectUrl ?? store.redirectUrl;
+      // A pre-registered client uses exactly the configured or default callback, never a
+      // callback left by an earlier attempt.
+      const redirectUrl =
+        configuredRedirectUrl ??
+        (preRegistered ? MCP_OAUTH_DEFAULT_REDIRECT_URL : store.redirectUrl);
       const oauthConfig: McpOAuthConfig = {
         ...config.oauth,
         ...(redirectUrl ? { redirectUrl } : {}),
@@ -459,7 +500,12 @@ export async function startMcpOAuthAuthorization(
         result = await runMcpOAuthAuthorizationAttempt(attempt, lease, context);
       } catch (error) {
         opts.login?.assertCurrent();
-        if (!configuredRedirectUrl && isMcpOAuthRedirectRegistrationError(error)) {
+        // Pre-registered redirects match byte for byte, so never guess another loopback host.
+        if (
+          !configuredRedirectUrl &&
+          !preRegistered &&
+          isMcpOAuthRedirectRegistrationError(error)
+        ) {
           result = await runMcpOAuthAuthorizationAttempt(
             {
               ...attempt,

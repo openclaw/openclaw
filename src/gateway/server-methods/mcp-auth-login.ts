@@ -13,6 +13,7 @@ import {
   startOperatorMcpOAuthLink,
 } from "../../agents/mcp-oauth-link.js";
 import {
+  McpOAuthClientConfigError,
   McpOAuthCredentialsRetainedError,
   type McpOAuthLoginLifecycle,
 } from "../../agents/mcp-oauth-provider.js";
@@ -221,6 +222,9 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
               reason = "provider-mismatch";
               message =
                 "OpenClaw could not verify the sign-in provider. Close this dialog, review the connection settings, and try again.";
+            } else if (error instanceof McpOAuthClientConfigError) {
+              reason = "client-config";
+              message = error.message;
             } else if (error instanceof McpOAuthCredentialsRetainedError) {
               reason = "credentials-retained";
               message =

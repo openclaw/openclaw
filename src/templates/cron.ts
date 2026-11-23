@@ -179,7 +179,8 @@ async function templateSchedulesNeedSetup(
     if (typeof url !== "string") {
       throw new Error("Template OAuth requirement has no declared MCP server URL.");
     }
-    return [operatorMcpOAuthIdentity(requirement.mcpServer, url).storeKey];
+    // Template servers declare no pre-registered client, so no client binding applies.
+    return [{ storeKey: operatorMcpOAuthIdentity(requirement.mcpServer, url).storeKey }];
   });
   if (identities.length === 0) {
     return false;

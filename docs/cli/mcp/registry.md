@@ -95,6 +95,7 @@ Notes:
 - Quoted `--command` and `--cwd` values preserve leading and trailing whitespace in executable and directory names. Whitespace-only values are treated as absent.
 - Quoted `--client-cert` and `--client-key` values preserve leading and trailing whitespace in certificate and key paths. Whitespace-only values are treated as absent.
 - `set` expects one JSON object value on the command line.
+- `--oauth-client-id <id>` on `add` and `configure` saves `oauth.clientId` for a [pre-registered OAuth client](/cli/mcp/transports#pre-registered-oauth-clients). There is no flag for the client secret, so it never appears in process arguments; store it as a SecretRef with `openclaw config set mcp.servers.<name>.oauth.clientSecret --ref-source env --ref-provider default --ref-id <ENV_VAR>`. `--clear-auth` removes the whole `oauth` block, including the client ID and secret reference.
 - `configure` updates enablement, tool filters, timeouts, OAuth, TLS, Codex approval mode, and parallel-tool-call hints without replacing the whole server definition. Add `--probe` to verify the updated server before saving.
 - `tools` updates per-server tool filters. Include/exclude entries accept raw MCP tool names, unambiguous unsuffixed tool names copied from `probe` (such as `docs__search`), and simple `*` globs. Globs match raw MCP tool names only; exact raw names take precedence over probe aliases. Use raw names for tools whose probe names collide or receive a collision suffix such as `-2`; such a probe name selects nothing in `include` and hides every tool that could carry it in `exclude`.
 - `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. For a loopback redirect, OpenClaw listens for the browser callback and completes login automatically. The printed `--code` command remains the fallback for remote, headless, or unreachable callbacks.
@@ -117,6 +118,7 @@ openclaw mcp tools context7 --include 'resolve-library-id,get-library-docs'
 openclaw mcp set docs '{"url":"https://mcp.example.com","transport":"streamable-http"}'
 openclaw mcp configure docs --timeout 20 --connect-timeout 5 --include 'search,read_*'
 openclaw mcp configure docs --auth oauth --oauth-scope 'docs.read'
+openclaw mcp configure docs --auth oauth --oauth-client-id 'docs-app-client-id'
 openclaw mcp login docs
 openclaw mcp logout docs
 openclaw mcp unset context7

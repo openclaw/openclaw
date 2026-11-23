@@ -144,6 +144,7 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     "gateway.auth.password",
     "gateway.remote.password",
     "gateway.remote.token",
+    "mcp.servers.*.oauth.clientSecret",
   ].map((pathPattern) => createOpenClawConfigSecretTargetEntry(pathPattern)),
   // Header strings support authored env references, but not structured SecretRef config writes.
   ...["memory.search.remote.headers.*", "agents.entries.*.memory.search.remote.headers.*"].map(

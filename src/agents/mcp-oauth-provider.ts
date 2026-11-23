@@ -6,11 +6,17 @@ import type {
   OAuthTokens,
   FetchLike,
 } from "@modelcontextprotocol/client";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { coerceSecretRef } from "../config/types.secrets.js";
+import { MCP_OAUTH_AUTHORIZATION_PARAM_KEYS } from "../config/zod-schema.mcp-server.js";
+import { secretRefKey } from "../secrets/ref-contract.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import type { OpenClawStateAsyncLeaseContext } from "../state/openclaw-state-lease.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
 import type { McpOAuthRefreshBoundary } from "./mcp-oauth-refresh-boundary.js";
+import { isMcpOAuthStoreBoundToClient } from "./mcp-oauth-status.js";
 import { mcpOAuthAuthorizationRequiredError } from "./mcp-oauth-store.authorization.js";
 import { readMcpOAuthStore, mutateMcpOAuthStore, type McpOAuthStore } from "./mcp-oauth-store.js";
 import { MCP_OAUTH_DEFAULT_REDIRECT_URL } from "./mcp-oauth-store.mutations.js";
@@ -20,7 +26,55 @@ export type McpOAuthConfig = {
   scope?: unknown;
   redirectUrl?: unknown;
   clientMetadataUrl?: unknown;
+  /** Pre-registered client; `clientSecret` must already be resolved to a string. */
+  clientId?: unknown;
+  clientSecret?: unknown;
+  authorizationParams?: unknown;
 };
+
+/** An operator-fixable OAuth client setting; its message names config paths, never secrets. */
+export class McpOAuthClientConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "McpOAuthClientConfigError";
+  }
+}
+
+/** The pre-registered client this config requires stored credentials to belong to, if any. */
+export function configuredMcpOAuthClientId(config: McpOAuthConfig | undefined): string | undefined {
+  return normalizeOptionalString(config?.clientId);
+}
+
+/** Whether stored credentials belong to the configured pre-registered client, if any. */
+export function isMcpOAuthStoreBoundToConfiguredClient(
+  store: McpOAuthStore,
+  config: McpOAuthConfig | undefined,
+): boolean {
+  return isMcpOAuthStoreBoundToClient(store, configuredMcpOAuthClientId(config));
+}
+
+function resolveConfiguredClient(
+  serverName: string,
+  config: McpOAuthConfig,
+): { client_id: string; client_secret?: string } | undefined {
+  const clientId = normalizeOptionalString(config.clientId);
+  if (!clientId) {
+    return undefined;
+  }
+  const secret = config.clientSecret;
+  if (secret === undefined) {
+    return { client_id: clientId };
+  }
+  if (typeof secret === "string" && secret.length > 0) {
+    return { client_id: clientId, client_secret: secret };
+  }
+  const ref = coerceSecretRef(secret);
+  const path = `${appendConfigPathSegment("mcp.servers", serverName)}.oauth.clientSecret`;
+  throw new McpOAuthClientConfigError(
+    `MCP server "${serverName}": ${path}${ref ? ` (${secretRefKey(ref)})` : ""} is not resolved. ` +
+      "Make the secret available, then run openclaw secrets reload or restart the Gateway.",
+  );
+}
 
 export type McpOAuthLoginLifecycle = {
   signal: AbortSignal;
@@ -109,6 +163,7 @@ export async function createMcpOAuthClientProvider(params: {
   refreshBoundary?: McpOAuthRefreshBoundary;
 }): Promise<OAuthClientProvider> {
   const config = params.config ?? {};
+  const configuredClient = resolveConfiguredClient(params.identity.serverName, config);
   const storeKey = params.identity.storeKey;
   const storeContext = params.storeContext;
   let preparedVerifier: string | undefined;
@@ -165,7 +220,9 @@ export async function createMcpOAuthClientProvider(params: {
     get redirectUrl() {
       return resolveOAuthRedirectUrl(config, preparedStore());
     },
-    clientMetadataUrl: normalizeOptionalString(config.clientMetadataUrl),
+    clientMetadataUrl: configuredClient
+      ? undefined
+      : normalizeOptionalString(config.clientMetadataUrl),
     get clientMetadata(): OAuthClientMetadata {
       const redirectUrl = resolveOAuthRedirectUrl(config, preparedStore());
       const scope = normalizeOptionalString(config.scope);
@@ -199,7 +256,7 @@ export async function createMcpOAuthClientProvider(params: {
       // State validates one browser round trip. It is not reusable persisted state.
       return randomUUID();
     },
-    async clientInformation() {
+    async clientInformation(ctx) {
       const store = await readStore();
       params.login?.assertCurrent();
       // The SDK can replace a mismatched client before requesting authorization.
@@ -209,6 +266,16 @@ export async function createMcpOAuthClientProvider(params: {
         assertAuthorizationRedirectAllowed();
       }
       const clientInformation = store.clientInformation;
+      // A configured client is never registered. Its stored row only binds the issuer.
+      if (configuredClient) {
+        // Only a matching stamp is returned; otherwise the SDK stamps the current issuer.
+        const issuer =
+          clientInformation?.client_id === configuredClient.client_id &&
+          clientInformation.issuer === ctx?.issuer
+            ? clientInformation.issuer
+            : undefined;
+        return issuer === undefined ? { ...configuredClient } : { ...configuredClient, issuer };
+      }
       // Re-register an unused client when the callback changes. Saved tokens remain
       // bound to their original client; metadata-document clients have no redirect list.
       if (
@@ -226,6 +293,18 @@ export async function createMcpOAuthClientProvider(params: {
       return clientInformation;
     },
     async saveClientInformation(clientInformation) {
+      if (configuredClient) {
+        // The SDK writes back what clientInformation() returned; the secret stays in config.
+        const { client_secret: _secret, ...binding } = clientInformation;
+        const store = await readStore();
+        if (store.tokens && store.clientInformation?.client_id !== binding.client_id) {
+          // Tokens issued to another client must never become usable under this one.
+          await updateStore({ kind: "invalidate", scope: "tokens", suppressStoredTokens: false });
+        }
+        await updateStore({ kind: "clientInformation", clientInformation: binding });
+        params.login?.assertCurrent();
+        return;
+      }
       await updateStore({ kind: "clientInformation", clientInformation });
       params.login?.assertCurrent();
     },
@@ -244,7 +323,9 @@ export async function createMcpOAuthClientProvider(params: {
         }
         throw new Error("MCP OAuth refresh outcome is uncertain; sign in again.");
       }
-      return canReuseStoredTokens(store) ? store.tokens : undefined;
+      return canReuseStoredTokens(store) && isMcpOAuthStoreBoundToConfiguredClient(store, config)
+        ? store.tokens
+        : undefined;
     },
     async saveTokens(tokens) {
       params.refreshBoundary?.assertTokens(tokens);
@@ -268,6 +349,13 @@ export async function createMcpOAuthClientProvider(params: {
       const state = authorizationUrl.searchParams.get("state");
       if (params.login && (!state || !preparedVerifier)) {
         throw new Error("MCP OAuth authorization preparation is incomplete.");
+      }
+      const extraParams = isRecord(config.authorizationParams) ? config.authorizationParams : {};
+      for (const key of MCP_OAUTH_AUTHORIZATION_PARAM_KEYS) {
+        const value = normalizeOptionalString(extraParams[key]);
+        if (value) {
+          authorizationUrl.searchParams.set(key, value);
+        }
       }
       await updateStore(
         {

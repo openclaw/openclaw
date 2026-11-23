@@ -13,6 +13,7 @@ export type McpServerControlOptions = {
   oauthScope?: string;
   oauthRedirectUrl?: string;
   oauthClientMetadataUrl?: string;
+  oauthClientId?: string;
   include?: string;
   exclude?: string;
   timeout?: string;
@@ -115,6 +116,7 @@ export function applyMcpHttpControls(
     ["scope", opts.oauthScope],
     ["redirectUrl", opts.oauthRedirectUrl],
     ["clientMetadataUrl", opts.oauthClientMetadataUrl],
+    ["clientId", opts.oauthClientId],
   ] as const) {
     const value = input?.trim();
     if (value) {

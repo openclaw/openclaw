@@ -1,5 +1,6 @@
 import { isHttpsUrl, isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { z } from "zod";
+import { SecretRefSchema } from "./zod-schema.secret-input.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 const HttpUrlSchema = z.string().url().refine(isHttpUrl, "Expected http:// or https:// URL");
@@ -11,6 +12,17 @@ const McpOAuthClientMetadataUrlSchema = z
     const url = URL.parse(value);
     return url !== null && isHttpsUrl(url) && url.pathname !== "/";
   }, "Expected https:// URL with a non-root pathname");
+
+const McpOAuthAuthorizationParamSchema = z.string().trim().min(1).optional();
+// A fixed allowlist: protocol parameters (redirect_uri, PKCE, state, scope, ...) stay SDK-owned.
+const McpOAuthAuthorizationParamsSchema = z.strictObject({
+  access_type: McpOAuthAuthorizationParamSchema,
+  prompt: McpOAuthAuthorizationParamSchema,
+  login_hint: McpOAuthAuthorizationParamSchema,
+});
+
+/** Extra authorization request parameters an operator may add to the sign-in URL. */
+export const MCP_OAUTH_AUTHORIZATION_PARAM_KEYS = McpOAuthAuthorizationParamsSchema.keyof().options;
 
 function createMcpSensitiveRecordSchema() {
   return z
@@ -44,6 +56,10 @@ export const McpServerSchema = z
         scope: z.string().trim().min(1).optional(),
         redirectUrl: HttpUrlSchema.optional(),
         clientMetadataUrl: McpOAuthClientMetadataUrlSchema.optional(),
+        clientId: z.string().trim().min(1).optional(),
+        // SecretRef only: a pre-registered client secret never sits in config as plaintext.
+        clientSecret: SecretRefSchema.register(sensitive).optional(),
+        authorizationParams: McpOAuthAuthorizationParamsSchema.optional(),
       })
       .optional(),
     sslVerify: z.boolean().optional(),
@@ -141,6 +157,28 @@ export const McpServerSchema = z
             'oauth.identity "per-requester" cannot be combined with a command or "stdio" transport',
           path: ["oauth", "identity"],
         });
+      }
+    }
+    const oauth = data.oauth;
+    const clientIssue = (field: "clientId" | "clientSecret", message: string) =>
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: ["oauth", field] });
+    if (oauth?.clientSecret !== undefined && !oauth.clientId) {
+      clientIssue("clientSecret", "oauth.clientSecret requires oauth.clientId");
+    }
+    if (oauth?.clientId) {
+      if (data.auth !== "oauth") {
+        clientIssue("clientId", 'oauth.clientId requires auth: "oauth"');
+      }
+      for (const field of ["clientMetadataUrl", "authProfileId"] as const) {
+        if (oauth[field] !== undefined) {
+          clientIssue("clientId", `oauth.clientId cannot be combined with oauth.${field}`);
+        }
+      }
+      if (oauth.identity === "per-requester") {
+        clientIssue(
+          "clientId",
+          'oauth.clientId is not supported with oauth.identity "per-requester" yet; use a shared identity',
+        );
       }
     }
     if (
