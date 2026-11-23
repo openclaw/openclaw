@@ -27,7 +27,7 @@ export function respondSessionFileTooLarge(
   respond: RespondFn,
   file: SessionFileEntry,
   filePath: string,
-  metadata: Pick<SessionsFilesGetResult, "root" | "source">,
+  metadata: Pick<SessionsFilesGetResult, "root" | "source" | "canOpenInSystem">,
 ) {
   respond(
     false,
@@ -35,9 +35,11 @@ export function respondSessionFileTooLarge(
     sessionFilesError("session_file_too_large", "session file is too large to preview", {
       maxPreviewBytes: WORKSPACE_PREVIEW_MAX_BYTES,
       path: file.path || filePath,
+      ...(metadata.root && file.workspacePath ? { workspacePath: file.workspacePath } : {}),
       size: file.size,
       ...(metadata.root ? { root: metadata.root } : {}),
       ...(metadata.source ? { source: metadata.source } : {}),
+      ...(metadata.canOpenInSystem ? { canOpenInSystem: true } : {}),
     }),
   );
 }

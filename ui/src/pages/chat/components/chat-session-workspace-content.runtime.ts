@@ -128,6 +128,35 @@ function createSessionWorkspaceFileContent(
       { sessionKey: result.sessionKey, agentId, path: actionPath, ...messageFile },
       signal,
     );
+  const client = state.client;
+  const connectionEpoch = state.connectionEpoch;
+  const openInSystem =
+    result.canOpenInSystem && client && hasOperatorAdminAccess(state.hello?.auth ?? null)
+      ? async () => {
+          if (
+            !state.connected ||
+            state.client !== client ||
+            state.connectionEpoch !== connectionEpoch
+          ) {
+            throw new Error(
+              "Reconnect and reopen this file before opening it on the Gateway host.",
+            );
+          }
+          const opened = await client.request<{ ok: boolean; error?: string }>(
+            "sessions.files.reveal",
+            {
+              key: result.sessionKey,
+              agentId,
+              path: actionPath,
+              expectedRoot: result.root,
+              ...messageFile,
+            },
+          );
+          if (!opened.ok) {
+            throw new Error(opened.error || "Could not open this file on the Gateway host.");
+          }
+        }
+      : undefined;
   if (file.previewKind === "image") {
     if (
       file.contentEncoding !== "base64" ||
@@ -139,6 +168,7 @@ function createSessionWorkspaceFileContent(
     }
     return {
       kind: "image",
+      openInSystem,
       title: name,
       src: `data:${file.mimeType};base64,${file.content}`,
       mimeType: file.mimeType,
@@ -161,6 +191,7 @@ function createSessionWorkspaceFileContent(
     if (file.mimeType === "application/pdf") {
       return {
         kind: "attachment",
+        openInSystem,
         attachmentKind: "document",
         title: name,
         mimeType: file.mimeType,
@@ -178,6 +209,7 @@ function createSessionWorkspaceFileContent(
     }
     return {
       ...unsupportedFileSidebarContent(file, actionPath, download),
+      openInSystem,
       fileLinkSessionKey: result.sessionKey,
       file: source,
     };
@@ -278,6 +310,7 @@ function createSessionWorkspaceFileContent(
   const extension = name.match(/\.([a-z0-9_-]+)$/i)?.[1]?.toLowerCase() ?? "";
   return {
     kind: "file",
+    openInSystem,
     path: filePath,
     absolutePath: workspaceBrowserFilePath(result.root, filePath),
     name,
@@ -478,11 +511,19 @@ async function readSessionFileReference(
           root: "root" in details ? details.root : undefined,
           source: "source" in details ? details.source : undefined,
         };
+        const workspacePath =
+          "workspacePath" in details && typeof details.workspacePath === "string"
+            ? details.workspacePath
+            : undefined;
         const result: SessionWorkspaceGetResult = {
           sessionKey,
           ...(isSessionFileReadMetadata(metadata) ? metadata : {}),
+          ...("canOpenInSystem" in details && details.canOpenInSystem === true
+            ? { canOpenInSystem: true }
+            : {}),
           file: {
             path: actionPath,
+            workspacePath,
             name: pathDisplayName(actionPath),
             size: details.size,
             kind: "read",
@@ -490,7 +531,12 @@ async function readSessionFileReference(
             previewKind: "unsupported",
           },
         };
-        return { result, actionPath };
+        return {
+          result,
+          actionPath: workspacePath
+            ? workspaceBrowserFilePath(result.root, workspacePath)
+            : actionPath,
+        };
       }
       throw error;
     }

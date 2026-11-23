@@ -344,7 +344,7 @@ type McpAppSidebarContent = {
   rawText?: null;
 };
 
-export type SidebarContent =
+export type SidebarContent = (
   | {
       kind: "mcp-app-preview";
       title: string;
@@ -359,7 +359,11 @@ export type SidebarContent =
   | ImageSidebarContent
   | AttachmentSidebarContent
   | FileSidebarContent
-  | SessionDiffSidebarContent;
+  | SessionDiffSidebarContent
+) & {
+  /** Opens the captured original file in an application on its Gateway host. */
+  openInSystem?: () => Promise<void>;
+};
 
 export type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "tool-output" }>;
 
