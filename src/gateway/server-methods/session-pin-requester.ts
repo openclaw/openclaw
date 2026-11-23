@@ -1,14 +1,18 @@
 import {
-  personalSessionPinKeys,
-  UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
-} from "../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+  isNativeAppUiClient,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import { assertAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   getGatewayToolCallerIdentity,
   resolveGatewayPersonalToolParticipant,
 } from "../../agents/tools/gateway-caller-context.js";
-import { getUserPreferenceValues } from "../../state/user-preferences.js";
-import { readResidentUserProfileId } from "../../state/user-profile-list.js";
+import { readProfileSidebarOrder } from "../../state/user-preferences.js";
+import {
+  readResidentUserProfileAliases,
+  readResidentUserProfileId,
+} from "../../state/user-profile-list.js";
 import {
   isIneligiblePersonalGatewayCaller,
   isSyntheticGatewayCaller,
@@ -89,19 +93,20 @@ export function sessionPinRequester(options: GatewayRequestHandlerOptions) {
 export async function readRequesterSessionPins(
   owner: NonNullable<ReturnType<typeof sessionPinRequester>>,
 ) {
-  const { values, isCurrent } = await getUserPreferenceValues(
-    [owner.profileId],
-    UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
+  const order = await readProfileSidebarOrder(
+    owner.profileId,
+    readResidentUserProfileAliases(owner.profileId),
   );
-  const raw = values.get(owner.profileId);
-  const keys = personalSessionPinKeys(Array.isArray(raw) ? raw : []);
-  const ranks = new Map([...keys].map((key, index) => [key, keys.size - index]));
-  const assertCurrent = () => {
-    owner.assertCurrent();
-    if (!isCurrent()) {
-      throw new Error("Personal session preferences changed. Refresh the list and try again.");
-    }
-  };
-  assertCurrent();
-  return { ranks, assertCurrent };
+  owner.assertCurrent();
+  return new Map(order.map((key, index) => [key, order.length - index]));
+}
+
+/** Older native binaries persist visible pin IDs in shared config. Never hand them personal pins. */
+export function usesLegacyNativePins(client: GatewayRequestHandlerOptions["client"]) {
+  return (
+    client !== null &&
+    !isSyntheticGatewayCaller(client) &&
+    isNativeAppUiClient(client.connect.client) &&
+    !hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.PERSONAL_SESSION_PINS)
+  );
 }

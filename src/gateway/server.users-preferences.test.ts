@@ -84,6 +84,33 @@ test("named preferences stay profile-scoped over authenticated multi-agent Gatew
         );
         expect(await rpcReq(socket, "sessions.preview", { keys: [key] })).toMatchObject(expected);
       }
+      const rail = "ui.railShortcuts";
+      const own = "agent:research:own";
+      const foreignKey = "agent:research:foreign";
+      const layout = [`session:${foreignKey}`, `session-rail:${own}`, `session:${own}`];
+      expect(
+        await rpcReq(socket, "users.prefs.set", { entries: { [rail]: layout } }),
+      ).toMatchObject({ ok: true, payload: { status: "ok" } });
+      const list = await rpcReq(socket, "sessions.list", { pinned: true, agentId: "research" });
+      expect(list).toMatchObject({
+        ok: true,
+        payload: { totalCount: 1, sessions: [{ key: own, pinned: true }] },
+      });
+      expect(
+        await rpcReq(socket, "sessions.patch", {
+          key: own,
+          expectedSessionId: "own-session",
+          pinned: false,
+        }),
+      ).toMatchObject({
+        ok: true,
+        payload: { entry: { sessionId: "own-session", pinned: false } },
+      });
+      const after = await rpcReq(socket, "users.prefs.get", { keys: [rail] });
+      expect(after).toMatchObject({
+        ok: true,
+        payload: { status: "ok", entries: { [rail]: layout.slice(0, 2) } },
+      });
     } finally {
       socket.close();
     }

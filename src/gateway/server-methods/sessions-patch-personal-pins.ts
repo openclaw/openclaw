@@ -172,6 +172,11 @@ export async function patchPersonalSessionPins(
         if (pinned && target.entry.archivedAt !== undefined) {
           return reject("Cannot pin an archived session; restore it first.");
         }
+        if (pinned && (target.entry.snoozedUntil ?? 0) > Date.now()) {
+          return reject(
+            "Wake the snoozed session first, then pin it. A personal pin cannot wake it for everyone.",
+          );
+        }
         if (pinned && !isPinnableSessionEntry(target.canonicalKey, target.entry)) {
           return reject("Cannot pin a child session; promote it or pin its parent instead.");
         }

@@ -49,6 +49,7 @@ import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
 import { respondError } from "./response.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
+import { sessionPinRequester, usesLegacyNativePins } from "./session-pin-requester.js";
 import type { SessionPatchTargetIdentity } from "./session-unread-ack.js";
 import { startSessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
 import { executeSessionPatchMutations } from "./sessions-patch-engine.js";
@@ -122,7 +123,10 @@ function createSessionPatchHandler(
         patch = singlePatch;
         targets = [singlePatch];
       }
-      if (patch.pinned !== undefined) {
+      if (
+        patch.pinned !== undefined &&
+        !(usesLegacyNativePins(client) && sessionPinRequester(options))
+      ) {
         return await patchPersonalSessionPins(options, targets, patch, request.many);
       }
       const assertCurrent = () => {

@@ -65,6 +65,7 @@ function selectSessionSharingEntry(entry: InternalSessionEntry) {
     inheritedToolAllow: entry.inheritedToolAllow,
     inheritedToolDeny: entry.inheritedToolDeny,
     archivedAt: entry.archivedAt,
+    snoozedUntil: entry.snoozedUntil,
     category: entry.category,
     sidebarRoot: entry.sidebarRoot,
     ...(entry.repositoryWorkspaceId === undefined

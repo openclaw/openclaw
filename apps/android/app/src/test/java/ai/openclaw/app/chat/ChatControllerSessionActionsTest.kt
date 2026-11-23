@@ -93,6 +93,30 @@ class ChatControllerSessionActionsTest {
     }
 
   @Test
+  fun personalPinChangesRefreshTheOpenRosterButUnrelatedPreferencesDoNot() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      fun roster(pinned: Boolean) = """{"sessions":[{"key":"custom","sessionId":"session-custom","archived":true,"pinned":$pinned}]}"""
+      gateway.respondWith("sessions.list", roster(false))
+      val controller = controller(this, gateway)
+      controller.refreshSessions(limit = 7, archived = true)
+      runCurrent()
+      assertEquals(false, controller.sessions.value.single().pinned)
+      gateway.respondWith("sessions.list", roster(true))
+      controller.handleGatewayEvent("users.prefs.changed", """{"keys":["ui.theme"]}""")
+      runCurrent()
+      assertEquals(1, gateway.callCount("sessions.list"))
+      controller.handleGatewayEvent("users.prefs.changed", """{"keys":["ui.railShortcuts"]}""")
+      runCurrent()
+      assertEquals(true, controller.sessions.value.single().pinned)
+      val reads = gateway.calls.filter { it.method == "sessions.list" }.map { json.parseToJsonElement(it.paramsJson!!).jsonObject }
+      assertEquals(2, reads.size)
+      assertEquals(reads.first()["agentId"], reads.last()["agentId"])
+      assertEquals(JsonPrimitive(7), reads.last()["limit"])
+      assertEquals(JsonPrimitive(true), reads.last()["archived"])
+    }
+
+  @Test
   fun snoozeAndWakeRequireDurableSessionIdentity() =
     runTest {
       val gateway = ScriptedGateway(json)

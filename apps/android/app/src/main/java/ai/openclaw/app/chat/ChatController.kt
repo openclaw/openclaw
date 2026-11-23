@@ -3816,6 +3816,11 @@ class ChatController internal constructor(
         refreshHistoryForRecovery(invalidateDefaultModel = true)
       }
 
+      "users.prefs.changed" -> {
+        val keys = payloadJson?.let { runCatching { json.parseToJsonElement(it).asObjectOrNull()?.get("keys").asArrayOrNull() }.getOrNull() }
+        if (keys?.any { it.asStringOrNull() == "ui.railShortcuts" } == true) refreshSessionsForCurrentWindow()
+      }
+
       "sessions.changed" -> {
         if (payloadJson.isNullOrBlank()) {
           refreshSessionsForCurrentWindow()

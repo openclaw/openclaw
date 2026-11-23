@@ -151,6 +151,7 @@ class ConnectionManager internal constructor(
           // Android does not consume presence rosters; accept deltas to avoid unused full snapshots.
           add("presence-deltas")
           add("health-summary")
+          add("personal-session-pins")
         },
       commands = emptyList(),
       permissions = emptyMap(),

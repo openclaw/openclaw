@@ -186,7 +186,11 @@ import shared navigation or pinned sessions, and writes nothing until you edit
 your pins or the rail. Both use the existing `ui.railShortcuts` preference; older
 `ui.sidebarEntries` values remain stored but are ignored. Shortcuts saved under
 the new preference, including an empty list, remain unchanged.
-Concurrent saves use conflict checks and preserve unrelated pin edits.
+Concurrent saves use conflict checks and preserve unrelated pin edits. Older native
+clients that do not advertise `personal-session-pins` keep their shared pin list;
+they never receive the profile's private pin list to write back to shared configuration.
+After upgrading, pin the chats you want on your own sidebar. Historical shared pins
+have no recorded pinner and are not copied into anyone's profile.
 
 The browser keeps device-specific geometry and transient presentation, such as
 sidebar width and scroll position. Navigation changes on read-only connections

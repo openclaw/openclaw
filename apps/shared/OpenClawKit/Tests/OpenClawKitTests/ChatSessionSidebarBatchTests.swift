@@ -1,6 +1,5 @@
 #if os(macOS)
 import Foundation
-import struct OpenClawKit.GatewayResponseError
 import OpenClawProtocol
 import SwiftUI
 import Testing
@@ -19,8 +18,8 @@ struct ChatSessionSidebarBatchTests {
                 "sessions.delete",
                 "sessions.groups.list",
                 "sessions.groups.put",
-                "config.get",
-                "config.patch",
+                "users.prefs.get",
+                "users.prefs.set",
             ]],
             "snapshot": ["presence": [], "health": [:], "stateVersion": ["presence": 0, "health": 0], "uptimeMs": 0],
             "auth": ["scopes": scopes], "policy": [:],
@@ -44,24 +43,19 @@ struct ChatSessionSidebarBatchTests {
         try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(request.params)) as? [String: Any])
     }
 
-    private func pinSnapshot(_ entries: [String], hash: String = "revision-1", valid: Bool = true) throws -> Data {
+    private func pinSnapshot(_ entries: [String], valid: Bool = true) throws -> Data {
         try JSONSerialization.data(withJSONObject: [
-            "valid": valid, "hash": hash, "config": ["ui": ["prefs": ["sidebarEntries": entries]]],
+            "status": valid ? "ok" : "no_durable_identity", "entries": ["ui.railShortcuts": entries],
         ])
     }
 
     private func pinPatch(_ request: OpenClawChatGatewayRequest) throws -> [String] {
         let params = try self.params(request)
-        #expect(request.method == "config.patch")
-        #expect(params["replacePaths"] as? [String] == ["ui.prefs.sidebarEntries"])
-        let raw = try #require(params["raw"] as? String)
-        let patch = try #require(JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any])
-        #expect(Set(patch.keys) == ["ui"])
-        let ui = try #require(patch["ui"] as? [String: Any])
-        #expect(Set(ui.keys) == ["prefs"])
-        let prefs = try #require(ui["prefs"] as? [String: Any])
-        #expect(Set(prefs.keys) == ["sidebarEntries"])
-        return try #require(prefs["sidebarEntries"] as? [String])
+        #expect(request.method == "users.prefs.set")
+        #expect(Set(params.keys) == ["entries", "expectedEntries"])
+        let prefs = try #require(params["entries"] as? [String: [String]])
+        #expect(Set(prefs.keys) == ["ui.railShortcuts"])
+        return try #require(prefs["ui.railShortcuts"])
     }
 
     @Test func `pin reordering permutes session slots without changing foreign bytes or positions`() {
@@ -77,7 +71,6 @@ struct ChatSessionSidebarBatchTests {
         ]
         let moved = ChatSessionSidebarBatch.movingPin(
             entries,
-            keys: ["a", "b", "c"],
             key: "c",
             target: "a",
             after: false)
@@ -94,14 +87,12 @@ struct ChatSessionSidebarBatchTests {
         for index in [0, 2, 4, 6, 7] {
             #expect(Array(moved[index].utf8) == Array(entries[index].utf8))
         }
-        #expect(ChatSessionSidebarBatch.movingPin(entries, keys: ["a"], key: "a", target: "a", after: true) == entries)
+        #expect(ChatSessionSidebarBatch.movingPin(entries, key: "a", target: "a", after: true) == entries)
     }
 
-    @Test func `missing pin slots append without moving non-session entries`() {
+    @Test func `reordering cannot restore a pin removed on another client`() {
         let entries = ["session:a", "route:usage", "future:reserved"]
-        #expect(ChatSessionSidebarBatch.movingPin(entries, keys: ["a", "b"], key: "b", target: "a", after: false) == [
-            "session:b", "route:usage", "future:reserved", "session:a",
-        ])
+        #expect(ChatSessionSidebarBatch.movingPin(entries, key: "b", target: "a", after: false) == entries)
     }
 
     @Test func `failed preference write rolls optimistic pin ordering back to the server snapshot`() async throws {
@@ -109,15 +100,15 @@ struct ChatSessionSidebarBatchTests {
         let batch = ChatSessionSidebarBatch()
         var writes = 0
         let connection = try self.connection { request in
-            if request.method == "config.get" { return try self.pinSnapshot(entries) }
+            if request.method == "users.prefs.get" { return try self.pinSnapshot(entries) }
             writes += 1
             #expect(batch.sidebarEntries == ["session:b", "future:reserved", "session:a"])
             #expect(try self.pinPatch(request) == batch.sidebarEntries)
-            #expect(try self.params(request)["baseHash"] as? String == "revision-1")
+            #expect(try self.params(request)["expectedEntries"] as? [String: [String]] == ["ui.railShortcuts": entries])
             throw URLError(.cannotConnectToHost)
         }
         await #expect(throws: URLError.self) {
-            try await batch.movePin(keys: ["a", "b"], key: "b", target: "a", after: false, connection: connection)
+            try await batch.movePin(key: "b", target: "a", after: false, connection: connection)
         }
         #expect(writes == 1)
         #expect(batch.sidebarEntries == entries)
@@ -127,12 +118,12 @@ struct ChatSessionSidebarBatchTests {
         let entries = ["session:a", "route:home", "session:b"]
         let batch = ChatSessionSidebarBatch()
         let connection = try self.connection { request in
-            if request.method == "config.get" { return try self.pinSnapshot(entries) }
+            if request.method == "users.prefs.get" { return try self.pinSnapshot(entries) }
             batch.reset(clearConnection: false)
             throw URLError(.cannotConnectToHost)
         }
         await #expect(throws: URLError.self) {
-            try await batch.movePin(keys: ["a", "b"], key: "b", target: "a", after: false, connection: connection)
+            try await batch.movePin(key: "b", target: "a", after: false, connection: connection)
         }
         #expect(batch.sidebarEntries == entries)
     }
@@ -142,7 +133,7 @@ struct ChatSessionSidebarBatchTests {
         let reads = AsyncStream.makeStream(of: CheckedContinuation<Void, Never>.self)
         var readCount = 0
         let connection = try self.connection { request in
-            if request.method == "config.patch" { return Data(#"{"ok":true}"#.utf8) }
+            if request.method == "users.prefs.set" { return Data(#"{"status":"ok"}"#.utf8) }
             readCount += 1
             if readCount <= 2 {
                 await withCheckedContinuation { reads.continuation.yield($0) }
@@ -151,12 +142,12 @@ struct ChatSessionSidebarBatchTests {
         }
         var iterator = reads.stream.makeAsyncIterator()
         let first = Task {
-            try await batch.movePin(keys: ["a", "b"], key: "b", target: "a", after: false, connection: connection)
+            try await batch.movePin(key: "b", target: "a", after: false, connection: connection)
         }
         let firstRead = try #require(await iterator.next())
         batch.reset()
         let second = Task {
-            try await batch.movePin(keys: ["a", "b"], key: "a", target: "b", after: true, connection: connection)
+            try await batch.movePin(key: "a", target: "b", after: true, connection: connection)
         }
         let secondRead = try #require(await iterator.next())
         firstRead.resume()
@@ -171,29 +162,20 @@ struct ChatSessionSidebarBatchTests {
     @Test func `concurrent preference writers trigger a fresh guarded move preserving their entries`() async throws {
         var server = ["route:home", "session:a", "plugin:old", "session:b"]
         let remote = ["route:home", "session:a", "future:new", "session:b", "plugin:new", "route:tail"]
-        var revision = 1
-        var hashes: [String] = []
-        let connection = try self.connection { request in
-            if request.method == "config.get" { return try self.pinSnapshot(server, hash: "revision-\(revision)") }
-            let hash = try #require(self.params(request)["baseHash"] as? String)
-            hashes.append(hash)
-            if hashes.count == 1 { server = remote
-                revision = 2
-            }
-            guard hash == "revision-\(revision)" else {
-                throw GatewayResponseError(
-                    method: "config.patch",
-                    code: "INVALID_REQUEST",
-                    message: "config changed since last load; re-run config.get and retry",
-                    details: nil)
-            }
+        var observations: [[String]] = []
+        let connection = try self.connection(scopes: ["operator.write"]) { request in
+            if request.method == "users.prefs.get" { return try self.pinSnapshot(server) }
+            let expected = try #require(self.params(request)["expectedEntries"] as? [String: [String]])
+            let previous = try #require(expected["ui.railShortcuts"])
+            observations.append(previous)
+            if observations.count == 1 { server = remote }
+            guard previous == server else { return Data(#"{"status":"conflict"}"#.utf8) }
             server = try self.pinPatch(request)
-            revision += 1
-            return Data(#"{"ok":true}"#.utf8)
+            return Data(#"{"status":"ok"}"#.utf8)
         }
         let batch = ChatSessionSidebarBatch()
-        try await batch.movePin(keys: ["a", "b"], key: "b", target: "a", after: false, connection: connection)
-        #expect(hashes == ["revision-1", "revision-2"])
+        try await batch.movePin(key: "b", target: "a", after: false, connection: connection)
+        #expect(observations == [["route:home", "session:a", "plugin:old", "session:b"], remote])
         #expect(batch.sidebarEntries == [
             "route:home",
             "session:b",
@@ -210,36 +192,29 @@ struct ChatSessionSidebarBatchTests {
         let external = ["session:a", "route:home", "session:b", "future:added"]
         var committed = false
         let connection = try self.connection { request in
-            if request.method == "config.patch" { committed = true
-                return Data(#"{"ok":true}"#.utf8)
+            if request.method == "users.prefs.set" { committed = true
+                return Data(#"{"status":"ok"}"#.utf8)
             }
             return try self.pinSnapshot(committed ? external : before)
         }
         let batch = ChatSessionSidebarBatch()
-        try await batch.movePin(keys: ["a", "b"], key: "b", target: "a", after: false, connection: connection)
+        try await batch.movePin(key: "b", target: "a", after: false, connection: connection)
         #expect(batch.sidebarEntries == external)
     }
 
-    @Test func `first pin retains default web links but preserves explicitly empty preferences`() async throws {
-        var written: [String]?
-        let connection = try self.connection { request in
-            if request.method == "config.patch" {
-                written = try self.pinPatch(request)
-                return Data(#"{"ok":true}"#.utf8)
-            }
-            if let written { return try self.pinSnapshot(written) }
-            return Data(#"{"valid":true,"hash":"revision-1","config":{}}"#.utf8)
-        }
+    @Test func `missing and empty personal preferences are read without writing shared navigation`() async throws {
         let batch = ChatSessionSidebarBatch()
-        try await batch.movePin(keys: ["a"], key: "a", target: nil, after: false, connection: connection)
-        #expect(written == [
-            "route:dashboards",
-            "route:systems",
-            "route:cron",
-            "route:plugins",
-            "session:a",
-        ])
-        let empty = try self.connection { _ in try self.pinSnapshot([]) }
+        let empty = try self.connection { request in
+            #expect(request.method == "users.prefs.get")
+            #expect(try self.params(request)["keys"] as? [String] == ["ui.railShortcuts"])
+            return try self.pinSnapshot([])
+        }
+        let fresh = try self.connection { request in
+            #expect(request.method == "users.prefs.get")
+            return Data(#"{"status":"ok","entries":{}}"#.utf8)
+        }
+        try await batch.movePin(key: "a", target: nil, after: false, connection: fresh)
+        #expect(batch.sidebarEntries == ["route:cron", "route:plugins", "route:usage"])
         try await batch.refreshPins(empty)
         #expect(batch.sidebarEntries.isEmpty)
     }
@@ -291,7 +266,7 @@ struct ChatSessionSidebarBatchTests {
         #expect(batch.errors[OpenClawChatSessionSidebarData.identity(ops)] != nil)
     }
 
-    @Test func `invalid configuration cannot replace the preference mirror`() async throws {
+    @Test func `missing personal identity cannot replace the preference mirror`() async throws {
         let batch = ChatSessionSidebarBatch()
         let initial = try self.connection { _ in try self.pinSnapshot(["session:a"]) }
         try await batch.refreshPins(initial)

@@ -313,8 +313,7 @@ extension ChatSessionSidebar {
         case let .mutation(fields)?: patch = fields
         case nil: return false
         }
-        if section == "pinned", !connection.allows("config.patch", scope: "operator.admin") { return false }
-        let keys = visibleRows.filter { $0.pinned == true }.map(\.key) + [row.key]
+        if section == "pinned", !connection.allows("users.prefs.set") { return false }
         let owner = self.viewModel.sidebarData
         self.interact(refresh: patch != nil) { connection in
             self.batch.errors = [:]
@@ -339,7 +338,6 @@ extension ChatSessionSidebar {
             }
             if section == "pinned" {
                 try await self.batch.movePin(
-                    keys: keys,
                     key: row.key,
                     target: pinTarget?.key,
                     after: after,

@@ -116,7 +116,7 @@ Snooze is saved by the Gateway and never stops a run, blocks messages or agent
 tools, disables automations, or changes the thread’s worktree. The thread wakes
 at its deadline, when you send a message, or when an agent run completes.
 System events and runs that preserve visible session state do not wake it.
-Snoozing keeps an existing pin; pinning wakes a snoozed thread, and archiving
+Snoozing keeps an existing pin. Wake a snoozed thread before pinning it; archiving
 clears its snooze. Archived, child, and protected main or sentinel threads
 cannot be snoozed.
 

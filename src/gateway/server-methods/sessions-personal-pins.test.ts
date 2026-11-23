@@ -5,6 +5,7 @@ import {
   loadSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
+import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { serializeGatewayFrame } from "../serialized-json.js";
@@ -55,6 +56,11 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
         },
       },
     );
+    const snoozed = key("asleep");
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: snoozed },
+      { sessionId: snoozed, updatedAt: 0, snoozedUntil: Date.now() + 86_400_000 },
+    );
     await initializeSessionReadContext(context);
     async function rpc(client: GatewayClient, method: string, params: Record<string, unknown>) {
       const respond = vi.fn<RespondFn>();
@@ -89,6 +95,29 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
     await rpc(bob, "users.prefs.set", { entries: { [PREF]: [`session:${a}`] } });
     const list = (client: GatewayClient, params: Record<string, unknown>) =>
       rpc(client, "sessions.list", { agentId: "main", ...params });
+    const oldMac: GatewayClient = {
+      ...alice,
+      connect: {
+        ...alice.connect,
+        client: { ...alice.connect.client, id: "openclaw-macos", mode: "ui" },
+        caps: [],
+      },
+    };
+    await expect(list(oldMac, { pinned: true })).resolves.toMatchObject({
+      totalCount: 1,
+      sessions: [{ key: a, pinned: true }],
+    });
+    const modernMac: GatewayClient = {
+      ...oldMac,
+      connect: { ...oldMac.connect, caps: ["personal-session-pins"] },
+    };
+    await expect(list(modernMac, { pinned: true })).resolves.toMatchObject({
+      totalCount: 2,
+      sessions: [{ key: b }, { key: c }],
+    });
+    await expect(rpc(alice, "sessions.patch", { key: snoozed, pinned: true })).rejects.toThrow(
+      /wake.*first/i,
+    );
     await expect(list(alice, { pinned: true, limit: 1 })).resolves.toMatchObject({
       totalCount: 2,
       nextOffset: 1,
@@ -97,6 +126,20 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
     await expect(
       list(alice, { pinned: true, sortBy: "activity", offset: 1 }),
     ).resolves.toMatchObject({ totalCount: 2, sessions: [{ key: c, pinned: true }] });
+    // The actual preference writer must not evict someone else's warm menu on a theme change.
+    await rpc(bob, "users.prefs.set", { entries: { "ui.theme": "dark" } });
+    const preferenceReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    try {
+      await expect(list(alice, { pinned: true })).resolves.toMatchObject({
+        totalCount: 2,
+        sessions: [{ key: b }, { key: c }],
+      });
+      expect(
+        preferenceReads.mock.calls.filter(([, op]) => op.type.startsWith("userPreferences.")),
+      ).toEqual([]);
+    } finally {
+      preferenceReads.mockRestore();
+    }
     await expect(list(bob, { pinned: true })).resolves.toMatchObject({
       sessions: [{ key: a, pinned: true }],
     });
@@ -104,6 +147,7 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
       sessions: [
         { key: nested, pinned: false },
         { key: a, pinned: false },
+        { key: snoozed, pinned: false },
       ],
     });
     await expect(list(alice, { limit: 2 })).resolves.toMatchObject({

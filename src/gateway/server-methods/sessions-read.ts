@@ -59,6 +59,7 @@ import {
   PERSONAL_PIN_PROFILE_REQUIRED,
   readRequesterSessionPins,
   sessionPinRequester,
+  usesLegacyNativePins,
 } from "./session-pin-requester.js";
 import { startSessionListDiagnostics } from "./sessions-list-diagnostics.js";
 import { sessionMaintenanceHandlers } from "./sessions-maintenance.js";
@@ -377,10 +378,10 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         diagnostics?.finish("returned");
         return undefined;
       }
-      let pins: Awaited<ReturnType<typeof readRequesterSessionPins>> | undefined;
+      const legacy = owner && usesLegacyNativePins(client);
       const assertCurrent = () => {
         args.sessionMutationAuthorization?.assertCurrent();
-        pins?.assertCurrent();
+        owner?.assertCurrent();
       };
       return {
         shareable: !owner,
@@ -397,9 +398,13 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         },
         release: (outcome) => diagnostics?.finish(outcome),
         run: async (respond) => {
-          pins = owner && (await readRequesterSessionPins(owner));
+          const personalPins = legacy
+            ? undefined
+            : owner
+              ? await readRequesterSessionPins(owner)
+              : new Map<string, number>();
           await listProjectedSessions({
-            personalPins: pins?.ranks ?? new Map(),
+            personalPins,
             projection,
             opts: params,
             context,

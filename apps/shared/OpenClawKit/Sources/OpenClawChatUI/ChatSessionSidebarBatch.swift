@@ -1,7 +1,6 @@
 #if os(macOS)
 import Foundation
 import Observation
-import struct OpenClawKit.GatewayResponseError
 import OpenClawProtocol
 
 struct ChatSidebarSelection {
@@ -48,24 +47,17 @@ final class ChatSessionSidebarBatch {
         struct Failure: Decodable { let message: String }
     }
 
-    struct PinSnapshot: Decodable {
-        let valid: Bool
-        let hash: String
-        let config: Config
-        struct Config: Decodable {
-            let ui: UI?
-            struct UI: Decodable {
-                let prefs: Prefs?
-                struct Prefs: Decodable { let sidebarEntries: [String]? }
-            }
-        }
+    private static let pinKey = "ui.railShortcuts"
+    private struct PinSnapshot: Decodable {
+        let status: String
+        let entries: [String: [String]]?
+    }
 
-        func entries() throws -> [String] {
-            guard self.valid else { throw CocoaError(.coderReadCorrupt) }
-            // ui/src/app-navigation.ts:59: absence uses page defaults; explicit [] hides them.
-            return self.config.ui?.prefs?.sidebarEntries ??
-                ["route:dashboards", "route:systems", "route:cron", "route:plugins"]
-        }
+    private struct PinWrite: Decodable { let status: String }
+    private func pinEntries(_ connection: OpenClawSessionMenuConnection) async throws -> [String] {
+        let reply: PinSnapshot = try await connection.read("users.prefs.get", ["keys": .init([Self.pinKey])])
+        guard reply.status == "ok", let entries = reply.entries else { throw CocoaError(.coderReadCorrupt) }
+        return entries[Self.pinKey] ?? ["route:cron", "route:plugins", "route:usage"]
     }
 
     var selection = ChatSidebarSelection()
@@ -101,21 +93,20 @@ final class ChatSessionSidebarBatch {
 
     func refreshPins(_ connection: OpenClawSessionMenuConnection) async throws {
         try Task.checkCancellation()
-        guard connection.allows("config.get", scope: "operator.read") else { return }
+        guard connection.allows("users.prefs.get", scope: "operator.read") else { return }
         guard !self.writingPins else { return }
-        let snapshot: PinSnapshot = try await connection.read("config.get")
-        self.sidebarEntries = try snapshot.entries()
+        let scope = self.scope
+        let entries = try await self.pinEntries(connection)
+        guard self.scope == scope, !self.writingPins else { return }
+        self.sidebarEntries = entries
     }
 
-    static func movingPin(_ entries: [String], keys: [String], key: String, target: String?, after: Bool) -> [String] {
+    static func movingPin(_ entries: [String], key: String, target: String?, after: Bool) -> [String] {
         // app-navigation.ts persists session:<key>; Gateway ordinary keys already include their agent.
         // Raw global/unknown sentinels share the web preference slot, not a native-only identity format.
         guard key != target else { return entries }
-        // Keep foreign slots fixed. Unpinning changes session state, not this array's slot count.
+        // Reordering must not re-add a slot removed by a concurrent unpin.
         var result = entries
-        for key in keys where !result.contains("session:\(key)") {
-            result.append("session:\(key)")
-        }
         let slots = result.indices.filter {
             result[$0].hasPrefix("session:") && !result[$0].dropFirst(8).trimmingCharacters(in: .whitespacesAndNewlines)
                 .isEmpty
@@ -132,46 +123,42 @@ final class ChatSessionSidebarBatch {
     }
 
     func movePin(
-        keys: [String],
         key: String,
         target: String?,
         after: Bool,
         connection: OpenClawSessionMenuConnection) async throws
     {
         guard !self.writingPins,
-              connection.allows("config.patch", scope: "operator.admin") else { throw CancellationError() }
+              connection.allows("users.prefs.set") else { throw CancellationError() }
         let scope = self.scope
         self.writingPins = true
         // The preference belongs to the connection, not the current roster filter or selection.
         defer { if self.scope == scope { self.writingPins = false } }
         do {
             for attempt in 0..<2 {
-                let snapshot: PinSnapshot = try await connection.read("config.get")
-                let previous = try snapshot.entries()
-                self.sidebarEntries = Self.movingPin(previous, keys: keys, key: key, target: target, after: after)
+                let previous = try await self.pinEntries(connection)
+                guard self.scope == scope else { return }
+                let next = Self.movingPin(previous, key: key, target: target, after: after)
+                self.sidebarEntries = next
+                guard next != previous else { return }
                 do {
-                    // ui/src/app/server-prefs.ts:549 uses this same leaf replacement. The config.patch baseHash
-                    // guard protects foreign slots; a conflict recomputes the move instead of replaying stale bytes.
-                    try await connection.request(OpenClawChatGatewayRequests.sidebarPinOrder(
-                        self.sidebarEntries,
-                        hash: snapshot.hash))
+                    let result: PinWrite = try await connection.read("users.prefs.set", [
+                        "entries": .init([Self.pinKey: next]), "expectedEntries": .init([Self.pinKey: previous]),
+                    ])
+                    guard self.scope == scope else { return }
+                    if result.status == "conflict", attempt == 0 { continue }
+                    guard result.status == "ok" else { throw CocoaError(.fileWriteUnknown) }
                 } catch {
-                    guard connection.isCurrent() else { throw CancellationError() }
+                    guard connection.isCurrent(), self.scope == scope else { throw CancellationError() }
                     self.sidebarEntries = previous
-                    // ui/src/lib/config/config-mutation-error.ts:40 identifies this existing conflict response.
-                    if attempt == 0, let error = error as? GatewayResponseError,
-                       error.code == "INVALID_REQUEST",
-                       error.details["publication"] == nil,
-                       error.message.contains("config changed since last load") { continue }
                     throw error
                 }
-                // One post-ack read is enough; changes during it settle on the next refresh.
-                let committed: PinSnapshot = try await connection.read("config.get")
-                self.sidebarEntries = try committed.entries()
+                let committed = try await self.pinEntries(connection)
+                if self.scope == scope { self.sidebarEntries = committed }
                 return
             }
         } catch {
-            guard connection.isCurrent() else { throw CancellationError() }
+            guard connection.isCurrent(), self.scope == scope else { throw CancellationError() }
             self.notices = [error.localizedDescription]
             throw error
         }

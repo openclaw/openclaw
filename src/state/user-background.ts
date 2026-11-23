@@ -106,7 +106,10 @@ async function mutateBackground(
   context.admission.assertCurrent();
   options.signal?.throwIfAborted();
   options.assertCurrent?.();
-  const finishMutation = beginUserPreferenceMutation(context.admission);
+  const finishMutation = beginUserPreferenceMutation(context.admission, {
+    profileId,
+    keys: ["ui.background"],
+  });
   try {
     const mutation: UserBackgroundWriteInput = { profileId, expected: input, image };
     return await runOpenClawStateWorkerOperation(
