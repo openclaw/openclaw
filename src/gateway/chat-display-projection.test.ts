@@ -513,6 +513,17 @@ it("restores widgets from Claude CLI results coalesced into the tool-call messag
   expect(unanswered[2]).toMatchObject({
     content: [{ type: "thinking" }, { type: "canvas", preview: { viewId: "cv_cli" } }],
   });
+  // An interrupted turn keeps its widget instead of handing it to the next prompt's answer.
+  const nextAnswer = assistant([text("Next answer.")], {});
+  const interrupted = augmentChatHistoryWithCanvasBlocks([
+    ...messages.slice(0, 2),
+    { role: "user", content: "Next question." },
+    nextAnswer,
+  ]);
+  expect(interrupted[1]).toMatchObject({
+    content: [{ type: "thinking" }, { type: "canvas", preview: { viewId: "cv_cli" } }],
+  });
+  expect(interrupted[3]).toBe(nextAnswer);
 });
 
 const hostTab = { targetId: "tab-1", target: "host", profile: "work" };

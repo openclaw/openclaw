@@ -282,6 +282,7 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
   let changed = false;
   let lastAssistantIndex = -1;
   let lastRenderableAssistantIndex = -1;
+  let thinkingFallbackIndex = -1;
   const pending: ChatCanvasPreview[] = [];
   for (let index = 0; index < next.length; index++) {
     const entry = readObjectRecord(next[index]);
@@ -315,9 +316,23 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
         if (pending.length > 0 && !reasoningOnly) {
           next[index] = appendChatCanvasBlocksToMessage(entry, pending);
           pending.length = 0;
+          thinkingFallbackIndex = -1;
           changed = true;
+        } else if (pending.length > 0 && thinkingFallbackIndex < 0) {
+          thinkingFallbackIndex = index;
         }
       }
+      continue;
+    }
+    if (role === "user" && thinkingFallbackIndex >= 0) {
+      // A turn interrupted before its reply keeps its widgets; the next prompt's answer must not take them.
+      next[thinkingFallbackIndex] = appendChatCanvasBlocksToMessage(
+        readRecord(next[thinkingFallbackIndex]),
+        pending,
+      );
+      pending.length = 0;
+      thinkingFallbackIndex = -1;
+      changed = true;
       continue;
     }
     if (!messageContainsToolHistoryContent(entry)) {
