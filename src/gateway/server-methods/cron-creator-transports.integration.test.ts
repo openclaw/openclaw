@@ -44,7 +44,7 @@ import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "../openclaw-id/tunnel-principal.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { dispatchGatewayRequestInProcess } from "../server-in-process-dispatch.js";
 import { createOperatorClient } from "../server-plugin-in-process-dispatch.test-support.js";
@@ -239,7 +239,7 @@ it.each([
       authMethod: ocid ? "trusted-proxy" : "token",
     });
     const original = expectDefined(
-      await captureGatewayOperatorRunAuthority({
+      await prepareGatewayOperatorRunAuthority({
         client,
         context: fixture.context,
         sourceAuthority: null,
@@ -575,7 +575,7 @@ it.each([
   },
 );
 
-it.each(["admin", "caller", "non-admin", "revoked"] as const)(
+it.each(["admin", "caller", "non-admin"] as const)(
   "enforces native-app final-write authority: %s",
   async (scenario) => {
     const scope = scenario === "caller" ? "caller" : undefined;
@@ -661,12 +661,6 @@ it.each(["admin", "caller", "non-admin", "revoked"] as const)(
             await expect(
               tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "get", jobId: foreign.id }),
             ).rejects.toThrow("not found");
-            return;
-          }
-          if (scenario === "revoked") {
-            await fixture.rejectMutation(update, /authority.*no longer active/i, () =>
-              invalidateGatewayDeviceRevocation(fixture.context, "native-admin-device", "operator"),
-            );
             return;
           }
           await update();

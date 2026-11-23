@@ -15,7 +15,8 @@ export type ReplyModelLevelResolver = () => Promise<{
 export function createReplyModelLevelResolver(params: {
   selection: {
     provider: string;
-    model: string;
+    /** Undefined with no model: defaults resolve to off. */
+    model: string | undefined;
     agentRuntime?: string | null;
     thinkLevel?: ThinkLevel;
     thinkingExplicit: boolean;
@@ -33,10 +34,13 @@ export function createReplyModelLevelResolver(params: {
     async () => {
       assertReplyPreprocessingActive(abortSignal);
       const { provider, model, agentRuntime } = selection;
+      const modelSelection = model ? { provider, model } : undefined;
       const resolvedThinkLevel =
         selection.thinkLevel ??
         (await racePromiseWithAbortSignal(
-          modelState.resolveDefaultThinkingLevel({ provider, model, agentRuntime }),
+          modelState.resolveDefaultThinkingLevel(
+            modelSelection && { ...modelSelection, agentRuntime },
+          ),
           abortSignal,
         ));
       // Shared catalog discovery may continue, but the canceled reply cannot use it.
@@ -47,7 +51,7 @@ export function createReplyModelLevelResolver(params: {
         resolvedThinkLevel === "off" &&
         !selection.thinkingExplicit
           ? await racePromiseWithAbortSignal(
-              modelState.resolveDefaultReasoningLevel({ provider, model }),
+              modelState.resolveDefaultReasoningLevel(modelSelection),
               abortSignal,
             )
           : selection.reasoningLevel;

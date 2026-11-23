@@ -41,7 +41,7 @@ export async function applyMediaUnderstandingIfNeeded(params: {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
-  activeModel: ActiveMediaModel;
+  activeModel?: ActiveMediaModel;
   processingMode?: "audio-only" | "files-only" | "audio-and-files";
   selfServeLocalPaths?: boolean;
 }): Promise<ApplyMediaUnderstandingResult | undefined> {

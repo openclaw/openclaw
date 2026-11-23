@@ -167,10 +167,11 @@ describe("personal navigation rail", () => {
     expect(dom.present(".nav-item--home", ".sidebar-shell__footer .sidebar-identity-card")).toEqual(
       [false, false],
     );
-    // "More" opens the page menu and leaves the open Sessions sidebar alone.
+    // "More" opens with usable links on its first update, without replacing the Sessions sidebar.
+    expect(dom.query(".sidebar-pages-menu")).toBeNull();
     await click(sidebar, "[data-rail-more]");
-    await vi.dynamicImportSettled();
-    await waitForSolid(() => expect(dom.query(".sidebar-pages-menu")).not.toBeNull());
+    expect(dom.query('.sidebar-pages-menu [data-sidebar-entry="route:usage"] a')).not.toBeNull();
+    expect(dom.query(".sidebar-pages-menu-popover .sidebar-view-loading")).toBeNull();
     expect(dom.query(".sidebar-session-content")).not.toBeNull();
     expect(dom.query("aside.sidebar")).toBe(frame);
     expect(dom.query(".sidebar-rail__bottom")).toBe(bottom);

@@ -380,6 +380,8 @@ Session details share concurrent reads across the sidebar, chat, and resource pa
 
 Sidebar pull-request indicators reuse the last known snapshot. Subscriptions acknowledge the requested sessions immediately; session preparation and fresh pull-request snapshots arrive through background updates. Recorded pull requests update when their receipts or session access and lineage change, without polling passive rows or rechecking unrelated audiences on owner-certified metadata-only updates. Delivery still checks each recipient’s current access. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
 
+Successful GitHub publications appear in **Details → Changes** without an automatic assistant message. Publication failures and requests for confirmation appear as system notices in chat.
+
 Changes summaries share identical concurrent polls and reuse unchanged checkout results when file metadata can establish freshness. Summary reads have a separate worker queue from full patches and PR statistics, with priority inside the shared Git child limit. Running Git commands still finish normally, and background work keeps making progress.
 
 Environment change totals request counts without patches or branch history. Opening Review loads patches separately.
@@ -585,32 +587,10 @@ Open group rename and **New session defaults** dialogs close when the Gateway
 reconnects or you switch connections. Reopen the group’s menu to make changes
 using the current connection.
 
-**Sections** organize only your sidebar, for solo users, members, and guests.
-They appear below **Pinned**, among the sidebar groups, marked with a stacked-layers
-icon; deliberately empty sections remain visible. Choose **New section** in
-**Filter & sort** even without selecting a session, or use a session's
-**Add to section** menu to add it to an existing section or create one with that
-session selected. Only your sidebar changes. Sessions stay in their groups.
-
-Creating a section takes two steps. First name it and choose where its sessions
-come from: **My sessions**, **Involving me**, **All sessions** (including
-teammates'), or one project. Then pick sessions from that list; the search button
-searches every session you can access, not only those loaded in the sidebar, and
-teammates' sessions show their owner. **Edit section** opens on the session list;
-**Back** returns to the name and source. Sessions inside a section follow the
-sidebar's **Sort by** selection. Drag an existing session into a section to add it.
-Dragging a session from one personal section to another moves that reference,
-leaving references in other sections unchanged. Drag section headers to reorder
-them, or use **Move up** and **Move down** in the section menu.
-**Remove section** removes only that personal section; it never deletes sessions.
-Pins and shared groups are independent, and **Move to group** still changes shared
-group membership.
-
-Sections do not grant access. Unavailable saved sessions remain hidden,
-and sessions outside the loaded session list resolve through the normal access-checked
-session lookup. Sections are scoped to your profile and Gateway. Connections with
-general Gateway write access sync them through personal preferences. Session-only,
-read-only, and profileless connections keep their edits in that browser, like personal pins.
+Personal sidebar sections have been retired. Their conversations are not deleted
+or moved. If an older conversation is no longer visible in the sidebar, find it
+in **Sessions** and use **Pin session** to keep it in view. **Move to group**
+still changes shared group membership.
 
 Dragging a session between shared sidebar groups updates its placement immediately. A successful
 save keeps that placement even if the subsequent list refresh fails; the UI reports

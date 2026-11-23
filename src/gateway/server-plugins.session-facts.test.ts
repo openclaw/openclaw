@@ -366,21 +366,25 @@ describe("trusted plugin selected session facts", () => {
     }));
 
   it.each(["grant", "role", "profile", "same-object config"] as const)(
-    "rejects a selected disclosure when %s authority changes during the callback",
+    "retains admitted grants but fences selected disclosure data after %s changes",
     (change) =>
       withFixture(async (fixture, { consume }) => {
         await consume(async () => "prepared snapshot");
-        await expect(
-          consume(async () => {
-            if (change === "same-object config") {
-              fixture.cfg.gateway!.roles!.definitions.reader!.scopes = [];
-              setRuntimeConfigSnapshot(fixture.cfg);
-            } else {
-              await fixture.changeReader(change);
-            }
-            return "private cached snapshot";
-          }),
-        ).rejects.toThrow();
+        const pending = consume(async () => {
+          if (change === "same-object config") {
+            fixture.cfg.gateway!.roles!.definitions.reader!.scopes = [];
+            setRuntimeConfigSnapshot(fixture.cfg);
+          } else {
+            await fixture.changeReader(change);
+          }
+          return "private cached snapshot";
+        });
+        if (change === "grant") {
+          await expect(pending).resolves.toBe("private cached snapshot");
+          await expect(consume(async () => "new disclosure")).rejects.toThrow();
+        } else {
+          await expect(pending).rejects.toThrow();
+        }
       }),
   );
 

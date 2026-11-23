@@ -4,6 +4,7 @@ import { expect, it, vi } from "vitest";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { expectCallCount, withRunLoopCleanup } from "./run-loop-cleanup.test-support.js";
+import * as loopExit from "./run-loop-exit.js";
 import { gatewayWorkAdmissionActual as admission } from "./run-loop-mocks.test-support.js";
 import {
   createCloseMock,
@@ -444,6 +445,40 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
           "Replacement Stop assertion and cleanup failed",
         );
       });
+    },
+  );
+  it.each([false, true])(
+    "leaves restart ownership with the launcher after installation replacement=%s",
+    async (replaced) => {
+      fixtures.setPlatform("darwin");
+      process.env.OPENCLAW_LAUNCHER_IPC = "1";
+      process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+      restartProcess.mockReturnValue({ mode: "supervised", exitCode: 0 });
+      const nativeHandoff = vi.spyOn(loopExit, "waitForLaunchdRestartHandoff");
+      try {
+        await withReplacement(
+          () => {},
+          async ({ signal, start, exited, replace, close }) => {
+            if (replaced) {
+              replace("Cannot find module", "ERR_MODULE_NOT_FOUND");
+            } else {
+              signal("SIGUSR2")();
+            }
+            await expect(exited).resolves.toBe(0);
+            expectCallCount(1, close, start, acquireGatewayLock);
+            expect(restartProcess).toHaveBeenCalledWith(
+              expect.objectContaining({
+                decision: { mode: "supervised", supervisor: "launcher" },
+              }),
+            );
+            expect(respawnUpdate).not.toHaveBeenCalled();
+            expect(writeHandoff).not.toHaveBeenCalled();
+            expect(nativeHandoff).not.toHaveBeenCalled();
+          },
+        );
+      } finally {
+        nativeHandoff.mockRestore();
+      }
     },
   );
   it.each([

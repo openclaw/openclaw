@@ -13,7 +13,7 @@ import { waitForChatAbortTerminalPersistence } from "./chat-abort-lifecycle-inte
 import { createChatAbortOps } from "./chat-abort-ops.js";
 import { abortChatRunById } from "./chat-abort.js";
 import { retainGatewayDeviceRevocation } from "./device-revocation.js";
-import type { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import type { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { captureGatewayOperatorContinuation } from "./operator-run-recovery.js";
 import {
   captureAbortedPartial,
@@ -32,23 +32,9 @@ type OperatorRunCancellationContext = Pick<
   keyof Parameters<typeof createChatAbortOps>[0] | "logGateway" | "trackExecution"
 >;
 
-/** Admit a retained producer once; later policy changes apply to its next start. */
-export function retainGatewayOperatorRunAuthority(
-  captured: NonNullable<Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>>,
-) {
-  const { authority, release: releaseSource } = captured;
-  try {
-    authority.reauthorize?.();
-    return { authority, release: releaseSource };
-  } catch (error) {
-    releaseSource();
-    throw error;
-  }
-}
-
 /** Retain authority before its execution or queue owner can arm cancellation. */
 export async function retainGatewayOperatorRun(
-  params: Parameters<typeof captureGatewayOperatorRunAuthority>[0] & {
+  params: Parameters<typeof prepareGatewayOperatorRunAuthority>[0] & {
     context: OperatorRunCancellationContext;
     runId: string;
     entry?: RpcSourceRef;
@@ -61,10 +47,9 @@ export async function retainGatewayOperatorRun(
     ? await prepareSessionSystemTurnAuthority(params.systemTurn)
     : // The requester's turn ending or chat edit does not revoke accepted work.
       await captureGatewayOperatorContinuation(params);
-  const retained = captured && retainGatewayOperatorRunAuthority(captured);
   const releaseSource =
-    retained?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
-  const authority = retained?.authority;
+    captured?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
+  const authority = captured?.authority;
   const signal = authority?.signal;
   let partialSession: ReturnType<typeof retainChatAbortSessionSnapshot> | undefined;
   try {

@@ -21,7 +21,7 @@ import {
   invalidateGatewayDeviceRevocation,
 } from "../../gateway/device-revocation.js";
 import { errorShapeFromError } from "../../gateway/error-shape.js";
-import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import {
   createContext,
   createOperatorClient,
@@ -659,7 +659,7 @@ it.each([false, true])(
             undefined,
             { isCurrent: () => true, subscribe: () => () => {} },
           );
-          const source = await captureGatewayOperatorRunAuthority({
+          const source = await prepareGatewayOperatorRunAuthority({
             client,
             context,
             hasCurrentClientAuthority: device.isCurrent,
@@ -768,7 +768,7 @@ it.each([false, true])(
         invalidateGatewayDeviceRevocation(context, "bob", "operator");
         expect(() => bob.source.authority.assertCurrent()).not.toThrow();
         await expect(
-          captureGatewayOperatorRunAuthority({
+          prepareGatewayOperatorRunAuthority({
             client: bob.client,
             context,
             hasCurrentClientAuthority: bob.device.isCurrent,

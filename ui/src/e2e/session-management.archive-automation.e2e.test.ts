@@ -64,7 +64,11 @@ suite.define(() => {
 
         await ui.archiveSession(page, row, surface);
         let dialog = await waitForConfirmModal(page);
-        await dialog.getByText("Nightly digest (nightly-digest)").waitFor();
+        const automation = dialog.getByRole("listitem").filter({ hasText: "Nightly digest" });
+        await automation.getByText("Nightly digest", { exact: true }).waitFor();
+        await automation.getByText("Every 1 day", { exact: true }).waitFor();
+        expect(await automation.textContent()).not.toContain(job.id);
+        expect(await automation.getByRole("switch").count()).toBe(0);
         await dialog
           .getByText('Archiving "Nightly owner" pauses its automations.', { exact: false })
           .waitFor();

@@ -456,6 +456,36 @@ describe("main failure attribution", () => {
 
 describe("known hourly main failures", () => {
   it.each([
+    ["complete", "", 1],
+    ["incomplete", "receipt", 0],
+    ["unframed", "unframed", 0],
+    ["unrelated error", "Error: unrelated failure", 0],
+    ["additional failure", "FAIL test/other.test.ts > another failure", 0],
+    ["mismatched counts", "counts", 0],
+    ["setup failure", "failed to spawn", 0],
+  ])("parses separated native errors only with complete evidence: %s", (_name, mutation, count) => {
+    let log = report()
+      .replace(
+        "[shard:gateway] AssertionError:",
+        "[shard:gateway] \n[shard:peer] [test] starting test/vitest/vitest.process.config.ts\n[shard:peer] Test Files 1 passed (1)\n[shard:peer] Tests 1 passed (1)\n[shard:peer] [test] passed 1 Vitest shard\n[shard:gateway] AssertionError:",
+      )
+      .replace('"invocations":1', '"invocations":2');
+    if (mutation === "receipt") {
+      log = log.replace(/^.*\[shard:completion\].*\n/mu, "");
+    } else if (mutation === "unframed") {
+      log = log.replace(/\[shard:[^\]]+\] /gu, "");
+    } else if (mutation === "counts") {
+      log = log.replace("Tests 1 failed", "Tests 2 failed");
+    } else if (mutation) {
+      log = log.replace(
+        "[shard:gateway] Test Files",
+        `[shard:gateway] ${mutation}\n[shard:gateway] Test Files`,
+      );
+    }
+    expect(parseNodeFailureReport(log, true)).toHaveLength(count);
+  });
+
+  it.each([
     ["complete empty config", "No test files found, exiting with code 0", "", 1],
     ["missing empty receipt", "", "", 0],
     ["failed empty config", "No test files found, exiting with code 1", "", 0],
@@ -765,7 +795,7 @@ describe("loose CI failure discovery", () => {
     const log = [
       `2026-10-12T08:00:00Z [shard:gateway] \u001b[31m FAIL \u001b[0m gateway-server (gateway-server-parallel) ${file} > native session > denies`,
       `2026-10-12T08:00:01Z [shard:other] FAIL ${file} > native session > denies`,
-      `2026-10-12T08:00:02Z [shard:other] FAIL test/second.test.ts > fails too`,
+      `\uFEFF2026-10-12T08:00:02Z [shard:other] FAIL test/second.test.ts > fails too`,
     ].join("\n");
     expect(extractNodeFailedTests(log)).toEqual([
       { file, tests: ["native session > denies"] },

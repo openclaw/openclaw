@@ -28,6 +28,7 @@ export function CatalogDiscoveryChips(props: {
 }
 
 export function CatalogDiscoveryChip(props: {
+  ref?: (button: HTMLButtonElement) => void;
   active: boolean;
   icon?: JSX.Element;
   onClick: () => void;
@@ -36,6 +37,7 @@ export function CatalogDiscoveryChip(props: {
   return (
     <button
       type="button"
+      ref={(button) => props.ref?.(button)}
       class={["plugin-catalog-chip", { "is-active": props.active }]}
       aria-pressed={props.active ? "true" : "false"}
       onClick={() => props.onClick()}
@@ -51,6 +53,8 @@ export function CatalogDiscoverySection(props: {
   title: string;
   viewAllLabel?: string;
   onViewAll?: () => void;
+  /** Lays the section out immediately rather than behind the remembered shelf height. */
+  eager?: boolean;
   children: JSX.Element;
 }): JSX.Element {
   return (
@@ -59,6 +63,7 @@ export function CatalogDiscoverySection(props: {
         "plugin-catalog-section",
         { "plugin-catalog-section--expandable": Boolean(props.onViewAll) },
       ]}
+      style={{ "content-visibility": props.eager ? "visible" : undefined }}
       data-catalog-section={props.id}
     >
       <header class="plugin-catalog-section__header">

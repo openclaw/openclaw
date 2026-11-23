@@ -130,10 +130,9 @@ export function resolveProfileUnusableUntil(
   const blockedUntil = isBlockScopedToDifferentModel(stats, forModel)
     ? undefined
     : stats.blockedUntil;
-  const cooldownUntil =
-    forModel === null && isModelScopedCooldownReason(stats.cooldownReason) && stats.cooldownModel
-      ? undefined
-      : stats.cooldownUntil;
+  const cooldownUntil = isCooldownScopedToDifferentModel(stats, forModel)
+    ? undefined
+    : stats.cooldownUntil;
   const values = [blockedUntil, cooldownUntil, stats.disabledUntil]
     .map((value) => asDateTimestampMs(value))
     .filter((value): value is number => value !== undefined && value > 0);
@@ -209,13 +208,6 @@ export function isProfileInCooldown(
     return false;
   }
   const ts = now ?? Date.now();
-  // Model-aware bypass: if the cooldown was caused by a model-scoped reason on a
-  // specific model and the caller is requesting a *different* model, allow it.
-  // We still honour profile-wide blocked/disabled windows; they must not be
-  // short-circuited by model scoping.
-  if (shouldBypassModelScopedCooldown(stats, ts, forModel)) {
-    return false;
-  }
   const unusableUntil = resolveProfileUnusableUntil(stats, forModel);
   return unusableUntil ? ts < unusableUntil : false;
 }

@@ -6,11 +6,13 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import * as projects from "../projects/project-registry.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import * as ttsSettings from "../tts/tts-settings.js";
 import { configFor } from "./model-auth.fixtures.test-support.js";
 import * as preparedModelCatalog from "./prepared-model-catalog.js";
 import { prepareConfiguredModelAliases } from "./prepared-model-runtime.configured-completion.js";
+import { sessionProjectGuidanceSource } from "./session-project-guidance.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
 import { buildAgentHarnessBasePrompt } from "./system-prompt-harness-base.js";
@@ -118,6 +120,48 @@ function reasoningConfig(
 }
 
 describe("buildConfiguredAgentSystemPrompt", () => {
+  it("suggests a project only when this conversation can move to a registered destination", async () => {
+    const workspace = {
+      id: "workspace:main",
+      displayName: "Workspace",
+      source: "workspace" as const,
+      repoRoot: "/workspace",
+    };
+    const website = {
+      id: "website",
+      displayName: "Website",
+      source: "registered" as const,
+      repoRoot: "/website",
+    };
+    const config = { agents: { entries: { main: { workspace: workspace.repoRoot } } } };
+    const catalog = vi.spyOn(projects, "listProjectRegistry").mockResolvedValue([workspace]);
+    const prompt = (projectId?: string, toolNames = ["session_project"]) =>
+      buildPrompt({
+        config,
+        agentId: "main",
+        runtimeInfo: { sessionKey: "agent:main:chat" },
+        toolNames,
+        prepareSessionProjectGuidance: sessionProjectGuidanceSource({
+          config,
+          agentId: "main",
+          sessionKey: "agent:main:chat",
+          entry: { sessionId: "chat", updatedAt: 1, projectId },
+          senderIsOwner: true,
+        }),
+      });
+    const hint = "You are in the default workspace";
+    expect(await prompt()).not.toContain(hint);
+    catalog.mockResolvedValue([workspace, website]);
+    const eligible = await prompt();
+    expect(eligible).toContain(hint);
+    expect(eligible).toContain('{"id":"website","name":"Website"}');
+    expect(eligible).toContain("as your first tool call");
+    expect(await prompt(workspace.id)).toContain(hint);
+    expect(await prompt("workspace:another-agent")).not.toContain(hint);
+    expect(await prompt(website.id)).not.toContain(hint);
+    expect(await prompt(undefined, [])).not.toContain(hint);
+  });
+
   it.each([
     ["OpenClaw", true],
     ["crestodian", true],
