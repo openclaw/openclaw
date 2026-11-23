@@ -11,6 +11,16 @@ describe("scrubDoctorErrorMessage", () => {
     );
   });
 
+  it("appends wrapped causes once, skipping ones the message already states", () => {
+    const repeated = new Error("database is locked");
+    const scrubbed = scrubDoctorErrorMessage(
+      new Error("Check failed.", {
+        cause: new Error("Store refused: database is locked", { cause: repeated }),
+      }),
+    );
+    expect(scrubbed).toBe("Check failed. Cause: Store refused: database is locked");
+  });
+
   it("drops non-whitespace control characters and caps length", () => {
     const scrubbed = scrubDoctorErrorMessage(`a\u0000b\u0007c ${"x".repeat(300)}`);
     expect(scrubbed.startsWith("abc x")).toBe(true);
