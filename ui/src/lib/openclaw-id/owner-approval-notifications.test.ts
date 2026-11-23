@@ -15,17 +15,14 @@ vi.mock("./owner-approval-lifetime.ts", () => ({
     return () => {};
   },
 }));
-vi.mock("../toast.ts", () => ({
+vi.mock("../toast.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../toast.ts")>()),
   showToast: (toast: { onAction?: () => void }) => {
     held.action = toast.onAction;
   },
 }));
-vi.mock("../reactive/i18n.ts", () => ({
-  registerEnglishCatalog: () => {},
-  t: (key: string) => key,
-}));
-vi.mock("../../i18n/locales/en-openclaw-id.ts", () => ({ registerOpenClawIdEnglish: () => {} }));
-vi.mock("./ui-error.ts", () => ({ openClawIdErrorToast: () => "failure" }));
+
+// mock-isolation: capture the selected client without loading device-key state or rendering a dialog.
 vi.mock("../../components/openclaw-id/owner-approval-dialog.tsx", () => ({
   showOwnerApprovalDialog: held.shown,
 }));

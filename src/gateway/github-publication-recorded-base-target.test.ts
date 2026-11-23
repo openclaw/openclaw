@@ -5,13 +5,15 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { prepareGitHubPublicationTarget } from "./github-publication-target.js";
 
-vi.mock("./github-publication-availability.js", () => ({
+vi.mock("./github-publication-availability.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./github-publication-availability.js")>()),
   assertExpectedSharedGitHubPublisher() {},
   prepareGitHubPublicationRepositoryIdentity: async () => ({
     originUrl: "https://github.com/test/repository.git",
   }),
 }));
-vi.mock("./github-publication-git-transport.js", () => ({
+vi.mock("./github-publication-git-transport.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./github-publication-git-transport.js")>()),
   requirePublicationCommand: async (argv: string[], options: { cwd?: string }) => {
     if (argv[0] === "gh") {
       return JSON.stringify({ fork: false, default_branch: "main" });
