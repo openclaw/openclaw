@@ -156,12 +156,11 @@ it("records a child-result notice for live children and none for a killed child"
       display: true,
       excludeFromContext: true,
       content: expect.stringMatching(
-        /^Release notes finished on .+ UTC, but its result couldn't be added/,
+        /^Release notes finished on .+ UTC, but its result couldn't be added[^]*canonical result$/,
       ),
     }),
   ]);
-  expect(JSON.stringify(recorded)).toContain("canonical result");
-  expect(JSON.stringify(recorded)).not.toContain("killed-run");
+  expect(recorded[0]).toMatchObject({ content: expect.not.stringContaining("killed") });
 });
 
 it.each([false, true])(
