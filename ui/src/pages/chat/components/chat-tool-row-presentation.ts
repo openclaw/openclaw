@@ -61,6 +61,25 @@ export function commandPreview(command: string): string {
   return truncateUtf16Safe(command.replace(/\s+/gu, " ").trim(), 200);
 }
 
+export const SESSION_LAUNCH_LIMIT_STYLE = {
+  "white-space": "normal",
+  "overflow-wrap": "anywhere",
+} as const;
+
+export function formatSessionLaunchLimit(
+  launch: ReturnType<typeof resolveSessionLaunchPresentation>,
+): string | undefined {
+  if (launch?.capacity) {
+    return t(
+      launch.label
+        ? "chat.toolCards.launch.subagent.namedLimitReached"
+        : "chat.toolCards.launch.subagent.limitReached",
+      { ...launch.capacity, name: launch.label ?? "" },
+    );
+  }
+  return undefined;
+}
+
 /** Recorded child actions replace containers; a standalone code operation keeps its purpose. */
 export function resolveToolOperationLabel(
   card: ToolCard,
@@ -70,12 +89,12 @@ export function resolveToolOperationLabel(
 ): string {
   const launch = resolveSessionLaunchPresentation(card, outcome);
   if (launch) {
-    return [
-      t(`chat.toolCards.launch.${launch.kind}.${launch.phase}`),
-      addressed?.name ?? launch.label,
-    ]
-      .filter(Boolean)
-      .join(" ");
+    return (
+      formatSessionLaunchLimit(launch) ??
+      [t(`chat.toolCards.launch.${launch.kind}.${launch.phase}`), addressed?.name ?? launch.label]
+        .filter(Boolean)
+        .join(" ")
+    );
   }
   const call = unwrapToolCallForDisplay(card);
   const args = asNullableRecord(call.args);

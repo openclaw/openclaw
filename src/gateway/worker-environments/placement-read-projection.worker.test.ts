@@ -512,7 +512,7 @@ describe("worker placement authority retained boundaries", () => {
         });
       }
       await store.releaseTurn(claim);
-      expect(() => sessionRead.assertCurrent()).toThrow("placement authority changed");
+      expect(() => sessionRead.assertCurrent()).toThrow("placement changed");
       for (const placement of await readPlacements()) {
         expect(placement).toMatchObject({ ...session, turnClaim: null });
       }
@@ -549,12 +549,12 @@ describe("worker placement authority retained boundaries", () => {
           expect(
             (await store.readProjection([session.sessionId])).placements.get(session.sessionId),
           ).toMatchObject({ agentId: session.agentId, turnClaim: { claimId: "settling-claim" } });
-          expect(() => sessionRead.assertCurrent()).toThrow("placement authority changed");
+          expect(() => sessionRead.assertCurrent()).toThrow("placement changed");
           publication[settlement]();
           if (settlement === "rollback") {
             sessionRead.assertCurrent();
           } else {
-            expect(() => sessionRead.assertCurrent()).toThrow("placement authority changed");
+            expect(() => sessionRead.assertCurrent()).toThrow("placement changed");
           }
         } finally {
           publication.rollback();
@@ -603,7 +603,7 @@ describe("worker placement authority retained boundaries", () => {
             await store.prepareWorkspaceResultClaim(testedClaim);
           } else {
             await expect(store.prepareWorkspaceResultClaim(testedClaim)).rejects.toThrow(
-              "workspace result authority changed",
+              "workspace result changed",
             );
           }
           expect(store.validateWorkspaceResultClaim(testedClaim)).toBe(expected);

@@ -27,6 +27,7 @@ const transport = pathToFileURL(
   resolve("test/scripts/plugin-npm-cli-transport.test-support.mjs"),
 ).href;
 type ResponseBytes = {
+  status?: number;
   encoding: "base64" | "utf8";
   data: string;
   after?: { route: string; value: ResponseBytes };
@@ -42,8 +43,13 @@ type RequestRecord = {
 
 // Materialize external GitHub responses before starting any consumer. The
 // subprocess never imports fixture clients or receives an authenticated owner.
-export async function createNpmCliProcessFixture(root: string, plugins = "", packageCount = 2) {
-  const f = candidatePublicationFixture();
+export async function createNpmCliProcessFixture(
+  root: string,
+  plugins = "",
+  packageCount = 2,
+  parent = true,
+) {
+  const f = candidatePublicationFixture(parent ? {} : { qualificationSha: "b".repeat(40) });
   const responses: Record<string, ResponseBytes> = {};
   const json = (route: string, value: unknown) => {
     const [path, query] = route.split("?");
@@ -97,8 +103,10 @@ export async function createNpmCliProcessFixture(root: string, plugins = "", pac
     artifactDigest: "",
     artifactSizeBytes: 0,
   };
-  producer.artifactName = preparedNpmArtifactName(f.q, producer);
+  producer.artifactName = preparedNpmArtifactName(f.c, producer);
   const policy = "name: immutable npm policy\n";
+  const policyFile = join(root, "publisher-policy.yml");
+  writeFileSync(policyFile, policy);
   const projection = expectDefined(f.source.projection, "publication source projection");
   const version = expectDefined(projection.version, "publication source version");
   const packages: Array<{
@@ -141,7 +149,7 @@ export async function createNpmCliProcessFixture(root: string, plugins = "", pac
       version,
       publishTag: "beta",
       route: "npm-oidc",
-      targetSha: f.q,
+      targetSha: f.c,
       sourcePackageJsonSha256: digest(sourceBytes),
       publicationReason: "Stable npm registry preflight selected npm-oidc.",
       publisherPolicy: {
@@ -245,7 +253,7 @@ export async function createNpmCliProcessFixture(root: string, plugins = "", pac
     [PREPARED_NPM_MANIFEST]: JSON.stringify({
       schema: "openclaw.plugin-npm-prepared/v1",
       runtimeQualification: "packed-runtime-v1",
-      sourceSha: f.q,
+      sourceSha: f.c,
       npmDistTag: "default",
       selectionMode: "all-publishable",
       publisherPolicySha256: digest(policy),
@@ -418,8 +426,8 @@ export async function createNpmCliProcessFixture(root: string, plugins = "", pac
     GITHUB_REF: f.publisherFullRef,
     GITHUB_RUN_ID: "800",
     GITHUB_RUN_ATTEMPT: "2",
-    PREPARED_NPM_PARENT_RUN_ID: "700",
-    PREPARED_NPM_PARENT_RUN_ATTEMPT: "1",
+    PREPARED_NPM_PARENT_RUN_ID: parent ? "700" : "",
+    PREPARED_NPM_PARENT_RUN_ATTEMPT: parent ? "1" : "",
     PREPARED_NPM_ARTIFACT: JSON.stringify(producer),
     PREPARED_NPM_FRV_RUN_ID: f.runId,
     PREPARED_NPM_FRV_RUN_ATTEMPT: "1",
@@ -445,7 +453,7 @@ export async function createNpmCliProcessFixture(root: string, plugins = "", pac
     const output = join(directory, "output");
     const result = spawnSync(
       process.execPath,
-      ["--import", transport, cli, ...args, "--source-sha", f.q, "--github-output", output],
+      ["--import", transport, cli, ...args, "--source-sha", f.c, "--github-output", output],
       {
         // Publisher jobs contain only trusted tooling, not the source extensions.
         cwd: directory,
@@ -468,8 +476,10 @@ export async function createNpmCliProcessFixture(root: string, plugins = "", pac
   let carrierDigest = "";
   return {
     f,
+    env,
     packages,
     previewManifest: join(root, "preview-manifest.json"),
+    evidence,
     records,
     responses,
     json,
@@ -489,6 +499,8 @@ export async function createNpmCliProcessFixture(root: string, plugins = "", pac
           env.PREPARED_NPM_SELECTION_MODE,
           "--source-root",
           root,
+          "--policy-file",
+          policyFile,
           "--output",
           join(root, "preview-manifest.json"),
           "--evidence-output",

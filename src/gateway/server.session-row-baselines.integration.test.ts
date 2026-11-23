@@ -20,7 +20,11 @@ import { startGatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { broadcastSessionActivitySummary } from "./session-activity-summary-events.js";
 import { drainSessionEventPublications } from "./session-event-prepared-row.js";
 import { observeSessionEventRowRetention } from "./session-event-row-retention.test-support.js";
-import { collectSessionRowFrames } from "./session-row-delta-sockets.test-support.js";
+import {
+  collectSessionRowFrames,
+  resolveLegacyAncestorRefs,
+  withoutAncestorRevisions,
+} from "./session-row-delta-sockets.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks, rpcReq } from "./test-helpers.js";
@@ -211,7 +215,7 @@ test("ordinary fact changes keep warm wire rows across three real sockets", asyn
   expect(streams.map((frames) => frames.length)).toEqual(frameCounts);
   expect(projection.snapshot({ key, agentId: "main" }).row).toEqual(participantRow);
 
-  const baseline = streams[2]!;
+  const baseline = resolveLegacyAncestorRefs(streams[2]!);
   const reasons: string[] = [];
   for (const encoded of streams.slice(0, 2)) {
     expect(encoded).toHaveLength(baseline.length);
@@ -224,7 +228,9 @@ test("ordinary fact changes keep warm wire rows across three real sockets", asyn
       decoder.dispatch(frame, (event) => {
         decoded = event;
       });
-      expect(decoded?.payload, `decoded frame ${index}`).toEqual(legacy.payload);
+      expect(withoutAncestorRevisions(decoded?.payload), `decoded frame ${index}`).toEqual(
+        legacy.payload,
+      );
       const payload = frame.payload as {
         sessionKey?: string;
         reason?: string;

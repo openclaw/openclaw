@@ -23,6 +23,7 @@ const ALLOWED_PATCHED_DEPENDENCIES = new Map([
   ["@solidjs/web@2.0.0-rc.18", "patches/@solidjs__web@2.0.0-rc.18.patch"],
   ["@solidjs/signals@2.0.0-rc.18", "patches/@solidjs__signals@2.0.0-rc.18.patch"],
   ["vitest@5.0.5", "patches/vitest@5.0.5.patch"],
+  ["tinyglobby@0.2.17", "patches/tinyglobby@0.2.17.patch"],
   ["baileys@7.0.0-rc14", "patches/baileys@7.0.0-rc14.patch"],
   ["matrix-js-sdk@44.0.0", "patches/matrix-js-sdk@44.0.0.patch"],
   ["ghostty-web@0.4.0", "patches/ghostty-web@0.4.0.patch"],

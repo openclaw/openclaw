@@ -292,16 +292,13 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         ? `club:${clubId}`
         : senderShip;
 
-    let attachments: Array<{ path: string; contentType: string }> = [];
-    let unavailableMediaCount = 0;
-    if (messageContent) {
-      ({ attachments, unavailableCount: unavailableMediaCount } = await downloadMessageImages(
-        messageContent,
-        account.mediaMaxBytes,
-      ));
-      if (attachments.length > 0) {
-        runtime.log?.(`[tlon] Downloaded ${attachments.length} image(s) from message`);
-      }
+    const { attachments, unavailableCount: unavailableMediaCount } = await downloadMessageImages(
+      messageContent,
+      account.mediaMaxBytes,
+      turnAdoptionLifecycle?.abortSignal,
+    );
+    if (attachments.length > 0) {
+      runtime.log?.(`[tlon] Downloaded ${attachments.length} image(s) from message`);
     }
 
     if (isThreadReply && parentId && channelNest) {

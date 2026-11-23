@@ -24,7 +24,7 @@ type Assistant = NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
 type Attempt = Partial<EmbeddedRunAttemptResult>;
 
 function assistant(overrides: Partial<Assistant> = {}) {
-  return buildEmbeddedRunnerAssistant({ model: "gpt-5.4", ...overrides });
+  return { ...buildEmbeddedRunnerAssistant({ model: "gpt-5.4" }), ...overrides };
 }
 
 function retryState(attempt: Attempt = {}) {

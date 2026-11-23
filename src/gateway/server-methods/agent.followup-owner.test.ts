@@ -24,6 +24,7 @@ import * as requester from "../../agents/subagents/requester-cron-authority.js";
 import * as caller from "../../agents/tools/gateway-caller-context.js";
 import { startSessionsSendReplyFlow } from "../../agents/tools/sessions-send-reply-flow.js";
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
+import { composePreparedOnlySessionSource } from "../../config/sessions/session-source-authority.js";
 import * as runs from "../../infra/agent-run-registry.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
@@ -276,7 +277,9 @@ it.for(["observer error", "observer error before dispatch", "cancel before dispa
             registry: builder.registry,
             context: { senderIsOwner: false, sessionKey: SESSION, sessionId: SESSION_ID },
             ownerContinuation,
-            assertInvocationCurrent: caller.captureGatewayToolCallerAssertion(),
+            assertInvocationCurrent: composePreparedOnlySessionSource(
+              caller.getGatewayToolCallerIdentity(),
+            ),
           });
           const raw = entry.factory(ctx);
           if (!raw || Array.isArray(raw)) {

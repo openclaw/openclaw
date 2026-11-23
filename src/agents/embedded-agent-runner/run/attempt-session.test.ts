@@ -623,7 +623,9 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
                 expect(publishPrompt).not.toHaveBeenCalled();
                 expect(outcome).toMatchObject({
                   status: "rejected",
-                  reason: { message: "admitted run authority is no longer active" },
+                  reason: {
+                    message: "This agent run is no longer active. Start a new turn to retry.",
+                  },
                 });
               } else {
                 expect(outcome.status).toBe("fulfilled");

@@ -577,13 +577,24 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(partitions.map((partition) => partition.lanes.length)).toEqual([
       5,
       2,
-      1 + firstHopLaneNames.length,
+      2 + firstHopLaneNames.length,
     ]);
-    expect(new Set(lanes.map((lane) => lane.name)).size).toBe(8 + firstHopLaneNames.length);
+    expect(new Set(lanes.map((lane) => lane.name)).size).toBe(9 + firstHopLaneNames.length);
     expect(lanes.map(summarizeLane)).toEqual(aggregate.lanes.map(summarizeLane));
     const complete = planFor({ ...options, planReleaseAll: true });
     const packageNames = new Set(lanes.map((lane) => lane.name));
     expect(complete.lanes.filter((lane) => packageNames.has(lane.name))).toEqual(lanes);
+  });
+
+  it("schedules the current-checkout release update without companion packages", () => {
+    const release = planFor({
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "package-update-self-upgrade",
+    });
+    expect(release.lanes.some((lane) => lane.name === "release-update-survivor")).toBe(true);
+    const selected = planFor({ selectedLaneNames: ["release-update-survivor"] });
+    expect(selected.lanes).toHaveLength(1);
+    expect(selected.needs.prepublishPluginRegistry).toBe(false);
   });
 
   it("keeps restart auth exactly once in the legacy package/update aggregate", () => {

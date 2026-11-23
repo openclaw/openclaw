@@ -365,11 +365,9 @@ async function createHostedChildFixture({
           throw new Error("public source revoked");
         }
       });
-      admitChildSessionPublication(ingressContext, admitted.operationalRunInstance, () => {
-        if (caller.receiptAuthority?.() === false) {
-          throw new Error("public source run closed");
-        }
-      });
+      admitChildSessionPublication(ingressContext, admitted.operationalRunInstance, () =>
+        caller.receiptAuthority?.(),
+      );
     },
     send,
     sendNested,

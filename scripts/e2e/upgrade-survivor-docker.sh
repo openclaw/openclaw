@@ -577,6 +577,23 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
 fi
 
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
+if [ "$SCENARIO" = "release-update" ]; then
+  docker_e2e_package_mount_args "$PACKAGE_TGZ"
+  mkdir -p "$ARTIFACT_DIR"
+  chmod a+rwx "$ARTIFACT_DIR"
+  docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
+  docker_e2e_run_with_harness \
+    --init \
+    --user root \
+    -e OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT=/tmp/openclaw-upgrade-survivor-artifacts \
+    -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
+    "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
+    "$IMAGE_NAME" \
+    timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" \
+    node scripts/e2e/lib/upgrade-survivor/release-update.mjs
+  run_completed="1"
+  exit 0
+fi
 if [ "$SCENARIO" != "package-installed-recovery" ] && [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
   AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT="$(
     mktemp -d "${TMPDIR:-/tmp}/openclaw-upgrade-survivor-plugin-registry.XXXXXX"

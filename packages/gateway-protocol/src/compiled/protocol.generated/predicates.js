@@ -18481,7 +18481,6 @@ var External = [
     "cacheRead" in value &&
     "cacheWrite" in value &&
     "totalTokens" in value &&
-    "cost" in value &&
     Object.getOwnPropertyNames(value).every(
       (unique_1841, unique_1842) => External[938].test(unique_1841) || check_2(value[unique_1841]),
     ) &&
@@ -18494,7 +18493,7 @@ var External = [
       !("contextUsage" in value) ||
       check_2769(value.contextUsage)) &&
     check_1392(value.totalTokens) &&
-    check_2772(value.cost),
+    (value.cost === void 0 || !("cost" in value) || check_2772(value.cost)),
   check_2767 = (value) =>
     typeof value == "object" &&
     value !== null &&
