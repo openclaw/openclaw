@@ -304,6 +304,19 @@ it.each(["@openclaw_bot answer", "stop"])(
   },
 );
 
+it.each([
+  ["room_event", "room_event"],
+  [undefined, "user_request"],
+] as const)("applies group unmentionedInbound=%s over the agent policy", async (room, kind) => {
+  const cfg = config({
+    requireMention: false,
+    ...(room ? { unmentionedInbound: room } : {}),
+  });
+  cfg.agents = { entries: { main: { groupChat: { unmentionedInbound: "user_request" } } } };
+  await receive(await inputBot(cfg), textMessage("ambient note"));
+  expect(agentInput()?.InboundEventKind).toBe(kind);
+});
+
 it("admits display-name mentions for the current bot ID", async () => {
   await receive(await inputBot(), {
     ...textMessage("Assistant please help"),

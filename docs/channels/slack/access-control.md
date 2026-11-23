@@ -285,6 +285,7 @@ restart the Slack monitor. The Gateway remains running.
     - `requireMention`
     - `requireMentionInBotThreads`
     - `ignoreOtherMentions`
+    - `unmentionedInbound` (`user_request|room_event`; overrides the agent and global policy for this channel, see [Ambient room events](/channels/ambient-room-events#room-specific-policy))
     - `replyToMode` (`off|first|all|batched`; overrides account/chat-type reply mode for this channel)
     - `users` (allowlist)
     - `allowBots`

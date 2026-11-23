@@ -360,6 +360,9 @@ export async function resolveTelegramInboundBody(params: {
     unmentionedGroupPolicy: resolveUnmentionedGroupInboundPolicy({
       cfg,
       agentId: routeAgentId,
+      roomUnmentionedInbound:
+        topicConfig?.unmentionedInbound ??
+        (groupConfig as TelegramGroupConfig | undefined)?.unmentionedInbound,
     }),
     wasMentioned: effectiveWasMentioned,
     hasControlCommand: hasControlCommandInMessage,

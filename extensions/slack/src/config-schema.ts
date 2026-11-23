@@ -13,6 +13,7 @@ import {
   ProviderCommandsSchema,
   ReplyToModeSchema,
   refineChannelDmPolicy,
+  UnmentionedInboundSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
@@ -43,6 +44,7 @@ const SlackChannelSchema = buildGroupEntrySchema(
   {
     requireMentionInBotThreads: z.boolean().optional(),
     ignoreOtherMentions: z.boolean().optional(),
+    unmentionedInbound: UnmentionedInboundSchema.optional(),
     replyToMode: ReplyToModeSchema.optional(),
     allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
     botLoopProtection: ChannelBotLoopProtectionSchema.optional(),

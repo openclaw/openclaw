@@ -11,6 +11,7 @@ import {
   ProviderCommandsSchema,
   refineChannelDmPolicy,
   ToolPolicySchema,
+  UnmentionedInboundSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import {
   buildSecretInputSchema,
@@ -85,6 +86,7 @@ const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
     requireMentionInBotThreads: z.boolean().optional(),
+    unmentionedInbound: UnmentionedInboundSchema.optional(),
     ingest: z.boolean().optional(),
     disableAudioPreflight: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
@@ -99,6 +101,7 @@ const TelegramTopicSchema = z
 
 const TelegramGroupSchema = buildGroupEntrySchema({
   requireMentionInBotThreads: z.boolean().optional(),
+  unmentionedInbound: UnmentionedInboundSchema.optional(),
   ingest: z.boolean().optional(),
   disableAudioPreflight: z.boolean().optional(),
   groupPolicy: GroupPolicySchema.optional(),
@@ -128,7 +131,13 @@ const TelegramDirectSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     topics: z
-      .record(z.string(), TelegramTopicSchema.omit({ requireMentionInBotThreads: true }).optional())
+      .record(
+        z.string(),
+        TelegramTopicSchema.omit({
+          requireMentionInBotThreads: true,
+          unmentionedInbound: true,
+        }).optional(),
+      )
       .optional(),
     errorPolicy: TelegramErrorPolicySchema,
     requireTopic: z.boolean().optional(),

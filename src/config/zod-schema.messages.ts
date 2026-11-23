@@ -12,6 +12,9 @@ const VisibleRepliesSchema = z
     return value;
   });
 
+/** How unmentioned always-on group traffic is submitted; shared by global, agent, and room config. */
+export const UnmentionedInboundSchema = z.enum(["user_request", "room_event"]);
+
 export const MentionPatternsPolicySchema = z.strictObject({
   mode: z.union([z.literal("allow"), z.literal("deny")]).optional(),
   allowIn: z.array(z.string()).optional(),
@@ -22,7 +25,7 @@ export const GroupChatSchema = z
   .strictObject({
     mentionPatterns: z.array(z.string()).optional(),
     historyLimit: z.number().int().min(0).optional(),
-    unmentionedInbound: z.enum(["user_request", "room_event"]).optional(),
+    unmentionedInbound: UnmentionedInboundSchema.optional(),
     visibleReplies: VisibleRepliesSchema.optional(),
   })
   .optional();

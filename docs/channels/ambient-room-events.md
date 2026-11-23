@@ -196,6 +196,38 @@ Use an agent override when several agents share the same room but only one shoul
 
 The agent-specific `agents.entries.*.groupChat.unmentionedInbound` value overrides `messages.groupChat.unmentionedInbound` for that agent.
 
+## Room specific policy
+
+Use a room override when one agent serves several rooms and only some of them should be ambient, for example one ambient Slack channel alongside regular Discord channels on the same agent:
+
+```json5
+{
+  channels: {
+    slack: {
+      groupPolicy: "allowlist",
+      channels: {
+        "<SLACK_CHANNEL_ID>": {
+          requireMention: false,
+          unmentionedInbound: "room_event",
+        },
+      },
+    },
+  },
+}
+```
+
+With no global or agent `unmentionedInbound`, every other room keeps the `"user_request"` default and its automatic replies. Room events always need `message(action=send)` to post, so the ambient room does not need its own `visibleReplies` setting.
+
+Room keys by channel:
+
+| Channel  | Key                                                                                                                          |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Slack    | `channels.slack.channels.<id>.unmentionedInbound` (and the `"*"` entry, and the same path under `accounts.<accountId>`)      |
+| Discord  | `channels.discord.guilds.<id>.channels.<channel>.unmentionedInbound`, then `channels.discord.guilds.<id>.unmentionedInbound` |
+| Telegram | `channels.telegram.groups.<id>.topics.<topic>.unmentionedInbound`, then `channels.telegram.groups.<id>.unmentionedInbound`   |
+
+Precedence is room, then agent (`agents.entries.*.groupChat.unmentionedInbound`), then global (`messages.groupChat.unmentionedInbound`). A room set to `"user_request"` stays a normal room even when the agent or global default is `"room_event"`.
+
 ## Visible reply modes
 
 `messages.groupChat.visibleReplies` defaults to `"automatic"` for normal group/channel user requests. Keep that default when final assistant text should post visibly without an explicit message-tool call.
@@ -223,7 +255,7 @@ If the room shows typing or token usage but no visible message:
 
 1. Confirm the room is allowed by the channel allowlist and sender allowlist.
 2. Confirm `requireMention: false` is set at the room level you expect.
-3. Check whether `messages.groupChat.unmentionedInbound` or the agent override is `"room_event"`.
+3. Check whether the room's `unmentionedInbound`, the agent override, or `messages.groupChat.unmentionedInbound` is `"room_event"`, in that order of precedence.
 4. Inspect logs for suppressed final payload metadata or `didSendViaMessagingTool: false`.
 5. For normal group requests, keep or restore `messages.groupChat.visibleReplies: "automatic"` if you want final replies posted automatically. For ambient rooms using `message_tool`, use a model/runtime that reliably calls tools.
 

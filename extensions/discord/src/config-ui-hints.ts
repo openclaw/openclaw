@@ -53,6 +53,14 @@ export const discordChannelConfigUiHints = {
     label: "Require Mention in Bot-Created Threads",
     help: "Override the guild setting for this channel. Applies only when Discord identifies this bot as the thread owner; unknown or other owners keep ordinary mention rules. Unmentioned messages require Message Content Intent.",
   },
+  "guilds.*.unmentionedInbound": {
+    label: "Guild Unmentioned Inbound",
+    help: 'Override how unmentioned messages in this guild are submitted. "room_event" makes them quiet context that only posts through the message tool; "user_request" keeps automatic replies. Overrides agents.entries.*.groupChat.unmentionedInbound and messages.groupChat.unmentionedInbound. Requires requireMention: false.',
+  },
+  "guilds.*.channels.*.unmentionedInbound": {
+    label: "Channel Unmentioned Inbound",
+    help: "Override the guild setting for this channel. Channel settings override guild, agent, and global unmentioned-inbound settings.",
+  },
   proxy: {
     label: "Discord Proxy URL",
     help: "Proxy URL for Discord gateway + API requests (app-id lookup and allowlist resolution). Set per account via channels.discord.accounts.<id>.proxy.",

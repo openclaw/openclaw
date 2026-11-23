@@ -961,6 +961,43 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     },
   );
 
+  it("lets a channel unmentionedInbound override the agent policy for that channel only", async () => {
+    const slackCtx = nameContext(
+      createInboundSlackCtx({
+        cfg: slackConfig(
+          {},
+          {
+            agents: {
+              entries: { main: { groupChat: { unmentionedInbound: "user_request" } } },
+            },
+          },
+        ),
+        defaultRequireMention: false,
+        channelsConfig: {
+          C_AMBIENT: { unmentionedInbound: "room_event" },
+          C_OTHER: {},
+        },
+      }),
+    );
+
+    const ambient = await prepareInbound(slackCtx, {
+      channel: "C_AMBIENT",
+      channel_type: "channel",
+      text: "ambient note",
+    });
+    const other = await prepareInbound(slackCtx, {
+      channel: "C_OTHER",
+      channel_type: "channel",
+      text: "regular note",
+      ts: "2.000",
+    });
+
+    assert(ambient);
+    assert(other);
+    expect(ambient.ctxPayload.InboundEventKind).toBe("room_event");
+    expect(other.ctxPayload.InboundEventKind).toBe("user_request");
+  });
+
   it("keeps channel metadata out of GroupSystemPrompt", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: slackConfig(),

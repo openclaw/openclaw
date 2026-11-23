@@ -71,6 +71,7 @@ export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
           "channels.*.enabled",
           "channels.*.requireMention",
           "channels.*.ignoreOtherMentions",
+          "channels.*.unmentionedInbound",
           "channels.*.replyToMode",
           "channels.*.users",
           "channels.*.allowBots",

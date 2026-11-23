@@ -931,6 +931,7 @@ export async function prepareSlackMessage(params: {
     unmentionedGroupPolicy: resolveUnmentionedGroupInboundPolicy({
       cfg,
       agentId: route.agentId,
+      roomUnmentionedInbound: channelConfig?.unmentionedInbound,
     }),
     wasMentioned: effectiveWasMentioned,
     hasControlCommand: hasControlCommandInMessage,

@@ -27,6 +27,11 @@ export type SlackChannelConfig = Omit<CommonChannelGroupConfig, "allowFrom"> & {
    * Requires a resolved bot user ID. Default: false.
    */
   ignoreOtherMentions?: boolean;
+  /**
+   * Override how unmentioned messages in this channel are submitted. Overrides
+   * `agents.entries.*.groupChat.unmentionedInbound` and `messages.groupChat.unmentionedInbound`.
+   */
+  unmentionedInbound?: "user_request" | "room_event";
   /** Override Slack reply/thread behavior for this channel. */
   replyToMode?: ReplyToMode;
   /** Allow bot-authored messages to trigger replies (default: true). Set to "mentions" to only allow bot messages that @mention this bot. */

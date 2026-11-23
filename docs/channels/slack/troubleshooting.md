@@ -21,7 +21,7 @@ Symptom-first checks for a Slack account that is not behaving.
     - `requireMention`
     - per-channel `users` allowlist
     - `messages.groupChat.visibleReplies`: normal group/channel requests default to `"automatic"`. If you opted into `"message_tool"` and logs show assistant text with no `message(action=send)` call, the model missed the visible message-tool path. Final text stays private in this mode; inspect the gateway verbose log for suppressed payload metadata, or set it to `"automatic"` if you want every normal assistant final reply posted through the legacy path.
-    - `messages.groupChat.unmentionedInbound`: if it is `"room_event"`, unmentioned allowed channel chatter is ambient context and stays silent unless the agent calls the `message` tool. See [Ambient room events](/channels/ambient-room-events).
+    - `channels.slack.channels.<id>.unmentionedInbound`, the agent's `groupChat.unmentionedInbound`, or `messages.groupChat.unmentionedInbound` (first set wins): if it is `"room_event"`, unmentioned allowed channel chatter is ambient context and stays silent unless the agent calls the `message` tool. See [Ambient room events](/channels/ambient-room-events).
 
 ```json5
 {

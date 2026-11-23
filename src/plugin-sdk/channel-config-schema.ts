@@ -50,6 +50,7 @@ export {
   ChannelThreadBindingsSchema,
   UnifiedStreamingModeSchema,
 } from "../config/zod-schema.channel-messaging-common.js";
+export { UnmentionedInboundSchema } from "../config/zod-schema.messages.js";
 export { ChannelImplicitMentionsSchema } from "../config/zod-schema.implicit-mentions.js";
 export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";
 export { isSafeScpRemoteHost } from "../infra/scp-host.js";
