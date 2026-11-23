@@ -2,7 +2,9 @@
 
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_RESTART_UNAVAILABLE_REASON } from "../../../packages/gateway-protocol/src/restart-unavailable.ts";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import type { CronStatus, ModelAuthStatusResult } from "../api/types.ts";
 import { createConnectionBootstrapCoordinator } from "../app/connection-bootstrap.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -162,6 +164,7 @@ describe("sidebar attention source publication", () => {
     );
     store = harness.attention;
     await vi.advanceTimersByTimeAsync(0);
+    await vi.dynamicImportSettled();
     expect(store.entries).toMatchObject([{ label: "retained" }]);
     const { hello, selfUser } = harness.gateway.snapshot;
     harness.update({ phase: "reconnecting", hello: null, selfUser: undefined });
@@ -248,6 +251,7 @@ describe("sidebar attention source publication", () => {
       const harness = startAuthenticatedStore(request);
       store = harness.attention;
       await vi.advanceTimersByTimeAsync(0);
+      await vi.dynamicImportSettled();
       expectLabels("incident");
 
       failed = true;
@@ -319,10 +323,24 @@ describe("sidebar attention source publication", () => {
     async (boundary) => {
       vi.stubGlobal("localStorage", createStorageMock());
       const jobs = [...cronPage("dismissed-incident").jobs, ...cronPage("visible-incident").jobs];
-      const request = inventoryRequest(
+      let account = "alice";
+      const acknowledgements = new Map<string, Record<string, number>>();
+      const inventory = inventoryRequest(
         () => ({ ...cronPage(), jobs, total: jobs.length }),
         jobs.length,
       );
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        const receipts = acknowledgements.get(account) ?? {};
+        if (method === "users.prefs.get") {
+          return { status: "ok", entries: { "ui.inbox.cronFailed": receipts } };
+        }
+        if (method === "cron.acknowledgeFailure") {
+          const { id } = params as { id: string };
+          acknowledgements.set(account, { ...receipts, [id]: 0 });
+          return { acknowledgedAtMs: 0 };
+        }
+        return inventory(method, params);
+      });
       const harness = gateway(request);
       const profile = (id: string) => ({
         id,
@@ -330,6 +348,7 @@ describe("sidebar attention source publication", () => {
         name: id,
       });
       const connect = (id: string) => {
+        account = id;
         if (boundary === "tenant") {
           harness.update({ phase: "reconnecting", selfUser: null });
           harness.gateway.connection.gatewayUrl = `wss://gateway.test/path?tenant=${id}`;
@@ -371,6 +390,69 @@ describe("sidebar attention source publication", () => {
       await waitLabels(...(boundary === "reconnect" ? [] : ["visible-incident"]));
     },
   );
+
+  it("keeps a legacy failure outside the selected inventory until its import is confirmed", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    const imported = pending({ acknowledgedAtMs: 17 });
+    const inventory = inventoryRequest(() => cronPage("current"));
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "cron.acknowledgeFailure") {
+        return imported.promise;
+      }
+      if (method === "users.prefs.get") {
+        return { status: "ok", entries: {} };
+      }
+      return inventory(method, params);
+    });
+    const harness = gateway(request, true);
+    const key = resolveSidebarAttentionKey(harness.gateway)!;
+    localStorage.setItem(
+      key,
+      JSON.stringify({ cronFailed: ["paused"], openClawIdRecoveryUse: ["existing"] }),
+    );
+    store = activate(harness);
+    await waitLabels("current");
+    expect(request).toHaveBeenCalledWith("cron.acknowledgeFailure", { id: "paused", adopt: true });
+    expect(loadDismissals(key).cronFailed).toEqual(["paused"]);
+    imported.resolve({ acknowledgedAtMs: 17 });
+    await waitForFast(() =>
+      expect(loadDismissals(key)).toEqual({ openClawIdRecoveryUse: ["existing"] }),
+    );
+  });
+
+  it("keeps a dismissal refused during Gateway restart and submits it after reload", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    const acknowledgement = deferred<{ acknowledgedAtMs: number }>();
+    const acknowledge = vi
+      .fn(async () => ({ acknowledgedAtMs: 0 }))
+      .mockImplementationOnce(() => acknowledgement.promise);
+    const request = respond({
+      "cron.list": () => cronPage("archive"),
+      "cron.status": () => ({ enabled: true, triggersEnabled: true, jobs: 1 }),
+      "models.authStatus": () => emptyAuth(1),
+      "users.prefs.get": () => ({ status: "ok", entries: {} }),
+      "cron.acknowledgeFailure": acknowledge,
+    });
+    const harness = gateway(request, true);
+    store = activate(harness);
+    await waitLabels("archive");
+    store.dismiss({ kind: "cronFailed", signature: "archive" });
+    acknowledgement.reject(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Gateway is restarting",
+        retryable: true,
+        details: { method: "cron.acknowledgeFailure", reason: GATEWAY_RESTART_UNAVAILABLE_REASON },
+      }),
+    );
+    await settleRefresh();
+    expectLabels();
+
+    store.dispose();
+    store = activate(harness);
+    await waitForFast(() => expect(acknowledge).toHaveBeenCalledTimes(2));
+    expectLabels();
+  });
 
   it("retires old-account health before the eager facade publishes a storage refresh", async () => {
     let profile = "alice";
@@ -649,7 +731,8 @@ describe("sidebar attention source publication", () => {
     store = activate(harness);
     pages[0]!.resolve(cronPage("dismissed"));
     await waitForFast(() => expect(store?.entries).toHaveLength(1));
-    store.dismiss({ kind: "cronFailed", signature: "dismissed" });
+    const legacyKey = resolveSidebarAttentionKey(harness.gateway);
+    dismissSidebarAttention(legacyKey, { kind: "cronOverdue", signature: "dismissed@1" });
 
     harness.emitEvent("cron", {});
     for (const index of [1, 2]) {
@@ -657,12 +740,12 @@ describe("sidebar attention source publication", () => {
       harness.emitEvent("cron", {});
       pages[index]!.resolve(cronPage(`current-${index}`));
       await waitLabels(`current-${index}`);
-      expect(dismissalState(harness)).toEqual({ cronFailed: ["dismissed"] });
+      expect(dismissalState(harness)).toEqual({ cronOverdue: ["dismissed@1"] });
     }
     pages[3]!.resolve({ ...cronPage("partial"), hasMore: true, total: 2, nextOffset: 1 });
     await waitForFast(() => expect(listCalls).toBe(5));
     expectLabels("current-2");
-    expect(dismissalState(harness)).toEqual({ cronFailed: ["dismissed"] });
+    expect(dismissalState(harness)).toEqual({ cronOverdue: ["dismissed@1"] });
     pages[4]!.resolve({ ...cronPage("fresh"), snapshotRevision: "partial", total: 2, offset: 1 });
     await waitLabels("partial", "fresh");
     expect(dismissalState(harness)).toEqual({});

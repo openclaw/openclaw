@@ -18,12 +18,8 @@ import {
 // compromises"; docs/gateway/security/trust-model.md). Admission, cancellation, secrets and
 // data fences are not listed: they stay.
 export const LIFETIME_CHECK_CALLS = [
-  "captureOperatorToolGatewayAuthority",
-  "resolveSessionRuntimeAuthority",
   "captureAdmittedRunActiveAssertion",
   "captureGatewayToolCallerAssertion",
-  "captureGatewayToolReceiptAssertion",
-  "captureMediaGenerationAdmission",
 ] as const;
 const calls: ReadonlySet<string> = new Set(LIFETIME_CHECK_CALLS);
 // Authority wording only: "<owner|lock|generation> is no longer current" is a data or ownership fence.

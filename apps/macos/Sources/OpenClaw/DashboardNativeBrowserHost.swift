@@ -54,6 +54,7 @@ final class DashboardNativeBrowserHost {
     private var tabs: [Tab] = []
     private var downloads: [String: DashboardBrowserDownload] = [:]
     private var presentations: [String: Presentation] = [:]
+    private var overlayCutouts: [DashboardBrowserCutout] = []
     private var colorScheme: DashboardBrowserColorScheme?
     private var presentationOrder: UInt64 = 0
     private var revision = 0
@@ -151,7 +152,7 @@ final class DashboardNativeBrowserHost {
         browser.webView.navigationDelegate = self.navigationDelegate
         browser.webView.uiDelegate = self.uiDelegate
         browser.webView.isHidden = true
-        container.addSubview(browser.webView, positioned: .above, relativeTo: dashboardWebView)
+        container.addSubview(browser.presentationView, positioned: .above, relativeTo: dashboardWebView)
         self.tabs.append(Tab(
             id: tabId, sessionKey: sessionKey, browser: browser, openedBy: openedBy, openerTabId: openerTabId))
         browser.observeNavigationState { [weak self, weak browser] in
@@ -227,6 +228,11 @@ final class DashboardNativeBrowserHost {
         self.updatePresentations()
     }
 
+    func setOverlayCutouts(_ cutouts: [DashboardBrowserCutout]) {
+        self.overlayCutouts = cutouts
+        self.updatePresentations()
+    }
+
     func releaseScope(_ scope: String) {
         self.presentations.removeValue(forKey: scope)
         self.updatePresentations()
@@ -234,6 +240,7 @@ final class DashboardNativeBrowserHost {
 
     func releaseAllScopes() {
         self.presentations.removeAll()
+        self.overlayCutouts.removeAll()
         self.updatePresentations()
     }
 
@@ -425,7 +432,12 @@ final class DashboardNativeBrowserHost {
                 continue
             }
             let frame = Self.mappedFrame(rect: presentation.rect, dashboardFrame: dashboardWebView.frame)
-            tab.browser.webView.frame = frame
+            let view = tab.browser.presentationView
+            if view.frame != frame {
+                view.frame = frame
+                tab.browser.webView.frame = view.bounds
+            }
+            view.applyCutouts(self.overlayCutouts, dashboardFrame: dashboardWebView.frame)
             tab.browser.webView.isHidden = frame.isEmpty
         }
     }

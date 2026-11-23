@@ -147,10 +147,13 @@ export async function prepareDelegatedSystemAgentApproval(params: {
     ? { kind: "worker", ...approvalAuthority, turnClaim: callerIdentity.workerTurnClaim }
     : { kind: "local", ...approvalAuthority };
   const isAuthorityActive = () => {
+    try {
+      callerIdentity?.receiptAuthority?.();
+    } catch {
+      return false;
+    }
     if (
       !validateAgentRunDelegatedAuthority(approvalAuthority) ||
-      callerIdentity?.approvalAuthorityCheck?.() === false ||
-      callerIdentity?.receiptAuthority?.() === false ||
       callerIdentity?.approvalSignals?.some((signal) => signal.aborted) ||
       (callerIdentity?.gatewayContextResolver && !callerIdentity.gatewayContextResolver())
     ) {

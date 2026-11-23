@@ -11,8 +11,8 @@ const SOURCE = `module.exports = { id: "${FORK_PLUGIN_ID}", register(api) {
   });
   api.registerGatewayMethod("prefixfork.run", async ({ params, respond }) => {
     try {
-      const through = turns.get(params.sessionKey);
-      if (!through) throw new Error("No completed parent turn");
+      const through = params.latest ? undefined : turns.get(params.sessionKey);
+      if (!through && !params.latest) throw new Error("No completed parent turn");
       const result = await api.runtime.subagent.runForkedTurn({
         sessionKey: params.sessionKey,
         through,

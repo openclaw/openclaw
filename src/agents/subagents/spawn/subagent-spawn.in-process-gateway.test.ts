@@ -478,7 +478,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
             sessionKey,
             operationalRunInstance,
             executionIdentityToken: parentToken,
-            receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+            receiptAuthority: identity.receiptAuthority,
             ...(kind === "worker"
               ? {
                   receiptAuthority: identity.receiptAuthority,

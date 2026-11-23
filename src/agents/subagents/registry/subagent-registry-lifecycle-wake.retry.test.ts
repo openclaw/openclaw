@@ -102,7 +102,7 @@ describe("requester settle retry lifetime", () => {
         agentId: "main",
         sessionKey: input.subagent.requesterSessionKey,
         operationalRunInstance: createOperationalRunInstanceRef("originating-wake-turn"),
-        receiptAuthority: () => !origin.signal.aborted,
+        receiptAuthority: () => origin.signal.throwIfAborted(),
         approvalSignals: [origin.signal],
       };
       const entered = createDeferred();

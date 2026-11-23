@@ -93,13 +93,12 @@ export class EmbeddedQuestionBroker {
         : undefined);
     const isRequesterActive = () => {
       try {
+        caller?.receiptAuthority?.();
         return (
           !signal?.aborted &&
           !caller?.approvalSignals?.some((inputSignal) => inputSignal.aborted) &&
           (!caller?.operationalRunInstance || authority !== undefined) &&
-          (!authority || validateAgentRunDelegatedAuthority(authority)) &&
-          caller?.approvalAuthorityCheck?.() !== false &&
-          caller?.receiptAuthority?.() !== false
+          (!authority || validateAgentRunDelegatedAuthority(authority))
         );
       } catch {
         return false;

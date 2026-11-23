@@ -20,10 +20,7 @@ import {
 } from "../admitted-run-context.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { requiresOperatorModelExecutionPolicy } from "../operator-access-program.js";
-import {
-  captureGatewayToolReceiptAssertion,
-  type getGatewayToolCallerIdentity,
-} from "../tools/gateway-caller-context.js";
+import type { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 
 /** Keep the original run and caller predicates attached to every host capability. */
@@ -66,12 +63,6 @@ export function bindHarnessHostSourceAuthority(params: {
   };
   const assertAdmitted = composeSessionSourceAssertion([admittedSource], checkAdmitted);
   const receipt = sourceCaller?.receiptAuthority;
-  const assertReceipt =
-    receipt &&
-    captureGatewayToolReceiptAssertion(
-      receipt,
-      "agent harness host capability lost its source execution claim",
-    );
   const checkCaller = (assertSource: () => void) => {
     if (
       (sourceCaller &&
@@ -87,13 +78,13 @@ export function bindHarnessHostSourceAuthority(params: {
     assertSource();
   };
   const assertCaller = composeSessionSourceAssertion(
-    [captureExternalSessionCommitGuard(assertReceipt)],
+    [captureExternalSessionCommitGuard(receipt)],
     checkCaller,
   );
   return Object.assign(composeSessionSourceAssertion([assertAdmitted, assertCaller]), {
     assertScopeCurrent: () => {
       checkAdmitted(() => admittedSource?.assertScopeCurrent());
-      checkCaller(() => (assertReceipt?.assertScopeCurrent ?? assertReceipt)?.());
+      checkCaller(() => (receipt?.assertScopeCurrent ?? receipt)?.());
     },
   });
 }

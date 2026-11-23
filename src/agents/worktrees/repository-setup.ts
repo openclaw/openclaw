@@ -65,6 +65,10 @@ export async function completeRepositoryWorktreeSetup(
             workerAuthority: current.workerAuthority,
           });
         });
+  const { prepareCheckout } = params;
+  if (prepareCheckout) {
+    await withWorktreeSource(params, (current) => prepareCheckout(worktreePath, current));
+  }
   if (runRepositorySetup) {
     await requireAllocationSpace(params, env, worktreePath, repository, setupBytes);
     await timeWorktreePreparationPhase("setup", () =>

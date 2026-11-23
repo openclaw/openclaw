@@ -65,7 +65,7 @@ async function mount(
   const settings = patchSettings({
     gatewayUrl: gateway.gateway.connection.gatewayUrl,
     themeMode: "dark",
-    background: { ...DEFAULT_BACKGROUND_PREFERENCE, ...preference },
+    background: { ...DEFAULT_BACKGROUND_PREFERENCE, source: { kind: "theme" }, ...preference },
   });
   const theme = createApplicationTheme(settings, gateway.gateway);
   onTestFinished(() => theme.dispose());
