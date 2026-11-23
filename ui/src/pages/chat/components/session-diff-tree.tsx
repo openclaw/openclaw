@@ -17,7 +17,7 @@ type ReviewNode = { key: string; name: string; path: string } & (
 );
 type ReviewDirectory = Extract<ReviewNode, { kind: "directory" }>;
 
-function ReviewFilename(props: { name: string }) {
+export function ReviewFilename(props: { name: string }) {
   const split = createMemo(() => {
     const compound = props.name.match(/\.(?:d\.ts|tar\.gz)$/i);
     return compound
@@ -27,7 +27,7 @@ function ReviewFilename(props: { name: string }) {
   return (
     <span class="session-diff__filename-label">
       <span ref={createTextOverflow(() => props.name)} class="session-diff__basename">
-        {split() ? props.name.slice(0, split()) : props.name}
+        <bdi>{split() ? props.name.slice(0, split()) : props.name}</bdi>
       </span>
       {split() > 0 && <span class="session-diff__extension">{props.name.slice(split())}</span>}
     </span>

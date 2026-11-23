@@ -722,10 +722,23 @@ button.sidebar-image-view__image {
   min-width: 0;
   flex-shrink: 0;
   max-width: 48%;
-  white-space: normal;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  white-space: nowrap;
   color: var(--text-strong);
   font-weight: 550;
+}
+
+.session-diff__filename .session-diff__basename {
+  direction: rtl;
+  text-align: match-parent;
+  text-overflow: ellipsis;
+  mask-image: none;
+}
+
+.session-diff__filename .session-diff__extension {
+  max-width: min(35%, 6ch);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .session-diff__directory {

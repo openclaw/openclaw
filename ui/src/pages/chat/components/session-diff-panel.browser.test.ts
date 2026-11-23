@@ -49,15 +49,17 @@ describe.runIf(browserMode)("Review layout", () => {
         expect(panel.querySelector(".session-diff__filename")?.textContent).toBe(name),
       );
       const label = panel.querySelector<HTMLElement>(".session-diff__filename")!;
+      expect(label.title).toBe(name);
+      const stem = label.querySelector(".session-diff__basename bdi")!.firstChild!;
       const range = document.createRange();
-      range.selectNodeContents(label);
+      range.selectNodeContents(stem);
+      expect(new Set(Array.from(range.getClientRects(), (rect) => rect.top)).size).toBe(1);
+      range.setStart(stem, stem.textContent!.lastIndexOf("-") + 1);
+      const suffix = range.getBoundingClientRect();
       const bounds = label.getBoundingClientRect();
-      expect(bounds.width).toBeGreaterThan(0);
-      for (const line of range.getClientRects()) {
-        expect(line.left).toBeGreaterThanOrEqual(bounds.left - 1);
-        expect(line.right).toBeLessThanOrEqual(bounds.right + 1);
-        expect(line.bottom).toBeLessThanOrEqual(bounds.bottom + 1);
-      }
+      expect(suffix.width).toBeGreaterThan(0);
+      expect(suffix.left).toBeGreaterThanOrEqual(bounds.left - 1);
+      expect(suffix.right).toBeLessThanOrEqual(bounds.right + 1);
       const toggle = panel.querySelector<HTMLButtonElement>(".session-diff__file-toggle")!;
       const initial = toggle.getAttribute("aria-expanded");
       await userEvent.click(toggle);
