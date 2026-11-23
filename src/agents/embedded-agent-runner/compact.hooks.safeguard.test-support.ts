@@ -22,6 +22,7 @@ import {
   limitHistoryTurnsMock,
   resolveBootstrapContextForRunMock,
   resolveEffectiveCompactionModeMock,
+  resolveModelMock,
   sessionAutomaticCompactionMock,
   sessionManualCompactionMock,
 } from "./compact.hooks.harness.js";
@@ -62,6 +63,33 @@ export function registerCompactionSafeguardTests({
     );
     expect(agents?.content.length).toBeLessThan(12_000);
   });
+  it.each([
+    { modelSizeClass: "small", bounded: true },
+    { modelSizeClass: undefined, bounded: false },
+  ] as const)(
+    "selects the compaction profile from the model size class ($modelSizeClass)",
+    async ({ modelSizeClass, bounded }) => {
+      const actual =
+        await vi.importActual<typeof import("../bootstrap-files.js")>("../bootstrap-files.js");
+      resolveBootstrapContextForRunMock.mockImplementation(actual.resolveBootstrapContextForRun);
+      const resolveModel = resolveModelMock.getMockImplementation();
+      resolveModelMock.mockImplementation((...args) => {
+        const resolved = expectDefined(resolveModel, "resolveModel mock")(...args);
+        return { ...resolved, model: { ...resolved.model, modelSizeClass } } as never;
+      });
+      const workspaceDir = await realpath(tempDirs.make("openclaw-compaction-size-class-"));
+      await writeFile(join(workspaceDir, "AGENTS.md"), "a".repeat(12_000));
+      await compact({
+        workspaceDir,
+        config: { agents: { defaults: { agentProfileId: "auto" } } },
+      });
+      const resolved = await resolveBootstrapContextForRunMock.mock.results[0]?.value;
+      const agents = resolved?.contextFiles.find((file: { path: string }) =>
+        file.path.endsWith("AGENTS.md"),
+      );
+      expect(agents?.content.length === 12_000).toBe(!bounded);
+    },
+  );
   it.each([
     [undefined, "background"],
     ["normal", "normal"],
