@@ -6595,7 +6595,6 @@ jobs:
         with:
           cache-mode: &android_cache_write ${{ needs.preflight.outputs.cache_write_allowed == 'true' && 'read-write' || needs.preflight.outputs.cache_mode }}
           gradle-cache-key: ${{ matrix.task }}
-          gradle-cache-mode: read-write # TEMP proof for #204184; revert before merge
           install-native-deps: ${{ needs.preflight.outputs.use_compatible_android_ci != 'true' && 'true' || 'false' }}
 
       - name: Restore Robolectric Maven cache
@@ -6860,7 +6859,7 @@ jobs:
         uses: ./.ci-harness/.github/actions/setup-android-toolchain
         with:
           cache-mode: *cache_mode
-          gradle-cache-mode: read-write # TEMP proof for #204184; revert before merge
+          gradle-cache-mode: *android_cache_write
           gradle-cache-key: access-native
           install-native-deps: "true"
 
