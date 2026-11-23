@@ -382,7 +382,7 @@ it.each([
       }
     };
     const stop = subscribeSubagentRunChanges("persistence", observeChild);
-    // Terminal session effects publish after the registry row; join their own receipt.
+    // An earlier yield-status event can overlap the terminal row publication.
     const stopClosed = onSessionLifecycleEvent((event) => {
       if (
         event.sessionKey === child?.childSessionKey &&
@@ -390,7 +390,14 @@ it.each([
         child &&
         getSubagentRunByRunId(child.runId)?.execution.outcome
       ) {
-        closed.resolve();
+        void readSessionEntryReadOnlyInWorker({
+          agentId: "main",
+          sessionKey: child.childSessionKey,
+        }).then((entry) => {
+          if (entry?.status === "failed" && entry.lifecycleRunId === undefined) {
+            closed.resolve();
+          }
+        }, closed.reject);
       }
     });
     try {
