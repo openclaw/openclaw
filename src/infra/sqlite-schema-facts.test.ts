@@ -92,9 +92,11 @@ describe("admitted SQLite schema facts", () => {
         "WITH value AS (SELECT 1) SELECT * FROM value",
         "PRAGMA user_version",
       ]) {
-        const database = openDatabase();
+        const { database } = openFile();
         const writeRevision = readSqliteDatabaseWriteRevision(database);
         const schemaRevision = getSqliteDatabaseSchemaRevision(database);
+        expect(writeRevision).toBeTypeOf("number");
+        expect(schemaRevision).toBeTypeOf("number");
         const statement = database.prepare(
           `${sql}; INSERT INTO original VALUES (7); CREATE TABLE ignored(id)`,
         );
@@ -114,9 +116,11 @@ describe("admitted SQLite schema facts", () => {
   );
 
   it("tracks the prepared mutation while ignoring later schema changes", () => {
-    const database = openDatabase();
+    const { database } = openFile();
     const writeRevision = readSqliteDatabaseWriteRevision(database);
     const schemaRevision = getSqliteDatabaseSchemaRevision(database);
+    expect(writeRevision).toBeTypeOf("number");
+    expect(schemaRevision).toBeTypeOf("number");
     database.prepare("INSERT INTO original VALUES (7); CREATE TABLE ignored(id)").run();
     expect(readSqliteDatabaseWriteRevision(database)).not.toBe(writeRevision);
     expect(getSqliteDatabaseSchemaRevision(database)).toBe(schemaRevision);

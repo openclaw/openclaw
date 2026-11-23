@@ -31,7 +31,7 @@ function expectNativeBehavior(
 }
 
 it.each(["get", "all", "run", "iterate"] as const)(
-  "preserves native %s preparation, finalization, and binding errors",
+  "preserves native %s errors and closed-handle custody",
   (method) => {
     const execute = (
       statement: ReturnType<ReturnType<typeof open>["prepare"]>,
@@ -48,11 +48,26 @@ it.each(["get", "all", "run", "iterate"] as const)(
         outcome(() => execute(db.prepare("SELECT ? AS value"), [argument])),
       );
     }
-    expectNativeBehavior((db) => {
-      const statement = db.prepare("SELECT 1 AS value");
+    for (const warm of [false, true]) {
+      using db = open();
+      let calls = 0;
+      db.function("probe_callback", () => ++calls);
+      const statement = db.prepare("SELECT probe_callback() AS value");
+      if (warm) {
+        execute(statement, []);
+      }
       db.close();
-      return outcome(() => execute(statement, []));
-    });
+      const before = calls;
+      // Observation may reject the closed database before native statement validation.
+      // Neither invalid-state path may execute callbacks or acquire pending custody.
+      expect(outcome(() => execute(statement, []))).toEqual({
+        name: "Error",
+        code: "ERR_INVALID_STATE",
+        message: expect.stringMatching(/database is not open|statement has been finalized/u),
+      });
+      expect(calls).toBe(before);
+      expect(hasPendingSqliteNativeExecution(db)).toBe(false);
+    }
   },
 );
 
