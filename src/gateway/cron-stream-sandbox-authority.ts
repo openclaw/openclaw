@@ -359,7 +359,6 @@ export async function prepareCronStreamSandboxAuthority(params: {
     const authority = requester
       ? createAdmittedRunOperatorAuthority({
           ...requester.authority,
-          assertCurrent: assertAuthorityCurrent,
           signal: revoked.signal,
           retain: () => {
             assertAuthorityCurrent();

@@ -194,20 +194,18 @@ it.each([
     allowed: true,
   },
   { change: "archive", patch: { archivedAt: 1 }, allowed: false },
-])(
-  "commits $change under the admitted principal and checks fresh starts",
-  ({ change, patch, allowed }) =>
-    withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const { admit } = fixture();
-      using accepted = await admit();
-      const committed = await patchSessionEntryCore(scope, () => patch, {
-        skipMaintenance: true,
-      });
-      expect(committed).toMatchObject(patch);
-      if (!allowed) {
-        await expect(admit()).rejects.toThrow("Session is unavailable");
-      }
-    }),
+])("commits $change under the admitted principal and checks fresh starts", ({ patch, allowed }) =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { admit } = fixture();
+    using _accepted = await admit();
+    const committed = await patchSessionEntryCore(scope, () => patch, {
+      skipMaintenance: true,
+    });
+    expect(committed).toMatchObject(patch);
+    if (!allowed) {
+      await expect(admit()).rejects.toThrow("Session is unavailable");
+    }
+  }),
 );
 
 it("admits the recorded Gateway owner without roles and never substitutes it for another person", () =>

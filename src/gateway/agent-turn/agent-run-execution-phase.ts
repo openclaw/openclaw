@@ -152,7 +152,6 @@ async function executeAgentRun(
     const assertDispatchCurrent = () => {
       params.assertGatewayLifetimeCurrent?.();
       params.executionSource?.();
-      prepared.operatorAuthority?.assertCurrent();
       prepared.userTurn.assertRequesterCurrent?.();
       abortController.signal.throwIfAborted();
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);

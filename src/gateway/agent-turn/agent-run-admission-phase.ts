@@ -571,7 +571,6 @@ export async function prepareAgentRunDispatch(
       return await operatorAdmission;
     }
     assertInputOwnerCurrent();
-    capturedOperator.authority?.assertCurrent();
   } catch (error) {
     const failure = await releasePreparedAgentRunUserTurnAfterFailure(
       userTurn,
@@ -588,7 +587,6 @@ export async function prepareAgentRunDispatch(
         return await registrationAdmission;
       }
       assertInputOwnerCurrent();
-      capturedOperator.authority?.assertCurrent();
     }
   } catch (error) {
     const failure = await releasePreparedAgentRunUserTurnAfterFailure(
@@ -623,7 +621,6 @@ export async function prepareAgentRunDispatch(
         assertInputOwnerCurrent();
         params.assertGatewayWorkAdmissionAllowed();
         activeRunAbort.controller.signal.throwIfAborted();
-        capturedOperator.authority?.assertCurrent();
       } catch (err) {
         const failure = await releasePreparedAgentRunUserTurnAfterFailure(
           userTurn,

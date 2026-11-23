@@ -163,7 +163,6 @@ export async function runOpenAiCompatibleAgentCommand(params: {
     : undefined;
   try {
     assertSourceCurrent();
-    captured?.authority.assertCurrent();
     const sourceSignal = captured?.authority.signal;
     const abortSignal =
       params.abortSignal && sourceSignal
@@ -198,7 +197,6 @@ export async function runOpenAiCompatibleAgentCommand(params: {
       defaultRuntime,
       createDefaultDeps(),
     );
-    captured?.authority.assertCurrent();
     return result;
   } finally {
     captured?.release();

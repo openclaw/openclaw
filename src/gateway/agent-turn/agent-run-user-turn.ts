@@ -186,7 +186,6 @@ export async function prepareAgentRunUserTurn(params: {
 }): Promise<PreparedAgentRunUserTurn> {
   const caller = params.client?.internal?.agentToolCaller;
   const operatorAuthority = params.client?.internal?.operatorRunAuthority;
-  operatorAuthority?.assertCurrent();
   let requesterOrigin = caller
     ? captureRequesterOrigin(caller)
     : operatorAuthority ||
