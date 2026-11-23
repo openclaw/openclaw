@@ -1389,11 +1389,14 @@ describe("ClawHub detached postpublish verification", () => {
     const f = fixture();
     sealParent(f);
     Object.assign(f.parent, { status: "in_progress", conclusion: null });
+    const dispatchUpload = { name: "Upload exact release child dispatch record", ...completed };
+    const authorizationUpload = {
+      name: "Upload original-byte ClawHub parent authorization",
+      ...completed,
+    };
     const producer = {
-      ...job("Publish plugins, then OpenClaw", 10, 1, [
-        "Upload exact release child dispatch record",
-        "Upload original-byte ClawHub parent authorization",
-      ]),
+      ...job("Publish plugins, then OpenClaw", 10, 1),
+      steps: [dispatchUpload, authorizationUpload],
       status: "in_progress",
       conclusion: null,
     };
@@ -1407,13 +1410,13 @@ describe("ClawHub detached postpublish verification", () => {
       producer.name = "Other job";
     }
     if (change === "wrong step") {
-      producer.steps![1].name = "Other upload";
+      authorizationUpload.name = "Other upload";
     }
     if (change === "failed upload") {
-      producer.steps![1].conclusion = "failure";
+      authorizationUpload.conclusion = "failure";
     }
     if (change === "failed dispatch upload") {
-      producer.steps![0].conclusion = "failure";
+      dispatchUpload.conclusion = "failure";
     }
     if (change === "active child seal") {
       f.setJobs(20, 1, [

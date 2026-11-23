@@ -1,0 +1,2 @@
+# Type-safe fixture step references and required authority callback preserve existing recovery assertions.
+7

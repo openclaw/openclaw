@@ -31,7 +31,11 @@ it.each([false, true])(
         .update(f.client.getWorkflowSource(q, ".github/workflows/plugin-npm-release.yml"))
         .digest("hex"),
     );
+    const revalidateAuthority = result.revalidateAuthority;
+    if (!revalidateAuthority) {
+      throw new Error("Expected live qualification authority callback");
+    }
     f.recoveryAuthority.permission = "read";
-    expect(() => result.revalidateAuthority()).toThrow("qualification authority");
+    expect(() => revalidateAuthority()).toThrow("qualification authority");
   },
 );
