@@ -98,7 +98,7 @@ describe("PaletteSessionDraft", () => {
       ).toContain("cold.txt");
     });
     host.observeColdSubmission = true;
-    host.draft.submitCold();
+    host.draft.queueSubmit();
     await host.updateComplete;
     expect(host.draft.messageLocked).toBe(true);
     expect(create).not.toHaveBeenCalled();

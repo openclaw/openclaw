@@ -47,6 +47,49 @@ function anchors(palette: Locator) {
 }
 
 suite.define(() => {
+  it("sends the image and prompt once after remembered palette settings arrive", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const fixture = scenario({
+        "users.prefs.get": {
+          status: "ok",
+          entries: {
+            "new-session.migration.v1": true,
+            "new-session.palette.v1": { agentId: "reviewer", selection: { freshWorkspace: true } },
+          },
+        },
+      });
+      const gateway = await installMockGateway(page, {
+        ...fixture,
+        heldMethods: ["users.prefs.get"],
+        presenceUsers: [{ self: true, id: "palette-user", name: "Sample User" }],
+        featureMethods: [...(fixture.featureMethods ?? []), "users.prefs.get", "users.prefs.set"],
+      });
+      const { palette, input } = await openFromForeground(page, suite.server.baseUrl);
+      await input.press("Tab");
+      const message = "Explain this screenshot";
+      await input.fill(message);
+      const attachments = await pasteImages(input);
+      await palette.locator(".chat-attachment-thumb img").waitFor();
+      await gateway.waitForRequest("users.prefs.get");
+      const send = palette.getByRole("button", { name: "Start new session in background" });
+      await send.click();
+      await expect.poll(() => send.getAttribute("aria-busy")).toBe("true");
+      await input.press("Escape");
+      await input.waitFor({ state: "hidden" });
+      await page.keyboard.press("ControlOrMeta+K");
+      await input.waitFor({ state: "visible" });
+      expect(await input.inputValue()).toBe(message);
+      expect(await send.isEnabled()).toBe(true);
+      await input.press("ControlOrMeta+Enter");
+      await input.press("ControlOrMeta+Enter");
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      await gateway.resolveDeferred("users.prefs.get");
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({ agentId: "reviewer", message, attachments });
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+    });
+  });
+
   it("previews an image above the palette and preserves both drafts after dismissal", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, scenario());

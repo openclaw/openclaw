@@ -450,6 +450,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
     () => current().mode,
     () => stack,
   );
+  const sending = () => current().draft.preparingSubmit || current().draft.submitting;
   const reason = () =>
     current().draft.disabledReason ??
     (current().draft.hasPrompt ? undefined : t("palette.promptRequired"));
@@ -513,7 +514,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
               onCompositionStart={current().onCompositionStart}
               onCompositionEnd={current().onCompositionEnd}
               onPaste={(event) => readCurrent().draft.pasteImages(event)}
-              busy={current().draft.submitting}
+              busy={sending()}
               readOnly={current().draft.messageLocked}
               controls={
                 current().mentionMenu.open
@@ -601,7 +602,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             </div>
             <Show when={current().mode === "compose"}>
               <div class="agent-chat__composer-footer">
-                <div class="agent-chat__composer-lead">
+                <div class="agent-chat__composer-lead" inert={current().draft.preparingSubmit}>
                   <PaletteSessionControls draft={current().draft} revision={current()} />
                 </div>
                 <div class="agent-chat__composer-trail">
@@ -622,10 +623,10 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
                         type="button"
                         class={[
                           "chat-send-btn new-session-page__start-submit cmd-palette__create",
-                          { "new-session-page__start-submit--busy": current().draft.submitting },
+                          { "new-session-page__start-submit--busy": sending() },
                         ]}
                         aria-label={t("palette.startSessionBackground")}
-                        aria-busy={saving() || current().draft.submitting ? "true" : "false"}
+                        aria-busy={saving() || sending() ? "true" : "false"}
                         disabled={current().composing || !current().draft.canSubmit}
                         onClick={() => {
                           const snapshot = readCurrent();
@@ -634,7 +635,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
                           }
                         }}
                       >
-                        <Icon name={current().draft.submitting ? "loader" : "arrowUp"} />
+                        <Icon name={sending() ? "loader" : "arrowUp"} />
                       </button>
                     </openclaw-tooltip>
                   </div>

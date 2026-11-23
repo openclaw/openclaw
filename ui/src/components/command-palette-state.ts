@@ -391,7 +391,7 @@ export class CommandPaletteState {
     if (input.attachmentFiles?.length) {
       this.draft.adoptAttachmentFiles(input.attachmentFiles, input.submitRequested);
     } else if (input.submitRequested) {
-      this.draft.submitCold();
+      this.draft.queueSubmit();
     }
     if (handoff) {
       // Restore the loading view choice after its text and files have been adopted.

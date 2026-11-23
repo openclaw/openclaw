@@ -80,7 +80,7 @@ export class PaletteSessionDraft {
       this.closeSettings = undefined;
     };
   };
-  private coldSubmit: { readSignal?: AbortSignal; failureCount: number } | undefined;
+  private pendingSubmit: { readSignal?: AbortSignal; failureCount: number } | undefined;
   private owner: { gateway: ApplicationContext["gateway"]; url: string; scope: string } | undefined;
   private readonly connectMachine: ConnectMachineSetupState;
   private static nextId = 0;
@@ -133,7 +133,7 @@ export class PaletteSessionDraft {
   get messageLocked(): boolean {
     return (
       this.submitting ||
-      Boolean(this.coldSubmit || this.draft?.submission.pendingPlacement.sessionKey)
+      Boolean(this.pendingSubmit || this.draft?.submission.pendingPlacement.sessionKey)
     );
   }
   get hasPrompt(): boolean {
@@ -141,8 +141,11 @@ export class PaletteSessionDraft {
       this.message.trim() || this.draft?.submission.attachmentDraft.attachments.length,
     );
   }
+  get preparingSubmit(): boolean {
+    return Boolean(this.pendingSubmit);
+  }
   get canSubmit(): boolean {
-    return !this.coldSubmit && this.hasPrompt && Boolean(this.draft?.submission.canSubmit());
+    return !this.pendingSubmit && this.hasPrompt && !this.disabledReason && !this.submitting;
   }
   get error(): string | null {
     const submission = this.draft?.submission;
@@ -156,7 +159,8 @@ export class PaletteSessionDraft {
     return this.draft?.submission.blockedSubmitNotice({ includePageRendered: true });
   }
   get disabledReason(): string | undefined {
-    return this.draft?.submission.submitDisabledReason();
+    const block = this.draft?.submission.submitBlock();
+    return block?.gate === "preference-restore" ? undefined : block?.reason;
   }
 
   setMessage(value: string, mentions?: readonly HumanMention[]) {
@@ -270,7 +274,7 @@ export class PaletteSessionDraft {
     if (submitRequested && admitted === files.length) {
       // The loader accepted Send before the readers existed. Carry that one
       // intent across preparation, but never across dismissal or invalidation.
-      this.submitCold(props.readSignal, failureCount);
+      this.queueSubmit(props.readSignal, failureCount);
     }
   }
 
@@ -303,7 +307,7 @@ export class PaletteSessionDraft {
     }
     const { draft } = this.slot;
     draft.connect();
-    this.coldSubmit = undefined;
+    this.pendingSubmit = undefined;
     draft.place.resetDraft();
     draft.submission.resetDraft();
     draft.place.agentsHydrated = draft.agentsReady();
@@ -379,7 +383,7 @@ export class PaletteSessionDraft {
   close() {
     this.retireSubmissionPresentation();
     this.preferences.retirePresentation();
-    this.coldSubmit = undefined;
+    this.pendingSubmit = undefined;
     // Dismissal hides the launcher, not its new-session draft. Reads retain their
     // original custody until completion, owner replacement, or disconnect.
     this.closeSettings?.();
@@ -396,7 +400,11 @@ export class PaletteSessionDraft {
   private async submitOwnedDraft(): Promise<void> {
     this.synchronizePresentationScope();
     const slot = this.slot;
-    if (!this.read().open || this.coldSubmit || this.submitting || !this.hasPrompt || !slot) {
+    if (!this.read().open || this.pendingSubmit || this.submitting || !this.hasPrompt || !slot) {
+      return;
+    }
+    if (slot.draft.submission.submitBlock()?.gate === "preference-restore") {
+      this.queueSubmit(slot.draft.submission.attachmentDraft.reads.readSignal);
       return;
     }
     const submission = slot.draft.submission.submit(undefined, true);
@@ -418,11 +426,11 @@ export class PaletteSessionDraft {
     this.changed();
   }
 
-  submitCold(
+  queueSubmit(
     readSignal?: AbortSignal,
     failureCount = this.draft?.submission.attachmentDraft.reads.failureCount ?? 0,
   ) {
-    this.coldSubmit = { readSignal, failureCount };
+    this.pendingSubmit = { readSignal, failureCount };
     this.callbacks.changed();
   }
 
@@ -469,7 +477,7 @@ export class PaletteSessionDraft {
     draft.synchronizeSelections();
     draft.submission.synchronizeSubmission();
     const attachmentDraft = draft.submission.attachmentDraft;
-    const pending = this.coldSubmit;
+    const pending = this.pendingSubmit;
     if (
       pending &&
       (!pending.readSignal ||
@@ -479,8 +487,12 @@ export class PaletteSessionDraft {
       const failed =
         pending.readSignal &&
         (pending.readSignal.aborted || attachmentDraft.reads.failureCount !== pending.failureCount);
-      if (failed || draft.gateway.placementPolicyReady) {
-        this.coldSubmit = undefined;
+      if (
+        failed ||
+        (draft.gateway.placementPolicyReady &&
+          draft.submission.submitBlock()?.gate !== "preference-restore")
+      ) {
+        this.pendingSubmit = undefined;
         this.callbacks.changed();
         if (!failed) {
           void this.submit();
@@ -532,7 +544,7 @@ export class PaletteSessionDraft {
 
   private restoreSettings(preference: PaletteSessionPreference | null) {
     const slot = this.slot;
-    if (!slot || this.messageLocked) {
+    if (!slot || this.submitting || slot.draft.submission.pendingPlacement.sessionKey) {
       return;
     }
     const defaultAgent = this.read().context?.agentSelection.state.selectedId ?? "";

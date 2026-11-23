@@ -146,6 +146,8 @@ mode you last chose, not to an automatic switch. That choice is remembered in th
 browser, including after a reload, when browser storage is available.
 **Cmd/Ctrl+Enter** starts a new background session from either mode using the
 current text and attachments; plain **Enter** still selects a search result.
+If your saved settings are still loading, send once. The palette waits for them
+before starting the session. Close the palette to cancel a waiting send.
 **Shift+Tab** keeps normal focus navigation to the mode switch and session controls.
 
 Open the command palette with **Cmd+K** on macOS or **Ctrl+K** elsewhere. Drop
