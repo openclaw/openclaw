@@ -77,3 +77,45 @@ it.each(["state", "agent"] as const)(
     expect(await fs.readFile(file)).toEqual(before);
   },
 );
+
+it("accepts a cleanly closed WAL-mode agent database without SHM or with an empty WAL without creating sidecars", async () => {
+  const dir = path.join(root, "agents", "main", "agent");
+  await fs.mkdir(dir, { recursive: true });
+  const file = path.join(dir, "openclaw-agent.sqlite");
+  const db = openNodeSqliteDatabase(file);
+  db.exec(`PRAGMA journal_mode=WAL; PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION};`);
+  db.close();
+
+  // Clean close without sidecars
+  await fs.rm(`${file}-shm`, { force: true });
+  await fs.rm(`${file}-wal`, { force: true });
+  const filesWithoutSidecars = listDirectoryTreeStrictSync(dir);
+  expect(await checkRelease({ env, configPath })).toMatchObject({ ok: true });
+  expect(listDirectoryTreeStrictSync(dir)).toEqual(filesWithoutSidecars);
+
+  // Empty WAL without SHM
+  await fs.writeFile(`${file}-wal`, Buffer.alloc(0));
+  const filesWithEmptyWal = listDirectoryTreeStrictSync(dir);
+  expect(await checkRelease({ env, configPath })).toMatchObject({ ok: true });
+  expect(listDirectoryTreeStrictSync(dir)).toEqual(filesWithEmptyWal);
+});
+
+it("detects newer schema from live committed WAL frames", async () => {
+  const dir = path.join(root, "agents", "main", "agent");
+  await fs.mkdir(dir, { recursive: true });
+  const file = path.join(dir, "openclaw-agent.sqlite");
+  const db = openNodeSqliteDatabase(file);
+  db.exec(`PRAGMA journal_mode=WAL; PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION};`);
+  db.close();
+
+  const writer = openNodeSqliteDatabase(file);
+  try {
+    writer.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION + 1};`);
+    expect(await checkRelease({ env, configPath })).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("agent-schema-newer"),
+    });
+  } finally {
+    writer.close();
+  }
+});

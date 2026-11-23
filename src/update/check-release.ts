@@ -4,6 +4,7 @@
 // the supervised trial catches a release whose Gateway cannot start.
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { quietPluginJsonLogger } from "../cli/plugins-json-logger.js";
 import {
   normalizeConfigIoDeps,
@@ -17,7 +18,9 @@ import { resolveStateDir } from "../config/paths.js";
 import { validateConfigObjectRaw } from "../config/validation-core.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { openNodeSqliteDatabase, resolveReadOnlyShmSqliteFileUri } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { tryInspectSqliteReadOnlyInProcess } from "../infra/sqlite-readonly-inspection.js";
+import { prepareSqliteReadOnlyCopyInProcess } from "../infra/sqlite-readonly-location.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { collectRegisteredPaths } from "../infra/update-candidate-state.shared.js";
 import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
@@ -67,12 +70,7 @@ export async function checkRelease(
         }
         throw error;
       }
-      // readonly_shm retains committed WAL changes without modifying source sidecars.
-      const db = openNodeSqliteDatabase(resolveReadOnlyShmSqliteFileUri(file), {
-        readOnly: true,
-        timeout: 5000,
-      });
-      try {
+      const readDb = (db: DatabaseSync) => {
         const version = readSqliteUserVersion(db);
         const supported =
           kind === "state" ? OPENCLAW_STATE_SCHEMA_VERSION : OPENCLAW_AGENT_SCHEMA_VERSION;
@@ -91,8 +89,28 @@ export async function checkRelease(
             agentPaths.add(source);
           }
         }
+      };
+      // Preserve source bytes/sidecars: live complete WAL families read in-place via
+      // readonly_shm; closed/incomplete WAL or rollback families use a private copy.
+      const inspected = tryInspectSqliteReadOnlyInProcess(file, readDb, {
+        preserveSourceArtifacts: true,
+      });
+      if (inspected) {
+        return;
+      }
+      const prepared = await prepareSqliteReadOnlyCopyInProcess(file);
+      try {
+        const db = openNodeSqliteDatabase(prepared.location, {
+          readOnly: true,
+          timeout: 5000,
+        });
+        try {
+          readDb(db);
+        } finally {
+          db.close();
+        }
       } finally {
-        db.close();
+        prepared.cleanup();
       }
     };
     await inspect(statePath, "state");
