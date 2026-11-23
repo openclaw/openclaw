@@ -324,9 +324,10 @@ export function collectCurrentInboundContext(
               { kind: "runtime-instruction", text: `Queued #${index + 1} context:` },
             ];
             return fragments.concat(
-              context.compactFragments ?? [
-                { kind: "conversation-data", text: context.compactText ?? context.text },
-              ],
+              context.compactFragments ??
+                (context.compactText !== undefined || context.compactResumableText !== undefined
+                  ? [{ kind: "conversation-data", text: context.compactText ?? context.text }]
+                  : (context.fragments ?? [{ kind: "conversation-data", text: context.text }])),
             );
           }),
         }

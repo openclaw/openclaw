@@ -29,6 +29,27 @@ describe("collectCurrentInboundContext compact fragments", () => {
     ]);
   });
 
+  it("keeps the instruction fragments of a queued item that has no compact projection", () => {
+    const merged = collectCurrentInboundContext([
+      item({ text: "Full one", compactText: "Short one" }),
+      item({
+        text: "Full two\n\nReply to the subagent result.",
+        fragments: [
+          { kind: "conversation-data", text: "Full two" },
+          { kind: "runtime-instruction", text: "Reply to the subagent result." },
+        ],
+      }),
+    ]);
+
+    expect(merged?.compactFragments).toEqual([
+      { kind: "runtime-instruction", text: "Queued #1 context:" },
+      { kind: "conversation-data", text: "Short one" },
+      { kind: "runtime-instruction", text: "Queued #2 context:" },
+      { kind: "conversation-data", text: "Full two" },
+      { kind: "runtime-instruction", text: "Reply to the subagent result." },
+    ]);
+  });
+
   it("adds no compact fragments when no queued context has a compact projection", () => {
     const merged = collectCurrentInboundContext([item({ text: "One" }), item({ text: "Two" })]);
 
