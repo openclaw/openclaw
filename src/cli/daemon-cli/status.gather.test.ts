@@ -1010,6 +1010,42 @@ describe("gatherDaemonStatus", () => {
     },
   );
 
+  it("probes native custom-bind dashboard targets via loopback with the TLS pin", async () => {
+    const bindHost = "100.64.0.1";
+    daemonLoadedConfig = {
+      gateway: {
+        bind: "custom",
+        customBindHost: bindHost,
+        tls: { enabled: true },
+        auth: { token: "daemon-token" },
+      },
+    };
+    resolveGatewayBindHost.mockImplementation(async (bindMode?: string, customBindHost?: string) =>
+      bindMode === "custom" && customBindHost ? customBindHost : "0.0.0.0",
+    );
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "run", "--port", "18789"],
+      environment: daemonEnvironment,
+    });
+    callGatewayStatusProbe.mockResolvedValueOnce({
+      ok: true,
+      url: "wss://127.0.0.1:18789",
+      error: null,
+    });
+
+    const status = await gatherStatus({
+      dashboardTarget: { port: 18789, probeUrl: `wss://${bindHost}:18789` },
+    });
+
+    // The bind-host endpoint is the native Gateway, so the probe borrows the
+    // native loopback URL with service credentials and the local TLS pin.
+    expect(probeInput().url).toBe("wss://127.0.0.1:18789");
+    expect(inspectGatewayTlsCertificate).toHaveBeenCalled();
+    expect(probeInput().tlsFingerprint).toBe("sha256:11:22:33:44");
+    expect(probeInput().token).toBe("daemon-token");
+    expect(status.rpc?.url).toBe("wss://127.0.0.1:18789");
+  });
+
   it("uses raw explicit URLs for probes but redacts them from status diagnostics", async () => {
     const rawUrl =
       "wss://user:password@override.example:18790/ws?token=secret&key=api-key&X-Amz-Signature=signed";

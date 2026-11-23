@@ -275,12 +275,12 @@ async function gatherDaemonStatusImpl(
     selectedUrl.protocol === (summary.gateway.tlsEnabled ? "wss:" : "ws:") &&
     (selectedUrl.hostname === "127.0.0.1" || selectedUrl.hostname === summary.gateway.bindHost);
   // Use the existing explicit-URL transport policy for alternate endpoints. Only
-  // the matching loopback probe may borrow native service credentials or TLS pins.
+  // a probe matching the native Gateway (loopback or its own bind host, same port
+  // and scheme) may borrow native service credentials or TLS pins; custom and
+  // Tailnet binds also listen on loopback, so probing via the native URL is equivalent.
   const probeUrlOverride =
     summary.probeUrlOverride ??
-    (dashboardTarget && !(dashboardMatchesNative && dashboardTarget.probeUrl === summary.probeUrl)
-      ? dashboardTarget.probeUrl
-      : null);
+    (dashboardTarget && !dashboardMatchesNative ? dashboardTarget.probeUrl : null);
   const probeUrl = probeUrlOverride ?? summary.probeUrl;
   const gateway = dashboardTarget
     ? { ...summary.gateway, probeUrl: projectGatewayUrlForDiagnostics(probeUrl) }
