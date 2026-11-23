@@ -163,7 +163,7 @@ vi.mock("../prepared-model-runtime.js", async (importOriginal) => {
       try {
         expect(current.registrations.length).toBe(1);
         if (current.mode === "raw") {
-          expect(lease.snapshot.catalogOwner).toBe(standalone.catalogOwner);
+          expect(lease.snapshot.catalogOwner).toBe(expectDefined(standalone, "raw").catalogOwner);
           expect(getPreparedModelRuntimePolicyConfigReader(lease.snapshot)?.()).toBe(input.config);
         }
         if (current.mode === "before_compaction" || current.mode === "after_compaction") {
