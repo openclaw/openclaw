@@ -88,12 +88,9 @@ suite.define(() => {
         expect(JSON.parse(listed.stdout).models).toContainEqual(
           expect.objectContaining({ name: localModelName, available: true }),
         );
-        const readiness = page.locator('[data-model-readiness="model-required"]');
-        await readiness.waitFor();
-        await readiness.locator("[data-models-connect]").click();
-        await page.locator(`[data-models-login-provider="${loginProvider}"]`).click();
+        await page.locator("[data-models-catalog-search]").fill(loginProvider);
+        await page.locator(`[data-models-catalog-provider="${loginProvider}"] button`).click();
         const modal = page.locator("openclaw-modal-dialog");
-        await modal.getByRole("button", { name: loginLabel, exact: true }).click();
         const link = page.locator(".wizard-step__external-link");
         await link.waitFor();
         const popup = context.waitForEvent("page");

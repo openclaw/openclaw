@@ -1,5 +1,5 @@
 import { afterEach, assert, expect, it, vi } from "vitest";
-import { cleanupSessionResources } from "../session-resources.js";
+import { claimConversationProviderState, cleanupSessionResources } from "../session-resources.js";
 import {
   claimOpenAIResponsesHttpContinuation,
   resolveResponsesContinuationRequest,
@@ -112,7 +112,7 @@ it("replays unstored HTTP input and resets to the chosen effort after cache expi
   vi.useFakeTimers();
   const claim = (request: ResponsesContinuationRequest) =>
     claimOpenAIResponsesHttpContinuation({
-      sessionId: "reasoning-session",
+      scope: claimConversationProviderState("reasoning-session"),
       apiKey: "test-api-key",
       baseUrl: "https://api.openai.com/v1",
       headers: {},

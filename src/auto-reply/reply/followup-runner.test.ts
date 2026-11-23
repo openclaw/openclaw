@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import {
   resolveSessionTranscriptReadFence,
   runWithSessionTranscriptReadFence,
@@ -486,6 +486,7 @@ describe("createFollowupRunner", () => {
       }
       if (revoked || unrecorded) {
         const authority = {
+          canonicalIdentity: null,
           profileId: "guest",
           scopes: ["operator.write"],
           assertCurrent: () => {
@@ -494,7 +495,7 @@ describe("createFollowupRunner", () => {
         };
         turn.queued.operatorAuthority = unrecorded
           ? { ...authority, signal: new AbortController().signal }
-          : createAdmittedRunOperatorAuthority(authority);
+          : createTestOperatorAuthority(authority);
       }
       const refuse = async () => {
         turn.queued.operatorAuthority?.assertCurrent();

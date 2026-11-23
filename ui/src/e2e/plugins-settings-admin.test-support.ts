@@ -5,6 +5,17 @@ import type {
 } from "../lib/plugins/index.ts";
 import { createPluginDeclaredSurface } from "../test-helpers/plugins-e2e-fixtures.test-support.ts";
 
+export const pluginMethods = [
+  "config.get",
+  "config.patch",
+  "config.schema",
+  "config.set",
+  "plugins.inspect",
+  "plugins.list",
+  "plugins.setEnabled",
+  "plugins.uninstall",
+];
+
 export const workboard = {
   id: "workboard",
   name: "Workboard",

@@ -35,7 +35,7 @@ import type { OpenClawPluginDefinition } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
 import { createControlUiRequestOptions } from "./server-methods/control-ui-request.test-support.js";
 import { controlUiHandlers } from "./server-methods/control-ui.js";
@@ -113,7 +113,7 @@ async function createFixture(allow?: string[], throughSearch = false) {
     profileName: "github-reader",
     scopes: ["operator.sessions.read"],
   });
-  const captured = await captureGatewayOperatorRunAuthority({ client, context });
+  const captured = await prepareGatewayOperatorRunAuthority({ client, context });
   if (captured) {
     cleanups.push(captured.release);
   }

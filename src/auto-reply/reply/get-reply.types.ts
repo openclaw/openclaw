@@ -27,6 +27,7 @@ import type { MsgContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.shared.js";
 import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
 import type { PreparedReplyConversation } from "./prompt-session-context.js";
+import type { ReplyCallbackCustodyBinding } from "./reply-callback-custody.js";
 import type { ReplyOptionsWithOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplySourceBinding } from "./reply-source-binding.types.js";
 import type {
@@ -88,8 +89,6 @@ type InternalReplySessionOptions = {
   /** Live channel policy retained from ingress through awaited lifecycle mutations. */
   assertChannelAuthority?: () => void;
   extractedFileImages?: ExtractedFileImage[];
-  /** Rechecks the live Gateway caller before a chat login has a durable effect. */
-  assertProviderLoginAuthority?: () => void;
   getProviderLoginConfig?: () => OpenClawConfig;
   /** Invocation-owned conversation facts; never execution or sender authority. */
   replyConversation?: PreparedReplyConversation;
@@ -153,7 +152,8 @@ export type InternalGetReplyOptions = GetReplyOptions &
   PluginCommandReplyOptions &
   InternalReplySessionOptions &
   ReplyOptionsWithOperationRunState &
-  ReplySourceBinding;
+  ReplySourceBinding &
+  ReplyCallbackCustodyBinding;
 
 /** Pin the host-issued source before public options cross asynchronous preparation. */
 export function prepareInternalGetReplyOptions(

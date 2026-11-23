@@ -322,6 +322,11 @@ export const validateCronStatusParams = createProtocolValidator(
   S.CronStatusParamsSchema,
   Checks.isCronStatusParams,
 );
+export const validateCronAcknowledgeFailureParams = createProtocolValidator(
+  S.CronAcknowledgeFailureParamsSchema,
+  Checks.isCronAcknowledgeFailureParams,
+);
+
 export const validateCronGetParams = createProtocolValidator(
   S.CronGetParamsSchema,
   Checks.isCronGetParams,

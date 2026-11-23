@@ -407,6 +407,11 @@ export function isSkillsUpdateParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SkillsUpdateParamsSchema
 >;
+export function isSkillsCategoriesParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SkillsCategoriesParamsSchema
+>;
 export function isSkillsSearchParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -1524,6 +1529,11 @@ export function isCronStatusParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").CronStatusParamsSchema
+>;
+export function isCronAcknowledgeFailureParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").CronAcknowledgeFailureParamsSchema
 >;
 export function isCronGetParams(
   value: unknown,
@@ -2666,6 +2676,16 @@ export function isProjectsRemoveParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").ProjectsRemoveParamsSchema
+>;
+export function isProjectsMoveSessionOptionsParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ProjectsMoveSessionOptionsParamsSchema
+>;
+export function isProjectsMoveSessionParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ProjectsMoveSessionParamsSchema
 >;
 export function isWorktreesListParams(
   value: unknown,

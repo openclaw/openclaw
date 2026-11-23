@@ -13,7 +13,7 @@ import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
 import { PaneOutboxRecovery } from "./chat-outbox-recovery.tsx";
-import { PaneAttachmentCatalog } from "./chat-pane-attachment-catalog.ts";
+import { filesJump, PaneAttachmentCatalog } from "./chat-pane-attachment-catalog.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { ChatPaneHeaderLayout, type PaneDetailsActions } from "./chat-pane-header-layout.ts";
 import type { PaneLayoutData } from "./chat-pane-layout-view.tsx";
@@ -246,6 +246,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
           ? { ...chatProps.disabledBanner, stop: subagentStop }
           : chatProps.disabledBanner,
       mobileComposer: Boolean(mobileHost),
+      // Composer extensions build session authority from the row; they mount once it exists.
+      sessionAdmitted: Boolean(selectedSession),
       get showNewMessages() {
         return canShowNewMessages && chatProps.showNewMessages;
       },
@@ -290,7 +292,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
         : undefined,
       onOpenSubagent: ownsSubagentsPanel ? (key) => this.showSubagents(key) : undefined,
       onOpenSubagents: ownsSubagentsPanel ? (focus) => this.showSubagents(null, focus) : undefined,
-      onOpenProcesses: ownsSubagentsPanel ? this.showDetailsProcess : undefined,
+      onOpenProcesses: ownsSubagentsPanel
+        ? this.processesOpener(state, selectedSession)
+        : undefined,
       composerRecovery: recovery,
       pluginToolIcons: this.toolIcons,
       presented: {
@@ -310,6 +314,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       gateway: this.context.gateway,
       presentation: this.sessionPresentation,
       workspacePresented: slotPresentation("workspace").isPresented(),
+      showMessage: filesJump(chatProps, mobileHost, conversationVisible, openPanelSlot),
       sessionWorkspace,
     });
     const { headerDetails, subagentHeader } = this.renderHeaderDetails({

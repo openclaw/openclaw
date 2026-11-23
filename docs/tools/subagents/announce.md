@@ -23,6 +23,10 @@ have no terminal non-delivery disposition. Once the transcript owner commits the
 input, it immediately records `state: "consumed"` and the consuming run in the
 registry, before the requester source settles. Registry readers use that stored
 fact directly.
+The 30-minute idle delivery deadline does not discard a result waiting behind its
+recorded blocker while that execution still belongs to the live requester. When
+the turn ends or yields, normal completion admission resumes. Dead or unknown
+blockers retain the expiry notice path.
 An ordinary requester run ending or a later follow-up taking over does not discard
 the waiting results. An accepted completion turn keeps its delivery; findings not
 yet accepted remain pending for the requester's next turn.
@@ -155,11 +159,14 @@ account, or thread, or perform actions other than `send`. Explicit `replyTo` sta
 limited to the current message or thread; inline reply and audio directives remain
 restricted. See [message tool access](/tools#configure-access-and-approvals).
 
-After `sessions_yield`, the frozen batch waits for its own children and their
-descendants to settle. Children paused to wait for a message remain resumable and
-retain their completion wake, while the batch offers its ready results. A
-still-running child from an earlier requester turn does not delay that batch's
-result; the earlier batch retains its own completion wake.
+After `sessions_yield`, each finished child result in the frozen batch wakes the
+parent as soon as it and its descendants settle. Siblings that are still running,
+or paused on their own `sessions_yield`, keep their completion wake and wake the
+parent again when they finish; a result is delivered once. The wake names the
+siblings that are still working, so the parent can act on the ready results or
+call `sessions_yield` again to wait for the rest. A still-running child from an
+earlier requester turn does not delay that batch's result; the earlier batch
+retains its own completion wake.
 
 Private results are addressed to the current requester chat by its recorded agent
 and session key, regardless of the session store path recorded at spawn. If a new

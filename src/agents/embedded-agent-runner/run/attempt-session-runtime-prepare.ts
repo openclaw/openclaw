@@ -165,6 +165,13 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   // prepareSessionSystemPrompt for the closed set of rebuild points.
   const usesSystemPromptSeries =
     !input.isRawModelRun && attempt.operation !== "settled-tool-finalization";
+  const toolSurface = codeModeControlsEnabledForRun
+    ? "code-mode"
+    : toolBase.toolSearchControlsEnabledForRun
+      ? resolveToolSearchConfig(toolSearchRuntimeConfig).mode
+      : "direct";
+  // A move ends the default-workspace series, retiring its guidance and tool pin.
+  const offersProjectMove = effectiveTools.some((tool) => tool.name === "session_project");
   const promptRouteKey = buildSystemPromptRouteKey({
     provider: attempt.provider,
     model: attempt.modelId,
@@ -174,11 +181,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     // The session's selected human, never the current turn's sender classification.
     personalProfile: attempt.sessionUserProfileId,
     harness: attempt.agentHarnessRuntimeOverride ?? attempt.agentHarnessId ?? "openclaw",
-    surface: codeModeControlsEnabledForRun
-      ? "code-mode"
-      : toolBase.toolSearchControlsEnabledForRun
-        ? resolveToolSearchConfig(toolSearchRuntimeConfig).mode
-        : "direct",
+    surface: offersProjectMove ? `${toolSurface}:project-move` : toolSurface,
   });
   const rankingEnabled =
     usesSystemPromptSeries &&

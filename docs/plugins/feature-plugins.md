@@ -321,7 +321,10 @@ host.ui.registerAction({
 
 A composer action with a host icon-registry `icon` renders as a compact button in
 the composer toolbar, after the attachment menu, with `label` as its accessible
-name and tooltip. Composer actions without an icon keep the text button above
+name and tooltip. On mobile, open **+** and choose the plugin by name to see
+its icon actions. The menu shows the [plugin icon](/plugins/manifest/surfaces#plugin-icon)
+beside its name, or a plug if the artwork is unavailable. Composer actions
+without an icon keep the text button above
 the composer, as do icon actions beside a replacement composer. A composer
 action's `resolve` receives the pane's current `draft`, so an action that needs
 text can return `{ disabled: !draft.trim() }`; the host re-resolves as the user

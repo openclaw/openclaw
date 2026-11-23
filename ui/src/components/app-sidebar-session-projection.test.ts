@@ -47,6 +47,7 @@ function projectionInput(
     knownGroups: [],
     collapsedSections: new Set(),
     emptyGroupsMode: "filtering",
+    showEmptyOther: false,
     ownerFilter: null,
     visibleSessionLimits: new Map(),
     sortMode: "created",
@@ -150,6 +151,29 @@ it("hides empty filtered native groups and preserves other section owners", () =
   expect(sectionIds(rows, { ...input, emptyGroupsMode: "never" })).toContain("category:Empty");
 });
 
+it("continues native Other on scroll only with grouping set to none", () => {
+  const rows = Array.from({ length: 20 }, (_, index) => sessionRow(`row-${index}`));
+  const alpha = rows.map((row) => ({ ...row, category: "Alpha" }));
+  const continues = (sessions: SidebarRecentSession[], overrides: Partial<ProjectionInput>) =>
+    project(sessions, overrides).sections.map(({ id, continuesOnScroll }) => [
+      id,
+      continuesOnScroll,
+    ]);
+  expect(continues(rows, { grouping: "none" })).toEqual([["ungrouped", true]]);
+  expect(continues(rows, {})).toEqual([["ungrouped", false]]);
+  expect(continues(alpha, { knownGroups: ["Alpha"] })).toEqual([["category:Alpha", false]]);
+  expect(continues(rows, { grouping: "none", catalogIds: ["external"] })).toEqual([
+    ["ungrouped", true],
+    ["catalog:external", false],
+  ]);
+  expect(
+    continues(alpha, { knownGroups: ["Alpha"], showEmptyOther: true, statusFilter: "all" }),
+  ).toEqual([
+    ["category:Alpha", false],
+    ["ungrouped", false],
+  ]);
+});
+
 it("retains unloaded group destinations until the session list establishes their contents", () => {
   const input = { knownGroups: ["Awaiting sessions"], statusFilter: "active" as const };
   expect(sectionIds([], { ...input, listLoaded: false })).toContain("category:Awaiting sessions");
@@ -204,39 +228,14 @@ it("promotes newly created sessions without losing the order of existing peers",
   ]);
 });
 
-it("reveals newly added children while preserving a manual collapse through ordinary updates", () => {
+it("preserves Show more as background children change", () => {
   const parent = parentRow("first", "second");
-  project([sessionRow(parent.key)]);
   project([parent]);
-  expect(projection.children.isExpanded(parent.key)).toBe(true);
-  expect(projection.children.toggle(parent.key)).toEqual({ expanded: false });
-
-  project([parentRow("second", "first")]);
-  expect(projection.children.isExpanded(parent.key)).toBe(false);
-
-  // Compare identities, not counts: one child can replace another between snapshots.
-  project([parentRow("second", "third")]);
-  expect(projection.children.isExpanded(parent.key)).toBe(true);
-
+  projection.children.toggle(parent.key);
   projection.children.showMore(parent.key);
-  project([parentRow("second", "third", "fourth")]);
+  project([parentRow("second", "third")]);
   expect(projection.children.isFullyShown(parent.key)).toBe(true);
 });
-
-it.each(["route placeholder", "restored collapse"])(
-  "baselines children from a %s before revealing additions",
-  (origin) => {
-    if (origin === "route placeholder") {
-      project([sessionRow("parent")], { listLoaded: false });
-    } else {
-      projection.children.restore([{ key: "parent", childrenDisplayMode: "collapsed-by-user" }]);
-    }
-    project([parentRow("first")]);
-    expect(projection.children.isExpanded("parent")).toBe(false);
-    project([parentRow("first", "second")]);
-    expect(projection.children.isExpanded("parent")).toBe(true);
-  },
-);
 
 it("preserves restored expansion through the live handoff but clears it on a later connection", () => {
   const rows = [
@@ -258,21 +257,12 @@ it("preserves restored expansion through the live handoff but clears it on a lat
   project(rows, { connectionIdentity: liveConnection, listSource: {} });
   expect(projection.children.isExpanded("expanded")).toBe(true);
   expect(projection.children.isFullyShown("fully-shown")).toBe(true);
-  expect(projection.children.isExpanded("collapsed")).toBe(false);
-  expect(projection.children.isExpanded("untouched")).toBe(true);
+  expect(projection.children.capture("collapsed")).toBe("collapsed-by-user");
+  expect(projection.children.isExpanded("untouched")).toBe(false);
   project(rows, { connectionIdentity: {} });
   expect(projection.children.isExpanded("expanded")).toBe(false);
   expect(projection.children.isFullyShown("fully-shown")).toBe(false);
-  expect(projection.children.isExpanded("collapsed")).toBe(true);
-});
-
-it("keeps an explicitly collapsed parent closed when a later descendant becomes active", () => {
-  const active = sessionRow("parent", { containsActiveDescendant: true });
-  project([active]);
-  expect(projection.children.toggle(active.key)).toEqual({ expanded: false });
-  project([sessionRow("parent")]);
-  project([active]);
-  expect(projection.children.isExpanded("parent")).toBe(false);
+  expect(projection.children.capture("collapsed")).toBeUndefined();
 });
 
 it("forgets expansion when a session disappears before returning", () => {

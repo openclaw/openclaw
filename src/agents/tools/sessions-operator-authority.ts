@@ -8,10 +8,7 @@ import {
 } from "../admitted-run-context.js";
 import { classifyToolAgainstSandboxToolPolicy } from "../sandbox/tool-policy.js";
 import { SANDBOX_DEFAULT_TOOL_ALLOW, type SandboxToolPolicy } from "../sandbox/types.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 export function captureSessionControlAuthority(prepared?: AdmittedRunOperatorAuthority) {
   const invocation = readOperatorToolGatewayAuthority();
@@ -41,7 +38,6 @@ export function captureSessionControlAuthority(prepared?: AdmittedRunOperatorAut
           }
         }),
       ),
-      captureGatewayToolCallerAssertion("sessions.patch"),
       composeSessionSourceAssertion([invocation?.assertCurrent], (assertSource) => {
         invocation?.signal.throwIfAborted();
         assertSource();

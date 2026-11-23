@@ -15,6 +15,8 @@ import { defaultRuntime } from "../../runtime.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { prepareResult, printResult } from "./progress.js";
 import {
+  assertGlobalUpdateOwner,
+  assertMacosGitForUnownedCheckout,
   parseUpdateTimeoutMs,
   UpdatePreMutationError,
   type UpdateCommandOptions,
@@ -36,6 +38,41 @@ import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 
 type Run = NonNullable<UpdateCommandOptions["run"]>;
+
+/** Keep release-client refusals read-only before delegation to the Gateway. */
+export async function assertReleaseUpdateAdmission(
+  params: Parameters<typeof assertGlobalUpdateOwner>[0] &
+    Pick<UpdateAdmissionReportParams, "opts" | "controlPlaneUpdateSentinelMeta">,
+): Promise<void> {
+  try {
+    await assertGlobalUpdateOwner(params);
+    if (params.installKind === "package") {
+      await assertMacosGitForUnownedCheckout(params);
+    }
+  } catch (error) {
+    if (!(error instanceof UpdatePreMutationError)) {
+      throw error;
+    }
+    return await reportUnreportedUpdateAdmissionOutcome(
+      new UnreportedUpdateAdmissionOutcome(
+        {
+          root: params.root,
+          installKind: params.installKind,
+          reason: error.reason,
+          message: error.message,
+          opts: params.opts,
+          controlPlaneUpdateSentinelMeta: params.controlPlaneUpdateSentinelMeta,
+        },
+        error.reason === "git-version-unsupported" ? undefined : { exitCode: 0 },
+      ),
+    );
+  }
+  if (params.opts.reapplyLocalOverrides) {
+    throw new Error(
+      "--reapply-local-overrides is not supported by prepared-release updates. Save your local dist edits, update without this flag, then reapply the overrides by hand. See https://docs.openclaw.ai/install/updating#local-packaged-code-overrides",
+    );
+  }
+}
 
 /** Report rejected read-only admission without creating a run or recovery diagnostics. */
 export async function withUpdateAdmissionReporting<T>(

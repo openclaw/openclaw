@@ -7,6 +7,6 @@ const animation = `@keyframes tabstrip-pulse {
 }`;
 
 export const panelTabStripCss = `${rules}\n${animation}`;
-export const nativePanelTabStripCss = `:is(openclaw-terminal-panel, openclaw-browser-panel, openclaw-desktop-panel) {
+export const nativePanelTabStripCss = `:is(openclaw-terminal-panel, openclaw-browser-panel, openclaw-desktop-panel, openclaw-link-reader-panel) {
 ${rules}
 }\n${animation}`;
