@@ -499,10 +499,21 @@ suite.define(() => {
         expect(await row.getByRole("button").getAttribute("aria-describedby")).toBe(
           await name.getAttribute("id"),
         );
-        const visible = await name.evaluate(
-          (element) => element.scrollWidth <= element.clientWidth + 1,
+        const identifier = row.locator(
+          index < 2 ? ".desktop-environment__qualifier" : ".desktop-environment__label",
         );
-        expect(visible).toBe(true);
+        expect(await identifier.getAttribute("title")).toBe(index < 2 ? device.id : expected);
+        const visibleEnd = await identifier.evaluate((element) => {
+          const text = element.querySelector("bdi")!.firstChild as Text;
+          const range = document.createRange();
+          range.selectNodeContents(text);
+          const lines = new Set(Array.from(range.getClientRects(), (rect) => rect.top));
+          range.setStart(text, text.length - 1);
+          const end = range.getBoundingClientRect();
+          const box = element.getBoundingClientRect();
+          return lines.size === 1 && end.left >= box.left - 1 && end.right <= box.right + 1;
+        });
+        expect(visibleEnd).toBe(true);
       }
       await rows.nth(2).getByRole("button").press("Enter");
       await expectObserve(gateway, devices[1]!.id);

@@ -368,9 +368,17 @@ function DesktopEnvironment(props: {
     <div class="desktop-environment">
       <div class="desktop-environment__details">
         <div id={nameId} class="desktop-environment__id">
-          {props.name}
+          <span
+            class="desktop-environment__label"
+            data-identifier={props.name === props.environment.id ? "true" : undefined}
+            title={props.name}
+          >
+            <bdi>{props.name}</bdi>
+          </span>
           {props.showId && props.name !== props.environment.id && (
-            <span class="desktop-environment__qualifier">{props.environment.id}</span>
+            <span class="desktop-environment__qualifier" title={props.environment.id}>
+              <bdi dir="ltr">{props.environment.id}</bdi>
+            </span>
           )}
         </div>
         <div class="desktop-environment__meta">
