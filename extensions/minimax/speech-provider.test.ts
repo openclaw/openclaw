@@ -46,6 +46,23 @@ describe("resolveConfig", () => {
     vi.unstubAllEnvs();
   });
 
+  it.each([
+    ["the portal host", {}, {}, "https://api.minimaxi.com"],
+    ["a TTS host", { baseUrl: "https://tts.example" }, {}, "https://tts.example"],
+    ["a Talk host", {}, { baseUrl: "https://talk.example" }, "https://talk.example"],
+  ])("uses %s for Talk", (_name, minimax, talkProviderConfig, baseUrl) => {
+    vi.stubEnv("MINIMAX_API_HOST", "");
+    const portal = { baseUrl: "https://api.minimaxi.com/anthropic", models: [] };
+    expect(
+      provider.resolveTalkConfig?.({
+        cfg: { models: { providers: { "minimax-portal": portal } } },
+        baseTtsConfig: { providers: { minimax } },
+        talkProviderConfig,
+        timeoutMs: 30_000,
+      }),
+    ).toMatchObject({ baseUrl });
+  });
+
   it("reads from providers.minimax in rawConfig", () => {
     const minimax = {
       baseUrl: "https://custom.api.com",
