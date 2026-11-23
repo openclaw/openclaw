@@ -71,10 +71,10 @@ If all three find nothing, say the docs do not cover it. Do not say it is imposs
 - When you cannot reach any docs, say so and mark the answer unverified.
 - When only the person can act, say so plainly. Examples are a Tailscale admin console change, an app store install, an OAuth browser sign-in, a BotFather token, and an OS permission prompt.
 
-## Hard rules
+## Config, access, and skill changes
 
-- Change config with `openclaw config set`, `openclaw config patch`, or `openclaw config unset`. Each one validates before it saves, and `--dry-run` checks without saving. After the person edits `openclaw.json` by hand, run `openclaw config validate`.
-- Diagnose read-only first with `openclaw doctor --lint`. Plain `openclaw doctor`, even with `--non-interactive`, can migrate state, so never run it to look. Run `openclaw doctor --fix` only after the person says yes.
-- Never print or echo a secret value. Report redacted state only. Store credentials as SecretRefs where supported (docs `gateway/secrets`).
-- When access is blocked, explain what blocked it and who can change it. Offer only verified steps that name the exact config key. Prefer scoped access, such as one sender on an allowlist, over opening access.
-- Skill and system prompt changes reach new sessions. Tell the person to start one with `/new`.
+- For config edits and validation, follow the config command guidance in `cli/config`.
+- For read-only Doctor diagnosis and repairs, follow [troubleshooting.md](references/troubleshooting.md) and `cli/doctor`.
+- For handling credentials and SecretRefs, see `gateway/secrets`.
+- For access restrictions and approvals, follow `tools/permission-modes` and `tools/exec-approvals`.
+- For skill changes, see `tools/skills#snapshots-and-refresh`. With watching enabled, an existing session can pick up changes to eligible file-backed skills on its next turn.

@@ -1,6 +1,6 @@
 # OpenClaw troubleshooting
 
-Find the symptom. Run the read-only checks first. Ask the person before any command that changes state.
+Find the symptom. Run the read-only checks first. If the person has already authorized a change, proceed within that scope and honor any runtime approvals. Ask only for authorization they have not already given. See [#157447](https://github.com/openclaw/openclaw/pull/157447).
 
 ## Start with an overview
 
@@ -12,26 +12,16 @@ Find the symptom. Run the read-only checks first. Ask the person before any comm
 
 1. Run `openclaw gateway status --deep`. Add `--require-rpc` to exit non-zero when the Gateway does not answer.
 2. Read the latest errors with `openclaw logs`.
-3. If the person agrees, run `openclaw gateway start` or `openclaw gateway restart`. Both change the service.
-4. If no service is installed, ask the person before `openclaw gateway install`. It installs and starts the service.
+3. If authorized, run `openclaw gateway start` or `openclaw gateway restart`. Both change the service.
+4. If no service is installed, `openclaw gateway install` installs and starts it. Run it only if the installation is authorized.
 
 Docs: `help/troubleshooting`, `gateway/troubleshooting`.
 
 ## A phone or node cannot pair
 
-1. Run `openclaw config get gateway.bind` and `openclaw config get gateway.tailscale.mode`.
-2. If `gateway.bind` is `loopback` (the default) and `gateway.tailscale.mode` is `off` (the default), only the Gateway host can reach the Gateway.
-3. If the person agrees to tailnet access, run `openclaw config set gateway.tailscale.mode serve`. Keep `gateway.bind` at `loopback`. Validation rejects `serve` or `funnel` unless the bind is loopback.
-4. In the default `hybrid` reload mode, the Gateway restarts by itself when a change needs it.
+Load the `node-connect` skill. Follow its live-route checks before proposing a configuration change. A loopback listener can still be reachable through an external reverse proxy or Tailscale Serve managed outside OpenClaw.
 
-Only the person can do these steps:
-
-- Install the `tailscale` CLI on the Gateway host and log in.
-- Enable Serve on the tailnet.
-- Allow the Gateway port in the tailnet ACLs or grants in the Tailscale admin console.
-- Install the OpenClaw app on the phone.
-
-For route, auth, and pairing failures after that, load the `node-connect` skill. `openclaw qr` is not read-only. It issues a short-lived bootstrap token. Docs: `gateway/tailscale`, `gateway/configuration/hot-reload`.
+Docs: `gateway/tailscale`.
 
 ## `openclaw doctor --fix` repeats the same repair
 
@@ -48,7 +38,7 @@ Docs: `cli/doctor`.
 2. Run `openclaw plugins inspect <id> --runtime --json`.
 3. Run `openclaw plugins doctor`. It checks loading and config without asking the running Gateway.
 4. Run `openclaw gateway status --deep --require-rpc` to confirm which Gateway runs.
-5. If `openclaw status --all` reports the plugin as `configured-unavailable`, fix or reinstall it. Then ask the person before you restart the Gateway.
+5. If `openclaw status --all` reports the plugin as `configured-unavailable`, fix or reinstall it. Restart the Gateway only if a restart is needed and authorized.
 
 Plugin commands apply to a running Gateway without a restart. A stopped Gateway loads the saved changes when it starts. Docs: `tools/plugin`.
 
@@ -56,9 +46,9 @@ Plugin commands apply to a running Gateway without a restart. A stopped Gateway 
 
 1. Run `openclaw skills check`.
 2. Run `openclaw skills info <name>`, or `openclaw skills list --verbose` for all skills.
-3. If the person agrees, install the missing binary or set the missing config. A missing API key comes from the person.
-4. If `openclaw doctor --fix` disabled the skill, run `openclaw config set skills.entries.<name>.enabled true` after the person agrees.
-5. Tell the person to start a new session with `/new`. A session keeps the skills it started with.
+3. If authorized, install the missing binary or set the missing config. A missing API key comes from the person.
+4. If `openclaw doctor --fix` disabled the skill, run `openclaw config set skills.entries.<name>.enabled true` if the change is authorized.
+5. With skill watching enabled, changes to eligible file-backed skills can appear on the next turn in an existing session. See `tools/skills#snapshots-and-refresh`.
 
 Docs: `tools/skills`.
 
@@ -76,6 +66,6 @@ Docs: `providers/index`, `concepts/models`, `cli/models`.
 1. Run `openclaw channels status`. It reads recorded state only.
 2. Add `--probe` only when you need live checks. It calls the channel provider.
 3. The person gets bot tokens, such as a Telegram token from BotFather.
-4. If the person agrees, approve a new sender with `openclaw pairing approve <channel> <CODE>`.
+4. If authorized, approve a new sender with `openclaw pairing approve <channel> <CODE>`.
 
 Docs: `channels/<name>`, `channels/pairing`.
