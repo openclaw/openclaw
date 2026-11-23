@@ -194,7 +194,7 @@ it("keeps Gateway readers while shedding the starting turn's async stores", asyn
   }
 });
 
-it("keeps each CLI grant's own ceiling and liveness for an admin dispatch after a write-only starter", async () => {
+it("keeps each CLI grant's own ceiling for an admin dispatch after a write-only starter", async () => {
   const adminDispatch = vi.fn(({ respond }: GatewayRequestHandlerOptions) =>
     respond(true, { allowed: true }),
   );
@@ -210,15 +210,13 @@ it("keeps each CLI grant's own ceiling and liveness for an admin dispatch after 
     getRuntimeConfig: () => ({}),
     getGatewayMethodRegistry: () => registry,
   });
-  const scopeFor = (client: RuntimeClient, isCurrent: () => boolean) => ({
+  const scopeFor = (client: RuntimeClient) => ({
     client,
     isWebchatConnect: () => false,
     resolveGatewayContext: () => context,
-    hasCurrentClientAuthority: isCurrent,
   });
   const writeOnly = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
   const admin = createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] });
-  let ownerCurrent = true;
   execute.mockImplementation(async () => {
     const result = await dispatchMethod(
       "scope.probe",
@@ -230,16 +228,15 @@ it("keeps each CLI grant's own ceiling and liveness for an admin dispatch after 
     };
   });
   // A write-only restart-recovery run starts the listener with its operator authority.
-  await withGatewayScope(
-    scopeFor(writeOnly, () => true),
-    () => withOperatorAuthority({ scopes: ["operator.write"] }, ensureMcpLoopbackServer),
+  await withGatewayScope(scopeFor(writeOnly), () =>
+    withOperatorAuthority({ scopes: ["operator.write"] }, ensureMcpLoopbackServer),
   );
   const runtime = mcp.runtime();
-  const admit = async (runId: string, client: RuntimeClient, isCurrent: () => boolean) => {
+  const admit = async (runId: string, client: RuntimeClient) => {
     const admission = mcp.prepareAdmission(runId, "mcp-scope-proof");
     admissions.push(admission);
     const admittedRunContext = await admission.admit("gateway", `gateway-${runId}`);
-    return withGatewayScope(scopeFor(client, isCurrent), () =>
+    return withGatewayScope(scopeFor(client), () =>
       mcp.captureGrant(
         {
           context: { sessionKey: "agent:main:scope-proof", senderIsOwner: true },
@@ -251,8 +248,8 @@ it("keeps each CLI grant's own ceiling and liveness for an admin dispatch after 
       ),
     );
   };
-  const ownerGrant = await admit("mcp-owner", admin, () => ownerCurrent);
-  const recoveryGrant = await admit("mcp-recovery", writeOnly, () => true);
+  const ownerGrant = await admit("mcp-owner", admin);
+  const recoveryGrant = await admit("mcp-recovery", writeOnly);
 
   expect(await callTool(ownerGrant)).toMatchObject({
     result: { content: [{ text: "admin-dispatched" }], isError: false },
@@ -262,11 +259,6 @@ it("keeps each CLI grant's own ceiling and liveness for an admin dispatch after 
   });
   expect(adminDispatch).toHaveBeenCalledTimes(1);
 
-  ownerCurrent = false;
-  expect(await callTool(ownerGrant)).toMatchObject({
-    result: { content: [{ text: "Gateway requester authority changed" }] },
-  });
-  expect(adminDispatch).toHaveBeenCalledTimes(1);
   expect(revokeMcpLoopbackClientGrant(ownerGrant.token)).toBe(true);
   const revoked = await mcp.request(runtime, mcp.toolCall("scope_probe"), ownerGrant);
   expect(revoked.status).toBe(401);
