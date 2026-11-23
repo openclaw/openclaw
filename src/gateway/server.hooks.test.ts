@@ -297,6 +297,38 @@ test("handles auth, wake, and agent flows", async ({ signal }) => {
   });
 });
 
+test("honors immediate wake overrides from mapped hook transforms", async () => {
+  await writeHookTransformModule(
+    "immediate-wake.mjs",
+    'export default () => ({ mode: "now", wakeMode: "now" });',
+  );
+  configureHooks({
+    mappings: [
+      {
+        match: { path: "immediate-wake" },
+        action: "wake",
+        textTemplate: "Immediate notification",
+        wakeMode: "next-heartbeat",
+        transform: { module: "immediate-wake.mjs" },
+      },
+      agentMapping("immediate-agent", { transform: { module: "immediate-wake.mjs" } }),
+    ],
+  });
+  await withHooksServer(async (post) => {
+    const wake = await post("immediate-wake", {});
+    expect.soft(await wake.json()).toMatchObject({ mode: "now", eventOutcome: "queued" });
+    expect(sessionEvents.enqueue).toHaveBeenCalledExactlyOnceWith(
+      "Immediate notification",
+      expect.objectContaining({ agentId: "main", source: "hook", createIfMissing: true }),
+    );
+    drainSystemEvents(resolveMainKey());
+
+    mockIsolatedRunOk();
+    await post("immediate-agent", { subject: "Immediate completion" });
+    expect(cronRunCall().job.wakeMode).toBe("now");
+  });
+});
+
 test("does not let mapped hook payload source claim gmail provenance", async () => {
   configureHooks({
     allowedSessionKeyPrefixes: ["hook:"],
