@@ -58,6 +58,19 @@ function setField<K extends keyof SessionEntry>(
   return true;
 }
 
+/** A manual provider switch must not reinterpret the previous provider's speed choice. */
+export function resetSessionFastModeForProviderSwitch(
+  entry: Pick<SessionEntry, "fastMode">,
+  previousProvider: string | undefined,
+  nextProvider: string,
+): boolean {
+  if (!previousProvider || previousProvider === nextProvider) {
+    return false;
+  }
+  delete entry.fastMode;
+  return true;
+}
+
 /** Applies a model/auth-profile override to a session entry and clears stale runtime fields. */
 export function applyModelOverrideToSessionEntry(params: {
   entry: SessionEntry;

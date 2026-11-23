@@ -51,6 +51,7 @@ import { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth
 import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
+  resetSessionFastModeForProviderSwitch,
 } from "../sessions/model-overrides.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 
@@ -267,7 +268,15 @@ export async function applySessionModelSelectionInternal(
     markLiveSwitchPending: params.markLiveSwitchPending,
   });
   const runtimeChange = applyModelRuntimeDirective(nextEntry, runtime);
-  const selectionChanged = modelChange.updated || runtimeChange.updated;
+  const resetFastMode = resetSessionFastModeForProviderSwitch(
+    nextEntry,
+    params.currentProvider,
+    request.provider,
+  );
+  const selectionChanged =
+    modelChange.updated ||
+    runtimeChange.updated ||
+    (resetFastMode && startingEntry.fastMode !== undefined);
   const placementService = resolveSessionWorkerPlacementContext().workerSessionPlacementService;
   if (nextEntry.sessionId && placementService && !placementService.prepareRuntimeRefresh) {
     return {
@@ -321,7 +330,9 @@ export async function applySessionModelSelectionInternal(
       allowCreate: params.allowCreate,
       reassertLiveModelSwitchPending: selectionChanged && nextEntry.liveModelSwitchPending === true,
       requireModelSelectionUnlocked: true,
-      touchedFields: SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
+      touchedFields: resetFastMode
+        ? [...SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS, "fastMode"]
+        : SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
       commitGuard: composeSessionSourceAssertion([
         createOperatorModelSelectionAssertion(operatorAuthority, selectedRef),
       ]),
@@ -344,6 +355,7 @@ export async function applySessionModelSelectionInternal(
     }
     if (
       persistence.status !== "current" ||
+      (resetFastMode && persistence.entry.fastMode !== undefined) ||
       !sessionModelOverrideChangesApplied({
         initial: initialEntry,
         next: nextEntry,
