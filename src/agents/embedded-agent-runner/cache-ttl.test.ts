@@ -107,11 +107,11 @@ describe("readLastCacheTtlTimestamp", () => {
 
   it("moves the transcript clock forward to a later prewarm of the same route", () => {
     const entries = [
+      { type: "message", id: "reply-1" },
       marker({ timestamp: 1_000, provider: "anthropic", modelId: "claude-sonnet-4-5" }),
     ];
-    const session = { getEntries: () => entries, getSessionId: () => "s1" };
+    const session = { getEntries: () => entries };
     const prewarm = {
-      sessionId: "s1",
       anchorEntryId: "reply-1",
       provider: "anthropic",
       model: "claude-sonnet-4-5",
@@ -119,16 +119,14 @@ describe("readLastCacheTtlTimestamp", () => {
       pings: 1,
     };
     expect(readLastCacheTtlTimestamp(session, target, prewarm)).toBe(5_000);
-    // Another route or transcript did not touch this cache.
+    // Another route, or a reply this transcript does not hold, did not touch this cache.
     expect(readLastCacheTtlTimestamp(session, target, { ...prewarm, model: "other" })).toBe(1_000);
-    expect(readLastCacheTtlTimestamp(session, target, { ...prewarm, sessionId: "s0" })).toBe(1_000);
+    expect(
+      readLastCacheTtlTimestamp(session, target, { ...prewarm, anchorEntryId: "reply-0" }),
+    ).toBe(1_000);
     // Without a transcript clock there is nothing to move.
     expect(
-      readLastCacheTtlTimestamp(
-        { getEntries: () => [], getSessionId: () => "s1" },
-        target,
-        prewarm,
-      ),
+      readLastCacheTtlTimestamp({ getEntries: () => [entries[0]] }, target, prewarm),
     ).toBeNull();
   });
 });

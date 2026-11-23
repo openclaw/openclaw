@@ -8,7 +8,7 @@ import { resolveProviderCacheTtlEligibility } from "../../plugins/provider-runti
 import type { ProviderCacheTtlEligibilityContext } from "../../plugins/provider-transport.types.js";
 import { isGooglePromptCacheEligible } from "./prompt-cache-retention.js";
 
-type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
+type CustomEntryLike = { id?: unknown; type?: unknown; customType?: unknown; data?: unknown };
 
 const CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
@@ -73,8 +73,8 @@ function matchesCacheTtlContext(
 
 /**
  * Last cache touch of this session on the route: the transcript marker, moved forward by the
- * session's recorded prewarm (`SessionEntry.promptCacheKeepWarm`) on the same transcript and
- * route. No marker means no clock, as before.
+ * session's recorded prewarm (`SessionEntry.promptCacheKeepWarm`) when the reply it warmed is
+ * in this transcript and the route matches. No marker means no clock, as before.
  */
 export function readLastCacheTtlTimestamp(
   sessionManager: unknown,
@@ -82,17 +82,14 @@ export function readLastCacheTtlTimestamp(
   keepWarm?: SessionEntry["promptCacheKeepWarm"],
 ): number | null {
   try {
-    const sm = sessionManager as {
-      getEntries?: () => CustomEntryLike[];
-      getSessionId?: () => string;
-    };
+    const sm = sessionManager as { getEntries?: () => CustomEntryLike[] };
+    const entries = sm?.getEntries ? sm.getEntries() : [];
     const touchedAt =
       keepWarm &&
-      sm?.getSessionId?.() === keepWarm.sessionId &&
-      matchesCacheTtlContext({ provider: keepWarm.provider, modelId: keepWarm.model }, context)
+      matchesCacheTtlContext({ provider: keepWarm.provider, modelId: keepWarm.model }, context) &&
+      entries.some((entry) => entry?.id === keepWarm.anchorEntryId)
         ? keepWarm.lastPingAt
         : 0;
-    const entries = sm?.getEntries ? sm.getEntries() : [];
     for (let i = entries.length - 1; i >= 0; i--) {
       const entry = entries[i];
       if (entry?.type !== "custom" || entry?.customType !== CACHE_TTL_CUSTOM_TYPE) {

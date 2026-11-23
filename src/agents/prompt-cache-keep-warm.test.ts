@@ -85,17 +85,12 @@ describe("resolvePromptCacheKeepWarmMaxPings", () => {
 
 describe("readStoredPromptCacheKeepWarm", () => {
   const record = {
-    sessionId: "s1",
     anchorEntryId: "reply-1",
     ...route,
     lastPingAt: 10_000,
     pings: 4,
   };
-  const entry = (lastInteractionAt: number, promptCacheKeepWarm = record) => ({
-    sessionId: "s1",
-    lastInteractionAt,
-    promptCacheKeepWarm,
-  });
+  const entry = (lastInteractionAt: number) => ({ lastInteractionAt, promptCacheKeepWarm: record });
 
   it("resumes a series after a restart from the row", () => {
     expect(readStoredPromptCacheKeepWarm(entry(5_000), "reply-1", route)).toEqual({
@@ -113,10 +108,7 @@ describe("readStoredPromptCacheKeepWarm", () => {
     expect(readStoredPromptCacheKeepWarm(entry(12_000), "reply-2", route).pings).toBe(0);
   });
 
-  it("ignores another transcript's or route's record", () => {
-    expect(
-      readStoredPromptCacheKeepWarm(entry(5_000, { ...record, sessionId: "s0" }), "reply-1", route),
-    ).toEqual({ pings: 0, pingedAt: 0 });
+  it("does not count another route's prewarm as a cache touch", () => {
     expect(
       readStoredPromptCacheKeepWarm(entry(5_000), "reply-1", { ...route, model: "other" }).pingedAt,
     ).toBe(0);

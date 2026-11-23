@@ -72,7 +72,6 @@ type Route = { provider: string; model: string };
 
 /** One idle stretch on one prefix, as read from the row and transcript at a wake. */
 type Series = {
-  sessionId: string;
   anchorEntryId: string;
   route: Route;
   ttlMs: number;
@@ -174,18 +173,16 @@ type Plan = { series: Series; touchAt: number; source: TranscriptEntryAnchor | u
 
 /**
  * What the row's prewarm record still says about this transcript. Its count stands until a
- * human turn after the last prewarm (an automation turn re-anchors the same idle stretch);
- * its time is a cache touch only for the tail reply and route it warmed.
+ * human turn after the last prewarm (an automation turn re-anchors the same idle stretch; a
+ * reset or new transcript starts with a human turn); its time is a cache touch only for the
+ * tail reply and route it warmed.
  */
 export function readStoredPromptCacheKeepWarm(
-  entry: Pick<SessionEntry, "sessionId" | "lastInteractionAt" | "promptCacheKeepWarm">,
+  entry: Pick<SessionEntry, "lastInteractionAt" | "promptCacheKeepWarm">,
   anchorEntryId: string,
   route: Route,
 ): { pings: number; pingedAt: number } {
-  const stored =
-    entry.promptCacheKeepWarm?.sessionId === entry.sessionId
-      ? entry.promptCacheKeepWarm
-      : undefined;
+  const stored = entry.promptCacheKeepWarm;
   if (!stored) {
     return { pings: 0, pingedAt: 0 };
   }
@@ -295,7 +292,6 @@ async function readPlan(
   }
   const { pings, pingedAt } = readStoredPromptCacheKeepWarm(entry, last.id, route);
   const series: Series = {
-    sessionId: entry.sessionId,
     anchorEntryId: last.id,
     route,
     ttlMs,
@@ -431,15 +427,8 @@ async function processCandidate(
     },
     {
       kind: "fields",
-      expected: {
-        sessionId: entry.sessionId,
-        ...(entry.lifecycleRevision !== undefined
-          ? { lifecycleRevision: entry.lifecycleRevision }
-          : {}),
-      },
       patch: {
         promptCacheKeepWarm: {
-          sessionId: series.sessionId,
           anchorEntryId: series.anchorEntryId,
           provider: series.route.provider,
           model: series.route.model,

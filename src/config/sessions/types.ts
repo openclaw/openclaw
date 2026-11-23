@@ -616,12 +616,11 @@ type SessionEntryCore = SessionEntryProvenance &
     compactionQualityDegraded?: true;
     memoryFlush?: MemoryFlushState;
     /**
-     * Last read-only prompt-cache prewarm of this transcript (`agents.defaults.promptCacheKeepWarm`).
-     * It keeps a keep-warm series and the cache-TTL pruning clock across Gateway restarts. Stale
-     * values are ignored by their readers: another `sessionId`, route or tail reply.
+     * Last read-only prompt-cache prewarm (`agents.defaults.promptCacheKeepWarm`). It keeps a
+     * keep-warm series and the cache-TTL pruning clock across Gateway restarts. Readers ignore it
+     * unless its reply is still in the transcript they read and the route matches.
      */
     promptCacheKeepWarm?: {
-      sessionId: string;
       /** Transcript entry of the provider reply whose cached prefix the pings keep warm. */
       anchorEntryId: string;
       provider: string;
