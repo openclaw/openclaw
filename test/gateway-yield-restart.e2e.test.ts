@@ -62,6 +62,9 @@ it
     let childKey: string | undefined;
     let childRunId: string | undefined;
     let childCalls = 0;
+    let childCallsAfterStop: number | undefined;
+    const childRequests: Array<{ phase: string; ordinal: number; execResult: boolean }> = [];
+    let lastExecOrdinal: number | undefined;
     let rootResumes = 0;
     let sequence = 0;
     let sentContinuation = false;
@@ -97,6 +100,9 @@ it
           const call = (name: string, args: object) => {
             const wireName = tools.includes(name) ? name : "dispatch_action";
             expect(tools).toContain(wireName);
+            if (name === "exec") {
+              lastExecOrdinal = ordinal;
+            }
             writeRestartToolCall(
               response,
               "yield",
@@ -107,6 +113,21 @@ it
           };
           if (text.includes(childPrompt) && !text.includes(rootPrompt)) {
             childCalls++;
+            childRequests.push({
+              phase,
+              ordinal,
+              execResult:
+                lastExecOrdinal !== undefined &&
+                input.some(
+                  (item) =>
+                    isRecord(item) &&
+                    item.type === "function_call_output" &&
+                    item.call_id === `call_yield_${lastExecOrdinal}`,
+                ),
+            });
+            if (childRequests.length > 16) {
+              childRequests.shift();
+            }
             if (mainTool) {
               if (text.includes("RUN_MAIN_LANE_TOOL")) {
                 call("exec", {
@@ -358,7 +379,9 @@ it
     let client: Pick<GatewayClient, "request" | "stopAndWait"> | undefined;
     let phase = "startup";
     onTestFailed(() => {
-      process.stderr.write(`yield restart phase=${phase}\n${instance.logs()}\n`);
+      process.stderr.write(
+        `yield restart ${JSON.stringify({ phase, childCallsAfterStop, childRequests })}\n${instance.logs()}\n`,
+      );
     });
     await runQaGatewayFixture(
       async () => {
@@ -446,8 +469,10 @@ it
             await client.request("agent.wait", { runId: root.runId, timeoutMs: 15_000 }),
           ).toMatchObject({ status: "ok" });
         }
-        phase = "restart";
+        phase = "shutdown";
         await instance.stopGateway();
+        childCallsAfterStop = childCalls;
+        phase = "stopped";
         await client.stopAndWait();
         client = undefined;
         if (mainTool) {
@@ -500,7 +525,9 @@ it
             root.runId,
           );
         }
+        phase = "restart startup";
         await instance.startGateway();
+        phase = "restart recovery";
         client = await connect();
         await vi.waitFor(
           () =>
