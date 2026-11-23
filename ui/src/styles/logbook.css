@@ -57,6 +57,30 @@
   overflow-wrap: break-word;
 }
 
+.logbook__device-details {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.logbook__device-details summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.logbook__device-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.logbook__device-details[open] summary svg:last-child {
+  transform: rotate(180deg);
+}
+
+.logbook__device-details code {
+  display: block;
+  padding: 4px 9px;
+  overflow-wrap: anywhere;
+}
+
 .logbook__chip svg {
   flex: none;
   width: 12px;

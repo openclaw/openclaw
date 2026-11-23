@@ -11,14 +11,19 @@ import {
 
 const suite = createControlUiE2eSuite({ name: "Logbook capture scope" });
 suite.define(() => {
-  it("keeps the fallback capture device ID clear of the tablet actions", async () => {
+  it.each([
+    [390, 844],
+    [820, 1180],
+    [1180, 820],
+    [1440, 900],
+  ])("keeps the fallback capture device ID inspectable at %i × %i", async (width, height) => {
     await suite.withPage(
-      { ...createControlUiE2eContextOptions(), viewport: { width: 820, height: 1180 } },
+      { ...createControlUiE2eContextOptions(), viewport: { width, height } },
       async ({ page }) => {
         const day = "2026-11-18";
         const nodeId = "7a94c6d0b81e52f34d0739ab96f2c1850de793a481b65f023c9a784e50b216df";
         await page.clock.setFixedTime(new Date(day + "T12:00:00Z"));
-        await installMockGateway(page, {
+        const gateway = await installMockGateway(page, {
           communityInvite: false,
           controlUiTabs: [
             { group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" },
@@ -29,30 +34,28 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl + "plugin?plugin=logbook&id=logbook");
-        const device = page.locator(".logbook__chip").filter({ hasText: nodeId });
+        const device = page.locator(".logbook__device-details summary");
         await device.waitFor();
         await page.evaluate(() => document.fonts.ready);
-        expect(
-          await device.evaluate((chip, id) => {
-            const walker = document.createTreeWalker(chip, NodeFilter.SHOW_TEXT);
-            while (walker.nextNode()) {
-              const node = walker.currentNode;
-              const end = node.textContent?.indexOf(id) ?? -1;
-              if (end < 0) continue;
-              const range = document.createRange();
-              range.setStart(node, end + id.length - 1);
-              range.setEnd(node, end + id.length);
-              const rect = range.getBoundingClientRect();
-              return (
-                rect.width > 0 &&
-                chip.contains(
-                  document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2),
-                )
-              );
-            }
-            return false;
-          }, nodeId),
-        ).toBe(true);
+        expect(await device.textContent()).toBe("7a94c6d0…50b216df");
+        expect(await device.evaluate((el) => el.getBoundingClientRect().height)).toBeLessThan(30);
+        await device.press("Enter");
+        const exact = page.locator(".logbook__device-details code");
+        expect(await exact.isVisible()).toBe(true);
+        expect(await exact.textContent()).toBe(nodeId);
+        expect(await exact.evaluate((el) => el.getBoundingClientRect().right <= innerWidth)).toBe(
+          true,
+        );
+        await device.press("Enter");
+        expect(await exact.isVisible()).toBe(false);
+        const paused = logbookStatus(day, { nodeId, todayCards: 0, capturePaused: true });
+        await gateway.setMethodResponse("logbook.capture.set", paused);
+        await gateway.setMethodResponse("logbook.status", paused);
+        await page.getByRole("button", { name: "Pause capture" }).press("Enter");
+        expect((await gateway.waitForRequest("logbook.capture.set")).params).toEqual({
+          paused: true,
+        });
+        await page.getByRole("button", { name: "Resume capture" }).waitFor();
       },
     );
   });
