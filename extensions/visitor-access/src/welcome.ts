@@ -131,7 +131,10 @@ export class VisitorWelcome {
       const inviter =
         invitation.invitedBy?.profileId === guest.profileId ? undefined : invitation.invitedBy;
       const label = inviter?.label?.replace(/\s+/gu, " ").trim() || undefined;
-      const greeting = name ? `Welcome to OpenClaw, ${name}.` : "Welcome to OpenClaw.";
+      const greeting = [
+        `Hi, I'm ${agentName(config, agentId)}.`,
+        name ? `Welcome to OpenClaw, ${name}.` : "Welcome to OpenClaw.",
+      ].join(" ");
       const access =
         invitation.expiresAt === null
           ? "Your guest access does not expire."
@@ -148,8 +151,10 @@ export class VisitorWelcome {
         invited,
         ...(note ? ["", `Note from ${label ?? "your inviter"}:`, note] : []),
         "",
-        `This is your own session with ${agentName(config, agentId)}. As a guest you can:`,
+        "This is your own session with me. We can talk through an idea or dig into something together. You can:",
         ...capabilities,
+        "",
+        "What brought you here?",
       ].join("\n");
       const start = greeting.length + 2;
       const message = {
@@ -244,14 +249,17 @@ function utcMinute(epochMs: number): string {
 /** Guest capabilities stated from the live guest role, never from fixed claims. */
 function guestCapabilities(config: OpenClawConfig, agentId: string): string[] {
   const role = guestRole(config);
-  const agents = role.agents === "*" ? undefined : role.agents.map((id) => agentName(config, id));
+  const agents =
+    role.agents === "*"
+      ? undefined
+      : role.agents.map((id) => (id === agentId ? "me" : agentName(config, id)));
   const lines = [
     agents
       ? `start your own sessions with ${agents.join(" or ")}`
       : "start your own sessions with any agent on this Gateway",
   ];
   if (role.sandbox === "required") {
-    lines.push(`have ${agentName(config, agentId)} work in a private sandbox`);
+    lines.push("ask me to work in a private sandbox (an isolated workspace)");
   }
   if (role.sessions.others === "view") {
     lines.push("read other people's sessions");
