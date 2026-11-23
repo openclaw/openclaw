@@ -18,7 +18,7 @@ export function sourceDomain(raw?: string) {
   return safe ? new URL(safe).hostname : "No external link";
 }
 
-type ReportSegment =
+export type ReportSegment =
   | { text: string; sourceId?: undefined }
   | { text: string; sourceId: string; startByte: number };
 

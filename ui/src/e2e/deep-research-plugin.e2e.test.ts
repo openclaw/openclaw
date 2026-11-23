@@ -118,15 +118,22 @@ suite.define(() => {
             title: `Canopy study ${index + 1}`,
           })),
         };
-        const marker = "[S8]";
-        first.report = `First finding ${marker}.
-
-Second finding ${marker}.`;
-        first.citations = [...first.report.matchAll(/\[S8\]/g)].map((match) => ({
-          sourceId: "S8",
-          startByte: match.index!,
-          endByte: match.index! + marker.length,
-        }));
+        const intro = "Café ☕. First finding ";
+        const beforePassage = `${intro}[S8].\n\nSecond finding: `;
+        const passage = "Urban shade\ncontinues here";
+        first.report = `${beforePassage}${passage}.`;
+        first.citations = [
+          {
+            sourceId: "S8",
+            startByte: Buffer.byteLength(intro),
+            endByte: Buffer.byteLength(intro) + 4,
+          },
+          {
+            sourceId: "S8",
+            startByte: Buffer.byteLength(beforePassage),
+            endByte: Buffer.byteLength(beforePassage + passage),
+          },
+        ];
         const second = { ...first, jobId: "b".repeat(64), title: "A different question" };
         const gateway = await installNativePluginMockGateway(page, {
           nativePlugins: [
@@ -151,7 +158,9 @@ Second finding ${marker}.`;
         const pane = page.locator(".deep-research-pane");
         const reportTab = pane.getByRole("button", { name: "Report", exact: true });
         const sourcesTab = pane.getByRole("button", { name: "Sources (8)", exact: true });
-        const cited = pane.getByRole("button", { name: "Source S8", exact: true }).last();
+        const references = pane.getByRole("button", { name: "Source S8", exact: true });
+        const cited = references.filter({ hasText: "Urban shade" });
+        const continuation = references.filter({ hasText: "continues here" });
         const source = pane.locator("details").last().locator("summary");
         const back = pane.getByRole("button", { name: "Back to citation" });
         await reportTab.tap();
@@ -167,14 +176,16 @@ Second finding ${marker}.`;
         ).toBe(true);
         await source.press("Shift+Tab");
         await pw(back).toBeFocused();
-        const reads = (await gateway.getRequests(method("read"))).length;
+        const refreshed = { ...first, revision: "refreshed", summary: "Report refreshed" };
+        await gateway.setMethodResponse(method("read"), read(refreshed));
         await gateway.emitGatewayEvent("plugin.deep-research.changed", {});
-        await expect
-          .poll(async () => (await gateway.getRequests(method("read"))).length)
-          .toBeGreaterThan(reads);
-        await pw(pane.getByRole("button", { name: "Refresh" })).toBeEnabled();
+        await pw(pane.getByText(refreshed.summary, { exact: true })).toBeVisible();
         await back.press("Enter");
         await pw(cited).toBeFocused();
+        await continuation.tap();
+        await pw(source).toBeFocused();
+        await back.press("Enter");
+        await pw(continuation).toBeFocused();
         await sourcesTab.tap();
         await pw(back).toHaveCount(0);
         await reportTab.tap();
@@ -196,6 +207,10 @@ Second finding ${marker}.`;
         const reportReturn = pane.getByRole("button", { name: "Back to report", exact: true });
         await pw(reportReturn).toBeVisible();
         await pw(back).toHaveCount(0);
+        const withoutSource = { ...revised, sources: revised.sources.slice(0, -1) };
+        await gateway.setMethodResponse(method("read"), read(withoutSource));
+        await gateway.emitGatewayEvent("plugin.deep-research.changed", {});
+        await pw(pane.getByRole("button", { name: "Sources (7)", exact: true })).toBeVisible();
         await reportReturn.tap();
         await pw(pane.getByRole("region", { name: "Research report" })).toBeFocused();
       },
