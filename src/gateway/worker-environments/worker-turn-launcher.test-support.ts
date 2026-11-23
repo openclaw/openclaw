@@ -17,6 +17,7 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
@@ -549,11 +550,16 @@ export function unusedEnvironments(): WorkerTurnEnvironmentService {
   };
 }
 
-export function turn(runId = "run-worker-turn", executionIdentity = false) {
+export function turn(
+  runId = "run-worker-turn",
+  executionIdentity = false,
+  plugins?: OpenClawConfig["plugins"],
+) {
   const config = {
     ...(executionIdentity
       ? { logging: { audit: { enabled: true, executionIdentity: true } } }
       : {}),
+    ...(plugins ? { plugins } : {}),
     models: {
       providers: {
         openai: {

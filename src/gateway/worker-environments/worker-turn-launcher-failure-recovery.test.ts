@@ -7,6 +7,7 @@ import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway
 import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
+import * as preparedModelRuntime from "../../agents/prepared-model-runtime.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import * as rootLogger from "../../logger.js";
 import type { SpawnResult } from "../../process/exec.js";
@@ -126,6 +127,9 @@ describe("worker turn launcher failure recovery", () => {
       assert(environment.bootstrapReceipt);
       environment.bootstrapReceipt.protocolFeatures.push(WORKER_TURN_ADMISSION_PROTOCOL_FEATURE);
       const recovered = vi.fn(() => failPendingWorkspace(loss));
+      // Observe the real preparation without replacing plugin discovery or acquisition.
+      const acquireRuntime = vi.spyOn(preparedModelRuntime, "acquireAgentRunPreparedModelRuntime");
+      onTestFinished(() => acquireRuntime.mockRestore());
       const provider = createLauncher({
         reconcileActivePlacement: recovered,
         environments: strictEnvironment({
@@ -156,10 +160,20 @@ describe("worker turn launcher failure recovery", () => {
             }),
         }),
       });
-      const attempt = executeTurn(provider, "node-loss", vi.fn());
+      const input = fx.turn("node-loss", false, { allow: ["openai"] });
+      const attempt = provider.executeTurn(runIdentity(input.runId), input, vi.fn());
       await expect(attempt).rejects.toBeInstanceOf(WorkerNodeLostError);
       expect(recovered).toHaveBeenCalledOnce();
       expectPlacement({ state: "failed", turnClaim: null });
+      // Unrelated startup plugins must not consume the transport recovery fixture's timeout.
+      const acquisition = acquireRuntime.mock.results[0];
+      assert(acquisition?.type === "return");
+      const { snapshot } = await acquisition.value;
+      expect(
+        snapshot.pluginRegistry?.plugins
+          .filter((plugin) => plugin.status === "loaded")
+          .map((plugin) => plugin.id),
+      ).toEqual(["openai"]);
     },
   );
 
