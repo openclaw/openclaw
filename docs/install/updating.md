@@ -175,6 +175,18 @@ found that earlier receipts did not prove what they claimed.
 Add a note here when a change alters a contract. A note about the in-place update
 flow names the shipped-updater contract or unmoved route that it serves.
 
+The resident launcher keeps the 20-minute combined trial ceiling while the new
+Gateway prepares state. Once the Gateway reports that boot state preparation has
+finished, it has up to 10 more minutes to finish starting, within that same
+ceiling. This includes agent database preparation and plugin startup, not just
+opening a listener. A measured healthy host took about 496 seconds to reach
+post-ready maintenance; the 600-second window leaves about 104 seconds of margin.
+Hangs before or during boot state preparation still use the full 20-minute limit.
+After rollback, the serving Gateway records why the update failed and names its
+running version. Another Update click starts a normal attempt; a failed version
+is not blocked. The resident launcher and candidate boot code must both contain
+this change; a candidate without the stage report keeps the original deadline.
+
 At Gateway start, a preparation lock whose owner is dead or has the new Gateway's
 PID is released after its run is recorded as failed with reason `interrupted`.
 A live preparation owner in another process is left untouched.
