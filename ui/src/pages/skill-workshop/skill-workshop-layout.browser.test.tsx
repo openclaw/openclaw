@@ -113,7 +113,7 @@ it("keeps the facts beside the reading column on a wide page and under it on a p
   }
 });
 
-it("keeps the complete draft file choice inside the reading column", async () => {
+it("keeps long draft file choices compact and opens the exact selected file", async () => {
   const { page } = await import("vitest/browser");
   await page.viewport(390, 844);
   const file =
@@ -161,12 +161,17 @@ it("keeps the complete draft file choice inside the reading column", async () =>
     expect(box.width).toBeGreaterThan(0);
     expect(column.right).toBeLessThanOrEqual(window.innerWidth);
     expect(box.right).toBeLessThanOrEqual(column.right + 1);
-    const label = document.createRange();
-    label.selectNodeContents(choice);
-    for (const line of label.getClientRects()) {
-      expect(line.right).toBeLessThanOrEqual(box.right + 1);
-      expect(line.bottom).toBeLessThanOrEqual(box.bottom + 1);
-    }
+    const instructions = mounted.getByRole("button", { name: "SKILL.md" });
+    expect(box.height).toBe(instructions.getBoundingClientRect().height);
+    expect(choice.getAttribute("title")).toBe(file);
+    expect(choice.scrollWidth).toBeGreaterThan(choice.clientWidth);
+    expect(getComputedStyle(choice).textOverflow).toBe("ellipsis");
+    expect(getComputedStyle(choice).direction).toBe("rtl");
+    instructions.click();
+    await waitForSolid(() => expect(mounted.getByText("Use the reminder.")).toBeTruthy());
+    expect(mounted.getByRole("button", { name: "SKILL.md" }).getAttribute("aria-current")).toBe(
+      "true",
+    );
   } finally {
     mounted.unmount();
   }
