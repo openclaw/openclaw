@@ -11,8 +11,9 @@ import { withSqliteSourceReadDatabase } from "./sqlite-source-handle.js";
 
 /**
  * Inspect in a dedicated child: closing a source in the caller can release its POSIX locks.
- * `preserveSourceArtifacts` reads only a complete WAL family, through a read-only index, so
- * no source byte changes; any other family returns undefined for the private snapshot owner.
+ * `preserveSourceArtifacts` reads a complete WAL family through a read-only index without
+ * changing database contents. SQLite may create an empty WAL if the last owner closes
+ * before the read; unavailable families return undefined for the private snapshot owner.
  */
 export function tryInspectSqliteReadOnlyInProcess<T>(
   pathname: string,

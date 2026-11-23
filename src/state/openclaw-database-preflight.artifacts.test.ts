@@ -380,14 +380,32 @@ it("falls back to the private snapshot when the last owner closes during a prese
   // after WAL-family classification but before SQLite opens its read-only index;
   // unconstrained child scheduling cannot guarantee that window in 300 reads.
   const open = nodeSqlite.openNodeSqliteDatabase;
+  let closedMain: Buffer | undefined;
   vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementationOnce((...args) => {
     owner.close();
     expect(fs.existsSync(`${file}-wal`)).toBe(false);
     expect(fs.existsSync(`${file}-shm`)).toBe(false);
+    closedMain = fs.readFileSync(file);
     return open(...args);
   });
   // Hand off to the private snapshot owner rather than admit or throw the open failure.
   expect(inspect()).toBeUndefined();
+  expect(fs.readFileSync(file)).toEqual(closedMain);
+  // SQLite may create an empty WAL before discovering that the read-only index
+  // disappeared. Do not require its absence or unchanged directory metadata.
+  if (fs.existsSync(`${file}-wal`)) {
+    expect(fs.statSync(`${file}-wal`).size).toBe(0);
+  }
+  expect(fs.existsSync(`${file}-shm`)).toBe(false);
+  expect(fs.existsSync(`${file}-journal`)).toBe(false);
+  using committed = nodeSqlite.openNodeSqliteDatabase(file, { readOnly: true });
+  expect(committed.prepare("PRAGMA user_version").get()).toEqual({
+    user_version: supportedVersions.agent,
+  });
+  expect(committed.prepare("SELECT hex(value) AS value FROM churn").all()).toEqual([
+    { value: "00" },
+  ]);
+  expect(fs.readFileSync(file)).toEqual(closedMain);
 }, 60_000);
 
 it("ignores uncommitted writer versions without ending the owning transactions", async () => {
