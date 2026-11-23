@@ -204,6 +204,26 @@ explicit key. Operator, WebChat, private subagent completion, requester-settle,
 and recovery turns share this session-boundary identity. The current client and
 reply delivery route do not select a different cache key.
 
+## Warm compaction requests
+
+Automatic compaction at a request boundary sends its summary request as the
+session's next normal request: the same system prompt, tools, `tool_choice`,
+output limit, thinking settings, cache key and every earlier message, plus one
+appended user item that asks for the summary. The provider therefore reads the
+prompt prefix it already cached instead of processing a separate summarizer
+request. The appended item is sent once and is never replayed, so the Anthropic
+and Chat Completions transports place no cache marker on it. The history markers
+are the ones the normal request would carry, so the request writes only what that
+request would have written, such as a new user message. On routes without prompt
+caching the request is still correct and costs ordinary input.
+
+This applies on every built-in route except the native ChatGPT sign-in route,
+which uses its provider checkpoint at the same boundary, and sessions whose
+compaction belongs to a context engine, a registered compaction provider, or a
+separate `agents.defaults.compaction.model`. Manual `/compact` and overflow
+recovery keep their existing paths. See
+[Compaction](/concepts/compaction#warm-request-compaction).
+
 ## Primary knobs
 
 ### Worker turns
