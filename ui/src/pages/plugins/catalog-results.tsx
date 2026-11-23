@@ -169,7 +169,7 @@ function CatalogCard(props: {
           <div class="plugin-catalog-row__text">
             <div class="plugin-card-title-row">
               <div class="plugin-catalog-row__name">
-                <h3>{props.plugin.catalog.name}</h3>
+                <h3 title={props.plugin.catalog.name}>{props.plugin.catalog.name}</h3>
                 {props.plugin.catalog.official ? renderPluginOfficialBadge() : undefined}
               </div>
               {renderPluginAuthor(props.plugin.catalog.author)}

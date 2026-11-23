@@ -353,12 +353,10 @@ it.each([263, 362])(
       for (const field of [name, publisher]) {
         const glyphs = document.createRange();
         glyphs.selectNodeContents(field);
-        const bounds = field.getBoundingClientRect();
-        for (const fragment of glyphs.getClientRects()) {
-          expect(fragment.left).toBeGreaterThanOrEqual(bounds.left - 1);
-          expect(fragment.right).toBeLessThanOrEqual(bounds.right + 1);
-          expect(fragment.bottom).toBeLessThanOrEqual(bounds.bottom + 1);
-        }
+        expect(new Set(Array.from(glyphs.getClientRects(), (fragment) => fragment.top)).size).toBe(
+          1,
+        );
+        expect(field.getBoundingClientRect().right).toBeLessThanOrEqual(text.right + 1);
       }
       expect(name.textContent).toBe(entry.catalog.name);
       expect(publisher.textContent).toBe("@" + entry.catalog.author);

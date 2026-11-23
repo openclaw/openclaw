@@ -2028,21 +2028,14 @@
     display: flex;
     align-items: baseline;
     gap: 6px;
+    min-width: 0;
     max-width: 100%;
-
-    h3 {
-      overflow: visible;
-      white-space: normal;
-      overflow-wrap: anywhere;
-    }
   }
 
   .plugin-card-title-row .plugin-card-author {
     flex: none;
     margin-inline-start: 0;
     font-size: calc(12.5px * var(--control-ui-text-scale));
-    white-space: normal;
-    overflow-wrap: anywhere;
   }
 
   .plugin-catalog-card__action {
