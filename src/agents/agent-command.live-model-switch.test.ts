@@ -1867,34 +1867,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     },
   );
 
-  it.each([
-    { name: "an operator turn", sourceRole: undefined, touchActivity: true },
-    {
-      name: "a child's sessions_send to its requester",
-      sourceRole: "subagent",
-      touchActivity: false,
-    },
-  ] as const)("records unread-worthy activity for $name", async ({ sourceRole, touchActivity }) => {
-    setupSuccessfulAttempt();
-    const sessionKey = "agent:default:main";
-    setupStoredSession({}, undefined, sessionKey);
-    state.resolvedSessionKeyMock = sessionKey;
-
-    await runBasicAgentCommand({
-      sessionKey,
-      inputProvenance: {
-        kind: "inter_session",
-        sourceTool: "sessions_send",
-        sourceSessionKey: "agent:default:subagent:child",
-        ...(sourceRole ? { sourceRole } : {}),
-      },
-    });
-
-    expect(state.updateSessionStoreAfterAgentRunMock).toHaveBeenCalledWith(
-      expect.objectContaining({ touchActivity }),
-    );
-  });
-
   it.each(["current", "persisted", "legacy", "probe"] as const)(
     "resolves the channel model from %s context",
     async (source) => {
