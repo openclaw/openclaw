@@ -49,6 +49,14 @@ export interface ReusableReleaseChildDependencies {
   token?: string;
 }
 
+export function validateReleaseWorkloadIdentity(
+  workflowSha: string,
+  request: Pick<ReusableReleaseChildRequest, "workflowSha" | "role"> & {
+    spec: Pick<import("../full-release-validation-policy.mjs").ReleaseChildSpec, "workflow">;
+  },
+  deps: Required<Pick<ReusableReleaseChildDependencies, "github">>,
+): Promise<void>;
+
 export function discoverReusableReleaseChild(
   request: ReusableReleaseChildRequest,
   deps?: ReusableReleaseChildDependencies,

@@ -859,7 +859,7 @@ process.stdout.write("##[error]checks-node-core-test-nondist-shard finished with
     );
     expect(recovered.run.conclusion).toBe("failure");
     expect(recovered.receipt.workloadConclusion).toBe("failure");
-    expect(recovered.receipt.jobs[0]?.conclusion).toBe(leafConclusion);
+    expect(recovered.receipt.jobs).toEqual(data.receipt.jobs);
     if (leafConclusion === "cancelled") {
       data.jobs[0]!.steps[0]!.name = "Setup";
       await expect(

@@ -1348,7 +1348,10 @@ function selectionFixture(
     releaseProfile: "stable",
     publicationArtifactSource: { runId: "51", runAttempt: 1 },
   });
-  const request = f.plan.candidateRequest!;
+  const request = f.plan.candidateRequest;
+  if (request?.schema !== "openclaw.full-release-candidate-request/v3") {
+    throw new Error("Expected the current candidate request fixture");
+  }
   const candidate = fullReleaseCandidateManifestFixture({
     ...request,
     upgradeSurvivorBaseline: request.upgradeBaseline,
@@ -1367,7 +1370,7 @@ function selectionFixture(
   const candidateBytes = makeStoredZip({
     "full-release-candidate.json": JSON.stringify(candidate),
   });
-  f.plan.candidate = buildFullReleaseCandidateBinding({
+  const candidateBinding = buildFullReleaseCandidateBinding({
     manifest: candidate,
     artifact: {
       id: "104",
@@ -1378,6 +1381,7 @@ function selectionFixture(
       runAttempt: "1",
     },
   });
+  f.plan.candidate = candidateBinding;
   f.plan.sha256 = releaseExecutionPlanSha256(f.plan);
   const qualified = structuredClone(retained.qualified);
   if (options.packageMismatch) {
@@ -1391,7 +1395,7 @@ function selectionFixture(
   for (const [stage, id, name] of [
     ["npm", "81", "Prepare release npm artifacts"],
     ["docker", "91", "Prepare release Docker artifacts"],
-  ]) {
+  ] as const) {
     const run = {
       ...f.parent,
       id: Number(id),
@@ -1483,7 +1487,7 @@ function selectionFixture(
     path: ".github/workflows/full-release-validation.yml",
   };
   const constituents = [
-    f.plan.candidate.evidenceArtifact,
+    candidateBinding.evidenceArtifact,
     candidate.package.artifact,
     candidate.sharedImage.artifact,
     candidate.prepublishPluginRegistry.artifact,
@@ -1553,7 +1557,7 @@ function selectionFixture(
           }))
         : [...(await f.client.getRunAttemptJobs(id)), ...jobs],
     getJobLog: async (id: number) => logs.get(id) ?? f.client.getJobLog(id),
-    getRunArtifacts: async (id: string) => artifacts.get(id) ?? [],
+    getRunArtifacts: (id: string) => artifacts.get(id) ?? [],
     getArtifact: async (id: string) => {
       const receipt = [...artifacts.values()].flat().find((entry) => String(entry.id) === id);
       if (receipt) {
@@ -1633,6 +1637,12 @@ async function selectedPublicationFixture() {
   expect(validateReleaseExecutionPlanArtifact(current.plan).candidate).toEqual(selected.candidate);
   const finalClient = {
     ...current.client,
+    selectPublicationArtifactSource(
+      selection: Parameters<typeof selectPublicationArtifactSource>[0],
+      selectionEnv: NodeJS.ProcessEnv,
+    ) {
+      return selectPublicationArtifactSource(selection, selectionEnv, this);
+    },
     readWorkloadIdentity: client.readWorkloadIdentity,
     getArtifact: client.getArtifact,
     getRunArtifacts: client.getRunArtifacts,
@@ -1720,7 +1730,7 @@ async function retainedRecoveryFixture(legacy = false) {
   const client = {
     repository: current.repository,
     getReleaseEvidenceClient: () => finalClient,
-    getRunAttempt: (id: string, attempt: number) =>
+    getRunAttempt: async (id: string, attempt: number) =>
       id === current.runId
         ? { ...current.parent, display_title: "Full Release Validation" }
         : finalClient.getRunAttempt(id, attempt),
@@ -1793,8 +1803,7 @@ describe("explicit publication artifact selection", () => {
       const { current, recoveryClient, finalClient } = await retainedRecoveryFixture();
       if (fault === "missing") {
         const getRunArtifacts = finalClient.getRunArtifacts;
-        finalClient.getRunArtifacts = async (id: string) =>
-          id === "81" ? [] : getRunArtifacts(id);
+        finalClient.getRunArtifacts = (id: string) => (id === "81" ? [] : getRunArtifacts(id));
       } else {
         const getJobLog = finalClient.getJobLog;
         finalClient.getJobLog = async (id: number) => {
