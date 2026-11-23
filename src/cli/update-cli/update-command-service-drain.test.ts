@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   managerTimeout: vi.fn(),
   legacyLock: vi.fn(),
   portUsage: vi.fn(),
+  processStat: vi.fn(),
 }));
 vi.mock("../../gateway/call-device-auth.js", async (actual) => ({
   ...(await actual<typeof import("../../gateway/call-device-auth.js")>()),
@@ -32,6 +33,10 @@ vi.mock("../../infra/gateway-lock-legacy.js", () => ({
   readLegacyGatewayLockIdentity: mocks.legacyLock,
 }));
 vi.mock("../../infra/ports-inspect.js", () => ({ inspectPortUsage: mocks.portUsage }));
+vi.mock("../../shared/pid-alive.js", async (actual) => ({
+  ...(await actual<typeof import("../../shared/pid-alive.js")>()),
+  readLinuxProcessStat: mocks.processStat,
+}));
 vi.mock("../../daemon/systemd-stop-policy.js", async (actual) => ({
   ...(await actual<typeof import("../../daemon/systemd-stop-policy.js")>()),
   readSystemdGatewayStopTimeout: mocks.managerTimeout,
@@ -102,6 +107,7 @@ beforeEach(() => {
   mocks.managerTimeout.mockReset().mockResolvedValue(330_000);
   mocks.legacyLock.mockReset().mockResolvedValue(undefined);
   mocks.portUsage.mockReset().mockResolvedValue(portUsage());
+  mocks.processStat.mockReset().mockReturnValue(null);
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -635,18 +641,52 @@ it.each(["authority", "boot"] as const)(
   },
 );
 
-// Runtime recovery reruns a Gateway whose Node fails admission under another
-// Node: systemd's main process is the launcher and its child serves (#202954).
+// The resident launcher (release installs, and runtime recovery of a Gateway whose
+// Node fails admission) is systemd's main process; its child serves (#202954).
+// When no listener names its process (no lsof or ss, or ss cannot see the owner),
+// the kernel parent of the reporting process still binds it to the service.
+const unattributedPort: PortUsage = {
+  port: 18789,
+  status: "busy",
+  listeners: [],
+  hints: [
+    "Port is in use but process details are unavailable (install lsof or run as an admin user).",
+  ],
+  errors: ["spawn lsof ENOENT", "spawn ss ENOENT"],
+};
 it.each([
-  { listener: { pid: 43, ppid: 42 }, explicit: false, stops: true },
-  { listener: { pid: 43, ppid: 42 }, explicit: true, stops: true },
-  { listener: { pid: 43, ppid: 7 }, explicit: false, stops: false },
-  { listener: { pid: 44, ppid: 42 }, explicit: false, stops: false },
+  { port: portUsage("busy", [{ pid: 43, ppid: 42 }]), parent: null, explicit: false, stops: true },
+  { port: portUsage("busy", [{ pid: 43, ppid: 42 }]), parent: null, explicit: true, stops: true },
+  { port: portUsage("busy", [{ pid: 43, ppid: 7 }]), parent: null, explicit: false, stops: false },
+  { port: portUsage("busy", [{ pid: 44, ppid: 42 }]), parent: null, explicit: false, stops: false },
+  // Attributed listener evidence is not overridden by the kernel parent.
+  { port: portUsage("busy", [{ pid: 44, ppid: 42 }]), parent: 42, explicit: false, stops: false },
+  { port: unattributedPort, parent: 42, explicit: false, stops: true },
+  { port: unattributedPort, parent: 42, explicit: true, stops: true },
+  { port: unattributedPort, parent: 7, explicit: false, stops: false },
+  { port: unattributedPort, parent: 7, explicit: true, stops: false },
+  { port: unattributedPort, parent: null, explicit: false, stops: false },
+  // ss lists the socket but cannot name its owner (another account's process).
+  {
+    port: portUsage("busy", [{ address: "127.0.0.1:18789" }]),
+    parent: 42,
+    explicit: false,
+    stops: true,
+  },
+  {
+    port: portUsage("busy", [{ address: "127.0.0.1:18789" }, { pid: 44, ppid: 42 }]),
+    parent: 42,
+    explicit: false,
+    stops: false,
+  },
 ])(
-  "drains a resident $listener.pid served under launcher $listener.ppid (explicit=$explicit, stops=$stops)",
-  async ({ listener, explicit, stops }) => {
+  "drains resident 43 under launcher 42: listeners $port.listeners, kernel parent $parent (explicit=$explicit, stops=$stops)",
+  async ({ port, parent, explicit, stops }) => {
     const f = fixture({ resident: { pid: 43 } });
-    mocks.portUsage.mockResolvedValue(portUsage("busy", [listener]));
+    mocks.portUsage.mockResolvedValue(port);
+    mocks.processStat.mockImplementation((pid: number) =>
+      pid === 43 && parent !== null ? { parentPid: parent, startedAt: 1 } : null,
+    );
     const running = explicit ? f.interrupt() : f.run();
     if (stops) {
       await expect(running).resolves.toBe("stopped");
@@ -657,7 +697,9 @@ it.each([
       );
       return;
     }
-    await expect(running).rejects.toThrow("Gateway process changed");
+    await expect(running).rejects.toThrow(
+      explicit ? "the resident process identity could not be verified" : "Gateway process changed",
+    );
     expect(f.stop).not.toHaveBeenCalled();
   },
 );

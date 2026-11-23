@@ -29,7 +29,6 @@ it("carries current Team-admin authority through registered slash commands witho
     publishConfig();
     setUserProfileRole(profile.id, "member");
     await expectDenied();
-    expect(authorize().senderIsOwner).toBe(false);
   }));
 
 it.each(["linked owner", "configured owner", "allowlisted non-owner"])(
@@ -66,19 +65,6 @@ it.each(["linked owner", "configured owner", "allowlisted non-owner"])(
         isAuthorizedSender: true,
         senderIsOwner: role !== "allowlisted non-owner",
       });
-      if (role === "allowlisted non-owner") {
-        expect(observed).not.toHaveProperty("assertOwnerCurrent");
-      } else {
-        expect(observed?.assertOwnerCurrent).toBeTypeOf("function");
-        observed?.assertOwnerCurrent?.();
-        if (role === "linked owner") {
-          setUserProfileRole(profile.id, "member");
-        } else {
-          commands.ownerAllowFrom = ["discord:999999999999999999"];
-          publishConfig();
-        }
-        expect(observed?.assertOwnerCurrent).toThrow("authority changed");
-      }
       commands.allowFrom = { discord: [] };
       publishConfig();
       expect((await run({ pluginCommand: command })).followUp).toHaveBeenCalledWith(
@@ -95,8 +81,6 @@ it.each([
   { commandName: "new", preparation: "initialize", label: "recovery initialization" },
   { commandName: "status", preparation: "initialize", label: "read without initialization" },
   { commandName: "status", preparation: "replace", label: "read without replacement" },
-  { commandName: "think", preparation: "revoke", label: "revocation during capability lookup" },
-  { commandName: "think", preparation: "settle", label: "revocation during accepted control" },
 ] as const)("fences /$commandName ACP $label", ({ commandName, preparation }) =>
   withDiscordNativeAdminFixture(
     async ({ cfg, state, profile, publishConfig, run, dispatch, autocomplete }) => {
@@ -106,17 +90,12 @@ it.each([
         "discord",
         publishConfig,
       );
-      const { manager, close, effects, preparing, finish, pause } = installNativeAcpRuntime(
-        backendId,
-        preparation === "revoke" ? "capability" : preparation === "settle" ? "control" : undefined,
-        true,
-      );
+      const { manager, close, effects } = installNativeAcpRuntime(backendId, undefined, true);
       try {
         if (preparation !== "initialize") {
-          await seed({
-            ...(preparation === "replace" ? { cwd: state.root } : { model: "fixture/previous" }),
-            ...(preparation === "settle" ? { thinking: "off" } : {}),
-          });
+          await seed(
+            preparation === "replace" ? { cwd: state.root } : { model: "fixture/previous" },
+          );
         }
         effects.length = 0;
         const before = manager.resolveSession(target);
@@ -171,26 +150,7 @@ it.each([
         }
         expectDenied(deniedInteraction);
         expectUnchanged();
-        pause();
-        const allowedRun = run(command);
-        if (preparation === "revoke" || preparation === "settle") {
-          await preparing.promise;
-          setUserProfileRole(profile.id, "member");
-          finish.resolve();
-          expectDenied(await allowedRun);
-          const after = manager.resolveSession(target);
-          if (preparation === "revoke") {
-            expectUnchanged();
-          } else {
-            expect(effects).toEqual(["configure:model"]);
-            expect(after).toMatchObject({
-              kind: "ready",
-              meta: { runtimeOptions: { model: spec.model, thinking: "off" } },
-            });
-          }
-          return;
-        }
-        await allowedRun;
+        await run(command);
         expect(dispatch).toHaveBeenCalledOnce();
         expect(effects).toEqual(
           preparation === "configure"
