@@ -132,6 +132,11 @@ export function ProviderCatalog(props: {
                   ),
                 ),
               );
+              const tailAt = () => {
+                const name = provider().label;
+                const end = name.lastIndexOf(" ");
+                return end > 0 && name.length - end <= 16 ? end : Math.max(0, name.length - 10);
+              };
               return (
                 <article
                   class="plugin-catalog-card plugin-catalog-row"
@@ -144,7 +149,10 @@ export function ProviderCatalog(props: {
                       </span>
                       <div class="plugin-catalog-row__text">
                         <div class="plugin-card-title-row">
-                          <h3>{provider().label}</h3>
+                          <h3 title={provider().label}>
+                            <span>{provider().label.slice(0, tailAt())}</span>
+                            <span>{provider().label.slice(tailAt())}</span>
+                          </h3>
                         </div>
                         <p class="installed-plugins-card__summary">{summary()}</p>
                       </div>

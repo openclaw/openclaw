@@ -596,6 +596,34 @@
   flex: none;
 }
 
+/* The icon belongs to the provider name, not the two-line name and method block. */
+[data-models-catalog-provider] .plugin-catalog-card__art {
+  align-self: start;
+  width: 24px;
+  height: 24px;
+}
+
+[data-models-catalog-provider] .model-providers__icon {
+  width: 20px;
+  height: 20px;
+}
+
+[data-models-catalog-provider] .plugin-card-title-row h3 {
+  display: flex;
+  min-width: 0;
+  white-space: pre;
+}
+
+[data-models-catalog-provider] h3 > :first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+[data-models-catalog-provider] h3 > :last-child {
+  flex: none;
+}
+
 /* "Show all" stays a quiet text action under the catalog rows. */
 .model-providers__catalog-more {
   justify-self: center;

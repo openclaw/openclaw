@@ -39,11 +39,16 @@ async function captureProviderProof(fileName: string, content: Locator): Promise
 }
 
 suite.define(() => {
-  it("keeps each keyboard-focused provider visible below search in a long catalog", async () => {
+  it.each([
+    [390, 844],
+    [820, 1180],
+    [1180, 820],
+    [1440, 900],
+  ])("keeps each keyboard-focused provider distinguishable at %i × %i", async (width, height) => {
     await suite.withPage(
       {
-        viewport: { width: 390, height: 844 },
-        isMobile: true,
+        viewport: { width, height },
+        isMobile: width === 390,
         hasTouch: true,
         reducedMotion: "reduce",
       },
@@ -57,7 +62,11 @@ suite.define(() => {
               {
                 id: id + "-login",
                 brandId: id,
-                groupLabel: "Studio " + (i + 1),
+                groupLabel:
+                  i < 2
+                    ? "Studio regional research and accessibility reporting — " +
+                      (i === 0 ? "North" : "South")
+                    : "Studio " + (i + 1),
                 label: "Sign in with account",
                 kind: "oauth",
                 featured: true,
@@ -65,7 +74,7 @@ suite.define(() => {
             ],
           };
         });
-        await installMockGateway(page, {
+        const gateway = await installMockGateway(page, {
           featureMethods: [
             ...defaultControlUiFeatureMethods,
             "models.authLogin",
@@ -76,27 +85,40 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl + "settings/model-providers?connect=1");
-        const catalog = page.locator(".model-provider-login--catalog");
-        const rows = catalog.locator("[data-models-login-provider]");
-        await rows.last().waitFor();
-        await rows.last().focus();
-        for (let i = providers.length - 2; i >= 0; i--) {
-          await page.keyboard.press("Shift+Tab");
-          const visible = await rows.nth(i).evaluate((el) => {
-            const r = el.getBoundingClientRect();
-            return (
-              el === document.activeElement &&
-              el.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2))
-            );
-          });
-          expect(visible).toBe(true);
+        const search = page.locator("[data-models-catalog-search]");
+        await search.fill("regional research");
+        const rows = page.locator("[data-models-catalog-provider]");
+        await expect.poll(() => rows.count()).toBe(2);
+        const first = rows.first().getByRole("button"),
+          second = rows.last().getByRole("button");
+        await second.focus();
+        await page.keyboard.press("Shift+Tab");
+        expect(await first.evaluate((el) => el === document.activeElement)).toBe(true);
+        await page.evaluate(() => document.fonts.ready);
+        for (const row of await rows.all()) {
+          const title = row.locator("h3"),
+            tail = title.locator("span").last();
+          expect(await title.getAttribute("title")).toBe(await title.textContent());
+          expect(
+            await tail.evaluate(
+              (el) =>
+                el.getBoundingClientRect().right <=
+                el.parentElement!.getBoundingClientRect().right + 1,
+            ),
+          ).toBe(true);
+          const icon = await row.locator(".model-providers__icon").boundingBox(),
+            box = await title.boundingBox();
+          expect(
+            Math.abs(icon!.y + icon!.height / 2 - box!.y - box!.height / 2),
+          ).toBeLessThanOrEqual(5);
         }
         await page.keyboard.press("Shift+Tab");
-        expect(
-          await catalog
-            .locator("[data-models-login-search]")
-            .evaluate((el) => el === document.activeElement),
-        ).toBe(true);
+        expect(await search.evaluate((el) => el === document.activeElement)).toBe(true);
+        await second.press("Enter");
+        const methods = page.locator(".model-provider-login");
+        await methods.getByRole("heading", { name: /South/ }).waitFor();
+        expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
+        expect(await gateway.getRequests("models.authSetApiKey")).toHaveLength(0);
       },
     );
   });
