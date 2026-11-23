@@ -1,3 +1,4 @@
+import { buildBootstrapContextForFiles } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it, onTestFinished } from "vitest";
 import {
   CODEX_INFERENCE_GENERATION_KEY,
@@ -104,19 +105,20 @@ const rejectsMetadata = (...args: Parameters<typeof readCodexInferenceMetadata>)
 describe("native inference context", () => {
   it("keeps additions after the existing prefix and resets after withdrawal or compaction", async () => {
     const { context, controller, prepare } = fixture();
-    const admit = (persona: string, requestLocal: string, profileId = "profile-one") =>
-      context.register({
+    const admit = (source: string, requestLocal: string, profileId = "profile-one") => {
+      const files = buildBootstrapContextForFiles(
+        [{ name: "SOUL.md", path: "SOUL.md", content: source, missing: false }],
+        {},
+      );
+      const persona = files[0]?.content ?? "";
+      return context.register({
         threadId: "root",
         text: [persona, requestLocal].filter(Boolean).join("\n\n"),
-        workspaceInstructions: {
-          persona,
-          requestLocal,
-          profileId,
-          files: persona ? [{ path: "SOUL.md", content: persona }] : [],
-        },
+        workspaceInstructions: { persona, requestLocal, profileId, files },
         signal: controller.signal,
         assertCurrent: () => {},
       });
+    };
     const base = developerMessage("native model policy");
     const user = (id: string) => ({
       type: "message",
@@ -124,7 +126,7 @@ describe("native inference context", () => {
       id,
       content: [{ type: "input_text", text: "Synthetic request" }],
     });
-    const first = await admit("first persona", "turn one");
+    const first = await admit("first persona \r\n", "turn one");
     const native = [recordedDeclaration, base, user("user-one")];
     const firstBody = incrementalRequest(first.generation, native);
     const projected = prepare(firstBody).body;
@@ -137,7 +139,7 @@ describe("native inference context", () => {
     expect(firstBody.input).toEqual(native);
 
     const nextUser = user("user-two");
-    const second = await admit("first persona\nextra instruction", "turn two");
+    const second = await admit("first persona \r\nextra instruction", "turn two");
     const secondBody = incrementalRequest(second.generation, [...native, nextUser]);
     const continued = prepare(secondBody).body;
     expect(continued.instructions).toBe("turn two");
@@ -170,21 +172,23 @@ describe("native inference context", () => {
     ).body;
     expect(compacted.input).toEqual([
       newDeclaration,
-      developerMessage("first persona\nextra instruction"),
+      developerMessage("first persona \r\nextra instruction"),
       user("user-three"),
     ]);
 
-    const replacement = await admit("second persona", "turn three", "profile-two");
+    const replacement = await admit("first persona revised", "turn three");
     expect(() => prepare(forkBody)).toThrow("workspace instructions changed");
-    expect(prepare(incrementalRequest(replacement.generation, native)).body.input).toEqual([
-      native[0],
-      developerMessage("second persona"),
-      ...native.slice(1),
-    ]);
-    const deselected = await admit("", "turn four");
+    expect(
+      prepare(incrementalRequest(replacement.generation, [newDeclaration, nextUser])).body.input,
+    ).toEqual([newDeclaration, developerMessage("first persona revised"), nextUser]);
+    const switched = await admit("second persona", "turn four", "profile-two");
+    expect(
+      prepare(incrementalRequest(switched.generation, [newDeclaration, nextUser])).body.input,
+    ).toEqual([newDeclaration, developerMessage("second persona"), nextUser]);
+    const deselected = await admit("", "turn five", "profile-two");
     expect(prepare(incrementalRequest(deselected.generation, native)).body).toMatchObject({
       input: native,
-      instructions: "turn four",
+      instructions: "turn five",
     });
   });
 

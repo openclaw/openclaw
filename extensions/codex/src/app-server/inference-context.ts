@@ -142,22 +142,30 @@ function getPersonaAddition(previous?: WorkspaceInstructions, current?: Workspac
     if (!next || next.personalUser !== file.personalUser) {
       return undefined;
     }
-    if (next.content !== file.content) {
-      // Never append updates to a selected personal overlay. Rebase without the old text.
-      if (file.personalUser || !next.content.startsWith(file.content + "\n")) {
-        return undefined;
-      }
-    }
   }
   for (const file of current.files) {
     const prior = previous.files.find((item) => item.path === file.path);
     if (file.content === prior?.content) {
       continue;
     }
+    // Never append updates to a selected personal overlay. Rebase without the old text.
     if (file.personalUser) {
       return undefined;
     }
-    const added = prior ? file.content.slice(prior.content.length + 1) : file.content;
+    let added = file.content;
+    if (prior) {
+      if (!file.content.startsWith(prior.content)) {
+        return undefined;
+      }
+      // Bootstrap snapshots trim trailing whitespace. A line append can expose
+      // the original spaces or CRLF between the old text and the new line.
+      const suffix = file.content.slice(prior.content.length);
+      const lineBreak = /^[^\S\n]*\n/u.exec(suffix);
+      if (!lineBreak) {
+        return undefined;
+      }
+      added = suffix.slice(lineBreak[0].length);
+    }
     if (added.trim()) {
       sections.push(`### ${file.path}\n\n${added}`);
     }
