@@ -5,6 +5,7 @@ import {
 } from "../agents/inherited-tool-deny.js";
 import { MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE } from "../auto-reply/reply/session-fork.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
+import { buildSessionParentLink } from "../config/sessions/session-entry-lineage.js";
 import {
   attributeDelegatedSessionCreator,
   inheritSessionCreationPolicy,
@@ -49,7 +50,7 @@ export function isStandaloneSessionCreate(
 }
 
 /** Inherit parent selection without replacing explicitly requested choices. */
-export function inheritSessionCreateParentFields(params: {
+function inheritSessionCreateParentFields(params: {
   parent: SessionEntry | undefined;
   newExplicitChild: boolean;
   newStandaloneRoot: boolean;
@@ -97,6 +98,39 @@ export function inheritSessionCreateParentFields(params: {
     inherited.chatType = "direct";
   }
   return inherited;
+}
+
+/** Project parent fields without storing a link to a standalone request's policy source. */
+export function projectSessionCreateParentFields(params: {
+  request: CreateGatewaySessionParams;
+  entry: InternalSessionEntry;
+  source: { key?: string; entry?: SessionEntry };
+  createdNewEntry: boolean;
+  standaloneRoot: boolean;
+  hasSpawnToolPolicy: boolean;
+}): Partial<InternalSessionEntry> {
+  const { request, entry, source, createdNewEntry } = params;
+  const standalone = request.creation?.standaloneCreation === true;
+  const storedParent = standalone ? undefined : source.key;
+  const parentSessionKey = storedParent ?? normalizeOptionalString(entry.parentSessionKey);
+  const newStandaloneRoot = createdNewEntry && params.standaloneRoot && !parentSessionKey;
+  return {
+    ...inheritSessionCreateParentFields({
+      parent: source.entry,
+      overrides: request,
+      newExplicitChild: createdNewEntry && Boolean(storedParent),
+      newStandaloneRoot,
+      newOperatorRoot: newStandaloneRoot && (request.creation?.via === "operator" || standalone),
+      selectedModel: entry.modelOverride,
+    }),
+    ...buildSessionParentLink({
+      parentSessionKey,
+      parent: storedParent ? source.entry : undefined,
+      captureSpawnAuthority:
+        createdNewEntry && request.creation?.via === "spawn" && params.hasSpawnToolPolicy,
+      requesterSenderIsOwner: request.creation?.requesterSenderIsOwner,
+    }),
+  };
 }
 
 /** Prepare the parent before lifecycle custody, while accepted input can still settle. */
@@ -210,7 +244,10 @@ export function resolveSessionCreateInheritance(params: {
 
 /** Project the trusted spawn policy only onto a genuinely new child row. */
 export function resolveSessionCreateSpawnPolicy(
-  params: Pick<CreateGatewaySessionParams, "spawnToolPolicy" | "preparedPermissionSelection">,
+  params: Pick<
+    CreateGatewaySessionParams,
+    "spawnToolPolicy" | "preparedPermissionSelection" | "creation"
+  >,
   parentSessionKey: string | undefined,
 ): Partial<SessionEntry> | undefined {
   if (!params.spawnToolPolicy || !parentSessionKey) {
@@ -222,7 +259,7 @@ export function resolveSessionCreateSpawnPolicy(
   const allow = normalizeInheritedToolAllowlist(params.spawnToolPolicy.allow);
   const deny = normalizeInheritedToolDenylist(params.spawnToolPolicy.deny);
   return {
-    spawnedBy: parentSessionKey,
+    ...(params.creation?.standaloneCreation ? {} : { spawnedBy: parentSessionKey }),
     ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
     inheritedToolPolicyVersion: 1,
     ...(params.spawnToolPolicy.delegatedToolPolicy

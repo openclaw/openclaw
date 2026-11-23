@@ -230,6 +230,8 @@ export type CreateGatewaySessionParams = {
     requesterProfileId?: string;
     /** Host-verified request credit, independent of operator role and ownership. */
     gitContributorProfileId?: string;
+    /** The source supplies policy, but is not the new session’s persisted parent. */
+    standaloneCreation?: true;
     /** Trusted owner status of the spawning invocation, never synthetic child launch authority. */
     requesterSenderIsOwner?: boolean;
     sandbox?: "required";

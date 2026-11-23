@@ -447,6 +447,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         !projectRoot &&
         !requestedCwd &&
         !requestedProjectGitUrl &&
+        !sessionCreation.standaloneCreation &&
         spawnRequesterSessionKey &&
         spawnRequesterSessionKey === parentSessionKey &&
         sessionCreation.actor?.type === "agent" &&
