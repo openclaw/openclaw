@@ -515,12 +515,11 @@ describe("Gateway startup lifetime", () => {
           vi.useRealTimers();
         }
         const failure = await startupOutcome;
-        if (processOwned || failCleanup) {
+        if (failCleanup) {
           expectStartupCleanupError(failure, startupError);
-          expect(formatErrorMessage(failure)).toContain(
-            processOwned ? "cleanup exceeded 5000ms" : cleanupError.message,
-          );
+          expect(formatErrorMessage(failure)).toContain(cleanupError.message);
         } else {
+          // Crossing diagnostic grace is not a cleanup failure once the required join settles.
           expect(failure).toBe(startupError);
         }
         expect(resumed).toHaveBeenCalledExactlyOnceWith({ closing: true, listening: true });
