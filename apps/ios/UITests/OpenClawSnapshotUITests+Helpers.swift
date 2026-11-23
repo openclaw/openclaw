@@ -690,13 +690,12 @@ extension OpenClawSnapshotUITests {
         // The side margin stays outside the menus and the transcript's interactive content.
         let outsideMenu = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.4))
         inlinePermissions.tap()
-        XCTAssertTrue(app.buttons["Default (inherited)"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Read-only"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Guarded"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Workspace"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Full"].waitForExistence(timeout: 3))
+        for mode in ["default", "read-only", "guarded", "workspace", "full"] {
+            XCTAssertTrue(app.buttons["chat-composer-permission-\(mode)"].waitForExistence(timeout: 3))
+        }
+        XCTAssertTrue(app.switches["chat-composer-web-search"].exists)
         self.attachScreenshot(named: "chat-composer-permissions")
-        outsideMenu.tap()
+        app.buttons["chat-composer-permissions-close"].tap()
         self.chatMessageInput(in: app).tap()
 
         inlineEffort.tap()

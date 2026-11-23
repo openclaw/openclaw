@@ -201,6 +201,22 @@ public enum OpenClawChatTheme {
     static var placeholder: Color {
         self.adaptiveColor(light: IOSPalette.lightTertiaryText, dark: IOSPalette.darkTertiaryText)
     }
+
+    /// A chat sheet's grouped background and its cards, in the app's warm neutrals.
+    static var sheetBackground: Color {
+        self.adaptiveColor(light: IOSPalette.lightMutedSurface, dark: IOSPalette.darkCanvas)
+    }
+
+    static var sheetCard: Color {
+        self.adaptiveColor(light: IOSPalette.lightRaisedSurface, dark: IOSPalette.darkRaisedSurface)
+    }
+
+    /// The app's switch green, so a switch in a chat sheet matches the ones in Settings.
+    static var switchOn: Color {
+        self.adaptiveColor(
+            light: UIColor(red: 22 / 255.0, green: 101 / 255.0, blue: 52 / 255.0, alpha: 1),
+            dark: UIColor(red: 95 / 255.0, green: 191 / 255.0, blue: 127 / 255.0, alpha: 1))
+    }
     #endif
 
     static var warning: Color {

@@ -133,6 +133,7 @@ struct OpenClawChatComposer: View {
     #if os(iOS)
     /// UIKit owns first responder; its bridge needs stored state, not an unbound SwiftUI FocusState.
     @State private var isFocused = false
+    @State var showsPermissionsSheet = false
     #else
     @FocusState private var isFocused: Bool
     #endif
@@ -208,6 +209,10 @@ struct OpenClawChatComposer: View {
                     OpenClawChatModelSignInSheet(context: context) { await self.viewModel.refreshModelSignIn() }
                 }
         }
+        #if os(iOS)
+        // Presented from here, not from the shield: the shield leaves the hierarchy while capabilities reload.
+        .chatComposerPermissionsSheet(isPresented: self.$showsPermissionsSheet, viewModel: self.viewModel)
+        #endif
         .onChange(of: self.presentationOwner) { _, _ in
             self.invalidateModelSignIn()
         }

@@ -8304,7 +8304,7 @@ struct ChatViewModelTests {
         #expect(await transport.sessionSettingsPatches().count == 1)
         #expect(await MainActor.run { !vm.composerCapabilityMutationDisabled })
         #expect(await MainActor.run { vm.composerPermissionMode } == .full)
-        #expect(await MainActor.run { vm.composerCapabilityNotice } == "New permissions apply to the next run.")
+        #expect(await MainActor.run { vm.composerCapabilityNotice } == "New permissions apply to the next reply.")
         await MainActor.run { vm.dismissComposerCapabilityNotice() }
         #expect(await MainActor.run { vm.composerCapabilityNotice } == nil)
 
@@ -8314,7 +8314,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { !vm.composerCapabilityMutationDisabled })
         #expect(await MainActor.run { !vm.composerWebSearchEnabled })
         #expect(await MainActor.run { vm.composerCapabilityNotice } ==
-            "Tool changes apply to the next run.")
+            "Tool changes apply to the next reply.")
         await MainActor.run { vm.dismissComposerCapabilityNotice() }
 
         await MainActor.run { vm.toggleComposerSkill(skill) }
@@ -8332,7 +8332,7 @@ struct ChatViewModelTests {
         #expect((patches[2].expectedToolOverrides ?? nil)?.webSearch == false)
         #expect((patches[2].toolOverrides ?? nil)?.skills["release"] == false)
         #expect(await MainActor.run { vm.composerCapabilityNotice } ==
-            "Tool changes apply to the next run.")
+            "Tool changes apply to the next reply.")
     }
 
     @Test func `restrictive composer patch serializes ahead of immediate send`() async throws {
@@ -8653,7 +8653,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { !vm.composerCapabilityMutationDisabled })
         #expect(await (transport.sessionSettingsPatches())[2].toolOverrides == .some(nil))
         #expect(await MainActor.run { vm.composerCapabilityNotice } ==
-            "Tool overrides will be cleared for the next run.")
+            "Tool overrides will be cleared for the next reply.")
     }
 
     @Test func `composer tool toggles use authoritative session denial instead of catalog baseline`() async throws {
@@ -8825,6 +8825,22 @@ struct ChatViewModelTests {
         #expect(await transport.sessionSettingsPatches()[2].toolOverrides == .some(nil))
     }
 
+    @Test func `a failed capability load names the access reason, not a save`() async {
+        let catalog = OpenClawChatComposerCapabilityCatalog(
+            sessionSettingsAvailable: true,
+            sessionSettingsCASAvailable: true)
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            composerCapabilityCatalog: catalog)
+        await vm.loadComposerCapabilities()
+
+        #expect(await MainActor.run { vm.composerCapabilityErrorMessage } != nil)
+        #expect(await MainActor.run { vm.composerPermissionMutationDisabledReason } ==
+            "You need write access to change permissions.")
+        #expect(await MainActor.run { vm.composerToolOverrideMutationDisabledReason } ==
+            "You need admin access to change tools.")
+    }
+
     @Test func `composer capability reasons name access and skill blockers`() async {
         let missing = OpenClawChatComposerSkill(
             key: "missing",
@@ -8860,11 +8876,9 @@ struct ChatViewModelTests {
         await vm.loadComposerCapabilities()
 
         #expect(await MainActor.run { vm.composerPermissionMutationDisabledReason } ==
-            "Changing permissions requires operator.write or operator.admin access.")
-        #expect(await MainActor.run { vm.composerPermissionDisabledReason(.full) } ==
-            "Full permission requires operator.admin access.")
+            "You need write access to change permissions.")
         #expect(await MainActor.run { vm.composerToolOverrideMutationDisabledReason } ==
-            "Session tool controls require operator.admin access.")
+            "You need admin access to change tools.")
         #expect(await MainActor.run { vm.composerWebSearchMutationDisabledReason } ==
             "Could not load Web Search.")
         #expect(await MainActor.run { vm.composerSkillDisabledReason(missing) } == "Missing dependencies.")
@@ -8947,7 +8961,7 @@ struct ChatViewModelTests {
         #expect(await transport.sessionSettingsPatches().isEmpty)
         #expect(await MainActor.run { !vm.composerWebSearchEnabled })
         #expect(await MainActor.run { vm.composerWebSearchMutationDisabledReason } ==
-            "Web Search is disabled in the Gateway configuration.")
+            "Web search is off in the Gateway configuration.")
     }
 
     @Test func `composer capability mutation rejects a replaced session before dispatch`() async throws {

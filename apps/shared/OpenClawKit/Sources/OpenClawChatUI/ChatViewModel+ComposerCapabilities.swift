@@ -73,6 +73,13 @@ extension OpenClawChatViewModel {
         self.composerCapabilityOwnerMatches && self.composerCapabilityState.phase == .loading
     }
 
+    /// A patch or reload is in flight. The catalog is empty while it reloads, so a view that stays
+    /// open across a change keeps its last state until this clears.
+    var composerCapabilitiesBusy: Bool {
+        self.composerCapabilityOwnerMatches &&
+            (self.composerCapabilityState.phase == .loading || self.composerCapabilityState.isMutating)
+    }
+
     var composerCapabilityMutationDisabled: Bool {
         !self.composerCapabilityOwnerMatches || !self.composerCapabilityControlsAvailable ||
             self.composerCapabilityState.phase != .loaded ||
@@ -126,61 +133,54 @@ extension OpenClawChatViewModel {
 
     var composerPermissionMutationDisabledReason: String? {
         if !self.composerCapabilityOwnerMatches || self.composerCapabilitiesLoading {
-            return String(localized: "Loading composer capabilities.")
+            return String(localized: "Loading session settings…")
         }
         if !self.composerCapabilityControlsAvailable {
-            return String(localized: "Session capability controls require a newer Gateway.")
+            return String(localized: "Update the Gateway to change session settings.")
         }
         if !self.composerCapabilityCatalog.sessionSettingsCASAvailable {
-            return String(localized: "Session permission controls require a newer Gateway.")
+            return String(localized: "Update the Gateway to change permissions.")
         }
-        if self.composerCapabilityMutationDisabled {
-            return String(localized: "Saving session settings.")
+        if self.composerCapabilityState.isMutating || self.isUpdatingSessionSettings {
+            return String(localized: "Saving session settings…")
         }
         if !self.composerCapabilityCatalog.permissionMutationAvailable {
-            return String(localized: "Changing permissions requires operator.write or operator.admin access.")
+            return String(localized: "You need write access to change permissions.")
         }
         return nil
     }
 
     var composerToolOverrideMutationDisabledReason: String? {
         if !self.composerCapabilityOwnerMatches || self.composerCapabilitiesLoading {
-            return String(localized: "Loading composer capabilities.")
+            return String(localized: "Loading session settings…")
         }
         if !self.composerCapabilityControlsAvailable {
-            return String(localized: "Session capability controls require a newer Gateway.")
+            return String(localized: "Update the Gateway to change session settings.")
         }
         if self.composerCapabilityCatalog.toolOverrideMutationRequiresGatewayUpgrade {
-            return String(localized: "Session tool controls require a newer Gateway.")
+            return String(localized: "Update the Gateway to change tools.")
         }
-        if self.composerCapabilityMutationDisabled {
-            return String(localized: "Saving session settings.")
+        if self.composerCapabilityState.isMutating || self.isUpdatingSessionSettings {
+            return String(localized: "Saving session settings…")
         }
         if !self.composerCapabilityCatalog.toolOverrideMutationAvailable {
-            return String(localized: "Session tool controls require operator.admin access.")
+            return String(localized: "You need admin access to change tools.")
         }
         return nil
     }
 
     var composerWebSearchMutationDisabledReason: String? {
         if self.composerCapabilitiesLoading {
-            return String(localized: "Loading composer capabilities.")
+            return String(localized: "Loading session settings…")
         }
         if !self.composerCapabilityCatalog.webSearchAvailable {
             return self
-                .composerCapabilityErrorMessage ?? String(localized: "Web Search is unavailable on this Gateway.")
+                .composerCapabilityErrorMessage ?? String(localized: "Web search is unavailable on this Gateway.")
         }
         if !self.composerCapabilityCatalog.webSearchBaseEnabled {
-            return String(localized: "Web Search is disabled in the Gateway configuration.")
+            return String(localized: "Web search is off in the Gateway configuration.")
         }
         return self.composerToolOverrideMutationDisabledReason
-    }
-
-    func composerPermissionDisabledReason(_ mode: OpenClawChatPermissionMode?) -> String? {
-        if mode == .full, !self.composerCapabilityCatalog.canSelectFullPermission {
-            return String(localized: "Full permission requires operator.admin access.")
-        }
-        return self.composerPermissionMutationDisabledReason
     }
 
     func composerSkillDisabledReason(_ skill: OpenClawChatComposerSkill) -> String? {
@@ -322,7 +322,7 @@ extension OpenClawChatViewModel {
         guard mode != self.composerPermissionMode else { return }
         self.performComposerCapabilityPatch(
             OpenClawChatSessionSettingsPatch(permissionMode: .some(mode)),
-            notice: String(localized: "New permissions apply to the next run."))
+            notice: Self.permissionsNextRunNotice)
     }
 
     func toggleComposerWebSearch() {
@@ -391,11 +391,15 @@ extension OpenClawChatViewModel {
     }
 
     static var toolOverridesClearedNextRunNotice: String {
-        String(localized: "Tool overrides will be cleared for the next run.")
+        String(localized: "Tool overrides will be cleared for the next reply.")
+    }
+
+    static var permissionsNextRunNotice: String {
+        String(localized: "New permissions apply to the next reply.")
     }
 
     static var toolChangesNextRunNotice: String {
-        String(localized: "Tool changes apply to the next run.")
+        String(localized: "Tool changes apply to the next reply.")
     }
 
     private func patchComposerToolOverrides(_ overrides: OpenClawChatSessionToolOverrides) {

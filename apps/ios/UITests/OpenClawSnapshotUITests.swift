@@ -797,7 +797,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
             XCTAssertLessThanOrEqual(inlineControl.frame.maxX, composerSurface.frame.maxX)
             XCTAssertLessThanOrEqual(abs(inlineControl.frame.midY - dictationButton.frame.midY), 1)
         }
-        XCTAssertEqual(inlinePermissions.value as? String, "Guarded")
+        XCTAssertEqual(inlinePermissions.value as? String, "Ask me")
         XCTAssertFalse((inlineModel.value as? String ?? "").isEmpty)
         XCTAssertFalse((inlineEffort.value as? String ?? "").isEmpty)
         self.assertNoHorizontalOverlap([

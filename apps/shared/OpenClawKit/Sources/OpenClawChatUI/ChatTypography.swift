@@ -109,6 +109,17 @@ enum OpenClawChatTypography {
         #endif
     }
 
+    #if os(iOS)
+    /// Sheets sit outside the dense transcript and keep the system text sizes, like Settings.
+    static func sheet(size: CGFloat, weight: Font.Weight = .regular, relativeTo textStyle: Font.TextStyle) -> Font {
+        Font.custom(self.bodyPostScriptName, size: size, relativeTo: textStyle).weight(weight)
+    }
+
+    static var sheetTitle: Font {
+        Font.custom(self.displayPostScriptName, size: 17, relativeTo: .headline).weight(.semibold)
+    }
+    #endif
+
     static func display(size: CGFloat, weight: Font.Weight, relativeTo textStyle: Font.TextStyle) -> Font {
         #if os(iOS)
         Font.custom(self.displayPostScriptName, size: self.scaled(size), relativeTo: textStyle).weight(weight)
