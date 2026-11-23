@@ -271,11 +271,8 @@ it.each(["warning", "error"] as const)(
       await entered.promise;
       const committed = await getUpdateRunAsync(run.runId, options);
       expect(committed?.status).toBe("succeeded");
-      expect(committed?.steps).toContainEqual(
-        expect.objectContaining({
-          step: "post-activation doctor inspections",
-          status: "in_progress",
-        }),
+      expect(committed?.steps).not.toContainEqual(
+        expect.objectContaining({ step: "post-activation doctor inspections" }),
       );
       expect(await readTrial()).toMatchObject({ reported: true });
     } finally {

@@ -24,8 +24,8 @@ it("retains post-activation advice after success without reopening the update", 
   const finished = finishUpdateRun(run.runId, { status: "succeeded" }, options);
   const step = "post-activation doctor inspections";
   recordUpdateRunStep(run.runId, { step, status: "in_progress" }, options);
-  expect(getUpdateRun(run.runId, options)?.steps).toContainEqual(
-    expect.objectContaining({ step, status: "in_progress" }),
+  expect(getUpdateRun(run.runId, options)?.steps).not.toContainEqual(
+    expect.objectContaining({ step }),
   );
   for (const name of [
     step,

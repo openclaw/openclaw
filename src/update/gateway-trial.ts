@@ -7,6 +7,7 @@ import {
   recordUpdateRunVerificationAsync,
 } from "../infra/update-run-write.async.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import {
@@ -17,6 +18,8 @@ import {
   writeTrial,
   type Trial,
 } from "./store.js";
+
+const log = createSubsystemLogger("gateway/update-run");
 
 // IPC also reaches Windows, where POSIX signals cannot request a graceful child stop.
 if (process.env.OPENCLAW_LAUNCHER_IPC === "1") {
@@ -62,53 +65,48 @@ export async function settleRunFromTrial(
   }
   if (outcome.status === "succeeded") {
     const step = "post-activation doctor inspections";
-    try {
-      // Publish success first. Advisory work never holds the trial handshake open.
-      await recordUpdateRunStepAsync(trial.runId, {
-        step,
-        status: "in_progress",
-        startedAtMs: Date.now(),
-      });
-      wakeUpdateRunWatcher(trial.runId);
-      void trackAsyncWork(async () => {
-        try {
-          const [{ runPostActivationInspections }, { resolvePostActivationInspectionCheckIds }] =
-            await Promise.all([
-              import("../cli/update-cli/update-command-post-activation-inspections.js"),
-              import("../flows/doctor-health-contributions.js"),
-            ]);
-          const root = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
-          if (!root) {
-            throw new Error("Running release root not found");
-          }
-          const result = await runPostActivationInspections({
-            root,
-            gatewayReady: true,
-            checkIds: await resolvePostActivationInspectionCheckIds(),
-            timeoutMs: 120_000,
-            result: { status: "ok", mode: "unknown", steps: [], durationMs: 0 },
-          });
-          for (const projected of result.steps.flatMap(updateRunStepsFromResultStep)) {
-            await recordUpdateRunStepAsync(trial.runId, projected);
-          }
-          if (result.steps.length === 0) {
-            await recordUpdateRunStepAsync(trial.runId, { step, status: "completed" });
-          }
-        } catch (error) {
-          // Keep incomplete advice visible without changing the committed outcome.
-          await recordUpdateRunStepAsync(trial.runId, {
-            step,
-            status: "completed",
-            detail: redactSensitiveText(`Doctor inspections did not complete: ${String(error)}`, {
-              mode: "tools",
-            }).slice(0, 2000),
-          }).catch(() => {});
+    // Advisory work never holds the committed trial handshake open.
+    void trackAsyncWork(async () => {
+      try {
+        const [{ runPostActivationInspections }, { resolvePostActivationInspectionCheckIds }] =
+          await Promise.all([
+            import("../cli/update-cli/update-command-post-activation-inspections.js"),
+            import("../flows/doctor-health-contributions.js"),
+          ]);
+        const root = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
+        if (!root) {
+          throw new Error("Running release root not found");
         }
+        const result = await runPostActivationInspections({
+          root,
+          gatewayReady: true,
+          checkIds: await resolvePostActivationInspectionCheckIds(),
+          timeoutMs: 120_000,
+          result: { status: "ok", mode: "unknown", steps: [], durationMs: 0 },
+        });
+        for (const projected of result.steps.flatMap(updateRunStepsFromResultStep)) {
+          await recordUpdateRunStepAsync(trial.runId, projected);
+        }
+        if (result.steps.length === 0) {
+          await recordUpdateRunStepAsync(trial.runId, { step, status: "completed" });
+        }
+      } catch (error) {
+        // Keep incomplete advice visible without changing the committed outcome.
+        await recordUpdateRunStepAsync(trial.runId, {
+          step,
+          status: "completed",
+          detail: redactSensitiveText(`Doctor inspections did not complete: ${String(error)}`, {
+            mode: "tools",
+          }).slice(0, 2000),
+        });
+      } finally {
         wakeUpdateRunWatcher(trial.runId);
-      }).catch(() => {});
-    } catch {
-      // Ledger failure must not undo an already committed update.
-    }
+      }
+    }).catch((error: unknown) => {
+      log.warn(
+        `update run ${trial.runId} inspection result could not be recorded: ${String(error)}`,
+      );
+    });
   }
   trial.reported = true;
   await writeTrial(trial, prefix);
