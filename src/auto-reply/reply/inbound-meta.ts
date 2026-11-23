@@ -437,11 +437,17 @@ export function buildCompactInboundUserContextPrefix(
   const historyLines: string[] = [];
   let removedSessionMessages = 0;
   let deduplicatedMessages = 0;
-  const addHistoryMessage = (value: unknown) => {
+  const addHistoryMessage = (value: unknown, nativeBodies?: ReadonlySet<string>) => {
     const id = readCompactMessageId(value);
     if (id?.startsWith("session:")) {
-      removedSessionMessages += 1;
-      return;
+      // A window row that only the session transcript holds (a delivered cron close-out, a
+      // message-tool source reply) is not replayed to the provider, so it stays. Only a row
+      // that repeats a native row of the same window is a duplicate.
+      const body = isRecord(value) ? sanitizeTranscriptText(value["body"], "body") : undefined;
+      if (!nativeBodies || (body && nativeBodies.has(body))) {
+        removedSessionMessages += 1;
+        return;
+      }
     }
     if (id && seenMessageIds.has(id)) {
       deduplicatedMessages += 1;
@@ -459,10 +465,23 @@ export function buildCompactInboundUserContextPrefix(
 
   for (const entry of ctx.ChannelStructuredContext ?? []) {
     if (isChatWindowStructuredContext(entry)) {
-      for (const message of Array.isArray(entry.payload["messages"])
+      const windowMessages: unknown[] = Array.isArray(entry.payload["messages"])
         ? entry.payload["messages"]
-        : []) {
-        addHistoryMessage(message);
+        : [];
+      const nativeBodies = new Set<string>();
+      for (const message of windowMessages) {
+        if (readCompactMessageId(message)?.startsWith("session:")) {
+          continue;
+        }
+        const body = isRecord(message)
+          ? sanitizeTranscriptText(message["body"], "body")
+          : undefined;
+        if (body) {
+          nativeBodies.add(body);
+        }
+      }
+      for (const message of windowMessages) {
+        addHistoryMessage(message, nativeBodies);
       }
       continue;
     }
