@@ -212,10 +212,10 @@ output limit, thinking settings, cache key and every earlier message, plus one
 appended user item that asks for the summary. The provider therefore reads the
 prompt prefix it already cached instead of processing a separate summarizer
 request. The appended item is sent once and is never replayed, so the Anthropic
-and Chat Completions transports place no cache marker on it; the history
-markers stay where the previous request put them, and the request normally
-writes no new cache entry. On routes without prompt caching the request is still
-correct and costs ordinary input.
+and Chat Completions transports place no cache marker on it. The history markers
+are the ones the normal request would carry, so the request writes only what that
+request would have written, such as a new user message. On routes without prompt
+caching the request is still correct and costs ordinary input.
 
 This applies on every built-in route except the native ChatGPT sign-in route,
 which uses its provider checkpoint at the same boundary, and sessions whose
