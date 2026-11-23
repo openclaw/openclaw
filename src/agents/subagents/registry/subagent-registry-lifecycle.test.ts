@@ -255,6 +255,7 @@ vi.mock("../../../runtime.js", () => ({
   },
 }));
 
+// mock-isolation: Lifecycle cases decide each announce outcome without running real delivery.
 vi.mock("../announce/subagent-announce.js", () => ({
   captureSubagentCompletionReply: vi.fn(async () => undefined),
   runSubagentAnnounceFlow: vi.fn(async () => "undelivered" as const),

@@ -262,9 +262,17 @@ export function isDeliveryTerminalForRequesterSettle(
   );
 }
 
-/** Older builds parked undelivered results; the sweeper settles each one into history once. */
-export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">): boolean {
-  return entry.delivery?.status === "suspended";
+/**
+ * Older builds parked undelivered results as suspended or failed; nothing writes either now.
+ * The sweeper settles each one into requester history once.
+ */
+export function isDeliverySuspended(
+  entry: Pick<SubagentRunRecord, "delivery" | "expectsCompletionMessage">,
+): boolean {
+  return (
+    entry.delivery?.status === "suspended" ||
+    (entry.delivery?.status === "failed" && entry.expectsCompletionMessage !== false)
+  );
 }
 
 export function getDeliveryLastError(entry: SubagentRunRecord): string | undefined {

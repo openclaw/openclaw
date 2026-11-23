@@ -21,7 +21,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("applies session-run retention after six minutes", async () => {
+it("settles a legacy failed result into requester history before session-run retention", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const settledAt = Date.now() - 6 * 60_000;
     const entry = createArchivedSubagentSweeperRun({
@@ -29,15 +29,22 @@ it("applies session-run retention after six minutes", async () => {
       cleanup: "keep",
       archiveAtMs: undefined,
       cleanupCompletedAt: settledAt,
-      delivery: {
-        status: "failed",
-        lastError: "completion agent failed",
-      },
+      expectsCompletionMessage: true,
+      // Older builds left an undelivered result like this after their retry gave up.
+      delivery: { status: "failed", lastError: "completion agent failed" },
     });
     const { sweeper, runs, callGateway } = createSubagentSweeperHarness(entry);
-    await sweeper.sweepOnce();
-    expect(runs.has(entry.runId)).toBe(false);
-    expect(callGateway).not.toHaveBeenCalled();
+    const settle = vi
+      .spyOn(completionStore, "settleSubagentCompletionInHistory")
+      .mockResolvedValue(false);
+    try {
+      await sweeper.sweepOnce();
+      expect(settle.mock.calls.map(([{ subagent }]) => subagent.runId)).toEqual([entry.runId]);
+      expect(runs.has(entry.runId)).toBe(true);
+      expect(callGateway).not.toHaveBeenCalled();
+    } finally {
+      settle.mockRestore();
+    }
   });
 });
 
