@@ -36,9 +36,6 @@ export function hasOperatorToolGatewayAuthority(): boolean {
   );
   if (scopedOperator) {
     scope?.signal?.throwIfAborted();
-    if (scope?.hasCurrentClientAuthority?.() === false) {
-      throw new Error("Gateway caller authority is no longer active.");
-    }
   }
   return Boolean(admitted || hasOperatorToolSource(direct) || scopedOperator);
 }
@@ -112,11 +109,8 @@ export async function captureAmbientGatewayOperatorAuthority(params: {
   try {
     assertInvocationCurrent?.();
     scope?.signal?.throwIfAborted();
-    if (
-      scope?.hasCurrentClientAuthority?.() === false ||
-      (scope?.resolveGatewayContext && scope.resolveGatewayContext() !== context)
-    ) {
-      throw new Error("Gateway caller authority is no longer active.");
+    if (scope?.resolveGatewayContext && scope.resolveGatewayContext() !== context) {
+      throw new Error("Gateway request context changed. Start a new request.");
     }
     capturedOperator?.authority.assertCurrent();
     return { ...capturedOperator, assertInvocationCurrent };

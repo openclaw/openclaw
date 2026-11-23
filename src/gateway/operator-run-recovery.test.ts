@@ -659,9 +659,7 @@ describe("scheduled authenticated operator source", () => {
               await expect(fixture.restore()).rejects.toThrow();
             }
           } else {
-            await expect(caller.capture()).rejects.toThrow(
-              "Gateway caller authority is no longer active",
-            );
+            await expect(caller.capture()).rejects.toThrow("Gateway request could not start");
           }
         } finally {
           source?.release();

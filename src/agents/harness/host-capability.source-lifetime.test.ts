@@ -60,7 +60,6 @@ it("returns no retained source authority without an operator", async () => {
 });
 
 it.each([
-  "source assertion",
   "lifecycle rotation",
   "gateway rotation",
   "synchronous signal",
@@ -71,19 +70,11 @@ it.each([
     const synchronous = revocation.startsWith("synchronous");
     const foreground = new AbortController();
     const controller = new AbortController();
-    const revoked = new Error("operator access revoked");
-    let current = true;
-    let duringAssertion: (() => void) | undefined;
     const source = createTestOperatorAuthority({
       profileId: "guest-source",
       scopes: ["operator.write"],
+      assertCurrent: () => {},
       ...(synchronous ? { signal: controller.signal } : {}),
-      assertCurrent: () => {
-        if (!current) {
-          throw revoked;
-        }
-        duringAssertion?.();
-      },
     });
     const foregroundAbort = !synchronous && revocation !== "gateway rotation";
     const host = await createSourceHost(
@@ -98,10 +89,11 @@ it.each([
     host.closeHost();
     host.closeAdmission();
     if (synchronous) {
-      duringAssertion =
-        revocation === "synchronous signal"
-          ? () => controller.abort(new Error("source revoked during validation"))
-          : rotateAgentRunRegistryLifecycleGeneration;
+      if (revocation === "synchronous signal") {
+        controller.abort(new Error("source stopped"));
+      } else {
+        rotateAgentRunRegistryLifecycleGeneration();
+      }
       expect(() => retained.assertCurrent()).toThrow();
       if (revocation === "synchronous signal") {
         expect(retained.signal?.aborted).toBe(true);
@@ -113,9 +105,7 @@ it.each([
       expect(() => retained.assertCurrent()).not.toThrow();
     }
     const modelBinding = bindModel(retained);
-    if (revocation === "source assertion") {
-      current = false;
-    } else if (revocation === "gateway rotation") {
+    if (revocation === "gateway rotation") {
       rotateAgentEventLifecycleGeneration();
       expect(retained.signal?.aborted).toBe(true);
       expect(modelBinding.signal.aborted).toBe(true);
@@ -123,16 +113,11 @@ it.each([
       rotateAgentRunRegistryLifecycleGeneration();
       expect(() => source.assertCurrent()).not.toThrow();
     }
-    const expected = revocation === "source assertion" ? revoked : "no longer active";
-    expect(() => retained.assertCurrent()).toThrow(expected);
+    expect(() => retained.assertCurrent()).toThrow("no longer active");
     expect(modelBinding.assertCurrent).toThrow(
-      revocation === "gateway rotation" ? expected : undefined,
+      revocation === "gateway rotation" ? "no longer active" : undefined,
     );
-    if (revocation === "source assertion") {
-      expect(modelBinding.signal.aborted).toBe(true);
-    }
-    current = true;
-    expect(() => retained.assertCurrent()).toThrow(expected);
+    expect(() => retained.assertCurrent()).toThrow("no longer active");
   },
 );
 

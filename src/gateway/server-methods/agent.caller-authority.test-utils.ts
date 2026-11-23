@@ -188,7 +188,7 @@ describe("gateway agent caller authority custody", () => {
                           context,
                           hasCurrentClientAuthority: caller.isCurrent,
                         }),
-                      ).rejects.toThrow("Gateway caller authority is no longer active");
+                      ).rejects.toThrow("Gateway request could not start");
                     }
                   }),
                 { inheritRequestScope: false },

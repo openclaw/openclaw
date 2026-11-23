@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 import {
   captureOpenAIResponsesCompaction,
   requestPreparedOpenAIResponsesCompaction,
@@ -158,21 +159,25 @@ export function createRequestBoundaryCompaction(params: {
     const outgoing = preflight
       ? (preflight.compactionReplay ?? preflight)
       : resolveProjectedRequestPressure({ ...budget, context, previousRequest: requestAnchor });
-    // The boundary sends the complete window plus its summary request. Leave room
-    // for the next tool result instead of waiting for the reserve-based limit.
+    // The boundary sends the complete window plus its summary request. It starts at
+    // the client threshold ratio, capped by the reserve-based prompt budget, so every
+    // route compacts at the same occupancy and the summary request keeps headroom.
     const contextTokens = Math.min(
       params.contextTokenBudget,
       model.contextWindow ?? params.contextTokenBudget,
     );
     const softTriggerTokens = Math.min(
       outgoing.promptBudgetBeforeReserve,
-      Math.max(1, Math.floor(contextTokens * 0.9)),
+      Math.max(
+        1,
+        resolveCompactionThreshold({ contextWindowTokens: contextTokens, reserveTokensFloor: 0 }),
+      ),
     );
     if (outgoing.estimatedPromptTokens < softTriggerTokens) {
       return undefined;
     }
     const fallback = (reason: string) => {
-      // The early V2 trigger must not move the client's compaction threshold, and a
+      // The V2 trigger must not move the client's compaction threshold, and a
       // soft fallback waits for a boundary where the tool batch can continue. The
       // text variant replaces the client threshold, so its maintenance is due.
       const maintenanceDue = !native || outgoing.route !== "fits";

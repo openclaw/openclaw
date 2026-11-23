@@ -41,7 +41,7 @@ entries and stages an owned user service's launcher definition with a backup.
 System-owned service definitions keep their forwarding entries.
 
 Plugin maintenance failures are warnings, not failed core updates. Retry them
-with `openclaw plugins update`. An already-current installation still maintains
+with `openclaw plugins update --all`. An already-current installation still maintains
 plugins and restarts only when needed and restart was requested.
 
 Older installed updaters still perform their first hop with their shipped update
@@ -125,6 +125,20 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    in the background. The same update details receive their results without a page
    reload. Only warning and error findings add advice; inspections do not delay
    completion, fail the update, or trigger rollback.
+8. The serving release updates installed plugins in the background, then reloads
+   changed plugins through the existing runtime lifecycle. Plugin failures appear
+   in the same update details and warning count; they never fail the core update
+   or trigger rollback.
+
+Before a startup migration replaces a SQLite database, the swap owner drains its
+readers and retires the retained admission descriptors for both the live database
+and its prepared replacement. Closing SQLite alone does not release those identity
+descriptors, and Windows refuses the rename while either file is still open.
+The candidate must contain this fix; the launcher needs no change. The swap still
+preserves the previous files for rollback and admits the replacement as a new file.
+On Windows, the task supervisor starts without the Gateway's config or state
+bootstrap. Only its child opens the state databases; the waiting supervisor must
+not retain a connection or admission descriptor across a release switch.
 
 Rules for update changes:
 
@@ -179,6 +193,27 @@ found that earlier receipts did not prove what they claimed.
 Add a note here when a change alters a contract. A note about the in-place update
 flow names the shipped-updater contract or unmoved route that it serves.
 
+Prepared-release plugin maintenance normally runs after the candidate has migrated
+state and reported ready. Downgrades retain pre-trial maintenance because older
+releases do not have the post-ready job and do not migrate the schema forward.
+The previous Gateway no longer owns the shared state during post-ready maintenance,
+and plugin downloads and installs do not extend the restart outage. Core success
+is recorded first; final plugin results arrive later in the open details. The
+existing trial record carries explicit `--accept-capabilities` consent; an absent
+field does not approve new capabilities. Maintenance has a ten-minute command
+budget. A Gateway stop during that work can leave no plugin result for that
+update. Published compatible plugin versions load at the next Gateway start;
+`openclaw plugins update --all` finishes the rest. The next core update also retries.
+Core rollback does not wait for plugin maintenance, and a candidate that fails
+before readiness does not update plugins on an upgrade. The candidate must contain
+the post-ready maintenance call; the installed updater must contain the version-aware
+pre-restart decision. A Git target with the same version string but an older revision
+does not receive plugin maintenance; run `openclaw plugins update --all` in that case.
+The internal maintenance-command result carries exact install-record hashes into
+the existing batch reload check. A record changed again before reload is refused.
+Removed records do not hot-unload a running plugin; the existing metadata-only
+removal policy takes effect at the next Gateway start.
+
 Candidate Doctor's retirement-only pass retains deferred advisory inspection
 selectors in its result. Shipped v2026.11.7 and v2026.11.10-beta.1 updaters read
 the last Doctor result and run those inspections after Gateway readiness; a
@@ -196,6 +231,13 @@ changing the recorded successful outcome.
 The installed updater must contain preparation-step reporting changes; the
 restored release must contain rollback reporting changes. No schema or protocol
 change is needed.
+
+Candidate Doctor accepts a read-only reader that finishes rebuilding a checkpointed
+SQLite WAL index between update capture and source verification. Rebuilding that
+index can clear its commit counter and checksum without changing the database.
+Migration admission still checks physical identity and committed content, so an
+outside write remains refused. The candidate must contain this repair; shipped
+first-hop updaters need no change.
 
 At Gateway start, a preparation lock whose owner is dead or has the new Gateway's
 PID is released after its run is recorded as failed with reason `interrupted`.

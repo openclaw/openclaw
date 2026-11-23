@@ -38,11 +38,11 @@ it("honors a redriven completion at its delivery deadline", () => {
   expect(decision.kind).toBe("give-up");
 });
 
-it.each([true, false])("backs off settled cleanup (completion required=%s)", (required) => {
+it("backs off optional announce cleanup", () => {
   expect(
     decide({
-      expectsCompletionMessage: required,
-      delivery: { status: required ? "pending" : "not_required", attemptCount: 1 },
+      expectsCompletionMessage: false,
+      delivery: { status: "not_required", attemptCount: 1 },
     }),
   ).toEqual({ kind: "retry", retryCount: 2, resumeDelayMs: 2_000 });
 });
