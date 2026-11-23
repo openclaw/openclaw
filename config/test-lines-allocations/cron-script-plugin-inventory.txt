@@ -1,0 +1,2 @@
+# Real plugin loading and script execution replace the mocked inventory counter.
+48

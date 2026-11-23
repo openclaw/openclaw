@@ -68,7 +68,7 @@ import {
   isPluginRegistryRecordSetAdmitting,
 } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import { captureActivePluginRegistryVersion } from "../plugins/runtime.js";
+import { getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -210,7 +210,7 @@ async function prepareTriggerRuntime(
     agentId,
     workspaceDir: workspaceDirRaw,
   });
-  const workspace = await ensureAgentWorkspace({
+  const { dir: workspaceDir } = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentDefaults.skipBootstrap,
     skipOptionalBootstrapFiles: agentDefaults.skipOptionalBootstrapFiles,
@@ -218,7 +218,6 @@ async function prepareTriggerRuntime(
     guard: { assertHost: () => preparationSignal?.throwIfAborted() },
   });
   preparationSignal?.throwIfAborted();
-  const workspaceDir = workspace.dir;
   const pluginRegistry = loadPluginRegistry({
     config,
     workspaceDir,
@@ -411,15 +410,14 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
   ): Promise<{ runtime: CachedTriggerRuntime; release: () => void }> => {
     const agentId = resolveTriggerAgentId(request.runtimeConfig, request.agentId);
     // Per-plugin replacement publishes a new registry without retiring the
-    // retained one, so isCurrent() alone cannot see inventory growth. Fold the
-    // active installation version into the request-shape key: any publication
-    // invalidates cached preparations even when the request is unchanged.
+    // retained one; fold the active installation version into the request
+    // shape so any publication invalidates unchanged cached preparations.
     const invalidationKey = JSON.stringify([
       request.toolsAllow ?? null,
       request.scheduledToolPolicy ?? null,
       request.callerOrigin ?? null,
       request.execTarget ?? null,
-      captureActivePluginRegistryVersion(),
+      getActivePluginRegistryVersion(),
     ]);
     const cached = runtimeCache.get(request.jobId);
     if (
@@ -534,7 +532,9 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         params.deliveryAttemptFence,
       );
       const request = {
-        runtimeConfig: selectLiveRuntimeConfig(deps.config),
+        runtimeConfig:
+          deps.resolveGatewayContext?.()?.getRuntimeConfig?.() ??
+          selectLiveRuntimeConfig(deps.config),
         jobId: params.job.id,
         agentId: params.job.agentId,
         toolsAllow: params.job.payload.toolsAllow,
