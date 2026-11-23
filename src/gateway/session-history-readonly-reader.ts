@@ -201,7 +201,12 @@ export function createReadonlySessionHistoryReader(
       ),
     readArtifactSummaries: async (query: Extract<SessionArtifactReadQuery, { kind: "list" }>) => {
       const { readArtifactSummariesFromProjection } = await import("./session-artifact-read.js");
-      return readSnapshot((projection) => readArtifactSummariesFromProjection(projection, query));
+      const projectAttachment = query.includeAttachments
+        ? (await import("./session-file-attachment-message.js")).sessionFileAttachmentMessage
+        : undefined;
+      return readSnapshot((projection) =>
+        readArtifactSummariesFromProjection(projection, query, projectAttachment),
+      );
     },
     readReactions: () =>
       readDatabase((database) => {
