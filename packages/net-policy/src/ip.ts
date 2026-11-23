@@ -5,9 +5,6 @@ import ipaddr from "ipaddr.js";
 export type ParsedIpAddress = ipaddr.IPv4 | ipaddr.IPv6;
 type Ipv4Range = ReturnType<ipaddr.IPv4["range"]>;
 type Ipv6Range = ReturnType<ipaddr.IPv6["range"]>;
-// Older co-installed ipaddr.js declarations can merge with 2.4's ambient module and
-// omit newer runtime ranges from ReturnType, so preserve the policy's known labels.
-type BlockedIpv6Range = Ipv6Range | "benchmarking" | "discard" | "orchid2";
 type Ipv6Hextets = readonly [number, number, number, number, number, number, number, number];
 
 // ipaddr.js guarantees 8 hextets; throw loudly on an impossible shape instead of
@@ -47,16 +44,16 @@ const PRIVATE_OR_LOOPBACK_IPV4_RANGES = new Set<Ipv4Range>([
   "carrierGradeNat",
 ]);
 
-const BLOCKED_IPV6_SPECIAL_USE_RANGES = new Set<BlockedIpv6Range>([
-  "unspecified",
-  "loopback",
-  "linkLocal",
-  "uniqueLocal",
-  "multicast",
-  "reserved",
-  "benchmarking",
-  "discard",
-  "orchid2",
+// Default-deny: ipaddr.js names each special-use IPv6 range, so every range it
+// adds stays blocked. Only global unicast passes, plus IPv4 transition forms
+// whose embedded IPv4 callers check through `extractEmbeddedIpv4FromIpv6`.
+const UNBLOCKED_IPV6_RANGES = new Set<Ipv6Range>([
+  "unicast",
+  "ipv4Mapped",
+  "rfc6145",
+  "rfc6052",
+  "6to4",
+  "teredo",
 ]);
 const RFC2544_BENCHMARK_PREFIX: [ipaddr.IPv4, number] = [ipaddr.IPv4.parse("198.18.0.0"), 15];
 const CLOUD_METADATA_IP_ADDRESSES = new Set(["100.100.100.200", "fd00:ec2::254"]);
@@ -249,9 +246,7 @@ export function isBlockedSpecialUseIpv6Address(
   address: ipaddr.IPv6,
   options: Ipv6SpecialUseBlockOptions = {},
 ): boolean {
-  // ipaddr.js returns "discard" at runtime for 100::/64, but its published
-  // TypeScript IPv6Range union omits that literal.
-  const range = address.range() as BlockedIpv6Range;
+  const range = address.range();
   if (isRfc8215Nat64LocalUseAddress(address)) {
     // RFC8215 local-use NAT64 can carry deployment-specific more-specific
     // prefixes, so the literal alone cannot prove which IPv4 bits a router
@@ -269,12 +264,7 @@ export function isBlockedSpecialUseIpv6Address(
     // `allowRfc2544BenchmarkRange` for the IPv4 side (#74351).
     return false;
   }
-  if (BLOCKED_IPV6_SPECIAL_USE_RANGES.has(range)) {
-    return true;
-  }
-  // ipaddr.js does not classify deprecated site-local fec0::/10 as private.
-  const [firstPart] = expectIpv6Hextets(address.parts);
-  return (firstPart & 0xffc0) === 0xfec0;
+  return !UNBLOCKED_IPV6_RANGES.has(range);
 }
 
 /** True for canonical IPv4 literals in RFC 1918 private ranges. */
