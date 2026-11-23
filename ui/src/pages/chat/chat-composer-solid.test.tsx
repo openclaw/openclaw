@@ -444,9 +444,9 @@ it("updates composer text on a live locale change without disturbing an IME draf
     expect(view.query(".chat-controls__permission-menu")?.matches(":popover-open")).toBe(true),
   );
   const textarea = view.textarea();
-  const heading = view.query(".chat-controls__permission-heading")!;
+  const heading = view.query(".oc-menu-heading__label")!;
   const learnMore = () => view.query(".chat-controls__permission-learn-more")?.textContent?.trim();
-  expect(learnMore()).toBe("Learn more");
+  await waitForSolid(() => expect(learnMore()).toBe("Learn more"));
   expect(textarea.placeholder).toBe("Message Locale fixture");
 
   textarea.focus();
@@ -461,7 +461,7 @@ it("updates composer text on a live locale change without disturbing an IME draf
 
   expect(learnMore()).toBe("Mehr erfahren");
   expect(textarea.placeholder).toBe("Nachricht an Locale fixture");
-  expect(view.query(".chat-controls__permission-heading")).toBe(heading);
+  expect(view.query(".oc-menu-heading__label")).toBe(heading);
   expect(view.textarea()).toBe(textarea);
   expect(document.activeElement).toBe(textarea);
   expect(textarea.value).toBe("Unfinished 日本語");

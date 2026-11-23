@@ -1,3 +1,4 @@
+import { mergeCatalog } from "../lib/merge-catalog.ts";
 import type { TranslationMap } from "../lib/types.ts";
 import { registerChatSessionEnglish } from "./en-chat-session.ts";
 import { registerSessionPeopleEnglish } from "./en-session-people.ts";
@@ -5,6 +6,14 @@ import { en } from "./en.ts";
 
 const catalog = {
   chat: {
+    composer: {
+      inviteLevelsStale: "Reselect @{name} to refresh available invitation levels.",
+      inviteAs: "Invite {name} to this session as",
+      inviteLevel: "Invitation level for {name}",
+      inviteRead: "Can read",
+      inviteSuggest: "Can suggest",
+      inviteSend: "Can send",
+    },
     sessionSuggestions: {
       sendNow: "Send {author}'s suggestion now",
       queue: "Queue {author}'s suggestion",
@@ -64,8 +73,7 @@ export const registerChatSessionSharingEnglish = Object.assign(
   () => {
     registerChatSessionEnglish();
     registerSessionPeopleEnglish();
-    Object.assign(en.chat.sessionSharing, catalog.chat.sessionSharing);
-    Object.assign(en.chat.sessionSuggestions, catalog.chat.sessionSuggestions);
+    mergeCatalog(en, catalog);
   },
   { catalog },
 );

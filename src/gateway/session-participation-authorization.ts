@@ -12,14 +12,15 @@ import {
   type ParticipationCeiling,
 } from "../agents/participation-ceiling.js";
 import { intersectSessionPermissionModes } from "../agents/session-permission-mode.js";
-import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
+import {
+  captureSessionParticipationSource,
+  retainSessionParticipation,
+} from "../config/sessions/session-participation-source.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveUserPath } from "../utils.js";
 import { readParticipantPublicationAuthority } from "./github-publication-participation.js";
 import { requiresSessionParticipation } from "./method-scopes.js";
 import { resolveAuthenticatedPersonalGatewayProfileId } from "./server-methods/gateway-personal-caller.js";
 import { isParticipantPublicationMethod } from "./session-method-policy.js";
-import { retainSessionParticipation } from "./session-participation-lifetime.js";
 import type {
   AuthorizedSessionMutationTarget,
   SessionMutationAuthorizationParams,
@@ -159,21 +160,14 @@ export function bindSessionParticipationSource(
   let source = ceiling.source;
   if (!source) {
     const target = readTarget();
-    const creatorProfileId = sessionCreatorProfileId(target?.entry.createdActor);
-    if (!target || !creatorProfileId || target.canonicalKey !== ceiling.sessionKey) {
+    if (!target) {
       throw new Error("Participation requires its original session incarnation and creator.");
     }
-    source = {
-      agentId: target.agentId,
-      sessionId: target.entry.sessionId,
-      lifecycleRevision: target.entry.lifecycleRevision ?? null,
-      creatorProfileId,
-      root: resolveUserPath(
-        target.entry.sessionRoot ??
-          target.entry.spawnedWorkspaceDir ??
-          resolveAgentWorkspaceDir(getConfig(), target.agentId),
-      ),
-    };
+    source = captureSessionParticipationSource(
+      ceiling.sessionKey,
+      target,
+      resolveAgentWorkspaceDir(getConfig(), target.agentId),
+    );
   }
   return {
     ...ceiling,

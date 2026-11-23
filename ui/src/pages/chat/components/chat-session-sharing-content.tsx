@@ -30,6 +30,7 @@ import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ChatSessionSharingError } from "./chat-session-sharing-error.tsx";
+import { CHAT_SESSION_SHARING_DESCRIPTION_KEYS } from "./chat-session-sharing-modes.tsx";
 import {
   createChatSessionSharingPresentation,
   projectChatSessionSharingRoster,
@@ -38,7 +39,6 @@ import {
 import {
   type ChatSessionSharingProps,
   VISIBILITY_LABEL_KEYS,
-  CHAT_SESSION_SHARING_DESCRIPTION_KEYS,
   ChatSessionSharingModeIcon,
 } from "./chat-session-sharing-shared.tsx";
 import type { ChatSessionSharingContentProps } from "./chat-session-sharing.solid.tsx";

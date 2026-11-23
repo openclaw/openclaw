@@ -28,4 +28,5 @@ export const CORE_GATEWAY_METHOD_SPECS_APPENDED = [
   ["cron.acknowledgeFailure", "cron", "operator.read", "2026.11"],
   ["projects.rename", "projects", "operator.admin", "2026.11"],
   ["sessions.catalog.route", "session-catalog", "operator.sessions.read", "2026.11"],
+  ["session.members.setAccess", "sessions-sharing", "operator.write", "2026.11"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

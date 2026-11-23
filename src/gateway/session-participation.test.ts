@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { DEFAULT_PARTICIPATION_TOOLS } from "../agents/participation-ceiling.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { publishSessionParticipationMemberChange } from "../config/sessions/session-participation-source.js";
 import {
   addSessionMember,
   removeSessionMember,
@@ -14,7 +15,6 @@ import { resolveSandboxedSessionCreation } from "./operator-session-run.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { authorizeGatewayMethod } from "./server-methods/method-authorization.js";
 import { sessionMutationTargetFields } from "./session-method-policy.js";
-import { revokeSessionParticipation } from "./session-participation-lifetime.js";
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
@@ -179,11 +179,19 @@ it("admits only bounded methods for a send invitation with read scope", async ()
       { ...target, agentId: "other" },
       { ...target, sessionKey: "agent:main:sibling" },
     ]) {
-      revokeSessionParticipation(sibling);
+      publishSessionParticipationMemberChange(sibling.agentId, sibling.sessionKey, {
+        sessionId: sibling.sessionId,
+        identityId: sibling.profileId,
+        present: false,
+      });
       expect(lifetime?.signal?.aborted).toBe(false);
     }
     // The next effect is refused permanently even if fresh membership again permits a new input.
-    revokeSessionParticipation(target);
+    publishSessionParticipationMemberChange(target.agentId, target.sessionKey, {
+      sessionId: target.sessionId,
+      identityId: target.profileId,
+      present: false,
+    });
     expect(lifetime?.signal?.aborted).toBe(true);
     expect(() => lifetime?.assertCurrent()).toThrow();
     const successor = await resolveSessionMutationAuthorizationAsync({

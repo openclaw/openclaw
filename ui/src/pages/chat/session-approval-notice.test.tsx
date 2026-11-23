@@ -2,7 +2,7 @@ import { createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { ChatParticipantNotices } from "./chat-participant-notices.tsx";
+import { renderChatComposerNotices as ChatComposerNotices } from "./chat-view-notices.tsx";
 import type { ParticipantApprovalNotice } from "./session-approval-projection.ts";
 
 it("loads a status-only waiting notice on approval and removes it on settlement or expiry", async () => {
@@ -20,7 +20,7 @@ it("loads a status-only waiting notice on approval and removes it on settlement 
   };
   const [pending, setPending] = createSignal<ParticipantApprovalNotice | null>(null);
   const { container } = mountSolid(() => (
-    <ChatParticipantNotices messages={[]} participantApproval={pending()} />
+    <ChatComposerNotices messages={[]} participantApproval={pending()} />
   ));
   expect(container.textContent).toBe("");
   setPending(approval);

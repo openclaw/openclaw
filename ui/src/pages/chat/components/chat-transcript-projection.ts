@@ -105,12 +105,10 @@ export function projectChatTranscript(
   const assistantIdentity = resolveTranscriptAssistantIdentity(props);
   const locale = i18n.getLocale();
   const searchFiltering = search.open && Boolean(search.query.trim());
-  const sharingNotices = searchFiltering
-    ? []
-    : currentChatSharingNotices(
-        props.historyState,
-        props.currentAgentId ?? props.fullMessageAgentId,
-      );
+  const sharingNotices = currentChatSharingNotices(
+    searchFiltering ? undefined : props.historyState,
+    props.currentAgentId ?? props.fullMessageAgentId,
+  );
   const expandedAssistantMessages = transcript.expandedAssistantMessages;
   const recovery = projectTranscriptRecovery(expandedAssistantMessages, actionProps);
   const subagents = projectSubagentStatus(actionProps, searchFiltering);

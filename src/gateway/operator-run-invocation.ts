@@ -3,18 +3,18 @@ import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
+import type { AdmittedRunInvocationAuthority } from "../agents/admitted-run-operator-authority.types.js";
 import { intersectOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { intersectParticipationCeilings } from "../agents/participation-ceiling.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { ExecPolicyCeiling } from "../infra/exec-policy.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { bindGatewayDeviceRevocation } from "./device-revocation.js";
-import type { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 
 /** Retain a recovered source and its new exact invocation restriction as one producer. */
 export function retainGatewayOperatorInvocation(
   captured: { authority: AdmittedRunOperatorAuthority; release: () => void },
-  invocation: Parameters<typeof prepareGatewayOperatorRunAuthority>[0]["invocationAuthority"],
+  invocation: AdmittedRunInvocationAuthority | undefined,
 ) {
   if (!invocation) {
     return captured;

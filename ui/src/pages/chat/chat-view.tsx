@@ -20,13 +20,15 @@ import { orderSessionPullRequests } from "../../lib/session-pull-request-present
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
-import { ChatParticipantNotices as ChatComposerNoticesView } from "./chat-participant-notices.tsx";
 import { loadChatPendingInputs } from "./chat-pending-inputs.ts";
 import { hasTerminalRunStatus, isChatRunWorking } from "./chat-run-working.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
 import { listSubagents, projectProgressCardRuntime } from "./chat-subagent-wait.ts";
 import { createChatViewFrame, type ChatProps, type ChatViewFrame } from "./chat-view-frame.ts";
-import { renderChatTopbarNotices as ChatTopbarNotices } from "./chat-view-notices.tsx";
+import {
+  renderChatComposerNotices as ChatComposerNoticesView,
+  renderChatTopbarNotices as ChatTopbarNotices,
+} from "./chat-view-notices.tsx";
 import type { ChatActivityPillsProps } from "./components/chat-activity-pills-types.ts";
 import { publicationOutsidePills } from "./components/chat-activity-pills-visibility.ts";
 import { ChatCommentController } from "./components/chat-comment-controller.ts";

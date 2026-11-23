@@ -791,7 +791,6 @@ src/gateway/github-publication-coordinator-methods.ts	5
 src/gateway/github-publication-defer.worker.ts	3
 src/gateway/github-publication-discovery.ts	4
 src/gateway/github-publication-git-index.ts	2
-src/gateway/github-publication-requester.ts	3
 src/gateway/github-publication-shared-read.kernel.ts	10
 src/gateway/github-publication-shared-read.ts	10
 src/gateway/github-publication-store.worker.ts	6
@@ -1056,7 +1055,6 @@ src/gateway/session-row-provider-review.ts	2
 src/gateway/session-row-selection-facts.ts	2
 src/gateway/session-row-transcript-backfill.ts	2
 src/gateway/session-send-delivery.ts	4
-src/gateway/session-sharing-authorization-async.ts	2
 src/gateway/session-sharing-authorization.ts	2
 src/gateway/session-sharing-policy.ts	4
 src/gateway/session-sharing-preparation.ts	4

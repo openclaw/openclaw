@@ -6,8 +6,24 @@ import type {
 } from "../../config/sessions/transcript-entry-anchor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
-import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../context-engine/types.js";
+import type {
+  ContextEngine,
+  ContextEnginePromptCacheInfo,
+  ContextEngineSessionTarget,
+} from "../../context-engine/types.js";
 import type { QueuedOperatorRecoverySource } from "../../gateway/operator-run-recovery-source.codec.js";
+
+export type ContextEngineTurnAttemptFacts = {
+  boundary: TranscriptTurnBoundary;
+  sessionIdUsed: string;
+  sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
+  promptError: boolean;
+  aborted: boolean;
+  yieldAborted: boolean;
+  runtimeContext?: ContextEngineTurnRuntimeContext;
+  operatorSource?: QueuedOperatorRecoverySource;
+};
 
 type PendingContextEngineTurn = Readonly<{
   advancement_key: string;

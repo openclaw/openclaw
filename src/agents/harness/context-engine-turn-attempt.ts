@@ -13,23 +13,13 @@ import { runContextEngineTurnMaintenance } from "./context-engine-turn-authority
 import { openContextEngineTurnOutboxWorkerStore } from "./context-engine-turn-outbox-store.js";
 import {
   drainContextEngineTurnOutbox,
-  type ContextEngineTurnRuntimeContext,
+  type ContextEngineTurnAttemptFacts,
 } from "./context-engine-turn-outbox.js";
+
+export type { ContextEngineTurnAttemptFacts } from "./context-engine-turn-outbox.js";
 
 const ACCEPTED_TURN_MAX_EVENTS = 20_000;
 const ACCEPTED_TURN_MAX_BYTES = 8 * 1024 * 1024;
-
-export type ContextEngineTurnAttemptFacts = {
-  boundary: TranscriptTurnBoundary;
-  sessionIdUsed: string;
-  sessionKey?: string;
-  sessionTarget?: ContextEngineSessionTarget;
-  promptError: boolean;
-  aborted: boolean;
-  yieldAborted: boolean;
-  runtimeContext?: ContextEngineTurnRuntimeContext;
-  operatorSource?: QueuedOperatorRecoverySource;
-};
 
 export async function drainPendingContextEngineTurnsBeforeRun(params: {
   admission: TranscriptTurnBoundary["admission"] | undefined;

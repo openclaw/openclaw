@@ -116,6 +116,12 @@ export type SessionRowReadView = {
   ): records.MaterializedRow | undefined;
   readSource(row: records.MaterializedRow): CapturedSessionEntryReadSource | undefined;
   readMembership(query: records.Lookup): ReadonlySet<string> | undefined;
+  hasMembership(
+    storePath: string,
+    sessionKey: string,
+    identityId: string,
+    agentId: string,
+  ): boolean;
   memberAccess(
     storePath: string,
     sessionKey: string,
@@ -250,6 +256,12 @@ export function readPreparedSessionRows<T>(
     memberAccess(storePath, sessionKey, identityId) {
       assertActive();
       return owner.memberAccess(storePath, sessionKey, identityId);
+    },
+    hasMembership(storePath, sessionKey, identityId, agentId) {
+      assertActive();
+      return isIncognitoSessionKey(sessionKey)
+        ? (read.readMembership({ agentId, storePath, key: sessionKey })?.has(identityId) ?? false)
+        : owner.hasMembership(storePath, sessionKey, identityId, agentId);
     },
     readMembership(query) {
       assertActive();

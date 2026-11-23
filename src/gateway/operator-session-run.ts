@@ -5,6 +5,7 @@ import {
 import { intersectParticipationCeilings } from "../agents/participation-ceiling.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
+import { isSessionParticipationSourceTarget } from "../config/sessions/session-participation-source.js";
 import {
   composeSessionSourceAssertion,
   createDynamicSessionSourceAssertion,
@@ -80,9 +81,14 @@ export function prepareGatewayOperatorSessionRun(params: {
             cfg: params.cfg,
             client,
             target: { agentId: params.agentId, canonicalKey: params.sessionKey, entry },
-            invitedSession:
-              params.authority.participationCeiling?.sessionKey === params.sessionKey &&
-              params.authority.participationCeiling.source?.sessionId === entry.sessionId,
+            invitedSession: Boolean(
+              params.authority.participationCeiling &&
+              isSessionParticipationSourceTarget(params.authority.participationCeiling, {
+                agentId: params.agentId,
+                canonicalKey: params.sessionKey,
+                entry,
+              }),
+            ),
           })
         : authorizeGatewaySessionCreation({ cfg: params.cfg, client, agentId: params.agentId });
       if (error) {

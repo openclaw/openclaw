@@ -3,6 +3,7 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import { intersectParticipationCeilings } from "../agents/participation-ceiling.js";
+import { isSessionParticipationSourceTarget } from "../config/sessions/session-participation-source.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { readSessionDelegatedParticipation } from "./session-delegated-operator-source.js";
@@ -86,10 +87,7 @@ export function resolveParticipantRunTarget(
   if (!ceiling?.source || !target || target.agentId !== ceiling.source.agentId) {
     return undefined;
   }
-  if (
-    target.canonicalKey === ceiling.sessionKey &&
-    target.entry.sessionId === ceiling.source.sessionId
-  ) {
+  if (isSessionParticipationSourceTarget(ceiling, target)) {
     return "source";
   }
   const child = readSessionDelegatedParticipation(target.entry);

@@ -205,9 +205,6 @@ function captureActiveEmbeddedRunToolAuthority(
   if (options?.allowMissingRegistry && !toolAuthority?.personalToolParticipants) {
     return undefined;
   }
-  if (!toolAuthority) {
-    throw new Error("Embedded run tool authority is no longer active");
-  }
   const delegatedAuthority = registration.delegatedAuthority;
   // Message identities use the policy session; their source owns the executing run.
   const executionSessionKey =
@@ -249,7 +246,7 @@ export function captureActiveEmbeddedRunPersonalToolParticipants(
   const captured = captureActiveEmbeddedRunToolAuthority(identity, options);
   return captured
     ? {
-        participants: captured.toolAuthority.personalToolParticipants,
+        participants: captured.toolAuthority?.personalToolParticipants,
         assertCurrent: captured.assertCurrent,
       }
     : undefined;
@@ -265,7 +262,7 @@ export function captureActiveEmbeddedRunParticipation(identity: AgentRuntimeIden
     return undefined;
   }
   const captured = captureActiveEmbeddedRunToolAuthority(identity);
-  const ceiling = captured?.toolAuthority.operatorAuthority?.participationCeiling;
+  const ceiling = captured?.toolAuthority?.operatorAuthority?.participationCeiling;
   if (!captured || !ceiling) {
     return undefined;
   }

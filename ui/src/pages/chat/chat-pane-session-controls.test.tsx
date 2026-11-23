@@ -527,8 +527,12 @@ describe("chat pane composer controls", () => {
     const heading = menu.querySelector<HTMLElement>(".oc-menu-heading__label");
     expect(heading?.textContent?.trim()).toBe("Permissions");
     expect(heading?.closest('[role="menuitem"]')).toBeNull();
+    await waitForSolid(() =>
+      expect(
+        container.querySelector("a.chat-controls__permission-learn-more")?.textContent?.trim(),
+      ).toBe("Learn more"),
+    );
     const docsLink = container.querySelector<HTMLElement>("a.chat-controls__permission-learn-more");
-    expect(docsLink?.textContent?.trim()).toBe("Learn more");
     expect(docsLink?.getAttribute("href")).toBe(
       "https://docs.openclaw.ai/gateway/permission-modes",
     );

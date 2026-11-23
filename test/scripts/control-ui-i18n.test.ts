@@ -362,6 +362,7 @@ describe("control-ui-i18n generated ownership", () => {
         .filter((key) => key.startsWith("chat.sessionSharing."))
         .map((key) => key.slice(20)),
     ).toEqual([
+      "loweringAccessCancelsQueued",
       "sessionAccess",
       "sharedDescription",
       "readOnlyDescription",

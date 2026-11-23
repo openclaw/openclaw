@@ -1,14 +1,23 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import type { ChatMobilePeopleMentions } from "../chat-mobile-people-mentions.ts";
 import type {
   ChatMobilePeople,
   ChatMobilePeopleMention,
   ChatMobilePerson,
 } from "../chat-mobile-people.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar-view.tsx";
+import { ChatSessionSharingOptions } from "./chat-session-sharing-options.tsx";
+import type { PreparedChatSessionSharing } from "./chat-session-sharing-shared.tsx";
+import { canManageChatSessionSharing } from "./chat-session-sharing-shared.tsx";
 import "../../../styles/chat/mobile-people.css";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type ChatMobilePeopleLabels = {
   people: string;
@@ -160,6 +169,101 @@ export function ChatMobilePeopleBody(props: ChatMobilePeopleBodyProps) {
         <p class="chat-mobile-people__unlisted">
           {props.labels.morePeople(props.people.unlistedParticipantCount)}
         </p>
+      </Show>
+    </div>
+  );
+}
+
+/** Optional People destination; the retained mobile host owns activation and commands. */
+export function ChatPaneMobilePeople(props: {
+  header: {
+    mobilePeople?: ChatMobilePeople;
+    mobilePeopleMentions?: ChatMobilePeopleMentions;
+    mobileSharing?: PreparedChatSessionSharing;
+  };
+  controls: string;
+  onClose: () => void;
+  onOpenSharing: () => void;
+}) {
+  const labels = {
+    get people() {
+      return t("chat.sessionHeader.people");
+    },
+    get viewingNow() {
+      return t("activityFeed.viewingNow");
+    },
+    get creator() {
+      return t("chat.sessionSharing.creator");
+    },
+    get owner() {
+      return t("chat.sessionSharing.owner");
+    },
+    get participants() {
+      return t("chat.sessionHeader.peopleParticipants");
+    },
+    get mention() {
+      return t("chat.sessionHeader.mention");
+    },
+    mentionPerson: (name: string) => t("chat.sessionHeader.mentionPerson", { name }),
+    morePeople: (count: number) => t("chat.sessionHeader.morePeople", { count: String(count) }),
+  };
+  const sharing = () => props.header.mobileSharing;
+  const sharingAvailable = () => {
+    const session = sharing()?.session;
+    return Boolean(session && canManageChatSessionSharing(session));
+  };
+  return (
+    <div id={props.controls}>
+      <Show when={props.header.mobilePeopleMentions?.status === "loading"}>
+        <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+      </Show>
+      <Show
+        when={
+          props.header.mobilePeopleMentions?.status === "error" ||
+          props.header.mobilePeopleMentions?.status === "unavailable" ||
+          props.header.mobilePeopleMentions?.status === "insert-rejected"
+        }
+      >
+        <p role="alert">
+          {props.header.mobilePeopleMentions?.status === "insert-rejected"
+            ? t("chat.sessionHeader.mentionRejected")
+            : (props.header.mobilePeopleMentions?.error ?? t("chat.mentions.unavailable"))}
+          <button
+            type="button"
+            class="btn btn--ghost"
+            onClick={() => void props.header.mobilePeopleMentions?.request()}
+          >
+            {t("common.retry")}
+          </button>
+        </p>
+      </Show>
+      <Show when={props.header.mobilePeopleMentions?.truncated}>
+        <p role="status">{t("chat.sessionHeader.mentionsTruncated")}</p>
+      </Show>
+      <Show when={props.header.mobilePeople}>
+        {(data) => (
+          <ChatMobilePeopleBody
+            people={data()}
+            labels={labels}
+            onMention={(person) => {
+              if (props.header.mobilePeopleMentions?.insert(person.profileId)) {
+                // Native close restores its source synchronously; the queued
+                // composer focus runs afterwards. Do not add another focus task.
+                props.onClose();
+              }
+            }}
+            sharingOptions={
+              <Show when={sharingAvailable()}>
+                <ChatSessionSharingOptions
+                  visibility={sharing()?.session.visibility ?? "shared"}
+                  publicShare={Boolean(sharing()?.state?.result?.publicShare)}
+                  openDisabledReason={sharing()?.openDisabledReason}
+                  onOpen={props.onOpenSharing}
+                />
+              </Show>
+            }
+          />
+        )}
       </Show>
     </div>
   );

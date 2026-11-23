@@ -1,5 +1,6 @@
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import type { SessionEntryReadScope } from "../../config/sessions/session-accessor.types.js";
+import { captureSessionEntryView } from "../../config/sessions/session-entry-view.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import {
@@ -157,7 +158,7 @@ export async function retainSessionScopedRead(
           facts?.membership.has(profileId) &&
           facts.target?.agentId === target.agentId &&
           facts.target.canonicalKey === target.canonicalKey &&
-          facts.target.entry.sessionId === target.entry?.sessionId,
+          captureSessionEntryView(facts.target.entry, ["sessionId"]).matches(target.entry),
         );
       },
     };

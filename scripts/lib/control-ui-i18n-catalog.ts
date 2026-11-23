@@ -696,6 +696,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       chat: {
         ...registerChatComposerEnglish.catalog.chat,
         composer: {
+          ...registerChatSessionSharingEnglish.catalog.chat.composer,
           ...registerChatComposerEnglish.catalog.chat.composer,
           ...registerChatWorktreeEnglish.catalog.chat.composer,
           menu: registerChatComposerMenuEnglish.catalog.chat.composer.menu,

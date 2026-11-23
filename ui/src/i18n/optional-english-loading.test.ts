@@ -86,6 +86,30 @@ beforeEach(() => {
 });
 afterEach(() => restoreElementRegistration?.());
 
+it.each([false, true])(
+  "loads invitation copy only with its controls and retains composer copy (invites first=%s)",
+  async (invitesFirst) => {
+    const { en, manager } = await loadI18n({ chat: { composer: { inviteSend: "Darf senden" } } });
+    await manager.setLocale("de");
+    const { registerChatComposerEnglish } = await import("./locales/en-chat-composer.ts");
+    if (!invitesFirst) {
+      registerChatComposerEnglish();
+      expect(manager.t("chat.composer.inviteAs")).toBe("chat.composer.inviteAs");
+    }
+    await import("../pages/chat/components/chat-invite-access.tsx");
+    const composer = en.chat.composer;
+    registerChatComposerEnglish();
+    expect(manager.t("chat.composer.inviteAs", { name: "Pat" })).toBe(
+      "Invite Pat to this session as",
+    );
+    expect(manager.t("chat.composer.inviteRead")).toBe("Can read");
+    expect(manager.t("chat.composer.inviteSend")).toBe("Darf senden");
+    expect(manager.t("chat.composer.composerInput")).toBe("Chat composer");
+    expect(en.chat.composer).toBe(composer);
+    expect(manager.getLocale()).toBe("de");
+  },
+);
+
 it("loads picker auth copy without loading Settings and preserves later Settings copy", async () => {
   const { manager } = await loadI18n({
     channels: { hub: { setUp: "Einrichten" } },

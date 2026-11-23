@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { SessionPermissionNarrowingPatchFields } from "../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import {
   isAdminOnlyNodeInvokeCommand,
   isBrowserProxyNodeInvokeCommand,
@@ -393,14 +394,7 @@ export function requiresSessionParticipation(
       patch &&
       ["read-only", "guarded", "workspace"].includes(String(patch.permissionMode)) &&
       Object.keys(patch).every((key) =>
-        [
-          "key",
-          "agentId",
-          "expectedSessionId",
-          "expectedLifecycleRevision",
-          "expectedPermissionMode",
-          "permissionMode",
-        ].includes(key),
+        SessionPermissionNarrowingPatchFields.some((field) => field === key),
       ),
     )
   );

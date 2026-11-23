@@ -35,6 +35,7 @@ import {
   rollbackPreparedContextEngine,
   type PreparedContextEngineSubagentSpawn,
 } from "./subagent-spawn-context.js";
+import { buildSubagentSpawnFailureResult } from "./subagent-spawn-contract.js";
 import type {
   SpawnSubagentContext,
   SpawnSubagentParams,
@@ -48,7 +49,6 @@ import {
   bindSubagentSpawnOperatorAuthority,
   callNativeSubagentGateway,
   readGatewayRunId,
-  buildSubagentSpawnFailureResult,
 } from "./subagent-spawn-gateway.js";
 import { buildSubagentLaunchRequest } from "./subagent-spawn-launch-request.js";
 import {

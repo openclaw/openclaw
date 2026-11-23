@@ -205,13 +205,7 @@ function prepareSessionRowRecipient(
     client: client ?? null,
     memberAccess: (value, id) => projection.memberAccess(value.storePath, value.storeKey, id),
     isMember: (value, identityId) =>
-      projection
-        .readMembership({
-          agentId: value.agentId,
-          key: value.storeKey,
-          storePath: value.storePath,
-        })
-        ?.has(identityId) ?? false,
+      projection.hasMembership(value.storePath, value.storeKey, identityId, value.agentId),
   });
   return { cfg, policyConfig, rowContext, presentFastMode, publicationState, sharing };
 }

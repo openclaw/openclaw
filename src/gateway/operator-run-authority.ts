@@ -5,6 +5,7 @@ import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
+import type { AdmittedRunInvocationAuthority } from "../agents/admitted-run-operator-authority.types.js";
 import { bindSharedGatewayOwnerRunAuthority } from "../agents/harness/host-private-capabilities.js";
 import {
   prepareOperatorModelPolicy,
@@ -214,13 +215,7 @@ export type GatewayOperatorRunAdmissionInput = {
     release?: () => void;
   }> | null;
   /** Additional request lifetime; never replaces the authenticated access grant. */
-  invocationAuthority?: Readonly<{
-    participationAuthority?: AdmittedRunOperatorAuthority;
-    participationCeiling?: import("../agents/participation-ceiling.js").BoundParticipationCeiling;
-    assertCurrent: () => void;
-    signal?: AbortSignal;
-    release?: () => void;
-  }>;
+  invocationAuthority?: AdmittedRunInvocationAuthority;
 };
 
 export type PreparedGatewayOperatorRunAuthority = {

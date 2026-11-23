@@ -11,6 +11,7 @@ import {
   readSessionActorTransactionState,
   writableSessionActorMap,
 } from "./session-actor-transaction.js";
+import { matchesSessionParticipationRevocation } from "./session-participation-source.js";
 
 /** A committed reduction retires persisted input custody before a re-invitation can occur. */
 export function revokeSessionParticipationQueueInTransaction(
@@ -40,12 +41,7 @@ export function revokeSessionParticipationQueueInTransaction(
       continue;
     }
     const ceiling = source.kind === "gateway" ? source.snapshot.participationCeiling : undefined;
-    if (
-      ceiling?.kind !== "send" ||
-      ceiling.profileId !== target.profileId ||
-      ceiling.sessionKey !== target.sessionKey ||
-      ceiling.source.sessionId !== target.sessionId
-    ) {
+    if (ceiling?.kind !== "send" || !matchesSessionParticipationRevocation(ceiling, target)) {
       continue;
     }
     const changes = { state: "cancelled", end_cause: "revoked", origin_source_json: null };

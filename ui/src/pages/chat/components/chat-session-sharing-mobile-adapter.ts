@@ -6,16 +6,14 @@ import type {
   ChatSessionSharingMobileLabels,
   ChatSessionSharingMobileProps,
 } from "./chat-session-sharing-mobile.tsx";
+import { createChatSessionSharingModes } from "./chat-session-sharing-modes.tsx";
 import type { ChatSessionSharingOptionsProps } from "./chat-session-sharing-options.tsx";
 import {
   projectChatSessionSharingRoster,
   createChatSessionSharingPresentation,
 } from "./chat-session-sharing-presentation.ts";
 import type { PreparedChatSessionSharing } from "./chat-session-sharing-shared.tsx";
-import {
-  canManageChatSessionSharing,
-  createChatSessionSharingModes,
-} from "./chat-session-sharing-shared.tsx";
+import { canManageChatSessionSharing } from "./chat-session-sharing-shared.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 

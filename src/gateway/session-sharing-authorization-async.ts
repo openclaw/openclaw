@@ -13,7 +13,8 @@ import {
   projectSessionSharingEntry,
 } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
-import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
+import { captureSessionEntryView } from "../config/sessions/session-entry-view.js";
+import { matchesSessionParticipationSource } from "../config/sessions/session-participation-source.js";
 import {
   bindSynchronousSessionSource,
   composeSessionSourceAssertion,
@@ -29,7 +30,6 @@ import {
   prepareUserProfileIdentity,
   readResidentGatewayOwnerProfile,
 } from "../state/user-profile-list.js";
-import { resolveUserPath } from "../utils.js";
 import { sanitizeChatSendMessageInput } from "./chat-input-sanitize.js";
 import { errorShapeFromError } from "./error-shape.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
@@ -208,14 +208,11 @@ export async function prepareSessionPrincipalRunAccess(params: {
           target.agentId !== params.agentId ||
           target.entry.archivedAt !== undefined ||
           (origin &&
-            (target.entry.sessionId !== origin.sessionId ||
-              (target.entry.lifecycleRevision ?? null) !== origin.lifecycleRevision ||
-              sessionCreatorProfileId(target.entry.createdActor) !== origin.creatorProfileId ||
-              resolveUserPath(
-                target.entry.sessionRoot ??
-                  target.entry.spawnedWorkspaceDir ??
-                  resolveAgentWorkspaceDir(getConfig(), params.agentId),
-              ) !== origin.root)) ||
+            !matchesSessionParticipationSource(
+              { sessionKey: params.sessionKey, source: origin },
+              target,
+              resolveAgentWorkspaceDir(getConfig(), params.agentId),
+            )) ||
           (params.sessionPrincipal &&
             resolveSessionSystemTurnProfileId(target.entry) !== params.profileId) ||
           (params.storePath !== undefined &&
@@ -230,7 +227,10 @@ export async function prepareSessionPrincipalRunAccess(params: {
     if (resolved.error) {
       throw new Error(resolved.error.message);
     }
-    if (!sharing || sharing.admittedTarget?.sessionId !== params.sessionId) {
+    if (
+      !sharing ||
+      !captureSessionEntryView(params, ["sessionId"]).matches(sharing.admittedTarget)
+    ) {
       throw new Error("Session is unavailable for this principal.");
     }
     const sharingSource = sharing.assertAdmittedInputCurrent ?? sharing.assertCurrent;

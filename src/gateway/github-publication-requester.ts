@@ -7,6 +7,7 @@ import {
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
 } from "../agents/tools/gateway-caller-context.js";
+import { matchesSessionParticipationTarget } from "../config/sessions/session-participation-source.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
@@ -444,12 +445,7 @@ export async function prepareGitHubPublicationTaskRequester(
     }
     if (snapshot.participation) {
       const target = snapshot.participation.target;
-      if (
-        target.agentId !== origin.agentId ||
-        target.sessionKey !== origin.sessionKey ||
-        target.sessionId !== origin.sessionId ||
-        target.lifecycleRevision !== origin.lifecycleRevision
-      ) {
+      if (!matchesSessionParticipationTarget(target, origin)) {
         throw new GitHubPublicationRequesterUnavailableError();
       }
       snapshot = Object.freeze({

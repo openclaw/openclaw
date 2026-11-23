@@ -1,20 +1,43 @@
 import { isDeepStrictEqual } from "node:util";
+import type { Result } from "@openclaw/normalization-core/result";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionMentionInvitation } from "../config/sessions/session-sharing-authority.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readResidentUserProfileAliases } from "../state/user-profile-list.js";
-import type { createHumanMentionPolicy } from "./human-mention-policy.js";
+import type { CurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import type { MentionInbox } from "./mention-inbox.contracts.js";
 import { resolveOperatorRolePolicyForProfile } from "./operator-role-policy.js";
+import type { GatewayClient } from "./server-methods/client-types.js";
 import { resolveSessionInvitationAccess } from "./session-member-access.js";
 
-type Policy = ReturnType<typeof createHumanMentionPolicy>;
+type MentionProfile = Extract<CurrentUserProfileDisplay, { kind: "resolved" }>;
+type InvitationTarget = Parameters<MentionInbox["prepareInvitation"]>[1] & {
+  entry: NonNullable<Parameters<MentionInbox["prepareInvitation"]>[1]["entry"]>;
+};
 
 /** Prepare the transcript owner's invitation payload and its existing commit guard. */
 export function prepareHumanMentionInvitation(
-  context: { getRuntimeConfig: () => OpenClawConfig; isActive: () => boolean } & Pick<
-    Policy,
-    "readProfile" | "identify" | "recipientProfile"
-  >,
+  context: {
+    getRuntimeConfig: () => OpenClawConfig;
+    isActive: () => boolean;
+    readProfile: (profileId: string) => MentionProfile | undefined;
+    identify: (
+      client: GatewayClient | null,
+      cfg: OpenClawConfig,
+    ) => Result<
+      {
+        profile: MentionProfile;
+        canInvite: (target: InvitationTarget) => boolean;
+      },
+      ErrorShape
+    >;
+    recipientProfile: (
+      profileId: string,
+      target: InvitationTarget,
+      cfg: OpenClawConfig,
+      canInvite: boolean,
+    ) => MentionProfile | undefined;
+  },
   ...[client, target, mentions]: Parameters<MentionInbox["prepareInvitation"]>
 ): ReturnType<MentionInbox["prepareInvitation"]> {
   const { getRuntimeConfig, isActive, readProfile, identify, recipientProfile } = context;

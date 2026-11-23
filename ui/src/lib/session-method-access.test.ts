@@ -288,6 +288,39 @@ describe("readSessionMethodAccess", () => {
   });
 });
 
+it("admits only exact chat.abort from invited send evidence, never session-wide cancellation", () => {
+  const session = { sharingRole: "member" as const, invitedAccess: "send" as const };
+  const request = {
+    method: "chat.abort",
+    requiredScope: "operator.write" as const,
+    params: { runId: "own-run" },
+    sessionScope: true,
+    session,
+  };
+  expect(access(["operator.sessions.read"], request).allowed).toBe(true);
+  for (const params of [undefined, {}, { runId: null }, { runId: "" }, { runId: "  " }]) {
+    expect(access(["operator.sessions.read"], { ...request, params }).allowed).toBe(false);
+  }
+  for (const method of ["sessions.abort", "sessions.fork", "sessions.reset"]) {
+    expect(access(["operator.sessions.read"], { ...request, method }).allowed).toBe(false);
+  }
+  for (const invitedAccess of [undefined, "read", "suggest"] as const) {
+    expect(
+      access(["operator.sessions.read"], {
+        ...request,
+        session: { ...session, invitedAccess },
+      }).allowed,
+    ).toBe(false);
+  }
+  expect(access(["operator.sessions.read"], { ...request, sessionScope: false }).allowed).toBe(
+    false,
+  );
+  expect(
+    access(["operator.sessions.read"], { ...request, requiredScope: "operator.admin" }).allowed,
+  ).toBe(false);
+  expect(access([], request).allowed).toBe(false);
+});
+
 it("admits only sending and tighter permissions from explicit invited send evidence", () => {
   const session = {
     sharingRole: "member" as const,

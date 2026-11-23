@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { captureActiveEmbeddedRunParticipation } from "../agents/embedded-agent-runner/run-state.js";
 import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
+import { captureSessionEntryView } from "../config/sessions/session-entry-view.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateAgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import {
@@ -34,11 +35,13 @@ export async function prepareExecApprovalParticipation(
     if (
       !target ||
       target.canonicalKey !== captured.ceiling.sessionKey ||
-      target.entry.sessionId !== (captured.ceiling.source?.sessionId ?? captured.sessionId) ||
+      !captureSessionEntryView(
+        captured.ceiling.source ?? { sessionId: captured.sessionId },
+        captured.ceiling.source ? ["sessionId", "lifecycleRevision"] : ["sessionId"],
+      ).matches(target.entry) ||
       (captured.ceiling.source &&
-        ((target.entry.lifecycleRevision ?? null) !== captured.ceiling.source.lifecycleRevision ||
-          sessionCreatorProfileId(target.entry.createdActor) !==
-            captured.ceiling.source.creatorProfileId))
+        sessionCreatorProfileId(target.entry.createdActor) !==
+          captured.ceiling.source.creatorProfileId)
     ) {
       throw new Error("Participation approval session owner changed");
     }

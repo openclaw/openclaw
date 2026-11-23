@@ -3,13 +3,14 @@
 import type { JSX } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { t } from "../../i18n/index.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
-import { EXPECTED_CHAT_REFUSAL } from "./chat-error-state.ts";
+import { createChatErrorState, EXPECTED_CHAT_REFUSAL } from "./chat-error-state.ts";
 import { renderChatComposerNotices, renderChatTopbarNotices } from "./chat-view-notices.tsx";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import {
@@ -85,6 +86,21 @@ it("preserves caller-owned recovery instructions in request notices", async () =
     expect(container.querySelector(".chat-error .app-toast__message")?.textContent).toBe(error);
     expect(container.querySelector("details")).toBeNull();
   });
+});
+it("keeps multiline request diagnostics behind a first-line summary", async () => {
+  const message = "Worker enrollment failed\n  at enroll (worker.ts:42:1)";
+  const state = createChatErrorState();
+  state.setRecoverableChatError(message, new GatewayRequestError({ code: "UNAVAILABLE", message }));
+  const { container } = publishedNotices<TopbarProps>(renderChatTopbarNotices, {
+    error: state.lastError,
+    errorDetail: state.lastErrorDetail,
+  });
+  await waitForSolid(() => expect(container.querySelector(".chat-error")).not.toBeNull());
+  expect(container.querySelector(".app-toast__message")?.textContent).toBe(
+    "Worker enrollment failed",
+  );
+  expect(container.querySelector("details")?.open).toBe(false);
+  expect(container.querySelector(".lazy-view-error__detail")?.textContent).toBe(message);
 });
 const failedPlacement = (error: string) => ({
   sessionKey: "agent:main:failed-start",

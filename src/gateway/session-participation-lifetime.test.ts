@@ -1,12 +1,12 @@
 import { expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import {
+  retainSessionParticipation,
+  publishSessionParticipationMemberChange,
+} from "../config/sessions/session-participation-source.js";
 import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { canRequesterAbortChatRun } from "./server-methods/chat-abort-authorization.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import {
-  retainSessionParticipation,
-  revokeSessionParticipation,
-} from "./session-participation-lifetime.js";
 
 it("keeps inherited invocation custody through retention and authorized incarnation rollover", async () => {
   const target = {
@@ -46,9 +46,17 @@ it("keeps inherited invocation custody through retention and authorized incarnat
   expect(released).not.toHaveBeenCalled();
   lifetime.followIncarnation("unrelated", "wrong");
   lifetime.followIncarnation("before", "after");
-  revokeSessionParticipation(target);
+  publishSessionParticipationMemberChange(target.agentId, target.sessionKey, {
+    sessionId: target.sessionId,
+    identityId: target.profileId,
+    present: false,
+  });
   expect(captured?.authority.signal?.aborted).toBe(false);
-  revokeSessionParticipation({ ...target, sessionId: "after" });
+  publishSessionParticipationMemberChange(target.agentId, target.sessionKey, {
+    sessionId: "after",
+    identityId: target.profileId,
+    present: false,
+  });
   expect(captured?.authority.signal?.aborted).toBe(true);
   expect(() => captured?.authority.assertCurrent()).toThrow();
   lifetime.followIncarnation("after", "reinvited");

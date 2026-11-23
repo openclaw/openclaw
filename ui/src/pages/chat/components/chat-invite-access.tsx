@@ -1,11 +1,11 @@
 import type { SessionMemberPermissionLevel } from "@openclaw/gateway-protocol";
 import { createMemo, createUniqueId, For, Show } from "solid-js";
 import { Menu } from "../../../components/solid/menu.tsx";
-import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
-registerEnglishCatalog(registerChatComposerEnglish);
+registerEnglishCatalog(registerChatSessionSharingEnglish);
 
 const labels = {
   read: "chat.composer.inviteRead",

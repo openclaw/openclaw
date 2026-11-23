@@ -88,7 +88,19 @@ export function readSessionMethodScopeAccess(
       ) &&
       (params.permissionMode === "read-only" ||
         (params.permissionMode === "guarded" && request.session?.permissionMode !== "read-only"));
-    if (request.method === "chat.send" || stricterPermission) {
+    // The Gateway checks the initiating participant against this exact run;
+    // invitation evidence never grants session-wide cancellation authority.
+    const exactChatAbort =
+      request.method === "chat.abort" &&
+      isRecord(params) &&
+      typeof params.runId === "string" &&
+      params.runId.trim().length > 0 &&
+      roleScopesAllow({
+        role: auth?.role ?? "operator",
+        requestedScopes: ["operator.sessions.read"],
+        allowedScopes: auth?.scopes ?? [],
+      });
+    if (request.method === "chat.send" || stricterPermission || exactChatAbort) {
       return { allowed: true, requiredScope };
     }
   }

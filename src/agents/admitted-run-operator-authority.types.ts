@@ -68,3 +68,12 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   }>;
   modelPolicy?: PreparedOperatorModelPolicy;
 }>;
+
+/** Additional request lifetime; never replaces the authenticated access grant. */
+export type AdmittedRunInvocationAuthority = Readonly<{
+  participationAuthority?: AdmittedRunOperatorAuthority;
+  participationCeiling?: import("./participation-ceiling.js").BoundParticipationCeiling;
+  assertCurrent: () => void;
+  signal?: AbortSignal;
+  release?: () => void;
+}>;

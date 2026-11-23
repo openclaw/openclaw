@@ -387,7 +387,6 @@ function createSessionMemberMutationHandler(
               addedBy: sharingActorStorageRef(actor),
               addedAt: now,
               ...(grant.value ? { access: grant.value } : {}),
-              expectedSessionId: current.entry.sessionId,
               expectedEntry: sharingExpectedEntry(current),
             },
             assertGrantCurrent,
@@ -659,7 +658,6 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
           {
             identityId: params.identityId,
             access: params.access,
-            expectedSessionId: target.entry.sessionId,
             expectedEntry: sharingExpectedEntry(target),
           },
           () => {

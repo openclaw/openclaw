@@ -5,7 +5,6 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getResidentUserProfileDisplay } from "../../state/user-profile-list.js";
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
-import { revokeSessionParticipation } from "../session-participation-lifetime.js";
 import type { SessionSharingTarget } from "../session-sharing-policy.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { SharingActorFacts } from "./sessions-sharing-identities.js";
@@ -50,7 +49,7 @@ export function publishSharingChange(params: {
   emitSessionsChanged(params.context, { reason: "sharing" });
 }
 
-/** Committed reductions publish through one boundary for retained participation owners. */
+/** Broadcast the acknowledged reduction after the storage owner has retired its producers. */
 export function publishSessionMemberAccessReduced(params: {
   context: GatewayRequestContext;
   actor: SharingActorFacts;
@@ -59,14 +58,6 @@ export function publishSessionMemberAccessReduced(params: {
   access?: SessionMemberPermissionLevel;
   ts: number;
 }): void {
-  if (params.access !== "send") {
-    revokeSessionParticipation({
-      profileId: params.identityId,
-      agentId: params.target.agentId,
-      sessionKey: params.target.canonicalKey,
-      sessionId: params.target.entry.sessionId,
-    });
-  }
   publishSharingChange({
     context: params.context,
     actor: params.actor,

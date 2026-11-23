@@ -1,11 +1,16 @@
-import { isDeepStrictEqual } from "node:util";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   participationAllowsTool,
   resolveParticipationTools,
   type ParticipationCeiling,
 } from "../agents/participation-ceiling.js";
-import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
+import { captureSessionEntryView } from "../config/sessions/session-entry-view.js";
+import {
+  captureSessionParticipationSource,
+  captureSessionParticipationTarget,
+  matchesSessionParticipationSource,
+  matchesSessionParticipationTarget,
+} from "../config/sessions/session-participation-source.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
@@ -17,7 +22,6 @@ import {
 import { UserProfileMutationUnsettledError } from "../state/user-profile-events.js";
 import type { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import type { UserProfileAccessFacts } from "../state/user-profiles.types.js";
-import { resolveUserPath } from "../utils.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import {
@@ -45,29 +49,7 @@ type PublicationSession = { sessionKey: string; agentId: string };
 type PreparedPublicationSession = Awaited<ReturnType<typeof prepareSessionMutationFacts>>;
 
 export function publicationParticipationTarget(facts: ExistingSessionMutationFacts) {
-  return Object.freeze({
-    agentId: facts.target.agentId,
-    sessionKey: facts.target.canonicalKey,
-    sessionId: facts.target.entry.sessionId,
-    lifecycleRevision: facts.target.entry.lifecycleRevision ?? null,
-  });
-}
-
-function publicationParticipationSource(
-  facts: ExistingSessionMutationFacts,
-  config: OpenClawConfig,
-) {
-  return {
-    agentId: facts.target.agentId,
-    sessionId: facts.target.entry.sessionId,
-    lifecycleRevision: facts.target.entry.lifecycleRevision ?? null,
-    creatorProfileId: sessionCreatorProfileId(facts.target.entry.createdActor),
-    root: resolveUserPath(
-      facts.target.entry.sessionRoot ??
-        facts.target.entry.spawnedWorkspaceDir ??
-        resolveAgentWorkspaceDir(config, facts.target.agentId),
-    ),
-  };
+  return captureSessionParticipationTarget(facts.target);
 }
 
 /** The original invitation is distinct from the exact session selected for publication. */
@@ -76,15 +58,23 @@ export function capturePublicationParticipation(
   facts: ExistingSessionMutationFacts,
   config: OpenClawConfig,
 ): GitHubPublicationParticipation {
-  const source = ceiling.source ?? publicationParticipationSource(facts, config);
-  if (
-    !source.creatorProfileId ||
-    (!ceiling.source && ceiling.sessionKey !== facts.target.canonicalKey)
-  ) {
+  let source = ceiling.source;
+  if (!source) {
+    try {
+      source = captureSessionParticipationSource(
+        ceiling.sessionKey,
+        facts.target,
+        resolveAgentWorkspaceDir(config, facts.target.agentId),
+      );
+    } catch {
+      throw new GitHubPublicationRequesterUnavailableError();
+    }
+  }
+  if (!source.creatorProfileId) {
     throw new GitHubPublicationRequesterUnavailableError();
   }
   return immutableGitHubPublicationParticipation({
-    ceiling: { ...ceiling, source: { ...source, creatorProfileId: source.creatorProfileId } },
+    ceiling: { ...ceiling, source },
     target: publicationParticipationTarget(facts),
   });
 }
@@ -123,7 +113,6 @@ function assertPublicationParticipation(
   if (participation) {
     const { ceiling, target } = participation;
     const facts = readPublicationFacts(participationFacts, config);
-    const source = publicationParticipationSource(facts, config);
     const access = resolveSessionMemberAccess({
       policy: role,
       scopes: snapshot.scopes,
@@ -143,12 +132,12 @@ function assertPublicationParticipation(
       target.agentId !== session.agentId ||
       target.sessionKey !== session.sessionKey ||
       facts.target.canonicalKey !== ceiling.sessionKey ||
-      source.agentId !== session.agentId ||
-      source.agentId !== ceiling.source.agentId ||
-      source.sessionId !== ceiling.source.sessionId ||
-      source.lifecycleRevision !== ceiling.source.lifecycleRevision ||
-      source.creatorProfileId !== ceiling.source.creatorProfileId ||
-      source.root !== ceiling.source.root ||
+      facts.target.agentId !== session.agentId ||
+      !matchesSessionParticipationSource(
+        ceiling,
+        facts.target,
+        resolveAgentWorkspaceDir(config, facts.target.agentId),
+      ) ||
       facts.target.entry.archivedAt !== undefined ||
       access.access !== "send" ||
       access.invitedAccessCeiling !== "send" ||
@@ -290,10 +279,10 @@ export function prepareRequesterPolicy(
     if (
       participation &&
       !target.origin &&
-      (facts.target.agentId !== participation.target.agentId ||
-        facts.target.canonicalKey !== participation.target.sessionKey ||
-        facts.target.entry.sessionId !== participation.target.sessionId ||
-        (facts.target.entry.lifecycleRevision ?? null) !== participation.target.lifecycleRevision ||
+      (!matchesSessionParticipationTarget(
+        participation.target,
+        captureSessionParticipationTarget(facts.target),
+      ) ||
         facts.target.entry.archivedAt !== undefined)
     ) {
       throw new GitHubPublicationRequesterUnavailableError();
@@ -322,12 +311,18 @@ export function prepareRequesterPolicy(
     return [
       {
         prepared: target.prepared,
-        sessionId: target.origin?.sessionId ?? facts.target.entry.sessionId,
-        lifecycleRevision: target.origin
-          ? target.origin.lifecycleRevision
-          : (facts.target.entry.lifecycleRevision ?? null),
-        createdActor: facts.target.entry.createdActor,
-        owner: facts.target.entry.owner,
+        view: captureSessionEntryView(
+          {
+            ...facts.target.entry,
+            ...(target.origin
+              ? {
+                  sessionId: target.origin.sessionId,
+                  lifecycleRevision: target.origin.lifecycleRevision,
+                }
+              : {}),
+          },
+          ["sessionId", "lifecycleRevision", "createdActor", "owner"],
+        ),
       },
     ];
   });
@@ -352,12 +347,7 @@ export function prepareRequesterPolicy(
           { cause },
         );
       }
-      if (
-        entry.sessionId !== target.sessionId ||
-        (entry.lifecycleRevision ?? null) !== target.lifecycleRevision ||
-        !isDeepStrictEqual(entry.createdActor, target.createdActor) ||
-        !isDeepStrictEqual(entry.owner, target.owner)
-      ) {
+      if (!target.view.matches(entry)) {
         throw new GitHubPublicationRequesterUnavailableError();
       }
     }

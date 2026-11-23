@@ -1,3 +1,4 @@
+import { captureSessionEntryView } from "../config/sessions/session-entry-view.js";
 import { prepareGitHubPublicationSession } from "./github-publication-availability.js";
 import { readParticipantPublicationAuthority } from "./github-publication-participation.js";
 import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
@@ -43,6 +44,7 @@ export async function prepareParticipantPublicationRead(
       lifecycleRevision: loaded.entry.lifecycleRevision ?? null,
       archivedAt: loaded.entry.archivedAt ?? null,
     };
+    const view = captureSessionEntryView(session, ["sessionId", "lifecycleRevision", "archivedAt"]);
     const admitted = await prepareGitHubPublicationRequesterV2(options, session);
     resources.defer(admitted.release);
     const assertCurrent = () => {
@@ -69,11 +71,7 @@ export async function prepareParticipantPublicationRead(
         archivedAt: number | null;
       }) => {
         assertCurrent();
-        if (
-          snapshot.sessionId !== session.sessionId ||
-          snapshot.lifecycleRevision !== session.lifecycleRevision ||
-          snapshot.archivedAt !== session.archivedAt
-        ) {
+        if (!view.matches(snapshot)) {
           throw new Error("Participant publication session changed.");
         }
       },

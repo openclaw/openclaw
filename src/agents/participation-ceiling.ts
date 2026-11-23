@@ -1,4 +1,8 @@
 import type { SessionPermissionMode } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import {
+  intersectSessionParticipationSources,
+  type SessionParticipationSource,
+} from "../config/sessions/session-participation-source.js";
 import { intersectExecPolicyCeilings, type ExecPolicyCeiling } from "../infra/exec-policy.js";
 import { AgentHarnessPreflightError } from "./harness/errors.js";
 import { intersectSessionPermissionModes } from "./session-permission-mode.js";
@@ -23,13 +27,7 @@ export type ParticipationCeiling = {
   /** Exact child execution floor when the permission label cannot represent it. */
   readonly execPolicy?: ExecPolicyCeiling;
   /** Original invitation and file root; descendants never retarget this source. */
-  readonly source?: {
-    readonly agentId: string;
-    readonly sessionId: string;
-    readonly lifecycleRevision: string | null;
-    readonly creatorProfileId: string;
-    readonly root: string;
-  };
+  readonly source?: SessionParticipationSource;
 };
 
 /** A run restriction is bound to its original invitation before it can be retained. */
@@ -143,17 +141,7 @@ export function intersectParticipationCeilings(
   if (!retained || !current) {
     return retained ?? current;
   }
-  if (
-    retained.profileId !== current.profileId ||
-    retained.sessionKey !== current.sessionKey ||
-    (retained.source &&
-      current.source &&
-      (retained.source.agentId !== current.source.agentId ||
-        retained.source.sessionId !== current.source.sessionId ||
-        retained.source.lifecycleRevision !== current.source.lifecycleRevision ||
-        retained.source.creatorProfileId !== current.source.creatorProfileId ||
-        retained.source.root !== current.source.root))
-  ) {
+  if (retained.profileId !== current.profileId || retained.sessionKey !== current.sessionKey) {
     throw new Error("Participation continuations must retain one original invitation.");
   }
   const tools = [...(retained.tools ?? DEFAULT_PARTICIPATION_TOOLS)];
@@ -167,7 +155,7 @@ export function intersectParticipationCeilings(
   ];
   return {
     ...retained,
-    source: retained.source ?? current.source,
+    source: intersectSessionParticipationSources(retained.source, current.source),
     permission: intersectSessionPermissionModes(
       participationPermission(retained),
       participationPermission(current),

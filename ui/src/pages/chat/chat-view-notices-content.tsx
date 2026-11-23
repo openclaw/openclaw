@@ -316,11 +316,8 @@ function ChatErrorNotice(props: {
   // Keep an expanded diagnostic stable across unrelated session refreshes.
   const toast = createMemo(
     () => {
-      const message =
-        props.summary ??
-        (props.detail === undefined
-          ? displayError().trim().split(/\r?\n/u)[0]?.trim() || props.error
-          : props.error);
+      const summary = props.detail === undefined ? displayError() : props.error;
+      const message = props.summary ?? (summary.trim().split(/\r?\n/u)[0]?.trim() || props.error);
       // Offer details only when they add something beyond the visible message.
       const diagnostic = displayError().trim();
       return {

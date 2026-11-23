@@ -10,6 +10,7 @@ import { prepareSessionEventTargetForHost } from "../auto-reply/reply/session-ev
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { publishSessionParticipationMemberChange } from "../config/sessions/session-participation-source.js";
 import {
   addSessionMember,
   removeSessionMember,
@@ -31,7 +32,6 @@ import { authorizeGatewayMethod } from "./server-methods/method-authorization.js
 import { resolveInProcessGatewayDispatch } from "./server-plugin-in-process-authority.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { prepareSessionDelegatedOperatorAuthority } from "./session-delegated-operator-source.js";
-import { revokeSessionParticipation } from "./session-participation-lifetime.js";
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
@@ -130,7 +130,11 @@ it("restores every child turn from its original invitation and accepts reinvitat
     first.release();
     const second = (await f.prepare())!;
     setSessionMemberAccess(f.source, { identityId: f.profileId, access: "read" });
-    revokeSessionParticipation({ ...f.source, profileId: f.profileId, sessionId: "root-id" });
+    publishSessionParticipationMemberChange(f.source.agentId, f.source.sessionKey, {
+      sessionId: "root-id",
+      identityId: f.profileId,
+      present: false,
+    });
     expect(second.authority.signal?.aborted).toBe(true);
     expect(() => second.authority.assertCurrent()).toThrow();
     await expect(f.prepare()).rejects.toThrow();
@@ -381,7 +385,11 @@ it("binds participant publication to the current native child without scope or o
             ).toThrow("Participating GitHub");
           }
           setSessionMemberAccess(f.source, { identityId: f.profileId, access: "read" });
-          revokeSessionParticipation({ ...f.source, profileId: f.profileId, sessionId: "root-id" });
+          publishSessionParticipationMemberChange(f.source.agentId, f.source.sessionKey, {
+            sessionId: "root-id",
+            identityId: f.profileId,
+            present: false,
+          });
           expect(() =>
             readParticipantPublicationAuthority("sessions.github.publish", request),
           ).toThrow();

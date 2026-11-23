@@ -251,6 +251,7 @@ it.each(["send", "suggest", "read"] as const)(
           kind: "direct",
           visibility: "shared",
           invitedAccess: access,
+          invitedPermission: access === "send" ? "guarded" : undefined,
           sharingRole: access === "send" ? "member" : "viewer",
           permissionMode: "workspace",
           createdActor: { type: "human", id: "owner", label: "Morgan" },

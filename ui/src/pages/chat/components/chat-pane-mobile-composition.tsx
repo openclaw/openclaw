@@ -37,8 +37,9 @@ import {
   type ChatPanePlacementProps,
 } from "./chat-pane-placement.tsx";
 import type { HeaderMenuSessionAction } from "./chat-quick-action.tsx";
-import { ChatSessionSharingOptions } from "./chat-session-sharing-options.tsx";
 import { canManageChatSessionSharing } from "./chat-session-sharing-shared.tsx";
+// The route retains its sharing stylesheet while optional People content loads separately.
+import "../../../styles/chat/sharing-mobile.css";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -105,8 +106,8 @@ export function ChatPaneMobileComposition(props: {
     }
     return page;
   };
-  const ChatMobilePeopleBody = lazy(() => import("./chat-mobile-people.tsx"), {
-    export: "ChatMobilePeopleBody",
+  const ChatPaneMobilePeople = lazy(() => import("./chat-mobile-people.tsx"), {
+    export: "ChatPaneMobilePeople",
   });
   const ChatMachine = lazy(() => import("./chat-machine.tsx"), { export: "ChatMachine" });
   const ChatSessionSharingMobile = lazy(() => import("./chat-session-sharing-mobile.tsx"), {
@@ -166,28 +167,6 @@ export function ChatPaneMobileComposition(props: {
   };
   const actionSource = () => actionsMenu?.readTrigger();
   const peopleId = () => `${props.header.paneId}-mobile-people`;
-  const labels = {
-    get people() {
-      return t("chat.sessionHeader.people");
-    },
-    get viewingNow() {
-      return t("activityFeed.viewingNow");
-    },
-    get creator() {
-      return t("chat.sessionSharing.creator");
-    },
-    get owner() {
-      return t("chat.sessionSharing.owner");
-    },
-    get participants() {
-      return t("chat.sessionHeader.peopleParticipants");
-    },
-    get mention() {
-      return t("chat.sessionHeader.mention");
-    },
-    mentionPerson: (name: string) => t("chat.sessionHeader.mentionPerson", { name }),
-    morePeople: (count: number) => t("chat.sessionHeader.morePeople", { count: String(count) }),
-  };
   const sharingAvailable = () => {
     const session = sharing()?.session;
     return Boolean(session && canManageChatSessionSharing(session));
@@ -233,62 +212,15 @@ export function ChatPaneMobileComposition(props: {
     page: {
       key: "people",
       get title() {
-        return labels.people;
+        return t("chat.sessionHeader.people");
       },
       render: retainPage(() => (
-        <div id={peopleId()}>
-          <Show when={props.header.mobilePeopleMentions?.status === "loading"}>
-            <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
-          </Show>
-          <Show
-            when={
-              props.header.mobilePeopleMentions?.status === "error" ||
-              props.header.mobilePeopleMentions?.status === "unavailable" ||
-              props.header.mobilePeopleMentions?.status === "insert-rejected"
-            }
-          >
-            <p role="alert">
-              {props.header.mobilePeopleMentions?.status === "insert-rejected"
-                ? t("chat.sessionHeader.mentionRejected")
-                : (props.header.mobilePeopleMentions?.error ?? t("chat.mentions.unavailable"))}
-              <button
-                type="button"
-                class="btn btn--ghost"
-                onClick={() => void props.header.mobilePeopleMentions?.request()}
-              >
-                {t("common.retry")}
-              </button>
-            </p>
-          </Show>
-          <Show when={props.header.mobilePeopleMentions?.truncated}>
-            <p role="status">{t("chat.sessionHeader.mentionsTruncated")}</p>
-          </Show>
-          <Show when={props.header.mobilePeople}>
-            {(data) => (
-              <ChatMobilePeopleBody
-                people={data()}
-                labels={labels}
-                onMention={(person) => {
-                  if (props.header.mobilePeopleMentions?.insert(person.profileId)) {
-                    // Native close restores its source synchronously; the queued
-                    // composer focus runs afterwards. Do not add another focus task.
-                    host()?.close();
-                  }
-                }}
-                sharingOptions={
-                  <Show when={sharingAvailable()}>
-                    <ChatSessionSharingOptions
-                      visibility={sharing()?.session.visibility ?? "shared"}
-                      publicShare={Boolean(sharing()?.state?.result?.publicShare)}
-                      openDisabledReason={sharing()?.openDisabledReason}
-                      onOpen={openSharing}
-                    />
-                  </Show>
-                }
-              />
-            )}
-          </Show>
-        </div>
+        <ChatPaneMobilePeople
+          header={props.header}
+          controls={peopleId()}
+          onClose={() => host()?.close()}
+          onOpenSharing={openSharing}
+        />
       )),
     },
   };
@@ -621,8 +553,8 @@ export function ChatPaneMobileComposition(props: {
       deviceOffline={machine()?.deviceOffline}
       machineName={machineName()}
       peopleControls={peopleId()}
-      peopleLabel={labels.people}
-      morePeople={labels.morePeople}
+      peopleLabel={t("chat.sessionHeader.people")}
+      morePeople={(count) => t("chat.sessionHeader.morePeople", { count: String(count) })}
       peopleExpanded={Boolean(host()?.open && !host()?.suspended && host()?.destination === people)}
       onChromeRef={(element) => {
         chromeRoot = element;

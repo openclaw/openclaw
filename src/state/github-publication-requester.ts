@@ -1,37 +1,14 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import {
+  publicationSessionParticipationSchema,
+  sessionParticipationTargetSchema,
+} from "../config/sessions/session-participation-source.js";
 import { openClawIdRecoveryPrincipalSchema } from "../gateway/openclaw-id/tunnel-principal-schema.js";
 
-const publicationTargetSchema = z.strictObject({
-  agentId: z.string().min(1),
-  sessionKey: z.string().min(1),
-  sessionId: z.string().min(1),
-  lifecycleRevision: z.string().min(1).nullable(),
-});
 const participationSchema = z.strictObject({
-  ceiling: z.strictObject({
-    kind: z.literal("send"),
-    profileId: z.string().min(1).max(128),
-    sessionKey: z.string().min(1),
-    tools: z.array(z.string().min(1)).optional(),
-    toolConstraints: z.array(z.array(z.string().min(1))).optional(),
-    permission: z.enum(["read-only", "guarded", "workspace", "full"]).optional(),
-    execPolicy: z
-      .strictObject({
-        security: z.enum(["deny", "allowlist", "full"]),
-        ask: z.enum(["off", "on-miss", "always"]),
-        denyMisses: z.literal(true).optional(),
-      })
-      .optional(),
-    source: z.strictObject({
-      agentId: z.string().min(1),
-      sessionId: z.string().min(1),
-      lifecycleRevision: z.string().min(1).nullable(),
-      creatorProfileId: z.string().min(1),
-      root: z.string().min(1),
-    }),
-  }),
-  target: publicationTargetSchema,
+  ceiling: publicationSessionParticipationSchema,
+  target: sessionParticipationTargetSchema,
 });
 
 const requesterSchema = z
@@ -52,7 +29,7 @@ const requesterSchema = z
       })
       .nullable(),
     participation: participationSchema.optional(),
-    origin: publicationTargetSchema
+    origin: sessionParticipationTargetSchema
       .extend({
         runId: z.string().min(1).optional(),
       })

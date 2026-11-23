@@ -539,9 +539,10 @@ export function createChatPaneSessionActionCallbacks(params: {
     const access = readChatSessionActionAccess(snapshot, hasLocalRun, {
       session: selectedChatSessionRow(state),
       sessionAbortable: state.chatRunSessionAbortable === true,
+      runId: state.chatRunId,
     });
     // Offline Stop captures intent only. The pane retires runs on client
-    // replacement; replay checks the original client and current write access.
+    // replacement; replay checks the original client and current action access.
     if (
       snapshot.client &&
       hasLocalRun &&
