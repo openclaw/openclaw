@@ -45,6 +45,40 @@ async function readTopTranscriptAnchor(thread: import("playwright").Locator) {
 }
 
 suite.define(() => {
+  it("follows a profile link from a reply without restarting the dashboard", async () => {
+    const { page } = await newChatPage(suite, { viewport: { height: 820, width: 1280 } });
+    await installMockGateway(page, {
+      historyMessages: [
+        timedText(
+          "assistant",
+          "Open [GitHub accounts](/settings/profile#settings-profile-github-connections).",
+        ),
+      ],
+    });
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const link = page.getByRole("link", { name: "GitHub accounts", exact: true });
+    await link.waitFor();
+    const documentStart = await page.evaluate(() => performance.timeOrigin);
+    const chat = page.url();
+    await link.click();
+    await page.waitForURL(
+      (url) =>
+        url.pathname === "/settings/profile" && url.hash === "#settings-profile-github-connections",
+    );
+    await page.locator("openclaw-profile-page").waitFor();
+    expect(await page.evaluate(() => performance.timeOrigin)).toBe(documentStart);
+    await page.goBack();
+    await link.waitFor();
+    expect(page.url()).toBe(chat);
+    await link.focus();
+    await page.keyboard.press("Enter");
+    await page.locator("openclaw-profile-page").waitFor();
+    expect(await page.evaluate(() => performance.timeOrigin)).toBe(documentStart);
+    expect(await page.evaluate(() => document.activeElement?.closest(".chat-thread") == null)).toBe(
+      true,
+    );
+  });
+
   it("coalesces persisted same-session split panes during cold startup", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
