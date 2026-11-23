@@ -40,6 +40,8 @@ export function sessionMemberSharingFacts(sessionKey: string, members: readonly 
   return {
     sessionKey,
     identityIds: members.map((member) => member.identityId),
-    memberAccess: sessionMemberAccessFacts(members),
+    ...(members.some((member) => member.access !== undefined)
+      ? { memberAccess: sessionMemberAccessFacts(members) }
+      : {}),
   };
 }
