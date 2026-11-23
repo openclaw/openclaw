@@ -303,14 +303,22 @@
 .transcripts-utterance__byline {
   display: flex;
   align-items: baseline;
-  flex-wrap: wrap;
   gap: var(--space-3);
   font-size: var(--control-ui-text-sm);
   color: var(--muted);
 }
 
+.transcripts-utterance__byline time {
+  flex: none;
+}
+
 .transcripts-utterance__byline strong {
-  overflow-wrap: anywhere;
+  min-width: 0;
+  overflow: hidden;
+  direction: rtl;
+  text-align: match-parent;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-strong);
   font-weight: 600;
 }

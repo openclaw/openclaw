@@ -106,7 +106,7 @@ async function expectDetailRequests(gateway: Gateway) {
 }
 
 suite.define(() => {
-  it("wraps a fallback speaker ID inside the phone reader without hiding the timestamp", () =>
+  it("keeps a fallback speaker ID compact beside the timestamp", () =>
     suite.withPage(
       { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
       async ({ page }) => {
@@ -146,14 +146,21 @@ suite.define(() => {
         expect(
           await byline.evaluate((el) => {
             const bounds = el.getBoundingClientRect();
+            const strong = el.querySelector("strong")!;
+            const text = strong.querySelector("bdi")!.firstChild!;
             const label = document.createRange();
-            label.selectNodeContents(el.querySelector("strong")!);
-            const lines = [...label.getClientRects()];
+            label.selectNodeContents(text);
+            const lines = new Set(Array.from(label.getClientRects(), (r) => r.top));
+            label.setStart(text, text.textContent!.lastIndexOf("_service"));
+            const suffix = label.getBoundingClientRect();
             const time = el.querySelector("time")!.getBoundingClientRect();
+            const name = strong.getBoundingClientRect();
             return (
-              lines.length > 1 &&
-              lines.every((r) => r.left >= bounds.left && r.right <= bounds.right + 1) &&
-              time.left >= bounds.left &&
+              lines.size === 1 &&
+              strong.title === text.textContent &&
+              suffix.left >= name.left - 1 &&
+              suffix.right <= name.right + 1 &&
+              time.left >= name.right &&
               time.right <= bounds.right + 1
             );
           }),
