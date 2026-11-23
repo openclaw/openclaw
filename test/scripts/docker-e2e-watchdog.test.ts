@@ -71,4 +71,40 @@ describe("docker E2E watchdog entrypoint", () => {
     expect(importResult.stdout).toBe("");
     expect(importResult.stderr).toBe("");
   });
+
+  it("arms the timeout the CLI duration names", () => {
+    const watchdogUrl = pathToFileURL(path.resolve("scripts/lib/docker-e2e-watchdog.mjs")).href;
+    // Record the armed delay; the trivial child exits first and settles the watchdog.
+    const source = `
+      const delays = [];
+      const setTimer = globalThis.setTimeout;
+      globalThis.setTimeout = (callback, ms, ...rest) => {
+        delays.push(ms);
+        return setTimer(callback, ms, ...rest);
+      };
+      process.on("exit", () => console.log(JSON.stringify(delays[0])));
+      const { runWatchdog } = await import(${JSON.stringify(watchdogUrl)});
+      await runWatchdog("e2e", process.argv[1], [process.execPath, "-e", ""]);
+    `;
+    const run = (value: string) =>
+      spawnSync(process.execPath, ["--input-type=module", "-e", source, value], {
+        encoding: "utf8",
+        env: testRunnerFixtureEnv(),
+        timeout: 5_000,
+      });
+    for (const [value, ms] of [
+      ["900s", 900_000],
+      ["1.5s", 1_500],
+      ["0", 1],
+      ["2m", 120_000],
+      ["0.01ms", 1],
+      ["1h", 3_600_000],
+      ["7", 7_000],
+    ] as const) {
+      expect(run(value).stdout.trim(), value).toBe(String(ms));
+    }
+    const invalid = run("invalid");
+    expect(invalid.status).toBe(1);
+    expect(invalid.stderr).toContain("unsupported timeout value: invalid");
+  });
 });
