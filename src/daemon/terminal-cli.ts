@@ -19,6 +19,7 @@ import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { appendShellProfilePath, resolveShellConfigRoot } from "../infra/shell-profile.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
+import { isDisposableInstallPath } from "./durable-service-entrypoint.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import { resolveServiceEntrypointIndex, summarizeGatewayServiceLayout } from "./service-layout.js";
 import type { GatewayServiceInstallArgs } from "./service-types.js";
@@ -147,8 +148,16 @@ export async function installGatewayTerminalCli(params: {
       warn("Keeping existing terminal CLI at " + launcher + "; this Gateway: " + contextual);
       return;
     }
+    // One-off runners put their evictable copy on PATH only while they run.
+    const searchPath: string[] = [];
+    for (const dir of (env.PATH ?? "").split(path.delimiter)) {
+      if (dir && isDisposableInstallPath(await fs.realpath(dir).catch(() => path.resolve(dir)))) {
+        continue;
+      }
+      searchPath.push(dir);
+    }
     const selected = await resolveExecutablePathAsync("openclaw", {
-      env: { ...env, PATH: env.PATH ?? "" },
+      env: { ...env, PATH: searchPath.join(path.delimiter) },
       useCache: false,
     });
     const selectedOther =

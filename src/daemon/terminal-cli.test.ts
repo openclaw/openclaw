@@ -174,6 +174,44 @@ describe.skipIf(process.platform === "win32")("Gateway terminal installation", (
     await expectMissing(f.launcher);
   });
 
+  it.each([
+    ["npx", ".npm/_npx/hash/node_modules"],
+    ["pnpm dlx", ".cache/pnpm/dlx/key/stamp/node_modules"],
+    ["bunx", ".bunx-1000/node_modules"],
+  ])(
+    "does not keep a one-off runner's copy in %s as the terminal default",
+    async (_runner, directory) => {
+      const f = await fixture();
+      const modules = path.join(f.root, directory);
+      await writeFixtureFile(
+        path.join(modules, "openclaw/openclaw.mjs"),
+        "#!/bin/sh\nexit 0\n",
+        0o755,
+      );
+      const runnerBin = path.join(modules, ".bin");
+      await fs.mkdir(runnerBin, { recursive: true });
+      await fs.symlink("../openclaw/openclaw.mjs", path.join(runnerBin, "openclaw"));
+      f.env.PATH = [runnerBin, "/usr/bin", "/bin"].join(path.delimiter);
+      await f.install();
+      expect(f.warnings).toEqual([]);
+      const output = f.execute("/bin/bash", ["-ic", "openclaw qr"], {
+        PATH: "/usr/bin:/bin",
+      });
+      expect(JSON.parse(output)).toEqual({ profile: "default", args: ["qr"] });
+    },
+  );
+
+  it("keeps an operator command that follows a one-off runner on PATH", async () => {
+    const f = await fixture();
+    const runnerBin = path.join(f.root, ".npm/_npx/hash/node_modules/.bin");
+    await writeFixtureFile(path.join(runnerBin, "openclaw"), "#!/bin/sh\necho runner\n", 0o755);
+    const operatorBin = await f.operator(".local/bin", "operator");
+    f.env.PATH = [runnerBin, operatorBin, "/usr/bin", "/bin"].join(path.delimiter);
+    await f.install();
+    expect(f.warnings.join("\n")).toContain("keeping " + path.join(operatorBin, "openclaw"));
+    await expectMissing(f.launcher);
+  });
+
   it("does not adopt an opaque service wrapper that recursively invokes openclaw", async () => {
     const f = await fixture();
     const wrapper = path.join(f.root, "service-wrapper");
