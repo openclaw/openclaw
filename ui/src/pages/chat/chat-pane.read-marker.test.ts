@@ -404,7 +404,7 @@ describe("chat pane read markers", () => {
       );
     });
 
-    it("leaves persistent children, read runs, failures, and manual markers unread", () => {
+    it("leaves persistent children, read runs, and manual markers unread", () => {
       const { pane, acknowledgeHiddenRuns } = createParentPane([
         {
           key: "agent:main:dashboard:child",
@@ -415,13 +415,29 @@ describe("chat pane read markers", () => {
           unread: true,
         },
         run("read", { unread: false }),
-        run("failed", { status: "failed" }),
         run("marked", { markedUnreadAt: 15 }),
       ]);
 
       pane.markSessionRead(parent);
 
       expect(acknowledgeHiddenRuns).not.toHaveBeenCalled();
+    });
+
+    it("acknowledges failed and timed-out hidden runs with their parent", () => {
+      const { pane, acknowledgeHiddenRuns } = createParentPane([
+        run("failed", { status: "failed" }),
+        run("timeout", { status: "timeout" }),
+      ]);
+
+      pane.markSessionRead(parent);
+
+      expect(acknowledgeHiddenRuns).toHaveBeenCalledExactlyOnceWith(
+        [
+          expect.objectContaining({ key: "agent:main:subagent:failed" }),
+          expect.objectContaining({ key: "agent:main:subagent:timeout" }),
+        ],
+        { agentId: "main" },
+      );
     });
 
     it.each(["operator.write", "operator.sessions.write"])(

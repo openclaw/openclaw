@@ -88,16 +88,14 @@ export function collectSidebarSessionChildKeys(
   return children;
 }
 
-/** Hidden runs keep failures on their own notice path; only plain unread state folds into reads. */
+/** Hidden runs have no row to open; reading the parent acknowledges them, failures included. */
 export function isAcknowledgeableHiddenRun(
-  row: Pick<GatewaySessionRow, "key" | "unread" | "status" | "archived" | "agentStatus">,
+  row: Pick<GatewaySessionRow, "key" | "unread" | "archived" | "agentStatus">,
 ): boolean {
   return (
     isSubagentSessionKey(row.key) &&
     row.archived !== true &&
     row.unread === true &&
-    row.status !== "failed" &&
-    row.status !== "timeout" &&
     !activeSessionAgentStatus(row)?.attention
   );
 }

@@ -14,34 +14,34 @@ describe("updateSessionStoreAfterAgentRun snooze", () => {
     {
       name: "completed run",
       inFlight: false,
-      touchActivity: true,
+      clearSnooze: true,
       preserve: false,
       snoozed: false,
     },
     {
       name: "snoozed during the run",
       inFlight: true,
-      touchActivity: true,
+      clearSnooze: true,
       preserve: false,
       snoozed: false,
     },
     {
       name: "heartbeat run",
       inFlight: false,
-      touchActivity: false,
+      clearSnooze: false,
       preserve: false,
       snoozed: true,
     },
     {
       name: "preserved-state run",
       inFlight: true,
-      touchActivity: true,
+      clearSnooze: true,
       preserve: true,
       snoozed: true,
     },
   ])(
     "settles snooze against the current entry for $name",
-    async ({ inFlight, touchActivity, preserve, snoozed }) => {
+    async ({ inFlight, clearSnooze, preserve, snoozed }) => {
       await withTempSessionStore(async ({ storePath }) => {
         const sessionKey = "agent:main:explicit:snooze-completion";
         const sessionId = "snooze-completion";
@@ -66,7 +66,7 @@ describe("updateSessionStoreAfterAgentRun snooze", () => {
           defaultModel: "gpt-5.4",
           result: createRunResult({ sessionId, provider: "openai", model: "gpt-5.4" }),
           touchInteraction: false,
-          touchActivity,
+          clearSnooze,
           preserveUserFacingSessionModelState: preserve,
         });
 
@@ -74,11 +74,10 @@ describe("updateSessionStoreAfterAgentRun snooze", () => {
         expect(persisted).toEqual(sessionStore[sessionKey]);
         expect(persisted?.pinnedAt).toBe(1);
         if (snoozed) {
-          expect(persisted).toMatchObject({ ...snooze, lastActivityAt: 1 });
+          expect(persisted).toMatchObject(snooze);
         } else {
           expect(persisted).not.toHaveProperty("snoozedUntil");
           expect(persisted).not.toHaveProperty("snoozedAt");
-          expect(persisted?.lastActivityAt).toBeGreaterThan(1);
         }
       });
     },
