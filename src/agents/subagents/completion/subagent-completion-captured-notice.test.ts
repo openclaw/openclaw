@@ -67,7 +67,7 @@ it.each(["permanent_failure", "expiry"] as const)(
     const notice = await readNotice();
     expect(notice).toMatchObject({
       customType:
-        suspendedReason === "expiry" ? "subagent-delivery-delayed" : "subagent-delivery-failed",
+        suspendedReason === "expiry" ? "subagent-delivery-delayed" : "subagent-completion",
     });
     expect(notice.text).toContain("Completed successfully.");
     expect(notice.text).toContain("Operator access was revoked; start a new user turn.");

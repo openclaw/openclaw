@@ -160,7 +160,7 @@ it.each(["suspended", "pending", "live requester", "unknown blocker", "not_requi
     expect(persisted?.delivery).toMatchObject({ status: "discarded", discardReason: "expired" });
     expect(persisted?.completion?.resultText).toBe(resultText);
     expect(notices[0]).toMatchObject({
-      customType: "subagent-delivery-failed",
+      customType: "subagent-completion",
       content: expect.stringContaining(
         "Captured before drain: the missing invoice is in archive A.",
       ),
