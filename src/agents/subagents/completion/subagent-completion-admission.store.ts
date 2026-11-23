@@ -80,11 +80,14 @@ async function formatChildStatus(child: SubagentRunRecord, budget: number): Prom
             : `failed: ${outcome.error || "unknown error"}`
           : "ended with unknown status";
   const label = child.label?.trim() || child.task?.trim() || "child task";
+  const nextAction = killed || outcome?.status === "ok" ? "" : NEXT_ACTION;
+  // Every rendered part, its "\n\n" joins and the truncation note count against `budget`.
+  const actionChars = nextAction ? nextAction.length + 2 : 0;
   const header = truncateUtf16Safe(
     `Child "${truncateUtf16Safe(label, 200)}" (session ${child.childSessionKey}, run ${child.runId}): ${status}`,
-    Math.min(1_000, budget),
+    Math.max(0, Math.min(1_000, budget - actionChars)),
   );
-  const resultBudget = Math.max(0, budget - header.length - NEXT_ACTION.length);
+  const resultBudget = Math.max(0, budget - header.length - actionChars - 2);
   // A retired or replaced row keeps its frozen captured result.
   const result = killed
     ? ""
@@ -93,13 +96,14 @@ async function formatChildStatus(child: SubagentRunRecord, budget: number): Prom
         () => resolveSubagentCompletionResultText(child),
       )) ?? "");
   const shownText = result.trim();
+  const note = `\n[Result truncated. Read the rest with sessions_history on ${child.childSessionKey}.]`;
   const shownResult =
-    shownText.length > resultBudget
-      ? `${truncateUtf16Safe(shownText, resultBudget)}\n[Result truncated. Read the rest with sessions_history on ${child.childSessionKey}.]`
-      : shownText;
-  return [header, shownResult, killed || outcome?.status === "ok" ? "" : NEXT_ACTION]
-    .filter(Boolean)
-    .join("\n\n");
+    shownText.length <= resultBudget
+      ? shownText
+      : resultBudget > note.length
+        ? `${truncateUtf16Safe(shownText, resultBudget - note.length)}${note}`
+        : "";
+  return [header, shownResult, nextAction].filter(Boolean).join("\n\n");
 }
 
 /**
@@ -138,7 +142,11 @@ export async function appendChildStatusToRequester(
   // this append fails and another child appends first, the retry repeats this entry. Accepted:
   // a rare repeated history line, never a lost result.
   const runId = buildAnnounceIdempotencyKey(`subagent-status:${runIds.join(",")}`);
-  const budget = Math.min(MAX_CHILD_STATUS_CHARS, Math.floor(MAX_STATUS_CHARS / shown.length));
+  // Children are joined by "\n\n"; reserve those separators before sharing the budget.
+  const budget = Math.min(
+    MAX_CHILD_STATUS_CHARS,
+    Math.floor((MAX_STATUS_CHARS - 2 * (shown.length - 1)) / shown.length),
+  );
   const content = (await Promise.all(shown.map((child) => formatChildStatus(child, budget)))).join(
     "\n\n",
   );

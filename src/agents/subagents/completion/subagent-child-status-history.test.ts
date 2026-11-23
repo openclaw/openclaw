@@ -77,7 +77,7 @@ it("appends a failed child's status once to an idle parent and keeps it after co
     expect(statusTexts(compacted)).toHaveLength(1);
   }));
 
-it("bounds a large completed cohort to one shared history budget", () =>
+it("bounds a large failed cohort to one shared history budget", () =>
   withOpenClawTestState({ label: "child-status-budget" }, async (state) => {
     const scope = await seedRequester(state);
     await SessionManager.openAsync(scope);
@@ -93,7 +93,7 @@ it("bounds a large completed cohort to one shared history budget", () =>
         completion: { required: true, resultText: "x".repeat(20_000) },
         startedAt: 1,
         endedAt: 2,
-        outcome: { status: "ok" },
+        outcome: { status: "error", error: "e".repeat(5_000) },
       }),
     );
     await appendChildStatusToRequester(cohort);
@@ -104,7 +104,13 @@ it("bounds a large completed cohort to one shared history budget", () =>
       ),
     );
     expect(statuses).toHaveLength(1);
-    expect(JSON.stringify(statuses[0]?.content).length).toBeLessThan(40_000);
+    const content = statuses[0]?.content;
+    const text =
+      typeof content === "string"
+        ? content
+        : (content ?? []).map((block) => (block.type === "text" ? block.text : "")).join("");
+    expect(text.length).toBeLessThanOrEqual(32_000);
+    expect(text).toContain("Result truncated");
   }));
 
 it("keeps tool call and result adjacent at the provider boundary when a child ends mid-turn", () =>
