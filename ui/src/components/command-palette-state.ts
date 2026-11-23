@@ -56,24 +56,26 @@ export type CommandPaletteProperties = {
 };
 /** Search and draft handoffs keep same-turn reads while Solid owns the presentation. */
 export class CommandPaletteState {
-  private publicationPending = false;
+  private reconciliationPending = false;
   private connected = false;
   readonly changed = () => {
-    if (!this.connected || this.publicationPending) {
-      return;
-    }
-    this.publicationPending = true;
-    queueMicrotask(() => {
-      if (this.connected) {
-        this.draft.synchronize();
-        this.draft.settled();
-        if (this.open) {
-          this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
+    if (this.connected && !this.reconciliationPending) {
+      this.reconciliationPending = true;
+      queueMicrotask(() => {
+        if (this.connected) {
+          this.draft.synchronize();
+          this.draft.settled();
+          if (this.open) {
+            this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
+          }
         }
-      }
-      this.publicationPending = false;
-    });
-    this.publish();
+        this.reconciliationPending = false;
+      });
+    }
+    // Coalesce draft reconciliation, not the changes it publishes to Solid.
+    if (this.connected) {
+      this.publish();
+    }
   };
   open = false;
   private pluginIconUrls: Record<string, string> = {};
@@ -254,7 +256,6 @@ export class CommandPaletteState {
     this.gateway.dispose();
     this.mentionMenu.dispose();
     this.composing = false;
-    this.mentionInput = undefined;
     this.activeId = null;
     this.clearSessionSearch();
     this.clearCatalogSearch();
