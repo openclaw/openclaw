@@ -64,7 +64,7 @@ case "$1 $2" in
     ;;
   "workflow run")
     test "\${GH_TOKEN-}" = "forwarded-test-token"
-    : > "$OPENCLAW_TEST_GH_DISPATCHED"
+    printf '%s\\0' "$@" >> "$OPENCLAW_TEST_GH_DISPATCHED"
     if [ "\${OPENCLAW_TEST_DISPATCH_FAIL:-}" = true ]; then exit 1; fi
     ;;
   "api --method")
@@ -253,6 +253,11 @@ function createFakeGh(
     },
     receipt,
     callsText: () => readFileSync(files.calls, "utf8"),
+    dispatchArgs() {
+      const args = readFileSync(files.dispatched, "utf8").split("\0");
+      expect(args.pop()).toBe("");
+      return args;
+    },
   };
 }
 
@@ -264,8 +269,22 @@ describePosix("scripts/pr ci-dispatch", () => {
     const calls = fakeGh.callsText();
     expect(calls).toContain("gh\tapi repos/openclaw/openclaw/pulls/12345 --jq .head.sha");
     expect(calls).not.toContain("pr view");
-    expect(calls.split("\n").filter((line) => line.includes("\tworkflow run "))).toEqual([
-      `real-gh\tworkflow run ci.yml --ref contributor/fix-hosted-gates -f target_ref=${headSha} -f release_gate=true -f pull_request_number=12345 -f runner_backend=hybrid -f ci_shape=default`,
+    expect(fakeGh.dispatchArgs()).toEqual([
+      "workflow",
+      "run",
+      "ci.yml",
+      "--ref",
+      "contributor/fix-hosted-gates",
+      "-f",
+      `target_ref=${headSha}`,
+      "-f",
+      "release_gate=true",
+      "-f",
+      "pull_request_number=12345",
+      "-f",
+      "runner_backend=hybrid",
+      "-f",
+      "ci_shape=default",
     ]);
   });
 
@@ -284,8 +303,23 @@ describePosix("scripts/pr ci-dispatch", () => {
       const result = fakeGh.ok({ args });
       expect(result.stdout).toContain(`observed_run_url=${runUrl}`);
       const calls = fakeGh.callsText();
-      expect(calls.split("\n").filter((line) => line.includes("\tworkflow run "))).toEqual([
-        `real-gh\tworkflow run ci.yml --ref contributor/fix-hosted-gates -f target_ref=${headSha} -f release_gate=true -f pull_request_number=12345 -f runner_backend=hybrid -f ci_shape=${shape}${runtime ? ` -f test_runtime_policy=${runtime}` : ""}`,
+      expect(fakeGh.dispatchArgs()).toEqual([
+        "workflow",
+        "run",
+        "ci.yml",
+        "--ref",
+        "contributor/fix-hosted-gates",
+        "-f",
+        `target_ref=${headSha}`,
+        "-f",
+        "release_gate=true",
+        "-f",
+        "pull_request_number=12345",
+        "-f",
+        "runner_backend=hybrid",
+        "-f",
+        `ci_shape=${shape}`,
+        ...(runtime ? ["-f", `test_runtime_policy=${runtime}`] : []),
       ]);
       expect(calls.match(/pulls\/12345 --jq \.head\.sha/gu)).toHaveLength(2);
     },
@@ -307,7 +341,11 @@ describePosix("scripts/pr ci-dispatch", () => {
     ["--backend", "crabbox", "--pending-gates", "--test-runtime-policy", "node"],
   ])("rejects invalid coverage before GitHub: %j", (...args) => {
     const fakeGh = createFakeGh();
-    fakeGh.refuse({ args });
+    if (args.includes("--pending-gates")) {
+      writePending(fakeGh);
+    }
+    const result = fakeGh.refuse({ args });
+    expect(result.stderr).toContain("Expected unique --ci-shape");
     expect(existsSync(fakeGh.calls)).toBe(false);
     expect(existsSync(fakeGh.dispatched)).toBe(false);
   });
