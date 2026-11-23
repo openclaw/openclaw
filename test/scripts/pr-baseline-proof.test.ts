@@ -316,6 +316,90 @@ const boundFixture = reuseBaselineFixture((root) => {
   };
 });
 
+describePosix("proof rejection diagnostics", () => {
+  const prefix = "PR_PROOF_REJECTION ";
+
+  it.each([
+    "wrong-workflow",
+    "missing-proof",
+    "malformed-identities",
+    "uppercase-identities",
+    "newline-identities",
+  ])("reports bounded identities for %s through the native helper and shell", (fault) => {
+    const f = fixture();
+    const review = structuredClone(f.review);
+    const canary = "SYNTHETIC_REVIEW_PRIVATE_TEXT";
+    review.behavioralSweep.summary = canary;
+    const proof = review.correction.proofPublication;
+    let reviewedWorkflow: string | null = null;
+    let reviewedBinding: string | null = null;
+    if (fault === "wrong-workflow") {
+      proof.workflowSource = f.source;
+      reviewedWorkflow = f.source;
+      reviewedBinding = f.binding;
+    } else if (fault === "missing-proof") {
+      Reflect.deleteProperty(review.correction, "proofPublication");
+    } else {
+      const invalid =
+        fault === "uppercase-identities"
+          ? "A".repeat(40)
+          : fault === "newline-identities"
+            ? "a".repeat(40) + "\n"
+            : `${canary}\n${prefix}${"x".repeat(4096)}`;
+      proof.workflowSource = invalid;
+      Reflect.set(
+        proof,
+        "workflowBinding",
+        fault === "malformed-identities" ? { invalid } : invalid,
+      );
+    }
+    f.writeLocal("source-review.json", JSON.stringify(review));
+    const reviewBlob = f.oid("source-review.json");
+    const args = f.args.map((value, index) =>
+      f.args[index - 1] === "--expected-review" ? reviewBlob : value,
+    );
+    const before = nativeState(f);
+    const result = f.run(command, args, f.extra);
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect(result.stderr).toContain(
+      "Proof publication requires an exact typed candidate and workflow authorization.\n" + prefix,
+    );
+    expect(result.stdout).not.toContain(prefix);
+    expect(result.stdout + result.stderr).not.toContain(canary);
+    const records = result.stderr.split("\n").filter((line) => line.startsWith(prefix));
+    expect(records).toHaveLength(1);
+    const record = records[0]!;
+    expect(Buffer.byteLength(record + "\n", "utf8")).toBeLessThanOrEqual(512);
+    expect(JSON.parse(record.slice(prefix.length))).toEqual({
+      schema: "openclaw.pr-proof-rejection.v1",
+      selectedWorkflow: f.workflow,
+      reviewedWorkflow,
+      reviewBlob,
+      candidateHead: f.source,
+      selectedBinding: f.binding,
+      reviewedBinding,
+    });
+    expect(nativeState(f)).toEqual(before);
+    f.expectSnapshot(f.before);
+    f.expectAbsent("prepare-baseline.json", "review-transition.json");
+    expect(existsSync(f.effects)).toBe(false);
+  });
+
+  it("emits no rejection record when exact proof identities are admitted", () => {
+    const f = fixture();
+    const result = f.run(command, f.args, f.extra);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout + result.stderr).not.toContain(prefix);
+    const record = JSON.parse(f.readLocal("prepare-baseline.json").toString());
+    expect(record.proofSource.workflowSource).toBe(f.workflow);
+    expect(f.prepGit("show", "-s", "--format=%P", "HEAD")).toBe(f.source + " " + f.baseline);
+    expect(f.git(f.repo, "rev-parse", "refs/openclaw/pr-workflow-bindings/42")).toBe(f.binding);
+    expect(f.git(f.repo, "rev-parse", "topic")).toBe(f.published);
+    f.expectAbsent("review-transition.json", "prep.env", "gates.env");
+    expect(existsSync(f.effects)).toBe(false);
+  });
+});
+
 describePosix("proof baseline with retained predecessor authority", () => {
   it("admits a published incoming-source baseline without approving its pending proof", () => {
     const f = boundFixture();
