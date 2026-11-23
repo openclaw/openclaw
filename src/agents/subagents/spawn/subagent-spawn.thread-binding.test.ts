@@ -114,6 +114,34 @@ describe("spawnSubagentDirect thread binding", () => {
     );
   });
 
+  it.each([
+    { mode: "run", thread: false, route: true, announce: false, cleanup: "delete" },
+    { mode: "run", thread: true, route: true, announce: true, cleanup: "keep" },
+    { mode: "session", thread: true, route: false, announce: true, cleanup: "keep" },
+  ] as const)(
+    "aligns $mode thread=$thread route=$route guidance and delivery",
+    async ({ mode, thread, route, announce, cleanup }) => {
+      routable = route;
+      const result = await spawnSubagentDirect(
+        { task: "Return findings", mode, thread, expectsCompletionMessage: announce, cleanup },
+        caller,
+      );
+      expect(result.status).toBe("accepted");
+      expect(agentParams().deliver).toBe(false);
+      expect(result.expectsCompletionMessage).toBe(announce);
+      expect(registered().expectsCompletionMessage).toBe(announce);
+      const { extraSystemPrompt, message } = agentParams();
+      expect(extraSystemPrompt).toBeTypeOf("string");
+      expect(message).toBeTypeOf("string");
+      const contract = announce ? /completion event/i : /no completion notification/i;
+      expect([extraSystemPrompt, message].join("\n")).toMatch(contract);
+      expect(result.note).toMatch(contract);
+      if (cleanup === "delete") {
+        expect(registered()).toMatchObject({ cleanup: "delete" });
+      }
+    },
+  );
+
   it.each([false, true])(
     "routes bound delivery separately from requester origin (generic=%s)",
     async (generic) => {
