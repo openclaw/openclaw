@@ -132,6 +132,9 @@ and its prepared replacement. Closing SQLite alone does not release those identi
 descriptors, and Windows refuses the rename while either file is still open.
 The candidate must contain this fix; the launcher needs no change. The swap still
 preserves the previous files for rollback and admits the replacement as a new file.
+On Windows, the task supervisor starts without the Gateway's config or state
+bootstrap. Only its child opens the state databases; the waiting supervisor must
+not retain a connection or admission descriptor across a release switch.
 
 Rules for update changes:
 
