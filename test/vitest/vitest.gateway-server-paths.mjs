@@ -584,6 +584,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/worker-turn-media.boundary.test.ts",
   "src/gateway/worker-environments/worker-turn-pg-boundary.test.ts",
   "src/gateway/worker-environments/worker-turn-plugin-tool-authority.test.ts",
+  "src/gateway/worker-environments/worker-turn-prompt.agent-profile.test.ts",
   "src/gateway/worker-environments/worker-turn-repository-disk.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.computer.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.gateway-tools.test.ts",
