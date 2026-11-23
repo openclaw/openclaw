@@ -277,24 +277,44 @@ export async function prepareCodexAttemptTurnRequest(
     if (inferenceRoute) {
       resourceState.releaseInferenceContext?.();
       const inferenceThread = resourceState.thread;
-      const inferenceInstructions = joinPresentSections(
-        usesSupervisionConnection
-          ? undefined
-          : (buildCodexParentLocalInstructions(runtimeParams, {
-              personaInstructions: workspaceBootstrapContext.personaInstructions,
-              skillsInstructions: context.skillsInstructions,
-              memoryInstructions: workspaceBootstrapContext.memoryInstructions,
-              sessionProjectGuidance: workspaceBootstrapContext.sessionProjectGuidance,
-            }) ?? undefined),
+      const persona = usesSupervisionConnection
+        ? undefined
+        : workspaceBootstrapContext.personaInstructions;
+      const parentContext = {
+        skillsInstructions: context.skillsInstructions,
+        memoryInstructions: workspaceBootstrapContext.memoryInstructions,
+        sessionProjectGuidance: workspaceBootstrapContext.sessionProjectGuidance,
+      };
+      const turnInstructions = joinPresentSections(
         turnState.promptBuild.turnDeveloperInstructions,
         buildCodexConversationTurnInstructions(
           runtimeParams,
           attemptTools.toolBridge.availableSpecs,
         ),
       );
+      const inferenceInstructions = joinPresentSections(
+        usesSupervisionConnection
+          ? undefined
+          : (buildCodexParentLocalInstructions(runtimeParams, {
+              ...parentContext,
+              personaInstructions: persona,
+            }) ?? undefined),
+        turnInstructions,
+      );
       const registration = await inferenceRoute.context.register({
         threadId: resourceState.thread.threadId,
         text: inferenceInstructions,
+        workspaceInstructions: persona
+          ? {
+              persona,
+              files: workspaceBootstrapContext.personaFiles,
+              profileId: runtimeParams.bootstrapUserProfileId,
+              requestLocal: joinPresentSections(
+                buildCodexParentLocalInstructions(runtimeParams, parentContext) ?? undefined,
+                turnInstructions,
+              ),
+            }
+          : undefined,
         signal: runAbortController.signal,
         assertCurrent: () => {
           params.hostCapabilities.assertActive();

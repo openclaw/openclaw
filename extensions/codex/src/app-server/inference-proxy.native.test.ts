@@ -238,6 +238,128 @@ const nativeInput = (text: string): CodexUserInput[] => [{ type: "text", text, t
 // One real app-server complements the deterministic admission/clock tests.
 // It never reaches a provider or the operator's HOME.
 describe.skipIf(process.platform === "win32")("native inference admission", () => {
+  it.skipIf(process.env.OPENCLAW_LIVE_CODEX_INFERENCE === "1").for(["HTTP", "WebSocket"])(
+    "keeps a stable persona prefix across full native incremental %s turns",
+    async (mode, context) => {
+      const native = await prepareNative(context, "codex-incremental-relay-");
+      const requests: JsonObject[] = [];
+      const websockets = mode === "WebSocket";
+      let sequence = 0;
+      const eventsFor = (value: unknown) => {
+        assert(isJsonObject(value), "Expected native JSON");
+        const index = ++sequence;
+        if (value.generate === false) {
+          expect(value.instructions).toBeUndefined();
+          return responseEvents(`fixture-response-${index}`);
+        }
+        requests.push(value);
+        return responseEvents(
+          `fixture-response-${index}`,
+          assistantMessage(`msg_fixture_${index}`, "Synthetic answer."),
+        );
+      };
+      transport.fetch.mockReset();
+      if (websockets) {
+        transport.fetch.mockRejectedValue(new Error("Unexpected HTTP fallback"));
+        const upstream = http.createServer();
+        const wss = new WebSocketServer({ server: upstream });
+        wss.on("connection", (socket) => {
+          socket.on("message", (bytes) => {
+            for (const event of eventsFor(JSON.parse(bytes.toString()))) {
+              socket.send(JSON.stringify(event));
+            }
+          });
+        });
+        upstream.listen(0, "127.0.0.1");
+        await once(upstream, "listening");
+        const address = upstream.address();
+        assert(address && typeof address !== "string");
+        transport.upstream = `ws://127.0.0.1:${address.port}`;
+        context.onTestFinished(async () => {
+          for (const socket of wss.clients) {
+            socket.terminate();
+          }
+          await promisify(wss.close.bind(wss))();
+          await promisify(upstream.close.bind(upstream))();
+        });
+      } else {
+        transport.fetch.mockImplementation(async (args) => {
+          const events = eventsFor(await new Response(args.init.body).json());
+          return {
+            response: new Response(
+              events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+              { headers: { "content-type": "text/event-stream" } },
+            ),
+            release: async () => {},
+          };
+        });
+      }
+      const proxy = await createCodexInferenceProxy({
+        upstream: new URL("https://api.openai.com/v1"),
+        assertCurrent: () => {},
+      });
+      context.onTestFinished(() => proxy.close());
+      await fs.writeFile(
+        path.join(native.codexHome, "config.toml"),
+        [
+          ...nativeConfig("gpt-5.6-sol", websockets ? "admission-fixture" : "http-fixture", [
+            "incremental_tools=true",
+          ]),
+          ...fixtureProvider("Synthetic incremental provider", proxy.baseUrl, websockets),
+        ].join("\n"),
+      );
+      const client = await startNative(context, native);
+      const { thread } = await client.request("thread/start", { cwd: native.cwd });
+      const persona = "Synthetic workspace persona.";
+      for (const requestLocal of ["First turn-only hint.", "Second turn-only hint."]) {
+        const registration = await proxy.context.register({
+          threadId: thread.id,
+          text: persona + "\n\n" + requestLocal,
+          workspaceInstructions: { persona, requestLocal },
+          signal: new AbortController().signal,
+          assertCurrent: () => {},
+        });
+        const terminal = new EventEmitter();
+        const unsubscribe = client.addNotificationHandler(({ method, params }) => {
+          if (
+            method === "turn/completed" &&
+            isJsonObject(params) &&
+            params.threadId === thread.id
+          ) {
+            terminal.emit("completed", params.turn);
+          }
+        });
+        try {
+          const completed = once(terminal, "completed");
+          await client.request("turn/start", {
+            threadId: thread.id,
+            input: nativeInput("Answer this synthetic question."),
+            responsesapiClientMetadata: {
+              [CODEX_INFERENCE_GENERATION_KEY]: registration.generation,
+            },
+          });
+          expect((await completed)[0]).toMatchObject({ status: "completed" });
+        } finally {
+          unsubscribe();
+        }
+        registration.release();
+      }
+
+      expect(requests).toHaveLength(2);
+      const [first, second] = requests;
+      assert(first && second && Array.isArray(first.input) && Array.isArray(second.input));
+      expect(first.instructions).toBe("First turn-only hint.");
+      expect(second.instructions).toBe("Second turn-only hint.");
+      expect(first.input[0]).toMatchObject({ type: "additional_tools" });
+      expect(first.input[1]).toMatchObject({
+        type: "message",
+        role: "developer",
+        content: [{ type: "input_text", text: persona }],
+      });
+      expect(second.input.slice(0, first.input.length)).toEqual(first.input);
+      expect(JSON.stringify(second.input)).not.toContain("First turn-only hint.");
+    },
+  );
   it.skipIf(process.env.OPENCLAW_LIVE_CODEX_INFERENCE === "1")(
     "loads a remote model catalog through the relay with native client version and auth",
     async (context) => {

@@ -15,6 +15,31 @@ function wire(nested: JsonObject, flat: JsonObject = {}, body: JsonObject = {}):
   };
 }
 
+const recordedDeclaration = {
+  type: "additional_tools",
+  role: "developer",
+  tools: [{ type: "function", name: "synthetic" }],
+  id: "at_01812345-6789-7abc-8def-0123456789aa",
+};
+
+function incrementalRequest(
+  generation: string,
+  input: JsonObject[],
+  threadId = "root",
+): JsonObject {
+  const body = wire(
+    { thread_id: threadId, request_kind: "turn", [CODEX_INFERENCE_GENERATION_KEY]: generation },
+    {},
+    { reasoning: { context: "all_turns" }, input, store: false },
+  );
+  delete body.instructions;
+  return body;
+}
+
+function developerMessage(text: string): JsonObject {
+  return { type: "message", role: "developer", content: [{ type: "input_text", text }] };
+}
+
 function request(
   threadId: string,
   generation?: string,
@@ -77,6 +102,142 @@ const rejectsMetadata = (...args: Parameters<typeof readCodexInferenceMetadata>)
   expect(() => readCodexInferenceMetadata(...args)).toThrow("metadata disagrees");
 
 describe("native inference context", () => {
+  it("keeps additions after the existing prefix and resets after withdrawal or compaction", async () => {
+    const { context, controller, prepare } = fixture();
+    const admit = (persona: string, requestLocal: string, profileId = "profile-one") =>
+      context.register({
+        threadId: "root",
+        text: [persona, requestLocal].filter(Boolean).join("\n\n"),
+        workspaceInstructions: {
+          persona,
+          requestLocal,
+          profileId,
+          files: persona ? [{ path: "SOUL.md", content: persona }] : [],
+        },
+        signal: controller.signal,
+        assertCurrent: () => {},
+      });
+    const base = developerMessage("native model policy");
+    const user = (id: string) => ({
+      type: "message",
+      role: "user",
+      id,
+      content: [{ type: "input_text", text: "Synthetic request" }],
+    });
+    const first = await admit("first persona", "turn one");
+    const native = [recordedDeclaration, base, user("user-one")];
+    const firstBody = incrementalRequest(first.generation, native);
+    const projected = prepare(firstBody).body;
+    expect(projected.instructions).toBe("turn one");
+    expect(projected.input).toEqual([
+      native[0],
+      developerMessage("first persona"),
+      ...native.slice(1),
+    ]);
+    expect(firstBody.input).toEqual(native);
+
+    const nextUser = user("user-two");
+    const second = await admit("first persona\nextra instruction", "turn two");
+    const secondBody = incrementalRequest(second.generation, [...native, nextUser]);
+    const continued = prepare(secondBody).body;
+    expect(continued.instructions).toBe("turn two");
+    expect(continued.input).toEqual([
+      ...(projected.input as JsonObject[]),
+      developerMessage(
+        "Additional OpenClaw workspace instructions (earlier workspace instructions still apply):\n\n" +
+          "### SOUL.md\n\nextra instruction",
+      ),
+      nextUser,
+    ]);
+    expect(prepare(secondBody).body).toEqual(continued);
+
+    const fork = await forkContext(context);
+    const forkBody = incrementalRequest(
+      fork.generation,
+      [...native, nextUser, user("fork-user")],
+      "fork",
+    );
+    const forked = prepare(forkBody).body;
+    expect(forked.instructions).toBe("turn two");
+    expect(forked.input).toEqual([...(continued.input as JsonObject[]), user("fork-user")]);
+
+    const newDeclaration = {
+      ...recordedDeclaration,
+      id: "at_01812345-6789-7abc-8def-0123456789ab",
+    };
+    const compacted = prepare(
+      incrementalRequest(second.generation, [newDeclaration, user("user-three")]),
+    ).body;
+    expect(compacted.input).toEqual([
+      newDeclaration,
+      developerMessage("first persona\nextra instruction"),
+      user("user-three"),
+    ]);
+
+    const replacement = await admit("second persona", "turn three", "profile-two");
+    expect(() => prepare(forkBody)).toThrow("workspace instructions changed");
+    expect(prepare(incrementalRequest(replacement.generation, native)).body.input).toEqual([
+      native[0],
+      developerMessage("second persona"),
+      ...native.slice(1),
+    ]);
+    const deselected = await admit("", "turn four");
+    expect(prepare(incrementalRequest(deselected.generation, native)).body).toMatchObject({
+      input: native,
+      instructions: "turn four",
+    });
+  });
+
+  it("keeps the legacy carrier for ambiguous Lite requests, WebSocket and non-sampling", async () => {
+    const { context, controller, prepare } = fixture();
+    const { generation } = await context.register({
+      threadId: "root",
+      text: "fixture persona\n\nrequest-only context",
+      workspaceInstructions: { persona: "fixture persona", requestLocal: "request-only context" },
+      signal: controller.signal,
+      assertCurrent: () => {},
+    });
+    const native = incrementalRequest(generation, [recordedDeclaration]);
+    const legacy = {
+      ...native,
+      input: [{ ...recordedDeclaration, id: "at_01812345-6789-5abc-8def-0123456789aa" }],
+    };
+    const expected = { instructions: "fixture persona\n\nrequest-only context" };
+    const fallbackBodies: JsonObject[] = [
+      legacy,
+      { ...native, reasoning: {} },
+      { ...native, previous_response_id: "response" },
+    ];
+    for (const body of fallbackBodies) {
+      expect(prepare(body).body).toMatchObject({ ...expected, input: body.input });
+    }
+    expect(prepare({ ...native, instructions: "native" }).body).toMatchObject({
+      instructions: "native\n\n" + expected.instructions,
+      input: native.input,
+    });
+    expect(prepare(native, undefined, false, "websocket").body.instructions).toBe(
+      "request-only context",
+    );
+    expect(
+      prepare(
+        { ...native, previous_response_id: "response", input: [] },
+        undefined,
+        false,
+        "websocket",
+      ).body,
+    ).toMatchObject({ ...expected, previous_response_id: "response", input: [] });
+    for (const metadata of [
+      { threadId: "root", generation, requestKind: "turn", parentThreadId: "parent" },
+      { threadId: "root", generation, requestKind: "compaction" },
+    ]) {
+      expect(prepare(native, metadata).body).toBe(native);
+    }
+    expect(prepare({ ...native, generate: false }, { requestKind: "prewarm" }).body).toEqual({
+      ...native,
+      generate: false,
+    });
+  });
+
   it("keeps sampling settings within their admitted generation", async () => {
     const { context, controller, register, prepare } = fixture();
     const bounded = await context.register({

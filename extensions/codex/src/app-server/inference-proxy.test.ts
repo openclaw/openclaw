@@ -10,7 +10,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
-import { isTerminalResponse } from "./inference-dispatch.js";
+import { readTerminalResponse } from "./inference-dispatch.js";
 import { createCodexInferenceProxy, type CodexInferenceProxy } from "./inference-proxy.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
@@ -494,9 +494,9 @@ describe("private inference WebSocket relay", () => {
     const parse = vi.spyOn(JSON, "parse");
     try {
       for (const type of ["response.output_text.delta", "response.function_call_arguments.delta"]) {
-        expect(isTerminalResponse(Buffer.from(JSON.stringify({ type, delta: "synthetic" })))).toBe(
-          false,
-        );
+        expect(
+          Boolean(readTerminalResponse(Buffer.from(JSON.stringify({ type, delta: "synthetic" })))),
+        ).toBe(false);
       }
       expect(parse).not.toHaveBeenCalled();
       for (const [wire, terminal] of [
@@ -512,11 +512,91 @@ describe("private inference WebSocket relay", () => {
         ['{"ty\\u0070e":"response.fa\\u0069led"}', true],
         ['{"type":"response.completed","response":{"id":"\\u0061"}}', true],
       ] as const) {
-        expect(isTerminalResponse(Buffer.from(wire)), wire).toBe(terminal);
+        expect(Boolean(readTerminalResponse(Buffer.from(wire))), wire).toBe(terminal);
       }
     } finally {
       parse.mockRestore();
     }
+  });
+
+  it("carries private incremental input only through a proven WebSocket continuation", async () => {
+    const completion = '{"type":"response.completed","response":{"id":"fixture-response"}}';
+    const received = await upstreamFixture(completion);
+    const { proxy } = await fixture();
+    const register = () =>
+      proxy.context.register({
+        threadId: "root",
+        text: "Synthetic persona.\n\nCurrent instruction.",
+        workspaceInstructions: {
+          persona: "Synthetic persona.",
+          requestLocal: "Current instruction.",
+        },
+        signal: new AbortController().signal,
+        assertCurrent: () => {},
+      });
+    const full = {
+      type: "response.create",
+      store: false,
+      reasoning: { context: "all_turns" },
+      input: [
+        {
+          type: "additional_tools",
+          role: "developer",
+          id: "at_01812345-6789-7abc-8def-0123456789aa",
+          tools: [{ type: "function", name: "fixture" }],
+        },
+      ],
+    };
+    const metadata = (generation: string, extra = {}) => ({
+      "x-codex-turn-metadata": JSON.stringify({
+        thread_id: "root",
+        request_kind: "turn",
+        [CODEX_INFERENCE_GENERATION_KEY]: generation,
+        ...extra,
+      }),
+    });
+    const registration = await register();
+    const socket = connect(proxy);
+    await once(socket, "open");
+    const send = async (body: object) => {
+      const response = once(socket, "message");
+      socket.send(JSON.stringify(body));
+      expect((await response)[0].toString()).toBe(completion);
+    };
+    const base = { ...full, client_metadata: metadata(registration.generation) };
+    await send(base);
+    const delta = {
+      ...base,
+      input: [],
+      previous_response_id: "fixture-response",
+      instructions: "Native delta instruction.",
+    };
+    await send(delta);
+
+    expect(received).toEqual([
+      {
+        ...base,
+        instructions: "Current instruction.",
+        input: [
+          ...full.input,
+          {
+            type: "message",
+            role: "developer",
+            content: [{ type: "input_text", text: "Synthetic persona." }],
+          },
+        ],
+      },
+      { ...delta, instructions: "Native delta instruction.\n\nCurrent instruction." },
+    ]);
+    const closed = once(socket, "close");
+    socket.send(
+      JSON.stringify({
+        ...delta,
+        client_metadata: metadata(registration.generation, { parent_thread_id: "parent" }),
+      }),
+    );
+    await closed;
+    expect(received).toHaveLength(2);
   });
 
   it("rejects WebSocket OAuth without resolving a bearer or dialing upstream", async () => {

@@ -75,7 +75,15 @@ Codex harness forwards the other bootstrap files as developer instructions:
   `USER.md` are added to **parent-only model request instructions**. The
   private relay leaves native base/catalog instructions and history intact,
   so newly delivered persona and user-profile context are not automatically
-  inherited by native Codex subagents.
+  inherited by native Codex subagents. For complete sampling requests with
+  Codex's incremental Responses Lite tool declarations, the relay places the
+  persona in a stable input prefix. Request-local instructions stay in the
+  top-level instruction field. Additions to shared files can extend the prefix;
+  replacements, profile changes, and compaction start a fresh base with only
+  the current selection. This relay projection is not saved in Codex history.
+  A WebSocket delta reuses that persona only when it refers to the preceding
+  response on the same socket and in the same admission. Unrecognized request
+  shapes keep the existing carrier.
 - The compact loaded OpenClaw skills list uses the same parent-local layer.
 - The selected memory plugin's prompt builder receives the complete available
   tool set, including deferred plugin tools. Its guidance uses the same

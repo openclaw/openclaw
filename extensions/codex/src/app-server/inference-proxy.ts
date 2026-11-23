@@ -22,7 +22,8 @@ import {
   authorizationFailure,
   requestTooLargeFailure,
   createCodexInferenceDispatch,
-  isTerminalResponse,
+  createCodexPersonaWebSocketChain,
+  readTerminalResponse,
   readProxyBody,
   type CodexInferenceModelExecution,
   type CodexInferenceModelRequest,
@@ -558,6 +559,7 @@ export async function createCodexInferenceProxy(
               local = accepted;
               accepted.once("error", close);
               accepted.once("close", close);
+              const personaChain = createCodexPersonaWebSocketChain();
               let releaseFrame = () => {};
               let settleFrame = () => {};
               const idle = (reclaimable = true) => {
@@ -633,20 +635,20 @@ export async function createCodexInferenceProxy(
                       req.headers,
                       signal,
                       "websocket",
+                      personaChain.current(),
                     );
+                    personaChain.sent(prepared.personaGeneration);
                     prepared.assertCurrent();
                     const frame = prepared;
-                    const onAbort = () => close();
-                    frame.signal.addEventListener("abort", onAbort, { once: true });
-                    frame.contextSignal?.addEventListener("abort", onAbort, { once: true });
-                    const releaseModel = () => {
-                      frame.signal.removeEventListener("abort", onAbort);
+                    frame.signal.addEventListener("abort", close, { once: true });
+                    frame.contextSignal?.addEventListener("abort", close, { once: true });
+                    settleFrame = () => {
+                      frame.signal.removeEventListener("abort", close);
                       frame.release();
                     };
-                    settleFrame = releaseModel;
                     releaseFrame = () => {
-                      frame.contextSignal?.removeEventListener("abort", onAbort);
-                      releaseModel();
+                      frame.contextSignal?.removeEventListener("abort", close);
+                      settleFrame();
                     };
                     frame.signal.throwIfAborted();
                     await forward(frame);
@@ -672,12 +674,13 @@ export async function createCodexInferenceProxy(
                 }
                 // Upload completion does not prove response quiescence. Only a
                 // delivered terminal event makes this retained transport reclaimable.
-                const terminal = !binary && isTerminalResponse(codexWebSocketDataToBuffer(data));
+                const terminal = !binary && readTerminalResponse(codexWebSocketDataToBuffer(data));
                 const releaseCompletedFrame = terminal ? settleFrame : undefined;
                 accepted.send(data, { binary }, (error) => {
                   if (error) {
                     close();
                   } else if (terminal && connections.has(close)) {
+                    personaChain.completed(terminal.responseId);
                     // Release completed work after delivery; its context still owns this socket.
                     releaseCompletedFrame?.();
                     idle();

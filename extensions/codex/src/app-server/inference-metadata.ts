@@ -14,6 +14,7 @@ export type CodexInferenceMetadata = Readonly<{
   parentThreadId?: string;
   parentTurnId?: string;
   rootTurnId?: string;
+  contextWindowId?: string;
   requestKind?: string;
   threadSource?: string;
   subagent?: string;
@@ -80,6 +81,7 @@ export function readCodexInferenceMetadata(
     ),
     parentTurnId: readTurnId("parent turn", "parent_turn_id"),
     rootTurnId: readTurnId("root turn", "root_turn_id"),
+    contextWindowId: readId("context window", ...nativeField("context_window_id")),
     requestKind,
     threadSource: reconcileMetadataStrings("thread source", ...nativeField("thread_source")),
     // SessionSource is fixed for this native model client, including across reused WS turns.

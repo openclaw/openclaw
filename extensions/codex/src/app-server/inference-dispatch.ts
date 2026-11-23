@@ -3,7 +3,7 @@ import type { IncomingHttpHeaders, IncomingMessage } from "node:http";
 import { promisify } from "node:util";
 import { zstdCompress, zstdDecompress } from "node:zlib";
 import type { CodexAppServerClient } from "./client.js";
-import type { createCodexInferenceContext } from "./inference-context.js";
+import type { CodexPersonaContinuation, createCodexInferenceContext } from "./inference-context.js";
 import { readCodexInferenceMetadata, type CodexInferenceMetadata } from "./inference-metadata.js";
 import { CODEX_INFERENCE_TRANSPORT_FAILURE as FAILURE } from "./inference-transport.js";
 import { createUploadBody, createRetryableUploadBody, MAX_BODY_BYTES } from "./inference-upload.js";
@@ -317,6 +317,7 @@ export function createCodexInferenceDispatch(params: {
     headers: IncomingHttpHeaders,
     signal: AbortSignal,
     transport: "http" | "websocket",
+    personaContinuation?: CodexPersonaContinuation,
   ) => {
     assertCurrent();
     const sampling = path === "/responses";
@@ -357,7 +358,13 @@ export function createCodexInferenceDispatch(params: {
       // Instruction injection remains parent-only, independently of model authorization.
       const prepared =
         sampling && isJsonObject(value)
-          ? context.prepare(value, metadata, params.requireAdmission)
+          ? context.prepare(
+              value,
+              metadata,
+              params.requireAdmission,
+              transport,
+              personaContinuation,
+            )
           : undefined;
       const assertPrepared = () => {
         if (released) {
@@ -387,6 +394,7 @@ export function createCodexInferenceDispatch(params: {
         assertCurrent: assertPrepared,
         signal: requestSignal,
         contextSignal: prepared?.signal,
+        personaGeneration: prepared?.personaGeneration,
         release,
       };
     } catch (error) {
@@ -466,26 +474,53 @@ export async function readProxyBody(
   return Buffer.concat(chunks);
 }
 
+/** Socket-local proof of which completed upstream response contains projected input. */
+export function createCodexPersonaWebSocketChain() {
+  let continuation: CodexPersonaContinuation | undefined;
+  let generation: string | undefined;
+  return {
+    current: () => continuation,
+    sent(personaGeneration: string | undefined) {
+      generation = personaGeneration;
+      if (continuation || generation) {
+        // Once the socket has carried a projection, refuse unknown prior responses.
+        continuation = {};
+      }
+    },
+    completed(responseId: string | undefined) {
+      if (continuation) {
+        continuation = { responseId, generation };
+      }
+      generation = undefined;
+    },
+  };
+}
+
 const TERMINAL_RESPONSE_CANDIDATE = /response\.(?:completed|failed|incomplete)|\\u/u;
 
-export function isTerminalResponse(bytes: Buffer): boolean {
+export function readTerminalResponse(bytes: Buffer): { responseId?: string } | undefined {
   const text = bytes.toString("utf8");
   // Ordinary deltas cannot settle a response. Escaped names and all possible
   // terminal matches still use JSON parsing, including duplicate/malformed keys.
   if (!TERMINAL_RESPONSE_CANDIDATE.test(text)) {
-    return false;
+    return undefined;
   }
   try {
     const event: unknown = JSON.parse(text);
-    return (
-      isJsonObject(event) &&
-      (event.type === "response.failed" ||
-        event.type === "response.incomplete" ||
-        (event.type === "response.completed" &&
-          isJsonObject(event.response) &&
-          typeof event.response.id === "string"))
-    );
+    if (isJsonObject(event)) {
+      if (event.type === "response.failed" || event.type === "response.incomplete") {
+        return {};
+      }
+      if (
+        event.type === "response.completed" &&
+        isJsonObject(event.response) &&
+        typeof event.response.id === "string"
+      ) {
+        return { responseId: event.response.id };
+      }
+    }
   } catch {
-    return false;
+    // Invalid frames are not terminal.
   }
+  return undefined;
 }

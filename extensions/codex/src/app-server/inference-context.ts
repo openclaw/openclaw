@@ -1,11 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { embeddedAgentLog, type AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  type AgentHarnessV2,
+  type EmbeddedContextFile,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { defineCodexBuildState } from "../build-state.js";
 import { readCodexInferenceMetadata, type CodexInferenceMetadata } from "./inference-metadata.js";
-import { isJsonObject, type JsonObject } from "./protocol.js";
+import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
 export { CODEX_INFERENCE_GENERATION_KEY } from "./inference-metadata.js";
+export type CodexPersonaContinuation = { responseId?: string; generation?: string };
 
 const MAX_CONTEXT_BYTES = 256 * 1024;
 const MAX_ACTIVE_ROOTS = 64;
@@ -14,9 +19,31 @@ const MAX_RETAINED_REQUEST_BYTES = 32 * 1024 * 1024;
 export type CodexInferenceStreamParams = Parameters<
   NonNullable<AgentHarnessV2["runIsolatedCompletionV2"]>
 >[0]["streamParams"];
-type PreparedPrefix = { text: string };
+type WorkspaceInstructions = {
+  persona: string;
+  requestLocal: string;
+  files?: readonly EmbeddedContextFile[];
+  profileId?: string;
+};
+type PersonaProjection = {
+  contextWindowId?: string;
+  base: { after: string; text: string };
+  additions: { before: string; text: string }[];
+};
+type PreparedPrefix = {
+  text: string;
+  workspaceInstructions?: WorkspaceInstructions;
+  projection?: PersonaProjection;
+  pendingAddition?: string;
+};
+type PreparedRequest = {
+  body: JsonObject;
+  bytes: number;
+  requestLocal?: string;
+  projection?: PersonaProjection;
+};
 const retained = defineCodexBuildState("openclaw.codexPreparedRequests", () => ({
-  requests: new Map<PreparedPrefix, { body: JsonObject; bytes: number }>(),
+  requests: new Map<PreparedPrefix, PreparedRequest>(),
   bytes: 0,
 }))();
 
@@ -31,7 +58,7 @@ function forgetRequest(prefix: PreparedPrefix | undefined) {
   }
 }
 
-function retainRequest(prefix: PreparedPrefix, body: JsonObject) {
+function retainRequest(prefix: PreparedPrefix, body: JsonObject, projection?: PersonaProjection) {
   const previous = retained.requests.get(prefix)?.body;
   forgetRequest(prefix);
   const continuation = body.previous_response_id != null;
@@ -54,21 +81,163 @@ function retainRequest(prefix: PreparedPrefix, body: JsonObject) {
       snapshot.inputTools = inputTools;
     }
   }
-  const bytes = Buffer.byteLength(JSON.stringify(snapshot));
+  const bytes =
+    Buffer.byteLength(JSON.stringify(snapshot)) +
+    (projection ? Buffer.byteLength(JSON.stringify(projection)) : 0);
   if (bytes > MAX_RETAINED_REQUEST_BYTES) {
     return;
   }
   while (retained.bytes + bytes > MAX_RETAINED_REQUEST_BYTES) {
     forgetRequest(retained.requests.keys().next().value);
   }
-  retained.requests.set(prefix, { body: snapshot, bytes });
+  retained.requests.set(prefix, {
+    body: snapshot,
+    bytes,
+    requestLocal: projection ? prefix.workspaceInstructions?.requestLocal : undefined,
+    projection,
+  });
   retained.bytes += bytes;
+}
+
+// Codex assigns UUIDv7 IDs to history items (session.rs). Legacy Responses Lite
+// also emits additional_tools, but as a prompt-only UUIDv5 item (client.rs).
+const RECORDED_DECLARATION_ID =
+  /^at_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
+function readIncrementalInput(body: JsonObject) {
+  if (
+    body.instructions !== undefined ||
+    body.previous_response_id !== undefined ||
+    body.generate === false ||
+    body.store !== false ||
+    !isJsonObject(body.reasoning) ||
+    body.reasoning.context !== "all_turns" ||
+    !Array.isArray(body.input)
+  ) {
+    return undefined;
+  }
+  for (const item of body.input) {
+    if (
+      isJsonObject(item) &&
+      item.type === "additional_tools" &&
+      item.role === "developer" &&
+      typeof item.id === "string" &&
+      RECORDED_DECLARATION_ID.test(item.id) &&
+      Array.isArray(item.tools) &&
+      item.tools.length > 0
+    ) {
+      return { input: body.input, declarationId: item.id };
+    }
+  }
+  return undefined;
+}
+
+function getPersonaAddition(previous?: WorkspaceInstructions, current?: WorkspaceInstructions) {
+  if (!previous?.files || !current?.files || previous.profileId !== current.profileId) {
+    return undefined;
+  }
+  const sections: string[] = [];
+  for (const file of previous.files) {
+    const next = current.files.find((item) => item.path === file.path);
+    if (!next || next.personalUser !== file.personalUser) {
+      return undefined;
+    }
+    if (next.content !== file.content) {
+      // Never append updates to a selected personal overlay. Rebase without the old text.
+      if (file.personalUser || !next.content.startsWith(file.content + "\n")) {
+        return undefined;
+      }
+    }
+  }
+  for (const file of current.files) {
+    const prior = previous.files.find((item) => item.path === file.path);
+    if (file.content === prior?.content) {
+      continue;
+    }
+    if (file.personalUser) {
+      return undefined;
+    }
+    const added = prior ? file.content.slice(prior.content.length + 1) : file.content;
+    if (added.trim()) {
+      sections.push(`### ${file.path}\n\n${added}`);
+    }
+  }
+  return sections.length
+    ? "Additional OpenClaw workspace instructions (earlier workspace instructions still apply):\n\n" +
+        sections.join("\n\n")
+    : undefined;
+}
+
+function insertPersona(input: JsonValue[], projection: PersonaProjection): JsonValue[] | undefined {
+  const developerMessage = (text: string): JsonObject => ({
+    type: "message",
+    role: "developer",
+    content: [{ type: "input_text", text }],
+  });
+  const baseIndex = input.findIndex(
+    (item) => isJsonObject(item) && item.id === projection.base.after,
+  );
+  if (baseIndex < 0) {
+    return undefined;
+  }
+  let nextIndex = baseIndex + 1;
+  const projected = [...input.slice(0, nextIndex), developerMessage(projection.base.text)];
+  for (const addition of projection.additions) {
+    const index = input.findIndex((item) => isJsonObject(item) && item.id === addition.before);
+    if (index < nextIndex) {
+      return undefined;
+    }
+    for (; nextIndex < index; nextIndex++) {
+      projected.push(input[nextIndex]!);
+    }
+    projected.push(developerMessage(addition.text));
+  }
+  return [...projected, ...input.slice(nextIndex)];
+}
+
+function preparePersonaProjection(
+  input: JsonValue[],
+  declarationId: string,
+  contextWindowId: string | undefined,
+  persona: string,
+  previous: PersonaProjection | undefined,
+  pendingAddition: string | undefined,
+) {
+  if (previous?.base.after === declarationId && previous.contextWindowId === contextWindowId) {
+    if (!pendingAddition && insertPersona(input, previous)) {
+      return previous;
+    }
+    // The last native user item anchors the addition, even on an HTTP retry.
+    const user = input.findLast(
+      (item): item is JsonObject =>
+        isJsonObject(item) &&
+        item.type === "message" &&
+        item.role === "user" &&
+        typeof item.id === "string",
+    );
+    if (
+      pendingAddition &&
+      typeof user?.id === "string" &&
+      previous.additions.length < 32 &&
+      !previous.additions.some((addition) => addition.before === user.id)
+    ) {
+      const extended = {
+        ...previous,
+        additions: [...previous.additions, { before: user.id, text: pendingAddition }],
+      };
+      if (insertPersona(input, extended)) {
+        return extended;
+      }
+    }
+  }
+  return { contextWindowId, base: { after: declarationId, text: persona }, additions: [] };
 }
 
 type Registration = {
   generation: string;
   text: string;
-  forkPrefix?: JsonObject;
+  workspaceInstructions?: WorkspaceInstructions;
+  forkRequest?: PreparedRequest;
   denyToolCalls: boolean;
   streamParams?: CodexInferenceStreamParams;
   controller: AbortController;
@@ -98,10 +267,11 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
     async register(params: {
       threadId: string;
       text: string;
+      workspaceInstructions?: WorkspaceInstructions;
       signal: AbortSignal;
       assertCurrent: () => void;
       retainPrefix?: boolean;
-      forkPrefix?: JsonObject;
+      forkRequest?: PreparedRequest;
       denyToolCalls?: boolean;
       streamParams?: CodexInferenceStreamParams;
     }) {
@@ -128,7 +298,8 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
         const registration: Registration = {
           generation: randomUUID(),
           text: params.text,
-          forkPrefix: params.forkPrefix,
+          workspaceInstructions: params.workspaceInstructions,
+          forkRequest: params.forkRequest,
           denyToolCalls: params.denyToolCalls === true,
           streamParams: params.streamParams,
           controller,
@@ -147,6 +318,8 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
               drain();
             }
             registration.text = "";
+            registration.workspaceInstructions = undefined;
+            registration.forkRequest = undefined;
             controller.abort();
             params.signal.removeEventListener("abort", registration.release);
           },
@@ -156,10 +329,26 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
         previous?.release();
         if (params.retainPrefix !== false) {
           const prefix = prefixes.get(params.threadId);
-          if (prefix) {
+          const workspace = params.workspaceInstructions;
+          const previousWorkspace = prefix?.workspaceInstructions;
+          if (
+            prefix &&
+            previousWorkspace?.persona === workspace?.persona &&
+            previousWorkspace?.profileId === workspace?.profileId
+          ) {
             prefix.text = params.text;
+            prefix.workspaceInstructions = workspace;
           } else {
-            prefixes.set(params.threadId, { text: params.text });
+            const addition = getPersonaAddition(previousWorkspace, workspace);
+            const projection =
+              addition && !prefix?.pendingAddition ? prefix?.projection : undefined;
+            forgetRequest(prefix);
+            prefixes.set(params.threadId, {
+              text: params.text,
+              workspaceInstructions: workspace,
+              projection,
+              pendingAddition: projection ? addition : undefined,
+            });
           }
         }
         params.signal.addEventListener("abort", registration.release, { once: true });
@@ -217,11 +406,17 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
       return this.register({
         threadId: params.threadId,
         text: prefix.text,
-        forkPrefix: request?.body,
+        forkRequest: request,
         retainPrefix: false,
         denyToolCalls: true,
         signal: params.signal,
-        assertCurrent: params.assertCurrent,
+        assertCurrent: () => {
+          params.assertCurrent();
+          const current = prefixes.get(params.sourceThreadId);
+          if (current !== prefix && (current || prefix.workspaceInstructions)) {
+            throw new Error("Codex side-question workspace instructions changed");
+          }
+        },
       });
     },
     forget(threadId: string) {
@@ -231,11 +426,32 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
     },
     /** Caller must authenticate its private transport before parsing any model request. */
     // Host-held OAuth may fund only admitted generations; native background work has no such grant.
-    prepare(body: JsonObject, preparedMetadata?: CodexInferenceMetadata, requireAdmission = false) {
+    prepare(
+      body: JsonObject,
+      preparedMetadata?: CodexInferenceMetadata,
+      requireAdmission = false,
+      transport: "http" | "websocket" = "http",
+      continuation?: CodexPersonaContinuation,
+    ) {
       assertOpen();
       const metadata = preparedMetadata ?? readCodexInferenceMetadata(body);
       const child = Boolean(metadata.parentThreadId || metadata.subagentKind || metadata.subagent);
       const kind = metadata.requestKind;
+      const projectedDelta =
+        kind === "turn" &&
+        !child &&
+        transport === "websocket" &&
+        continuation?.generation !== undefined &&
+        body.previous_response_id === continuation.responseId;
+      if (transport === "websocket" && continuation && body.previous_response_id !== undefined) {
+        if (
+          body.previous_response_id !== continuation.responseId ||
+          (continuation.generation !== undefined &&
+            (!projectedDelta || continuation.generation !== metadata.generation))
+        ) {
+          throw new Error("Codex persona continuation has no current admitted response");
+        }
+      }
       // Native children/reviewers and compaction/memory keep their original instructions.
       if (!requireAdmission && (child || kind === "compaction" || kind === "memory")) {
         return { body, assertCurrent: assertOpen, signal: undefined };
@@ -262,6 +478,8 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
       }
       registration.assertCurrent();
       let preparedBody = body;
+      let matchedForkPrefix = false;
+      let personaGeneration: string | undefined;
       if (kind !== "compaction") {
         // Responses Lite carries native base instructions in input and omits this optional field.
         const instructions = body.instructions;
@@ -279,17 +497,20 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
         }
       }
       if (kind === "turn") {
-        const prefix = registration.forkPrefix;
+        const forkRequest = registration.forkRequest;
+        const prefix = forkRequest?.body;
         const inputTools = Array.isArray(prefix?.input)
           ? prefix.input.find((item) => isJsonObject(item) && item.type === "additional_tools")
           : prefix?.inputTools;
         const input =
           prefix && Array.isArray(body.input)
-            ? body.input.map((item) =>
-                isJsonObject(inputTools) && isJsonObject(item) && item.type === "additional_tools"
-                  ? inputTools
-                  : item,
-              )
+            ? forkRequest?.projection
+              ? body.input
+              : body.input.map((item) =>
+                  isJsonObject(inputTools) && isJsonObject(item) && item.type === "additional_tools"
+                    ? inputTools
+                    : item,
+                )
             : undefined;
         // Only a complete matching prefix proves where current native history begins.
         // A changed/compacted history uses native reconstruction rather than losing its tail.
@@ -314,6 +535,7 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
             }
           }
           preparedBody.input = [...prefix.input, ...input.slice(prefix.input.length)];
+          matchedForkPrefix = true;
         } else if (prefix) {
           // Native history owns the tail; the retained request still owns prepared
           // instructions and declarations, independently of input-prefix equality.
@@ -339,14 +561,59 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
           };
         }
         const retainedPrefix = metadata.threadId ? prefixes.get(metadata.threadId) : undefined;
+        const persona = registration.workspaceInstructions?.persona;
+        const requestLocal = forkRequest
+          ? forkRequest.requestLocal
+          : registration.workspaceInstructions?.requestLocal;
+        const wire = persona || forkRequest?.projection ? readIncrementalInput(body) : undefined;
+        let projection: PersonaProjection | undefined;
+        if (wire && Array.isArray(preparedBody.input)) {
+          if (retainedPrefix && persona) {
+            projection = preparePersonaProjection(
+              wire.input,
+              wire.declarationId,
+              metadata.contextWindowId,
+              persona,
+              retainedPrefix.projection,
+              retainedPrefix.pendingAddition,
+            );
+            retainedPrefix.projection = projection;
+            retainedPrefix.pendingAddition = undefined;
+          } else if (matchedForkPrefix) {
+            projection = forkRequest?.projection;
+          }
+        }
         if (retainedPrefix) {
-          retainRequest(retainedPrefix, preparedBody);
+          // Side questions match the native history, then apply the exact projection
+          // for the sampled parent request. Neither projection mutates native history.
+          retainRequest(retainedPrefix, preparedBody, projection);
+        }
+        const projectedInput =
+          projection && Array.isArray(preparedBody.input)
+            ? insertPersona(preparedBody.input, projection)
+            : undefined;
+        if (projectedInput || projectedDelta) {
+          const { instructions: _legacyInstructions, ...native } = preparedBody;
+          const nativeInstructions = projectedDelta ? body.instructions : undefined;
+          const instructions =
+            typeof nativeInstructions === "string"
+              ? requestLocal
+                ? nativeInstructions + "\n\n" + requestLocal
+                : nativeInstructions
+              : requestLocal || undefined;
+          preparedBody = {
+            ...native,
+            ...(projectedInput ? { input: projectedInput } : {}),
+            ...(instructions === undefined ? {} : { instructions }),
+          };
+          personaGeneration = registration.generation;
         }
       }
       return {
         body: preparedBody,
         assertCurrent: registration.assertCurrent,
         signal: registration.controller.signal,
+        personaGeneration,
       };
     },
     close() {
