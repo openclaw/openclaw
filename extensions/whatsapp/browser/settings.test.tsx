@@ -103,9 +103,9 @@ it("keeps QR/relink actions and busy state tied to the shared login snapshot", (
   expect(f.start).toHaveBeenCalledWith(false);
   f.update({ status: { linked: true }, login: qrLogin });
   // The shown code is watched by the login owner; no separate wait action remains.
-  expect(f.container.querySelector('[role="status"]')?.textContent).toBe(
-    "Waiting for a scan. The code refreshes on its own.",
-  );
+  expect(
+    [...f.container.querySelectorAll('[role="status"]')].map((node) => node.textContent),
+  ).toEqual(["Scan now", "Waiting for a scan. The code refreshes on its own."]);
   expect(f.buttons().map((node) => node.textContent?.trim())).toEqual(["Relink", "Logout"]);
   f.button("Relink").click();
   expect(f.start).toHaveBeenLastCalledWith(true);

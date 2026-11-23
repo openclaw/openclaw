@@ -158,7 +158,7 @@ export function WhatsAppCard(props: {
             </button>
           </div>
         </div>
-        <Show when={!login()?.qrDataUrl && login()?.message}>
+        <Show when={login()?.message}>
           {(message) => (
             <div class="settings-row" role="status">
               <div class="settings-row__text">

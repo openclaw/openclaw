@@ -229,6 +229,8 @@ suite.define(() => {
         },
       },
       async (page, gateway, assets) => {
+        // The phone has not scanned yet, so the view's wait on the shown code stays open.
+        await gateway.setMethodDelay("web.login.wait", "forever");
         const detail = await openChannel(page);
         const logout = detail.getByRole("button", { name: "Logout" });
         await logout.waitFor();
@@ -240,6 +242,12 @@ suite.define(() => {
         const qr = detail.getByRole("img", { name: "WhatsApp QR" });
         await qr.waitFor();
         await expect(qr.getAttribute("src")).resolves.toBe(QR_DATA_URL);
+        await gateway.waitForRequest("web.login.wait");
+        expect((await gateway.getRequests("web.login.wait"))[0]?.params).toMatchObject({
+          channel: "whatsapp",
+          timeoutMs: 180_000,
+          currentQrDataUrl: QR_DATA_URL,
+        });
 
         await logout.click();
         await expectRequests(gateway, "channels.logout", 0);
