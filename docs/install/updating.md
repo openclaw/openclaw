@@ -150,13 +150,14 @@ found that earlier receipts did not prove what they claimed.
   afterwards.)
 - **Route:** each run records the update run's `trigger` (`control-ui` or `api`),
   the Gateway log line for `update.run`, and the environment of the Gateway and the
-  CLI. A run with `OPENCLAW_UPDATE_PACKAGE_SPEC`, `--tag`, `--no-restart` or
-  `--timeout` does not prove the Gateway route: those select a local route or a
-  different target resolution.
-- **Service:** the service comes from `openclaw gateway install`, and the
-  effective service state is saved after each run (`systemctl --user show -p
-  ExecStart,NeedDaemonReload`, `launchctl print`, or the task definition and
-  script). A hand-written service definition is not proof.
+  CLI. A run with `OPENCLAW_UPDATE_PACKAGE_SPEC`, `--tag` or `--no-restart` does
+  not prove the Gateway route: those select a local route or a different target
+  resolution. A run that ends at a shortened `--timeout` is not a product result.
+- **Service:** in the managed-service lanes, the service comes from `openclaw
+  gateway install`, and the effective service state is saved after each run
+  (`systemctl --user show -p ExecStart,NeedDaemonReload`, `launchctl print`, or
+  the task definition and script). A hand-written service definition is not
+  proof. The container lane runs with no service on purpose.
 - **Next build:** `T+1` has its own build ID and a higher state schema, and the
   crash candidate crashes after its migration. A pass shows the state files equal
   to the `.pre-` originals after a rollback. A re-stamped copy of `T` proves only
