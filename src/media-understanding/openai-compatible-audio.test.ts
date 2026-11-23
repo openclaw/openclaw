@@ -1,5 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
-import { VERSION } from "../version.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
@@ -24,12 +23,20 @@ function transcribe(fetchFn: typeof fetch, overrides: Partial<AudioParams> = {})
 }
 
 describe("transcribeOpenAiCompatibleAudio", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it.each([
-    { baseUrl: undefined, attribution: ["openclaw", VERSION, `openclaw/${VERSION}`] },
+    {
+      baseUrl: undefined,
+      attribution: ["openclaw", "2026.11.10", "openclaw/2026.11.10-beta.3"],
+    },
     { baseUrl: "https://proxy.example.com/v1", attribution: [null, null, null] },
   ])(
     "limits hidden attribution headers to the native host (baseUrl=$baseUrl)",
     async ({ baseUrl, attribution }) => {
+      vi.stubEnv("OPENCLAW_VERSION", "2026.11.10-beta.3");
       const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
 
       await transcribe(fetchFn, { baseUrl });

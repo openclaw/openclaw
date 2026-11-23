@@ -123,7 +123,9 @@ export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAge
       expectRespondError(respond, { message: "reset storage unavailable" });
       expect(context.dedupe.get(`agent:${resetRunId}`)).toBeUndefined();
     } else {
-      expectRespondError(respond, { message: "agent runtime authority is no longer active" });
+      expectRespondError(respond, {
+        message: "The message turn has ended. Start a new turn to retry.",
+      });
       expect(respond.mock.calls.some(([ok]) => ok === true)).toBe(false);
     }
     if (closesAfterCommit || closesDuringFollowUp) {

@@ -369,6 +369,12 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
         : dispatchChannelMessageAction(actionContext);
       if (mode.endsWith("allowed")) {
         expect(await invocation).not.toBeNull();
+      } else if (mode === "run-revoked-direct" || mode === "run-result-revoked-direct") {
+        // Direct dispatch retains the Gateway runtime guard and its actionable refusal.
+        await expect(invocation).rejects.toMatchObject({
+          name: "TypeError",
+          message: "The message turn has ended. Start a new turn to retry.",
+        });
       } else {
         await expect(invocation).rejects.toThrow(
           mode === "denied" ? "not allowed" : "no longer active",

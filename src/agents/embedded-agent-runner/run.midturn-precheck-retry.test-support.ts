@@ -417,7 +417,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       { activeCount: 1, codeModeEngaged: true },
       true,
     ],
-    ["asynchronous tool activity", { asyncStarted: true }, false],
+    ["asynchronous tool activity", { asyncStarted: true }, true],
   ])("keeps %s fail-closed", async (_label, attemptParams, expectsWarning) => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeReplayUnsafeMidTurnOverflow(attemptParams));
 

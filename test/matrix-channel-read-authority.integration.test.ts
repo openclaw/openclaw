@@ -363,7 +363,11 @@ describe("registered installed Matrix reads", () => {
           }
         }
       });
-      await expect(fixture.invoke("read", { limit: 1 })).rejects.toThrow(/no longer active/);
+      await expect(fixture.invoke("read", { limit: 1 })).rejects.toThrow(
+        owner === "caller"
+          ? "The message turn has ended. Start a new turn to retry."
+          : /no longer active/,
+      );
       if (boundary === "preparation") {
         expect(fixture.requests.map((request) => request.path)).toEqual([revokeAt]);
       } else {

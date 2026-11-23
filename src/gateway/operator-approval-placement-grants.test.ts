@@ -509,13 +509,17 @@ describe("placement standing grants", () => {
       placementDatabase(databaseOptions).updatePlacement({ transition_generation: 5 });
       const { record: staleApproval, pending: staleLaunch } = await requestApproval();
       placementAuthorityActive = false;
-      expect(await manager.resolve(staleApproval.id, "allow-always")).toBe(false);
+      // The decision is accepted, but the closed placement owner still prevents dispatch.
+      expect(await manager.resolve(staleApproval.id, "allow-always")).toBe(true);
       await expect(staleLaunch).resolves.toMatchObject({ ok: false, code: "DENIED" });
+      expect(invoke).toHaveBeenCalledTimes(2);
       placementAuthorityActive = true;
 
+      // The accepted decision retained a generation-5 grant; a new generation must re-prompt.
+      placementDatabase(databaseOptions).updatePlacement({ transition_generation: 6 });
       const { record: movedApproval, pending: movedLaunch } = await requestApproval();
       expect(movedApproval.id).not.toBe(firstApproval.id);
-      expect(movedApproval.request.placementGrant).toMatchObject({ placementGeneration: 5 });
+      expect(movedApproval.request.placementGrant).toMatchObject({ placementGeneration: 6 });
       expect(await manager.resolve(movedApproval.id, "deny")).toBe(true);
       await expect(movedLaunch).resolves.toMatchObject({ ok: false, code: "DENIED" });
       expect(invoke).toHaveBeenCalledTimes(2);

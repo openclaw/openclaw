@@ -726,7 +726,7 @@ it("rolls back both import and selection when the live run retires at the commit
         context: { validateAgentRuntimeApprovalAuthority: () => active },
       },
     ),
-    "no longer active",
+    "The message turn has ended. Start a new turn to retry.",
   );
   expect(reachedCommit).toBe(true);
   preferences();

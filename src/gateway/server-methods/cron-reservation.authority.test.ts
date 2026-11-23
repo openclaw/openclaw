@@ -86,7 +86,7 @@ it("revalidates a scheduled Gateway caller after its child reservation commits w
       expect(checkedAfterCommit).toBe(true);
       expect(runner).toHaveBeenCalledOnce();
       admission.close();
-      expect(commitGuard).toThrow("agent runtime authority is no longer active");
+      expect(commitGuard).toThrow("The message turn has ended. Start a new turn to retry.");
     } finally {
       sql.restore();
       stopObserving();

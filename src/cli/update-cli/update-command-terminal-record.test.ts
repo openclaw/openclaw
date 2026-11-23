@@ -4,7 +4,6 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { captureGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import * as snapshot from "../../infra/sqlite-snapshot-source.js";
 import { normalizeControlPlaneUpdateResult } from "../../infra/update-restart-sentinel-payload.js";
 import { createRetainedCheckpointFixture } from "../../infra/update-retained-checkpoint.test-support.js";
 import {
@@ -12,7 +11,9 @@ import {
   finishUpdateRun,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
+import * as updateRunReader from "../../infra/update-run-reader.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import * as updateRunWriter from "../../infra/update-run-write.async.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -170,7 +171,7 @@ describe("owned completed update publication", () => {
     expect(output).toHaveBeenCalledTimes(1);
   });
 
-  it("publishes the durable verified build when fresh-owned cleanup cannot snapshot changing history", async () => {
+  it("publishes the durable verified build when fresh-owned cleanup cannot access history", async () => {
     const f = fixture();
     f.result.after = { ...after, sha: "a".repeat(40) };
     const captured = await f.capture();
@@ -178,13 +179,16 @@ describe("owned completed update publication", () => {
     expect(captured?.record.status).toBe("succeeded");
     const before = fs.readFileSync(f.databasePath);
     f.release();
-    const snapshotOwners: Array<string | undefined> = [];
-    const snapshotRead = vi
-      .spyOn(snapshot, "prepareSqliteReadOnlyLocationSync")
-      .mockImplementation(() => {
-        snapshotOwners.push(captureGatewayStateOwner(f.databasePath)?.role);
-        throw new Error("live database is changing");
-      });
+    const cleanupOwners: Array<string | undefined> = [];
+    const cleanupRead = vi.spyOn(updateRunReader, "getUpdateRun").mockImplementation(() => {
+      cleanupOwners.push(captureGatewayStateOwner(f.databasePath)?.role);
+      throw new Error("update history is unavailable");
+    });
+    // An inaccessible ledger cannot record the cleanup warning either. Keep the
+    // byte-preservation proof without requiring verified live reads to snapshot.
+    const cleanupWrite = vi
+      .spyOn(updateRunWriter, "recordUpdateRunStepAsync")
+      .mockRejectedValue(new Error("update history is unavailable"));
     const reportPath = path.join(root, "update-reports", `${f.run.runId}.md`);
     let savedAtPublication: string | undefined;
     const captureReport = () => {
@@ -198,11 +202,12 @@ describe("owned completed update publication", () => {
     });
     expect(result.status).toBe("ok");
     expect(savedAtPublication).toContain(after.version);
-    // Publication still uses captured facts. Only independently acquired offline
-    // cleanup custody may attempt a new snapshot after the update executor closes.
-    expect(snapshotOwners.length).toBeGreaterThan(0);
-    expect(snapshotOwners.every((role) => role === "agent-embedded")).toBe(true);
-    expect(result.steps.at(-1)?.advisory?.message).toContain("live database is changing");
+    // Publication still uses captured facts; cleanup reacquires its own custody
+    // after the update executor closes, even when history is inaccessible.
+    expect(cleanupOwners.length).toBeGreaterThan(0);
+    expect(cleanupOwners.every((role) => role === "agent-embedded")).toBe(true);
+    expect(cleanupWrite).toHaveBeenCalledTimes(1);
+    expect(result.steps.at(-1)?.advisory?.message).toContain("update history is unavailable");
     expect(fs.readFileSync(f.databasePath)).toEqual(before);
     expect(jsonOutput).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -213,7 +218,8 @@ describe("owned completed update publication", () => {
     );
     expect(jsonOutput.mock.calls[0]?.[0]).not.toHaveProperty("captured");
     // A historical report is not permission for the next update to skip admission.
-    snapshotRead.mockRestore();
+    cleanupRead.mockRestore();
+    cleanupWrite.mockRestore();
     f.write(
       "INSERT INTO config_machine_state(state_key, value_json, updated_at_ms) VALUES(?, ?, ?)",
       `update.recovery.${f.run.runId}`,

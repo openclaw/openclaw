@@ -129,10 +129,16 @@ it.each(["example.com", "internal"])("gates private redirects from search.%s", a
   const fetch = mockFetch(Response.redirect(redirect), [row("local")]);
   const endpoint = `https://search.${host}/searxng`;
   const pending = search({ config: searchConfig(endpoint) });
-  if (host === "internal") {
-    await expect(pending).resolves.toMatchObject({ count: 1 });
-  } else {
-    await expect(pending).rejects.toMatchObject({ name: "SsrFBlockedError" });
-  }
-  expect(fetch).toHaveBeenCalledTimes(host === "internal" ? 2 : 1);
+  await expect(pending).rejects.toMatchObject({ name: "SsrFBlockedError" });
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+it("allows self-hosted redirects within the configured hostname", async () => {
+  const fetch = mockFetch(Response.redirect("https://search.internal/redirected-search"), [
+    row("local"),
+  ]);
+  await expect(
+    search({ config: searchConfig("https://search.internal/searxng") }),
+  ).resolves.toMatchObject({ count: 1 });
+  expect(fetch).toHaveBeenCalledTimes(2);
 });

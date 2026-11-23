@@ -151,8 +151,8 @@ describe("settled terminal run stats", () => {
       const prepared = await prepareStats({
         config: COST_CONFIG,
         attempts: [
-          { ...tokens, cost: { total: firstCost } },
-          { ...tokens, cost: { total: 0 } },
+          { ...tokens, cost: { total: firstCost }, costStatus: "complete" },
+          { ...tokens, cost: { total: 0 }, costStatus: "complete" },
         ],
       });
       expect(prepared.agentMeta.costUsd).toBe(firstCost);
@@ -161,7 +161,7 @@ describe("settled terminal run stats", () => {
 
   it.each`
     name                               | input
-    ${"partially priced tiered calls"} | ${{ config: modelConfig({ cost: { ...cost, tieredPricing: [{ range: [200_000], input: 2, output: 4, cacheRead: 1, cacheWrite: 8 }] } }), attempts: [{ input: 150_000, output: 100, cost: { total: 0.125 } }, { input: 150_000, output: 100 }] }}
+    ${"partially priced tiered calls"} | ${{ config: modelConfig({ cost: { ...cost, tieredPricing: [{ range: [200_000], input: 2, output: 4, cacheRead: 1, cacheWrite: 8 }] } }), attempts: [{ input: 150_000, output: 100, cost: { total: 0.125 }, costStatus: "complete" }, { input: 150_000, output: 100, costStatus: "unavailable" }] }}
     ${"unpriced model"}                | ${{ provider: "no-cost-provider", model: "uncosted-model", config: COST_CONFIG, usage: { input: 1_000_000, output: 500_000, total: 1_500_000 } }}
     ${"no usage"}                      | ${{ config: COST_CONFIG }}
   `("omits costUsd for $name", async ({ input }: { input: TerminalStatsInput }) => {

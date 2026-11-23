@@ -185,7 +185,7 @@ describe.each<Api>(["openai-responses", "anthropic-messages"])("%s", (api) => {
 
   // Model copies of the scheduled reply two user turns later, and display rows. A misplaced
   // copy lands after the first follow-up, where Anthropic drops it as a trailing assistant turn.
-  async function observe(sessionKey: string) {
+  async function observe(sessionKey: string, backgroundResult = false) {
     await send(sessionKey, "First follow-up.");
     const next = await send(sessionKey, "Second follow-up.");
     const history = await gateway.client.request<{ messages: Record<string, unknown>[] }>(
@@ -198,11 +198,22 @@ describe.each<Api>(["openai-responses", "anthropic-messages"])("%s", (api) => {
         message.display !== false &&
         JSON.stringify(message.content).includes(REPLY),
     );
+    const modelTurns = next.at(-1);
+    if (backgroundResult) {
+      expect(modelTurns?.filter((turn) => turn.text.includes(REPLY))).toEqual([
+        expect.objectContaining({
+          role: "user",
+          text: expect.stringContaining(
+            "[OpenClaw background result] You sent the message below to the user in this chat from a separate background run.",
+          ),
+        }),
+      ]);
+    }
     return {
-      // Anthropic merges adjacent assistant messages, so count text occurrences, not turns.
-      modelCopies: next
-        .at(-1)
-        ?.filter((turn) => turn.role === "assistant")
+      // Background results replay as user input; Anthropic can merge adjacent turns.
+      // Count text occurrences across both roles, not the number of turns.
+      modelCopies: modelTurns
+        ?.filter((turn) => turn.role === "assistant" || turn.role === "user")
         .reduce((sum, turn) => sum + turn.text.split(REPLY).length - 1, 0),
       displayRows: shown.length,
     };
@@ -238,6 +249,6 @@ describe.each<Api>(["openai-responses", "anthropic-messages"])("%s", (api) => {
     const sessionKey = `agent:main:creator-${randomUUID()}`;
     await send(sessionKey, "Hello.");
     await runCron({ sessionTarget: "isolated", sessionKey, payload });
-    await expect(observe(sessionKey)).resolves.toEqual({ modelCopies: 1, displayRows: 1 });
+    await expect(observe(sessionKey, true)).resolves.toEqual({ modelCopies: 1, displayRows: 1 });
   }, 60_000);
 });

@@ -351,7 +351,7 @@ describe("Gateway automation policy", () => {
             ],
           );
           if (scenario === "revoked before commit") {
-            expectDenied(response, "authority is no longer active");
+            expectDenied(response, "The message turn has ended. Start a new turn to retry.");
           } else {
             expect(response[0]).toBe(false);
             expect(response[2]?.message).toBe("missing scope: operator.admin");

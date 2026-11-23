@@ -121,7 +121,9 @@ it("keeps other callers out of a trusted job's scratch", async () => {
       throw new Error("expected local delegated authority");
     }
     releaseAgentRunDelegatedAuthority(authority);
-    expect(reply((await set(ended)).respond).message).toContain("no longer active");
+    expect(reply((await set(ended)).respond).message).toContain(
+      "The message turn has ended. Start a new turn to retry.",
+    );
     expect((await cron.readScratch(job.id)).scratch?.content).toBe("notes r1");
   } finally {
     cron.stop();

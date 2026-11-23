@@ -70,8 +70,8 @@ it.each([
     screenshots: 0,
     label: "summarizes completed work when reasoning display is on",
   },
-  // The summary reopens the session within contextWindow * 8 bytes; screenshots
-  // fill those bytes long before the token budget, so the request must survive.
+  // Screenshot-heavy recovery retains the request within the fixed 16 MiB history guard.
+  // These ten images no longer force eviction after the history-until-compaction change.
   {
     interrupted: true,
     screenshots: 10,
@@ -262,8 +262,8 @@ it.each([
             );
             expect(summaryRequestHasPrompt).toBe(true);
             if (screenshots) {
-              // The request survives inside the replay byte bound, not by loading everything.
-              expect(summaryRequestBytes).toBeLessThan(65_536 * 8);
+              // Match the fixed history guard; it no longer scales with the model context window.
+              expect(summaryRequestBytes).toBeLessThan(16 * 1024 * 1024);
             }
             expect(await fs.readFile(path.join(state.workspaceDir, "a.txt"), "utf8")).toBe(
               "alpha\n",

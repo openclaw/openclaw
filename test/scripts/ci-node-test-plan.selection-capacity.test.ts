@@ -404,17 +404,14 @@ it("shares selected serial setup within the shortest contributing timeout", () =
     planConcurrency: 1,
   });
   expect(serial.timeoutMinutes ?? 60).toBe(60);
-  // The plugin-reload owner retains its separate two-worker execution envelope.
+  // Shared job setup preserves the reload owner's separate two-worker test group.
   const isolated = expectDefined(
-    selected.find((job) =>
-      job.groups.some((group) => group.includePatterns?.includes(isolatedTarget)),
-    ),
-    "isolated reload selection",
+    serial.groups.find((group) => group.includePatterns?.includes(isolatedTarget)),
+    "isolated reload group",
   );
-  expect(isolated).not.toBe(serial);
   expect(isolated).toMatchObject({
-    runner: "blacksmith-16vcpu-ubuntu-2404",
-    planConcurrency: 1,
+    configs: ["test/vitest/vitest.gateway-server.config.ts"],
+    includePatterns: [isolatedTarget],
     env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
   });
   for (const group of serial.groups) {

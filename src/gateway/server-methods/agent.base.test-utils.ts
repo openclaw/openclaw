@@ -588,7 +588,7 @@ describe("gateway agent handler", () => {
       await source.settlement.promise;
       expectRespondError(respond, {
         code: ErrorCodes.INVALID_REQUEST,
-        message: "agent runtime authority is no longer active",
+        message: "The message turn has ended. Start a new turn to retry.",
       });
       expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
       expect(getReservedRpcSourceInput(runId)).toBeUndefined();

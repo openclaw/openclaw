@@ -1,6 +1,5 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { VERSION } from "../version.js";
 
 const { guardedFetch, usesProxy } = vi.hoisted(() => ({
   guardedFetch: vi.fn<typeof import("../infra/net/fetch-guard.js").fetchWithSsrFGuard>(),
@@ -66,6 +65,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.clearAllMocks();
   vi.useRealTimers();
 });
@@ -317,6 +317,7 @@ describe("provider operation deadlines", () => {
 
 describe("resolveProviderHttpRequestConfig", () => {
   it("preserves explicit caller headers but protects attribution headers", () => {
+    vi.stubEnv("OPENCLAW_VERSION", "2026.11.10-beta.3");
     const resolved = resolveProviderHttpRequestConfig({
       baseUrl: "https://api.openai.com/v1/",
       defaultBaseUrl: "https://api.openai.com/v1",
@@ -342,9 +343,9 @@ describe("resolveProviderHttpRequestConfig", () => {
     expect(Object.fromEntries(resolved.headers)).toMatchObject({
       authorization: "Bearer override",
       "x-default": "1",
-      "user-agent": `openclaw/${VERSION}`,
+      "user-agent": "openclaw/2026.11.10-beta.3",
       originator: "openclaw",
-      version: VERSION,
+      version: "2026.11.10",
     });
   });
 

@@ -437,7 +437,9 @@ test("sessions.create commits no session after delegated authority closes", asyn
 
     const created = await creating;
     expect(created.ok).toBe(false);
-    expect(created.error?.message).toContain("agent runtime authority is no longer active");
+    expect(created.error?.message).toContain(
+      "The message turn has ended. Start a new turn to retry.",
+    );
     expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
   } finally {
     releaseWriter.resolve();
@@ -613,7 +615,9 @@ test("sessions.create removes a provisioned worktree when authority closes befor
     );
 
     expect(created.ok).toBe(false);
-    expect(created.error?.message).toContain("agent runtime authority is no longer active");
+    expect(created.error?.message).toContain(
+      "The message turn has ended. Start a new turn to retry.",
+    );
     const worktreeId = requireNonEmptyString(allocatedWorktree?.id, "allocated worktree id");
     const worktreePath = requireNonEmptyString(allocatedWorktree?.path, "allocated worktree path");
     expect(allocatedDirectoryExists).toBe(true);

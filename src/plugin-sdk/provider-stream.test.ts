@@ -331,7 +331,7 @@ it("buildProviderStreamFamilyHooks: covers the stream family matrix", async () =
   expect(capturedHeaders).toEqual({
     "User-Agent": "openclaw/" + VERSION,
     originator: "openclaw",
-    version: VERSION,
+    version: VERSION.split(/[-+]/u)[0],
   });
 
   const router = (modelId: string) =>
