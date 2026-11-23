@@ -196,6 +196,18 @@ found that earlier receipts did not prove what they claimed.
 
 ### Recorded contract notes
 
+After a manual update, a running managed node using the updated installation is
+reported separately from Gateway activation. In-place update finalization tells
+the operator to wait until node work is idle and run `openclaw node restart`.
+Prepared-release updates instead explain that a local Gateway must activate the
+release first; restarting a node alone does not activate a pending release.
+The notice is retained in update details and JSON output. It never restarts or
+rewrites the node service. Unavailable service inspection leaves reporting
+unchanged rather than claiming a node is running. The installed release updater
+must contain this notice; the candidate finalizer supplies it to shipped
+in-place updaters that delegate finalization. Older updaters that finish entirely
+in their own code need the corresponding stable-line backport.
+
 Add a note here when a change alters a contract. A note about the in-place update
 flow names the shipped-updater contract or unmoved route that it serves.
 

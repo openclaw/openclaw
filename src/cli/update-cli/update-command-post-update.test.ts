@@ -5,6 +5,8 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as nodeServices from "../../daemon/node-service.js";
+import type { GatewayService } from "../../daemon/service.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
@@ -19,6 +21,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { registerMaintenanceCommands } from "../program/register.maintenance.js";
 import { registerCurrentCoreServiceReceiptTests } from "./update-command-current-core-service-receipt.test-support.js";
+import { registerNodeRestartNoticeTests } from "./update-command-node-service.test-support.js";
 import {
   createManagedServiceIdentityFixture,
   registerServiceInstallationConvergenceTests,
@@ -40,6 +43,9 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const mocks = vi.hoisted(() => ({
+  nodeCommand: vi.fn<GatewayService["readCommand"]>(),
+  nodeRuntime: vi.fn<GatewayService["readRuntime"]>(),
+  nodeRestart: vi.fn<GatewayService["restart"]>(),
   parkForeground: vi.fn(),
   checkCompletionStatus: vi.fn(),
   completePluginUpdate: vi.fn(),
@@ -166,6 +172,14 @@ afterEach(() => {
 describe("successful update finalization ordering", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    mocks.nodeCommand.mockReset().mockResolvedValue(null);
+    mocks.nodeRuntime.mockReset().mockResolvedValue({ status: "stopped" });
+    vi.spyOn(nodeServices, "resolveNodeService").mockReturnValue({
+      ...nodeServices.resolveNodeService(),
+      readCommand: mocks.nodeCommand,
+      readRuntime: mocks.nodeRuntime,
+      restart: mocks.nodeRestart,
+    });
     const control = tempDirs.make("post-update-native-control-");
     await fs.chmod(control, 0o700);
     vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
@@ -203,6 +217,8 @@ describe("successful update finalization ordering", () => {
     const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
     return { restartEnvironment: process.env, run };
   };
+
+  registerNodeRestartNoticeTests(() => tempDirs.make("node-update-notice-"), mocks);
 
   registerForegroundFinalizationTests({ tempDirs, mocks });
   registerMaintenanceContentionTests(() => tempDirs.make("update-maintenance-contention-"), mocks);

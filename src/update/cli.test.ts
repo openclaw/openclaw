@@ -7,6 +7,7 @@ import type * as UpdateCliShared from "../cli/update-cli/shared.js";
 import type * as ConfigMutate from "../config/mutate.js";
 import { GatewayCredentialsRequiredError } from "../gateway/call-device-auth.js";
 import type { CallGatewayOptions } from "../gateway/call-options.js";
+import type { UpdateRunStep } from "../infra/update-run-record.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
@@ -30,7 +31,11 @@ beforeEach(async () => {
 const sent = vi.hoisted(() => [] as unknown[]);
 const missingCredentials = vi.hoisted(() => ({ enabled: false }));
 const install = vi.hoisted(() => ({ kind: "git" }));
-const localRun = vi.hoisted(() => ({ status: "skipped", phase: "finished" }));
+const localRun = vi.hoisted(() => ({
+  status: "skipped",
+  phase: "finished",
+  steps: [] as UpdateRunStep[],
+}));
 const packageTarget = vi.hoisted(() => ({ version: "" }));
 const confirmDowngrade = vi.hoisted(() =>
   vi.fn<() => Promise<"confirmed" | "cancelled" | "confirmation-required">>(),
@@ -79,7 +84,9 @@ vi.mock("./run.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./run.js")>()),
   prepareUpdate: async (params: unknown) => {
     prepared.push(params);
-    return { status: "current", version: "2026.11.6", pluginsChanged: false };
+    return localRun.status === "running" && localRun.phase === "activating"
+      ? { status: "pending", target: { version: "2026.11.6" }, releaseRoot: "/candidate" }
+      : { status: "current", version: "2026.11.6", pluginsChanged: false };
   },
 }));
 vi.mock("../infra/update-run-write.async.js", async (importOriginal) => ({
@@ -92,7 +99,6 @@ vi.mock("../infra/update-run-reader.js", async (importOriginal) => ({
     ...localRun,
     runId: "run-cli",
     reason: "already-current",
-    steps: [],
     after: {},
     origin: {},
   }),
@@ -140,6 +146,7 @@ afterEach(async () => {
   missingCredentials.enabled = false;
   localRun.status = "skipped";
   localRun.phase = "finished";
+  localRun.steps = [];
   maintainRuntimes.mockReset();
   maintainRuntimes.mockResolvedValue([]);
   confirmDowngrade.mockReset();
@@ -174,6 +181,34 @@ it("sends a pinned commit and the --timeout budget that the Gateway protocol acc
   expect(timeoutMs).toBeLessThanOrEqual(5_000);
   expect(validateUpdateRunParams(sent[0])).toBe(true);
 });
+
+it.each([false, true])(
+  "reports the recorded node notice while activation is pending (json=%s)",
+  async (json) => {
+    const detail =
+      "Node service is still running; a node restart alone will not activate the prepared release.";
+    localRun.status = "running";
+    localRun.phase = "activating";
+    localRun.steps = [{ step: "warning:node-service-inspection", status: "completed", detail }];
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://remote.example.invalid");
+    try {
+      await runReleaseUpdateCli({ json, restart: true, runningRoot: root, tag: "2026.11.6" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(sent).toEqual([]);
+    if (json) {
+      expect(output).toHaveBeenCalledWith(expect.objectContaining({ steps: localRun.steps }));
+      expect(log).not.toHaveBeenCalled();
+    } else {
+      expect(log).toHaveBeenCalledWith(detail);
+      expect(log.mock.calls.flat().join(" ")).toContain("release trial is pending");
+      expect(log.mock.calls.flat().join(" ")).not.toContain("Updated to");
+    }
+  },
+);
 
 it("keeps a stable-tag checkout on stable when it updates without the Gateway", async () => {
   await runReleaseUpdateCli({ json: true, restart: false, runningRoot: root });

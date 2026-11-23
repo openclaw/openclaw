@@ -36,6 +36,7 @@ import { VERSION } from "../version.js";
 import { checkRelease } from "./check-release.js";
 import { stageReleaseService } from "./convert-service.js";
 import { writeLauncher } from "./launcher.js";
+import { describeNodeUpdateRestart } from "./node-service-notice.js";
 import { preflight } from "./preflight.js";
 import { prepareGit, type PrepareResult } from "./prepare-git.js";
 import { preparePackage } from "./prepare-package.js";
@@ -421,6 +422,22 @@ export async function prepareUpdate(params: {
       },
       { env },
     );
+    const nodeNotice = await describeNodeUpdateRestart({
+      root: params.runningRoot,
+      env,
+      activation: "prepared",
+    });
+    if (nodeNotice) {
+      await recordUpdateRunStepAsync(
+        params.runId,
+        {
+          step: "warning:node-service-inspection",
+          status: "completed",
+          detail: nodeNotice,
+        },
+        { env },
+      );
+    }
     return { status: "pending", target: { version: prepared.version }, releaseRoot };
   } catch (error) {
     return await fail(

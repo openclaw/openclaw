@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import * as nodeServices from "../daemon/node-service.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import { createDoctorRuntimeProjection } from "../flows/doctor-health-contributions.test-support.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
@@ -516,7 +517,10 @@ describe("package release conversion", () => {
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
       const runningRoot = path.join(root, "global", "node_modules", "openclaw");
       await fs.mkdir(path.join(runningRoot, "dist"), { recursive: true });
-      await fs.writeFile(path.join(runningRoot, "package.json"), '{"type":"module"}');
+      await fs.writeFile(
+        path.join(runningRoot, "package.json"),
+        '{"name":"openclaw","type":"module"}',
+      );
       await fs.copyFile(
         new URL("../../release-launcher-forward.mjs", import.meta.url),
         path.join(runningRoot, "release-launcher-forward.mjs"),
@@ -591,6 +595,23 @@ if (process.argv[2] !== 'install') {
         spec: archive,
         engines: {},
       });
+      const nodeService = nodeServices.resolveNodeService();
+      vi.spyOn(nodeServices, "resolveNodeService").mockReturnValue({
+        ...nodeService,
+        readCommand: async () => ({
+          programArguments: [
+            process.execPath,
+            path.join(runningRoot, "dist/index.js"),
+            "node",
+            "run",
+          ],
+          environment: { OPENCLAW_SERVICE_KIND: "node" },
+        }),
+        readRuntime: async () => ({ status: "running", pid: 5151 }),
+        restart: vi.fn(async () => {
+          throw new Error("An update must not restart the node");
+        }),
+      });
       const prefix = resolvePrefix();
       // Native service publication has its own backup/reload proof. At its boundary the
       // running link must already work, while the global package must not yet forward.
@@ -643,6 +664,12 @@ if (process.argv[2] !== 'install') {
           return;
         }
         expect(outcome).toMatchObject({ status: "pending", target: { version: "2026.11.21" } });
+        const notice = preparedRun?.steps.find(
+          ({ step }) => step === "warning:node-service-inspection",
+        );
+        expect(notice?.detail).toContain("Node service is still running (PID 5151)");
+        expect(notice?.detail).toContain("a node restart alone will not activate it");
+        expect(notice?.detail).toContain("openclaw update status");
         expect(await fs.readFile(path.join(root, "release-commands"), "utf8")).toBe(
           `check-release:${runtime}\n`,
         );

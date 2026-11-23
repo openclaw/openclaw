@@ -11,6 +11,7 @@ import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
+import { describeNodeUpdateRestart } from "../../update/node-service-notice.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
 import {
@@ -226,6 +227,25 @@ export async function completePostUpdateMaintenance(
     // A current core refreshes completion only when an earlier update still owes it, unprompted.
     await retryOwedSteps(() => refreshShellCompletion(true));
     return;
+  }
+  if (result.status === "ok" && !params.gitRelease) {
+    // Candidate finalization also serves the first hop from shipped in-place updaters.
+    const message = await describeNodeUpdateRestart({
+      root: result.root ?? params.root,
+      env: params.opts.run?.env ?? params.ownedManagedUpdateEnv ?? process.env,
+      activation: "installed",
+    });
+    if (message) {
+      defaultRuntime.error(message);
+      result.steps.push({
+        name: "node-service-inspection",
+        command: "",
+        cwd: result.root ?? params.root,
+        durationMs: 0,
+        exitCode: 0,
+        warnings: [message],
+      });
+    }
   }
   const startedAt = performance.now();
   using _ = {

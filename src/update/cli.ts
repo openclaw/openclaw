@@ -384,7 +384,7 @@ async function updateWithoutGateway(
   }
   if (outcome.status === "pending" && !opts.json) {
     defaultRuntime.log(
-      `OpenClaw ${outcome.target.version} is ready and starts the next time the Gateway starts.`,
+      `OpenClaw ${outcome.target.version} is prepared; the release trial is pending until the Gateway starts.`,
     );
   }
   return await getUpdateRunAsync(run.runId);
@@ -412,6 +412,10 @@ function report(record: UpdateRunRecord | undefined, json: boolean) {
     defaultRuntime.error(`Plugins were not all updated: ${plugins.detail ?? "unknown reason"}`);
   } else if (plugins?.detail) {
     defaultRuntime.log(`Plugin notes: ${plugins.detail}`);
+  }
+  const nodeNotice = record.steps.find(({ step }) => step === "warning:node-service-inspection");
+  if (nodeNotice?.detail) {
+    defaultRuntime.log(nodeNotice.detail);
   }
   if (isPendingActivation(record)) {
     return;
