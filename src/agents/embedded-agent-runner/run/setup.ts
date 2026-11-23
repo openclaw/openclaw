@@ -89,7 +89,7 @@ function captureModelRoutingAssertion(params: ModelRoutingAuthority) {
           owner !== previousOwner &&
           owner.operationalRunInstance.instanceId !== instance.instanceId
         ) {
-          throw new Error("This agent run is no longer active. Start a new turn to retry.");
+          throw new Error("A newer run took over this session. Start a new turn to retry.");
         }
       }
     } catch (cause) {
