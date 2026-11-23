@@ -56,7 +56,6 @@ const mocks = vi.hoisted(() => ({
   sandboxRequired: false,
   sandboxed: false,
   ambient: undefined as unknown,
-  assertAmbient: vi.fn(),
 }));
 vi.mock("../state/user-channel-identity-operations.js", () => ({
   prepareUserProfileRoleAuthority: mocks.prepare,
@@ -64,7 +63,6 @@ vi.mock("../state/user-channel-identity-operations.js", () => ({
 vi.mock("../agents/tools/gateway-caller-context.js", async (original) => ({
   ...(await original<typeof import("../agents/tools/gateway-caller-context.js")>()),
   getGatewayToolCallerIdentity: () => mocks.ambient,
-  captureGatewayToolCallerAssertion: () => mocks.assertAmbient,
 }));
 vi.mock("./session-resource-tool-policy.js", () => ({
   resolveSessionResourceToolPolicy: () => {
@@ -254,7 +252,6 @@ beforeEach(() => {
   mocks.sandboxRequired = false;
   mocks.sandboxed = false;
   mocks.ambient = undefined;
-  mocks.assertAmbient.mockReset();
   mocks.prepareIdentity.mockReset().mockImplementation(async (profileId) => {
     const lease = {};
     mocks.profileLeases.add(lease);
