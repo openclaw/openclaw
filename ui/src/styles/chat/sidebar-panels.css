@@ -736,7 +736,7 @@ button.sidebar-image-view__image {
 }
 
 .session-diff__filename .session-diff__extension {
-  max-width: min(35%, 6ch);
+  max-width: 6ch;
   overflow: hidden;
   text-overflow: ellipsis;
 }
