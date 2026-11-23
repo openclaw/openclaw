@@ -19,7 +19,9 @@ export function loadUpdateRecovery(
   return withUpdateRunRead(({ db }) => readRecovery(db, runId), options);
 }
 /** Detection only. This delivery never claims, rewrites, or retires retained recovery. */
-export function assertNoPendingUpdateRecovery(options: OpenClawStateDatabaseOptions = {}): void {
+export function assertNoPendingUpdateRecovery(
+  options: OpenClawStateDatabaseOptions & { allowNativeRead?: true } = {},
+): void {
   // Candidate children can migrate the ledger after this updater admitted its original format.
   const pending = withUpdateRunRead(
     ({ db }) => inspectRecoveryRows(db).find((entry) => isUpdateRecoveryPending(entry.record)),
