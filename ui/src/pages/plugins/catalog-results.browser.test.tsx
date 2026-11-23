@@ -371,11 +371,9 @@ it.each([263, 362])(
 );
 
 it.each([263, 362])(
-  "keeps the Installed label visible inside a %ipx Featured row",
+  "keeps the installed status visible inside a %ipx catalog row",
   async (width) => {
     await renderCatalog({
-      intent: "featured",
-      query: "",
       result: {
         items: [{ ...entry, local: { ...entry.local, installed: true, state: "enabled" } }],
       },
@@ -383,13 +381,10 @@ it.each([263, 362])(
     find(".plugin-catalog-grid").style.gridTemplateColumns = `${width}px`;
     const card = find(".plugin-catalog-card");
     const status = find(".plugin-catalog-card__status", card);
-    expect(status.getAttribute("aria-label")).toBe("Installed (Enabled)");
-    expect(status.textContent).toBe("Installed");
+    expect(status.getAttribute("aria-label")).toBe("Enabled");
     const dot = find(".settings-status__dot", status).getBoundingClientRect();
     expect(dot.width).toBeGreaterThan(0);
-    expect(status.getBoundingClientRect().right).toBeLessThanOrEqual(
-      card.getBoundingClientRect().right,
-    );
+    expect(dot.right).toBeLessThanOrEqual(card.getBoundingClientRect().right);
     expect(card.scrollWidth).toBeLessThanOrEqual(card.clientWidth);
   },
 );

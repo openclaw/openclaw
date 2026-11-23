@@ -15,20 +15,18 @@ const INSTALLED_PLUGIN_STATUS = {
   error: ["pluginsPage.needsAttention", "danger"],
 } as const satisfies Record<InstalledPluginState, readonly [string, string]>;
 
-export function renderPluginStateStatus(state: InstalledPluginState, showInstalledLabel = false) {
+export function renderPluginStateStatus(state: InstalledPluginState, className: string) {
   const [labelKey, tone] = INSTALLED_PLUGIN_STATUS[state];
   const label = t(labelKey);
-  const installedLabel = showInstalledLabel ? t("pluginsPage.installed") : undefined;
   return (
     <span
-      class={["plugin-catalog-card__status", "settings-status", `settings-status--${tone}`]}
+      class={[className, "settings-status", `settings-status--${tone}`]}
       data-plugin-state={state}
       role="img"
-      aria-label={installedLabel ? `${installedLabel} (${label})` : label}
+      aria-label={label}
       title={label}
     >
       <span class="settings-status__dot" aria-hidden="true" />
-      {installedLabel}
     </span>
   );
 }
