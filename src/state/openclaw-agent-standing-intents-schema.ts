@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-assembly.js";
 import {
+  captureSqliteSchemaFacts,
   getAdmittedSqliteSchemaFacts,
   runSqliteReadOperationSync,
   type SqliteSchemaFacts,
@@ -60,6 +61,26 @@ function hasCurrentStandingIntentsSchema(db: DatabaseSync): boolean {
   }
 }
 
+/**
+ * FTS5 keeps its shadow tables in the schema even when the virtual table itself is
+ * gone. SQLite then refuses to recreate the virtual table ("fts5: error creating
+ * shadow table ... already exists"), and `CREATE VIRTUAL TABLE IF NOT EXISTS` does
+ * not help: the guard only covers the virtual table, not its shadows. Drop the
+ * orphaned shadows before the schema is applied so the ensure path can converge.
+ */
+function dropOrphanedStandingIntentsFtsShadows(db: DatabaseSync): void {
+  const facts = getAdmittedSqliteSchemaFacts(db) ?? captureSqliteSchemaFacts(db);
+  if (facts.tables.has(STANDING_INTENTS_FTS_TABLE)) {
+    return;
+  }
+  for (const shadow of STANDING_INTENTS_FTS_SHADOW_TABLES) {
+    if (facts.tables.has(shadow)) {
+      // sqlite-allow-raw -- Orphaned FTS5 shadow cleanup; the owning index is rebuilt.
+      db.exec(`DROP TABLE IF EXISTS main.${shadow}`);
+    }
+  }
+}
+
 /** The optional synchronous owner supplies write grants only when main-schema DDL is needed. */
 export function ensureOpenClawAgentStandingIntentsSchema(
   db: DatabaseSync,
@@ -83,6 +104,7 @@ export function ensureOpenClawAgentStandingIntentsSchema(
           errorMessage: "OpenClaw standing-intents schema markers are missing.",
         },
       );
+      dropOrphanedStandingIntentsFtsShadows(db);
       // TEMP objects must not redirect installation away from the canonical agent schema.
       // sqlite-allow-raw -- Canonical additive DDL only.
       db.exec(
