@@ -61,6 +61,20 @@ afterEach(async () => {
   await disposeAllSessionMcpRuntimes();
 });
 
+function steerAsGrace(operation: ReturnType<typeof createReplyOperation> | undefined) {
+  operation!.personalToolParticipants!.accept({
+    operatorAuthority: createAdmittedRunOperatorAuthority({
+      profileId: "grace-profile",
+      canonicalIdentity: { profileId: "grace-profile" },
+      scopes: ["operator.read", "operator.write"],
+      gatewayAccessGrant: null,
+      modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: {} }),
+      assertCurrent() {},
+    }),
+    gatewayUiCommandTarget: { connId: "grace-connection", profileId: "grace-profile" },
+  });
+}
+
 async function withTurn<T>(
   profileId: string,
   run: (context: {
@@ -252,17 +266,7 @@ it("settles an admitted personal write even if someone else steers before its re
     const view = createMcpRunView(runtime, owner.assertCurrent);
     const pending = view.callTool("calendar", "write", {});
     expect(callTool).toHaveBeenCalledOnce();
-    turn.replyOperation!.personalToolParticipants!.accept({
-      operatorAuthority: createAdmittedRunOperatorAuthority({
-        profileId: "grace-profile",
-        canonicalIdentity: { profileId: "grace-profile" },
-        scopes: ["operator.read", "operator.write"],
-        gatewayAccessGrant: null,
-        modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: {} }),
-        assertCurrent() {},
-      }),
-      gatewayUiCommandTarget: { connId: "grace-connection", profileId: "grace-profile" },
-    });
+    steerAsGrace(turn.replyOperation);
     const receipt = { content: [{ type: "text", text: "write committed" }] } as const;
     respond.resolve({ content: [...receipt.content] });
     await expect(pending).resolves.toEqual(receipt);
@@ -431,17 +435,7 @@ it.each([
             if (change === "revoked") {
               revoke();
             } else {
-              turn.replyOperation!.personalToolParticipants!.accept({
-                operatorAuthority: createAdmittedRunOperatorAuthority({
-                  profileId: "grace-profile",
-                  canonicalIdentity: { profileId: "grace-profile" },
-                  scopes: ["operator.read", "operator.write"],
-                  gatewayAccessGrant: null,
-                  modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: {} }),
-                  assertCurrent() {},
-                }),
-                gatewayUiCommandTarget: { connId: "grace-connection", profileId: "grace-profile" },
-              });
+              steerAsGrace(turn.replyOperation);
             }
             release.resolve();
             expect(await settled).toMatchObject({
