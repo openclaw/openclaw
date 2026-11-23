@@ -434,7 +434,8 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     const hasRequester =
       webchatRequester !== undefined ||
       normalizeOptionalString(params.requesterSenderId) !== undefined;
-    const baseAdvertisedCatalog = getAdvertisedScopedMcpCatalog(params.sessionId) ?? liveCatalog;
+    const baseAdvertisedCatalog =
+      getAdvertisedScopedMcpCatalog(webchatRequester?.sessionId ?? params.sessionId) ?? liveCatalog;
     const advertisedCatalog = baseAdvertisedCatalog
       ? mergeMcpConnectCatalog(baseAdvertisedCatalog, scopedRuntime?.requesterConnect)
       : hasRequester

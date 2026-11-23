@@ -314,9 +314,12 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
         personalToolParticipants,
         webchatMcpRequester: captureRunMcpRequester({
           ...attempt,
-          admittedRunContext: admitted,
-          replyOperation: operation,
-          toolAuthorityFingerprint: fingerprint,
+          operatorAuthority,
+          assertActive: assertReplyActive,
+          participants: operation?.personalToolParticipants,
+          directBrowserTurn:
+            Boolean(operation && !admitted.admissionSource) &&
+            (turnState?.turnKind === "direct" || turnState?.turnKind === "visible"),
           trigger: internal.trigger,
           mcpRequesterProfileId: internal.mcpRequesterProfileId,
         }),

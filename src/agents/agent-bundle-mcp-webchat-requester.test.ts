@@ -15,10 +15,7 @@ import {
 } from "./agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import { createMcpRunView } from "./agent-bundle-mcp-run-view.js";
-import {
-  captureWebchatMcpRequester,
-  type WebchatMcpRequesterContext,
-} from "./agent-bundle-mcp-webchat-requester.js";
+import { readWebchatMcpRequester } from "./agent-bundle-mcp-webchat-requester.js";
 import { withPreparedEmbeddedRunToolAuthority } from "./harness/tool-authority.runtime.js";
 import { admitted, attempt } from "./harness/tool-authority.runtime.test-support.js";
 import { requesterMcpOAuthIdentity } from "./mcp-oauth-identity.js";
@@ -26,6 +23,7 @@ import { readMcpOAuthStore } from "./mcp-oauth-store.js";
 import { withMcpOAuthTempHome } from "./mcp-oauth.test-harness.js";
 import { prepareOperatorModelPolicy } from "./operator-model-policy.js";
 import { closeProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const oauth = vi.hoisted(() => ({ status: vi.fn(), start: vi.fn() }));
 vi.mock("./mcp-oauth.js", async (importOriginal) => ({
@@ -65,8 +63,15 @@ afterEach(async () => {
 
 async function withTurn<T>(
   profileId: string,
-  run: (context: { turn: WebchatMcpRequesterContext; revoke: () => void }) => Promise<T>,
+  run: (context: {
+    turn: Omit<typeof attempt, "senderId"> & {
+      senderId?: string;
+      replyOperation?: ReturnType<typeof createReplyOperation>;
+    };
+    revoke: () => void;
+  }) => Promise<T>,
   turnKind: "visible" | "queued_followup" = "visible",
+  stampRequester = true,
 ) {
   let revoked = false;
   const authority = createAdmittedRunOperatorAuthority({
@@ -108,12 +113,16 @@ async function withTurn<T>(
     });
     try {
       return await withPreparedEmbeddedRunToolAuthority(
-        { admittedRunContext, replyOperation: operation, mcpRequesterProfileId: profileId },
+        {
+          admittedRunContext,
+          replyOperation: operation,
+          mcpRequesterProfileId: stampRequester ? profileId : undefined,
+        },
         { ...input, toolAuthorityFingerprint: fingerprint },
         undefined,
         async (prepared) =>
           run({
-            turn: { ...prepared, admittedRunContext },
+            turn: prepared,
             revoke: () => {
               revoked = true;
             },
@@ -129,7 +138,7 @@ it("creates separate personal OAuth links for two people in the same Webchat ses
   const keys: string[] = [];
   for (const profileId of ["ada-profile", "grace-profile", "ada-profile"]) {
     await withTurn(profileId, async ({ turn }) => {
-      const requester = captureWebchatMcpRequester(turn)!;
+      const requester = readWebchatMcpRequester(turn)!;
       expect(requester?.requesterSenderId).toBe(profileId);
       expect(turn.senderId).toBeUndefined();
       const acquisition = await manager.acquire({
@@ -165,7 +174,7 @@ it("creates separate personal OAuth links for two people in the same Webchat ses
 
 it("refuses a retained connect executor after source revocation and after turn end", async () => {
   const retained = await withTurn("ada-profile", async ({ turn, revoke }) => {
-    const requester = captureWebchatMcpRequester(turn)!;
+    const requester = readWebchatMcpRequester(turn)!;
     const acquisition = await manager.acquire({
       sessionId: turn.sessionId,
       sessionKey: turn.sessionKey,
@@ -229,37 +238,29 @@ it("keeps turn guards off cached runtimes and fences every MCP operation", async
   }
 });
 
-it("does not infer credential authority from a profile label or a different run", async () => {
+it("does not lend a captured personal credential to another session or run", async () => {
   await withTurn("ada-profile", async ({ turn }) => {
-    const missing = [
-      { admittedRunContext: undefined },
-      { replyOperation: undefined },
-      { toolAuthorityFingerprint: undefined },
-      { runId: "other-run" },
-      { sessionId: "other-session" },
-      { sessionKey: "agent:other:main" },
-      { gatewayUiCommandTarget: { connId: "other", profileId: "grace-profile" } },
-      { senderId: "telegram-person" },
-      { messageChannel: "telegram" },
-      { spawnedBy: "parent-run" },
-      { trigger: "memory" },
-      { controlOperation: {} },
-      { scheduledToolPolicy: {} },
-      { inputProvenance: { kind: "internal_system" as const } },
-    ];
-    for (const change of missing) {
-      expect(captureWebchatMcpRequester({ ...turn, ...change })).toBeUndefined();
-    }
-    expect(() =>
-      captureWebchatMcpRequester({
-        ...turn,
-        gatewayUiCommandTarget: {
-          connId: "different-connection",
-          profileId: "ada-profile",
+    expect(readWebchatMcpRequester(turn)?.requesterSenderId).toBe("ada-profile");
+    expect(readWebchatMcpRequester({ sessionKey: "agent:other:main" })).toBeUndefined();
+    await admitted(async ({ admittedRunContext }) => {
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: turn.sessionKey,
+          operationalRunInstance: admittedRunContext.operationalRunInstance,
         },
-      })!.assertCurrent(),
-    ).toThrow("matching live Webchat participant");
+        () => expect(readWebchatMcpRequester(turn)).toBeUndefined(),
+      );
+    });
   });
+  await withTurn(
+    "ada-profile",
+    async ({ turn }) => {
+      expect(readWebchatMcpRequester(turn)).toBeUndefined();
+    },
+    "visible",
+    false,
+  );
 });
 
 it("materializes Codex personal connect through the SDK without exposing private admission state", async () => {
@@ -288,7 +289,7 @@ it("materializes Codex personal connect through the SDK without exposing private
 
 it("closes a released native view before its parent turn ends", async () => {
   await withTurn("ada-profile", async ({ turn }) => {
-    const requester = captureWebchatMcpRequester(turn)!;
+    const requester = readWebchatMcpRequester(turn)!;
     const acquisition = await manager.acquire({
       sessionId: turn.sessionId,
       sessionKey: turn.sessionKey,
@@ -349,7 +350,7 @@ it.each([
       };
       try {
         await withTurn("ada-profile", async ({ turn, revoke }) => {
-          const requester = captureWebchatMcpRequester(turn)!;
+          const requester = readWebchatMcpRequester(turn)!;
           await bindSessionMcpRuntimeTestScheduler();
           const acquisition = await manager.acquire({
             sessionId: turn.sessionId,
@@ -443,7 +444,7 @@ it("does not borrow a person's credentials for a queued follow-up", async () => 
   await withTurn(
     "ada-profile",
     async ({ turn }) => {
-      expect(captureWebchatMcpRequester(turn)).toBeUndefined();
+      expect(readWebchatMcpRequester(turn)).toBeUndefined();
     },
     "queued_followup",
   );

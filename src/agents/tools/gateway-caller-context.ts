@@ -494,7 +494,9 @@ export async function withGatewayToolCallerIdentity<T>(
       workspacePublicationPolicy: inheritedValue("workspacePublicationPolicy"),
       workspaceEvidenceSandbox: inheritedValue("workspaceEvidenceSandbox"),
       personalToolParticipants: inheritedValue("personalToolParticipants"),
-      webchatMcpRequester: inheritedValue("webchatMcpRequester"),
+      webchatMcpRequester: Object.hasOwn(identity, "webchatMcpRequester")
+        ? identity.webchatMcpRequester
+        : inheritedOwner?.webchatMcpRequester,
       personalToolUser: inheritedValue("personalToolUser"),
       personalToolIdentityScoped: inheritedValue("personalToolIdentityScoped"),
       personalToolSelection: inheritedValue("personalToolSelection"),
