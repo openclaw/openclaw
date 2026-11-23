@@ -27,6 +27,13 @@ it("routes Abliteration and either credential variable to its official package",
   }
 });
 
+it("routes bf16.ai and BF16_API_KEY to its official package", () => {
+  const entry = findPackage("@openclaw/bf16-provider");
+  expect(findEntry("bf16")).toBe(entry);
+  expect(resolveInstall(entry!)?.npmSpec).toBe("@openclaw/bf16-provider");
+  expect(providerEnvOwners({ BF16_API_KEY: "synthetic-key" })).toEqual(["bf16"]);
+});
+
 it("keeps Fish Audio's legacy id migration-only across npm and ClawHub routes", () => {
   const entry = findPackage("@openclaw/fish-audio-speech");
   expect(pluginId(entry!)).toBe("fish-audio-speech");

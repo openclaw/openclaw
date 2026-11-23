@@ -619,6 +619,11 @@
       - any-glob-to-any-file:
           - "extensions/baseten/**"
           - "docs/providers/baseten.md"
+"extensions: bf16":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/bf16/**"
+          - "docs/providers/bf16.md"
 "extensions: clawrouter":
   - changed-files:
       - any-glob-to-any-file:

@@ -32,6 +32,17 @@ activity icon and the opaque white package tile.
 
 The name and mark remain the property of Abliteration AI, Inc.
 
+## bf16.ai icon
+
+`ProviderIcon-bf16.svg` uses the official logo mark from https://bf16.ai/logo.svg,
+retrieved on November 24, 2026. The keycap plate and offset shadow are removed,
+the view box is centered on the tensor register strip and `bf[16]` mark in a
+square frame, and fills are normalized to `currentColor`. The same mark supplies
+the plugin activity icon, and the full logo centered on opaque white supplies the
+package tile.
+
+The name and mark remain the property of bf16.ai.
+
 ## Particle icon
 
 `ProviderIcon-particle.svg` uses the official Particle symbol from the inline
