@@ -1,4 +1,4 @@
-# #202517 Agent Profiles core: 2065 net test/helper lines against 1601f86def0; the
+# #202517 Agent Profiles core: 1971 net test/helper lines against 1601f86def0; the
 # ordinary allowance covers 400.
 # Each profile effect has a regression test on every runtime that consumes it, because
 # each runtime builds its prompt and tools through its own seam: embedded runner, CLI
@@ -10,4 +10,4 @@
 # Test names across those suites are distinct behaviors (budget caps, never-widen,
 # size-selection off, native-owned thread), so no test restates another.
 # Exact measured net growth minus the standard 400-line allowance.
-1665
+1571
