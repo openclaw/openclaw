@@ -4,20 +4,31 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
+import type * as PluginLifecycleClient from "../cli/plugins-lifecycle-client.js";
+import { resolvePluginBatchReload } from "../cli/plugins-lifecycle-client.js";
 import type * as InspectionOwner from "../cli/update-cli/update-command-post-activation-inspections.js";
 import { runPostActivationInspections } from "../cli/update-cli/update-command-post-activation-inspections.js";
 import type * as DoctorContributions from "../flows/doctor-health-contributions.js";
 import type * as UpdateNotices from "../gateway/update-run-notice.runtime.js";
-import type * as UpdateRunWatcher from "../gateway/update-run-watcher.js";
+import * as watcherModule from "../gateway/update-run-watcher.js";
+import * as rootModule from "../infra/openclaw-root.js";
+import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
+import type * as UpdateInstallStatus from "../infra/update-install-status.js";
 import { getUpdateRunAsync } from "../infra/update-run-reader.js";
 import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import { createUpdateRunAsync, recordUpdateRunStepAsync } from "../infra/update-run-write.async.js";
+import type * as ProcessExec from "../process/exec.js";
+import type { SpawnResult } from "../process/exec.js";
+import { runCommandWithTimeout } from "../process/exec.js";
+import { killProcessTree } from "../process/kill-tree.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { VERSION } from "../version.js";
 import { announceReady, settleRunFromTrial } from "./gateway-trial.js";
 import {
@@ -30,6 +41,10 @@ import {
 } from "./store.js";
 
 const notices = vi.hoisted(() => [] as Array<{ runId: string; kind: string; status: string }>);
+const backgroundWork = vi.hoisted(() => {
+  const jobs: Promise<void>[] = [];
+  return jobs;
+});
 vi.mock("../gateway/update-run-notice.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof UpdateNotices>()),
   createUpdateRunNotifier:
@@ -39,6 +54,31 @@ vi.mock("../gateway/update-run-notice.runtime.js", async (importOriginal) => ({
     },
 }));
 
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ProcessExec>()),
+  runCommandWithTimeout: vi.fn(async () => ({
+    stdout: JSON.stringify({
+      status: "ok",
+      changed: false,
+      sync: { changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: [] },
+      npm: { changed: false, outcomes: [] },
+      integrityDrifts: [],
+    }),
+    stderr: "",
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit" as const,
+  })),
+}));
+vi.mock("../cli/plugins-lifecycle-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof PluginLifecycleClient>()),
+  resolvePluginBatchReload: vi.fn(async () => undefined),
+}));
+vi.mock("../infra/update-install-status.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof UpdateInstallStatus>()),
+  resolveStartupInstallStatus: vi.fn(async () => ({ status: { installKind: "package" } })),
+}));
 vi.mock(
   "../cli/update-cli/update-command-post-activation-inspections.js",
   async (importOriginal) => ({
@@ -53,10 +93,10 @@ vi.mock("../flows/doctor-health-contributions.js", async (importOriginal) => ({
   resolvePostActivationInspectionCheckIds: async () => ["core/doctor/secrets"],
 }));
 vi.mock("../gateway/update-run-watcher.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof UpdateRunWatcher>()),
+  ...(await importOriginal<typeof watcherModule>()),
   wakeUpdateRunWatcher: (_runId?: string, advisoryWork?: () => Promise<void>) => {
     if (advisoryWork) {
-      void trackAsyncWork(advisoryWork);
+      backgroundWork.push(trackAsyncWork(advisoryWork));
     }
     return true;
   },
@@ -64,10 +104,13 @@ vi.mock("../gateway/update-run-watcher.js", async (importOriginal) => ({
 
 const directories: string[] = [];
 afterEach(async () => {
+  await Promise.all(backgroundWork.splice(0));
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
   notices.length = 0;
+  vi.restoreAllMocks();
+  vi.clearAllMocks();
   for (const dir of directories.splice(0)) {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -136,6 +179,8 @@ it.each(["succeeded", "rolled-back"] as const)(
       expect(startup?.detail).not.toContain("sk-abcdefghijklmnopqrstuvwxyz123456");
       expect(startup?.detail).toContain("failed with token");
       expect(startup?.stderrTail).toContain("failed with token");
+      expect(runCommandWithTimeout).not.toHaveBeenCalled();
+      expect(resolvePluginBatchReload).not.toHaveBeenCalled();
     }
     expect(await readTrial(resolvePrefix())).toMatchObject({ reported: true });
     await settleRunFromTrial((await readTrial())!);
@@ -300,6 +345,7 @@ it.each(["warning", "error"] as const)(
       expect(await readTrial()).toMatchObject({ reported: true });
     } finally {
       gate.resolve();
+      await Promise.all(backgroundWork);
       await work.drain();
     }
     const inspected = await getUpdateRunAsync(run.runId, options);
@@ -339,3 +385,218 @@ it.each(["warning", "error"] as const)(
     );
   },
 );
+
+it.each([undefined, true, false])(
+  "finishes core before plugin maintenance, preserving late failures (consent=%s)",
+  async (acceptCapabilities) => {
+    const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-plugins-"));
+    directories.push(state);
+    vi.stubEnv("OPENCLAW_STATE_DIR", state);
+    const options = { env: process.env };
+    openOpenClawStateDatabase(options);
+    const run = await createUpdateRunAsync({ trigger: "control-ui" }, options);
+    const entered = Promise.withResolvers<void>();
+    const command = Promise.withResolvers<SpawnResult>();
+    const targets = [
+      { pluginId: "updated", installHash: "1".repeat(64) },
+      { pluginId: "restored", installHash: "2".repeat(64) },
+    ];
+    const reload = vi.fn(async () => ({
+      operationId: "plugin-maintenance-reload",
+      generation: 2,
+      pluginIds: ["updated", "restored"],
+    }));
+    vi.mocked(resolvePluginBatchReload).mockResolvedValueOnce(reload);
+    if (acceptCapabilities === false) {
+      reload.mockRejectedValueOnce(
+        new Error("Plugin updated changed after the installation batch."),
+      );
+    }
+    vi.mocked(runCommandWithTimeout).mockImplementationOnce(async () => {
+      entered.resolve();
+      return await command.promise;
+    });
+    const trial: Trial = {
+      v: 2,
+      runId: run.runId,
+      phase: "committed",
+      target: "releases/new/openclaw",
+      previous: "releases/old/openclaw",
+      version: VERSION,
+      attempts: 1,
+      createdAt: Date.now(),
+      ...(acceptCapabilities === undefined ? {} : { acceptCapabilities }),
+      outcome: { status: "succeeded", at: Date.now() },
+    };
+    const failed = acceptCapabilities === undefined;
+    const result = {
+      status: failed ? "warning" : "ok",
+      changed: true,
+      sync: {
+        changed: true,
+        switchedToBundled: ["bundled"],
+        switchedToNpm: ["restored"],
+        warnings: [],
+        errors: [],
+      },
+      npm: {
+        changed: true,
+        outcomes: [
+          { pluginId: "updated", status: "error", message: "Repaired by convergence." },
+          { pluginId: "updated", status: "updated", message: "Updated." },
+          { pluginId: "unchanged", status: "skipped", message: "Already current." },
+          ...(failed
+            ? [
+                {
+                  pluginId: "broken",
+                  status: "error",
+                  message: "broken: package download failed",
+                },
+              ]
+            : []),
+        ],
+      },
+      integrityDrifts: [],
+      reloadTargets: targets,
+    };
+    const work = new AsyncWorkScope();
+    let finishedAtMs: number | null | undefined;
+    try {
+      await work.run(() => settleRunFromTrial(trial));
+      await entered.promise;
+      const committed = await getUpdateRunAsync(run.runId, options);
+      expect(committed).toMatchObject({ status: "succeeded", phase: "finished" });
+      finishedAtMs = committed?.finishedAtMs;
+      expect(finishedAtMs).toEqual(expect.any(Number));
+      expect(committed?.steps).not.toContainEqual(expect.objectContaining({ step: "plugins" }));
+      expect(await readTrial()).toMatchObject({ reported: true });
+      expect(runPostActivationInspections).not.toHaveBeenCalled();
+      expect(reload).not.toHaveBeenCalled();
+      const [argv, commandOptions] = vi.mocked(runCommandWithTimeout).mock.calls[0]!;
+      expect(argv).toEqual(expect.arrayContaining(["update", "plugins", "--json"]));
+      expect(argv.includes("--accept-capabilities")).toBe(acceptCapabilities === true);
+      expect(commandOptions).toMatchObject({ timeoutMs: 10 * 60_000, killProcessTree: true });
+    } finally {
+      command.resolve({
+        stdout: `Plugin maintenance finished.\n${JSON.stringify(result)}`,
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      });
+      await Promise.all(backgroundWork);
+      await work.drain();
+    }
+    const maintained = await getUpdateRunAsync(run.runId, options);
+    expect(maintained).toMatchObject({
+      status: "succeeded",
+      phase: "finished",
+      finishedAtMs,
+    });
+    expect(maintained?.steps).toContainEqual(
+      expect.objectContaining({
+        step: "plugins",
+        status: acceptCapabilities ? "completed" : "failed",
+      }),
+    );
+    expect(reload).toHaveBeenCalledExactlyOnceWith(targets);
+    expect(runPostActivationInspections).toHaveBeenCalledOnce();
+    const report = renderUpdateRunReport(maintained!);
+    if (failed) {
+      const pluginStep = maintained?.steps.find(({ step }) => step === "plugins");
+      expect(pluginStep?.detail).toContain("broken: package download failed");
+      expect(pluginStep?.detail).toContain("openclaw plugins update broken");
+      expect(report.headline).toMatch(/; 1 warning needs attention\.$/u);
+      expect(report.lines.join("\n")).toContain("broken: package download failed");
+      expect(report.lines.join("\n")).toContain("openclaw plugins update broken");
+    } else if (!acceptCapabilities) {
+      const pluginStep = maintained?.steps.find(({ step }) => step === "plugins");
+      expect(pluginStep?.detail).toContain("changed after the installation batch");
+      expect(pluginStep?.detail).toContain("openclaw plugins reload updated restored");
+      expect(report.headline).toMatch(/; 1 warning needs attention\.$/u);
+    } else {
+      expect(report.headline).not.toContain("needs attention");
+    }
+  },
+);
+
+it("stops plugin command work when the Gateway watcher closes", async ({ signal }) => {
+  const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-stop-"));
+  directories.push(state);
+  vi.stubEnv("OPENCLAW_STATE_DIR", state);
+  const release = path.join(state, "release");
+  await fs.mkdir(release);
+  await fs.writeFile(
+    path.join(release, "openclaw.mjs"),
+    `import { spawn } from "node:child_process";
+import { MessageChannel } from "node:worker_threads";
+spawn(process.execPath, ["-e", "const { port1 } = new (require('node:worker_threads').MessageChannel)(); port1.on('message', () => {});"], { stdio: "ignore" });
+const { port1 } = new MessageChannel();
+port1.on("message", () => {});
+process.stdout.write("maintenance-ready\\n");`,
+  );
+  const actualExec = await vi.importActual<typeof ProcessExec>("../process/exec.js");
+  const actualWatcher = await vi.importActual<typeof watcherModule>(
+    "../gateway/update-run-watcher.js",
+  );
+  vi.spyOn(rootModule, "resolveOpenClawPackageRoot").mockResolvedValue(release);
+  vi.spyOn(watcherModule, "wakeUpdateRunWatcher").mockImplementation(
+    actualWatcher.wakeUpdateRunWatcher,
+  );
+  const entered = Promise.withResolvers<void>();
+  const stopped = Promise.withResolvers<SpawnResult>();
+  let childPid: number | undefined;
+  let commandFinished = false;
+  vi.mocked(runCommandWithTimeout).mockImplementationOnce(async (argv, options) => {
+    const result = await actualExec.runCommandWithTimeout(argv, {
+      ...(typeof options === "number" ? { timeoutMs: options } : options),
+      input: "",
+      beforeInput: (pid) => {
+        childPid = pid;
+      },
+      onOutputChunk: (chunk) => {
+        if (chunk.toString().includes("maintenance-ready")) {
+          entered.resolve();
+        }
+      },
+    });
+    commandFinished = true;
+    stopped.resolve(result);
+    return result;
+  });
+  const lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
+  const watcher = actualWatcher.startUpdateRunWatcher({
+    lifecycle,
+    broadcast: vi.fn(),
+    log: { warn: vi.fn() },
+  });
+  openOpenClawStateDatabase({ env: process.env });
+  const run = await createUpdateRunAsync({ trigger: "control-ui" });
+  try {
+    await settleRunFromTrial({
+      v: 2,
+      runId: run.runId,
+      phase: "committed",
+      target: "releases/new/openclaw",
+      previous: "releases/old/openclaw",
+      version: VERSION,
+      attempts: 1,
+      createdAt: Date.now(),
+      outcome: { status: "succeeded", at: Date.now() },
+    });
+    await withinTest(entered.promise, signal);
+    await withinTest(watcher.stop(), signal);
+    expect((await stopped.promise).termination).toBe("signal");
+    expect(runPostActivationInspections).not.toHaveBeenCalled();
+    const finished = await getUpdateRunAsync(run.runId);
+    expect(finished?.status).toBe("succeeded");
+    expect(finished?.steps).not.toContainEqual(expect.objectContaining({ step: "plugins" }));
+  } finally {
+    if (childPid && !commandFinished) {
+      killProcessTree(childPid, { detached: true, force: true });
+    }
+    await watcher.stop();
+    await lifecycle.stop();
+  }
+});
