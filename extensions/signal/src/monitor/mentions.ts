@@ -4,10 +4,10 @@ import {
   matchesMentionPatterns,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveSignalAccountConfig } from "../accounts.js";
 import type {
   SignalDataMessage,
   SignalEventHandlerDeps,
@@ -118,7 +118,12 @@ export function resolveSignalMentionDecision(params: {
           configuredGroupDefaultsToNoMention: true,
         }),
       implicitMentions: quotesBot
-        ? resolveChannelImplicitMentions({ cfg, channel: "signal", accountId: account.accountId })
+        ? {
+            quotedBot:
+              cfg.channels?.defaults?.implicitMentions?.quotedBot !== false &&
+              resolveSignalAccountConfig(cfg, account.accountId).implicitMentions?.quotedBot ===
+                true,
+          }
         : undefined,
       allowTextCommands: true,
       hasControlCommand: params.hasControlCommand,

@@ -42,6 +42,13 @@ it("accepts a default-account number stored beside a root container transport", 
   });
 });
 
+it("accepts explicit quote activation for the default and named accounts", () => {
+  expectValidSignalConfig({
+    implicitMentions: { quotedBot: true },
+    accounts: { work: { implicitMentions: { quotedBot: false } } },
+  });
+});
+
 it.each([
   { socketPath: "/tmp/../signal.sock" },
   { socketPath: `/tmp/${"a".repeat(100)}.sock` },

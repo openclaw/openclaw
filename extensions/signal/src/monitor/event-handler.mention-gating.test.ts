@@ -199,29 +199,67 @@ it("records quote text in pending history for skipped quote-only group messages"
 });
 
 it.each([
-  { name: "bot UUID", authorUuid: "bot-uuid", dispatched: true },
-  { name: "bot phone", authorNumber: "+15550002222", dispatched: true },
-  { name: "legacy bot phone", author: "+15550002222", dispatched: true },
-  { name: "another author", authorUuid: "other-user", dispatched: false },
+  { name: "own quote without opt-in", authorUuid: "bot-uuid", dispatched: false },
+  { name: "bot UUID", authorUuid: "bot-uuid", quotedBot: true, dispatched: true },
+  { name: "bot phone", authorNumber: "+15550002222", quotedBot: true, dispatched: true },
+  { name: "legacy bot phone", author: "+15550002222", quotedBot: true, dispatched: true },
+  { name: "another author", authorUuid: "other-user", quotedBot: true, dispatched: false },
   {
     name: "disabled quote activation",
     authorUuid: "bot-uuid",
     quotedBot: false,
     dispatched: false,
   },
-  { name: "denied sender", authorUuid: "bot-uuid", senderAllowed: false, dispatched: false },
+  {
+    name: "shared default is not an account opt-in",
+    authorUuid: "bot-uuid",
+    defaultQuotedBot: true,
+    dispatched: false,
+  },
+  {
+    name: "shared disable takes precedence over account opt-in",
+    authorUuid: "bot-uuid",
+    quotedBot: true,
+    defaultQuotedBot: false,
+    dispatched: false,
+  },
+  {
+    name: "named account opt-in",
+    authorUuid: "bot-uuid",
+    accountId: "work",
+    workQuotedBot: true,
+    dispatched: true,
+  },
+  {
+    name: "default and other accounts cannot opt in a named account",
+    authorUuid: "bot-uuid",
+    accountId: "personal",
+    quotedBot: true,
+    workQuotedBot: true,
+    dispatched: false,
+  },
+  {
+    name: "denied sender",
+    authorUuid: "bot-uuid",
+    quotedBot: true,
+    senderAllowed: false,
+    dispatched: false,
+  },
 ])("applies Signal quote activation rules: $name", async (testCase) => {
   const groupAllowFrom = testCase.senderAllowed === false ? ["+15550003333"] : ["group:g1"];
   const handler = createMentionHandler({
     account: "+15550002222",
     accountUuid: "bot-uuid",
+    accountId: testCase.accountId ?? "default",
     groupPolicy: "allowlist",
     groupAllowFrom,
     cfg: {
       messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: [] } },
       channels: {
-        defaults: { implicitMentions: { quotedBot: testCase.quotedBot } },
+        defaults: { implicitMentions: { quotedBot: testCase.defaultQuotedBot } },
         signal: {
+          implicitMentions: { quotedBot: testCase.quotedBot },
+          accounts: { work: { implicitMentions: { quotedBot: testCase.workQuotedBot } } },
           groups: { g1: { requireMention: true } },
           groupPolicy: "allowlist",
           groupAllowFrom,
