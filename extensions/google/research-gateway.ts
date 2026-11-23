@@ -221,7 +221,7 @@ export async function handleGoogleResearch(
               // report content; every reconciliation must pass fresh host/profile fences.
               ...(receipt ? { handle: receipt } : {}),
               reason: startReturned
-                ? "Google research returned a submission, but authority changed before delivery. Do not repeat the start request."
+                ? "Google research returned a submission, but the provider or session ended before delivery. Do not repeat the start request."
                 : "Google research is unavailable under the current configuration or session authority.",
             };
     respond(true, reply);

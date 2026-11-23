@@ -51,7 +51,7 @@ async function createCallback(text: string, error?: string) {
 }
 
 it("reports a spooled callback failure to the ingress owner", async () => {
-  const message = "Gateway requester authority changed";
+  const message = "Callback delivery failed";
   const text = "This action is no longer available.";
   const { callbackHandler, context } = await createCallback(text, message);
   const update = { update_id: 404, callback_query: context.callbackQuery };

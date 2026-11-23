@@ -58,7 +58,7 @@ export function createCodexNodeAppServerCommand(): OpenClawPluginNodeHostCommand
       }
       const request = parseRequest(JSON.parse(paramsJSON ?? "null"));
       if (context.sessionKey !== request.workspace.sessionKey) {
-        throw new Error("Worker Codex session authority changed");
+        throw new Error("Worker Codex request targets a different session. Retry the request.");
       }
       const signal = context.signal ? AbortSignal.any([io.signal, context.signal]) : io.signal;
       signal.throwIfAborted();

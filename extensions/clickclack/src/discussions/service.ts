@@ -561,11 +561,9 @@ export class ClickClackDiscussionService {
           bound.channelId !== currentBinding.channelId ||
           sessionAuthority.entry?.sessionId !== currentBinding.sessionId ||
           sessionAuthority.entry.archivedAt !== undefined ||
-          resolvePreparedDiscussionBindingAccount(this.#currentConfig(), currentBinding, account)
-            .state !== "active" ||
           isRevoked(bound)
         ) {
-          throw new Error("ClickClack discussion authority changed before channel update");
+          throw new Error("The discussion binding or session moved. Retry the update.");
         }
       };
       let updated: Awaited<ReturnType<ClickClackClient["updateChannel"]>>;

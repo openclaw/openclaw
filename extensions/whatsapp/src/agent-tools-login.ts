@@ -50,7 +50,7 @@ export function createWhatsAppLoginTool(
       const beforeCredentialPersistence = async () => {
         context.assertInvocationCurrent?.();
         if (!signal || signal.aborted) {
-          throw new Error("WhatsApp login authority is no longer active.");
+          throw new Error("WhatsApp login was stopped. Start a new login to retry.");
         }
       };
       const renderReply = (

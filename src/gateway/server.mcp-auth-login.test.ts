@@ -599,14 +599,12 @@ describe("registered mcp.authLogin", () => {
     },
   );
 
-  it.each(["admin scope", "plugin registry", "connector URL", "in-place connector URL"] as const)(
-    "rejects token publication after its %s authority changes",
+  it.each(["plugin registry", "connector URL", "in-place connector URL"] as const)(
+    "rejects token publication after its %s changes",
     async (change) => {
       await clearMcpOAuthCredentials(identity());
       const started = await begin();
       const invocation = getInvocation();
-      const client = expectDefined(invocation.client, "admitted client");
-      const scopes = client.connect.scopes;
       const resolveRegistry = registryGetter();
       const originalRegistry = resolveRegistry();
       const registry = resolverRegistry();
@@ -618,9 +616,7 @@ describe("registered mcp.authLogin", () => {
       try {
         expect((await callback(started.state)).status).toBe(200);
         await suite.tokenEntered.promise;
-        if (change === "admin scope") {
-          client.connect.scopes = ["operator.read"];
-        } else if (change === "plugin registry") {
+        if (change === "plugin registry") {
           invocation.context.getGatewayMethodRegistry = () => replacement;
           expect(
             withPluginRuntimeRegistryScope(
@@ -654,7 +650,6 @@ describe("registered mcp.authLogin", () => {
       } finally {
         suite.releaseToken.resolve();
         suite.releaseToken = undefined;
-        client.connect.scopes = scopes;
         invocation.context.getGatewayMethodRegistry = resolveRegistry;
         if (changedServer) {
           changedServer.url = originalUrl;

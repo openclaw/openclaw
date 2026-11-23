@@ -19,6 +19,6 @@ export type WorkerMessage =
   | { type: "assert"; id: number }
   | { type: "done"; id: number; ok: true; value: unknown; live: LiveState["state"] }
   | { type: "done"; id: number; ok: false; message: string };
-/** Error thrown in the worker when the main thread reports lost authority; the
+/** Error thrown in the worker when the main thread refuses continuation; the
  * client replaces it with the main thread's original error. */
-export const AUTHORITY_REVOKED = "Knowledge authority changed during the operation.";
+export const AUTHORITY_REVOKED = "Knowledge operation ended. Retry the original request.";

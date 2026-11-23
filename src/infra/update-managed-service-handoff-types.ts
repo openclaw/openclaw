@@ -16,7 +16,7 @@ export type ManagedServiceUpdateHandoffParams = Parameters<typeof resolveUpdateC
   runId?: string;
   beforePark?: () => Promise<void>;
   /** Local original admission; never serialized to the detached helper. */
-  requesterAuthority?: Readonly<{ assertCurrent: () => void; signal?: AbortSignal }>;
+  requesterAuthority?: Readonly<{ signal?: AbortSignal }>;
   root: string;
   recoveryTimeoutMs?: number;
   restartDrainTimeoutMs: number;

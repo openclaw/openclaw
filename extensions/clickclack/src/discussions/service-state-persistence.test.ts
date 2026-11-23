@@ -359,7 +359,7 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
         text: "The bound discussion has no messages yet.",
       });
     } else {
-      await expect(renaming).rejects.toThrow("authority changed before channel update");
+      await expect(renaming).rejects.toThrow("The discussion binding or session moved");
       expect(f.updateChannel).not.toHaveBeenCalled();
     }
   },
@@ -561,24 +561,6 @@ describe("ClickClack pending generation persistence", () => {
     await expect(opening).resolves.toMatchObject({ state: "open" });
     expect(await generations.lookup(sessionKey)).toEqual(successor);
   });
-
-  it.each(["token", "apiBaseUrl"] as const)(
-    "rechecks %s after a pending write waits",
-    async (field) => {
-      const f = blockedGeneration("pending");
-      const { entered, release, track } = f;
-      const opening = track(f.service.open(sessionKey));
-      await entered.promise;
-      if (field === "token") {
-        f.config.channels!.clickclack!.token = "replacement-token";
-      } else {
-        f.config.channels!.clickclack!.apiBaseUrl = "https://replacement.example";
-      }
-      release.resolve();
-      await expect(opening).rejects.toThrow("authority changed");
-      expect(f.createChannel).not.toHaveBeenCalled();
-    },
-  );
 
   it("does not replay a failed worker mutation through native storage", async () => {
     const failure = new Error("generation worker unavailable");

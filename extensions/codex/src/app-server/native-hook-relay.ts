@@ -316,7 +316,7 @@ export function createCodexNativeHookRelay(params: {
                       } catch (error) {
                         return toErrorObject(
                           error,
-                          "Native spawn execution authority is no longer current",
+                          "Native subagent spawn was denied. Start a new turn to retry.",
                         ).message;
                       }
                     }
