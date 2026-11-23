@@ -53,8 +53,6 @@ import { gitTargetSupportsReleaseUpdates, resolveTarget } from "./target.js";
 /** Covers fetch, dependencies and both builds; a run past it is "interrupted". */
 export const PREPARE_DEADLINE_MS = 45 * 60_000;
 const CHECK_RELEASE_TIMEOUT_MS = 3 * 60_000;
-/** The run step that reports what retained-runtime maintenance removed or kept. */
-export const RETAINED_RUNTIMES_STEP = "retained-runtimes";
 
 export type InstallKind = { kind: ReleaseKind; checkout?: string };
 
@@ -187,7 +185,6 @@ export async function prepareUpdate(params: {
     }
     // Releases left by an earlier update; never on the critical path.
     void collectReleases(prefix).catch(() => undefined);
-    await recordRetainedRuntimeMaintenance(params.runId, env, params.runningRoot, deadline);
     let target;
     try {
       target = await resolveTarget({
@@ -423,61 +420,6 @@ export async function prepareUpdate(params: {
       await fs.rm(staging.path, { recursive: true, force: true }).catch(() => undefined);
     }
     await releaseUpdateLock(prefix).catch(() => undefined);
-  }
-}
-
-/**
- * Removes runtimes that earlier in-place updaters retained, as their next update. Their owner
- * record and the process census decide custody, so a runtime still in use stays; what stays or
- * fails is reported, never a failed update.
- */
-export async function reclaimRetainedUpdateRuntimes(params: {
-  env: NodeJS.ProcessEnv;
-  runningRoot: string;
-  deadline: number;
-}): Promise<string[]> {
-  try {
-    const { prepareRetainedUpdateRuntimeMaintenance } =
-      await import("../commands/doctor-retained-runtime.js");
-    // This process's environment is the one the serving updater or Gateway runs with.
-    const maintain = await prepareRetainedUpdateRuntimeMaintenance(params.env, {
-      inspectService: false,
-      packageRoots: [params.runningRoot],
-    });
-    // Doctor also fences its own process's workers; this process never loads code from
-    // another updater's runtime, and its own runtimes stay registered with their creator.
-    return await maintain(true, {
-      assertCurrent: () => {
-        if (Date.now() >= params.deadline) {
-          throw new Error("the update deadline passed; the next update retries");
-        }
-      },
-    });
-  } catch (error) {
-    return [`Could not inspect retained updater runtimes: ${formatErrorMessage(error)}`];
-  }
-}
-
-async function recordRetainedRuntimeMaintenance(
-  runId: string,
-  env: NodeJS.ProcessEnv,
-  runningRoot: string,
-  deadline: number,
-) {
-  const startedAtMs = Date.now();
-  const lines = await reclaimRetainedUpdateRuntimes({ env, runningRoot, deadline });
-  if (lines.length > 0) {
-    await recordUpdateRunStepAsync(
-      runId,
-      {
-        step: RETAINED_RUNTIMES_STEP,
-        status: "completed",
-        startedAtMs,
-        endedAtMs: Date.now(),
-        detail: lines.join("\n"),
-      },
-      { env },
-    );
   }
 }
 

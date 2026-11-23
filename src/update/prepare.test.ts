@@ -719,15 +719,17 @@ describe("already-current update", () => {
 });
 
 describe("retained updater runtimes", () => {
+  // Updaters before owner records projected the package they replaced into the temp dir.
+  const project = (checkout: string, name: string) =>
+    createDoctorRuntimeProjection(path.join(root, "tmp"), checkout, name);
+
   it("reclaims an earlier updater's runtime and keeps uncertain ones without failing", async () => {
     const { checkout, sha } = await repository();
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     vi.stubEnv("GIT_COMMIT", sha);
-    // Updaters before owner records projected the package they replaced into the temp dir.
-    const tmp = path.join(root, "tmp");
-    const abandoned = createDoctorRuntimeProjection(tmp, checkout, "Gone01");
-    const held = createDoctorRuntimeProjection(tmp, checkout, "Held01");
-    const unseen = createDoctorRuntimeProjection(tmp, checkout, "Blind1");
+    const abandoned = project(checkout, "Gone01");
+    const held = project(checkout, "Held01");
+    const unseen = project(checkout, "Blind1");
     // One runtime is still used by another process; for another, processes cannot be listed.
     vi.spyOn(processCensus, "inspectOtherOpenClawProcesses").mockImplementation(((
       directory: string,
@@ -748,27 +750,52 @@ describe("retained updater runtimes", () => {
         timeoutMs: 30_000,
       });
       expect(process.exitCode).toBe(0);
+      expect((await getUpdateRunStatusAsync()).lastRun).toMatchObject({
+        status: "skipped",
+        reason: "already-current",
+      });
       await expect(fs.access(abandoned)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.access(held)).resolves.toBeUndefined();
       await expect(fs.access(unseen)).resolves.toBeUndefined();
-      // The run record shortens the fixture home to ~.
-      const shown = (name: string) => path.join("~", "tmp", `openclaw-update-runtime-${name}`);
-      const removed = `Removed abandoned updater runtime: ${shown("Gone01")}`;
-      const kept = `Runtime retained at ${shown("Held01")}: other OpenClaw processes are still running (PIDs: 4242)`;
-      const blind = `Runtime retained at ${shown("Blind1")}: Could not inspect OpenClaw processes: census unavailable`;
-      const { lastRun } = await getUpdateRunStatusAsync();
-      expect(lastRun).toMatchObject({ status: "skipped", reason: "already-current" });
-      const detail = lastRun?.steps.find(({ step }) => step === "retained-runtimes")?.detail;
-      expect(detail?.split("\n").toSorted()).toEqual([
-        removed,
-        blind,
-        expect.stringContaining(kept),
-      ]);
       const printed = log.mock.calls.map(([line]) => String(line));
-      expect(printed).toEqual(
-        expect.arrayContaining([removed, blind, expect.stringContaining(kept)]),
-      );
+      // One line per runtime, in directory order, then the update's own result.
+      expect(printed.slice(0, -1).toSorted()).toEqual([
+        `Removed abandoned updater runtime: ${abandoned}`,
+        `Runtime retained at ${unseen}: Could not inspect OpenClaw processes: census unavailable`,
+        expect.stringContaining(
+          `Runtime retained at ${held}: other OpenClaw processes are still running (PIDs: 4242)`,
+        ),
+      ]);
       expect(printed.at(-1)).toBe("Already up to date.");
+    } finally {
+      process.exitCode = undefined;
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+    }
+  });
+
+  it("leaves an earlier updater's runtime alone when the update fails", async () => {
+    const { checkout } = await repository(true, ">=1", true);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    vi.stubEnv("GIT_COMMIT", "");
+    const abandoned = project(checkout, "Gone01");
+    vi.spyOn(processCensus, "inspectOtherOpenClawProcesses").mockReturnValue({ pids: [] });
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    try {
+      openOpenClawStateDatabase({ env: process.env });
+      await runReleaseUpdateCli({
+        json: false,
+        restart: false,
+        runningRoot: checkout,
+        storedChannel: "dev",
+        timeoutMs: 30_000,
+      });
+      expect(process.exitCode).toBe(1);
+      expect((await getUpdateRunStatusAsync()).lastRun).toMatchObject({
+        status: "failed",
+        reason: "build-failed",
+      });
+      await expect(fs.access(abandoned)).resolves.toBeUndefined();
     } finally {
       process.exitCode = undefined;
       await closeOpenClawStateDatabaseAsync();

@@ -28,11 +28,7 @@ beforeEach(async () => {
 const sent = vi.hoisted(() => [] as unknown[]);
 const missingCredentials = vi.hoisted(() => ({ enabled: false }));
 const install = vi.hoisted(() => ({ kind: "git" }));
-const localRun = vi.hoisted(() => ({
-  status: "skipped",
-  phase: "finished",
-  steps: [] as Array<{ step: string; status: string; detail?: string }>,
-}));
+const localRun = vi.hoisted(() => ({ status: "skipped", phase: "finished" }));
 // The selected package release; the running version unless a case tests a downgrade.
 const packageTarget = { version: VERSION };
 const confirmDowngrade = vi.hoisted(() =>
@@ -70,16 +66,20 @@ vi.mock("../infra/update-install-status.js", async (importOriginal) => ({
   }),
 }));
 const prepared = vi.hoisted(() => [] as unknown[]);
-const reclaim = vi.hoisted(() => vi.fn(async (): Promise<string[]> => []));
-// mock-isolation: preparation builds a real release and reclamation scans host temp
-// directories (prepare.test.ts runs both); this file checks what the CLI does around them.
+const maintainRuntimes = vi.hoisted(() =>
+  vi.fn(async (_repair: boolean, _authority: { assertCurrent: () => void }) => [] as string[]),
+);
+// mock-isolation: reclamation scans host temp directories; prepare.test.ts runs it for real.
+vi.mock("../commands/doctor-retained-runtime.js", () => ({
+  prepareRetainedUpdateRuntimeMaintenance: async () => maintainRuntimes,
+}));
+// mock-isolation: preparation builds a real release; this test checks only the channel it is given.
 vi.mock("./run.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./run.js")>()),
   prepareUpdate: async (params: unknown) => {
     prepared.push(params);
     return { status: "current", version: "2026.11.6", pluginsChanged: false };
   },
-  reclaimRetainedUpdateRuntimes: reclaim,
 }));
 vi.mock("../infra/update-run-write.async.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-run-write.async.js")>()),
@@ -91,6 +91,7 @@ vi.mock("../infra/update-run-reader.js", async (importOriginal) => ({
     ...localRun,
     runId: "run-cli",
     reason: "already-current",
+    steps: [],
     after: {},
     origin: {},
   }),
@@ -138,11 +139,10 @@ afterEach(async () => {
   missingCredentials.enabled = false;
   localRun.status = "skipped";
   localRun.phase = "finished";
-  localRun.steps = [];
   packageTarget.version = VERSION;
+  maintainRuntimes.mockReset();
+  maintainRuntimes.mockResolvedValue([]);
   confirmDowngrade.mockReset();
-  reclaim.mockReset();
-  reclaim.mockResolvedValue([]);
   createRun.mockClear();
   mutateConfig.mockClear();
   sent.length = 0;
@@ -210,12 +210,13 @@ it("keeps following the run while the restarting Gateway refuses connections", a
 });
 
 it.each([false, true])(
-  "reclaims earlier updaters' runtimes itself before the Gateway updates (json=%s)",
+  "reclaims earlier updaters' runtimes after the Gateway updates (json=%s)",
   async (json) => {
     const removed = "Removed abandoned updater runtime: /tmp/openclaw-update-runtime-Gone01";
-    // The Gateway's census would count this requesting CLI as a possible holder.
-    reclaim.mockImplementation(async () => {
-      expect(sent).toEqual([]);
+    maintainRuntimes.mockImplementation(async () => {
+      // The Gateway has finished: this command is the only update-like process left.
+      expect(sent).toEqual([{}]);
+      expect(runsGet).toEqual([]);
       return [removed];
     });
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
@@ -225,38 +226,32 @@ it.each([false, true])(
       run: {
         status: "succeeded",
         phase: "finished",
-        steps: [{ step: "retained-runtimes", status: "completed", detail: "nothing left" }],
+        steps: [],
         after: { version: "2026.11.7" },
         origin: {},
       },
     }));
     await runReleaseUpdateCli({ json, restart: true, runningRoot: root });
-    expect(reclaim).toHaveBeenCalledWith(expect.objectContaining({ runningRoot: root }));
-    expect(sent).toEqual([{}]);
+    expect(maintainRuntimes).toHaveBeenCalledOnce();
     const lines = (spy: typeof log) => spy.mock.calls.map(([line]) => line);
     if (json) {
       // stdout carries only the record.
       expect(lines(error)).toEqual([removed]);
       expect(log).not.toHaveBeenCalled();
-      expect(writeJson).toHaveBeenCalledTimes(1);
+      expect(writeJson).toHaveBeenCalledOnce();
     } else {
-      expect(lines(log)).toEqual([removed, "finished: retained-runtimes", "Updated to 2026.11.7."]);
+      expect(lines(log)).toEqual(["finished: finished", removed, "Updated to 2026.11.7."]);
       expect(error).not.toHaveBeenCalled();
     }
     expect(process.exitCode).toBe(0);
   },
 );
 
-it("prints a kept runtime once when the update falls back to this process", async () => {
-  missingCredentials.enabled = true;
-  const kept = "Runtime retained at /tmp/openclaw-update-runtime-Held01: still in use";
-  reclaim.mockResolvedValue([kept]);
-  // The local run's own pass finds the same runtime still in use.
-  localRun.steps = [{ step: "retained-runtimes", status: "completed", detail: kept }];
-  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-  await runReleaseUpdateCli({ json: false, restart: true, runningRoot: root, yes: true });
-  expect(prepared).toHaveLength(1);
-  expect(log.mock.calls.map(([line]) => line)).toEqual([kept, "Already up to date."]);
+it("leaves earlier updaters' runtimes alone when the Gateway refuses the update", async () => {
+  await expect(
+    runReleaseUpdateCli({ json: true, restart: true, runningRoot: root }),
+  ).rejects.toThrow("refused for the test");
+  expect(maintainRuntimes).not.toHaveBeenCalled();
 });
 
 it("says the update is still running when the --timeout budget ends first", async () => {

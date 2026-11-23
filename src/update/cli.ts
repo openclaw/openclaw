@@ -12,6 +12,7 @@ import {
   isImplicitLocalGatewayTarget,
 } from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { compareSemverStrings } from "../infra/npm-registry-spec.js";
 import { resolveEffectiveUpdateChannel, type UpdateChannel } from "../infra/update-channels.js";
 import { resolveStartupInstallStatus } from "../infra/update-install-status.js";
@@ -24,15 +25,12 @@ import {
   checkUpdateInstallationSlot,
   resolveUpdateInstallationIdentity,
 } from "./installation-identity.js";
-import {
-  PREPARE_DEADLINE_MS,
-  prepareUpdate,
-  reclaimRetainedUpdateRuntimes,
-  RETAINED_RUNTIMES_STEP,
-} from "./run.js";
+import { PREPARE_DEADLINE_MS, prepareUpdate } from "./run.js";
 import { resolveTarget } from "./target.js";
 
 const POLL_MS = 2_000;
+/** Earlier updaters' runtime cleanup is advisory; it never holds the command much longer. */
+const RETAINED_RUNTIME_BUDGET_MS = 2 * 60_000;
 /** Prepare, plus a trial that includes the boot migration. */
 const RUN_DEADLINE_MS = PREPARE_DEADLINE_MS + 30 * 60_000;
 
@@ -124,20 +122,8 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
       : undefined;
   // Explicit package targets stay local: update.run cannot carry them without a protocol change.
   // --no-restart prepares in this process; the release starts at the Gateway's next start.
-  const viaGateway = opts.restart && !opts.tag;
-  if (viaGateway) {
-    // The Gateway's census cannot tell this requesting CLI from an earlier updater that may
-    // still load a runtime without an owner record, so this process reclaims them first.
-    printLines(
-      await reclaimRetainedUpdateRuntimes({
-        env: process.env,
-        runningRoot: opts.runningRoot,
-        deadline: startedAt + (opts.timeoutMs ?? RUN_DEADLINE_MS),
-      }),
-      opts.json,
-    );
-  }
-  const request = viaGateway ? await requestGatewayUpdate(target, { ...opts, timeoutMs }) : null;
+  const request =
+    opts.restart && !opts.tag ? await requestGatewayUpdate(target, { ...opts, timeoutMs }) : null;
   let record = request
     ? await followRun(
         request.runId,
@@ -177,11 +163,53 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
       Math.max(0, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
     );
   }
-  report(record, opts.json, !viaGateway);
+  const updated =
+    record?.status === "succeeded" || record?.status === "skipped" || isPendingActivation(record);
+  if (updated) {
+    // Only an admitted update that went through, never a refusal or failure, changes the disk.
+    for (const line of await reclaimRetainedUpdateRuntimes(opts.runningRoot)) {
+      if (opts.json) {
+        defaultRuntime.error(line);
+      } else {
+        defaultRuntime.log(line);
+      }
+    }
+  }
+  report(record, opts.json);
   process.exitCode =
     record?.status === "succeeded" || record?.status === "skipped" || isPendingActivation(record)
       ? 0
       : 1;
+}
+
+/**
+ * Removes the runtime an earlier in-place updater retained (shipped updaters promise that the
+ * next update does). Doctor's owner decides custody from the runtime's owner record and the
+ * process census. It runs in this command, not the Gateway: the census is synchronous, and
+ * without an owner record it cannot tell a waiting `openclaw update` from an old updater.
+ */
+async function reclaimRetainedUpdateRuntimes(runningRoot: string): Promise<string[]> {
+  const deadline = Date.now() + RETAINED_RUNTIME_BUDGET_MS;
+  try {
+    const { prepareRetainedUpdateRuntimeMaintenance } =
+      await import("../commands/doctor-retained-runtime.js");
+    // This command's temp directories and the system one; Doctor also reads the service's.
+    const maintain = await prepareRetainedUpdateRuntimeMaintenance(process.env, {
+      inspectService: false,
+      packageRoots: [runningRoot],
+    });
+    // Doctor also fences its own process's workers; this command never loads code from
+    // another updater's runtime.
+    return await maintain(true, {
+      assertCurrent: () => {
+        if (Date.now() >= deadline) {
+          throw new Error("cleanup ran out of time; the next update retries");
+        }
+      },
+    });
+  } catch (error) {
+    return [`Could not inspect retained updater runtimes: ${formatErrorMessage(error)}`];
+  }
 }
 
 async function requestLocalGatewayRestart(timeoutMs = 30_000): Promise<boolean> {
@@ -358,25 +386,7 @@ function isPendingActivation(record: UpdateRunRecord | undefined) {
   return record?.status === "running" && record.phase === "activating";
 }
 
-/** JSON output keeps stdout to the record; notes go to stderr. */
-function printLines(lines: readonly string[], json: boolean) {
-  for (const line of lines) {
-    if (json) {
-      defaultRuntime.error(line);
-    } else {
-      defaultRuntime.log(line);
-    }
-  }
-}
-
-function report(record: UpdateRunRecord | undefined, json: boolean, unreported: boolean) {
-  // After this CLI's own pass, the run's pass can only repeat what that pass kept.
-  const runtimes = unreported
-    ? record?.steps.find(({ step }) => step === RETAINED_RUNTIMES_STEP)?.detail
-    : undefined;
-  if (runtimes) {
-    printLines(runtimes.split("\n"), json);
-  }
+function report(record: UpdateRunRecord | undefined, json: boolean) {
   if (json) {
     defaultRuntime.writeJson(record ?? { status: "unknown" });
     return;
