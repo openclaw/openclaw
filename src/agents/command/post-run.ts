@@ -16,6 +16,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
@@ -189,8 +190,11 @@ export async function finalizeEmbeddedAgentCommand(params: {
         compactionAccounting: compactionFact,
         touchInteraction:
           params.opts.bootstrapContextRunKind !== "cron" && !params.opts.internalEvents?.length,
-        // Cron output counts as unread-worthy activity; internal events do not.
-        touchActivity: !params.opts.internalEvents?.length,
+        // Cron output counts as unread-worthy activity; internal events and hidden
+        // coordination turns (a child's sessions_send to its requester) do not.
+        touchActivity:
+          !params.opts.internalEvents?.length &&
+          !isSubagentCoordinationInputProvenance(params.opts.inputProvenance),
         preserveRuntimeModel:
           result.meta.providerStarted === false ||
           fallbackExhausted ||
@@ -274,7 +278,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
       admittedSource: compactionFact?.target ?? params.admittedDeliverySource,
       assertCurrent: () => {
         assertSourceCurrent?.();
-        operatorAuthority?.assertCurrent();
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
       },
       commandOwnerReference: params.opts.assertSourceCurrent?.recoveryReference,
@@ -298,7 +301,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
         ? async (): Promise<SessionEntry | undefined> => {
             const assertCurrent = () => {
               assertSourceCurrent?.();
-              operatorAuthority?.assertCurrent();
               assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
             };
             assertCurrent();
@@ -388,7 +390,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
       const authorize = () => {
         throwAgentRunRestartAbortReason(params.opts.abortSignal?.reason);
         assertSourceCurrent?.();
-        operatorAuthority?.assertCurrent();
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
         return (
           maintenance.remainingMs() > 0 && !maintenance.signal.aborted && !sessionReboundDuringRun

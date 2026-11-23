@@ -13,6 +13,7 @@ import {
   waitForConfirmModal,
 } from "./session-management.test-support.ts";
 import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
+import { showNextSidebarPage } from "./sidebar-session-pagination.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -90,7 +91,7 @@ suite.define(() => {
               break;
             }
             const before = await viewport.evaluate((element) => element.scrollHeight);
-            await showMore.click();
+            await showNextSidebarPage(showMore);
             await expect
               .poll(() => viewport.evaluate((element) => element.scrollHeight))
               .toBeGreaterThan(before);

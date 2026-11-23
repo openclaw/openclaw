@@ -1,35 +1,18 @@
 /**
- * Chooses a configured provider/model fallback when defaults are absent from
- * the user's model config.
+ * Chooses a configured provider/model row when the user's model config names
+ * no primary.
  */
-import {
-  findNormalizedProviderValue,
-  normalizeProviderId,
-} from "@openclaw/model-catalog-core/provider-id";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ModelRef } from "./model-ref-shared.js";
 
-/** Resolve the first configured provider/model that can replace a missing default. */
+/** Resolve the first configured provider/model that can stand in for a missing primary. */
 export function resolveConfiguredProviderFallback(params: {
   cfg: Pick<OpenClawConfig, "models">;
-  defaultProvider: string;
-  defaultModel: string | undefined;
   excludedModel?: ModelRef;
 }): ModelRef | null {
   const configuredProviders = params.cfg.models?.providers;
   if (!configuredProviders || typeof configuredProviders !== "object") {
-    return null;
-  }
-  const defaultProviderConfig = findNormalizedProviderValue(
-    configuredProviders,
-    params.defaultProvider,
-  );
-  const defaultModel = params.defaultModel?.trim();
-  if (
-    defaultProviderConfig?.models?.some(
-      (model) => model?.id && (!defaultModel || model.id === defaultModel),
-    )
-  ) {
     return null;
   }
   // A utility-only row does not express primary intent. Keep the remaining

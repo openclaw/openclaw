@@ -285,6 +285,7 @@ export async function initializeLocalWorkspaceProjection(
   rawManifest: string;
   manifestRef: string;
   projectionFingerprints?: Buffer | null;
+  clonedDevice?: bigint;
   buildCacheInputs: string[];
   preparedDirectories?: string[];
 }> {

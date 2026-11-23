@@ -294,32 +294,6 @@ describe("doctor runtime tool schema checks", () => {
     },
   );
 
-  it("preserves the catalog transport when building runtime models", async () => {
-    const transport = {
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
-    };
-    mocks.catalog.mockResolvedValueOnce([
-      {
-        provider: "openai",
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        ...transport,
-        compat: { supportsTools: true },
-      },
-    ]);
-    mocks.codingTools.mockReturnValueOnce([tool("healthy", objectSchema)]);
-    await inspectSchemas({});
-    expect(mocks.normalizeTools).toHaveBeenCalledWith(
-      expect.objectContaining({
-        context: expect.objectContaining({
-          modelApi: transport.api,
-          model: expect.objectContaining(transport),
-        }),
-      }),
-    );
-  });
-
   it.each([
     ["cleanup failure", "fuzzplugin", undefined, true, false],
     ["explicit allowlist", "my__server", "my__server__healthy", false, false],

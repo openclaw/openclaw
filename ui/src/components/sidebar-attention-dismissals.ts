@@ -22,7 +22,11 @@ const SIDEBAR_ATTENTION_DISMISSAL_KINDS = [
 ] as const;
 
 export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_DISMISSAL_KINDS)[number];
-export type SidebarAttentionDismissal = { kind: SidebarAttentionKind; signature: string };
+export type SidebarAttentionDismissal = {
+  kind: SidebarAttentionKind;
+  signature: string;
+  failedAtMs?: number;
+};
 
 export type SidebarAttentionDismissals = Partial<Record<SidebarAttentionKind, string[]>>;
 
@@ -35,6 +39,28 @@ export function resolveSidebarAttentionKey(gateway: ApplicationGateway): string 
   return snapshot.phase === "connected" && profileId && gateway.connection.gatewayUrl
     ? `${DISMISSED_STORE_PREFIX}${JSON.stringify([gatewayCredentialScope(gateway.connection.gatewayUrl), profileId])}`
     : null;
+}
+
+export function deferredCronFailurePrefix(key: string): string {
+  return key + ":pending-failure:";
+}
+
+export function hasDeferredCronFailure(key: string): boolean {
+  const storage = getSafeLocalStorage();
+  if (!storage) {
+    return false;
+  }
+  const prefix = deferredCronFailurePrefix(key);
+  try {
+    for (let index = 0; index < storage.length; index++) {
+      if (storage.key(index)?.startsWith(prefix)) {
+        return true;
+      }
+    }
+  } catch {
+    // Browser storage can be denied while the Gateway remains available.
+  }
+  return false;
 }
 
 export function loadDismissals(key: string | null): SidebarAttentionDismissals {
@@ -67,7 +93,7 @@ export function loadDismissals(key: string | null): SidebarAttentionDismissals {
   }
 }
 
-function saveDismissals(key: string | null, dismissals: SidebarAttentionDismissals) {
+export function saveDismissals(key: string | null, dismissals: SidebarAttentionDismissals) {
   if (!key) {
     return;
   }
@@ -179,7 +205,8 @@ export function reconcileSidebarAttentionDismissals(params: {
     const current = stored.filter((signature) => {
       // A recovery use is an immutable event, not a nag that can recur. Other inventories
       // and a pending owner history read cannot re-arm an already dismissed event.
-      if (kind === "openClawIdRecoveryUse") {
+      // A v2 failure ID is pending migration. Only the authenticated gateway can retire it.
+      if (kind === "openClawIdRecoveryUse" || kind === "cronFailed") {
         return true;
       }
       // Selected-agent responses are partial: they may re-arm their own auth
@@ -192,7 +219,7 @@ export function reconcileSidebarAttentionDismissals(params: {
               (!signature.startsWith("agent:") ||
                 signature.startsWith(`agent:${scope.modelAuthAgentId}\n`)),
             )
-          : kind === "cronFailed" || kind === "cronOverdue"
+          : kind === "cronOverdue"
             ? scope.cronInventoryComplete
             : true);
       return (

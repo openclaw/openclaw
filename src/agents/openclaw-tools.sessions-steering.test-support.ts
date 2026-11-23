@@ -1,7 +1,10 @@
 import { afterEach, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  readLatestSessionTranscriptReport,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getSessionControllerOperation } from "../sessions/session-controller.js";
@@ -301,6 +304,102 @@ export function registerSessionsSendActiveSteeringTests({
       queue.mockRestore();
       prepare.mockRestore();
     }
+  });
+
+  // Supervised children (hidden, ACP or visible) name their parent as completion owner.
+  it.each([false, true])(
+    "a supervised child's send to its parent starts no parent turn (busy=%s)",
+    async (busy) => {
+      const parentKey = `agent:main:dashboard:progress-parent-${busy}`;
+      const childKey = `agent:main:dashboard:progress-child-${busy}`;
+      const parentSessionId = `progress-parent-${busy}`;
+      await seedSession(parentKey, parentSessionId);
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: childKey },
+        {
+          sessionId: `progress-child-${busy}`,
+          updatedAt: 1,
+          spawnedBy: parentKey,
+          parentSessionKey: parentKey,
+          completionOwnerSessionKey: parentKey,
+          spawnDepth: 1,
+        },
+      );
+      const queueMessage = busy
+        ? await activeRun(parentKey, {
+            config: cloneTestConfig(),
+            sessionId: parentSessionId,
+            requesterSessionKey: parentKey,
+          })
+        : undefined;
+      mockGatewayResponses({
+        agent: { runId: "parent-turn", status: "accepted" },
+        "agent.wait": {
+          status: "ok",
+          terminalReply: { disposition: "visible", text: "parent reply to child" },
+        },
+      });
+      const result = await getSessionTool("sessions_send", { agentSessionKey: childKey }).execute(
+        "child-progress",
+        { sessionKey: parentKey, message: "synthetic progress: step 2 of 3" },
+      );
+      expect(result.details).toMatchObject({
+        status: "accepted",
+        sessionKey: parentKey,
+        targetDisposition: busy ? "steered" : "queued",
+        delivery: { status: "skipped" },
+      });
+      expect(gatewayCalls("agent")).toEqual([]);
+      const recorded = await readLatestSessionTranscriptReport(
+        { agentId: "main", sessionKey: parentKey, sessionId: parentSessionId },
+        ["sessions-send-child-message"],
+      );
+      if (busy) {
+        expect(queueMessage).toHaveBeenCalledOnce();
+        expect(queueMessage?.mock.calls[0]?.[0]).toContain("synthetic progress: step 2 of 3");
+        expect(recorded).toEqual({ ok: true, value: undefined });
+      } else {
+        expect(recorded).toMatchObject({
+          ok: true,
+          value: { content: expect.stringContaining("synthetic progress: step 2 of 3") },
+        });
+      }
+      await settleContinuations();
+      expect(gatewayCalls("agent")).toEqual([]);
+    },
+  );
+
+  it("an unsupervised session's send to its creator still starts a turn", async () => {
+    const creatorKey = "agent:main:dashboard:independent-creator";
+    const sessionKey = "agent:main:dashboard:independent-session";
+    await seedSession(creatorKey);
+    // sessions_create records lineage without a completion owner.
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      {
+        sessionId: sessionKey,
+        updatedAt: 1,
+        spawnedBy: creatorKey,
+        parentSessionKey: creatorKey,
+        spawnDepth: 1,
+      },
+    );
+    mockGatewayResponses({
+      agent: { runId: "creator-turn", status: "accepted" },
+      "agent.wait": {
+        status: "ok",
+        terminalReply: { disposition: "visible", text: "creator reply" },
+      },
+    });
+    const result = await getSessionTool("sessions_send", { agentSessionKey: sessionKey }).execute(
+      "independent-result",
+      { sessionKey: creatorKey, message: "synthetic result for the creator" },
+    );
+    expect(result.details).toMatchObject({ status: "ok", reply: "creator reply" });
+    expect(gatewayCalls("agent")).toEqual([
+      [expect.objectContaining({ params: expect.objectContaining({ sessionKey: creatorKey }) })],
+    ]);
+    await settleContinuations();
   });
 
   it.each(["agent:main:dashboard:self-send", "agent:main:dashboard:self-send:run:captured"])(

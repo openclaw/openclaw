@@ -128,7 +128,9 @@ export function AgentChannels(
       >
         {(pending, error) =>
           error ? (
-            <InlineAlert tone="danger">{error}</InlineAlert>
+            <InlineAlert tone="danger" class="agent-channel-read-error">
+              {error}
+            </InlineAlert>
           ) : !params.readState().channelsSnapshot ? (
             <InlineAlert tone="info">
               {t(pending ? "common.loading" : "agents.channels.loadHint")}

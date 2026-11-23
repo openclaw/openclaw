@@ -80,6 +80,23 @@ describe("Google Meet OAuth", () => {
     }
   });
 
+  it("asks again when a pasted redirect belongs to another sign-in", async () => {
+    const promptInput = vi
+      .fn<(message: string) => Promise<string>>()
+      .mockResolvedValueOnce("http://localhost:8085/oauth2callback?code=stale&state=other")
+      .mockResolvedValueOnce(
+        "http://localhost:8085/oauth2callback?code=auth-code-123&state=state-token",
+      );
+    const lines: string[] = [];
+    await expect(
+      waitForCode({ manual: true, promptInput, writeLine: (message) => lines.push(message) }),
+    ).resolves.toBe("auth-code-123");
+    expect(promptInput).toHaveBeenCalledTimes(2);
+    expect(lines).toContain(
+      "This address belongs to a different sign-in attempt. Use the link from this sign-in.",
+    );
+  });
+
   it("propagates non-listener callback failures without manual fallback", async () => {
     // Test the SDK rejection without requiring the fixed callback port to be free.
     const timeoutError = new Error("OAuth callback timeout");

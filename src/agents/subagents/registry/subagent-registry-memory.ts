@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { revokeGoalContinuationReturn } from "../../../auto-reply/reply/goal-continuation-return.js";
-import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
 import { prepareGatewayContextBindingOwner } from "../../../plugins/runtime/gateway-context-binding-owner.js";
 import {
   bindGatewayContextResolver,
@@ -8,6 +7,7 @@ import {
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { retireAcceptedSessionSpawnCompletionForRun } from "../../accepted-session-spawn.js";
 import type { OperationalRunInstanceRef } from "../../operational-run-instance.js";
 import { transferFollowupCohort } from "../completion/session-followup-cohort.js";
 import {
@@ -284,9 +284,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     row: SubagentRunRecord,
     source: SubagentCompletionCustody["authority"],
     requesterRunInstance?: OperationalRunInstanceRef,
-    requesterCompletion: SubagentCompletionCustody["requesterCompletion"] = requesterRunInstance
-      ? { runId: requesterRunInstance.runId }
-      : undefined,
+    requesterCompletion?: SubagentCompletionCustody["requesterCompletion"],
   ) {
     const entry = this.currentValue(row);
     const key = getSubagentRunRuntimeKey(entry);
@@ -379,7 +377,8 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     try {
       custody?.authority.assertCurrent();
     } catch (error) {
-      if (isOperatorAuthorityUnavailable(error)) {
+      // A cancellation notice belongs to the independently admitted cancelling caller.
+      if (!isSubagentCancellationNotice(entry)) {
         throw error;
       }
       return run();
@@ -451,11 +450,18 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     changedRunIds?: readonly string[],
   ): void {
     const changed = changedRunIds && new Set(changedRunIds);
-    for (const { entry } of this.completionAuthorities.values()) {
+    for (const { entry, requesterRunInstance } of this.completionAuthorities.values()) {
       if (changed && !changed.has(entry.runId)) {
         continue;
       }
       const record = committed.get(entry.runId);
+      // Committed removal ends this obligation; a later yield must not require its deleted row.
+      if (!record && requesterRunInstance) {
+        retireAcceptedSessionSpawnCompletionForRun(requesterRunInstance, {
+          runId: entry.taskRunId ?? entry.runId,
+          childSessionKey: entry.childSessionKey,
+        });
+      }
       if (
         !record ||
         !isSameSubagentRunOwner(this.get(entry.runId), entry) ||

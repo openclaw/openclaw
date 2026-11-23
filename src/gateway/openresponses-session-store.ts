@@ -41,7 +41,6 @@ export async function lookupResponseSession(
 
 export async function rememberResponseSession(
   input: ResponseSessionScope & { responseId: string; sessionKey: string },
-  assertCurrent: () => void,
   env?: NodeJS.ProcessEnv,
 ): Promise<void> {
   if (
@@ -52,15 +51,10 @@ export async function rememberResponseSession(
     return;
   }
   const { responseId, sessionKey, authSubject, agentId, requestedSessionKey } = input;
-  await openStore(env).register(
-    responseId,
-    {
-      sessionKey,
-      authSubject,
-      agentId,
-      ...(requestedSessionKey === undefined ? {} : { requestedSessionKey }),
-    },
-    { assertCurrent },
-  );
-  assertCurrent();
+  await openStore(env).register(responseId, {
+    sessionKey,
+    authSubject,
+    agentId,
+    ...(requestedSessionKey === undefined ? {} : { requestedSessionKey }),
+  });
 }

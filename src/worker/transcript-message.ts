@@ -13,7 +13,11 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { isWorkerTranscriptFrameWithinBudget } from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { redactAgentDiagnosticPayload } from "../agents/diagnostic-redaction.js";
-import type { AssistantMessage, ProviderReplayState } from "../llm/types.js";
+import type {
+  AssistantHistoryMessage,
+  AssistantMessage,
+  ProviderReplayState,
+} from "../llm/types.js";
 import {
   projectWorkerAssistantContent,
   projectWorkerTextOrImageContent,
@@ -146,7 +150,9 @@ export function projectWorkerProviderReplay<
   return { kind: "complete", message: candidate };
 }
 
-function toWorkerAssistantMessage(message: AssistantMessage): WorkerTranscriptAssistantMessage {
+function toWorkerAssistantMessage(
+  message: AssistantHistoryMessage,
+): WorkerTranscriptAssistantMessage {
   return {
     role: "assistant",
     content: message.content.map(projectWorkerAssistantContent),

@@ -85,7 +85,7 @@ suite.define(() => {
         await gateway.deferNext(rpc.next, { answer: { stepId: "scope" } });
         await button(
           page.locator('[data-auth-choice="provider-device-code"]'),
-          "Set up & verify",
+          "Provider account",
         ).click();
         const start = await gateway.waitForRequest(rpc.auth);
         expect(start.params).toMatchObject({ authChoice: "provider-device-code" });
@@ -282,7 +282,6 @@ suite.define(() => {
 
         const detectCountBeforeDismiss = (await gateway.getRequests(rpc.detect)).length;
         await page.getByRole("button", { name: "Back to Models" }).click();
-        await page.locator("[data-models-connect]").click();
         await page.locator("[data-models-login-discover]").click();
         await pollRequestCount(gateway, rpc.detect).toBe(detectCountBeforeDismiss + 1);
         await openProviderMenu();

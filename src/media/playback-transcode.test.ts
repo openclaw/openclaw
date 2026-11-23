@@ -111,6 +111,48 @@ function createGatedFfmpegJob(output: string) {
 }
 
 describe("resolvePlaybackTranscode", () => {
+  it("returns a lossless MP4 rendition on the first playback request for a compatible MOV", async () => {
+    const source = await createSource("screen-recording.mov");
+    probePlaybackMediaFileDescriptor.mockResolvedValue(
+      videoProbe({
+        videoCodec: "h264",
+        videoProfile: "high",
+        videoPixelFormat: "yuv420p",
+        audioCodec: "aac",
+        audioStreamIndex: 1,
+      }),
+    );
+    runFfmpeg.mockImplementation(writeFfmpegOutput("mp4-rendition"));
+    const params = videoRequest(source, "video/quicktime");
+
+    const result = await resolveTranscode(params);
+    await waitForPlaybackSourceCleanup();
+    expect(result).toMatchObject({ kind: "transcoded", contentType: "video/mp4" });
+    expect(runFfmpeg).toHaveBeenCalledOnce();
+    expect(runFfmpeg.mock.calls[0]?.[0]).toEqual(expect.arrayContaining(["-c", "copy"]));
+    expect(runFfmpeg.mock.calls[0]?.[0]).not.toContain("libx264");
+    await expect(resolveTranscode(params)).resolves.toEqual(result);
+    expect(runFfmpeg).toHaveBeenCalledOnce();
+  });
+
+  it("re-encodes a compatible MOV if copying its streams fails", async () => {
+    const source = await createSource("unmappable-recording.mov");
+    probePlaybackMediaFileDescriptor.mockResolvedValue(
+      videoProbe({
+        videoCodec: "h264",
+        videoProfile: "high",
+        videoPixelFormat: "yuv420p",
+      }),
+    );
+    runFfmpeg
+      .mockRejectedValueOnce(new Error("Could not write MP4 header"))
+      .mockImplementationOnce(writeFfmpegOutput("encoded-rendition"));
+
+    await expectResolution(videoRequest(source, "video/quicktime"), "transcoded");
+    expect(runFfmpeg).toHaveBeenCalledTimes(2);
+    expect(runFfmpeg.mock.calls[1]?.[0]).toContain("libx264");
+  });
+
   it("does not reuse a rendition after the source file is replaced", async () => {
     using sync = vi.spyOn(syncFs, "fsyncSync");
     const original = await createSource("replaced-cache.mkv", "first-source");

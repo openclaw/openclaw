@@ -1,5 +1,5 @@
 import { expect, it, vi, type Mock } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { preparePublishedModelRuntimeChoice } from "../../agents/model-runtime-choice.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
@@ -43,7 +43,7 @@ export function registerModelRuntimeDirectiveTests({
       async () => {
         const result = await runHandleCommand("/model openai/gpt-4o", {
           sessionEntry,
-          operatorAuthority: createAdmittedRunOperatorAuthority({
+          operatorAuthority: createTestOperatorAuthority({
             profileId: "runtime-policy-fixture",
             scopes: ["operator.write"],
             assertCurrent() {},

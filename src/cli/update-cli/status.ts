@@ -11,6 +11,7 @@ import {
   resolveUpdateAvailability,
 } from "../../commands/status.update.js";
 import { readSourceConfigBestEffort } from "../../config/config.js";
+import { applyImplicitAgentRosterDefaults } from "../../config/implicit-agent-roster.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { isDefaultInstallIdentity, resolveIsNixMode } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -41,7 +42,6 @@ import {
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { projectUpdateRunHistory } from "../../infra/update-run-history-projection.js";
 import { formatUpdateOwedStep, listUpdateOwedSteps } from "../../infra/update-run-owed-step.js";
-import type { getUpdateRunAsync } from "../../infra/update-run-reader.js";
 import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { readUpdateRunStatusWithOwedSteps } from "../../infra/update-run-status.js";
@@ -53,31 +53,10 @@ import { resolveSafeTimeoutDelayMs } from "../../utils/timer-delay.js";
 import { VERSION } from "../../version.js";
 import { formatCliCommand } from "../command-format.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
+import { readUpdateRecoverySetStatus } from "./status-recovery.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
 import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
-
-async function readUpdateRecoverySetStatus(readRun?: typeof getUpdateRunAsync) {
-  try {
-    const { inspectUpdateRecoveryBackups } =
-      await import("../../infra/update-recovery-backup-status.js");
-    const sets = await inspectUpdateRecoveryBackups(readRun);
-    return {
-      recoverySets: sets.map((set) =>
-        set.status === "incomplete" || set.status === "unreadable" || set.status === "warning"
-          ? set
-          : {
-              runId: set.runId,
-              manifestPath: set.ref.manifestPath,
-              status: set.status,
-              message: set.message,
-              nextAction: set.nextAction,
-            },
-      ),
-    };
-  } catch (error) {
-    return { recoverySetsError: formatErrorMessage(error) };
-  }
-}
+import { resolveRefusedRestartRecovery } from "./update-refused-restart-recovery.js";
 
 async function readChannelStatusIssues(
   config: OpenClawConfig,
@@ -180,11 +159,14 @@ async function inspectUpdateStatus(
     inspect<OpenClawConfig>("configuration", readSourceConfigBestEffort, {}),
     inspect("Node runtime", collectNodeRuntimeFindings, []),
   ]);
-  const databaseStatusPromise = inspect(
+  const migrationWarningErrors: string[] = [];
+  const databaseInspectionPromise = inspect(
     "state database",
     () =>
-      withUpdateDatabaseEngine(process.env, () =>
-        Promise.all([
+      withUpdateDatabaseEngine(process.env, async () => ({
+        // Start every database reader in the selected scope, but retain each result independently
+        // so a stalled migration reader cannot discard completed history or recovery information.
+        status: Promise.all([
           inspect<RunStatus>("update history", readRunStatus, {
             runStatusError: "Update history inspection unavailable",
           }),
@@ -201,29 +183,50 @@ async function inspectUpdateStatus(
                 undefined,
               ),
         ]),
-      ).catch(async (error: unknown) => {
+        warnings: Promise.all([
+          inspect(
+            "migration warnings",
+            () => readDeferredPluginMigrationsAsync(),
+            [],
+            (message) => {
+              migrationWarningErrors[0] = message;
+            },
+          ),
+          inspect(
+            "migration warnings",
+            () => readSessionSqliteMigrationWarnings(),
+            [],
+            (message) => {
+              migrationWarningErrors[1] = message;
+            },
+          ),
+        ]),
+      })).catch((error: unknown) => {
         const message = sanitizeTerminalText(
           redactSensitiveText(formatErrorMessage(error), { mode: "tools" }),
         );
         inspectionErrors.push({ section: "state database", message });
-        return [
-          { runStatusError: message },
-          await inspect(
-            "recovery sets",
-            () =>
-              readUpdateRecoverySetStatus(async () => {
-                throw new Error(message);
-              }),
-            { recoverySetsError: "Recovery set inspection unavailable" },
-          ),
-          undefined,
-        ] as const;
+        migrationWarningErrors[0] = message;
+        return {
+          status: Promise.all([
+            Promise.resolve({ runStatusError: message }),
+            inspect(
+              "recovery sets",
+              () =>
+                readUpdateRecoverySetStatus(async () => {
+                  throw new Error(message);
+                }),
+              { recoverySetsError: "Recovery set inspection unavailable" },
+            ),
+            Promise.resolve(undefined),
+          ]),
+          warnings: Promise.resolve([[], []] as const),
+        };
       }),
-    [
-      { runStatusError: "Update history inspection unavailable" },
-      { recoverySetsError: "Recovery set inspection unavailable" },
-      undefined,
-    ] as const,
+    undefined,
+    (message) => {
+      migrationWarningErrors[0] = message;
+    },
   );
   const configChannel = normalizeUpdateChannel(config.update?.channel);
   const gitTargetChannel =
@@ -320,7 +323,14 @@ async function inspectUpdateStatus(
     }
   }
 
-  const [inspectedRunStatus, recoveryStatus, replacement] = await databaseStatusPromise;
+  const databaseInspection = await databaseInspectionPromise;
+  const [inspectedRunStatus, recoveryStatus, replacement] = databaseInspection
+    ? await databaseInspection.status
+    : ([
+        { runStatusError: "Update history inspection unavailable" },
+        { recoverySetsError: "Recovery set inspection unavailable" },
+        undefined,
+      ] as const);
   const runStatus = retainedRunStatus ?? inspectedRunStatus;
   const activeRun = "activeRun" in runStatus ? runStatus.activeRun : undefined;
   const updateInProgress =
@@ -329,7 +339,7 @@ async function inspectUpdateStatus(
   const safeMessage = (message: string) =>
     sanitizeTerminalText(redactSensitiveText(message, { mode: "tools" }));
   const printWarning = (message: string) => defaultRuntime.log(theme.warn(message));
-  const configValidation = validateConfigObjectRaw(config);
+  const configValidation = validateConfigObjectRaw(applyImplicitAgentRosterDefaults(config));
   const configWarnings = configValidation.ok
     ? []
     : [
@@ -395,27 +405,19 @@ async function inspectUpdateStatus(
       ...(issue.fix ? { fix: safeMessage(issue.fix) } : {}),
     }),
   );
-  const migrationWarnings: string[] = [];
-  const migrationWarningErrors: string[] = [];
-  for (const readWarnings of [
-    async () =>
-      (await readDeferredPluginMigrationsAsync()).map((pending) =>
-        formatDeferredPluginMigration(
-          pending,
-          updateInProgress ? { ...process.env, OPENCLAW_UPDATE_IN_PROGRESS: "1" } : process.env,
-        ),
+  const [pendingMigrations, sessionWarnings] = databaseInspection
+    ? await databaseInspection.warnings
+    : [[], []];
+  const migrationWarnings = [
+    ...pendingMigrations.map((pending) =>
+      formatDeferredPluginMigration(
+        pending,
+        updateInProgress ? { ...process.env, OPENCLAW_UPDATE_IN_PROGRESS: "1" } : process.env,
       ),
-    () => readSessionSqliteMigrationWarnings(),
-  ]) {
-    migrationWarnings.push(
-      ...(
-        await inspect("migration warnings", readWarnings, [], (message) =>
-          migrationWarningErrors.push(message),
-        )
-      ).map(safeMessage),
-    );
-  }
-  const migrationWarningsError = migrationWarningErrors.join("\n");
+    ),
+    ...sessionWarnings,
+  ].map(safeMessage);
+  const migrationWarningsError = migrationWarningErrors.filter(Boolean).join("\n");
   let packageActivation;
   let packageActivationError: string | undefined;
   try {
@@ -652,9 +654,23 @@ async function inspectUpdateStatus(
           `Abandoned update detected; the Gateway will reconcile its recorded outcome. Stop the Gateway first (${formatCliCommand("openclaw gateway stop --force")}), then run ${formatCliCommand("openclaw update repair")} to reconcile it now.`,
         );
       }
+      // A refused restart on a Gateway that is not responding has a recovery verified against
+      // the live service just now; name it as the next step, not as saved triage advice.
+      const refusedRestartRecovery =
+        currentRunHealth?.kind === "unavailable"
+          ? await inspect(
+              "refused restart recovery",
+              () => resolveRefusedRestartRecovery({ run, activeRoot: update.root }),
+              undefined,
+            )
+          : undefined;
       const report = renderUpdateRunReport(
         run,
-        run.status === "failed" ? { currentHealth: currentRunHealth } : {},
+        refusedRestartRecovery
+          ? { nextAction: refusedRestartRecovery }
+          : run.status === "failed"
+            ? { currentHealth: currentRunHealth }
+            : {},
       );
       const historical =
         currentRunHealth?.kind === "responding"

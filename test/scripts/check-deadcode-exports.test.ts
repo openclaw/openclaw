@@ -957,6 +957,9 @@ function other(lineageCompletion: typeof lineageWriter) {
       ).toBe(false);
       expect(compiled).toContain(`from "./${module}";`);
     }
+    expect(compiled).toMatch(
+      /import \{ runWithOpenClawStateLeaseWorker as __updateCompatibilityConsumer\d+ \} from "\.\/src\/state\/openclaw-state-lease-worker-operation\.ts";/u,
+    );
     const finishAliases = [
       ...compiled.matchAll(
         /import \{ finishUpdateRun as (__updateCompatibilityConsumer\d+) \} from "\.\/src\/infra\/update-run-(?:ledger|write)\.ts";/gu,

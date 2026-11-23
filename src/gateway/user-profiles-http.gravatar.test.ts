@@ -9,13 +9,11 @@ import {
 } from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import { handleUserProfileAvatarHttpRequest } from "./user-profiles-http.js";
 
 const profileFixture = vi.hoisted(() => vi.fn());
 const authorizeControlUiReadRequestOrReply = vi.hoisted(() => vi.fn());
-const readAuthority = (res: ServerResponse) =>
-  bindHttpResponseAuthority({ operatorScopes: ["operator.read"] }, res, () => true);
+const readAuthority = () => ({ operatorScopes: ["operator.read"] });
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../infra/host-account-avatar.js", () => ({ resolveHostAccountAvatar: async () => null }));
 vi.mock("./http-auth-utils.js", () => ({
@@ -73,9 +71,7 @@ describe("Gravatar HTTP waiter lifetimes", () => {
       id,
       emails: [`${id}@example.test`],
     }));
-    authorizeControlUiReadRequestOrReply
-      .mockReset()
-      .mockImplementation(({ res }: { res: ServerResponse }) => readAuthority(res));
+    authorizeControlUiReadRequestOrReply.mockReset().mockImplementation(readAuthority);
   });
 
   afterEach(async () => {
@@ -196,7 +192,7 @@ describe("Gravatar HTTP waiter lifetimes", () => {
   );
 
   it("does not start a Gravatar fetch for a client already disconnected during authorization", async () => {
-    const authorized = createDeferred<ReturnType<typeof bindHttpResponseAuthority> | null>();
+    const authorized = createDeferred<{ operatorScopes: string[] } | null>();
     authorizeControlUiReadRequestOrReply.mockReturnValue(authorized.promise);
     fetchImpl.mockResolvedValue(imageResponse());
     const disconnected = startRequest("disconnected-before-lookup");
@@ -208,8 +204,8 @@ describe("Gravatar HTTP waiter lifetimes", () => {
       const closed = once(first.response, "close");
       disconnected.client.destroy();
       await closed;
-      authorized.resolve(readAuthority(first.response));
-      await expect(first.promise).rejects.toThrow("HTTP request authority expired");
+      authorized.resolve(readAuthority());
+      await first.promise;
 
       expect(fetchImpl).not.toHaveBeenCalled();
       expect([writeHead.mock.calls, end.mock.calls]).toEqual([[], []]);

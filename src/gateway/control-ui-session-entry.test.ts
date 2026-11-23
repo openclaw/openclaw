@@ -257,8 +257,6 @@ describe("protected canonical session handoff", () => {
       const missing = await request(entry, undefined, undefined, rows);
       expect(missing.res.statusCode).toBe(403);
       expect(missing.getBody()).toContain("Session unavailable");
-      current.mockReturnValue(false);
-      expect(beforeFirstMessage?.()).toBe(false);
     } finally {
       rows.dispose();
       clearRuntimeConfigSnapshot();

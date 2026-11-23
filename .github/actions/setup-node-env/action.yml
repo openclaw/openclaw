@@ -90,8 +90,8 @@ outputs:
     description: Exact pnpm store key used for restore or save.
     value: ${{ steps.setup-pnpm.outputs.store-cache-primary-key }}
   pnpm-store-cache-path:
-    description: Resolved pnpm store path.
-    value: ${{ steps.setup-pnpm.outputs.store-path }}
+    description: Workspace-relative pnpm archive path shared by cache publishers and readers.
+    value: ${{ steps.setup-pnpm.outputs.store-cache-path }}
   vitest-cache-key:
     description: Exact Vitest transform cache key.
     value: ${{ steps.vitest-cache.outputs.cache-primary-key }}

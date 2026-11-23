@@ -325,7 +325,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // Gateway person principal and access-refresh classifier: +2 (#196276, #176886).
       // +6: expose the existing model-request hook (#193550) and metric (#198455) types through plugin-entry.
       // +2: owner-approved stored-session Control UI path resolver and parser on session-discussion (#203044).
-      3896,
+      // +2: owner-approved SessionCatalogProfileRelation and SessionCatalogSourceProfileRelation
+      // (#203063). Also approved: sessionCatalogPaging.encodeScopedCursor and
+      // sessionCatalogPaging.decodeScopedCursor; object members add no counted callables.
+      3898,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

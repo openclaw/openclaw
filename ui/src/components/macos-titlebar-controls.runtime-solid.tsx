@@ -71,12 +71,12 @@ export const MacosTitlebarControls = defineSolidBridge<Props>(
         <Show when={props.macNavigation}>
           <TitlebarButton
             label={t(props.navigationExpanded ? "nav.collapse" : "nav.expand")}
-            icon="sessionPanels"
+            icon="macosTitlebarSidebar"
             expanded={props.navigationExpanded}
             shortcut={KEYBOARD_SHORTCUT_COMBOS.toggleSidebar}
             disabled={props.historyOnly}
             onClick={props.onToggleSidebar}
-            class="macos-titlebar-controls__sidebar"
+            class="macos-titlebar-controls__sidebar macos-titlebar-sidebar-toggle"
           />
           <TitlebarButton
             label={t("chat.openCommandPalette")}

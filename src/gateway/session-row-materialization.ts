@@ -88,9 +88,9 @@ function sessionRowMaterializationMatches(
     equal(row.contextWindows, input.contextWindowProfile.contextWindows) &&
     row.contextWindowDefault === input.contextWindowProfile.contextWindowDefault &&
     row.contextTokens === input.contextTokens &&
-    row.effectiveFastMode === input.fastModeState.mode &&
-    row.effectiveFastModeSource === input.fastModeState.source &&
-    row.fastAutoOnSeconds === input.fastModeState.fastAutoOnSeconds &&
+    row.effectiveFastMode === input.fastModeState?.mode &&
+    row.effectiveFastModeSource === input.fastModeState?.source &&
+    row.fastAutoOnSeconds === input.fastModeState?.fastAutoOnSeconds &&
     row.permissionModePending === input.permissionModePending &&
     row.hasAutomation === input.hasAutomation &&
     equal(row.repository, input.repository) &&

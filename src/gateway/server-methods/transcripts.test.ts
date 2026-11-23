@@ -318,7 +318,7 @@ describe("transcript Gateway read authorization and errors", () => {
     });
   });
 
-  it.each(["authority", "archive role", "cancellation"])(
+  it.each(["archive role", "cancellation"])(
     "refuses a public page after %s changes during its worker read",
     async (kind) => {
       await withOpenClawTestState(profileState, async ({ stateDir }) => {
@@ -351,7 +351,6 @@ describe("transcript Gateway read authorization and errors", () => {
             client: client(profile.id),
             signal: cancellation.signal,
             respond,
-            hasCurrentClientAuthority: () => kind !== "authority" || current,
             isWebchatConnect: () => false,
             context: {
               getRuntimeConfig: () => (kind === "archive role" && !current ? roles("none") : cfg),
@@ -511,54 +510,6 @@ describe("meeting transcript RPC", () => {
     expect(writes).toHaveBeenCalledTimes(1);
     expect(fs.existsSync(store.sessionDir(session))).toBe(false);
   });
-
-  it.each(["snapshot", "response"] as const)(
-    "does not return notes when requester authority expires during %s",
-    async (phase) => {
-      await store.appendUtteranceForSession(session, { text: "Agreed to ship." });
-      let current = true;
-      if (phase === "snapshot") {
-        const readSnapshot = store.readSummarySnapshot.bind(store);
-        vi.spyOn(TranscriptsStore.prototype, "readSummarySnapshot").mockImplementation(
-          async (...args) => {
-            const snapshot = await readSnapshot(...args);
-            current = false;
-            return snapshot;
-          },
-        );
-      } else {
-        let reads = 0;
-        const readEntry = store.readLibraryEntry.bind(store);
-        vi.spyOn(TranscriptsStore.prototype, "readLibraryEntry").mockImplementation(
-          async (...args) => {
-            const result = await readEntry(...args);
-            if (++reads === 2) {
-              current = false;
-            }
-            return result;
-          },
-        );
-      }
-      const respond = vi.fn();
-      await transcriptsHandlers["transcripts.summarize"]!({
-        req: { type: "req", id: "revoked", method: "transcripts.summarize" },
-        params: { selector },
-        client: null,
-        respond,
-        hasCurrentClientAuthority: () => current,
-        isWebchatConnect: () => false,
-        context: { getRuntimeConfig: () => ({}), logGateway } as unknown as GatewayRequestContext,
-      });
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "UNAVAILABLE" }),
-      );
-      if (phase === "snapshot") {
-        expect((await store.readSummary(session)).summary).toBeUndefined();
-      }
-    },
-  );
 
   it.each([{ texts: [] }, { texts: ["context:", "###", "Transcribe the audio."] }])(
     "leaves meetings without substantive speech unsummarized: %j",

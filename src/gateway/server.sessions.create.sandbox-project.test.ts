@@ -11,13 +11,17 @@ import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { runGitReadOperation } from "../infra/git-read-cache.js";
 import * as directoryObservation from "../infra/owned-directory-observation.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
+import { mergeProfiles, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { projectRequesterForClient, resolveRunProjectRequester } from "./project-access.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import {
   identifiedClient,
   initializeSessionReadContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { initializeRepository } from "./server.sessions.create.projects.test-support.js";
 import { testState } from "./test-helpers.js";
 import { setupGatewaySessionsHandlerTestHarness } from "./test/server-sessions.test-helpers.js";
@@ -256,3 +260,243 @@ test.each(["all", "off"] as const)(
     }
   },
 );
+
+test("role project grants open private projects only in isolated worktrees", async () => {
+  const root = tempDirs.make("openclaw-session-project-grant-");
+  const workspace = await initializeRepository(root, "workspace");
+  const privateRepo = await initializeRepository(root, "private");
+  const publicRepo = await initializeRepository(root, "public");
+  await publishOrigin(privateRepo, "openclaw/grant-private");
+  await publishOrigin(publicRepo, "openclaw/grant-public");
+  stubRepositoryVisibility({
+    "openclaw/grant-private": "private",
+    "openclaw/grant-public": "public",
+  });
+  testState.agentConfig = { workspace, sandbox: { mode: "off" } };
+  await createSessionStoreDir();
+  const privateProject = await registerProjectRegistry({ path: privateRepo, name: "private" });
+  const publicProject = await registerProjectRegistry({ path: publicRepo, name: "public" });
+  const profile = ensureProfileForEmail("project-grant@example.test");
+  const client = identifiedClient(profile.id);
+  client.connect.scopes = ["operator.sessions.read", "operator.sessions.write"];
+  const baseCfg = getRuntimeConfig();
+  const makeConfig = (projects?: "*" | string[]) => ({
+    ...baseCfg,
+    gateway: {
+      roles: {
+        default: "guest",
+        definitions: {
+          guest: {
+            scopes: ["operator.sessions.read" as const, "operator.sessions.write" as const],
+            agents: ["main"],
+            sessions: { others: "none" as const },
+            ...(projects ? { projects } : {}),
+          },
+        },
+      },
+    },
+  });
+  // Each config edit is a new Gateway publication with its own session projection.
+  let context!: ReturnType<typeof createDirectChatContext>;
+  const useConfig = async (projects?: "*" | string[]) => {
+    const cfg = makeConfig(projects);
+    const next = createDirectChatContext({ getRuntimeConfig: () => cfg });
+    next.readPreparedGatewayModelCatalog = async () => {
+      const catalog = await next.loadGatewayModelCatalogSnapshot();
+      return { entries: catalog.entries, routeVariants: catalog.routeVariants };
+    };
+    await initializeSessionReadContext(next);
+    context = next;
+  };
+  await useConfig();
+  const request = async (method: string, params: Record<string, unknown>) => {
+    const respond = vi.fn();
+    const req = { type: "req" as const, id: method, method, params };
+    await handleGatewayRequest({ req, client, context, respond, isWebchatConnect: () => false });
+    expect(respond).toHaveBeenCalledOnce();
+    return respond.mock.calls[0]!;
+  };
+  const listed = async () => {
+    const [ok, result, error] = await request("projects.list", {});
+    expect(ok, JSON.stringify(error)).toBe(true);
+    return (result as { projects: { id: string }[] }).projects.map((entry) => entry.id);
+  };
+  const create = (projectId: string) => request("sessions.create", { agentId: "main", projectId });
+  const unknown = [
+    false,
+    undefined,
+    { code: "INVALID_REQUEST", message: `unknown project id: ${privateProject.id}` },
+  ];
+
+  // Without a grant the public fallback is unchanged, including its direct checkout.
+  expect(await listed()).toEqual(expect.arrayContaining([publicProject.id]));
+  expect(await listed()).not.toContain(privateProject.id);
+  expect(await create(privateProject.id)).toEqual(unknown);
+  const [publicOk, publicSession, publicError] = await create(publicProject.id);
+  expect(publicOk, JSON.stringify(publicError)).toBe(true);
+  expect(publicSession).not.toHaveProperty("worktree");
+
+  for (const projects of [[privateProject.id, "removed-project"], "*"] as const) {
+    await useConfig(typeof projects === "string" ? projects : [...projects]);
+    expect(await listed()).toEqual(expect.arrayContaining([privateProject.id, publicProject.id]));
+    expect(
+      await request("projects.checkoutOptions", { agentId: "main", projectId: privateProject.id }),
+    ).toEqual([true, { current: false, worktree: true }, undefined]);
+    // The client did not ask for a worktree; a grant-only project still gets one.
+    const [ok, result, error] = await create(privateProject.id);
+    expect(ok, JSON.stringify(error)).toBe(true);
+    const { key, worktree } = expectDefined(result, "granted session") as {
+      key: string;
+      worktree: { id: string; path: string };
+    };
+    expect(await managedWorktrees.findLiveByOwner("session", key)).toMatchObject({
+      id: worktree.id,
+      repoRoot: privateRepo,
+    });
+    expect(worktree.path).not.toBe(privateRepo);
+  }
+
+  // Revocation applies to the next source handoff.
+  await useConfig();
+  expect(await create(privateProject.id)).toEqual(unknown);
+  expect(await listed()).not.toContain(privateProject.id);
+});
+
+test("retained run clients read project grants live for creation and inherited spawns", async () => {
+  const root = tempDirs.make("openclaw-session-run-grant-");
+  const workspace = await initializeRepository(root, "workspace");
+  const privateRepo = await initializeRepository(root, "private");
+  await publishOrigin(privateRepo, "openclaw/run-grant-private");
+  stubRepositoryVisibility({ "openclaw/run-grant-private": "private" });
+  testState.agentConfig = { workspace, sandbox: { mode: "off" } };
+  await createSessionStoreDir();
+  const project = await registerProjectRegistry({ path: privateRepo, name: "private" });
+  const profile = ensureProfileForEmail("run-grant@example.test");
+  const client = identifiedClient(profile.id);
+  const scopes = ["operator.sessions.read" as const, "operator.sessions.write" as const];
+  client.connect.scopes = [...scopes];
+  const baseCfg = getRuntimeConfig();
+  const configFor = (projects?: "*" | string[]) => ({
+    ...baseCfg,
+    gateway: {
+      roles: {
+        default: "guest",
+        definitions: {
+          guest: {
+            scopes,
+            agents: ["main"],
+            sessions: { others: "none" as const },
+            ...(projects ? { projects } : {}),
+          },
+          staff: {
+            scopes,
+            agents: ["main"],
+            sessions: { others: "none" as const },
+            projects: [project.id],
+          },
+        },
+      },
+    },
+  });
+  let activeCfg: ReturnType<typeof getRuntimeConfig> = configFor([project.id]);
+  const context = createDirectChatContext({ getRuntimeConfig: () => activeCfg });
+  context.readPreparedGatewayModelCatalog = async () => {
+    const catalog = await context.loadGatewayModelCatalogSnapshot();
+    return { entries: catalog.entries, routeVariants: catalog.routeVariants };
+  };
+  await initializeSessionReadContext(context);
+  const admitted = expectDefined(
+    await prepareGatewayOperatorRunAuthority({ client, context }),
+    "admitted guest run",
+  );
+  onTestFinished(() => admitted.release());
+  const runClient = (requesterSessionKey?: string) =>
+    createSyntheticPluginRuntimeClient({
+      authenticatedUserProfile: client.authenticatedUserProfile,
+      operatorRoleActor: { kind: "operator", profileId: profile.id },
+      operatorRunAuthority: admitted.authority,
+      scopes: [...admitted.authority.scopes],
+      ...(requesterSessionKey
+        ? {
+            sessionCreation: {
+              via: "spawn" as const,
+              actor: { type: "agent" as const, id: "main" },
+              requesterSessionKey,
+              inheritedToolPolicy: { version: 1 as const, allow: ["read"], deny: [] },
+            },
+          }
+        : {}),
+    });
+  const request = async (
+    requestClient: ReturnType<typeof runClient>,
+    params: Record<string, unknown>,
+  ) => {
+    const respond = vi.fn();
+    const req = { type: "req" as const, id: "create", method: "sessions.create", params };
+    await handleGatewayRequest({
+      req,
+      client: requestClient,
+      context,
+      respond,
+      isWebchatConnect: () => false,
+    });
+    expect(respond).toHaveBeenCalledOnce();
+    return respond.mock.calls[0]!;
+  };
+  const create = () => request(runClient(), { agentId: "main", projectId: project.id });
+  const spawnChild = (parentKey: string) =>
+    request(runClient(parentKey), {
+      agentId: "main",
+      label: "Grant child",
+      parentSessionKey: parentKey,
+      spawnDepth: 1,
+      worktree: true,
+    });
+
+  const [parentOk, parent, parentError] = await create();
+  expect(parentOk, JSON.stringify(parentError)).toBe(true);
+  const parentKey = (parent as { key: string }).key;
+
+  // Revoking the grant applies to the retained run's next handoff without a restart.
+  activeCfg = configFor();
+  expect(projectRequesterForClient(runClient(), activeCfg)).toEqual({ kind: "operator", scopes });
+  expect(await create()).toEqual([
+    false,
+    undefined,
+    { code: "INVALID_REQUEST", message: `unknown project id: ${project.id}` },
+  ]);
+  const [deniedOk, , deniedError] = await spawnChild(parentKey);
+  expect(deniedOk).toBe(false);
+  expect(deniedError).toMatchObject({
+    message: "The parent session's project is not available to this requester.",
+  });
+
+  // Adding a grant admits the same retained run again.
+  activeCfg = configFor("*");
+  expect(projectRequesterForClient(runClient(), activeCfg)).toEqual({
+    kind: "operator",
+    scopes,
+    projects: "*",
+  });
+  const [createdOk, , createdError] = await create();
+  expect(createdOk, JSON.stringify(createdError)).toBe(true);
+  const [childOk, child, childError] = await spawnChild(parentKey);
+  expect(childOk, JSON.stringify(childError)).toBe(true);
+  expect(
+    await managedWorktrees.findLiveByOwner("session", (child as { key: string }).key),
+  ).toMatchObject({ repoRoot: privateRepo });
+
+  // Merging the person into a granted staff profile never lends that grant to the retained run.
+  const staff = ensureProfileForEmail("run-grant-staff@example.test");
+  setUserProfileRole(staff.id, "staff");
+  activeCfg = configFor();
+  mergeProfiles(profile.id, staff.id);
+  expect(resolveRunProjectRequester(activeCfg, { profileId: staff.id })).toMatchObject({
+    projects: [project.id],
+  });
+  expect(projectRequesterForClient(runClient(), activeCfg)).toEqual({ kind: "operator", scopes });
+  expect(resolveRunProjectRequester(activeCfg, { operatorAuthority: admitted.authority })).toEqual({
+    kind: "operator",
+    scopes,
+  });
+});

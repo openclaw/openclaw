@@ -22,6 +22,8 @@ export type LocalWorkspaceBaselineDocument = {
   buildCacheInputs: string[];
   /** Producer-created layout added to an immutable template before initial publication. */
   preparedDirectories?: string[];
+  /** Btrfs template clone: file identities persist on this new device. */
+  clonedDevice?: bigint;
 };
 
 export type LocalWorkspaceManifestAction =
