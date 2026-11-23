@@ -1,3 +1,4 @@
+import type { Result } from "@openclaw/normalization-core/result";
 import { vi } from "vitest";
 import type { GatewayServiceInventory } from "../../daemon/inspect.js";
 import type { ForeignLaunchdJob } from "../../daemon/launchd-foreign-jobs.js";
@@ -67,10 +68,12 @@ export const inspectPortConnections = vi.fn(async (port: number): Promise<PortCo
 
 export const formatPortDiagnostics = vi.fn<(usage: PortUsageTestSummary) => string[]>(() => []);
 
-export const inspectGatewayTlsCertificate = vi.fn(async (_cfg?: unknown) => ({
-  ok: true as const,
-  value: { cert: "public-certificate", fingerprintSha256: "sha256:11:22:33:44" },
-}));
+export const inspectGatewayTlsCertificate = vi.fn(
+  async (_cfg?: unknown): Promise<Result<{ cert: string; fingerprintSha256: string }, string>> => ({
+    ok: true,
+    value: { cert: "public-certificate", fingerprintSha256: "sha256:11:22:33:44" },
+  }),
+);
 export const findExtraGatewayServices = vi.fn<
   (_env?: unknown, _opts?: unknown) => Promise<GatewayServiceInventory>
 >(async () => ({ services: [], errors: [] }));

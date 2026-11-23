@@ -1,7 +1,10 @@
 import { assert, expect, it, type Mock } from "vitest";
 import { setTestEnvValue } from "../../test-utils/env.js";
 import type { gatherDaemonStatus } from "./status.gather.js";
-import { callGatewayStatusProbe } from "./status.gather.probes.test-support.js";
+import {
+  callGatewayStatusProbe,
+  inspectGatewayTlsCertificate,
+} from "./status.gather.probes.test-support.js";
 
 export function registerStatusDashboardTargetTests(params: {
   gatherStatus: (
@@ -24,6 +27,7 @@ export function registerStatusDashboardTargetTests(params: {
     { args: ["--port", "19001"], port: 19001, role: "target" },
     { args: ["--port", "19001"], port: 19001, role: "target", host: "10.0.0.5", tls: true },
     { args: ["--port", "19001"], port: 19001, role: "target", host: "10.0.0.5", tls: false },
+    { args: ["--port", "19001"], port: 19001, role: "target", host: "10.0.0.5", tls: "unreadable" },
     {
       args: ["--port", "19001"],
       port: 19001,
@@ -38,9 +42,12 @@ export function registerStatusDashboardTargetTests(params: {
       // With a host: a custom bind to 10.0.0.5, so only that host is the service's endpoint.
       params.setDaemonConfig({
         gateway: host
-          ? { ...gateway, bind: "custom", customBindHost: "10.0.0.5", tls: { enabled: tls } }
+          ? { ...gateway, bind: "custom", customBindHost: "10.0.0.5", tls: { enabled: !!tls } }
           : gateway,
       });
+      if (tls === "unreadable") {
+        inspectGatewayTlsCertificate.mockResolvedValueOnce({ ok: false, error: "unreadable" });
+      }
       if (host) {
         params.resolveGatewayBindHost.mockResolvedValueOnce("10.0.0.5");
       }
@@ -64,7 +71,7 @@ export function registerStatusDashboardTargetTests(params: {
       expect(status.service.targetRole).toBe(role);
       expect(input.url).toBe(probeUrl);
       // Off loopback, only the local certificate pin lets the probe borrow service credentials.
-      const native = role === "target" && (!host || tls);
+      const native = role === "target" && (!host || tls === true);
       expect(input.token).toBe(native ? "daemon-token" : undefined);
       expect(input.tlsFingerprint).toBe(native && host ? "sha256:11:22:33:44" : undefined);
     },

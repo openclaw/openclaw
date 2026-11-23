@@ -284,9 +284,9 @@ async function gatherDaemonStatusImpl(
           inspectGatewayTlsCertificate(daemonCfg.gateway?.tls),
         )
       : undefined;
-  // Use the existing explicit-URL transport policy for alternate endpoints. The
-  // matching loopback probe borrows native service credentials; the bind host only
-  // with the local TLS pin, which proves the peer is this Gateway.
+  // Use the existing explicit-URL transport policy for alternate endpoints. The plain
+  // loopback probe, or another matching native endpoint once the local certificate pin
+  // loads, may borrow service credentials; the pin proves the peer is this Gateway.
   const dashboardUsesNative =
     dashboardMatchesNative &&
     (dashboardTarget?.probeUrl === summary.probeUrl || localCertificate?.ok === true);
