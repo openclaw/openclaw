@@ -302,9 +302,13 @@ it("normalizes a captured manifest alias once through PDF execution", async () =
   await withEnvAsync(nativeFixtureEnv(dir, path.join(dir, "state")), async () => {
     useNoBundledPlugins();
     stubPdfInput("Captured model fixture");
-    const complete = vi
-      .spyOn(llmStream, "completeSimple")
-      .mockResolvedValue(makeAssistantMessageFixture());
+    const complete = vi.spyOn(llmStream, "completeSimple").mockResolvedValue(
+      makeAssistantMessageFixture({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [{ type: "text", text: "selected model" }],
+      }),
+    );
     const lease = await preparedRuntime.acquireAgentRunPreparedModelRuntime(
       { agentDir, config, workspaceDir: dir },
       { catalogMode: "static" },
