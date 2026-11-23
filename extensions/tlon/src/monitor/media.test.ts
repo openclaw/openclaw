@@ -79,7 +79,7 @@ caption`,
         new Promise((_, reject) => {
           const signal = requestInit?.signal;
           signal?.throwIfAborted();
-          signal?.addEventListener("abort", () => reject(signal.reason));
+          signal?.addEventListener("abort", () => reject(new Error("ingress work aborted")));
         }),
     );
     const ingress = new AbortController();
