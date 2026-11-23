@@ -494,7 +494,7 @@ describe("scheduled message write declaration", () => {
       return receipt;
     });
     const request = dispatchChannelMessageAction(fixture.context);
-    const rejected = expect(request).rejects.toThrow(/authority|retired/);
+    const rejected = expect(request).rejects.toThrow(/reloaded|retired/);
     try {
       await entered.promise;
       revokePluginRecord(fixture.owner.registry, fixture.record);

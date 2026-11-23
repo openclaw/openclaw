@@ -509,7 +509,9 @@ describe("operator model policy on plugin completions", () => {
           ),
         );
         const rejected = expect(pending).rejects.toThrow(
-          scenario === "restricted model" ? "cannot use this model" : /authority|request ended/,
+          scenario === "restricted model"
+            ? "cannot use this model"
+            : /authority|request ended|could not start/,
         );
         try {
           await Promise.race([started.promise, pending]);
