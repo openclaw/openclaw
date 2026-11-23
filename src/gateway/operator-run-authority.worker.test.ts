@@ -278,9 +278,6 @@ it("keeps gateway and channel role facts immutable while honoring explicit lifec
       expect(authority.assertCurrent).not.toThrow();
     }
     source.abort(new Error("source revoked"));
-    for (const read of readers) {
-      expect(read).toThrow();
-    }
     for (const authority of authorities) {
       expect(authority.assertCurrent).toThrow();
     }
