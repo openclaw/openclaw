@@ -96,7 +96,8 @@ async function formatChildStatus(child: SubagentRunRecord, budget: number): Prom
         () => resolveSubagentCompletionResultText(child),
       )) ?? "");
   const shownText = result.trim();
-  const note = `\n[Result truncated. Read the rest with sessions_history on ${child.childSessionKey}.]`;
+  // sessions_history caps each text block, so the child itself is the reader for the rest.
+  const note = `\n[Result truncated. Ask the child for the rest with sessions_send to ${child.childSessionKey}.]`;
   const shownResult =
     shownText.length <= resultBudget
       ? shownText
