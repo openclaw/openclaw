@@ -417,6 +417,24 @@ openclaw-browser-panel {
   }
   .bp-note--error {
     color: var(--danger);
+
+    > div {
+      display: inline-block;
+      max-inline-size: 100%;
+      padding-inline-end: 0.5em;
+      vertical-align: middle;
+      overflow-wrap: anywhere;
+    }
+
+    /* Keep the toggle in the message line; expanded diagnostics take a full line. */
+    .lazy-view-error__details {
+      display: inline;
+    }
+
+    .lazy-view-error__summary {
+      margin-block-start: 0;
+      vertical-align: middle;
+    }
   }
 }
 
