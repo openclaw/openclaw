@@ -508,7 +508,7 @@ export function createExecApprovalHandlers(
       respond(true, { outcome: result.outcome }, undefined);
     },
     "exec.approval.resolve": async (options) => {
-      using authority = createApprovalRequestAuthority(options, manager);
+      using authority = createApprovalRequestAuthority(options);
       const { params, respond, client, context } = options;
       const resolveParams = resolveApprovalDecisionParams({
         rawParams: params,
