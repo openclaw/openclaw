@@ -232,6 +232,21 @@ in that suite does not replace the required PR check GitHub selects. If the
 original required check remains failed or cancelled, recover that run; do not
 bypass it or dispatch another full suite hoping to replace its status.
 
+When the required proof needs broader coverage, select it explicitly through the
+same locked dispatcher:
+
+```bash
+scripts/pr ci-dispatch <pr-number> --ci-shape main --test-runtime-policy dual-all
+```
+
+`--ci-shape default|main` selects PR-shaped or main-shaped coverage.
+`--test-runtime-policy node|bun-all|dual-all` selects the workflow's test runtime
+policy; `dual-all` runs eligible test lanes under both Node and Bun. With no
+options, dispatch keeps PR-shaped coverage and leaves the runtime policy to the
+workflow default. These options cannot combine with `--backend crabbox`.
+Dispatch once, then inspect the returned run's exact checkout and job selection;
+acceptance alone is not proof and does not replace required PR checks.
+
 ## PR context and evidence
 
 External contributor PRs run a PR context and evidence gate from

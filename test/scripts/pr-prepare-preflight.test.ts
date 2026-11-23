@@ -127,6 +127,26 @@ describe("scripts/pr prepare mode preflight", () => {
         ["prepare-push", "123", "--resume-crabbox-run", "99", "extra"],
         ["prepare-push", "123", "--run-id", "run_fake"],
         ["ci-dispatch", "123", "--backend", "crabbox", "--pending-gates"],
+        ["ci-dispatch", "123", "--ci-shape"],
+        ["ci-dispatch", "123", "--ci-shape", ""],
+        ["ci-dispatch", "123", "--ci-shape", "release"],
+        ["ci-dispatch", "123", "--ci-shape", "main", "--ci-shape", "main"],
+        ["ci-dispatch", "123", "--test-runtime-policy"],
+        ["ci-dispatch", "123", "--test-runtime-policy", ""],
+        ["ci-dispatch", "123", "--test-runtime-policy", "dual"],
+        [
+          "ci-dispatch",
+          "123",
+          "--test-runtime-policy",
+          "node",
+          "--test-runtime-policy",
+          "dual-all",
+        ],
+        ["ci-dispatch", "123", "--ci-shape=main"],
+        ["ci-dispatch", "123", "--unknown", "main"],
+        ["ci-dispatch", "123", "--backend", "crabbox", "--ci-shape", "main"],
+        ["ci-dispatch", "123", "--test-runtime-policy", "dual-all", "--backend", "crabbox"],
+        ["ci-dispatch", "123", "--backend", "crabbox", "--backend", "crabbox"],
       ]) {
         const result = spawnSync(join(root, "scripts/pr"), args, {
           cwd: root,
@@ -166,6 +186,20 @@ describe("scripts/pr prepare mode preflight", () => {
           expectUntouched();
         }
       }
+      // Valid coverage selectors reach the ordinary GitHub owner; its refusal
+      // still releases the operation lock without retiring preparation proof.
+      const accepted = spawnSync(
+        join(root, "scripts/pr"),
+        ["ci-dispatch", "123", "--test-runtime-policy", "dual-all", "--ci-shape", "main"],
+        { cwd: root, encoding: "utf8", env: { ...env, PR_TEST_GH_CALLS: ghCalls } },
+      );
+      expect(accepted.status, accepted.stdout + accepted.stderr).not.toBe(0);
+      expect(readFileSync(ghCalls, "utf8").trim()).not.toBe("");
+      expect(readFileSync(evidence, "utf8")).toBe("previous exact-head proof\n");
+      expect(readdirSync(evidenceRoot)).toEqual(originalArtifacts);
+      expect(git("for-each-ref", "--format=%(refname)", "refs/openclaw/pr-operation-locks")).toBe(
+        "",
+      );
     },
   );
 });
