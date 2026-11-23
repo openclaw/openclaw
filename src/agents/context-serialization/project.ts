@@ -1,4 +1,4 @@
-import type { CurrentInboundPromptContext } from "../embedded-agent-runner/run/params.js";
+import type { CurrentInboundPromptContext } from "../internal-runtime-context.js";
 import type { ResolvedContextSerialization } from "./resolve.js";
 
 export type ContextSerializationReport = {
