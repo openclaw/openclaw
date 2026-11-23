@@ -338,13 +338,13 @@ src/agents/embedded-agent-runner/run/attempt-settle.ts	3
 src/agents/embedded-agent-runner/run/attempt-tool-run-context.ts	2
 src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.ts	3
 src/agents/embedded-agent-runner/run/auth-controller.ts	1
-src/agents/embedded-agent-runner/run/chatgpt-v2-compaction.ts	1
 src/agents/embedded-agent-runner/run/compaction-runtime.ts	19
 src/agents/embedded-agent-runner/run/lane-controller.ts	2
 src/agents/embedded-agent-runner/run/model-setup.ts	7
 src/agents/embedded-agent-runner/run/permission-change.ts	1
 src/agents/embedded-agent-runner/run/pre-persisted-user-turn.ts	17
 src/agents/embedded-agent-runner/run/provider-review-run.ts	1
+src/agents/embedded-agent-runner/run/request-boundary-compaction.ts	1
 src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts	2
 src/agents/embedded-agent-runner/run/run-settlement.ts	1
 src/agents/embedded-agent-runner/run/session-bootstrap.ts	31

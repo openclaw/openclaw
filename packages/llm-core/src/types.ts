@@ -399,6 +399,8 @@ export interface UserMessage {
   runtimeContextCarrierRetained?: boolean;
   /** Operator-authored text projected to system authority on capable routes. */
   operatorMessage?: { turnScoped: boolean };
+  /** `false`: sent once and never replayed, so transports place no prompt-cache checkpoint on it. */
+  cacheCheckpoint?: false;
 }
 
 export const RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";

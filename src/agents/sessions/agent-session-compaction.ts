@@ -1,6 +1,9 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
+import { compactFromSource } from "../../../packages/agent-core/src/harness/compaction/compaction-assembly.js";
 import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
-import { InvalidSummaryOutputError } from "../../../packages/agent-core/src/harness/types.js";
+import { formatSummaryInstructions } from "../../../packages/agent-core/src/harness/compaction/summarization-completion.js";
+import { prepareCompactionSummaryRequest } from "../../../packages/agent-core/src/harness/compaction/summary-checkpoint-prompt.js";
+import { InvalidSummaryOutputError, ok } from "../../../packages/agent-core/src/harness/types.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { AssistantHistoryMessage, ModelRequestHeaders } from "../../llm/types.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
@@ -24,6 +27,7 @@ import { AgentSessionInspection } from "./agent-session-inspection.js";
 import {
   agentSessionDeferThresholdCompaction,
   agentSessionRunProviderCompaction,
+  agentSessionRunWarmCompaction,
 } from "./agent-session-types.js";
 import { compactionErrorMessage } from "./agent-session-utils.js";
 import { formatNoModelSelectedMessage } from "./auth-guidance.js";
@@ -40,6 +44,7 @@ import {
   replayTokenBudget,
 } from "./compaction/request-budget.js";
 import { createCompactionRuntime } from "./compaction/runtime.js";
+import type { WarmCompactionSummary } from "./extensions/compaction-events.types.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import { getLatestCompactionEntry } from "./session-manager.js";
@@ -137,6 +142,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
   override dispose(): void {
     this.onContextReplaced = undefined;
     super.dispose();
+  }
+
+  async [agentSessionRunWarmCompaction](warmSummary: WarmCompactionSummary): Promise<boolean> {
+    return await this.completeAutoCompaction("threshold", false, undefined, warmSummary);
   }
 
   /**
@@ -270,6 +279,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     pendingUserEntryId?: string;
     requestRequiresCompaction?: true;
     onSummaryReady?: () => void;
+    warmSummary?: WarmCompactionSummary;
   }): Promise<CompactionWorkOutcome> {
     const isManual = options.mode === "manual";
     const assertContextReplacementActive = this.assertContextReplacementActive;
@@ -330,6 +340,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         // context as the core path below or provider wrappers and reasoning drift.
         thinkingLevel: compactionThinkingLevel,
         streamFn: this.agent.streamFn,
+        ...(options.warmSummary ? { warmSummary: options.warmSummary } : {}),
       };
       const extensionResult = await this.currentExtensionRunner.emit(event);
 
@@ -357,18 +368,40 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         options.customInstructions,
         preparation.latestUnresolvedUserRequest,
       );
+      const { warmSummary } = options;
       const runCoreCompaction = () =>
-        compact(
-          preparation,
-          model,
-          auth.apiKey,
-          auth.headers,
-          coreInstructions,
-          options.signal,
-          compactionThinkingLevel,
-          this.agent.streamFn,
-          createCompactionRuntime((usage) => recordSessionModelUsage(this.sessionManager, usage)),
-        );
+        warmSummary
+          ? // One warm request covers the history and any split turn.
+            compactFromSource(
+              preparation,
+              { history: preparation.messagesToSummarize.length, turnPrefix: 0 },
+              async () =>
+                ok(
+                  await warmSummary(
+                    formatSummaryInstructions({
+                      prompt: prepareCompactionSummaryRequest({
+                        model,
+                        reserveTokens: preparation.settings.reserveTokens,
+                      }).prompt,
+                      customInstructions: coreInstructions,
+                    }),
+                    options.signal,
+                  ),
+                ),
+            )
+          : compact(
+              preparation,
+              model,
+              auth.apiKey,
+              auth.headers,
+              coreInstructions,
+              options.signal,
+              compactionThinkingLevel,
+              this.agent.streamFn,
+              createCompactionRuntime((usage) =>
+                recordSessionModelUsage(this.sessionManager, usage),
+              ),
+            );
       let result = await runCoreCompaction();
       // Automatic core compaction owns one retry for invalid summary output.
       // Manual, provider-error, and extension-owned paths keep their own policy.
@@ -591,6 +624,32 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     willRetry: boolean,
     requestBudget?: CompactionRequestBudget,
   ): Promise<boolean> {
+    if (!(await this.completeAutoCompaction(reason, willRetry, requestBudget))) {
+      return false;
+    }
+    if (willRetry) {
+      const messages = this.agent.state.messages;
+      const lastMsg = messages[messages.length - 1];
+      if (
+        lastMsg?.role === "assistant" &&
+        (lastMsg.stopReason === "error" || lastMsg.stopReason === "length")
+      ) {
+        this.agent.state.messages = messages.slice(0, -1);
+      }
+      return true;
+    }
+    // Auto-compaction can complete while follow-up/steering/custom messages are waiting.
+    // Continue once so queued messages are delivered.
+    return this.agent.hasQueuedMessages();
+  }
+
+  /** Runs one automatic compaction and reports whether it committed. */
+  private async completeAutoCompaction(
+    reason: Exclude<CompactionReason, "manual">,
+    willRetry: boolean,
+    requestBudget?: CompactionRequestBudget,
+    warmSummary?: WarmCompactionSummary,
+  ): Promise<boolean> {
     const settings = this.settingsManager.getCompactionSettings();
     const contextWindow = this.model?.contextWindow;
 
@@ -617,28 +676,14 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         summaryOutputPolicy: "retry-invalid-once",
         settings,
         signal: abortController.signal,
+        ...(warmSummary ? { warmSummary } : {}),
       });
       if (outcome.status !== "completed") {
         this.emit({ type: "compaction_end", reason, itemId, outcome });
         return false;
       }
       this.emitCompletedCompaction(reason, itemId, outcome, willRetry);
-
-      if (willRetry) {
-        const messages = this.agent.state.messages;
-        const lastMsg = messages[messages.length - 1];
-        if (
-          lastMsg?.role === "assistant" &&
-          (lastMsg.stopReason === "error" || lastMsg.stopReason === "length")
-        ) {
-          this.agent.state.messages = messages.slice(0, -1);
-        }
-        return true;
-      }
-
-      // Auto-compaction can complete while follow-up/steering/custom messages are waiting.
-      // Continue once so queued messages are delivered.
-      return this.agent.hasQueuedMessages();
+      return true;
     } catch (error) {
       if (abortController.signal.aborted) {
         this.emit({ type: "compaction_end", reason, itemId, outcome: { status: "aborted" } });

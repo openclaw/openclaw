@@ -1,5 +1,6 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
+import { exceedsContextWindow } from "../../agents/context-pressure.js";
 import { resolveModelContextTokenProjection } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
@@ -14,7 +15,7 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import { resolveProjectedSessionContextTokens } from "../../config/sessions/context-token-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MemoryFlushRunParams } from "./agent-runner-memory.types.js";
-import type { FollowupRun } from "./queue.js";
+import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 
 type FollowupRuntimeParams = {
   cfg: OpenClawConfig;
@@ -168,56 +169,52 @@ export function resolveFollowupContextTokens(
     : projected;
 }
 
-export async function defersTokenCompactionToChatGPTBoundary(
+/**
+ * Maintenance that still fits waits for the attempt's request boundary, which
+ * summarizes from the warm prompt cache. A prompt that cannot fit compacts here.
+ */
+export async function defersTokenCompactionToRequestBoundary(
   run: FollowupRun["run"],
+  tokenCount: number | undefined,
+  contextWindowTokens: number,
 ): Promise<boolean> {
-  const [
-    { getPreparedRuntimeAuthProfileStoreSnapshot },
-    { prepareAgentRuntimeAuth },
-    { resolvePreparedExtraParams },
-    { isChatGPTV2CompactionEligible },
-  ] = await Promise.all([
-    import("../../agents/auth-profiles.js"),
-    import("../../agents/runtime-plan/prepare-auth.js"),
-    import("../../agents/embedded-agent-runner/extra-params.js"),
-    import("../../agents/embedded-agent-runner/run/chatgpt-v2-compaction.js"),
-  ]);
-  // Reuse the attempt's route planner with lifecycle-published metadata only.
-  // Maintenance must not load secrets or refresh credentials.
-  let route;
-  try {
-    route = prepareAgentRuntimeAuth({
-      provider: run.provider,
-      modelId: run.model,
-      config: run.config,
-      agentId: run.agentId,
-      agentDir: run.agentDir,
-      workspaceDir: run.workspaceDir,
-      authProfileStore: getPreparedRuntimeAuthProfileStoreSnapshot(run.agentDir),
-      sessionAuthProfileId: run.authProfileId,
-      sessionAuthProfileSource: run.authProfileIdSource,
-      harnessId: "openclaw",
-    }).plan.modelRoute;
-  } catch {
-    // A missing or stale route snapshot retains ordinary reply maintenance.
+  if (exceedsContextWindow(tokenCount, contextWindowTokens)) {
     return false;
   }
+  // Lazy: reply maintenance must not load the attempt runtime graph.
+  const { requestBoundaryOwnsCompaction } =
+    await import("../../agents/embedded-agent-runner/run/request-boundary-compaction.js");
+  // A configured context engine may own compaction; it keeps reply-level maintenance.
+  const contextEngine = run.config.plugins?.slots?.contextEngine?.trim();
   return (
-    route !== undefined &&
-    isChatGPTV2CompactionEligible({
+    (!contextEngine || contextEngine === "legacy") &&
+    requestBoundaryOwnsCompaction({
       config: run.config,
-      model: route,
-      extraParams: resolvePreparedExtraParams({
-        cfg: run.config,
-        provider: run.provider,
-        modelId: run.model,
-        agentId: run.agentId,
-        agentDir: run.agentDir,
-        workspaceDir: run.workspaceDir,
-      }),
       compactionEnabled: run.config.agents?.defaults?.compaction?.enabled !== false,
-      // Native Responses always replays checkpoints, independent of credentials.
-      compactionReplayEnabled: true,
     })
   );
+}
+
+/** Points the follow-up run and its queued work at the compacted session. */
+export function adoptCompactedFollowupSession(
+  params: {
+    followupRun: FollowupRun;
+    sessionKey?: string;
+    onSessionIdChanged?: (sessionId: string) => void;
+  },
+  sessionId: string,
+): void {
+  const previousSessionId = params.followupRun.run.sessionId;
+  params.followupRun.run.sessionId = sessionId;
+  params.onSessionIdChanged?.(sessionId);
+  const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
+  if (queueKey) {
+    params.followupRun.run.sessionFile = queueKey;
+    refreshQueuedFollowupSession({
+      key: queueKey,
+      previousSessionId,
+      nextSessionId: sessionId,
+      nextSessionFile: queueKey,
+    });
+  }
 }
