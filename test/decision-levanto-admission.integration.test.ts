@@ -133,6 +133,9 @@ async function runScenario(
             : { type: "boolean", instructions: "Needs review?" },
       },
     };
+    // This proof owns admission ordering, not the deadline: credential-store I/O
+    // while DNS is held must not race the independent decision timeout.
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const pending = evaluateDecisionV2InRegistry(
       input,
       {
@@ -213,6 +216,7 @@ async function runScenario(
       for (const spy of [forwarding, auth]) {
         spy.mockRestore();
       }
+      vi.useRealTimers();
     }
   } finally {
     prepareDecisionProviderReload(builder.registry, new Set([record.id]));
