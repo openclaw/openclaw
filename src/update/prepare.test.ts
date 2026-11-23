@@ -25,7 +25,13 @@ import { runReleaseUpdateCli } from "./cli.js";
 import * as serviceConversion from "./convert-service.js";
 import { preflight } from "./preflight.js";
 import { prepareGit } from "./prepare-git.js";
-import { preparePackage } from "./prepare-package.js";
+import {
+  RESTART_INTERRUPTED_MESSAGE,
+  RESTART_INTERRUPTED_REASON,
+  isPrepareInterruptedByRestart,
+  isSignalTerminated,
+  preparePackage,
+} from "./prepare-package.js";
 import { prepareUpdate } from "./run.js";
 import { readTrial, resolvePrefix } from "./store.js";
 import * as targets from "./target.js";
@@ -361,6 +367,116 @@ if (args[0] === 'pack') {
       ).toBe("2026.11.21");
     },
   );
+
+  it("reports a signal-killed install as a restart interruption that can be retried", async () => {
+    const packedRoot = path.join(root, "packed", "package");
+    await fs.mkdir(packedRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(packedRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.11.21" }),
+    );
+    const archive = path.join(root, "openclaw.tgz");
+    await exec("tar", ["-czf", archive, "-C", path.dirname(packedRoot), "package"]);
+    const npm = await executable(
+      "npm",
+      `
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'pack') {
+  fs.copyFileSync(${JSON.stringify(archive)}, 'openclaw.tgz');
+} else {
+  process.kill(process.pid, 'SIGTERM');
+}
+`,
+    );
+    const staging = path.join(root, "staging");
+    const result = await preparePackage({
+      spec: `file:${archive}`,
+      staging,
+      npm: [npm],
+      node,
+      timeoutMs: 30_000,
+    });
+    expect(result).toEqual({
+      ok: false,
+      reason: RESTART_INTERRUPTED_REASON,
+      stderrTail: RESTART_INTERRUPTED_MESSAGE,
+    });
+    await expect(fs.access(staging)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("detects restart interruption from broker errors and signal termination", async () => {
+    const { SpawnBrokerError } = await import("../process/spawn-broker/protocol.js");
+    expect(
+      isPrepareInterruptedByRestart(
+        new SpawnBrokerError("Spawn broker exited; command outcome is unavailable"),
+      ),
+    ).toBe(true);
+    expect(
+      isPrepareInterruptedByRestart(
+        new Error("wrapped", {
+          cause: new SpawnBrokerError("Spawn broker exited; command outcome is unavailable"),
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isPrepareInterruptedByRestart(new SpawnBrokerError("Spawn broker startup capacity exceeded")),
+    ).toBe(false);
+    expect(isPrepareInterruptedByRestart(new SpawnBrokerError("Spawn broker is unavailable"))).toBe(
+      false,
+    );
+    expect(isPrepareInterruptedByRestart(new Error("npm exited 1"))).toBe(false);
+    expect(isPrepareInterruptedByRestart("broker")).toBe(false);
+    const base = { stdout: "", stderr: "", pid: undefined };
+    expect(
+      isSignalTerminated({
+        ...base,
+        code: null,
+        signal: "SIGTERM",
+        killed: true,
+        termination: "signal",
+      }),
+    ).toBe(true);
+    expect(
+      isSignalTerminated({
+        ...base,
+        code: null,
+        signal: "SIGINT",
+        killed: true,
+        termination: "exit",
+      }),
+    ).toBe(true);
+    expect(
+      isSignalTerminated({
+        ...base,
+        code: null,
+        signal: "SIGABRT",
+        killed: true,
+        termination: "signal",
+      }),
+    ).toBe(false);
+    expect(
+      isSignalTerminated({
+        ...base,
+        code: null,
+        signal: "SIGKILL",
+        killed: true,
+        termination: "signal",
+      }),
+    ).toBe(false);
+    expect(
+      isSignalTerminated({
+        ...base,
+        code: 124,
+        signal: null,
+        killed: true,
+        termination: "timeout",
+      }),
+    ).toBe(false);
+    expect(
+      isSignalTerminated({ ...base, code: 1, signal: null, killed: false, termination: "exit" }),
+    ).toBe(false);
+  });
 });
 
 describe("package release conversion", () => {
