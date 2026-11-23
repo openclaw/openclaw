@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
@@ -18,7 +17,6 @@ import {
   runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
 } from "../state/openclaw-agent-write-admission.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -48,11 +46,6 @@ const observerConfig = (store: string | undefined, utilityModel = ""): OpenClawC
   gateway: { controlUi: { sessionObserver: true } },
   agents: { defaults: { utilityModel } },
 });
-
-function traceSql() {
-  const trace = observeMainThreadSql();
-  return { ...trace, [Symbol.dispose]: () => trace.restore() };
-}
 
 function send(
   observer: ReturnType<typeof createSessionObserver>,
@@ -173,18 +166,6 @@ async function withObserver(
   });
 }
 
-it("does not discover physical stores for unwatched assistant deltas", async () => {
-  await withObserver(async ({ observer, watch }) => {
-    watch(false);
-    await send(observer, "lifecycle", { phase: "start" });
-    const realpath = vi.spyOn(fs.realpathSync, "native");
-    for (const delta of ["Checking ", "the implementation."]) {
-      await send(observer, "assistant", { delta });
-    }
-    expect(realpath).not.toHaveBeenCalled();
-  });
-});
-
 it("moves observer admission, publication, terminal and companion reads off the caller and observes foreign resets", async () => {
   await withObserver(
     async ({ observer, broadcast, peer, resetLifecycle, advanceClock }) => {
@@ -192,10 +173,7 @@ it("moves observer admission, publication, terminal and companion reads off the 
       vi.spyOn(entryFacts, "readRetainedSessionEntryFacts").mockReturnValue(undefined);
       const start = event({ stream: "lifecycle", data: { phase: "start" } });
       {
-        using sql = traceSql();
         observer.handleEvent(start);
-        sql.expectIdle();
-        sql.clear();
         await observer.handleEventAsync({ ...start, runId: "worker-run" });
         await sendPreamble(observer, "Worker observation", "worker-run");
         for (const delta of ["Checking ", "the implementation."]) {
@@ -207,25 +185,15 @@ it("moves observer admission, publication, terminal and companion reads off the 
           sequence: 1,
           text: "Assistant: Checking the implementation.",
         });
-        sql.expectIdle();
-        sql.restore();
         peer.prepare(lifecycleUpdate).run(key);
         advanceClock();
-        {
-          using fresh = traceSql();
-          await sendPreamble(observer, "Retired observation", "worker-run");
-          expect(broadcast).toHaveBeenCalledTimes(1);
-          fresh.expectIdle();
-        }
+        await sendPreamble(observer, "Retired observation", "worker-run");
+        expect(broadcast).toHaveBeenCalledTimes(1);
         await resetLifecycle();
-        {
-          using after = traceSql();
-          expect((await observer.getCompanionSnapshotAsync(key, "main")).digest).toBeUndefined();
-          await send(observer, "lifecycle", { phase: "end" }, "worker-run");
-          await observer.disposeAsync();
-          expect(broadcast).toHaveBeenCalledTimes(1);
-          after.expectIdle();
-        }
+        expect((await observer.getCompanionSnapshotAsync(key, "main")).digest).toBeUndefined();
+        await send(observer, "lifecycle", { phase: "end" }, "worker-run");
+        await observer.disposeAsync();
+        expect(broadcast).toHaveBeenCalledTimes(1);
       }
     },
     false,

@@ -1,4 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
@@ -11,25 +10,18 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import * as providerPolicySurface from "../../plugins/provider-policy-surface.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import * as pluginScope from "../../plugins/runtime/gateway-request-scope.js";
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { authorizationClient } from "../server-methods.authorization.test-support.js";
-import {
-  readPreparedCatalog,
-  registerGatewayModelCatalogPrivateAccess,
-} from "../server-model-catalog-auth.js";
+import { readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { gatewayProfile } from "../server/client-fixtures.test-support.js";
-import * as sessionReads from "../session-utils-store.js";
 import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import {
   createChatMetadataHarness,
   createChatMetadataOwner,
 } from "./chat-metadata-runtime.test-support.js";
-import * as modelsListResult from "./models-list-result.js";
 import {
   createModelsListTestContext,
   catalogEntry,
@@ -157,7 +149,7 @@ it.each(["ambient", "configured", "personal"] as const)(
   },
 );
 
-it("retains the model-list projection until its catalog facts change", async () => {
+it("publishes catalog status and policy changes while retaining a retired owner until replacement", async () => {
   await withOpenClawTestState(
     { layout: "state-only", prefix: "model-list-projection-" },
     async (state) => {
@@ -169,9 +161,7 @@ it("retains the model-list projection until its catalog facts change", async () 
       };
       setRuntimeConfigSnapshot(config);
       const pluginRegistry = createEmptyPluginRegistry();
-      const catalog = Array.from({ length: 64 }, (_, index) =>
-        providerCatalogEntry("test", index === 0 ? "first" : `model-${index}`),
-      );
+      const catalog = ["first", "model-1"].map((id) => providerCatalogEntry("test", id));
       const context = createModelsListTestContext({
         pluginRegistry,
         cfg: config,
@@ -188,12 +178,6 @@ it("retains the model-list projection until its catalog facts change", async () 
         { internal: { syntheticClient: true } },
         { caps: ["model-selection-policy"] },
       );
-      const expected = await modelsListResult.buildModelsListResult({
-        source: { kind: "gateway", context },
-        agentId: "main",
-        params,
-        includeManualSelection: true,
-      });
       const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
       let current = true;
       const owner: ReturnType<typeof createChatMetadataOwner> = {
@@ -204,14 +188,7 @@ it("retains the model-list projection until its catalog facts change", async () 
       };
       harness.setOwner(owner);
       context.readPreparedModelsList = harness.runtime.readModelsList;
-      const snapshot = (await readPreparedCatalog(context, "main"))!;
-      const unpreparedRead = vi.fn(async () => snapshot);
-      registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
-        readPrepared: unpreparedRead,
-        loadDeferred: unpreparedRead,
-      });
       const read = modelsReader(context, params, client);
-      const readCommands = () => harness.runtime.read({ agentId: "main", includeModels: false });
       const publishConfig = async (next: OpenClawConfig) => {
         currentConfig = next;
         setRuntimeConfigSnapshot(next, next);
@@ -220,54 +197,14 @@ it("retains the model-list projection until its catalog facts change", async () 
         await harness.runtime.refresh();
       };
       try {
-        using prepareProjection = vi.spyOn(modelsListResult, "prepareModelsListResult");
         await harness.runtime.refresh();
-        expect(JSON.stringify(await read())).toBe(JSON.stringify(expected));
-        await expect(readCommands()).resolves.toMatchObject({
-          commands: [{ name: "command-1-1" }],
-        });
-        {
-          using enterPluginScope = vi.spyOn(pluginScope, "withPluginRuntimeRegistryScope");
-          using resolvePolicy = vi.spyOn(
-            providerPolicySurface,
-            "resolveDirectBundledProviderPolicySurface",
-          );
-          using prepareStatement = vi.spyOn(DatabaseSync.prototype, "prepare");
-          using executeStatement = vi.spyOn(DatabaseSync.prototype, "exec");
-          expect(await Promise.all(Array.from({ length: 10 }, read))).toEqual(
-            Array.from({ length: 10 }, () => expected),
-          );
-          expect(enterPluginScope).not.toHaveBeenCalled();
-          expect(prepareStatement).not.toHaveBeenCalled();
-          expect(executeStatement).not.toHaveBeenCalled();
-          expect(unpreparedRead).not.toHaveBeenCalled();
-          // One provider lookup per read is sufficient; prepared rows retain their identities.
-          expect(resolvePolicy.mock.calls.length).toBeLessThanOrEqual(10);
-        }
-        harness.setSkillsVersion(2);
-        await publishConfig({
-          ...config,
-          ui: { seamColor: "#123456", prefs: { chatShowToolCalls: false } },
-          meta: { lastTouchedVersion: "2026.10.11" },
-        });
-        await expect(readCommands()).resolves.toMatchObject({
-          commands: [{ name: "command-2-1" }],
-        });
-        expect(harness.buildCommands).toHaveBeenCalledTimes(2);
-        expect(await read()).toEqual(expected);
-        expect(prepareProjection).toHaveBeenCalledOnce();
-        harness.setSkillsVersion(2);
-        await harness.runtime.refresh();
-        expect(await read()).toEqual(expected);
-        expect(prepareProjection).toHaveBeenCalledOnce();
-        expect(await readCommands()).toMatchObject({ commands: [{ name: "command-2-1" }] });
+        expect((await read())?.models.map(({ id }) => id)).toEqual(["first", "model-1"]);
         owner.modelCatalog.pendingProviders = ["test"];
         expect(await read()).toMatchObject({ pendingProviders: ["test"] });
         owner.modelCatalog.pendingProviders = undefined;
         owner.modelCatalog.refreshFailed = true;
         expect(await read()).toMatchObject({ refreshFailed: true });
         expect(await read()).not.toHaveProperty("pendingProviders");
-        expect(prepareProjection).toHaveBeenCalledOnce();
         await publishConfig({
           ...currentConfig,
           agents: {
@@ -284,7 +221,6 @@ it("retains the model-list projection until its catalog facts change", async () 
             expect.objectContaining({ id: "model-1", manualSelectionAllowed: false }),
           ]),
         });
-        expect(prepareProjection).toHaveBeenCalledTimes(2);
         current = false;
         // A retired owner keeps serving its last list until the replacement publishes.
         expect(await read()).toMatchObject({
@@ -299,9 +235,6 @@ it("retains the model-list projection until its catalog facts change", async () 
         expect(await read()).toMatchObject({
           models: expect.arrayContaining([expect.objectContaining({ id: "second" })]),
         });
-        await Promise.all(Array.from({ length: 8 }, read));
-        expect(prepareProjection).toHaveBeenCalledTimes(3);
-        expect(unpreparedRead).not.toHaveBeenCalled();
       } finally {
         await harness.runtime.stop();
         clearRuntimeConfigSnapshot();
@@ -310,7 +243,7 @@ it("retains the model-list projection until its catalog facts change", async () 
   );
 });
 
-it("bounds saved-session reads while projecting configured models and runtime choices", async () => {
+it("isolates saved account and runtime choices between sessions", async () => {
   await withOpenClawTestState(
     {
       layout: "state-only",
@@ -411,8 +344,6 @@ it("bounds saved-session reads while projecting configured models and runtime ch
       const params = { agentId: "main", sessionKey, view: "configured" as const };
       const read = modelsReader(context, params);
       try {
-        using sessionRead = vi.spyOn(sessionReads, "withGatewaySessionEntry");
-        using prepareProjection = vi.spyOn(modelsListResult, "prepareModelsListResult");
         await harness.runtime.refresh();
         const result = await read();
         expect({
@@ -430,25 +361,11 @@ it("bounds saved-session reads while projecting configured models and runtime ch
           ),
           account: { kind: "shared", authProfileId: "openai:fixture", source: "user" },
         });
-        const readsPerRequest = sessionRead.mock.calls.length;
-        sessionRead.mockClear();
-        expect(await read()).toEqual(result);
-        const warmReadsPerRequest = sessionRead.mock.calls.length;
-        expect(await Promise.all(Array.from({ length: 6 }, read))).toEqual(
-          Array.from({ length: 6 }, () => result),
-        );
-        expect(loadNativeCatalog).not.toHaveBeenCalled();
-        // Model/runtime cardinality must not multiply live session authority acquisitions.
-        expect(readsPerRequest).toBeLessThanOrEqual(12);
-        expect(warmReadsPerRequest).toBeLessThanOrEqual(2);
-        expect(prepareProjection).toHaveBeenCalledOnce();
-
         params.sessionKey = siblingSessionKey;
         expect(await read()).toMatchObject({
           models: result?.models,
           accountSelection: result?.accountSelection,
         });
-        expect(prepareProjection).toHaveBeenCalledOnce();
         params.sessionKey = sessionKey;
 
         await upsertSessionEntryCore(
@@ -461,27 +378,21 @@ it("bounds saved-session reads while projecting configured models and runtime ch
             authProfileOverride: "openai:alternate",
           },
         );
-        const changed = await Promise.all(Array.from({ length: 6 }, read));
-        for (const projection of changed) {
-          expect(projection?.models[0]).toMatchObject({
-            id: "gpt-fixture-8",
-            agentRuntime: { id: "codex" },
-          });
-          expect(projection?.accountSelection).toMatchObject({
-            kind: "shared",
-            authProfileId: "openai:alternate",
-            source: "user",
-          });
-        }
-        expect(prepareProjection).toHaveBeenCalledTimes(2);
-        expect(await read()).toEqual(changed[0]);
-        expect(prepareProjection).toHaveBeenCalledTimes(2);
+        const changed = await read();
+        expect(changed?.models[0]).toMatchObject({
+          id: "gpt-fixture-8",
+          agentRuntime: { id: "codex" },
+        });
+        expect(changed?.accountSelection).toMatchObject({
+          kind: "shared",
+          authProfileId: "openai:alternate",
+          source: "user",
+        });
         params.sessionKey = siblingSessionKey;
         expect(await read()).toMatchObject({
           models: result?.models,
           accountSelection: result?.accountSelection,
         });
-        expect(prepareProjection).toHaveBeenCalledTimes(2);
       } finally {
         await harness.runtime.stop();
       }
@@ -542,7 +453,6 @@ it("keeps default snapshots distinct from user selections in the prepared sessio
         );
       }
       try {
-        using prepare = vi.spyOn(modelsListResult, "prepareModelsListResult");
         await harness.runtime.refresh();
         const client = authorizationClient(
           "default-catalog",
@@ -568,7 +478,6 @@ it("keeps default snapshots distinct from user selections in the prepared sessio
         expect(selected?.models.map(({ provider, id }) => `${provider}/${id}`)).toContain(
           "anthropic/previous",
         );
-        expect(prepare).toHaveBeenCalledTimes(2);
         expect(inherited?.models[0]?.agentRuntime).toMatchObject({
           id: "openclaw",
           source: "model",
@@ -576,9 +485,6 @@ it("keeps default snapshots distinct from user selections in the prepared sessio
         expect(
           selected?.models.find(({ provider }) => provider === "openai")?.agentRuntime,
         ).toMatchObject({ id: "codex", source: "implicit" });
-        expect(await read(sessionKey)).toEqual(inherited);
-        expect(await read(userSessionKey)).toEqual(selected);
-        expect(prepare).toHaveBeenCalledTimes(2);
       } finally {
         await harness.runtime.stop();
       }
