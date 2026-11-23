@@ -122,7 +122,9 @@ process.exitCode = 13;
   );
   expect(observed.status).toBe("ok");
   const report = renderUpdateRunReport(updateRunReportInputFromResult(observed));
-  expect(report.headline).toBe("✅ OpenClaw updated to 2026.10.6 (from 2026.10.5).");
+  expect(report.headline).toBe(
+    "✅ OpenClaw updated to 2026.10.6 (from 2026.10.5); 1 warning needs attention.",
+  );
   expect(report.lines[0]).toMatch(
     /^Warning: Deferred Doctor inspections did not complete after restart \(.*ERR_MODULE_NOT_FOUND.*\)\. Run `openclaw doctor --lint --all --severity-min info`/s,
   );

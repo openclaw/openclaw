@@ -320,12 +320,17 @@ export function renderUpdateRunReport(
   let headline: string;
   switch (run.status) {
     case "succeeded": {
-      // Post-activation inspections are advice, not unfinished activation work.
+      // Findings from a completed inspection pass are advice. A pass that did not complete
+      // (no lint receipt) still needs attention, because `status --all` shows only the headline.
+      const inspected = run.steps.some(
+        ({ step }) => step === "finalize:doctor-lint:post-activation doctor inspections",
+      );
       const attentionCount = warningMessages(
         run.steps.filter(
           ({ step }) =>
-            step !== "warning:post-activation doctor inspections" &&
-            !step.startsWith("warning:post-activation doctor inspections:"),
+            !inspected ||
+            (step !== "warning:post-activation doctor inspections" &&
+              !step.startsWith("warning:post-activation doctor inspections:")),
         ),
       ).length;
       const attention =

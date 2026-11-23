@@ -155,6 +155,12 @@ it.each([false, true])(
   (otherWarning) => {
     const report = render({
       steps: [
+        // A completed inspection pass always writes its lint receipt.
+        {
+          step: "finalize:doctor-lint:post-activation doctor inspections",
+          status: "completed",
+          detail: "{}",
+        },
         {
           step: "warning:post-activation doctor inspections",
           status: "completed",
