@@ -8,10 +8,11 @@ import type * as InspectionOwner from "../cli/update-cli/update-command-post-act
 import { runPostActivationInspections } from "../cli/update-cli/update-command-post-activation-inspections.js";
 import type * as DoctorContributions from "../flows/doctor-health-contributions.js";
 import type * as UpdateNotices from "../gateway/update-run-notice.runtime.js";
+import type * as UpdateRunWatcher from "../gateway/update-run-watcher.js";
 import { getUpdateRunAsync } from "../infra/update-run-reader.js";
 import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import { createUpdateRunAsync, recordUpdateRunStepAsync } from "../infra/update-run-write.async.js";
-import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -50,6 +51,14 @@ vi.mock(
 vi.mock("../flows/doctor-health-contributions.js", async (importOriginal) => ({
   ...(await importOriginal<typeof DoctorContributions>()),
   resolvePostActivationInspectionCheckIds: async () => ["core/doctor/secrets"],
+}));
+vi.mock("../gateway/update-run-watcher.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof UpdateRunWatcher>()),
+  wakeUpdateRunWatcher: async (_runId?: string, advisoryWork?: () => Promise<void>) => {
+    if (advisoryWork) {
+      await trackAsyncWork(advisoryWork);
+    }
+  },
 }));
 
 const directories: string[] = [];

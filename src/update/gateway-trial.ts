@@ -8,7 +8,6 @@ import {
 } from "../infra/update-run-write.async.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import {
   readTrial,
@@ -66,7 +65,7 @@ export async function settleRunFromTrial(
   if (outcome.status === "succeeded") {
     const step = "post-activation doctor inspections";
     // Advisory work never holds the committed trial handshake open.
-    void trackAsyncWork(async () => {
+    void wakeUpdateRunWatcher(trial.runId, async () => {
       try {
         const [{ runPostActivationInspections }, { resolvePostActivationInspectionCheckIds }] =
           await Promise.all([
@@ -99,8 +98,6 @@ export async function settleRunFromTrial(
             mode: "tools",
           }).slice(0, 2000),
         });
-      } finally {
-        wakeUpdateRunWatcher(trial.runId);
       }
     }).catch((error: unknown) => {
       log.warn(

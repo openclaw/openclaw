@@ -16,11 +16,19 @@ import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 
 const UPDATE_RUN_POLL_MS = 2_000;
 const TERMINAL_SENTINEL_WAIT_MS = 30 * 60_000;
-let wakeCurrentWatcher: ((runId?: string) => void) | undefined;
+let wakeCurrentWatcher:
+  | ((runId?: string, advisoryWork?: () => Promise<void>) => void | Promise<void>)
+  | undefined;
 
-/** Wake the Gateway-owned watcher for an admitted run or late diagnostic writes. */
-export function wakeUpdateRunWatcher(runId?: string): void {
-  wakeCurrentWatcher?.(runId);
+/** The Gateway-lifetime watcher owns advisory jobs and their final invalidation. */
+export async function wakeUpdateRunWatcher(
+  runId?: string,
+  advisoryWork?: () => Promise<void>,
+): Promise<void> {
+  if (advisoryWork && !wakeCurrentWatcher) {
+    throw new Error("Gateway update watcher is unavailable");
+  }
+  await wakeCurrentWatcher?.(runId, advisoryWork);
 }
 
 /** The update-check lifecycle joins notices and their transport tails before Gateway teardown. */
@@ -261,7 +269,10 @@ export function startUpdateRunWatcher(params: {
         }
       });
   };
-  const wake = (runId?: string) => {
+  const wake = (runId?: string, advisoryWork?: () => Promise<void>): void | Promise<void> => {
+    if (advisoryWork) {
+      return work.track(advisoryWork).finally(() => wake(runId));
+    }
     if (runId) {
       void work
         .track(async () => {
