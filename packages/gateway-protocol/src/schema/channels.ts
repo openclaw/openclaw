@@ -40,10 +40,12 @@ export const TalkSpeakParamsSchema = closedObject({
 
 /**
  * One-shot text-to-speech request rendered with the configured TTS provider
- * chain (unlike `talk.speak`, which pins the Talk-mode provider).
+ * chain (unlike `talk.speak`, which pins the Talk-mode provider). `sessionKey`
+ * selects the TTS settings of the agent that owns that session.
  */
 export const TtsSpeakParamsSchema = closedObject({
   text: NonEmptyString,
+  sessionKey: Type.Optional(NonEmptyString),
 });
 
 const TalkModeSchema = stringLiteralUnion(["realtime", "stt-tts", "transcription"]);

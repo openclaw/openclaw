@@ -1145,7 +1145,7 @@ var External = [
     /(^serverName$)/u,
     /(^sessionId$|^answer$)/u,
     /(^sessionId$|^closeInput$)/u,
-    /(^text$)/u,
+    /(^text$|^sessionKey$)/u,
     /(^sessionKey$|^sessionAgentId$|^includeDisabled$|^limit$|^offset$|^query$|^enabled$|^scheduleKind$|^lastRunStatus$|^trigger$|^sortBy$|^sortDir$|^agentId$|^compact$|^includeDeliveryPreviews$)/u,
     /(^id$|^failedAtMs$)/u,
     /(^id$|^adopt$)/u,
@@ -10708,7 +10708,8 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_1024, unique_1025) => External[522].test(unique_1024) || check_2(value[unique_1024]),
     ) &&
-    check_6(value.text),
+    check_6(value.text) &&
+    (value.sessionKey === void 0 || !("sessionKey" in value) || check_65(value.sessionKey)),
   check_1588 = (value) => check_644(value),
   check_1589 = (value) => check_1590(value),
   check_1590 = (value) =>

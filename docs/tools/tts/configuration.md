@@ -473,6 +473,9 @@ voice, model, persona, or auto-TTS mode. The agent block deep-merges over
 To pin a per-agent persona, set `agents.entries.*.tts.persona` alongside provider
 config — it overrides the global `tts.persona` for that agent only.
 
+Apps that read a reply aloud through Gateway `tts.speak` get the agent's block
+when they pass the chat's `sessionKey`. Without it, the agent block is skipped.
+
 Precedence order for automatic replies, `/tts audio`, `/tts status`, and the
 `tts` agent tool. Later layers win: each layer deep-merges over the ones above
 it, so the last layer that sets a field decides its value.

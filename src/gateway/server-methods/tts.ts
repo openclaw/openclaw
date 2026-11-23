@@ -28,6 +28,11 @@ import {
   synthesizeSpeech,
   textToSpeech,
 } from "../../tts/tts.js";
+import {
+  getSessionRowProjection,
+  requireSessionRowProjection,
+} from "../session-row-projection-access.js";
+import { withPreparedSessionResolve } from "../sessions-resolve.js";
 import { formatForLog } from "../ws-log.js";
 import { respondError, respondUnavailableOnThrow } from "./response.js";
 import { inferSpeechMimeType } from "./speech-mime.js";
@@ -169,7 +174,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
   },
   // Unlike tts.convert (gateway-local audioPath) this returns the clip inline,
   // so remote clients (mobile apps) can play it without filesystem access.
-  "tts.speak": async ({ params, respond, context }) => {
+  "tts.speak": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateTtsSpeakParams, "tts.speak", respond)) {
       return;
     }
@@ -180,9 +185,35 @@ export const ttsHandlers: GatewayRequestHandlers = {
     }
     try {
       const cfg = context.getRuntimeConfig();
+      let agentId: string | undefined;
+      if (params.sessionKey) {
+        const projection = requireSessionRowProjection(context);
+        // The lookup applies the caller's session visibility, so a hidden session
+        // is rejected like a missing one and its agent's voice stays out of reach.
+        const session = await withPreparedSessionResolve(
+          {
+            projection,
+            client,
+            p: { key: params.sessionKey },
+            isCurrent: () => getSessionRowProjection(context) === projection,
+          },
+          (resolved) => resolved,
+        );
+        if (!session.ok || !("agentId" in session)) {
+          respond(
+            false,
+            undefined,
+            session.ok
+              ? errorShape(ErrorCodes.INVALID_REQUEST, `No session found: ${params.sessionKey}`)
+              : session.error,
+          );
+          return;
+        }
+        agentId = session.agentId;
+      }
       // synthesizeSpeech enforces the same tts.maxTextLength bound but
       // reports it as a synthesis failure; pre-check to return a request error.
-      const maxTextLength = resolveTtsConfig(cfg).maxTextLength;
+      const maxTextLength = resolveTtsConfig(cfg, agentId).maxTextLength;
       if (text.length > maxTextLength) {
         respondError(
           respond,
@@ -192,7 +223,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
         return;
       }
       assertSecretOwnerAvailable("capability", "tts");
-      const result = await synthesizeSpeech({ text, cfg });
+      const result = await synthesizeSpeech({ text, cfg, agentId });
       const provider = normalizeOptionalString(result.provider);
       if (!result.success || !result.audioBuffer || result.audioBuffer.length === 0 || !provider) {
         const primary = result.attempts?.[0];
