@@ -859,12 +859,12 @@ describe("CLI message authority integration", () => {
           turn.revokeScheduledPermission();
         }
         release();
-        expectDenied(
-          await pending,
-          retire === "abort"
-            ? /abort|cancel|no longer active/i
-            : /no longer active|permission revoked/i,
-        );
+        const reason = {
+          abort: /abort|cancel|no longer active/i,
+          registration: /no longer active|permission revoked/i,
+          source: /^The message turn has ended. Start a new turn to retry.$/,
+        }[retire];
+        expectDenied(await pending, reason);
         expect(acceptedChannelEdits).toBe(0);
         expect(requests.every((entry) => entry.method === "GET")).toBe(true);
         expect(requests).toContainEqual(request("GET", lookupPath));
@@ -989,7 +989,7 @@ describe("CLI message authority integration", () => {
 
         const result = await pending;
         if (revoke === "source") {
-          expectDenied(result, /agent runtime authority is no longer active/);
+          expectDenied(result, /^The message turn has ended. Start a new turn to retry.$/);
         } else {
           expectSuccess(result);
         }

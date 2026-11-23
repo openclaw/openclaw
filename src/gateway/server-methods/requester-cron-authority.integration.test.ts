@@ -375,7 +375,8 @@ describe("requester continuation persisted automation management", () => {
           undefined,
           expect.objectContaining({
             code: "INVALID_REQUEST",
-            message: expect.stringMatching(/authority|admitted run/i),
+            message:
+              "invalid cron.get params: The message turn has ended. Start a new turn to retry.",
           }),
         );
       } finally {

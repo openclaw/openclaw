@@ -623,7 +623,7 @@ it.skipIf(process.platform === "win32")(
         command: "while :; do sleep 0.05; done >/dev/null 2>&1 & echo PID=$!",
       });
       const loopPid = firstPid(aggregated(loop.details));
-      expect(aggregated(loop.details)).toMatch(
+      expect(warningText(loop.details)).toMatch(
         new RegExp(`pid ${loopPid} .*keeps running as background session`),
       );
       expect(runningIn(scopeKey).map((session) => session.pid)).toContain(loopPid);
