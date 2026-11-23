@@ -105,6 +105,7 @@ describe.skipIf(process.platform === "win32")("local GitHub credential launch bo
           sessionKey: "agent:main:fixture",
           operatorAuthority: {
             profileId: "fixture",
+            canonicalIdentity: { profileId: "fixture" },
             scopes: [],
             assertCurrent: () => {
               throw new Error("fixture stopped before credential admission");

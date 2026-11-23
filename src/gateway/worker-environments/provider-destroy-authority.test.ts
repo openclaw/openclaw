@@ -60,12 +60,13 @@ describe("worker deletion request authority", () => {
     await beforeSettlement(entered.promise, creating, "Independent create preparation");
     const original = support.testState.store.list()[0]!;
     let current = true;
+    const checkRequester = vi.fn(() => current);
     const deleting = invokeEnvironment(
       "environments.destroy",
       { environmentId: original.environmentId, force },
       context,
       null,
-      () => current,
+      checkRequester,
     );
     try {
       if (force) {
@@ -83,6 +84,7 @@ describe("worker deletion request authority", () => {
     }
     const response = await deleting;
     expect(response[0], JSON.stringify(response[2])).toBe(!revoked);
+    expect(checkRequester).toHaveBeenCalledOnce();
     expect(support.testState.store.get(original.environmentId)).toMatchObject(
       revoked
         ? { state: "provisioning", destroyRequestedAtMs: null }
@@ -92,8 +94,28 @@ describe("worker deletion request authority", () => {
     expect(destroy).toHaveBeenCalledTimes(revoked ? 0 : 1);
   });
 
-  it("requires current authority to upgrade accepted cleanup to forced discard", async () => {
+  it.each([
+    {
+      description: "upgrade accepted cleanup to forced discard",
+      acceptedForce: false,
+      force: true,
+    },
+    { description: "retry accepted ordinary cleanup", acceptedForce: false, force: false },
+    { description: "retry accepted forced discard", acceptedForce: true, force: true },
+  ])("requires current authority to $description", async ({ acceptedForce, force }) => {
     const original = await support.seedReady("accepted-ordinary-cleanup");
+    if (acceptedForce) {
+      await support.testState.store.transition({
+        environmentId: original.environmentId,
+        from: "ready",
+        to: "draining",
+      });
+      await support.testState.store.transition({
+        environmentId: original.environmentId,
+        from: "draining",
+        to: "destroying",
+      });
+    }
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const destroy = vi.fn(async () => {});
@@ -103,23 +125,30 @@ describe("worker deletion request authority", () => {
       throw new Error("Accepted cleanup remains pending");
     });
     const service = support.createService(support.createProvider({ destroy }));
-    const cleanup = service.destroy(original.environmentId).catch(() => undefined);
+    const cleanup = service
+      .destroy(original.environmentId, undefined, acceptedForce ? async () => {} : undefined)
+      .catch(() => undefined);
     await beforeSettlement(entered.promise, cleanup, "Independent accepted cleanup");
     let current = true;
-    const forced = invokeEnvironment(
+    const checkRequester = vi.fn(() => current);
+    const deleting = invokeEnvironment(
       "environments.destroy",
-      { environmentId: original.environmentId, force: true },
+      { environmentId: original.environmentId, force },
       await contextFor(service),
       null,
-      () => current,
+      checkRequester,
     );
     current = false;
     release.resolve();
     await cleanup;
-    expect((await forced)[0]).toBe(false);
+    expect((await deleting)[0]).toBe(false);
+    expect(checkRequester).toHaveBeenCalledOnce();
+    expect(support.testState.store.get(original.environmentId)?.destroyRequestedAtMs).toBe(
+      support.testState.nowMs,
+    );
     expect(
       hasForcedWorkerEnvironmentAbandonment(support.testState.store.get(original.environmentId)!),
-    ).toBe(false);
+    ).toBe(acceptedForce);
     expect(destroy).toHaveBeenCalledOnce();
   });
 
