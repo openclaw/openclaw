@@ -153,7 +153,7 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
       });
       readIdentities({ "/workspace/test-agent/IDENTITY.md": "```md\n- Name: Example\n```\n" });
       await expect(update({ name: "Nova" })).rejects.toThrow(
-        "Identity update would change fenced Markdown content or field values",
+        /Identity update was not saved.*openclaw agents set-identity --agent <id> --theme <single-line-value>.*Gateway host.*profile and config.*retry the original update/,
       );
       expectUncalled(mocks.rootWrite, mocks.writeConfigFile);
     });

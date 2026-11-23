@@ -308,7 +308,12 @@ export function mergeIdentityMarkdownContent(
   // expose an example or make an unclosed fence consume ordinary prose.
   const conservative = edit(original, true);
   if (!valid(conservative)) {
-    throw new Error("Identity update would change fenced Markdown content or field values");
+    throw new Error(
+      "Identity update was not saved because it would change fenced Markdown content or field values. " +
+        "Correct the conflicting identity value. For a multiline theme, run " +
+        "`openclaw agents set-identity --agent <id> --theme <single-line-value>` on the Gateway host " +
+        "with the Gateway's profile and config. Then retry the original update.",
+    );
   }
   const normalized = edit(conservative);
   return render(valid(normalized) ? normalized : conservative);
