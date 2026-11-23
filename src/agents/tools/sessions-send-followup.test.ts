@@ -42,7 +42,6 @@ vi.mock("../../state/user-channel-identity-operations.js", () => ({
 }));
 vi.mock("./gateway-caller-context.js", () => ({
   getGatewayToolCallerIdentity: () => ({ agentId: "main", sessionKey: "agent:main:requester" }),
-  captureGatewayToolCallerAssertion: () => () => {},
   resolveGatewayToolOperatorSelection: () => ({
     operatorAuthority: undefined,
     assertCurrent: () => {},
