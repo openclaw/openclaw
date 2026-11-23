@@ -299,9 +299,12 @@ export function prepareSessionEventProjection(
           plan,
           payload: {
             ...base,
-            // Personal clients get no pin fields; only a legacy recipient can receive shared tombstones.
-            pinned: row.pinned,
-            pinnedAt: row.pinned === undefined ? undefined : (row.pinnedAt ?? null),
+            // Restore only slots owned by this producer; compact message envelopes never had pin fields.
+            pinned: Object.hasOwn(base, "pinned") ? row.pinned : undefined,
+            pinnedAt:
+              Object.hasOwn(base, "pinnedAt") && row.pinned !== undefined
+                ? (row.pinnedAt ?? null)
+                : undefined,
             session: plan.rows ? plan.rows.wire[0] : row,
             cyberAccessProgram: row.cyberAccessProgram ?? null,
             fastMode: row.fastMode,

@@ -9,7 +9,7 @@ export function buildGatewaySessionSnapshot(params: {
   sessionRow: GatewaySessionRow | null | undefined;
   agentId?: string;
   lifecycle?: boolean;
-  /** Only for single-recipient history replies to a legacy native client. */
+  /** Only for single-recipient history replies to a legacy client. */
   includeLegacyPins?: boolean;
   event?: AgentEventRuntimePayload;
   lifecycleRunId?: string;
@@ -89,10 +89,10 @@ export function buildGatewaySessionSnapshot(params: {
     archivedAt: sessionRow.archivedAt ?? null,
     archivedBy: sessionRow.archivedBy ?? null,
     archiveReason: sessionRow.archiveReason ?? null,
-    ...(params.includeLegacyPins
-      ? { pinned: sessionRow.pinned ?? false, pinnedAt: sessionRow.pinnedAt ?? null }
-      : {}),
+    // Reserve the original wire slots; the shared producer never supplies a personal value.
+    pinned: params.includeLegacyPins ? (sessionRow.pinned ?? false) : undefined,
     sidebarRoot: sessionRow.sidebarRoot ?? false,
+    pinnedAt: params.includeLegacyPins ? (sessionRow.pinnedAt ?? null) : undefined,
     snoozedUntil: sessionRow.snoozedUntil ?? null,
     snoozedAt: sessionRow.snoozedAt ?? null,
     unread: sessionRow.unread ?? false,
