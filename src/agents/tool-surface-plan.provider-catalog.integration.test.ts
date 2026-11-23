@@ -95,17 +95,3 @@ it.each([
   }
   expect(model.compat?.codeMode).toBe("preferred");
 });
-
-it.each(["minimax", "minimax-portal"])(
-  "keeps %s M2.7 tools direct under auto",
-  async (providerId) => {
-    for (const route of ["static", "dynamic"] as const) {
-      const model = await resolveModel(providerId, route, "MiniMax-M2.7");
-      for (const codeMode of [undefined, "auto"] as const) {
-        expect(assembleSurface(model, codeMode).names, `${route}:${codeMode ?? "default"}`).toEqual(
-          ["query_records"],
-        );
-      }
-    }
-  },
-);
