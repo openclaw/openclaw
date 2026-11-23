@@ -181,11 +181,11 @@ describe("usage cost estimation", () => {
     [{ input: 1_000, cost: { total: 0 } }, true, 0.001],
     [{ input: 1_000 }, true, 0.001],
     [{ total: 1_000 }, false, undefined],
-  ] as const)("preserves aggregate call-tier pricing: %j", (usage, tiered, expected) => {
+  ] as const)("preserves aggregate single-tier pricing: %j", (usage, tiered, expected) => {
     const rates = { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 };
     const cost: ModelCostConfig = {
-      ...rates,
-      tieredPricing: tiered ? [{ ...rates, range: [0, Infinity] }] : undefined,
+      ...inputRates(99),
+      tieredPricing: tiered ? [{ ...rates, range: [200_000, Infinity] }] : undefined,
     };
     const config = sourceConfig("fixture", [{ id: "priced", cost }]);
     expect(estimateAggregateUsageCost({ usage, cost })).toBe(expected);
