@@ -60,7 +60,7 @@ export function isGatewayRunInvocationArgv(argv: string[]): boolean {
 
 export function resolveGatewayRunPreBootstrapOptions(
   argv: string[],
-): { force: boolean; reset: boolean; taskSupervisor: boolean } | null {
+): { force: boolean; reset: boolean; taskSupervisor?: true } | null {
   const args = getCommandArgsWithRootOptions(argv, {
     commandPath: ["gateway"],
     mode: "command-path",
@@ -105,5 +105,5 @@ export function resolveGatewayRunPreBootstrapOptions(
     }
   }
 
-  return { force, reset, taskSupervisor };
+  return taskSupervisor ? { force, reset, taskSupervisor: true } : { force, reset };
 }
