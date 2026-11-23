@@ -44,7 +44,7 @@ export function buildSubagentCompletionFailureNotice(
           ? "Interrupted by Gateway restart; not resumed."
           : outcome.error
         : outcome?.status;
-    const identity = `${child.label?.trim() || "A child agent"}: ${status ?? "unknown"}\nChild session ${child.childSessionKey} (run ${child.runId})`;
+    const identity = `Child session ${child.childSessionKey} (run ${child.runId})\n${child.label?.trim() || "A child agent"}: ${status ?? "unknown"}`;
     const header = truncateUtf16WithEllipsis(identity, 512);
     const captured = hasPrivateRequesterInput(child)
       ? ""
