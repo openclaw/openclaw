@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { json } from "node:stream/consumers";
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined, isRecord } from "@openclaw/normalization-core";
 import { expect, test } from "vitest";
 import { z } from "zod";
 import { truncateToolResultMessage } from "../src/agents/embedded-agent-runner/tool-result-truncation.js";
@@ -42,8 +42,6 @@ const wireRequestSchema = z.object({
   ),
 });
 type WireRequest = z.infer<typeof wireRequestSchema>;
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 function output(request: WireRequest): { text: string; images: string[] } {
   const item = request.input.find(
