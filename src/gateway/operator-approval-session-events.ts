@@ -220,7 +220,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
       }
     }
     if (params.isCurrent?.() === false) {
-      throw new Error("Operator approval replay authority is no longer current");
+      throw new Error("Approval replay runtime ended. Start a new request.");
     }
     const revision = prepared.outcome === "expired" ? scope.revision : readRevision;
     const records =
@@ -262,22 +262,20 @@ export function createOperatorApprovalSessionEventRuntime(params: {
             approvals: [],
             truncated: false,
           },
-          isCurrent: () => !canReviewOperatorApproval(client),
+          isCurrent: () => true,
           release: () => {},
         };
       }
-      const scopes = [...(client?.connect.scopes ?? [])];
+      const admin = client?.connect.scopes?.includes(ADMIN_SCOPE) === true;
       const deviceId = client?.connect.device?.id;
-      const reviewerDeviceId = scopes.includes(ADMIN_SCOPE) ? undefined : deviceId?.trim();
+      const reviewerDeviceId = admin ? undefined : deviceId?.trim();
       const assertCurrent = () => {
         if (
           params.isCurrent?.() === false ||
           client?.invalidated ||
-          !canReviewOperatorApproval(client) ||
-          scopes.join("\0") !== client?.connect.scopes?.join("\0") ||
-          (!scopes.includes(ADMIN_SCOPE) && deviceId !== client?.connect.device?.id)
+          (!admin && deviceId !== client?.connect.device?.id)
         ) {
-          throw new Error("Operator approval replay authority is no longer current");
+          throw new Error("Approval replay connection or device changed. Start a new request.");
         }
       };
       assertCurrent();

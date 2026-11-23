@@ -412,7 +412,7 @@ export class QuestionManager {
       ) {
         throw new QuestionManagerError(
           QuestionManagerErrorCodes.REQUESTER_INACTIVE,
-          "the question's resolution authority is no longer active",
+          "The question ended or changed. Request a new question.",
         );
       }
     };
