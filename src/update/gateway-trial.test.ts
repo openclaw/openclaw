@@ -73,6 +73,48 @@ afterEach(async () => {
   }
 });
 
+it("lets a launcher child exit naturally while its IPC peer remains connected", async () => {
+  const child = spawn(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "--eval",
+      `import ${JSON.stringify(new URL("./gateway-trial.ts", import.meta.url).href)};
+       process.send("loaded");`,
+    ],
+    {
+      env: {
+        ...Object.fromEntries(
+          Object.entries(process.env).filter(([key]) => !key.startsWith("OPENCLAW_")),
+        ),
+        NODE_OPTIONS: "",
+        OPENCLAW_LAUNCHER_IPC: "1",
+      },
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
+    },
+  );
+  let stderr = "";
+  child.stderr!.setEncoding("utf8").on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  const exited = once(child, "exit");
+  try {
+    const [message] = await once(child, "message");
+    expect(message).toBe("loaded");
+    expect(await once(child, "exit", { signal: AbortSignal.timeout(5_000) }), stderr).toEqual([
+      0,
+      null,
+    ]);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+      await exited;
+    }
+  }
+}, 15_000);
+
 it.each(["succeeded", "rolled-back"] as const)(
   "durably finishes a %s trial and marks its outcome reported",
   async (status) => {

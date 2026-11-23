@@ -32,6 +32,8 @@ if (process.env.OPENCLAW_LAUNCHER_IPC === "1") {
       process.kill(process.pid, "SIGTERM");
     }
   });
+  // The listener must receive stop requests without keeping a settled Gateway alive.
+  process.channel?.unref();
 }
 
 export async function settleRunFromTrial(
