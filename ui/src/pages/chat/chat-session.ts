@@ -350,6 +350,7 @@ export async function switchChatModel(
   targetSessionKey = host.sessionKey,
   agentRuntime?: string | null,
   agentDefaultModel?: string,
+  fastMode?: SessionPatch["fastMode"],
 ): Promise<boolean> {
   if (!host.client || !host.connected) {
     return false;
@@ -379,7 +380,7 @@ export async function switchChatModel(
         ? !isSessionRuntimePinned(activeRow?.agentRuntime)
         : isSessionRuntimePinned(activeRow?.agentRuntime) &&
           activeRow?.agentRuntime?.id === runtimeSelection));
-  if (currentOverride === nextModel && runtimeUnchanged) {
+  if (currentOverride === nextModel && runtimeUnchanged && fastMode === undefined) {
     return true;
   }
   const modelOwnerAgentId = scopedAgentParamsForSession(host, targetSessionKey).agentId;
@@ -389,6 +390,7 @@ export async function switchChatModel(
   const patch: SessionPatch = {
     model: nextModel || null,
     ...(runtimeSelection !== undefined ? { agentRuntime: runtimeSelection } : {}),
+    ...(fastMode !== undefined ? { fastMode } : {}),
   };
   const canDispatch = () =>
     ownsSelection() &&
@@ -467,6 +469,7 @@ export async function switchChatModel(
           nextModel,
           runtimeSelection,
           selection,
+          fastMode,
         );
       } catch (error) {
         if (ownsSelection()) {

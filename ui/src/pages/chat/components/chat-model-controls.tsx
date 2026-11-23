@@ -26,6 +26,7 @@ import {
   isModelPickerOptionSelected,
   type ChatModelPickerOption,
 } from "./chat-model-picker-options.ts";
+import { createChatModelPickerSpeed } from "./chat-model-picker-speed.ts";
 import { ChatModelPicker, type ChatModelPickerParams } from "./chat-model-picker.tsx";
 
 registerEnglishCatalog(registerModelControlsEnglish);
@@ -432,6 +433,24 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
       sessionsResult: { defaults: { model: defaultModel, modelProvider: defaultProvider } },
     });
   });
+  const speed = createChatModelPickerSpeed(() => ({
+    scope: props.modelPickerSpeedScope,
+    account: props.accountSelection,
+    ...selection(),
+    fastMode: resolvedFastMode(),
+    speedOverride: props.selectedSession?.fastMode,
+    disabled: Boolean(
+      !props.connected ||
+      !props.gatewayAvailable ||
+      props.loading ||
+      props.modelSwitching ||
+      props.sending ||
+      props.activeRunId ||
+      props.stream !== null ||
+      props.effortMutationDisabledReason,
+    ),
+    select: props.onModelSelect,
+  }));
   return createMemo(() => {
     const {
       catalog,
@@ -597,6 +616,7 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
           setupRequired && !sessionModelPinned
             ? modelOptions.filter((option) => !option.isDefault || option.unavailableReason)
             : modelOptions,
+        speedForModel: speed.forModel,
         targetGroups: props.modelPickerTargetGroups,
         selectedModelValue: pickerValue,
         selectedAgentRuntime,
@@ -621,8 +641,7 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
           policy?.restricted || retired || uninitialized ? undefined : props.onProviderSettings,
         onOpen: props.onModelPickerOpen,
         onOpenChange: props.onModelPickerOpenChange,
-        onModelSelect: async (next, targetSessionKey, agentRuntime) =>
-          props.onModelSelect?.(next, targetSessionKey, agentRuntime),
+        onModelSelect: speed.select,
         onTargetRetry: props.onModelPickerTargetRetry,
         onTargetSelect: props.onModelPickerTargetSelect,
       },

@@ -328,6 +328,9 @@ export function renderChatPaneComposerControls(params: {
         modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
         modelSelectionTarget: state.sessionsResult?.defaults.modelSelectionTarget,
         modelPickerOpen: state.chatModelPickerOpenSessionKey === state.sessionKey,
+        modelPickerSpeedScope: expectedSessionId
+          ? JSON.stringify([state.connectionEpoch, permissionScopeKey, expectedSessionId])
+          : undefined,
         modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
         modelMutationDisabledReason:
           snapshotReason ?? (modelAccess.allowed ? undefined : modelAccess.reason),
@@ -394,9 +397,11 @@ export function renderChatPaneComposerControls(params: {
           state.chatModelPickerOpenSessionKey = open ? state.sessionKey : null;
           // The native picker already presents this transition.
         },
-        onModelSelect: (next, targetSessionKey, agentRuntime) =>
-          modelAccess.allowed && canPatch({ model: next, agentRuntime }, targetSessionKey)
-            ? switchChatModel(state, next, targetSessionKey, agentRuntime, agentDefaultModel)
+        onModelSelect: (next, targetSessionKey, agentRuntime, speed) =>
+          modelAccess.allowed &&
+          (speed == null || effortAccess.allowed) &&
+          canPatch({ model: next, agentRuntime, fastMode: speed }, targetSessionKey)
+            ? switchChatModel(state, next, targetSessionKey, agentRuntime, agentDefaultModel, speed)
             : Promise.resolve(false),
         onThinkingSelect: (next, targetSessionKey) =>
           effortAccess.allowed && canPatch({ thinkingLevel: next }, targetSessionKey)

@@ -155,10 +155,8 @@ export function createControlUiSessionFixtures(
       "toolOverrides",
     ]) {
       if (Object.hasOwn(fields, field)) {
-        set(
-          field,
-          field === "cyberAccessProgram" && fields[field] === null ? undefined : fields[field],
-        );
+        const reset = fields[field] === null && ["cyberAccessProgram", "fastMode"].includes(field);
+        set(field, reset ? undefined : fields[field]);
       }
     }
     if (Object.hasOwn(fields, "model")) {

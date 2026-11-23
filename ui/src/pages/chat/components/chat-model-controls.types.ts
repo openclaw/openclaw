@@ -14,7 +14,10 @@ import type {
 import type { ChatThinkingTarget } from "../../../lib/chat/thinking.ts";
 import type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
-import type { ChatModelPickerTargetGroup } from "./chat-model-picker-options.ts";
+import type {
+  ChatModelPickerTargetGroup,
+  PickerSpeedOverride,
+} from "./chat-model-picker-options.ts";
 
 type ChatContextWindowTarget = Pick<
   SessionsListResult["defaults"],
@@ -39,6 +42,8 @@ export type ChatModelControlsProps = {
   modelSelectionTarget?: SessionsListResult["defaults"]["modelSelectionTarget"];
   modelPickerTargetGroups?: readonly ChatModelPickerTargetGroup[];
   modelPickerOpen?: boolean;
+  /** Only the existing chat owns ephemeral last-used speed choices. */
+  modelPickerSpeedScope?: string;
   modelSwitching: boolean;
   modelMutationDisabledReason?: string;
   effortMutationDisabledReason?: string;
@@ -68,7 +73,12 @@ export type ChatModelControlsProps = {
   onProviderSettings?: (provider: string) => void;
   onModelPickerOpen?: () => unknown;
   onModelPickerOpenChange?: (open: boolean) => void;
-  onModelSelect?: (value: string, sessionKey: string, agentRuntime?: string | null) => unknown;
+  onModelSelect?: (
+    value: string,
+    sessionKey: string,
+    agentRuntime?: string | null,
+    speed?: PickerSpeedOverride,
+  ) => unknown;
   onModelPickerTargetRetry?: (groupId: string) => unknown;
   onModelPickerTargetSelect?: (groupId: string, value: string) => unknown;
   onThinkingSelect?: (value: string, sessionKey: string) => unknown;
