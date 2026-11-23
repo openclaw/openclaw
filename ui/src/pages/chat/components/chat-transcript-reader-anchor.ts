@@ -585,7 +585,7 @@ export class TranscriptReaderAnchor {
     this.syncColumn();
     // Native zero is the reader's start: rows that grew above it while the offset was held are
     // revealed, not scrolled past, so a reader who reached the top stays at the top.
-    if (!(shift > 0 && offset <= 0)) {
+    if (shift < 0 || offset > 0) {
       this.scrollBy(shift);
     }
   }
