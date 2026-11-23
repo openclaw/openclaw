@@ -28,6 +28,17 @@ import { OPENAI_ULTRA_NORMAL_EFFORT } from "./gateway-models.profiles.live.ultra
 export function isolateLiveGatewayConfig(cfg: OpenClawConfig): OpenClawConfig {
   return {
     ...cfg,
+    skills: {
+      ...cfg.skills,
+      workshop: {
+        ...cfg.skills?.workshop,
+        autonomous: {
+          ...cfg.skills?.workshop?.autonomous,
+          // Detached reviews reuse the foreground model at independent low effort.
+          mode: "off",
+        },
+      },
+    },
     gateway: {
       ...cfg.gateway,
       controlUi: {

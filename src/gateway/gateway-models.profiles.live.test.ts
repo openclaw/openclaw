@@ -4193,6 +4193,126 @@ function createOpenAIUltraTestRun(purpose: string) {
 }
 
 describe("OpenAI Ultra wire capture", () => {
+  it("isolates detached Workshop review traffic from strict effort probes", async () => {
+    const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
+    const { prepareSystemAgentRunAdmission } = await import("../agents/admitted-run-context.js");
+    const { SessionManager } = await import("../agents/sessions/session-manager.js");
+    const { runSkillWorkshopReview } = await import("../skills/workshop/review-run.js");
+    const { createExperienceReviewCandidate } =
+      await import("../skills/workshop/experience-review.test-support.js");
+    const { prepareSkillExperienceReviewCandidate } =
+      await import("../skills/workshop/experience-review.js");
+    const { setRuntimeConfigSnapshot } = await import("../config/runtime-snapshot.js");
+    const { providerResponse } =
+      await import("../agents/embedded-agent-runner.wire.test-support.js");
+    await withOpenClawTestState({ label: "ultra-workshop-capture" }, async (state) => {
+      const model = "gpt-wire-fixture";
+      let requests = 0;
+      const upstream = createHttpServer((request, response) => {
+        request.resume();
+        request.on("end", () => {
+          requests++;
+          void providerResponse({
+            api: "openai-responses",
+            model,
+            id: "resp_fixture",
+            messageId: "msg_fixture",
+            text: "NO_REPLY",
+            calls: [],
+          })
+            .response.text()
+            .then((body) => {
+              response.writeHead(200, { "content-type": "text/event-stream" });
+              response.end(body);
+            });
+        });
+      });
+      const baseUrl = await listenOnLoopbackForUltraWireTest(upstream);
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: { skipBootstrap: true },
+          entries: { main: { workspace: state.workspaceDir } },
+        },
+        models: {
+          mode: "replace",
+          providers: {
+            openai: {
+              api: "openai-responses",
+              apiKey: "synthetic-wire-key",
+              baseUrl,
+              request: { allowPrivateNetwork: true },
+              models: [modelDefinition(model, { contextWindow: 128_000 })],
+            },
+          },
+        },
+        plugins: { allow: ["openai"], slots: { memory: "none" } },
+        skills: { load: { watch: false } },
+      };
+      await state.writeConfig(config);
+      setRuntimeConfigSnapshot(config);
+      const runReview = (suffix: string) => {
+        const runId = "skill-workshop-review:wire-fixture-" + suffix;
+        return runSkillWorkshopReview({
+          config,
+          runId,
+          agentId: "main",
+          sessionId: "internal-session-effects-wire-fixture-" + suffix,
+          sessionKey: "agent:main:internal-session-effects:wire-fixture-" + suffix,
+          skillWorkshopReviewOf: "agent:main:foreground-fixture",
+          preparedRunAdmission: prepareSystemAgentRunAdmission(
+            config,
+            runId,
+            "main",
+            "skill-workshop.review",
+          ),
+          sessionManager: SessionManager.inMemory(state.workspaceDir),
+          workspaceDir: state.workspaceDir,
+          agentDir: state.agentDir(),
+          provider: "openai",
+          model,
+          prompt: "Review this synthetic completed task. Return NO_REPLY.",
+          timeoutMs: 30_000,
+        });
+      };
+      let capture: OpenAIUltraWireCapture | undefined;
+      try {
+        // Initialize the real provider transport before wrapping its request capture.
+        expect((await runReview("prepare")).meta.error).toBeUndefined();
+        capture = startOpenAIUltraWireCapture([baseUrl]);
+        expect((await runReview("probe")).meta.error).toBeUndefined();
+        await waitForDiagnosticEventsDrained();
+        expect(requests).toBe(2);
+        const observations = capture.observations;
+        expect(observations).toMatchObject([{ model, reasoningEffort: "low", dispatch: null }]);
+        expect(() =>
+          assertOpenAIUltraWireEffort({ expectedModel: model, observations, ultraRuns: new Map() }),
+        ).toThrow(/observed=low request=1 run=unknown/);
+        const candidate = await createExperienceReviewCandidate(
+          "wire-admission",
+          [{ role: "user", content: "Synthetic completed task", timestamp: 1 }],
+          {
+            workspaceDir: state.workspaceDir,
+            modelId: model,
+            baseUrl,
+            apiKey: "synthetic-wire-key",
+          },
+        );
+        expect(
+          await prepareSkillExperienceReviewCandidate(candidate, candidate.config),
+        ).toBeDefined();
+        await expect(
+          prepareSkillExperienceReviewCandidate(
+            candidate,
+            isolateLiveGatewayConfig(candidate.config),
+          ),
+        ).resolves.toBeUndefined();
+      } finally {
+        capture?.close();
+        await closeHttpServer(upstream);
+      }
+    });
+  });
+
   it("checks every interleaved request against its admitted intent", async () => {
     const endpoint = "https://api.openai.com/v1/responses";
     const host = getAiTransportHost();
