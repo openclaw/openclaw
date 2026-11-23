@@ -48,12 +48,11 @@ export function findGraphemeChunkEnd(
   // A boundary depends only on the text before it and the next code point, so a
   // window ending two code units past the budget gives the same answer as the whole text.
   const segments = getGraphemeSegmenter().segment(text.slice(start, hardEnd + 2));
-  let end = (segments.containing(preferred - start)?.index ?? preferred - start) + start;
+  const boundaryAt = (position: number) =>
+    (segments.containing(position - start)?.index ?? position - start) + start;
+  let end = boundaryAt(preferred);
   if (end <= start && preferred < hardEnd) {
-    end =
-      hardEnd === text.length
-        ? hardEnd
-        : (segments.containing(hardEnd - start)?.index ?? hardEnd - start) + start;
+    end = hardEnd === text.length ? hardEnd : boundaryAt(hardEnd);
   }
   return end > start
     ? end
@@ -71,6 +70,7 @@ export function firstGraphemeClusterLength(text: string): number {
 }
 
 const WHITESPACE_GRAPHEME_RE = /^\s+$/u;
+const INITIAL_WINDOW = 256;
 
 /** Skips only whole whitespace graphemes, never the base of a space-plus-mark cluster. */
 export function skipWhitespaceGraphemes(
@@ -92,7 +92,7 @@ export function skipWhitespaceGraphemes(
   let cursor = start;
   let count = 0;
   // Segment a growing window so a long reply is never copied into ICU per chunk.
-  for (let span = 256; count < maxGraphemes && cursor < text.length; span *= 2) {
+  for (let span = INITIAL_WINDOW; count < maxGraphemes && cursor < text.length; span *= 2) {
     const windowEnd = Math.min(text.length, cursor + span);
     for (const { segment } of getGraphemeSegmenter().segment(text.slice(cursor, windowEnd))) {
       if (count >= maxGraphemes) {
@@ -117,7 +117,7 @@ export function trimEndWhitespaceGraphemes(text: string, end = text.length): str
   if (!/\s/u.test(text.charAt(end - 1))) {
     return text.slice(0, end);
   }
-  for (let span = 256; ; span *= 2) {
+  for (let span = INITIAL_WINDOW; ; span *= 2) {
     const from = Math.max(0, end - span);
     // Two extra code units reveal a mark that joins the whitespace across `end`.
     const segments = getGraphemeSegmenter().segment(text.slice(from, end + 2));
