@@ -652,6 +652,23 @@ struct DashboardNativeBrowserFaviconTests {
         }
         let retainedDocument = try await webView.evaluateJavaScript("window.openclawFixtureLoaded === true")
         #expect(retainedDocument as? Bool == true)
+
+        controller.hideForExperience()
+        try #require(controller.isHiddenForExperience)
+        let closeAllowed = try await controller.webView.callAsyncJavaScript(
+            """
+            document.documentElement.dataset.themeMode = 'dark';
+            const reply = await window.webkit.messageHandlers.openclawBrowser
+              .postMessage({type: 'close', tabId: 'mac-theme'});
+            return reply.ok;
+            """, arguments: [:], in: nil, contentWorld: .page)
+        #expect(closeAllowed as? Bool == false)
+        controller.show()
+        try await TestWait.state("the retained tab adopts the appearance selected while hidden") {
+            browser.state.tabs.first?.favicon == dark
+        }
+        let reopenedDocument = try await webView.evaluateJavaScript("window.openclawFixtureLoaded === true")
+        #expect(reopenedDocument as? Bool == true)
     }
 
     @Test func `navigations that keep the displayed page keep its favicon`() async throws {
