@@ -254,7 +254,7 @@ export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
         return runOpenClawStateWriteTransaction(({ db }) => callback(db), { ...options, database });
       } finally {
         if (options.sealOnClose) {
-          stateDbCache.closeOpenClawStateDatabaseByPath(database.path);
+          stateDbCache.sealOpenClawStateDatabaseByPath(database.path);
         }
       }
     });
@@ -283,7 +283,7 @@ export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
       },
     );
     if (options.sealOnClose) {
-      stateDbCache.closeOpenClawStateDatabaseByPath(database.path);
+      stateDbCache.sealOpenClawStateDatabaseByPath(database.path);
     }
     return result;
   }
