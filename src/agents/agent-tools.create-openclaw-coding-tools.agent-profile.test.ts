@@ -46,6 +46,7 @@ describe("createOpenClawCodingTools agent profiles", () => {
         tools: { profile: "minimal" },
       },
       runtimeToolAllowlist: ["message"],
+      retainUnavailableMessageTool: true,
       toolConstructionPlan: {
         includeBaseCodingTools: false,
         includeShellTools: false,
@@ -69,6 +70,7 @@ describe("createOpenClawCodingTools agent profiles", () => {
         tools: { profile: "minimal" },
       },
       forceMessageTool: true,
+      retainUnavailableMessageTool: true,
       toolConstructionPlan: {
         includeBaseCodingTools: false,
         includeShellTools: false,
@@ -92,6 +94,7 @@ describe("createOpenClawCodingTools agent profiles", () => {
         tools: { profile: "minimal" },
       },
       sourceReplyDeliveryMode: "message_tool_only",
+      retainUnavailableMessageTool: true,
       toolConstructionPlan: {
         includeBaseCodingTools: false,
         includeShellTools: false,
