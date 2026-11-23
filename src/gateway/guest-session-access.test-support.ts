@@ -4,6 +4,8 @@ import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-
 import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
+import * as lifecycleRuntime from "../cli/gateway-cli/lifecycle.runtime.js";
+import { prepareGatewayRestartIteration } from "../cli/gateway-cli/run-loop-startup.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
@@ -32,6 +34,7 @@ type GuestGatewayOptions = {
   invitedScopes?: OperatorScope[];
   maxInvitedAccess?: "read" | "suggest" | "send";
   invitedTools?: string[];
+  cronEnabled?: boolean;
   invitedAlsoAllow?: string[];
   setupPlugins?: (
     state: Awaited<ReturnType<typeof createOpenClawTestState>>,
@@ -52,6 +55,7 @@ async function startInvitedGuestGateway(
       VITEST: process.env.VITEST,
       OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_SKIP_CRON: options.cronEnabled ? undefined : "1",
     },
     prepareProfileCatalog: true,
   });
@@ -154,7 +158,7 @@ async function startInvitedGuestGateway(
   });
   const origin = options.origin ?? "https://control.example.test";
   const plugins = await options.setupPlugins?.(state);
-  const gateway = await startGatewayWithClient({
+  const startup = {
     configPath: state.configPath,
     auth,
     secure: true,
@@ -236,49 +240,82 @@ async function startInvitedGuestGateway(
         },
       },
     },
+  } satisfies Parameters<typeof startGatewayWithClient>[0];
+  let gateway = await startGatewayWithClient(startup);
+  let stopped = false;
+  cleanup.defer(async () => {
+    if (!stopped) {
+      await gateway.server.close({ reason: "committed mention cleanup" });
+    }
   });
-  cleanup.defer(() => gateway.server.close({ reason: "committed mention cleanup" }));
   cleanup.defer(() => disconnectGatewayClient(gateway.client));
-  const sender = await connectGatewayClient({
-    signal,
-    url: `wss://127.0.0.1:${gateway.port}`,
-    tlsFingerprint,
-    origin,
-    edgeAuthHeaders: headers(senderEmail),
-    clientName: "openclaw-control-ui",
-    mode: "webchat",
-    scopes: ["operator.admin"],
-    caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
-    onEvent: (event) => events.sender.push(event),
-    deviceIdentity: loadOrCreateDeviceIdentity({
-      path: state.path("sender-device", "client", "credentials.sqlite"),
-    }),
-  });
+  const connectSender = () =>
+    connectGatewayClient({
+      signal,
+      url: `wss://127.0.0.1:${gateway.port}`,
+      tlsFingerprint,
+      origin,
+      edgeAuthHeaders: headers(senderEmail),
+      clientName: "openclaw-control-ui",
+      mode: "webchat",
+      scopes: ["operator.admin"],
+      caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
+      onEvent: (event) => events.sender.push(event),
+      deviceIdentity: loadOrCreateDeviceIdentity({
+        path: state.path("sender-device", "client", "credentials.sqlite"),
+      }),
+    });
+  let sender = await connectSender();
   cleanup.defer(() => disconnectGatewayClient(sender));
-  const invited = await connectGatewayClient({
-    signal,
-    url: `wss://127.0.0.1:${gateway.port}`,
-    tlsFingerprint,
-    origin,
-    edgeAuthHeaders: headers("carol@committed-mention.example.test"),
-    clientName: "openclaw-control-ui",
-    mode: "webchat",
-    scopes: invitedScopes,
-    caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
-    onEvent: (event) => {
-      events.invited.push(event);
-      options.onInvitedEvent?.(event);
-    },
-    deviceIdentity: loadOrCreateDeviceIdentity({
-      path: state.path("invited-device", "client", "credentials.sqlite"),
-    }),
-  });
+  const connectInvited = () =>
+    connectGatewayClient({
+      signal,
+      url: `wss://127.0.0.1:${gateway.port}`,
+      tlsFingerprint,
+      origin,
+      edgeAuthHeaders: headers("carol@committed-mention.example.test"),
+      clientName: "openclaw-control-ui",
+      mode: "webchat",
+      scopes: invitedScopes,
+      caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
+      onEvent: (event) => {
+        events.invited.push(event);
+        options.onInvitedEvent?.(event);
+      },
+      deviceIdentity: loadOrCreateDeviceIdentity({
+        path: state.path("invited-device", "client", "credentials.sqlite"),
+      }),
+    });
+  let invited = await connectInvited();
   cleanup.defer(() => disconnectGatewayClient(invited));
   return {
     state,
-    gateway,
-    sender,
-    invited,
+    get gateway() {
+      return gateway;
+    },
+    get sender() {
+      return sender;
+    },
+    get invited() {
+      return invited;
+    },
+    async restart(whileStopped?: () => Promise<void>) {
+      await disconnectGatewayClient(invited);
+      await disconnectGatewayClient(sender);
+      await disconnectGatewayClient(gateway.client);
+      await gateway.server.close({
+        reason: "participation restart proof",
+        restartExpectedMs: 1_500,
+      });
+      stopped = true;
+      await whileStopped?.();
+      await prepareGatewayRestartIteration(lifecycleRuntime, { warn: console.warn }, () => true);
+      gateway = await startGatewayWithClient(startup);
+      stopped = false;
+      sender = await connectSender();
+      invited = await connectInvited();
+      await gateway.server.startupSettled;
+    },
     alice,
     bob,
     carol,

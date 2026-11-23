@@ -369,7 +369,7 @@ async function executeAgentRun(
         // Awaited routing can retire this owner before final dispatch.
         params.assertGatewayLifetimeCurrent?.();
         const callerContext = resolveChatSendCallerContext(params.client);
-        const clientCaps = [...callerContext.GatewayClientCaps];
+        const clientCaps = [...(callerContext.GatewayClientCaps ?? [])];
         const gatewayUiCommandTarget = captureGatewayUiCommandTarget(params.client);
         const supportsTaskSuggestions =
           (isOperatorUiClient(params.client?.connect.client) ||

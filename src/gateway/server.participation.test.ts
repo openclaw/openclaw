@@ -296,6 +296,16 @@ it("retains exact invitation access through turns, patches, and creator-reviewed
         expect
           .soft(providerToolNames(providerRequests.at(-1)!))
           .toEqual(["exec", "ls", "process", "read", "sessions_spawn", "skills_read"]);
+        console.info(
+          "native-direct-approval-proof",
+          JSON.stringify({
+            sessionKey: key,
+            runId: "participation-exec",
+            approval,
+            toolOutputs,
+            providerCalls: providerRequests.length,
+          }),
+        );
         providerReplies.reply = undefined;
         expect(await creatorTurn("creator-after-participation", creator)).toEqual(originalTools);
       } finally {
@@ -413,7 +423,7 @@ it("serializes the exact invited tool ceiling without leaking it into creator or
       };
       const narrowed = await turn(invited, shared.key, "narrow-participant");
       for (const body of narrowed) {
-        expect.soft(providerToolNames(body)).toEqual(["ls", "read"]);
+        expect.soft(providerToolNames(body)).toEqual(["ls", "read", "skills_read"]);
       }
       const outputs = (
         JSON.parse(narrowed.at(-1)!) as { input: { type?: string; output?: string }[] }
@@ -432,7 +442,7 @@ it("serializes the exact invited tool ceiling without leaking it into creator or
       ).toEqual(originalTools);
       expect(
         providerToolNames((await turn(invited, shared.key, "narrow-participant-again"))[0]!),
-      ).toEqual(["ls", "read"]);
+      ).toEqual(["ls", "read", "skills_read"]);
     },
     {
       invitedScopes: ["operator.sessions.read"],

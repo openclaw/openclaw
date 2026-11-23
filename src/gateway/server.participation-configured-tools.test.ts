@@ -113,6 +113,16 @@ it("adds a configured plugin to participant defaults and denies openclaw exact-i
       expect(outputs[2]).toMatch(/not found|unknown|unavailable/i);
       expect(listings[0]).toContain("read");
       expect(listings.every((tools) => !tools.includes("openclaw"))).toBe(true);
+      console.info(
+        "native-exact-id-proof",
+        JSON.stringify({
+          sessionKey: key,
+          sessionId,
+          runId,
+          providerCalls: listings.length,
+          outputs,
+        }),
+      );
     },
     {
       maxInvitedAccess: "send",

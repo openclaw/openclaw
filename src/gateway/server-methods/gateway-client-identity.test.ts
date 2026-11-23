@@ -3,6 +3,7 @@ import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
+import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import { prepareTurn } from "./chat-send-user-turn-family.test-support.js";
 import { createClientInfo } from "./chat-send-user-turn.test-support.js";
@@ -96,6 +97,32 @@ describe("chat send command authority", () => {
       ...overrides,
     };
   }
+  it.each([false, true])(
+    "only a live client updates recorded capability metadata (synthetic=%s)",
+    (synthetic) => {
+      const client = createClient({ internal: synthetic ? { syntheticClient: true } : undefined });
+      client.connect.caps = [];
+      const ctx = resolveChatSendCallerContext(client);
+      const existing = {
+        sessionId: "restart-source",
+        updatedAt: 1,
+        clientCapabilities: ["approvals", "webchat-prompt-reactions"],
+      };
+      const updated = {
+        ...existing,
+        ...deriveSessionMetaPatch({
+          ctx,
+          sessionKey: "agent:main:dashboard:restart-source",
+          existing,
+        }),
+      };
+      expect(ctx.GatewayClientCaps).toEqual(synthetic ? undefined : []);
+      expect(updated.clientCapabilities).toEqual(
+        synthetic ? existing.clientCapabilities : ["webchat-prompt-reactions"],
+      );
+    },
+  );
+
   function authorize(
     context: ReturnType<typeof resolveChatSendCallerContext>,
     entry = "profile-ada",

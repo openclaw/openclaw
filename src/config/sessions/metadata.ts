@@ -111,6 +111,8 @@ export function prepareSessionMetaPatch(params: {
       (params.ctx.InputProvenance === undefined ||
         params.ctx.InputProvenance.kind === "external_user") &&
       clientChannel !== undefined &&
+      // Synthetic WebChat replay has no current client declaration to replace the catalog.
+      (clientChannel !== INTERNAL_MESSAGE_CHANNEL || params.ctx.GatewayClientCaps !== undefined) &&
       !isInternalNonDeliveryChannel(clientChannel)
         ? [
             ...new Set([

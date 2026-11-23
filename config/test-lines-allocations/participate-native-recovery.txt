@@ -1,0 +1,13 @@
+# Native final acceptance adds 1,199 net test/support lines beyond the existing
+# Participate allocations. Reuses the synthetic identity/Gateway/provider fixture.
+# Independent runtime boundaries: actual pending-child admission and due timer
+# revocation; separate same-role permission/tool narrowing and retained widening;
+# real write/exec refusal and owner parity; SQLite root plus queued-input restart;
+# direct/descendant reviewer routing; unsupported child restart non-execution.
+# The ordinary root+queue control exposed an inherited synthetic capability
+# metadata overwrite that helper-only authority tests missed. Its fail-first
+# ingress regression and the native recovery control cover different boundaries.
+# No source admission, assertion, timeout, process policy or global cap is exempted.
+# Local maxWorkers=1 complete native/prefix command: 336.40s wall, 50 tests;
+# corrected exact exec-refusal proof: 107.50s wall. CI seconds are pending.
+1199
