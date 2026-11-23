@@ -127,11 +127,17 @@ export function validateReleaseExecutionPlanArtifact(
 export function releaseExecutionPlanSha256(plan: ReleaseRecord): string;
 export function releaseCompositeJobsSha256(value: ReleaseRecord): string;
 export function compareReleaseJobsByName(left: { name: string }, right: { name: string }): number;
+export function resolveReleaseAttemptJobs<T extends ReleaseRecord>(
+  jobs: T[],
+  runAttempt: number,
+  options?: { allowRunning?: boolean },
+): T[];
 export function composeReleaseAttemptJobs(
   attempts: Array<{ jobs: ReleaseRecord[]; runAttempt: number }>,
   expected: {
     effectiveRunAttempt: number;
     effectiveRunStatus?: string;
+    recordedJobs?: ReleaseRecord[];
     plannedRunAttempt: number;
   },
 ): {
@@ -141,6 +147,7 @@ export function composeReleaseAttemptJobs(
   sha256: string;
 };
 export function composeReleaseChildAttemptEvidence(input: {
+  recordedJobs?: ReleaseRecord[];
   attempts: Array<{ jobs: ReleaseRecord[]; runAttempt: number }>;
   expected: ReleaseRecord;
   run: ReleaseRecord;

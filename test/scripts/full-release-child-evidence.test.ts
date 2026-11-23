@@ -215,6 +215,9 @@ describe("full release child evidence producer", () => {
     data.jobs[2]!.status = "completed";
     data.jobs[2]!.conclusion = "failure";
     data.jobs[1]!.conclusion = "failure";
+    Object.assign(data.jobs[1]!, { runner_id: 42, runner_name: "hosted-42" });
+    data.jobs.push({ ...data.jobs[1]!, id: 99, status: "queued", conclusion: null });
+    Object.assign(data.jobs.at(-1)!, { runner_id: null, runner_name: null });
     data.attempts.push([
       { ...data.jobs[1]!, run_attempt: 2, conclusion: "success" },
       { ...data.jobs[2]!, id: 4, run_attempt: 2, status: "in_progress", conclusion: null },
@@ -270,7 +273,7 @@ describe("full release child evidence producer", () => {
     [
       "ambiguous publisher",
       (data) => void data.jobs.push({ ...data.jobs[2]!, id: 4 }),
-      "publisher job identity",
+      "duplicate job identity",
     ],
   ])("rejects %s", (_name, mutate, error) => {
     const data = fixture();

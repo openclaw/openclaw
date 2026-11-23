@@ -33,6 +33,7 @@ import {
   releaseChildAdvisories,
 } from "./lib/release-validation-waivers.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
+import { sameJobExecution } from "./npm-prepared-bundle.mjs";
 import { parseGithubResponse } from "./pr-lib/gh-api-preflight.mjs";
 import { validateQualificationCoverage } from "./release-qualification-coverage.mjs";
 
@@ -101,7 +102,7 @@ const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
 export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY = "split-changelog-release-v1";
 // GitHub can leave runnerless same-name copies after any rerun request; they never settle.
 export const GHOST_JOBS_ADVICE =
-  "GitHub ghost jobs detected; stop rerunning, cancel that attempt, and start a fresh all-group FRV";
+  "conflicting job identities; inspect the exact executions before another targeted retry";
 
 export function assertReleasePublicationKnownBudget(plan, context, reusedManifest) {
   serializeReleaseArtifact(plan);
@@ -668,6 +669,54 @@ export function releaseCompositeJobsSha256(value) {
   return jsonSha256(sortJsonValueKeys({ effectiveRunAttempt, jobs, plannedRunAttempt }));
 }
 
+// GitHub may expose runnerless queued projections beside a single real execution.
+// Only that unambiguous execution can replace prior evidence; queued-only sets and
+// two actual executions are still conflicts, regardless of their conclusions.
+export function resolveReleaseAttemptJobs(jobs, runAttempt, { allowRunning = false } = {}) {
+  const groups = new Map();
+  for (const job of jobs) {
+    if (job?.status === "completed" && job?.conclusion === "skipped") {
+      continue;
+    }
+    const name = boundedString(job?.name, MAX_LABEL_LENGTH);
+    if (!name) {
+      throw new Error(`release child attempt ${runAttempt} contains an unnamed job`);
+    }
+    const group = groups.get(name) ?? [];
+    group.push(job);
+    groups.set(name, group);
+  }
+  return [...groups.entries()].map(([name, group]) => {
+    if (group.length === 1) {
+      return group[0];
+    }
+    const executions = group.filter(
+      (job) =>
+        !(
+          job.status === "queued" &&
+          !job.conclusion &&
+          !job.completed_at &&
+          !job.runner_id &&
+          !job.runner_name
+        ),
+    );
+    const [execution] = executions;
+    if (
+      executions.length === 1 &&
+      (execution.runner_id || execution.runner_name) &&
+      (execution.status === "completed" || (allowRunning && execution.status === "in_progress"))
+    ) {
+      return execution;
+    }
+    throw Object.assign(
+      new Error(
+        `release child attempt ${runAttempt} is unsealable due to duplicate job identity: ${name}; ${GHOST_JOBS_ADVICE}`,
+      ),
+      { code: "FRV_DUPLICATE_JOB_IDENTITY", runAttempt, jobNames: [name] },
+    );
+  });
+}
+
 export function composeReleaseAttemptJobs(attempts, expected = {}) {
   const plannedRunAttempt = positiveInteger(expected.plannedRunAttempt);
   const effectiveRunAttempt = positiveInteger(expected.effectiveRunAttempt);
@@ -697,69 +746,56 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
     if (attempt.runAttempt !== expectedAttempt || attempt.jobs.length === 0) {
       throw new Error("release child attempt evidence is gapped");
     }
-    const identityNames = new Set();
-    for (const job of attempt.jobs) {
-      if (job?.status === "completed" && job?.conclusion === "skipped") {
+    const allowRunning =
+      expectedAttempt === effectiveRunAttempt &&
+      ["queued", "in_progress"].includes(expected.effectiveRunStatus);
+    for (const rawJob of resolveReleaseAttemptJobs(attempt.jobs, expectedAttempt, {
+      allowRunning,
+    })) {
+      const prior = accepted.get(rawJob.name);
+      // A rerun listing re-IDs retained jobs. Keep the authenticated execution's
+      // original URL/attempt, not the later API projection of identical work.
+      if (prior && sameJobExecution(prior.rawJob, rawJob)) {
         continue;
       }
-      const name = boundedString(job?.name, MAX_LABEL_LENGTH);
-      if (!name) {
-        throw new Error(`release child attempt ${expectedAttempt} contains an unnamed job`);
-      }
-      if (identityNames.has(name)) {
-        throw Object.assign(
-          new Error(
-            `release child attempt ${expectedAttempt} is unsealable due to duplicate job identity: ${name || "(unnamed)"}; ${GHOST_JOBS_ADVICE}`,
-          ),
-          { code: "FRV_DUPLICATE_JOB_IDENTITY", runAttempt: expectedAttempt },
-        );
-      }
-      identityNames.add(name);
-    }
-    const names = new Set();
-    const completedNames = new Set(
-      attempt.jobs.filter((job) => job?.status === "completed").map((job) => job.name),
-    );
-    const runningNames = new Set(
-      ["queued", "in_progress"].includes(expected.effectiveRunStatus) &&
-        expectedAttempt === effectiveRunAttempt &&
-        effectiveRunAttempt > plannedRunAttempt
-        ? attempt.jobs
-            .filter((job) => job?.status === "in_progress" && (job.runner_id || job.runner_name))
-            .map((job) => job.name)
-        : [],
-    );
-    for (const rawJob of attempt.jobs) {
-      const job = normalizedAttemptJob(rawJob, expectedAttempt);
-      // GitHub's runnerless queued copies can outlive the real rerun job. While
-      // the latest rerun is active, retain its running job so collection stays
-      // pending even when the aggregate run status still says queued. Terminal
-      // evidence still requires the completed sibling. Mirrored steps do not
-      // identify a real runner.
-      const ghost = job.status === "queued" && !rawJob.runner_id && !rawJob.runner_name;
-      const skipped = job.status === "completed" && job.conclusion === "skipped";
-      if (skipped || (ghost && (completedNames.has(job.name) || runningNames.has(job.name)))) {
-        continue;
-      }
-      names.add(job.name);
-      accepted.set(job.name, job);
+      accepted.set(rawJob.name, { rawJob, job: normalizedAttemptJob(rawJob, expectedAttempt) });
     }
   }
 
+  // Existing sealed receipts can name a later API projection of the same execution.
+  // Preserve that exact authenticated identity only after matching every recorded
+  // field and the execution timestamps/steps; never substitute another execution.
+  for (const recorded of expected.recordedJobs ?? []) {
+    const selected = accepted.get(recorded.name);
+    const attempt = normalizedAttempts.find(
+      (entry) => entry.runAttempt === recorded.acceptedRunAttempt,
+    );
+    const raw = attempt?.jobs.find((job) => {
+      const normalized = normalizedAttemptJob(job, attempt.runAttempt);
+      return Object.entries(normalized).every(([key, value]) => recorded[key] === value);
+    });
+    if (selected && raw && sameJobExecution(selected.rawJob, raw)) {
+      accepted.set(recorded.name, {
+        rawJob: raw,
+        job: normalizedAttemptJob(raw, attempt.runAttempt),
+      });
+    }
+  }
   const composite = {
     effectiveRunAttempt,
-    jobs: [...accepted.values()].toSorted(compareReleaseJobsByName),
+    jobs: [...accepted.values()].map(({ job }) => job).toSorted(compareReleaseJobsByName),
     plannedRunAttempt,
   };
   return { ...composite, sha256: releaseCompositeJobsSha256(composite) };
 }
 
-export function composeReleaseChildAttemptEvidence({ attempts, expected, run }) {
+export function composeReleaseChildAttemptEvidence({ attempts, expected, run, recordedJobs }) {
   const provenance = validateReleaseChildRunProvenance(run, expected);
   const composite = composeReleaseAttemptJobs(attempts, {
     effectiveRunAttempt: provenance.effectiveRunAttempt,
     effectiveRunStatus: run.status,
     plannedRunAttempt: expected.plannedRunAttempt,
+    recordedJobs,
   });
   return {
     compositeJobsSha256: composite.sha256,

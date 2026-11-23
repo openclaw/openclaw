@@ -94,6 +94,15 @@ export function verifyReleaseQualificationOperators(
   triggeringActor: unknown,
   runGh: QualificationAdmissionGh,
 ): { operator: { id: number; login: string }; triggeringOperator: { id: number; login: string } };
+export function verifyReleaseRecoveryProducer(params: {
+  producer: QualificationAdmissionProducer;
+  completed?: boolean;
+  runGh?: QualificationAdmissionGh;
+}): {
+  run: Record<string, unknown>;
+  operator: { id: number; login: string };
+  triggeringOperator: { id: number; login: string };
+};
 export function produceQualificationAdmission(params: {
   request: QualificationAdmissionRequest;
   producer: QualificationAdmissionProducer;

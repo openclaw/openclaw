@@ -49,6 +49,12 @@ export function normalizeWorkflowPathRef(ref) {
   return `refs/heads/${ref}`;
 }
 
+// Projection only: the strict verifier authenticates recovery producer authority
+// and the unchanged original plan before any publication decision.
+export function releaseEvidenceProducerTuple(manifest) {
+  return manifest.recovery?.producer ?? manifest;
+}
+
 // This projects an eligible retained producer context. Only the strict FRV
 // verifier authenticates both admissions and the unchanged artifact descriptors.
 export function retainedPublicationArtifactSource(manifest) {

@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 import process from "node:process";
 import {
   composeReleaseChildAttemptEvidence,
+  resolveReleaseAttemptJobs,
   releaseChildSpec,
   releaseCompositeJobsSha256,
   validateReleaseChildRunProvenance,
@@ -96,14 +97,17 @@ async function seal() {
     if (allJobs.some((job) => String(job.run_id) !== runId || job.run_attempt !== attempt)) {
       throw new Error("Child evidence job inventory belongs to another attempt");
     }
-    const publishers = allJobs.filter((job) => job.name === PUBLISHER_JOB);
+    const resolvedJobs = resolveReleaseAttemptJobs(allJobs, attempt, {
+      allowRunning: attempt === runAttempt,
+    });
+    const publishers = resolvedJobs.filter((job) => job.name === PUBLISHER_JOB);
     if (attempt === runAttempt) {
       if (publishers.length !== 1 || publishers[0].status !== "in_progress") {
         throw new Error("Child evidence publisher job identity is ambiguous or inactive");
       }
       publisher = publishers[0];
     }
-    const jobs = allJobs.filter((job) => job.name !== PUBLISHER_JOB);
+    const jobs = resolvedJobs.filter((job) => job.name !== PUBLISHER_JOB);
     if (jobs.some((job) => job.status !== "completed")) {
       throw new Error("Child evidence cannot seal while predecessor jobs are active");
     }

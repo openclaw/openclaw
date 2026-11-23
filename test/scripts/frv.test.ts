@@ -2120,6 +2120,90 @@ describe("FRV same-parent recovery", () => {
     },
   );
 
+  it("recovers only the real cancelled execution behind ghost copies and retains original successes", async () => {
+    const scenario = rerunScenario({
+      childSource: [2, "cancelled"],
+      childAfter: [[3, null, "in_progress"]],
+    });
+    const original = {
+      ...job("unaffected", "success"),
+      id: 10,
+      runner_id: 1,
+      runner_name: "runner-1",
+    };
+    const failed = { ...job("test", "failure"), id: 11, runner_id: 2, runner_name: "runner-2" };
+    const cancelled = {
+      ...job("test", "cancelled"),
+      id: 21,
+      runner_id: 3,
+      runner_name: "runner-3",
+      html_url: "https://example.invalid/jobs/21",
+      started_at: "2026-08-22T01:00:00Z",
+      completed_at: "2026-08-22T01:01:00Z",
+    };
+    const ghost = {
+      ...cancelled,
+      id: 22,
+      runner_id: null,
+      runner_name: null,
+      status: "queued",
+      conclusion: null,
+      completed_at: null,
+    };
+    const retry = {
+      ...cancelled,
+      id: 31,
+      status: "in_progress",
+      conclusion: null,
+      completed_at: null,
+    };
+    const rerunJob = vi.fn(scenario.client.rerunJob);
+    const client = {
+      ...scenario.client,
+      rerunJob,
+      getAttemptJobs: async (_runId: string, attempt: number) =>
+        attempt === 1
+          ? [original, failed]
+          : attempt === 2
+            ? [
+                { ...original, id: 20, html_url: "https://example.invalid/jobs/20" },
+                ghost,
+                cancelled,
+                { ...ghost, id: 23 },
+              ]
+            : [{ ...ghost, id: 32 }, retry],
+    };
+    const before = await inspectContinuation(plan([scenario.selected]), client);
+    expect(before.children[0]).toMatchObject({
+      status: "failed",
+      conclusion: "cancelled",
+      jobs: [
+        expect.objectContaining({
+          name: "test",
+          conclusion: "cancelled",
+          acceptedRunAttempt: 2,
+          url: cancelled.html_url,
+        }),
+        expect.objectContaining({
+          name: "unaffected",
+          conclusion: "success",
+          acceptedRunAttempt: 1,
+          url: original.html_url,
+        }),
+      ],
+    });
+    const result = await continueFailed(plan([scenario.selected]), "77", client, {
+      job: "normalCi:test",
+      noFollow: true,
+    });
+    expect(result).toMatchObject({
+      action: "rerun-accepted",
+      reruns: [expect.objectContaining({ jobId: 21, runAttempt: 3 })],
+    });
+    expect(rerunJob).toHaveBeenCalledExactlyOnceWith(21);
+    expect(scenario.counters.posts).toEqual({ child: 1, parent: 0 });
+  });
+
   it.each(["conclusion", "run_id", "run_attempt", "duplicate"])(
     "rejects changed %s job evidence before a targeted POST",
     async (change) => {
@@ -2142,7 +2226,7 @@ describe("FRV same-parent recovery", () => {
       };
       await expect(
         continueFailed(plan([selected]), "77", client, { job: "normalCi:test" }),
-      ).rejects.toThrow("job identity changed");
+      ).rejects.toThrow(change === "duplicate" ? "duplicate job identity" : "job identity changed");
       expect(client.rerunJob).not.toHaveBeenCalled();
     },
   );
@@ -2195,7 +2279,7 @@ describe("FRV same-parent recovery", () => {
               })
             : expect(inspection).rejects.toThrow(
                 outcome === "persists"
-                  ? "duplicate job identity: test; GitHub ghost jobs detected"
+                  ? "duplicate job identity: test; conflicting job identities"
                   : "changed during attempt materialization",
               );
         await Promise.all([result, vi.advanceTimersByTimeAsync(60_000)]);
@@ -2748,7 +2832,7 @@ describe("FRV child rerun", () => {
     [
       "keeps duplicate queued jobs",
       2,
-      "attempt 2 is unsealable and holds duplicate jobs: test; GitHub ghost jobs detected; stop rerunning",
+      "attempt 2 is unsealable and holds duplicate jobs: test; conflicting job identities",
     ],
     ["exposes no jobs", 0, "attempt 2 exposed no jobs"],
   ])("fails after one POST when the new attempt %s", async (_case, copies, message) => {
@@ -3220,7 +3304,7 @@ describe("FRV watch", () => {
     expect(getJobLog).toHaveBeenLastCalledWith(5, expect.anything());
   });
 
-  it("advises a fresh FRV only for duplicate jobs that persist into a final attempt", async () => {
+  it("reports conflicting executions without suggesting a broad rerun", async () => {
     const ci = child("normalCi", "101");
     let polls = 0;
     const duplicateJobs = (status: string) => [
@@ -3256,7 +3340,7 @@ describe("FRV watch", () => {
     const duplicates = messages.filter((message) => message.includes("duplicate jobs"));
     expect(duplicates).toEqual([
       "normalCi run 101 attempt 1 holds duplicate jobs: test; they may still settle; recheck before rerunning",
-      "normalCi run 101 attempt 1 holds duplicate jobs: test; GitHub ghost jobs detected; stop rerunning, cancel that attempt, and start a fresh all-group FRV",
+      "normalCi run 101 attempt 1 holds duplicate jobs: test; conflicting job identities; inspect the exact executions before another targeted retry",
     ]);
   });
 
