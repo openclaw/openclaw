@@ -245,7 +245,11 @@ suite.define(() => {
         ? options
         : { ...options, viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true };
     await suite.withPage(context, async ({ page }) => {
-      const config = { agents: { defaults: { skills: ["github"] }, entries: { main: {} } } };
+      const name =
+        target === "phone name"
+          ? "internationalcoastalsurveyobservationsandfieldworkhandoff"
+          : "github";
+      const config = { agents: { defaults: { skills: [name] }, entries: { main: {} } } };
       const skill = (name: string, blockedByAgentFilter: boolean) =>
         createSkill({
           name,
@@ -268,10 +272,10 @@ suite.define(() => {
           "config.get": configResponse(config),
           "skills.status": {
             agentId: "main",
-            agentSkillFilter: ["github"],
+            agentSkillFilter: [name],
             workspaceDir: "/tmp/workspace",
             managedSkillsDir: "/tmp/skills",
-            skills: [skill("github", false), skill("weather", true)],
+            skills: [skill(name, false), skill("weather", true)],
           },
         },
       });
@@ -282,8 +286,8 @@ suite.define(() => {
       await gateway.waitForRequest("skills.status");
 
       await gateway.deferNext("config.set");
-      const row = page.locator(".agent-skill-row", { hasText: "github skill" });
-      const toggle = row.getByRole("switch", { name: "github", exact: true });
+      const row = page.locator(".agent-skill-row", { hasText: `${name} skill` });
+      const toggle = row.getByRole("switch", { name, exact: true });
       if (target === "phone name") {
         const title = row.locator(".settings-row__title");
         await title.scrollIntoViewIfNeeded();
@@ -292,7 +296,16 @@ suite.define(() => {
           throw new Error("Expected the skill name and switch to be visible");
         }
         expect(control.x).toBeGreaterThanOrEqual(text.x + text.width);
+        expect(control.x + control.width).toBeLessThanOrEqual(390);
         expect(Math.abs(control.y + control.height / 2 - text.y - text.height / 2)).toBeLessThan(1);
+        expect(await title.getAttribute("title")).toBe(name);
+        const line = await title.evaluate((element) =>
+          parseFloat(getComputedStyle(element).lineHeight),
+        );
+        expect(Math.abs(text.height - line)).toBeLessThan(1);
+        expect(await title.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(
+          true,
+        );
         await title.tap();
       } else {
         await toggle.click();
@@ -300,7 +313,7 @@ suite.define(() => {
 
       const params = await saveParams(gateway);
       expect(JSON.parse(String(params.raw))).toEqual({
-        agents: { defaults: { skills: ["github"] }, entries: { main: { skills: [] } } },
+        agents: { defaults: { skills: [name] }, entries: { main: { skills: [] } } },
       });
       expect(params.baseHash).toBe("agent-config-hash-1");
       await gateway.resolveDeferred("config.set", {

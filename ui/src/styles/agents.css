@@ -956,6 +956,12 @@
   cursor: var(--cursor-action);
 }
 
+.agent-skill-row__heading .settings-row__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .agent-skill-row__heading:has(input:disabled) {
   cursor: not-allowed;
 }
@@ -1014,7 +1020,7 @@
 }
 
 .skills-grid {
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 @container (min-width: 900px) {

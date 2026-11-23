@@ -283,7 +283,7 @@ function AgentSkillsContent(
                         return (
                           <div class="settings-row agent-skill-row">
                             <label class="agent-skill-row__heading">
-                              <span class="settings-row__title">
+                              <span class="settings-row__title" title={skill().name}>
                                 {skill().emoji ? `${skill().emoji}\u00a0` : ""}
                                 {skill().name}
                               </span>
