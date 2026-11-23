@@ -4,6 +4,8 @@ import type { t } from "../i18n/index.ts";
 export type ModelPickerOption = {
   value: string;
   label: string;
+  /** Trailing part of the full label to keep visible in a compact picker. */
+  labelSuffix?: string;
   provider?: string;
   description?: string;
   disabled?: boolean;

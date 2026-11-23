@@ -315,30 +315,39 @@
     width: 100%;
   }
 
-  .model-picker .picker-select__trigger .picker-select__label {
-    white-space: normal;
-    overflow-wrap: anywhere;
+  .model-picker .picker-select__label {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
 
-  .model-picker .picker-select__option {
-    /* Keep access beside short names; give it its own line when the two do not fit. */
-    .picker-select__copy {
-      display: flex;
-      flex: 1;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 2px var(--space-2);
-    }
+  .picker-select__split-label {
+    display: flex;
+    min-width: 0;
+  }
 
-    .picker-select__label {
-      flex: 1 1 max-content;
-    }
+  .picker-select__split-label > :first-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
-    .picker-select__description {
-      max-width: 100%;
-      color: var(--muted);
-      overflow-wrap: anywhere;
-    }
+  .picker-select__split-label > :last-child {
+    flex: none;
+    white-space: pre;
+  }
+
+  .model-picker .picker-select__option .picker-select__copy {
+    display: grid;
+    flex: 1;
+    min-width: 0;
+    gap: 2px;
+  }
+
+  .model-picker .picker-select__description {
+    color: var(--muted);
+    overflow-wrap: anywhere;
   }
 
   .settings-segmented > .settings-segmented__btn {
