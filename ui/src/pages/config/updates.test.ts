@@ -566,26 +566,43 @@ describe("renderUpdates", () => {
     expect(row("Status").querySelector(".settings-status__dot")).toBeNull();
   });
 
+  const recordedSuccess = "✅ OpenClaw updated to 2026.9.5 (from 2026.9.4).";
+
   it.each([
     {
+      name: "version and build mismatch",
       version: "2026.11.5",
       buildId: "new-build",
       headline: "Earlier update succeeded on 2026.9.5. Gateway now serves 2026.11.5.",
     },
     {
+      name: "same-version build mismatch",
       version: "2026.9.5",
-      buildId: "new-build",
+      buildId: " new-build\u202e ",
       headline: "Earlier update succeeded on build old-build. Gateway now serves build new-build.",
     },
     {
+      name: "matching identity",
       version: "2026.9.5",
       buildId: "old-build",
-      headline: "✅ OpenClaw updated to 2026.9.5 (from 2026.9.4).",
+      headline: recordedSuccess,
+    },
+    {
+      name: "missing live identity",
+      version: null,
+      buildId: undefined,
+      headline: recordedSuccess,
+    },
+    {
+      name: "unverified recorded service",
+      version: "2026.11.5",
+      buildId: "new-build",
+      serviceRunning: false,
+      headline: recordedSuccess,
     },
   ])(
-    "labels a successful update against live $version ($buildId)",
-    ({ version, buildId, headline }) => {
-      const recordedReport = "✅ OpenClaw updated to 2026.9.5 (from 2026.9.4).";
+    "labels a successful update with $name",
+    ({ version, buildId, serviceRunning = true, headline }) => {
       const props = {
         gatewayVersion: version,
         gatewayBuildId: buildId,
@@ -596,7 +613,7 @@ describe("renderUpdates", () => {
             before: { version: "2026.9.4" },
             after: { version: "2026.9.5" },
             verification: {
-              serviceRunning: true,
+              serviceRunning,
               runningVersion: "2026.9.5",
               runningBuildId: "old-build",
             },
@@ -607,10 +624,10 @@ describe("renderUpdates", () => {
       const view = container.querySelector(".update-run-view")!;
       expect(view.querySelector("h3")?.textContent).toBe(headline);
       expect(view.querySelector('[aria-label="Update report"]')?.textContent).toContain(
-        recordedReport,
+        recordedSuccess,
       );
       renderUpdates({ ...props, connected: false });
-      expect(view.querySelector("h3")?.textContent).toBe(recordedReport);
+      expect(view.querySelector("h3")?.textContent).toBe(recordedSuccess);
     },
   );
 

@@ -1,8 +1,7 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { action, createOptimistic, For, Show } from "solid-js";
-import {
-  projectUpdateRunHistory,
-  resolveUpdateRunServingChange,
-} from "../../../../src/infra/update-run-history-projection.ts";
+import { sanitizeTerminalText } from "../../../../packages/terminal-core/src/safe-text.js";
+import { projectUpdateRunHistory } from "../../../../src/infra/update-run-history-projection.ts";
 import { isAcknowledgedAbandonedUpdateRun } from "../../../../src/infra/update-run-record.ts";
 import {
   classifyUpdateOutcome,
@@ -43,11 +42,29 @@ export function RecordedAttempt(
     props.connected ? { version: props.gatewayVersion, buildId: props.gatewayBuildId } : undefined;
   const earlierSuccessHeadline = () => {
     const currentRun = run();
-    const change =
-      currentRun?.status === "succeeded"
-        ? resolveUpdateRunServingChange(currentRun.verification, serving())
-        : null;
-    return change ? t(`updates.page.earlierSuccess.${change.kind}`, change) : null;
+    const live = serving();
+    if (
+      currentRun?.status !== "succeeded" ||
+      currentRun.verification.serviceRunning !== true ||
+      !live
+    ) {
+      return null;
+    }
+    // Compare the recorded serving process, independent of the package installed at the time.
+    for (const [kind, recordedValue, liveValue] of [
+      ["version", currentRun.verification.runningVersion, live.version],
+      ["build", currentRun.verification.runningBuildId, live.buildId],
+    ] as const) {
+      const recorded = normalizeOptionalString(recordedValue);
+      const current = normalizeOptionalString(liveValue);
+      if (recorded && current && recorded !== current) {
+        return t(`updates.page.earlierSuccess.${kind}`, {
+          recorded: sanitizeTerminalText(recorded).slice(0, 240),
+          current: sanitizeTerminalText(current).slice(0, 240),
+        });
+      }
+    }
+    return null;
   };
   const failed = () => {
     const currentRun = run();
