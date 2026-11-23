@@ -10,7 +10,10 @@ import {
   MAX_TOOL_APPROVAL_REVIEWS,
   normalizeToolApprovalReview,
 } from "../shared/tool-approval-reviews.js";
-import { truncateChatHistoryText } from "./chat-display-projection.helpers.js";
+import {
+  isAssistantInternalReasoningContentType,
+  truncateChatHistoryText,
+} from "./chat-display-projection.helpers.js";
 import { projectPluginInlineView } from "./chat-display-projection.inline-view.js";
 
 function isDisplayRouteIdentifier(value: unknown, maxChars: number): value is string {
@@ -299,7 +302,14 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
             pending.push(preview);
           }
         }
-      } else {
+      } else if (
+        // Claude CLI history records thinking as its own row before the visible reply.
+        !Array.isArray(entry.content) ||
+        entry.content.length === 0 ||
+        !entry.content.every((block) =>
+          isAssistantInternalReasoningContentType(readObjectRecord(block)?.type),
+        )
+      ) {
         lastRenderableAssistantIndex = index;
         if (pending.length > 0) {
           next[index] = appendChatCanvasBlocksToMessage(entry, pending);

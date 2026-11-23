@@ -500,9 +500,10 @@ it("restores widgets from Claude CLI results coalesced into the tool-call messag
   const call = { type: "toolcall", id: "toolu_1", name: "mcp__openclaw__show_widget" };
   const messages = [
     assistant([call, { type: "tool_result", tool_use_id: "toolu_1", content: [text(result)] }], {}),
+    assistant([{ type: "thinking", thinking: "", signature: "sig" }], {}),
     assistant([text("Done.")], {}),
   ];
-  expect(augmentChatHistoryWithCanvasBlocks(messages)[1]).toMatchObject({
+  expect(augmentChatHistoryWithCanvasBlocks(messages)[2]).toMatchObject({
     content: [text("Done."), { type: "canvas", preview: { viewId: "cv_cli", url: "/cv_cli" } }],
   });
 });
