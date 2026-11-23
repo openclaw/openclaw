@@ -296,8 +296,7 @@ it("sanitizes channel metadata before primer notes", async () => {
   await noteChannelPrimer({ note } as never, [
     {
       id: "bad\u001B[31m\nid",
-      label: "\u001B[31m\u0007",
-      blurb: "Blurb\u001B[2K\nline\u0007",
+      meta: { label: "\u001B[31m\u0007", blurb: "Blurb\u001B[2K\nline\u0007" },
     },
   ]);
 

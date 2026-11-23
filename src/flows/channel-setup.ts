@@ -308,8 +308,7 @@ export async function setupChannels(
 
   // The primer compares every channel; it only helps someone still choosing one.
   if (!targetedChannel) {
-    const primer = resolveVisibleChannelEntries().entries.map(({ id, meta }) => ({ ...meta, id }));
-    await noteChannelPrimer(prompter, primer);
+    await noteChannelPrimer(prompter, resolveVisibleChannelEntries().entries);
   }
 
   const quickstartDefault =
