@@ -319,6 +319,14 @@ describe("full release same-parent recovery workflow", () => {
             `${verifierRoot}/scripts/full-release-validation-state.mjs`,
           );
         }
+        if (jobName === "release_execution_plan") {
+          const seal = step(jobName, "Seal immutable release execution plan");
+          const env = seal.env as Record<string, unknown>;
+          expect(evaluate(env.RELEASE_STATE_SCRIPT)).toBe(
+            `${verifierRoot}/scripts/full-release-validation-state.mjs`,
+          );
+          expect(seal.run).toContain('node "$RELEASE_STATE_SCRIPT" plan');
+        }
         for (const entry of job.steps) {
           const env = entry.env as Record<string, unknown> | undefined;
           if (env?.OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR) {
