@@ -695,9 +695,14 @@ describe("streamOpenAICodexResponses transport", () => {
       compat: { ...model.compat, cachesInstructions: false },
     };
     const sessionId = "session-cached-instructions";
+    const options = {
+      transport: "websocket-cached" as const,
+      sessionId,
+      [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
+    };
 
     const res1 = await run(
-      { transport: "websocket-cached", sessionId },
+      options,
       {
         systemPrompt: "System Prompt 1",
         messages: [{ role: "user", content: "turn 1", timestamp: 1 }],
@@ -720,7 +725,7 @@ describe("streamOpenAICodexResponses transport", () => {
     ]);
 
     const res2 = await run(
-      { transport: "websocket-cached", sessionId },
+      options,
       {
         systemPrompt: "System Prompt 1",
         messages: [
@@ -742,7 +747,7 @@ describe("streamOpenAICodexResponses transport", () => {
     ]);
 
     const res3 = await run(
-      { transport: "websocket-cached", sessionId },
+      options,
       {
         systemPrompt: "System Prompt 2 (Changed)",
         messages: [
