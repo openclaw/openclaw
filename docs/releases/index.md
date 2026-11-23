@@ -14,6 +14,9 @@ who contributed, with links to the source changes.
 ### November 2026
 
 <CardGroup cols={2}>
+  <Card title="v2026.11.8" href="/releases/2026.11.8">
+    Fixes for incomplete replies, lost session history, scheduled work and recovery backups.
+  </Card>
   <Card title="v2026.11.7" href="/releases/2026.11.7">
     Changes to updates, messaging, models and session reliability.
   </Card>
