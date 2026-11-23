@@ -5,7 +5,10 @@ import { afterEach, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
-import { refuseEarlyGitReleaseSchemaChange } from "./update-candidate-check-early-release.js";
+import {
+  formatEarlyGitReleaseRefusal,
+  inspectEarlyGitReleaseSchemaChange as inspect,
+} from "./update-candidate-check-early-release.js";
 
 const roots: string[] = [];
 afterEach(() => cleanupTempDirs(roots));
@@ -63,20 +66,50 @@ function install(params: {
   return { root, stateDir, env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv };
 }
 
+const REBUILD =
+  "git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force; openclaw gateway start";
+
 it("refuses a schema change for the early release updater and names the rebuild", () => {
   const { root, env } = install({});
-  const refusal = refuseEarlyGitReleaseSchemaChange(root, env);
+  const change = inspect(root, env)!;
+  const refusal = formatEarlyGitReleaseRefusal(change, { started: false });
 
   expect(refusal).toContain(
     `state schema ${OPENCLAW_STATE_SCHEMA_VERSION - 1} to ${OPENCLAW_STATE_SCHEMA_VERSION}, agent schema ${OPENCLAW_AGENT_SCHEMA_VERSION - 1} to ${OPENCLAW_AGENT_SCHEMA_VERSION}`,
   );
   expect(refusal).toContain("the Gateway was not touched");
   // The early updater redacts state and home paths out of this output; the step names none.
-  const rebuild = refusal?.split("\n").at(-1);
-  expect(rebuild).toBe(
-    "git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force; openclaw gateway start",
-  );
+  const rebuild = refusal.split("\n").at(-1);
+  expect(rebuild).toBe(REBUILD);
   expect(rebuild).not.toMatch(/[\s~]\//u);
+
+  const fallback = formatEarlyGitReleaseRefusal(change, { started: false, reason: "no upstream" });
+  expect(fallback).toContain("Automatic recovery did not start: no upstream.");
+  expect(fallback.split("\n").at(-1)).toBe(REBUILD);
+});
+
+it("says the new release finishes in the background, with a path-free progress command", () => {
+  const { root, env } = install({});
+  const change = inspect(root, env)!;
+  const automatic = formatEarlyGitReleaseRefusal(change, {
+    started: true,
+    unit: "openclaw-update-recovery",
+    target: "0123456789abcdef0123456789abcdef01234567",
+  });
+  expect(automatic).toContain("the new release finishes the update in the background");
+  expect(automatic).toContain("moves the checkout to 0123456789a");
+  expect(automatic).toContain(
+    "Follow progress: systemctl --user status openclaw-update-recovery (log: journalctl --user -u openclaw-update-recovery)",
+  );
+  expect(automatic).not.toContain("the Gateway was not touched");
+  expect(automatic).not.toMatch(/[\s~]\//u);
+
+  const running = formatEarlyGitReleaseRefusal(change, {
+    started: false,
+    running: "openclaw-update-recovery",
+  });
+  expect(running).toContain("still running and finishes this update");
+  expect(running).not.toContain(REBUILD);
 });
 
 it("refuses when one agent store is older, registered or not", () => {
@@ -86,9 +119,7 @@ it("refuses when one agent store is older, registered or not", () => {
       agents: [OPENCLAW_AGENT_SCHEMA_VERSION, OPENCLAW_AGENT_SCHEMA_VERSION - 1],
       registered,
     });
-    expect(refuseEarlyGitReleaseSchemaChange(root, env)).toContain(
-      `agent schema ${OPENCLAW_AGENT_SCHEMA_VERSION - 1} to ${OPENCLAW_AGENT_SCHEMA_VERSION}`,
-    );
+    expect(inspect(root, env)?.agent).toBe(OPENCLAW_AGENT_SCHEMA_VERSION - 1);
   }
 });
 
@@ -96,19 +127,19 @@ it("finds the early release layout through a linked state directory", () => {
   const { root, stateDir } = install({});
   const alias = path.join(makeTempDir(roots, "openclaw-early-release-alias-"), "state");
   fs.symlinkSync(stateDir, alias);
-  expect(refuseEarlyGitReleaseSchemaChange(root, { OPENCLAW_STATE_DIR: alias })).not.toBeNull();
+  expect(inspect(root, { OPENCLAW_STATE_DIR: alias })).not.toBeNull();
 });
 
 it("lets the early release updater through when nothing migrates or state is unreadable", () => {
   for (const agents of [[OPENCLAW_AGENT_SCHEMA_VERSION], []]) {
     const { root, env } = install({ state: OPENCLAW_STATE_SCHEMA_VERSION, agents });
-    expect(refuseEarlyGitReleaseSchemaChange(root, env)).toBeNull();
+    expect(inspect(root, env)).toBeNull();
   }
   const newer = install({ state: OPENCLAW_STATE_SCHEMA_VERSION + 1, agents: [] });
-  expect(refuseEarlyGitReleaseSchemaChange(newer.root, newer.env)).toBeNull();
+  expect(inspect(newer.root, newer.env)).toBeNull();
   const unreadable = install({});
   fs.writeFileSync(path.join(unreadable.stateDir, "state", "openclaw.sqlite"), "not a database");
-  expect(refuseEarlyGitReleaseSchemaChange(unreadable.root, unreadable.env)).toBeNull();
+  expect(inspect(unreadable.root, unreadable.env)).toBeNull();
 });
 
 it("never refuses another updater, which can finish a schema change", () => {
@@ -118,7 +149,7 @@ it("never refuses another updater, which can finish a schema change", () => {
     { legacyLink: false },
   ]) {
     const { root, env } = install(shape);
-    expect(refuseEarlyGitReleaseSchemaChange(root, env)).toBeNull();
+    expect(inspect(root, env)).toBeNull();
   }
   // A `build` directory outside this state directory's releases is not the early layout.
   const { env } = install({});
@@ -129,5 +160,5 @@ it("never refuses another updater, which can finish a schema change", () => {
     "build",
   );
   fs.mkdirSync(elsewhere, { recursive: true });
-  expect(refuseEarlyGitReleaseSchemaChange(elsewhere, env)).toBeNull();
+  expect(inspect(elsewhere, env)).toBeNull();
 });

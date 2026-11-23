@@ -48,7 +48,10 @@ import { closePostgresPool, preparePostgresPoolForUpdate } from "./postgres-sync
 import { resolveEnvironmentValue } from "./process-env.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { withSqliteSnapshotReuse } from "./sqlite-snapshot-reuse.js";
-import { refuseEarlyGitReleaseSchemaChange } from "./update-candidate-check-early-release.js";
+import {
+  formatEarlyGitReleaseRefusal,
+  inspectEarlyGitReleaseSchemaChange,
+} from "./update-candidate-check-early-release.js";
 import { stopSupervisedPredecessorGateway } from "./update-candidate-predecessor-stop.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import { createDoctorServiceInspectionBudget } from "./update-doctor-deadline.js";
@@ -90,6 +93,14 @@ let pluginCohortSettlementResult: UpdatePluginCohortSettlementResult | undefined
 async function finalizeMigratedUpdate(): Promise<void> {
   // This executable bypasses CLI bootstrap but owns the same one-shot database work.
   installDatabaseProcessRole("cli-oneshot");
+  if (process.argv[2] === "--early-release-recovery") {
+    const { runEarlyGitReleaseRecoveryEntry } = await import("./update-early-release-recovery.js");
+    if (await runEarlyGitReleaseRecoveryEntry(process.argv.slice(3))) {
+      // The finishing step removed the release this process runs from.
+      process.exit(0);
+    }
+    return;
+  }
   const settlePluginCohort = process.argv[2] === "--settle-plugin-cohort";
   const commitPluginCohort = process.argv[2] === "--commit-plugin-cohort";
   if (settlePluginCohort || commitPluginCohort) {
@@ -104,10 +115,16 @@ async function finalizeMigratedUpdate(): Promise<void> {
       throw new Error("Update recovery writer is unavailable.");
     }
     const root = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
-    const refusal = root ? refuseEarlyGitReleaseSchemaChange(root) : null;
-    if (refusal) {
+    const early = root ? inspectEarlyGitReleaseSchemaChange(root) : null;
+    if (early) {
+      const { startEarlyGitReleaseRecovery } = await import("./update-early-release-recovery.js");
+      const recovery = await startEarlyGitReleaseRecovery(early);
       // The early release updater reports this stderr as the failed check before any change.
-      process.stderr.write(`${refusal}\n`);
+      process.stderr.write(`${formatEarlyGitReleaseRefusal(early, recovery)}\n`);
+      if (recovery.started) {
+        // This release now lives outside the updater's cleanup path; loading more code would fail.
+        process.exit(1);
+      }
       process.exitCode = 1;
       return;
     }
