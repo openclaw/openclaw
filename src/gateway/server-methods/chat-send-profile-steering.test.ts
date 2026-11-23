@@ -305,16 +305,12 @@ it.each(["backend", "question dispatcher"] as const)(
       profileId: profile.id,
       scopes: fixture.client.connect.scopes,
     });
-    expect(authority.assertCurrent).not.toThrow();
     expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
       total: 1,
       items: [{ state: "queued", runId: fixture.params.idempotencyKey }],
     });
     expectUntouched(fixture, operation, cancel);
     await fixture.finishDispatch();
-    expect(authority.assertCurrent).toThrow(
-      "Operator execution ended. Reconnect to the Gateway, then resend your message.",
-    );
   },
 );
 

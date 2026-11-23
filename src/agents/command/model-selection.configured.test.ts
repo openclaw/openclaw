@@ -195,7 +195,6 @@ function createRestrictedFixture() {
   const operatorAuthority = createTestOperatorAuthority({
     profileId: "limited-operator",
     scopes: ["operator.write"],
-    assertCurrent: () => {},
     modelPolicy: prepareOperatorModelPolicy({
       cfg: fixture.cfg,
       policy: { sourceAgent: "main", deny: ["custom/child"] },
@@ -623,7 +622,6 @@ describe("command selection with session routing", () => {
     const operatorAuthority = createTestOperatorAuthority({
       profileId: "transcript-operator",
       scopes: ["operator.write"],
-      assertCurrent: () => {},
       signal: lifetime.signal,
     });
     vi.mocked(loadProviderScopedThinkingCatalog)

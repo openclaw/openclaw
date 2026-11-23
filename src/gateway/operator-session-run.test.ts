@@ -12,7 +12,6 @@ it("follows newly installed command sources while refusing an obsolete prepared 
     authority: createTestOperatorAuthority({
       profileId: "synthetic-operator",
       scopes: ["operator.write"],
-      assertCurrent() {},
     }),
     cfg: {},
     agentId: "main",

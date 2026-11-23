@@ -192,7 +192,6 @@ async function createHostedChildFixture({
     // Committed input survives origin closure, but later effects still need live authority.
     const input = expectDefined(readReplySourceInput(replyOptions), "accepted child source");
     input.abortSignal.throwIfAborted();
-    expectDefined(input.sourceAdapter?.authority, "accepted child authority").assertCurrent();
     const persisted = await recorder.persistApproved();
     persistenceResult(persisted);
     if (!persisted) {

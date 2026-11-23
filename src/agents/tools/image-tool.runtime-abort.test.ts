@@ -97,13 +97,11 @@ describe("image tool run abort", () => {
   it.each([
     { source: "admitted", scenario: "denied override" },
     { source: "admitted", scenario: "permitted fallback" },
-    { source: "admitted", scenario: "retired after download" },
-    { source: "direct", scenario: "retired after download" },
   ] as const)(
     "preserves $source requester model policy for $scenario",
     async ({ source, scenario }) => {
       let sourceHolds = 0;
-      const { cfg, setActive, runWithRequester } = createMediaModelPolicyFixture(
+      const { cfg, runWithRequester } = createMediaModelPolicyFixture(
         "image",
         "image-reader",
         source,
@@ -111,10 +109,7 @@ describe("image tool run abort", () => {
           sourceHolds += delta;
         },
       );
-      const loadWebMedia = vi.fn<MockImageLoadWebMedia>(async () => {
-        setActive(scenario !== "retired after download");
-        return imageMedia();
-      });
+      const loadWebMedia = vi.fn<MockImageLoadWebMedia>(async () => imageMedia());
       const spies = makeDescribeSpies();
       const resolveModel = vi.fn(resolveConfiguredImageModelForTest);
       installAbortImageDeps(

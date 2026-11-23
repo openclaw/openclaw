@@ -199,11 +199,6 @@ describe("personal USER.md self-service", () => {
       scopes,
       openclawIdPrincipal: principal,
       readCurrentRoleFacts: principal ? () => ({ assignedRole: state.role }) : undefined,
-      assertCurrent: () => {
-        if (!active) {
-          throw new Error("requester revoked");
-        }
-      },
     });
     client = {
       ...client,
@@ -515,7 +510,6 @@ describe("personal USER.md self-service", () => {
         client.internal!.operatorRunAuthority = createTestOperatorAuthority({
           profileId: identity.operatorAuthority.profileId,
           scopes: ["operator.read"],
-          assertCurrent: () => {},
         });
       }
       const result =

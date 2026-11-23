@@ -437,7 +437,7 @@ describe("session resource admission", () => {
     const operatorAuthority = createTestOperatorAuthority({
       profileId: "alice",
       scopes: ["operator.sessions.write"],
-      assertCurrent: () => test.grant.signal.throwIfAborted(),
+      signal: test.grant.signal,
     });
     mocks.ambient = {
       agentId: "main",

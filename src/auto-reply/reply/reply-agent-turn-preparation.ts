@@ -140,8 +140,6 @@ export async function prepareReplyAgentTurn<TConfigured>(
   params: PrepareReplyAgentTurnParams<TConfigured>,
 ): Promise<PreparedReplyAgentTurn<TConfigured | undefined>> {
   let operatorAuthority = params.queued.operatorAuthority;
-  // Queued start: the source's own fences (for example a retired cron delivery) refuse before claim.
-  operatorAuthority?.assertCurrent();
   const readAdmissionConfig = () =>
     params.queued.readAdmissionConfig?.() ?? selectLiveRuntimeConfig(params.queued.run.config);
   let config = captureRuntimeConfig(params.queued.run.config);

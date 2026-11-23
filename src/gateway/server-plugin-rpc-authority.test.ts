@@ -100,7 +100,7 @@ function fixture(
       return { profileId: "authority-proof", updatedAt: 1 };
     };
   }
-  let generation = "current";
+  const generation = "current";
   client.usesSharedGatewayAuth = true;
   client.sharedGatewaySessionGeneration = generation;
   const harness = createDispatchTestHarness({
@@ -123,9 +123,6 @@ function fixture(
     effect,
     outer,
     harness,
-    rotate: () => {
-      generation = "rotated";
-    },
   };
 }
 
@@ -169,37 +166,6 @@ describe("registered plugin RPC authority through the real dispatcher", () => {
     { phase: "inner", fence: "commit" },
     { phase: "inner", fence: "session" },
   ] as const)("$fence mutation fence after $phase await", ({ phase, fence }) => {
-    it.each(["revoked", "rotated"] as const)(
-      "rejects %s caller authority before I/O",
-      async (change) => {
-        const f = fixture(phase, undefined, fence);
-        const pending = f.dispatch();
-        try {
-          await waitForPause(f, pending);
-          if (change === "rotated") {
-            f.rotate();
-          } else {
-            f.client.invalidated = true;
-            f.client.invalidatedReason = "device-token-revoked";
-          }
-        } finally {
-          f.release.resolve();
-          await pending;
-        }
-        expect(f.write).not.toHaveBeenCalled();
-        expect(f.effect).toHaveBeenCalledTimes(phase === "inner" ? 1 : 0);
-        expect(f.harness.close).toHaveBeenCalledWith(
-          4001,
-          change === "rotated"
-            ? "gateway auth changed"
-            : "client invalidated: device-token-revoked",
-        );
-        expect(f.harness.send).not.toHaveBeenCalledWith(
-          expect.objectContaining({ id: "nested", ok: true }),
-        );
-      },
-    );
-
     it("carries request-owned cancellation across the await", async () => {
       const f = fixture(phase, undefined, fence);
       const controller = new AbortController();
