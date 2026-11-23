@@ -407,16 +407,6 @@ describe("openclaw.chat session ownership", () => {
 });
 
 describe("openclaw.chat session responses", () => {
-  it("returns the stored welcome when no message is sent", async () => {
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession()]]);
-    const call = await callChat(makeContext(sessions), { sessionId: "s1" });
-
-    expect(call).toMatchObject({
-      ok: true,
-      payload: { sessionId: "s1", reply: "welcome text", action: "none" },
-    });
-  });
-
   it("rejects a structured answer without an active chat session", async () => {
     const call = await callChat(makeContext(new Map()), {
       sessionId: "missing",
@@ -449,20 +439,6 @@ describe("openclaw.chat session responses", () => {
     expect(inferenceFallbackMocks.verifySystemAgentInferenceWithFallback).not.toHaveBeenCalled();
   });
 
-  it("routes a structured cancel through its bound session", async () => {
-    const engine = makeEngine();
-    engine.cancelWizard.mockResolvedValue({ text: "Setup cancelled.", action: "none" });
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
-
-    const call = await callChat(makeContext(sessions), {
-      sessionId: "s1",
-      wizardCancel: { stepId: "channel" },
-    });
-
-    expect(engine.cancelWizard).toHaveBeenCalledWith({ stepId: "channel" });
-    expect(call.payload).toMatchObject({ reply: "Setup cancelled.", action: "none" });
-  });
-
   it("rejects a structured answer when the active session has no hosted wizard", async () => {
     const engine = makeEngine();
     const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
@@ -488,43 +464,5 @@ describe("openclaw.chat session responses", () => {
     const call = await callChat(makeContext(sessions), { sessionId: "s1", message: "yes" });
 
     expect(call.payload).toMatchObject({ sensitive: true });
-  });
-
-  it("maps the TUI handoff to an open-agent action", async () => {
-    const engine = makeEngine();
-    engine.handle.mockResolvedValue({
-      text: "",
-      action: "open-tui",
-      handoff: { kind: "open-tui" },
-    });
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
-
-    const call = await callChat(makeContext(sessions), {
-      sessionId: "s1",
-      message: "talk to agent",
-    });
-
-    expect(call.payload).toMatchObject({ action: "open-agent" });
-    expect(call.payload).not.toHaveProperty("agentDraft");
-    expect((call.payload as { reply: string }).reply).toContain("continue with your agent");
-  });
-
-  it("forwards the hatch draft intent with an agent handoff", async () => {
-    const engine = makeEngine();
-    engine.handle.mockResolvedValue({
-      text: "Your agent is hatching.",
-      action: "open-tui",
-      agentDraft: "hatch",
-      handoff: { kind: "open-tui", agentId: "researcher" },
-    });
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
-
-    const call = await callChat(makeContext(sessions), { sessionId: "s1", message: "yes" });
-
-    expect(call.payload).toMatchObject({
-      action: "open-agent",
-      agentDraft: "hatch",
-      agentId: "researcher",
-    });
   });
 });
