@@ -355,6 +355,18 @@ JSON uploads currently run only after successful publish steps. Review commands
 before executing; never automatically override scan failures. Verify recovered
 versions publicly before final release verification.
 
+For a terminal, partially executed child, the release parent can instead reuse
+original packed artifacts for an explicit selected subset only when every selected
+entry has an authenticated `unavailable` receipt with no attempt ID and the
+authoritative publication endpoint reports `absent`. This is initial publication
+of retained bytes, not attempt recovery. The original full roster, FRV admission,
+artifact producers, and current parent approval still authenticate before selection;
+pending, published, failed, or unknown selected states cannot enter this route.
+The prepared-artifact owner rechecks absence and current authority before exposing
+restored bytes and again at the existing publication approval boundary. Keep the
+original child identity and tarballs; never replace this binding with a normal
+selected plan that repacks source.
+
 Watch the independent ClawHub child until every package's
 `versions/<version>` returns 200. Seen in 2026.9.6: Convex 512 MB out-of-memory
 errors, runner ENOSPC, and curl timeouts. Recover only the failed packages,

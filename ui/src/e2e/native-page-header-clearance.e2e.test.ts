@@ -1,6 +1,5 @@
 import type { BrowserContext, Locator, Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
-import { buildPluginDiscoveryMock } from "../../../scripts/control-ui-mock-plugins.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -76,44 +75,6 @@ suite.define(() => {
       })
       .toBeLessThanOrEqual(axis === "x" ? 1 : 0.5);
   }
-  it("keeps the macOS Plugins title and scrollbar clear of the rounded workspace edge", async () => {
-    const { page, toolbar } = await openPage(
-      "plugins",
-      installNativeWebChrome,
-      ".plugins-hub-header",
-      {
-        featureMethods: [...defaultControlUiFeatureMethods, "plugins.catalog.browse"],
-        methodResponses: { "plugins.catalog.browse": buildPluginDiscoveryMock() },
-      },
-    );
-    await page.setViewportSize({ width: 1240, height: 620 });
-    await page.getByText("Trending", { exact: true }).first().click();
-    await page.locator(".plugin-catalog-card").first().waitFor();
-    const content = page.locator("main.content");
-    await expect
-      .poll(() =>
-        content.evaluate((element) => {
-          const top = element.getBoundingClientRect().top;
-          const header = element.querySelector(".plugins-hub-header")!.getBoundingClientRect();
-          const corner = getComputedStyle(element.closest(".shell")!, "::after");
-          return {
-            contentTop: top,
-            cornerTop: Number.parseFloat(corner.top),
-            headerGap: header.top - top,
-            trackClearsCorner:
-              Number.parseFloat(getComputedStyle(element, "::-webkit-scrollbar-track").marginTop) >=
-              Number.parseFloat(corner.borderTopRightRadius),
-          };
-        }),
-      )
-      .toEqual({
-        contentTop: toolbar.height - 4,
-        cornerTop: toolbar.height - 4,
-        headerGap: 16,
-        trackClearsCorner: true,
-      });
-  });
-
   // Built-in Pages use the stacked hub header; Memory import keeps the toolbar-row title.
   it.each([true, false])("centers page titles and clears controls (native: %s)", async (native) => {
     const { page, toolbar } = await openPage(

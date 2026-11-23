@@ -16,11 +16,19 @@ import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 
 const UPDATE_RUN_POLL_MS = 2_000;
 const TERMINAL_SENTINEL_WAIT_MS = 30 * 60_000;
-let wakeCurrentWatcher: (() => void) | undefined;
+let wakeCurrentWatcher:
+  | ((runId?: string, advisoryWork?: () => Promise<void>) => void | Promise<void>)
+  | undefined;
 
-/** Wake the Gateway-owned watcher when this process admits an update. */
-export function wakeUpdateRunWatcher(): void {
-  wakeCurrentWatcher?.();
+/** The Gateway-lifetime watcher owns advisory jobs and their final invalidation. */
+export async function wakeUpdateRunWatcher(
+  runId?: string,
+  advisoryWork?: () => Promise<void>,
+): Promise<void> {
+  if (advisoryWork && !wakeCurrentWatcher) {
+    throw new Error("Gateway update watcher is unavailable");
+  }
+  await wakeCurrentWatcher?.(runId, advisoryWork);
 }
 
 /** The update-check lifecycle joins notices and their transport tails before Gateway teardown. */
@@ -261,8 +269,23 @@ export function startUpdateRunWatcher(params: {
         }
       });
   };
-  const wake = () => {
-    if (!timer && !watched) {
+  const wake = (runId?: string, advisoryWork?: () => Promise<void>): void | Promise<void> => {
+    if (advisoryWork) {
+      return work.track(advisoryWork).finally(() => wake(runId));
+    }
+    if (runId) {
+      void work
+        .track(async () => {
+          const run = await getUpdateRunAsync(runId);
+          if (run && !work.isClosing) {
+            reconciled.push(run);
+            await scan(false);
+          }
+        })
+        .catch((error: unknown) =>
+          params.log.warn(`update run refresh failed: ${formatErrorMessage(error)}`),
+        );
+    } else if (!timer && !watched) {
       poll();
     }
   };

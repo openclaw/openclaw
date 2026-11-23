@@ -1368,22 +1368,27 @@ start and end times. Unattributed active-loop stalls use the observed gap betwee
 JavaScript callback lifetime. Idle monitoring uses the missed wake deadline and
 the resumed wake instead, without adding idle heartbeats.
 
-On supported Node runtimes, `main-thread stall profile` selects samples only
-inside the longest reported stall's saved interval. `windowStartMs` and
-`windowEndMs` identify that interval; `reportedAtMs` identifies profile emission.
-The recorder keeps its 25 ms sample interval and bounded profile buffers. Later
-work outside the interval is excluded, even when reporting is delayed. Sample
-counts include idle samples whose frames are omitted from `inclusive`, so a
-single listed stack does not mean that stack occupied the whole interval.
+A `main-thread stall profile` describes the longest reported stall in a batch,
+not every stall. To count the stalls the Gateway reported, use `main-thread
+stall` warnings that include `stallStartMs` and `stallEndMs`. `windowStartMs`
+and `windowEndMs` identify the selected profile interval; `reportedAtMs`
+identifies profile emission.
+
+On Node 26, the CPU flight recorder samples every 25 ms and uses only samples
+inside the saved interval. Counts can include idle samples whose frames are
+omitted from `inclusive`, so a single listed stack did not necessarily occupy
+the whole interval. On Node 24, `sampleMode=interrupt` reports up to three
+point-in-time stacks, not CPU-duration samples. `cpuProfile=unavailable`
+means no CPU samples were captured; Linux kernel evidence can still be present.
+See [CPU pressure and event-loop delay](/gateway/health#cpu-pressure-and-event-loop-delay) for runtime limits.
 
 The report also includes `self`, up to ten sampled leaf frames as
-`[frame, samples, sampledMs, nearestAppFrame]`. These identify the work beneath
-shared inclusive callers; `nearestAppFrame` is the nearest OpenClaw frame on
-that sampled stack, or `null` when none is visible. Sampled milliseconds use
-the selected profile time deltas, clipped at the start of the stall; they are
-an attribution estimate, not an exact CPU timer. `deepest` contains up to three
-hot stack tails as `[samples, frames]`, with up to eight frames ordered from
-caller to sampled leaf.
+`[frame, samples, sampledMs, nearestAppFrame]`. The `nearestAppFrame` is the
+nearest OpenClaw frame on that stack, or `null` when none is visible. For CPU
+profiles, `sampledMs` is an estimate from the profile time deltas clipped to
+the start of the stall. For interrupt samples, `sampledMs` is `null`.
+`deepest` contains up to three sampled stack tails as `[samples, frames]`,
+ordered from caller to sampled leaf.
 
 The report payload has a hard 2 KiB limit. `reportTruncated=true` means lower
 priority entries were omitted to fit: inclusive ancestors first, then extra
@@ -1465,10 +1470,10 @@ on an unchanged route.
 Drops classified as `unattributed` use `debug`; attributed drops remain warnings.
 `providerPrefix` compares final encoded request segments against the last request
 with usable cache-read usage: system instructions, tools, history messages, and
-other request parameters. It names the first differing segment or `prefix-match`
-when the previous prefix is unchanged. A match does not prove provider cache
-availability or retention. Unsupported transports and missing baselines report
-`unavailable`.
+other request parameters except output caps. It names the first differing
+segment or `prefix-match` when the previous prefix is unchanged. A match does
+not prove provider cache availability or retention. Unsupported transports and
+missing baselines report `unavailable`.
 
 Prompt content is retained only as hashes, within the existing 512-entry
 diagnostic tracker.

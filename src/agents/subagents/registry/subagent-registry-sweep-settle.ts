@@ -55,6 +55,15 @@ export async function settleUnreachableYieldedSubagentRun(params: {
         requester.lastRunId === requesterCompletion.runId);
   }
   const retired = subagentRuns.isCompletionAuthorityRetired(entry);
+  if (requesterEnded && !retired && isYieldedSubagentRun(entry) && entry.waitForMessage) {
+    // The parent may finish before its retained send replays after a plugin reload.
+    // Both lifecycle events and periodic sweeps consume that handoff owner's live fact.
+    const { hasRetainedSessionSendForSubagent } =
+      await import("../../tools/sessions-send-self-hold.js");
+    if (hasRetainedSessionSendForSubagent(entry)) {
+      return false;
+    }
+  }
   let continuation = isYieldedSubagentRun(entry)
     ? resolveYieldedRunContinuation(entry, requesterEnded)
     : undefined;

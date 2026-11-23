@@ -355,9 +355,11 @@ The selected chat loads before automatic sidebar session lists refresh. Live eve
 A foreground create uses its reply to keep the confirmed title and an actionless current-session display row available independently of the sidebar refresh. This display row does not add the session to filtered membership or counts; those still come from the Gateway. The first message and run status appear from local submission facts and live events without waiting for the list refresh.
 
 After the current page and transcript are ready, the browser can prepare code for
-Pages, New Session, and common dialogs during idle time. Hovering or focusing a
-navigation link, the Settings menu item, the command-palette button, or the model picker prepares
-that destination sooner.
+Pages, New Session, and common dialogs during idle time. In Chat, it first prepares
+the effort picker, composer attachment menu, and side-panel launcher and layout menu.
+Pointing at or focusing a navigation link, the Settings menu item, the command
+palette button, the model picker, or a session or account menu button can prepare
+that destination sooner. Warming Chat controls does not open panels or fetch their data.
 Navigation preparation pauses while a page loads, the tab is hidden, or the
 connection is offline, and respects the browser's Save-Data setting. Page data
 still loads through its normal navigation flow. Hashed assets remain cached for
@@ -379,6 +381,8 @@ The chat header’s **Details** panel groups session information into collapsibl
 Session details share concurrent reads across the sidebar, chat, and resource panels. Returning to a session reuses its details on the same connection, including updates received through complete session snapshots. Incomplete updates, explicit refreshes, and reconnects fetch current details; failed reads remain retryable.
 
 Sidebar pull-request indicators reuse the last known snapshot. Subscriptions acknowledge the requested sessions immediately; session preparation and fresh pull-request snapshots arrive through background updates. Recorded pull requests update when their receipts or session access and lineage change, without polling passive rows or rechecking unrelated audiences on owner-certified metadata-only updates. Delivery still checks each recipient’s current access. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
+
+Successful GitHub publications appear in **Details → Changes** without an automatic assistant message. Publication failures and requests for confirmation appear as system notices in chat.
 
 Changes summaries share identical concurrent polls and reuse unchanged checkout results when file metadata can establish freshness. Summary reads have a separate worker queue from full patches and PR statistics, with priority inside the shared Git child limit. Running Git commands still finish normally, and background work keeps making progress.
 

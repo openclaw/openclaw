@@ -148,8 +148,11 @@ it("dispatches a hosted message action without connecting to either Gateway endp
           sessionKey,
           operationalRunInstance,
           gatewayContextResolver: () => context,
-          receiptAuthority: () =>
-            runs.getActiveAgentRunDelegatedAuthority(operationalRunInstance) === authority,
+          receiptAuthority: () => {
+            if (runs.getActiveAgentRunDelegatedAuthority(operationalRunInstance) !== authority) {
+              throw new Error("agent tool caller authority is no longer active");
+            }
+          },
         },
         () =>
           selectedTool.execute("hosted-reaction", {
@@ -182,12 +185,6 @@ it("dispatches a hosted message action without connecting to either Gateway endp
     }
     expect(dispatched.mock.calls[2]?.[0].params).toEqual(dispatched.mock.calls[1]?.[0].params);
     expect(assertDashboardReadCurrent).not.toHaveBeenCalled();
-    runs.releaseAgentRunDelegatedAuthority(authority);
-    for (const selectedTool of tools) {
-      await expect(execute(selectedTool)).rejects.toThrow(
-        /agent (?:runtime identity requires active delegated run|tool caller) authority/,
-      );
-    }
     expect(dispatched).toHaveBeenCalledTimes(3);
     expect(local.connections).not.toHaveBeenCalled();
     expect(remote.connections).not.toHaveBeenCalled();

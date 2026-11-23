@@ -396,6 +396,13 @@ export const toolIconData = {
     ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
     ["path", { d: "M9 3v18", "stroke-width": "1.8", "stroke-linecap": "butt" }],
   ]),
+  macosTitlebarSidebar: strokeIconData([
+    ["rect", { x: "3", y: "4.25", width: "18", height: "15.5", rx: "3", "stroke-width": "1.6" }],
+    [
+      "path",
+      { class: "macos-titlebar-sidebar-divider", d: "M15.5 4.75v14.5", "stroke-width": "1.6" },
+    ],
+  ]),
   // Dock is a destination action, so it has no open/close chevron or active fill.
   sessionPanelDockBottom: strokeIconData([
     ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],

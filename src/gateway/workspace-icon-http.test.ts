@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import { createServer } from "node:http";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -28,7 +28,6 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { finishFailedGatewayHttpResponse } from "./http-common.js";
-import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 
@@ -126,7 +125,6 @@ describe("resolveWorkspaceIcon", () => {
 describe("handleWorkspaceIconHttpRequest", () => {
   let origin: string;
   let server: ReturnType<typeof createServer>;
-  let authorityCurrent = true;
   let state: OpenClawTestState;
   let cfg: OpenClawConfig;
   let projection: SessionRowProjection | undefined;
@@ -201,19 +199,12 @@ describe("handleWorkspaceIconHttpRequest", () => {
   beforeEach(() => {
     // The shared test setup retires plugin runtime metadata after every case.
     publishPluginMetadata();
-    authorityCurrent = true;
     sessionVisible = true;
-    mocks.authorize.mockReset().mockImplementation(({ res }: { res: ServerResponse }) =>
-      bindHttpResponseAuthority(
-        {
-          authMethod: "token",
-          operatorScopes: ["operator.admin", "operator.read"],
-          canReadSession: () => sessionVisible,
-        },
-        res,
-        () => authorityCurrent,
-      ),
-    );
+    mocks.authorize.mockReset().mockImplementation(() => ({
+      authMethod: "token",
+      operatorScopes: ["operator.admin", "operator.read"],
+      canReadSession: () => sessionVisible,
+    }));
   });
 
   const iconRoute = (sessionKey: string) =>
@@ -311,40 +302,26 @@ describe("handleWorkspaceIconHttpRequest", () => {
     await expectBody(response, ICO_BYTES);
   });
 
-  it.each(["authority", "workspace"])(
-    "rejects a changed %s during icon preparation",
-    async (kind) => {
-      await seedIcon();
-      const replacement =
-        kind === "workspace" ? await makeWorkspace({ "favicon.svg": SVG_BYTES }) : undefined;
-      const held = holdIconRead();
-      const pending = fetch(iconRoute("agent:main:one"));
-      try {
-        await held.reading;
-        if (replacement) {
-          seedSession(replacement, "agent:main:one", { sessionId: "replacement-session" });
-        } else {
-          authorityCurrent = false;
-        }
-        held.release();
-        const response = await pending;
-        expect(response.status).toBe(kind === "authority" ? 401 : 503);
-        expectHeaders(response, { etag: null });
-        if (kind === "authority") {
-          expect(await response.json()).toEqual({
-            error: { message: "Unauthorized", type: "unauthorized" },
-          });
-        } else {
-          await response.arrayBuffer();
-          await expectBody(await requestIcon(), SVG_BYTES);
-        }
-      } finally {
-        held.release();
-        await pending;
-        held.restore();
-      }
-    },
-  );
+  it("rejects a changed workspace during icon preparation", async () => {
+    await seedIcon();
+    const replacement = await makeWorkspace({ "favicon.svg": SVG_BYTES });
+    const held = holdIconRead();
+    const pending = fetch(iconRoute("agent:main:one"));
+    try {
+      await held.reading;
+      seedSession(replacement, "agent:main:one", { sessionId: "replacement-session" });
+      held.release();
+      const response = await pending;
+      expect(response.status).toBe(503);
+      expectHeaders(response, { etag: null });
+      await response.arrayBuffer();
+      await expectBody(await requestIcon(), SVG_BYTES);
+    } finally {
+      held.release();
+      await pending;
+      held.restore();
+    }
+  });
 
   it("never exposes a local decoy for a bound or stopped remote workspace", async () => {
     const root = await seedIcon();
@@ -486,9 +463,7 @@ describe("handleProjectIconHttpRequest", () => {
     operatorScopes = ["operator.read"];
     mocks.authorizeRead
       .mockReset()
-      .mockImplementation(({ res }: { res: ServerResponse }) =>
-        bindHttpResponseAuthority({ authMethod: "token", operatorScopes }, res, () => true),
-      );
+      .mockImplementation(() => ({ authMethod: "token", operatorScopes }));
   });
 
   const projectRoute = (projectId: string) =>

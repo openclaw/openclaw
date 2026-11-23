@@ -18,7 +18,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { readAgentAssistantSource } from "../../../infra/agent-events.js";
 import { hasMeaningfulAutomationResult } from "../../../infra/agent-run-registry.automation.js";
 import { hasReplyPayloadContent } from "../../../interactive/payload.js";
-import type { AssistantMessage } from "../../../llm/types.js";
+import type { AssistantHistoryMessage } from "../../../llm/types.js";
 import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
 import { readAssistantTextBlocksForPhase } from "../../../shared/chat-message-content.js";
 import { sanitizeAssistantVisibleText } from "../../../shared/text/assistant-visible-text.js";
@@ -64,7 +64,7 @@ import { buildFailureWarning } from "./tool-error-warning.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 function renderNativeAssistantReply(
-  assistant: AssistantMessage,
+  assistant: AssistantHistoryMessage,
   rawText: string,
   preparedText: string,
 ): string | undefined {
@@ -120,8 +120,8 @@ export function buildEmbeddedRunPayloads(params: {
   assistantMessageIndex?: number;
   assistantTranscriptOwned?: boolean;
   assistantTranscriptIdempotencyKey?: string;
-  lastAssistant: AssistantMessage | undefined;
-  currentAssistant?: AssistantMessage | null;
+  lastAssistant: AssistantHistoryMessage | undefined;
+  currentAssistant?: AssistantHistoryMessage | null;
   agentTerminal?: EmbeddedRunAttemptResult["agentTerminal"];
   lastToolError?: ToolErrorSummary;
   config?: OpenClawConfig;

@@ -18,7 +18,7 @@ import {
   WizardSession,
   type WizardStep,
 } from "../../wizard/session.js";
-import { canAccessWizardSession } from "../server-wizard-sessions.js";
+import { canAccessWizardSession, noteWizardReader } from "../server-wizard-sessions.js";
 import { formatForLog } from "../ws-log.js";
 import { startGatewayWizard, whenAdmittedWizardSessionSettled } from "./setup-admission.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
@@ -98,6 +98,7 @@ function wizardSessionHandler<T extends { sessionId: string }>(
       );
       return;
     }
+    noteWizardReader(session, options.client);
     await run(options, session);
   });
 }

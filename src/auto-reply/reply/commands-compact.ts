@@ -156,7 +156,6 @@ export async function handleCompactCommand(
   const assertOwnerBeforeAcceptance = () => {
     operatorAuthority?.assertCurrent();
     if (!compactionAccepted) {
-      params.command.assertOwnerCurrent?.();
       assertOwnerCurrent?.();
     }
   };

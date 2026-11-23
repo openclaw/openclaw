@@ -295,6 +295,8 @@ const config = {
     "src/test-utils/**": ["exports", "nsExports"],
     // The memory-state compatibility facade must retain its pre-registry-bundle type export.
     "src/plugins/memory-state.ts": ["types"],
+    // Session and cron state type this slot through `import(...)` type queries.
+    "src/cron/service/timer-execution-timeout.ts": ["types"],
     "test/fixtures/ts-topology/basic/**": [
       "exports",
       "nsExports",

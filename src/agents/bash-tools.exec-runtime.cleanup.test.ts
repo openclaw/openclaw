@@ -597,7 +597,7 @@ describe("operator source lifetime", () => {
     const guest = await withGatewayToolCallerIdentity(
       {
         ...caller(source, "agent:main:retained-exec"),
-        receiptAuthority: () => !turn.signal.aborted,
+        receiptAuthority: () => turn.signal.throwIfAborted(),
       },
       () => runTestExecProcess({ command: "retained-source-command", startupSignal: turn.signal }),
     );

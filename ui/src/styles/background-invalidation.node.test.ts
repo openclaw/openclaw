@@ -16,7 +16,7 @@ fixture.describe("personal background style scope", () => {
         ),
         `<div class="shell shell--chat"><aside>
           ${Array.from({ length: 64 }, (_, index) => `<div class="sidebar-recent-session"><a>Session ${index}</a><span>Ready</span></div>`).join("")}
-          </aside><main><div class="chat-group user"><div class="chat-bubble">Hello</div></div>
+          </aside><main class="sidebar-region"><div class="chat-group user"><div class="chat-bubble">Hello</div></div>
           <div class="agent-chat__input">Composer</div></main></div>`,
       ),
       async (page) => {
@@ -28,8 +28,8 @@ fixture.describe("personal background style scope", () => {
             );
         await flushChatStyles();
         const finishTrace = await traceCss(page);
-        await page.locator(".shell").evaluate((shell) => {
-          shell.setAttribute("data-background-managed", "");
+        await page.locator(".sidebar-region").evaluate((pane) => {
+          pane.setAttribute("data-background-painted", "");
         });
         await flushChatStyles();
         const recalculated = await finishTrace();

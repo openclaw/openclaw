@@ -1,6 +1,6 @@
 import rules from "./dock-panel.css?inline";
 
-export const nativeDockPanelCss = `:is(openclaw-terminal-panel, openclaw-browser-panel, openclaw-desktop-panel) {
+export const nativeDockPanelCss = `:is(openclaw-terminal-panel, openclaw-browser-panel, openclaw-desktop-panel, openclaw-link-reader-panel) {
 ${rules
   .replace(/:host(?:\(([^)]+)\))?/gu, "&$1")
   // Another panel can inject these shared rules after embedded-position overrides.

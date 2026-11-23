@@ -494,6 +494,19 @@ it.each(["next-renderable", "last-renderable", "last-assistant"] as const)(
   },
 );
 
+it("restores widgets from Claude CLI results coalesced into the tool-call message", () => {
+  const widget = { kind: "canvas", presentation: { target: "assistant_message" } };
+  const result = JSON.stringify({ ...widget, view: { id: "cv_cli", url: "/cv_cli" } });
+  const call = { type: "toolcall", id: "toolu_1", name: "mcp__openclaw__show_widget" };
+  const messages = [
+    assistant([call, { type: "tool_result", tool_use_id: "toolu_1", content: [text(result)] }], {}),
+    assistant([text("Done.")], {}),
+  ];
+  expect(augmentChatHistoryWithCanvasBlocks(messages)[1]).toMatchObject({
+    content: [text("Done."), { type: "canvas", preview: { viewId: "cv_cli", url: "/cv_cli" } }],
+  });
+});
+
 const hostTab = { targetId: "tab-1", target: "host", profile: "work" };
 const nodeTab = { ...hostTab, target: "node", node: "node-1" };
 const boundedTab = {

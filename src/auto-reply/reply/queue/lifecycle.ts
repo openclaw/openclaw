@@ -1,7 +1,11 @@
 import type { OperatorAdmissionContext } from "../../../gateway/operator-admission.js";
 import { decodeGatewayOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.js";
-import { restoreGatewayQueuedOperatorRecovery } from "../../../gateway/operator-run-recovery.js";
+import {
+  restoreGatewayQueuedOperatorRecovery,
+  restoreScheduledAutomationOperator,
+  restoreTalkConsultOperator,
+} from "../../../gateway/operator-run-recovery.js";
 import {
   GatewayOperatorAccessUnavailableError,
   isOperatorAuthorityUnavailable,
@@ -13,6 +17,7 @@ import {
   retireSessionControllerInput,
   submitSessionControllerInput,
 } from "../../../sessions/session-controller.mailbox.js";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../../talk/agent-consult-tool.js";
 import type { FollowupQueueDisposition } from "../../get-reply-options.types.js";
 import { replyCallbackCustody } from "../reply-callback-custody.js";
 import type { ReplyOperationRunState } from "../reply-operation-run-state.js";
@@ -167,8 +172,17 @@ export async function prepareFollowupRunOperatorAuthority(
     throw new Error("Input completed before source adoption");
   }
   try {
-    const operatorSource = run.run.scheduledAutomation?.job.operatorSource;
-    const restored = await restoreGatewayQueuedOperatorRecovery({
+    const automation = run.run.scheduledAutomation;
+    const operatorSource = automation?.job.operatorSource;
+    // Each queued start needs the grant that created it: the automation grant for a cron
+    // conversation event, talk for a Talk consult (only Talk sets this trusted provenance),
+    // and write for chat.
+    const restore = automation
+      ? restoreScheduledAutomationOperator
+      : run.run.inputProvenance?.sourceTool === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
+        ? restoreTalkConsultOperator
+        : restoreGatewayQueuedOperatorRecovery;
+    const restored = await restore({
       context,
       agentId: run.run.agentId,
       source: captureQueuedOperatorRecoverySource(run.operatorAuthority),

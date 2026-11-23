@@ -49,20 +49,17 @@ const forkableClaudeCliBackend = {
 
 const { createSessionStoreDir } = setupSessionCreateTestHarness();
 
-test("sessions.create parents dashboard sessions to agent main by default", async () => {
+test("sessions.create keeps ordinary dashboard chats independent of Home", async () => {
   const { storePath } = await createSessionStoreDir();
   testState.sessionConfig = undefined;
   testState.agentConfig = { model: { primary: "openai/current-model" } };
-  await writeSessionStore({
-    entries: {
-      "agent:main:main": {
-        ...sessionStoreEntry("sess-grouping-parent"),
-        providerOverride: "anthropic",
-        modelOverride: "parent-model",
-        modelOverrideSource: "user",
-      },
-    },
-  });
+  const home = {
+    ...sessionStoreEntry("sess-home"),
+    providerOverride: "anthropic",
+    modelOverride: "parent-model",
+    modelOverrideSource: "user" as const,
+  };
+  await writeSessionStore({ entries: { "agent:main:main": home } });
 
   const created = await directSessionReq<{
     key?: string;
@@ -72,17 +69,11 @@ test("sessions.create parents dashboard sessions to agent main by default", asyn
 
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
   expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
-  expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
-  // Auto-parented operator sessions must stay depth-zero roots. This preserves
-  // their operator identity and makes explicit finite spawn-depth caps apply
-  // from the correct origin.
+  expect(created.payload?.entry?.parentSessionKey).toBeUndefined();
   expect(created.payload?.entry?.spawnDepth).toBe(0);
   const key = requireNonEmptyString(created.payload?.key, "created session key");
   const child = expectDefined(loadSessionEntry({ sessionKey: key, storePath }), "created session");
-  const parent = expectDefined(
-    loadSessionEntry({ sessionKey: "agent:main:main", storePath }),
-    "grouping parent session",
-  );
+  expect(child.parentSessionKey).toBeUndefined();
   const { createModelSelectionState } = await import("../auto-reply/reply/model-selection.js");
   const cfg = getRuntimeConfig();
   const reply = await createModelSelectionState({
@@ -90,7 +81,7 @@ test("sessions.create parents dashboard sessions to agent main by default", asyn
     agentId: "main",
     agentCfg: cfg.agents?.defaults,
     sessionEntry: child,
-    sessionStore: { "agent:main:main": parent },
+    sessionStore: { "agent:main:main": home },
     sessionKey: key,
     parentSessionKey: child.parentSessionKey,
     defaultProvider: "openai",
