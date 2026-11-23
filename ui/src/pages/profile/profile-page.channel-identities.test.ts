@@ -707,6 +707,7 @@ it.each(["link", "unlink"] as const)(
     let lastListedLinks: typeof canonicalLinks = [];
     const pendingMutation = createDeferred<unknown>();
     const pendingPreference = createDeferred<{ status: "ok" }>();
+    const savedPreferences: Record<string, unknown> = {};
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "users.self") {
         return { profile: modelAccountProfile };
@@ -715,10 +716,13 @@ it.each(["link", "unlink"] as const)(
         return { profileId, accounts: [], links: [] };
       }
       if (method === "users.prefs.get") {
-        return { status: "ok", entries: {} };
+        return { status: "ok", entries: savedPreferences };
       }
       if (method === "users.prefs.set") {
-        return pendingPreference.promise;
+        const saved = await pendingPreference.promise;
+        // The deferred identity refresh after the save reads the Gateway's stored value.
+        Object.assign(savedPreferences, (params as { entries: Record<string, unknown> }).entries);
+        return saved;
       }
       if (method === "users.listChannelIdentities") {
         channelListReads += 1;

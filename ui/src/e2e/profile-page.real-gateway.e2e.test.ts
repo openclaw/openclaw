@@ -359,9 +359,13 @@ suite.define(() => {
 
             const reloadWithLink = await page.reload();
             expect(reloadWithLink?.status()).toBe(200);
+            // Opaque proxy subjects are not shown as names or handles after the reload.
             await expect
-              .poll(() => page.locator(".profile-hero__handle").textContent())
-              .toContain(authenticatedUser);
+              .poll(() => page.locator(".profile-hero__name").textContent())
+              .toBe(`Person ${guest.id.slice(0, 8)}`);
+            expect(await page.locator(".profile-hero").textContent()).not.toContain(
+              authenticatedUser,
+            );
             await expect.poll(() => identityRow.count()).toBe(1);
             await expect.poll(() => identityRow.textContent()).toContain(channelIdentity.senderId);
             await expectIdentitySectionInFrame(".settings-row", channelIdentity.senderId);
@@ -381,9 +385,13 @@ suite.define(() => {
 
             const reloadWithoutLink = await page.reload();
             expect(reloadWithoutLink?.status()).toBe(200);
+            // Opaque proxy subjects are not shown as names or handles after the reload.
             await expect
-              .poll(() => page.locator(".profile-hero__handle").textContent())
-              .toContain(authenticatedUser);
+              .poll(() => page.locator(".profile-hero__name").textContent())
+              .toBe(`Person ${guest.id.slice(0, 8)}`);
+            expect(await page.locator(".profile-hero").textContent()).not.toContain(
+              authenticatedUser,
+            );
             await expect.poll(() => identityRow.count()).toBe(0);
             await expect
               .poll(() => identitySection.locator(".settings-empty").textContent())
