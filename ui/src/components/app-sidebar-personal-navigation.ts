@@ -117,13 +117,15 @@ export function createSidebarPinnedSessions(
   };
   const reads = new Map<string, Read | "invalidated">();
   const seeds = new Map<string, () => SidebarRecentSession>();
-  function retire(key: string) {
+  function retire(key: string, keepSeed = false) {
     const read = reads.get(key);
     if (read && read !== "invalidated") {
       read.observation?.dispose();
     }
     reads.delete(key);
-    seeds.delete(key);
+    if (!keepSeed) {
+      seeds.delete(key);
+    }
   }
   function dispose() {
     for (const key of reads.keys()) {
@@ -169,7 +171,9 @@ export function createSidebarPinnedSessions(
     }
     for (const row of snapshot) {
       const read = reads.get(row.key);
-      if (!seeds.has(row.key) && (read === "invalidated" || !read?.settled)) {
+      // Keep the latest visible projection for an observed row, so a refresh can
+      // retain it without projecting again inside an event handler.
+      if (!seeds.has(row.key) || (read !== "invalidated" && read?.observation?.row)) {
         seeds.set(row.key, () => ({
           ...row,
           active: row.key === host.getRouteSessionKey(),
@@ -211,7 +215,7 @@ export function createSidebarPinnedSessions(
         if (!current()) {
           return;
         }
-        retire(key);
+        retire(key, Boolean(owned.observation?.row));
         reads.set(key, "invalidated");
         if (host.isConnected) {
           host.sessionData.requestSessionDataUpdate();
@@ -254,7 +258,9 @@ export function createSidebarPinnedSessions(
             return;
           }
           owned.settled = true;
-          seeds.delete(key);
+          if (!row) {
+            seeds.delete(key);
+          }
           reconcile(row ?? undefined);
           publish();
         };

@@ -59,7 +59,6 @@ import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
 } from "../prepared-model-runtime.js";
-import { prepareAgentPromptProjects } from "../prompt-projects.js";
 import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
 import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
@@ -89,6 +88,7 @@ import {
 import {
   bindRunToPreparedModelRuntime,
   initializeReadOnlyRunModelCatalog,
+  prepareRunModelRuntimeProjects,
   resolvePreparedRuntimeWorkspaces,
 } from "./run/prepared-runtime-context.js";
 import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
@@ -393,11 +393,10 @@ async function runEmbeddedAgentForSession(
             });
             params = rebound.runParams;
             const workspaceResolution = rebound.workspaceResolution;
-            const projects = await prepareAgentPromptProjects(params);
-            const preparedModelRuntime = Object.freeze({
-              ...preparedModelRuntimeOwnerSnapshot,
-              ...projects,
-            });
+            const preparedModelRuntime = await prepareRunModelRuntimeProjects(
+              params,
+              preparedModelRuntimeOwnerSnapshot,
+            );
             const runPrepared = async () => {
               params = refresh.withDeliveryCallbacks(params);
               const preparedAgentId = workspaceResolution.agentId;
@@ -468,7 +467,7 @@ async function runEmbeddedAgentForSession(
                 sessionKey: resolvedSessionKey,
                 sessionId: params.sessionId,
                 workspaceDir: resolvedWorkspace,
-                activeProjectKeys: [...projects.activeProjectKeys],
+                activeProjectKeys: [...preparedModelRuntime.activeProjectKeys],
                 modelProviderId: provider,
                 modelId,
                 trigger: params.trigger,

@@ -74,7 +74,9 @@ export function createChatModelSearchView(
   const matches = createMemo(
     () => {
       const term = normalizeSearch(query().trim());
-      const buckets: ChatModelSearchRow[][] = [[], [], [], [], [], []];
+      // Keep text relevance primary; split each tier so recommended matches win
+      // ties across providers without changing the unfiltered browsing order.
+      const buckets = Array.from({ length: term ? 12 : 1 }, (): ChatModelSearchRow[] => []);
       for (const row of read().rows) {
         const score = term
           ? modelMatchRank(row, term)
@@ -87,7 +89,8 @@ export function createChatModelSearchView(
             ? 0
             : null;
         if (score !== null) {
-          buckets[score]!.push(row);
+          const rank = term ? score * 2 + (row.recommended && !row.disabled ? 0 : 1) : 0;
+          buckets[rank]!.push(row);
         }
       }
       const ranked: SearchMatch[] = [];

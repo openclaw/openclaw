@@ -226,7 +226,11 @@ describe("requester settle watch admission", () => {
             admittedRunContext,
             agentId: "main",
             sessionKey: REQUESTER_KEY,
-            receiptAuthority: params.isSourceSessionEffectsAllowed,
+            receiptAuthority: () => {
+              if (params.isSourceSessionEffectsAllowed?.() === false) {
+                throw new Error("agent tool caller authority is no longer active");
+              }
+            },
             receiptAdmission: params.sourceReceiptAdmission,
           });
           const sql = writer ? undefined : observeMainThreadSql();

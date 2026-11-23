@@ -88,7 +88,7 @@ export type TerminalPanelOpenAction = Extract<TerminalPanelAction, { kind: "cata
 
 export type TerminalPanelError = {
   text: string;
-  retryAction?: TerminalPanelOpenAction | { kind: "resume" };
+  retryAction?: TerminalPanelOpenAction | { kind: "resume" } | { kind: "restore" };
 };
 
 export type TerminalPanelSessionState = {

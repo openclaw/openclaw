@@ -598,6 +598,8 @@ export const startSubagentAnnounceCleanupFlow = (
         )?.protocolRunId;
         await commit((draft) => recordRequesterHandoff(draft, blockingRunId));
       }
+      // The registry already owns this completion's admitted source. Starting
+      // the requester turn inside the announce flow owns its next admission.
       announceOutcome = await subagentRuns.runWithCompletionAuthority(entry, () =>
         params.runSubagentAnnounceFlow({
           ...announceParams,

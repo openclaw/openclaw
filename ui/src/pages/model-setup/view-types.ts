@@ -20,8 +20,6 @@ type OptionalOwnerProps =
   | "cancellationNotice"
   | "activationUnresolved"
   | "onUseCurrentModel"
-  | "nativeSessionCatalogsEnabled"
-  | "onNativeSessionCatalogsChange"
   | "nativeModels"
   | "onOpenSetupAssistant";
 

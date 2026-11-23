@@ -21,10 +21,12 @@ import type {
   OpenClawIdAuthority,
 } from "./authority.js";
 import type { ClawNameRequest } from "./claw-name-check.js";
-import type { OpenClawIdAccount } from "./claw-store.js";
+import type { OpenClawIdAccount, StoredClaw } from "./claw-store.js";
 import { createOpenClawIdConnectionAccess } from "./connection-identity.js";
 import { setDeviceTokenBindingOwner } from "./device-token-binding.js";
+import { createEndpointKeyPin } from "./endpoint-key-pin.js";
 import type { TunnelApiHandler } from "./ingress-listener.js";
+import { linkSummaryOf } from "./link-summary.js";
 import type { OpenClawIdPeerActivity } from "./member-activity.js";
 import { publishMemberProfileRoleChanges } from "./member-role-change.js";
 import { createMemberRolePresetActivation } from "./member-role-presets.js";
@@ -40,6 +42,7 @@ import { appliedConfigKey, resolveSettings, sameSettings } from "./service-setti
 import { openClawIdTunnelStatus, type OpenClawIdStatus } from "./service-status.js";
 import { createTokenBindingPublisher } from "./service-token-bindings.js";
 import { createTunnelPrincipalPublisher } from "./service-tunnel-principals.js";
+import { createServiceUnlink } from "./service-unlink.js";
 import {
   isOpenClawIdTunnelPrincipalAdmitted,
   notifyOpenClawIdTunnelPrincipalsChanged,
@@ -123,7 +126,7 @@ export function createOpenClawIdService(params: {
   let lastPublish: PublishOutcome | undefined;
   // K_srv selected by linking or seen in a binding. Keep it when uncertain storage
   // withdraws authority, so a child restart cannot create another endpoint identity.
-  let lastBoundEndpointKey: string | undefined;
+  const endpointKeyPin = createEndpointKeyPin();
   const rebindPublication = createRebindPublication();
   let loadEffects: (() => Promise<OpenClawIdEffects>) | undefined;
   let effectsPromise: Promise<OpenClawIdEffects> | undefined;
@@ -269,6 +272,8 @@ export function createOpenClawIdService(params: {
     await owner.initializeMemberProfileRoles();
     localPrincipals.publish();
     await armOwnerExpiry(owner);
+    // Pending unlinks go out once the claw record is loaded, even before remote access starts.
+    unlinkSteps.resume();
     const settings = resolveSettings(config, params.getStateDir());
     if ("missing" in settings) {
       await stopRuntime();
@@ -285,6 +290,7 @@ export function createOpenClawIdService(params: {
     await stopRuntime();
     try {
       await armOwnerExpiry(await getAuthority());
+      unlinkSteps.resume();
       // A linked claw whose Gateway key is gone stays off rather than sign with a new key.
       const keyRefusal = await gatewayKey.refusal();
       if (keyRefusal) {
@@ -303,9 +309,7 @@ export function createOpenClawIdService(params: {
         settings,
         gatewayServer: params.getGatewayServer,
         membership: await (await getAuthority()).admittedPeerKeys(),
-        boundEndpointKey: () =>
-          (lastBoundEndpointKey =
-            authority?.current()?.binding?.body.k_srv ?? lastBoundEndpointKey),
+        boundEndpointKey: () => endpointKeyPin.read(authority?.current()),
         log: params.log,
         onStatus: (tunnel) => {
           status = openClawIdTunnelStatus(tunnel);
@@ -361,7 +365,7 @@ export function createOpenClawIdService(params: {
     }
     const client = createDiscoveryClient({ baseUrl: config.discoveryUrl, signer, signal });
     const { reconcileRegistration } = await import("./registration-recovery.js");
-    const recoveryFailure = await reconcileRegistration(owner, client);
+    const recoveryFailure = await reconcileRegistration(owner, client, code !== undefined);
     // Recovery persisted the account before publication; consume the authority's current record.
     record = owner.current()!;
     const outcome =
@@ -376,13 +380,16 @@ export function createOpenClawIdService(params: {
       }));
     lastPublish = outcome;
     peopleChanged();
+    // Mirror progress for this claw only: one unlinked meanwhile is gone from the record.
+    const settled = (update: Partial<StoredClaw["discovery"]>) =>
+      owner.recordDiscovery(update, record.claw_id);
     if (outcome.state === "published") {
       const bindingSeq = record.binding?.body.binding_seq ?? 0;
       if (rebindPublication.published(bindingSeq, record.discovery.published_binding_seq)) {
         const event = { type: "notify_owners", event: "rebind", ref: `${bindingSeq}` } as const;
         void notifyOwners([event]).catch((error: unknown) => params.log.warn(String(error)));
       }
-      await owner.recordDiscovery({
+      await settled({
         owner_account_id: outcome.ownerAccountId,
         published_binding_seq: record.binding?.body.binding_seq ?? 0,
         published_snapshot_seq: outcome.snapshotSeq,
@@ -393,9 +400,7 @@ export function createOpenClawIdService(params: {
       params.log.warn(`openclaw-id: Discovery publication failed (${outcome.code})`);
       // Registered before failing: keep the account, so a retry needs no enrollment code.
       if (outcome.ownerAccountId) {
-        await (
-          await getAuthority()
-        ).recordDiscovery({
+        await settled({
           owner_account_id: outcome.ownerAccountId,
           published_binding_seq: record.binding?.body.binding_seq ?? 0,
         });
@@ -527,6 +532,7 @@ export function createOpenClawIdService(params: {
   // Only disabling the feature or closing this Gateway ends its local membership source.
   const stopLocalAuthority = () => {
     rebindOwner.stop();
+    unlinkSteps.stop();
     ownerExpiry.stop();
     peopleExpiry.stop();
     stopAuthorityChanges?.();
@@ -567,7 +573,7 @@ export function createOpenClawIdService(params: {
       clawId: record.claw_id,
       client,
       cursor: record.discovery.mailbox_cursor,
-      sink: createMailboxSink(owner),
+      sink: createMailboxSink(owner, record.claw_id),
       onEffects: async (events) => {
         await applyEvents(events);
       },
@@ -660,15 +666,16 @@ export function createOpenClawIdService(params: {
   });
 
   const restartForRebind = () => stopRuntime().then(reconcile);
-  const rebindOwner = createServiceRebindOwner({
+  const machine = {
     ...params,
     getAuthority,
     gatewayKey,
     enabled,
-    holdCode: rebindPublication.hold,
     restartRemoteAccess: () =>
       (queue = queue.then(restartForRebind, restartForRebind)).then(() => status),
-  });
+  };
+  const rebindOwner = createServiceRebindOwner({ ...machine, holdCode: rebindPublication.hold });
+  const unlinkSteps = createServiceUnlink({ ...machine, applyEvents });
 
   localPrincipals.publish();
 
@@ -708,17 +715,7 @@ export function createOpenClawIdService(params: {
       if (!isOpenClawIdEnabled(params.getConfig())) {
         return { linked: false as const };
       }
-      const record = await (await getAuthority()).load();
-      const state = record?.authority;
-      if (!record || !state) {
-        return { linked: false as const };
-      }
-      return {
-        linked: true as const,
-        clawId: record.claw_id,
-        hostname: record.hostname ?? undefined,
-        rootPub: state.anchor.root_pub,
-      };
+      return linkSummaryOf(await (await getAuthority()).load());
     },
 
     /**
@@ -777,8 +774,9 @@ export function createOpenClawIdService(params: {
       const { pub: kGw }: { pub: Ed25519PublicKey } = await gatewayKey.load();
       // A link write can persist and then lose both its acknowledgement and reconciliation.
       // Retain the running identity before awaiting settlement, not only after success.
-      lastBoundEndpointKey = kSrv;
-      const result = await (await getAuthority()).commitLink(input, channel, { kSrv, kGw, guard });
+      const owner = await getAuthority();
+      endpointKeyPin.retain(kSrv, owner.current()?.claw_id);
+      const result = await owner.commitLink(input, channel, { kSrv, kGw, guard });
       if (!result.ok) {
         return result;
       }
@@ -794,6 +792,9 @@ export function createOpenClawIdService(params: {
     },
 
     rebind: rebindOwner.run,
+
+    /** Unlink from OpenClaw ID on this computer: the warning's counts, and the unlink itself. */
+    unlink: unlinkSteps,
 
     /** Retries publication with a code (after linking, or `needs_link_code`) held until success. */
     async publish(enrollmentCode?: string): Promise<PublishOutcome | undefined> {

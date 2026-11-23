@@ -330,7 +330,7 @@ describe("a launched subagent", () => {
     const waiting = [{ ...c, activeRunIds: ["run"] }];
     const waited = { details: { completed, pending: [] } };
     expect(headline("agents_wait", { ids: ["run"] }, "Wait for Agents", waiting, waited)).toBe(
-      "Wait for subagents",
+      "Waiting for subagents",
     );
     // An unlabeled launch is named by the session its result names.
     const spawn = { outputText: accepted(c.key) };

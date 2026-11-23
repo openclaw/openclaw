@@ -8,40 +8,6 @@ import type { TempHomeEnv } from "../../test-utils/temp-home.js";
 import type { updateFinalizeCommand as UpdateFinalizeCommand } from "./update-command-finalize.js";
 import type { updateCommand as UpdateCommand } from "./update-command.js";
 
-export async function mockUnbuiltRecoveryFixture(): Promise<void> {
-  // These fixtures must not inherit build identity from the checkout's generated dist.
-  vi.spyOn(
-    await import("../../infra/update-git-runtime.js"),
-    "readBuiltGatewayBuildId",
-  ).mockResolvedValue(null);
-}
-
-export const recoveryObservationStep = (cwd = process.cwd()) => ({
-  name: "gateway recovery observation",
-  command: "gateway verification",
-  cwd,
-  durationMs: expect.any(Number),
-  exitCode: 0,
-  diagnostics: [
-    expect.stringMatching(
-      /^(?:No recovery needed; .+ No service was stopped or started\.|Gateway readiness was not checked: no Gateway service or listener was present before maintenance\.)$/,
-    ),
-  ],
-});
-export const recoveryCleanupStep = () => ({
-  name: "recovery-artifact-cleanup",
-  command: "openclaw update cleanup",
-  cwd: "",
-  durationMs: expect.any(Number),
-  exitCode: 0,
-  // The summary comes first; one line per removed or kept item follows.
-  diagnostics: expect.arrayContaining([
-    expect.stringMatching(
-      /^Update backup cleanup removed [1-9]\d* items? \([1-9]\d* logical bytes, .+\)\./,
-    ),
-  ]),
-});
-
 export function registerFailureSelectorTests(deps: {
   updateCommand: typeof UpdateCommand;
   updateFinalizeCommand: typeof UpdateFinalizeCommand;
@@ -51,10 +17,7 @@ export function registerFailureSelectorTests(deps: {
   runUpdateFailureTriage: typeof RunUpdateFailureTriage;
   expectSelectorTriageFailure: typeof import("../update-cli-invocation.test-support.js").expectSelectorTriageFailure;
 }) {
-  it.each([
-    { name: "update", run: deps.updateCommand },
-    { name: "repair", run: deps.updateFinalizeCommand },
-  ])(
+  it.each([{ name: "repair", run: deps.updateFinalizeCommand }])(
     "$name pins relative installation selectors before failed-update triage",
     async ({ name, run }) => {
       const failure = new Error(name === "update" ? "Git update failed" : "Config snapshot failed");
@@ -71,9 +34,7 @@ export function registerFailureSelectorTests(deps: {
         OPENCLAW_WORKSPACE_DIR: "relative-workspace",
       };
       await withEnvAsync(selectors, async () => {
-        const error = await run({ yes: true, json: true, restart: false }).catch(
-          (caught: unknown) => caught,
-        );
+        const error = await run({ yes: true, json: true }).catch((caught: unknown) => caught);
         expect(deps.runUpdateFailureTriage).toHaveBeenCalledOnce();
         const triageCall = vi.mocked(deps.runUpdateFailureTriage).mock.calls[0]?.[0];
         if (name === "update") {

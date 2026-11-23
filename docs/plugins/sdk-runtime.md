@@ -185,17 +185,19 @@ the session's cached prefix:
   the session's pinned system prompt and tool definitions.
 - The fork sends its rebuilt request instead of the replay when the parent sent
   an item the rebuilt context lacks, the parent request is a continuation that
-  carries only its delta, the fork may run a tool the parent request never
-  listed, or the fork may run tools and the parent request lists a
-  provider-hosted tool.
+  carries only its delta, or the fork may run a tool the parent request never
+  listed.
 
-Every tool the session lists stays in the request; the fork runs only the tools
-it was given. A call to any other tool returns a normal result such as
-`exec is not available in this background run.` A tool-free fork also sets tool
-choice to `none` on OpenAI Responses (including native ChatGPT), Chat
-Completions and Anthropic Messages, so provider-hosted tools cannot run. Other
-APIs keep the parent's tool choice; a tool-free fork whose request carries a
-provider-hosted tool on those APIs fails before it is sent.
+Every tool the session lists stays in the request, including provider-hosted
+tools such as web search, so the fork shares the session's cached tool list. The
+fork runs only the client tools it was given; a call to any other client tool
+returns a normal result such as `exec is not available in this background
+run.` A fork that runs tools may also use the session's provider-hosted tools,
+because the provider runs those before the fork's tool gate. A tool-free fork
+sets tool choice to `none` on OpenAI Responses (including native ChatGPT), Chat
+Completions and Anthropic Messages, so no tool runs. Other APIs keep the
+parent's tool choice; a tool-free fork whose request carries a provider-hosted
+tool on those APIs fails before it is sent.
 
 A fork uses the session's full model context with the model's own context
 window and compaction, not an excerpt. Thinking follows the session, because
@@ -523,6 +525,10 @@ callback keeps its registry until its returned operation settles; detached async
 resources do not extend that lifetime. Access to a released registry fails instead
 of silently selecting the current generation. Admitted turns and explicitly
 retained consumers keep their selected generation until they settle.
+Queued channel replies retain their delivery and run-observer callbacks until
+source settlement, independently of the inbound turn's adoption lifecycle.
+An internal delivery-recovery turn takes its own callback hold; completing the
+original turn does not close the recovery's callbacks or reuse its cancellation identity.
 Registry-dependent runtime APIs re-enter their live plugin owner after adoption
 and preserve an explicitly prepared registry, including an empty selection.
 

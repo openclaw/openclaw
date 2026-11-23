@@ -102,7 +102,7 @@ describe("requester settle retry lifetime", () => {
         agentId: "main",
         sessionKey: input.subagent.requesterSessionKey,
         operationalRunInstance: createOperationalRunInstanceRef("originating-wake-turn"),
-        receiptAuthority: () => !origin.signal.aborted,
+        receiptAuthority: () => origin.signal.throwIfAborted(),
         approvalSignals: [origin.signal],
       };
       const entered = createDeferred();
@@ -125,7 +125,7 @@ describe("requester settle retry lifetime", () => {
         origin.abort();
         await withGatewayToolCallerIdentity(caller, () => {
           expect(() => captureGatewayToolCallerAssertion()?.("agent")).toThrow(
-            "agent tool caller authority is no longer active",
+            "operation was aborted",
           );
         });
         release.resolve();

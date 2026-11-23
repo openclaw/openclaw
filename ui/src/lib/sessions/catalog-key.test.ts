@@ -46,6 +46,7 @@ it.each([undefined, "home:a/b"])(
 );
 
 it("keeps the explicit agent owner across paginated lookup requests", async () => {
+  const profileRelation = { relationship: "involving", target: { type: "me" } } as const;
   const read = new AbortController();
   const key = { catalogId: "codex", hostId: "gateway:local", threadId: "thread-2" };
   const request = vi
@@ -59,6 +60,7 @@ it("keeps the explicit agent owner across paginated lookup requests", async () =
     agentId: "jarvis",
     isCurrent: () => true,
     signal: read.signal,
+    profileRelation,
   });
 
   expect(result?.session?.threadId).toBe("thread-2");
@@ -67,6 +69,7 @@ it("keeps the explicit agent owner across paginated lookup requests", async () =
     catalogId: "codex",
     hostIds: ["gateway:local"],
     limitPerHost: 100,
+    profileRelation,
   };
   expect(request).toHaveBeenNthCalledWith(1, "sessions.catalog.list", params, {
     signal: read.signal,

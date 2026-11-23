@@ -1198,40 +1198,53 @@ const text = fs.readFileSync(process.argv[2], "utf8");
 const result = JSON.parse(text.slice(text.indexOf("{")));
 assert.equal(result.status, "skipped", "second update was not a clean no-op");
 assert.equal(result.reason, "already-current", "second update was not already current");
-// The isolated state directory records a service refusal without running the suggested command.
-assert(Array.isArray(result.steps), "second update did not report its steps");
-// Already-current updates still retire verified recovery artifacts, never packages.
-const cleanups = result.steps.filter((step) => step.name === "recovery-artifact-cleanup");
-assert(cleanups.length <= 1, "second update repeated recovery cleanup");
-for (const { durationMs, diagnostics, ...step } of cleanups) {
-  assert(Number.isFinite(durationMs) && durationMs >= 0, "invalid recovery cleanup duration");
-  assert.deepEqual(step, {
-    name: "recovery-artifact-cleanup", command: "openclaw update cleanup", cwd: "", exitCode: 0,
-  }, "second update recovery cleanup did not finish cleanly");
-  // The summary comes first; one line per removed or kept item may follow.
-  // Earlier releases reported one fixed sentence.
-  assert(Array.isArray(diagnostics) && diagnostics.length >= 1 &&
-    diagnostics.every((line) => typeof line === "string") &&
-    (/^Update backup cleanup removed \d+ items? \(\d+ logical bytes, [^)]+\)\./.test(diagnostics[0]) ||
-      (diagnostics.length === 1 &&
-        /^Recovery cleanup removed \d+ files \(\d+ logical bytes\); protected recovery artifacts were retained\.$/.test(diagnostics[0]))),
-    "second update omitted its verified recovery cleanup outcome");
+// Current release updaters return their lifecycle record; historical candidates
+// still return command receipts, which retain their checks below.
+if (Object.hasOwn(result, "phase")) {
+  assert.equal(result.phase, "finished", "second update did not finish");
+  assert.deepEqual(result.steps.map(({ step, status }) => ({ step, status })), [
+    { step: "requested", status: "completed" },
+    { step: "staging", status: "skipped" },
+    { step: "plugins", status: "completed" },
+  ], "second update executed mutations or did not finish plugin maintenance");
+  assert.deepEqual(result.repair, [], "second update ran a repair");
+  assert(!result.origin.nextAction, "second update requested repair");
+} else {
+  // The isolated state directory records a service refusal without running the suggested command.
+  assert(Array.isArray(result.steps), "second update did not report its steps");
+  // Already-current updates still retire verified recovery artifacts, never packages.
+  const cleanups = result.steps.filter((step) => step.name === "recovery-artifact-cleanup");
+  assert(cleanups.length <= 1, "second update repeated recovery cleanup");
+  for (const { durationMs, diagnostics, ...step } of cleanups) {
+    assert(Number.isFinite(durationMs) && durationMs >= 0, "invalid recovery cleanup duration");
+    assert.deepEqual(step, {
+      name: "recovery-artifact-cleanup", command: "openclaw update cleanup", cwd: "", exitCode: 0,
+    }, "second update recovery cleanup did not finish cleanly");
+    // The summary comes first; one line per removed or kept item may follow.
+    // Earlier releases reported one fixed sentence.
+    assert(Array.isArray(diagnostics) && diagnostics.length >= 1 &&
+      diagnostics.every((line) => typeof line === "string") &&
+      (/^Update backup cleanup removed \d+ items? \(\d+ logical bytes, [^)]+\)\./.test(diagnostics[0]) ||
+        (diagnostics.length === 1 &&
+          /^Recovery cleanup removed \d+ files \(\d+ logical bytes\); protected recovery artifacts were retained\.$/.test(diagnostics[0]))),
+      "second update omitted its verified recovery cleanup outcome");
+  }
+  // Advisory guidance is product prose that releases reword; require one, not its text.
+  const steps = result.steps.filter((step) => step.name !== "recovery-artifact-cleanup")
+    .map(({ advisory, ...step }) => advisory ? {
+    ...step,
+    advisory: { kind: advisory.kind, explained: typeof advisory.message === "string" && advisory.message.trim() !== "" },
+  } : step);
+  const expectedSteps = steps.length === 0 ? [] : [{
+    name: "managed-service-reconciliation",
+    command: "openclaw gateway install --force",
+    cwd: result.root ?? "",
+    durationMs: 0,
+    exitCode: 0,
+    advisory: { kind: "recoverable-maintenance", explained: true },
+  }];
+  assert.deepEqual(steps, expectedSteps, "second update executed mutations or unexpected maintenance");
 }
-// Advisory guidance is product prose that releases reword; require one, not its text.
-const steps = result.steps.filter((step) => step.name !== "recovery-artifact-cleanup")
-  .map(({ advisory, ...step }) => advisory ? {
-  ...step,
-  advisory: { kind: advisory.kind, explained: typeof advisory.message === "string" && advisory.message.trim() !== "" },
-} : step);
-const expectedSteps = steps.length === 0 ? [] : [{
-  name: "managed-service-reconciliation",
-  command: "openclaw gateway install --force",
-  cwd: result.root ?? "",
-  durationMs: 0,
-  exitCode: 0,
-  advisory: { kind: "recoverable-maintenance", explained: true },
-}];
-assert.deepEqual(steps, expectedSteps, "second update executed mutations or unexpected maintenance");
 assert(!result.nextAction, "second update requested repair");
 console.log("Second update: already-current, no package mutations or repair required.");
 NODE

@@ -217,6 +217,14 @@
   overflow-wrap: anywhere;
 }
 
+.cmd-palette__item-title--archived {
+  color: var(--muted);
+}
+
+.cmd-palette__avatar--archived {
+  opacity: 0.55;
+}
+
 /* The time centers on the row, across the title and its metadata. */
 .cmd-palette__item-time {
   grid-column: 2;

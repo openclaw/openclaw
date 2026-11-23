@@ -293,6 +293,18 @@ export function filterSessionEntries(
         target: NonNullable<ReturnType<SessionListTargetLookup>>,
       ): boolean => {
         const storeKey = target.storeKey ?? key;
+        if (opts.searchTitlesOnly) {
+          return [
+            entry.label,
+            entry.subject,
+            resolveSessionListSearchDisplayName(storeKey, entry),
+            resolveGatewaySessionDisplayName(storeKey, entry),
+          ].some(
+            (title) =>
+              normalizeSessionSearchLiteral(title).includes(search) ||
+              Boolean(titleSearch && normalizeSessionSearchText(title).includes(titleSearch)),
+          );
+        }
         let fields = staticSearchFields.get(entry);
         if (!fields || fields.key !== storeKey) {
           const titles = [
@@ -408,12 +420,14 @@ export function filterSessionEntries(
           const modelKey = JSON.stringify([
             "prepared",
             agentId,
-            source.selectedModel.provider,
-            source.selectedModel.model,
+            source.selectedModel?.provider,
+            source.selectedModel?.model,
             source.rowModelIdentity.provider,
             source.rowModelIdentity.model,
           ]);
-          if (matchesModelRefs(modelKey, () => [source.selectedModel, source.rowModelIdentity])) {
+          if (
+            matchesModelRefs(modelKey, () => [source.selectedModel ?? {}, source.rowModelIdentity])
+          ) {
             return true;
           }
         }

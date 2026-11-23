@@ -254,7 +254,10 @@ describe("artifacts RPC handlers", () => {
   it("does not discover untyped non-string data as an artifact", async () => {
     mockArtifactBlock(2, { data: {} });
     const listed = await listArtifacts({ sessionKey: "agent:main:main" });
-    expect(expectArtifactList(listed.calls)).toEqual({ artifacts: [] });
+    expect(expectArtifactList(listed.calls)).toEqual({
+      artifacts: [],
+      attachments: { sessionId: "sess-main", messages: [] },
+    });
   });
 
   it.each([

@@ -47,6 +47,18 @@ export function commandFixture(groups: string[] = ["Team"], agents?: OpenClawCon
     select: (share: unknown) => {
       config.plugins!.entries!["session-share"]!.config = { share };
     },
+    listForProfile: async (params: Record<string, unknown>) =>
+      JSON.parse(
+        await commands
+          .find((command) => command.command === "openclaw.sessions.catalog.list.v1")!
+          .handle(JSON.stringify(params)),
+      ) as SessionPage,
+    readForProfile: async (threadId: string, params: Record<string, unknown>) =>
+      JSON.parse(
+        await commands
+          .find((command) => command.command === "openclaw.sessions.catalog.read.v1")!
+          .handle(JSON.stringify({ threadId, ...params })),
+      ) as TranscriptPage,
     list: async (params: Record<string, unknown> = {}) =>
       JSON.parse(await list.handle(JSON.stringify(params))) as SessionPage,
     read: async (threadId: string, params: Record<string, unknown> = {}) =>
