@@ -67,7 +67,7 @@ function install(params: {
 }
 
 const REBUILD =
-  "git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force; openclaw gateway start";
+  "git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force || { openclaw gateway start; false; }";
 
 it("refuses a schema change for the early release updater and names the rebuild", () => {
   const { root, env } = install({});
@@ -79,7 +79,8 @@ it("refuses a schema change for the early release updater and names the rebuild"
   );
   expect(refusal).toContain("the Gateway was not touched");
   // The early updater redacts state and home paths out of this output; the step names none.
-  const rebuild = refusal.split("\n").at(-1);
+  const rebuild = refusal.split("
+").at(-1);
   expect(rebuild).toBe(REBUILD);
   expect(rebuild).not.toMatch(/[\s~]\//u);
 
@@ -130,6 +131,9 @@ it("lets the early release updater through when nothing migrates or state is unr
   }
   const newer = install({ state: OPENCLAW_STATE_SCHEMA_VERSION + 1, agents: [] });
   expect(inspect(newer.root, newer.env)).toBeNull();
+  // A PostgreSQL-backed store's local anchor has user_version 0; the server holds the schema.
+  const postgres = install({ state: 0, agents: [] });
+  expect(inspect(postgres.root, postgres.env)).toBeNull();
   const unreadable = install({});
   fs.writeFileSync(path.join(unreadable.stateDir, "state", "openclaw.sqlite"), "not a database");
   expect(inspect(unreadable.root, unreadable.env)).toBeNull();

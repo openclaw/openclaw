@@ -140,6 +140,12 @@ On Windows, the task supervisor starts without the Gateway's config or state
 bootstrap. Only its child opens the state databases; the waiting supervisor must
 not retain a connection or admission descriptor across a release switch.
 
+The Gateway's launcher IPC listener does not keep the child process alive. Once
+Gateway cleanup settles, the child exits naturally so the resident launcher can
+start the pending release, including after a rollback. Stop and readiness messages
+still use the same channel while the Gateway is running. The serving release must
+contain this fix; a newer candidate cannot release an older Gateway's IPC reference.
+
 Rules for update changes:
 
 - Change update behavior in `src/update/`. Do no update work while the Gateway is
@@ -222,10 +228,13 @@ contain this fix.
 
 The serving Gateway records a completed release rollback as a failed update, with
 the launcher's reason and the previous version's running facts. Settings → Updates
-and `openclaw update status` offer Retry, then Report update failure if it fails
-again. Startup output remains in the saved diagnostic details, not a failed update
-step. Unperformed verification checks are not reported as warnings. Machine-only
-Doctor check receipts stay in saved JSON, not installation steps or report text.
+and `openclaw update status` show that cause, then offer Retry and Report update
+failure if it fails again. Saved verification remains labeled as recorded facts;
+an unavailable current-health probe adds no separate notice. The failed phase and
+its internal check stay in the saved row, not the rollback summary. Startup output
+remains in the saved diagnostic details, not a failed update step. Unperformed
+verification checks are not reported as warnings. Machine-only Doctor check
+receipts stay in saved JSON, not installation steps or report text.
 Failed supplemental steps count toward the success headline's warnings without
 changing the recorded successful outcome.
 The installed updater must contain preparation-step reporting changes; the
@@ -2176,19 +2185,25 @@ files, is not on a branch, cannot fast-forward to the release's commit, or has c
 upstream lacks; when the service or the `openclaw` command on PATH runs another installation or
 state directory; when less than 4 GiB is free; and on macOS, Windows and hosts without a systemd
 user manager. If the build fails, the Gateway keeps serving the new release and the recorded
-outcome names the command to finish with. Then run from the checkout:
+outcome names the command to finish with. When it does not start, run this from the checkout:
 
 ```sh
-git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force; openclaw gateway start
+git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force || { openclaw gateway start; false; }
 ```
 
 The rebuild moves the service back to the checkout, which ends the startup failure above. The
-rebuilt Gateway migrates state when the service starts, and `openclaw gateway start` waits until
-it is ready. Later `openclaw update` runs use the rebuilt checkout's updater. After this
-by-hand rebuild, the older layout's `git-install/lib/node_modules/openclaw` link and the release
-it names stay on disk (about 4.6 GiB) and are no longer used. To free that space, remove the
-release directory the link names, then the link, then run `git worktree prune` in the checkout.
-Updates that change no schema still go through the older updater.
+reinstalled service starts the rebuilt Gateway, which migrates state at boot. If an earlier step
+fails, the command starts the previous service again and exits non-zero; a failed `pnpm build`
+can leave the checkout's build incomplete, so fix the reported error and run the line again.
+PostgreSQL-backed stores are not covered: follow the stopped-writer Doctor procedure in
+[PostgreSQL updates and schema migrations](/gateway/postgresql#updates-and-schema-migrations).
+Later `openclaw update` runs use the rebuilt checkout's updater; their first trial falls back to
+the rebuilt checkout. The older layout's `git-install/lib/node_modules/openclaw` link and the
+release it names stay on disk (about 4.6 GiB) and are no longer used. To free that space, remove
+the release directory the link names, then the link, then run `git worktree prune` in the
+checkout. Updates that change no schema still go through the older updater; when its Gateway
+fails at startup (the web search case above), run them from a terminal with the checkout's
+`openclaw`, not from the Control UI.
 
 The inspection reports data at risk only on evidence: a schema that moved, or a store it
 cannot read after a new-version Doctor or boot check may have written it. When no

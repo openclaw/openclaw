@@ -514,6 +514,15 @@ personality/SOUL greeting, not a saved canned greeting or a message sent on your
 behalf. Later setup failure retains the exposed agent and conversation;
 completion does not replace an existing draft.
 
+Offline CLI Add checks model and sign-in availability before its optional greeting.
+If no usable model is available, it skips the greeting and prints a short note to
+stderr, including with `--json`. Dependency installation, automations, and
+first-run instruction files still finish normally; a successful Add exits `0`.
+Configure a model in **Settings → Models**, then open the new agent's chat.
+When a model is available, Add still runs the greeting. A failed model turn or
+failed setup step still reports `partial` and exits `1`; it is not treated as a
+skipped greeting.
+
 During a CLI Add, the installer shows a card for each newly installed plugin and
 an automation-created notice as each routine is added. Disabled routines remain
 disabled while their setup prerequisites are missing. Actual installation failures
@@ -565,14 +574,20 @@ stops agent creation. You choose installation or enabling afterwards.
 This path creates declared `automations` (`cronJobs` in older manifests); it
 does not convert legacy `agent.heartbeat` settings into a heartbeat automation.
 
-Intermediate text and card sends are non-final; the final reply closes setup.
+Intermediate text and card sends are non-final. A final reply alone does not
+finish setup: the Gateway checks that every declared automation exists under
+its declaration key and belongs to the new agent's conversation. It includes
+paused jobs and does not rewrite jobs you have already edited or enabled.
+If any are missing, **Retry setup** remains available in the same chat.
 Sending becomes available when setup finishes; a message typed earlier stays in
 the composer.
 
 If that first turn fails or is interrupted, **Retry setup** runs only that turn
 with a fresh run ID in the existing chat. It does not re-create the agent,
 rewrite its files, fetch the Template again, or reinstall dependencies. The
-ordinary session retains the creation report until the turn completes; a retry
+exception is a pending setup from an older Gateway that did not record the
+declared automation IDs: it reverifies the exact release once to recover them.
+The ordinary session retains the creation report until the turn completes; a retry
 cannot start a second setup while the first still owns the agent's setup lease.
 Retry explicitly targets the admitted agent. If setup completed while the client
 was disconnected, Retry reconciles that existing chat without adding another copy.
@@ -601,6 +616,13 @@ require their separate explicit acknowledgements.
 
 For `add` and `dev`, an explicitly empty `--agent-id` is invalid. Omit the option
 to use the default unused ID.
+
+For a new cron automation, Gateway Add uses the time zone reported by the device
+that adds the Template. For example, a 9 AM schedule added from Los Angeles
+runs at 9 AM Los Angeles time, even if the Gateway is in London. If the client
+does not report a valid time zone, Add uses the zone declared in the Template.
+Viewing the Template or retrying setup from another device does not move an
+existing job. Interval automations are unchanged.
 
 Gateway Add review responses describe schedules as either `{ cron, timezone }`
 or `{ everyMs }`, where `everyMs` is a positive integer in milliseconds. Delivery
