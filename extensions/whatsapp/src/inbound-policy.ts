@@ -18,12 +18,19 @@ import { isSelfChatMode } from "./targets-runtime.js";
 
 type ResolvedWhatsAppInboundPolicy = ReturnType<typeof resolveWhatsAppInboundPolicy>;
 
+// Brazilian mobiles gained a ninth digit (+55, area code, 9, eight digits), but WhatsApp still
+// identifies many older accounts by the eight-digit form. Mobile numbers began with 6-9 before
+// the change and landlines never do, so dropping that 9 cannot match a different line.
+const BRAZIL_NINTH_DIGIT_MOBILE_RE = /^\+55(\d{2})9([6-9]\d{7})$/;
+
 function normalizeWhatsAppIngressPhone(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) {
     return null;
   }
-  return normalizeE164(trimmed);
+  const e164 = normalizeE164(trimmed);
+  const brazilMobile = BRAZIL_NINTH_DIGIT_MOBILE_RE.exec(e164);
+  return brazilMobile ? `+55${brazilMobile[1]}${brazilMobile[2]}` : e164;
 }
 
 export function resolveWhatsAppInboundPolicy(params: {

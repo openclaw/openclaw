@@ -639,18 +639,21 @@ export function installRemainingPluginMock(fixture: RemainingFixture) {
         qrDataUrl: fixture.qrDataUrl,
       }),
     );
+    // The view waits as soon as its code shows; the flow decides when the phone scans.
     gateway.setRequestHandler("web.login.wait", ({ respond }) => {
-      Object.assign(fixture.status.channels.whatsapp, {
-        linked: true,
-        running: true,
-        connected: true,
+      Reflect.set(globalThis, "__openclawBenchWhatsAppScan", () => {
+        Object.assign(fixture.status.channels.whatsapp, {
+          linked: true,
+          running: true,
+          connected: true,
+        });
+        Object.assign(fixture.status.channelAccounts.whatsapp[0]!, {
+          linked: true,
+          running: true,
+          connected: true,
+        });
+        respond({ connected: true, message: "Linked." });
       });
-      Object.assign(fixture.status.channelAccounts.whatsapp[0]!, {
-        linked: true,
-        running: true,
-        connected: true,
-      });
-      respond({ connected: true, message: "Linked." });
     });
   }
 }

@@ -158,7 +158,7 @@ export function WhatsAppCard(props: {
             </button>
           </div>
         </div>
-        <Show when={login()?.message}>
+        <Show when={!login()?.qrDataUrl && login()?.message}>
           {(message) => (
             <div class="settings-row" role="status">
               <div class="settings-row__text">
@@ -173,16 +173,10 @@ export function WhatsAppCard(props: {
               <div class="qr-wrap">
                 <img src={qr()} alt={t("channels.setup.whatsappQrAlt")} />
               </div>
-              <div class="settings-row__control">
-                <button
-                  type="button"
-                  class="btn primary"
-                  disabled={login()?.busy}
-                  onClick={() => run(() => props.context.login!.wait())}
-                >
-                  {t("common.waitForScan")}
-                </button>
-              </div>
+              {/* The application keeps waiting while the code shows; a scan links on its own. */}
+              <span class="settings-row__desc" role="status">
+                {t("channels.whatsapp.waitingForScan")}
+              </span>
             </div>
           )}
         </Show>

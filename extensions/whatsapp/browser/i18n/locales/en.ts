@@ -14,7 +14,6 @@ export default {
     relink: "Relink",
     working: "Working",
     showQr: "Show QR",
-    waitForScan: "Wait for scan",
     logout: "Logout",
     refresh: "Refresh",
   },
@@ -27,6 +26,7 @@ export default {
       title: "WhatsApp",
       subtitle: "Link WhatsApp Web and monitor connection health.",
       phoneNumber: "Phone number",
+      waitingForScan: "Waiting for a scan. The code refreshes on its own.",
       logoutConfirmTitle: "Log out of WhatsApp account {accountId}?",
       logoutConfirmMessage:
         "Logging out of account {accountId} stops its listener and deletes its saved credentials.",

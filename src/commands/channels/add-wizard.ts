@@ -144,7 +144,12 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
   let selection: ChannelChoice[] = [];
   const accountIds: Partial<Record<ChannelChoice, string>> = {};
   const resolvedPlugins = new Map<ChannelChoice, ChannelSetupPlugin>();
-  await prompter.intro("Channel setup");
+  // Gateway clients draw their own title and completion state; as wizard notes these
+  // would each become a screen that only asks for Continue.
+  const clientHosted = params.deferDeviceLinkToClient === true;
+  if (!clientHosted) {
+    await prompter.intro("Channel setup");
+  }
   let nextConfig = await onboardChannels.setupChannels(cfg, runtime, prompter, {
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     ...(params.initialChannel
@@ -195,10 +200,14 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
   if (selection.length === 0) {
     if (nextConfig !== cfg) {
       await commitWizardConfig(nextConfig);
-      await prompter.outro("Channels updated.");
+      if (!clientHosted) {
+        await prompter.outro("Channels updated.");
+      }
       return;
     }
-    await prompter.outro("No channel changes made.");
+    if (!clientHosted) {
+      await prompter.outro("No channel changes made.");
+    }
     return;
   }
 
@@ -267,15 +276,20 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
       const owner = tryResolveAgentOperationAgentId(nextConfig);
       const defaultAgentId =
         owner === undefined ? undefined : resolveConfiguredAgentId(nextConfig, owner);
+      // A client opens setup from one agent's context, so that agent receives the channel.
+      const clientTargetAgentId =
+        clientHosted && usesTargetedDefaults ? (params.agentId ?? defaultAgentId) : undefined;
       for (const target of bindTargets) {
-        const targetAgentId = await prompter.select({
-          message: `Send ${target.channel}/${target.accountId} messages to agent`,
-          options: agentSummaries.map((agent) => ({
-            value: agent.id,
-            label: agent.isDefault ? `${agent.id} (default)` : agent.id,
-          })),
-          initialValue: params.agentId ?? defaultAgentId,
-        });
+        const targetAgentId =
+          clientTargetAgentId ??
+          (await prompter.select({
+            message: `Send ${target.channel}/${target.accountId} messages to agent`,
+            options: agentSummaries.map((agent) => ({
+              value: agent.id,
+              label: agent.isDefault ? `${agent.id} (default)` : agent.id,
+            })),
+            initialValue: params.agentId ?? defaultAgentId,
+          }));
         const bindingResult = applyAgentBindings(nextConfig, [
           {
             agentId: targetAgentId,
@@ -283,7 +297,10 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
           },
         ]);
         nextConfig = bindingResult.config;
-        if (bindingResult.added.length > 0 || bindingResult.updated.length > 0) {
+        if (
+          clientTargetAgentId === undefined &&
+          (bindingResult.added.length > 0 || bindingResult.updated.length > 0)
+        ) {
           await prompter.note(
             [
               ...bindingResult.added.map((binding) => `Added: ${describeBinding(binding)}`),
@@ -315,7 +332,9 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
       accountId: accountIds[channel] ?? DEFAULT_ACCOUNT_ID,
     })),
   );
-  await prompter.outro("Channels updated.");
+  if (!clientHosted) {
+    await prompter.outro("Channels updated.");
+  }
 }
 
 /**

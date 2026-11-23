@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { flush } from "solid-js";
 import { describe, expect, it } from "vitest";
 import {
   renderWizard,
@@ -8,6 +9,16 @@ import {
 } from "./wizard-view.test-support.ts";
 
 setupWizardTests();
+
+const buttonLabels = (container: HTMLElement) =>
+  [...container.querySelectorAll("button")].map(
+    (node) => node.getAttribute("aria-label") ?? node.textContent?.trim(),
+  );
+
+const button = (container: HTMLElement, label: string) =>
+  [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+    (node) => node.textContent?.trim() === label,
+  ) ?? expect.unreachable(`Missing ${label}`);
 
 describe("ChannelWizard", () => {
   it.each([
@@ -100,6 +111,114 @@ describe("ChannelWizard", () => {
     expect(container.querySelector(".channels-wizard__output")?.textContent).toBe(message);
     expect(container.querySelector(".channels-wizard__note")).toBeNull();
     expect(container.querySelector(".channels-wizard__links button")).toBeNull();
+  });
+
+  it("offers a few described choices as cards answered with Continue", () => {
+    const view = renderWizard(
+      wizardStep(
+        {
+          id: "phone",
+          type: "select",
+          message: "Which phone will you link?",
+          options: [
+            { value: "personal", label: "My own WhatsApp", hint: "Only you can reach it." },
+            { value: "separate", label: "A separate number", hint: "You approve people." },
+          ],
+          initialValue: "personal",
+        },
+        { channel: "whatsapp", busy: false },
+      ),
+    );
+    const radios = [...view.container.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+    expect(view.container.querySelector('[role="radiogroup"]')?.getAttribute("aria-label")).toBe(
+      "Which phone will you link?",
+    );
+    expect(radios.map((radio) => radio.getAttribute("aria-checked"))).toEqual(["true", "false"]);
+    radios[1]?.click();
+    flush();
+    expect(radios.map((radio) => radio.getAttribute("aria-checked"))).toEqual(["false", "true"]);
+    expect(view.onAnswer).not.toHaveBeenCalled();
+    button(view.container, "Continue").click();
+    expect(view.onAnswer).toHaveBeenCalledWith("separate");
+  });
+
+  it("links WhatsApp from the shown code without a separate wait action", () => {
+    const done = { phase: "done", channel: "whatsapp", channels: ["whatsapp"], accounts: [] };
+    const view = renderWizard(done as const, { whatsappBusy: true });
+    expect(view.container.querySelector('[role="status"]')?.textContent).toBe("Getting a code");
+
+    view.update({ whatsappQrDataUrl: "data:image/png,qr" });
+    expect(view.container.querySelector<HTMLImageElement>("img")?.alt).toBe("WhatsApp QR");
+    expect(view.container.querySelector('[role="status"]')?.textContent).toBe(
+      "Waiting for a scanThe code refreshes on its own.",
+    );
+    expect(buttonLabels(view.container)).toEqual(["Close", "Cancel"]);
+
+    view.update({ whatsappQrDataUrl: null, whatsappBusy: false, whatsappMessage: "QR expired." });
+    expect(view.container.querySelector('[role="alert"]')?.textContent).toBe(
+      "This code is no longer active.QR expired.",
+    );
+    button(view.container, "Get a new code").click();
+    expect(view.onWhatsAppStart).toHaveBeenCalledWith(true);
+  });
+
+  it("waits on a personal phone for the first message, then opens its chat", () => {
+    const done = { phase: "done", channel: "whatsapp", channels: ["whatsapp"], accounts: [] };
+    const view = renderWizard(done as const, {
+      whatsappConnected: true,
+      whatsappStatus: { linked: true, self: { e164: "+15555550123" }, lastMessageAt: null },
+      whatsappConfig: { channels: { whatsapp: { selfChatMode: true } } },
+    });
+    expect(view.container.textContent).toContain("WhatsApp is connected");
+    expect(view.container.textContent).toContain("Message yourself");
+    expect(view.container.querySelector('[role="status"]')?.textContent).toBe(
+      "Waiting for your first message",
+    );
+    expect(buttonLabels(view.container)).toEqual(["Close", "Done"]);
+
+    view.update({
+      whatsappStatus: { linked: true, self: { e164: "+15555550123" }, lastMessageAt: 2_000 },
+    });
+    expect(view.container.textContent).toContain("Your agent got your message");
+    expect(view.container.textContent).toContain("Replies show up in WhatsApp and in Chat.");
+    button(view.container, "Open chat").click();
+    expect(view.onOpenWhatsAppChat).toHaveBeenCalledOnce();
+  });
+
+  it("lets the owner allow the first person who texts a separate number", async () => {
+    const done = { phase: "done", channel: "whatsapp", channels: ["whatsapp"], accounts: [] };
+    const request = {
+      requestId: "request-1",
+      channel: "whatsapp",
+      channelLabel: "WhatsApp",
+      accountId: "default",
+      senderId: "+15555550199",
+      senderLabel: "Phone",
+      createdAt: "2026-11-23T10:00:00.000Z",
+      lastSeenAt: "2026-11-23T10:00:00.000Z",
+      expiresAt: "2026-11-23T11:00:00.000Z",
+      notifySupported: true,
+    };
+    const view = renderWizard(done as const, {
+      whatsappConnected: true,
+      whatsappStatus: { linked: true, self: { e164: "+15555550123" }, lastMessageAt: null },
+      whatsappConfig: { channels: { whatsapp: { selfChatMode: false } } },
+      pairing: {
+        accounts: [],
+        requests: [request],
+        commandOwnerConfigured: true,
+        limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+      },
+    });
+    expect(view.container.textContent).toContain("send a WhatsApp message to");
+    expect(view.container.querySelector(".whatsapp-setup__request")?.textContent).toContain(
+      "wants to talk to your agent.",
+    );
+    button(view.container, "Allow").click();
+    expect(view.onWhatsAppAllow).toHaveBeenCalledWith(request);
+    await Promise.resolve();
+    flush();
+    expect(view.container.textContent).toContain("can talk to your agent now.");
   });
 
   it("links channel docs from the setup subtitle without static helper links", () => {

@@ -306,12 +306,11 @@ export async function setupChannels(
     return cfg;
   }
 
-  const primerChannels = resolveVisibleChannelEntries().entries.map((entry) => ({
-    id: entry.id,
-    label: entry.meta.label,
-    blurb: entry.meta.blurb,
-  }));
-  await noteChannelPrimer(prompter, primerChannels);
+  // The primer compares every channel; it only helps someone still choosing one.
+  if (!targetedChannel) {
+    const primer = resolveVisibleChannelEntries().entries.map(({ id, meta }) => ({ ...meta, id }));
+    await noteChannelPrimer(prompter, primer);
+  }
 
   const quickstartDefault =
     options?.initialSelection?.[0] ??
@@ -874,7 +873,8 @@ export async function setupChannels(
     installedPlugins: listVisibleInstalledPlugins(),
     selection,
   });
-  if (selectedLines.length > 0) {
+  // A targeted setup already knows its one channel; the summary would repeat it.
+  if (selectedLines.length > 0 && !targetedChannel) {
     await prompter.note(selectedLines.join("\n"), t("wizard.channels.selectedTitle"));
   }
 

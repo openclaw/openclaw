@@ -459,4 +459,38 @@ describe("setupChannels", () => {
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
     expect(multiselect).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { name: "a chosen channel", targeted: true },
+    { name: "the channel picker", targeted: false },
+  ])("compares channels only when setup starts from $name", async ({ targeted }) => {
+    registerDiscord({
+      channel: "discord",
+      getStatus: async () => ({ channel: "discord", configured: false, statusLines: [] }),
+      configure: async ({ cfg }) => ({
+        cfg: { ...cfg, channels: { discord: { token: "synthetic-token" } } },
+        accountId: "default",
+      }),
+    });
+    let picks = 0;
+    const prompter = createPrompter({
+      select: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Select a channel") {
+          picks += 1;
+          return picks === 1 ? "discord" : "__done__";
+        }
+        return "__skip__";
+      }) as unknown as WizardPrompter["select"],
+    });
+
+    await runSetupChannels({}, prompter, {
+      ...(targeted ? { initialSelection: ["discord"], finishAfterInitialSelection: true } : {}),
+      skipDmPolicyPrompt: true,
+    });
+
+    const titles = new Set(vi.mocked(prompter.note).mock.calls.map(([, title]) => title));
+    for (const title of ["How channels work", "Selected channels"]) {
+      expect(titles.has(title)).toBe(!targeted);
+    }
+  });
 });

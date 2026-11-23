@@ -76,6 +76,8 @@ export type ChannelsState = {
 
 export type ChannelCapability = ReturnType<typeof createChannelCapability>;
 
+const WHATSAPP_QR_LOGIN_LIFETIME_MS = 180_000;
+
 export function resolveChannelAccounts(
   channelAccounts: ChannelsStatusSnapshot["channelAccounts"] | null | undefined,
   channelId: string,
@@ -379,7 +381,8 @@ export function createChannelCapability(gateway: {
           qrDataUrl?: string;
         }>("web.login.wait", {
           channel: "whatsapp",
-          timeoutMs: 120000,
+          // A QR login lives three minutes, so one wait covers it unless the code rotates.
+          timeoutMs: WHATSAPP_QR_LOGIN_LIFETIME_MS,
           currentQrDataUrl: state.whatsappLoginQrDataUrl ?? undefined,
           ...(state.whatsappLoginSessionKey ? { sessionKey: state.whatsappLoginSessionKey } : {}),
           ...(accountId ? { accountId } : {}),
@@ -390,16 +393,34 @@ export function createChannelCapability(gateway: {
         if (res.connected) {
           state.whatsappLoginSessionKey = null;
         }
-        if (res.qrDataUrl) {
-          state.whatsappLoginQrDataUrl = res.qrDataUrl;
-        } else if (res.connected) {
-          state.whatsappLoginQrDataUrl = null;
-        }
+        // Without a link or a fresh code, the shown code has expired or failed.
+        state.whatsappLoginQrDataUrl = res.connected ? null : (res.qrDataUrl ?? null);
       },
       () => {
         state.whatsappLoginConnected = null;
+        state.whatsappLoginQrDataUrl = null;
       },
     );
+  }
+
+  // The phone can be scanned whenever the code shows. Waiting at once lets the Gateway see the
+  // link, start the channel and report it here, without a separate wait action.
+  async function linkWhatsApp(force: boolean, accountId?: string): Promise<boolean> {
+    const whatsappEpoch = lifecycle.whatsappEpoch;
+    if (!(await startWhatsAppLogin(force, accountId))) {
+      return false;
+    }
+    while (
+      lifecycle.whatsappEpoch === whatsappEpoch &&
+      state.whatsappLoginQrDataUrl &&
+      state.whatsappLoginConnected !== true
+    ) {
+      publish();
+      if (!(await waitWhatsAppLogin(accountId))) {
+        return false;
+      }
+    }
+    return lifecycle.whatsappEpoch === whatsappEpoch;
   }
 
   function logoutWhatsApp(accountId?: string) {
@@ -687,8 +708,18 @@ export function createChannelCapability(gateway: {
         ),
       ),
     startWhatsApp: (force: boolean, accountId?: string) =>
-      runWhatsApp(() => startWhatsAppLogin(force, accountId)),
+      runWhatsApp(() => linkWhatsApp(force, accountId)),
     waitWhatsApp: (accountId?: string) => runWhatsApp(() => waitWhatsAppLogin(accountId)),
+    /** Stops watching the shown code; a scan the Gateway is already waiting on still links. */
+    stopWhatsAppLogin() {
+      lifecycle.whatsappEpoch += 1;
+      state.whatsappBusy = false;
+      state.whatsappLoginSessionKey = null;
+      state.whatsappLoginMessage = null;
+      state.whatsappLoginQrDataUrl = null;
+      state.whatsappLoginConnected = null;
+      publish();
+    },
     logoutWhatsApp: (accountId?: string) => runWhatsApp(() => logoutWhatsApp(accountId)),
     subscribe: (listener: (state: ChannelsState) => void) => registerListener(listeners, listener),
     dispose() {

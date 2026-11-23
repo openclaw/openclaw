@@ -194,6 +194,55 @@ export async function finalizeWhatsAppSetup(params: {
 
   const cfg = next;
   const { forceAllowFrom, prompter } = params;
+  // Gateway clients link the phone after setup and can read its number from the link, so the
+  // only thing left to ask is whose phone it is.
+  async function promptWhatsAppLinkedPhone(): Promise<OpenClawConfig> {
+    const accountId = selectedAccountId.trim() || DEFAULT_ACCOUNT_ID;
+    const account = resolveWhatsAppAccount({ cfg, accountId });
+    const phone = await prompter.select({
+      message: t("wizard.whatsapp.linkedPhonePrompt"),
+      options: [
+        {
+          value: "personal",
+          label: t("wizard.whatsapp.linkedPhonePersonal"),
+          hint: t("wizard.whatsapp.linkedPhonePersonalHint"),
+        },
+        {
+          value: "separate",
+          label: t("wizard.whatsapp.linkedPhoneSeparate"),
+          hint: t("wizard.whatsapp.linkedPhoneSeparateHint"),
+        },
+      ],
+      initialValue: account.selfChatMode === false ? "separate" : "personal",
+    });
+    const allowFrom = account.allowFrom?.filter((entry) => entry !== "*");
+    if (phone === "separate") {
+      // New people get a pairing code the owner approves. A policy that already admits
+      // someone else stays; an empty allowlist would leave the owner unanswered.
+      const keepsPolicy =
+        account.dmPolicy !== undefined &&
+        (account.dmPolicy !== "allowlist" || Boolean(account.allowFrom?.length));
+      return mergeWhatsAppConfig(cfg, accountId, {
+        selfChatMode: false,
+        dmPolicy: keepsPolicy ? account.dmPolicy : "pairing",
+      });
+    }
+    // The linked number is always admitted in self-chat mode, so the owner needs no entry.
+    // Anyone else on the owner's phone stays unanswered.
+    return mergeWhatsAppConfig(
+      cfg,
+      accountId,
+      {
+        selfChatMode: true,
+        dmPolicy: "allowlist",
+        allowFrom: allowFrom?.length ? allowFrom : undefined,
+      },
+      { unsetOnUndefined: ["allowFrom"] },
+    );
+  }
+  if (params.options?.deferDeviceLinkToClient && !forceAllowFrom) {
+    return { cfg: await promptWhatsAppLinkedPhone() };
+  }
   async function promptWhatsAppDmAccess(): Promise<OpenClawConfig> {
     const accountId = selectedAccountId.trim() || DEFAULT_ACCOUNT_ID;
     const account = resolveWhatsAppAccount({ cfg, accountId });

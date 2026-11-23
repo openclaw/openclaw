@@ -70,6 +70,7 @@ it.each([
       presentWizard: async (pending) => await pending,
       retire: () => {},
       startWhatsApp: (force, accountId) => channels.startWhatsApp(force, accountId),
+      openChat: () => {},
     });
   });
   try {

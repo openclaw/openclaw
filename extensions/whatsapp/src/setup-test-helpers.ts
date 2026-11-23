@@ -106,14 +106,6 @@ export function expectWhatsAppOwnerAllowlistSetup(
   );
 }
 
-export function expectWhatsAppSeparatePhoneDisabledSetup(
-  cfg: WhatsAppSetupConfig,
-  harness: WizardPromptHarness,
-): void {
-  expectWhatsAppDmAccess(cfg, false, "disabled");
-  expect(harness.text).not.toHaveBeenCalled();
-}
-
 export function expectWhatsAppAllowlistModeSetup(cfg: WhatsAppSetupConfig): void {
   expectWhatsAppDmAccess(cfg, false, "allowlist", [WHATSAPP_OWNER_NUMBER, "*"]);
 }

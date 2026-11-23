@@ -78,6 +78,8 @@ export function createChannelsViewProps(
       toggleSecretVisibility: () => {},
       answer: () => {},
       close: () => {},
+      allowWhatsApp: async () => true,
+      openWhatsAppChat: () => {},
       ...wizardHost,
     },
     pairingChannelFilter: null,

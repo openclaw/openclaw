@@ -356,6 +356,12 @@ function SingleChoice(props: WizardStepControlsProps & { options: WizardStepOpti
       props.channelSelect &&
       props.options.every((option) => typeof option.value === "string"),
   );
+  // A few described choices read better side by side than folded into a menu.
+  const cards = () =>
+    props.presentation === "channels" &&
+    !channels() &&
+    props.options.length <= 4 &&
+    props.options.every((option) => Boolean(option.hint));
   // A picker's preselected choice needs a way forward, so these steps answer with Continue.
   const confirms = () =>
     props.presentation === "channels" ||
@@ -411,9 +417,38 @@ function SingleChoice(props: WizardStepControlsProps & { options: WizardStepOpti
       when={props.presentation !== "channels" && props.options.length <= 2}
       fallback={
         <>
-          <Show when={channels()} fallback={<Picker params={params} />}>
-            <ChannelPicker {...params} />
-          </Show>
+          <Switch fallback={<Picker params={params} />}>
+            <Match when={channels()}>
+              <ChannelPicker {...params} />
+            </Match>
+            <Match when={cards()}>
+              <div
+                class={stepClass(props, "options")}
+                role="radiogroup"
+                aria-label={label()}
+                aria-describedby={props.validationErrorId}
+              >
+                <For each={props.options} keyed={false}>
+                  {(option) => (
+                    <button
+                      type="button"
+                      role="radio"
+                      class="channels-wizard__option"
+                      disabled={props.busy}
+                      aria-checked={Object.is(option().value, current()) ? "true" : "false"}
+                      onClick={() => setPicked({ step: props.step.id, value: option().value })}
+                    >
+                      <OptionBody
+                        option={option()}
+                        channels
+                        selected={Object.is(option().value, current())}
+                      />
+                    </button>
+                  )}
+                </For>
+              </div>
+            </Match>
+          </Switch>
           <Show when={confirms()}>
             <Answer
               {...props}
