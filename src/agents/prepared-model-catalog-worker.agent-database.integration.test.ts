@@ -1,12 +1,15 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeDeletedAgentDatabases,
   reviveAgentDatabases,
 } from "../state/openclaw-agent-db-readers.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { CatalogWorkerTaskPool } from "./prepared-model-catalog-worker.pool.js";
 import { loadPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
 import { retirePreparedModelRuntimeAgent } from "./prepared-model-runtime.js";
 import { createCatalogFleetFixture } from "./test-helpers/prepared-model-catalog-fleet-fixture.js";
@@ -39,7 +42,11 @@ describe("Gateway catalog worker agent database readers", () => {
         agentCount: 2,
         ...(workspaces === "distinct" ? { workspaces } : {}),
       });
-      await Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
+      await Promise.all(
+        (workspaces === "shared" ? fixture.snapshots.slice(0, 1) : fixture.snapshots).map(
+          (snapshot) => loadCompletedFullCatalog(snapshot),
+        ),
+      );
       const catalogWorkers = readCatalogWorkers();
       expect(catalogWorkers).toHaveLength(1);
       const contextCount = () =>
@@ -50,10 +57,60 @@ describe("Gateway catalog worker agent database readers", () => {
       const [deleted, survivor] = fixture.agentIds.map((agentId) =>
         path.join(fixture.entries[agentId]!.agentDir, "openclaw-agent.sqlite"),
       );
-      await retirePreparedModelRuntimeAgent({
-        agentId: fixture.agentIds[0]!,
-        agentDirs: [path.dirname(deleted!)],
-      });
+      const retire = () =>
+        retirePreparedModelRuntimeAgent({
+          agentId: fixture.agentIds[0]!,
+          agentDirs: [path.dirname(deleted!)],
+        });
+      if (workspaces === "shared") {
+        const retirement = createDeferredCore();
+        const events: string[] = [];
+        const nativeWorker = catalogWorkers[0]!;
+        const post = nativeWorker.postMessage.bind(nativeWorker);
+        const posting = vi.spyOn(nativeWorker, "postMessage").mockImplementation((...args) => {
+          if (isRecord(args[0])) {
+            if ("input" in args[0] && !("responseId" in args[0])) events.push("task");
+            if (args[0].closeResource) events.push("close");
+          }
+          post(...args);
+        });
+        const run = CatalogWorkerTaskPool.prototype.run;
+        const dispatch = vi
+          .spyOn(CatalogWorkerTaskPool.prototype, "run")
+          .mockImplementationOnce(function (
+            this: CatalogWorkerTaskPool<unknown, unknown>,
+            input,
+            options,
+          ) {
+            return run.call(
+              this,
+              () => {
+                const selected = typeof input === "function" ? input() : input;
+                expect(selected).not.toHaveProperty("value.pluginMetadataSnapshot");
+                // Retirement must not overtake a compact first request from this new owner.
+                queueMicrotask(() => void retire().then(retirement.resolve, retirement.reject));
+                return selected;
+              },
+              options,
+            );
+          });
+        try {
+          const [auth] = await Promise.all([
+            loadPreparedModelRuntimeAuth(fixture.snapshots[1]!, { providerIds: ["fleet-proof"] }),
+            retirement.promise,
+          ]);
+          expect(auth?.authStore.profiles[`fleet:${fixture.agentIds[1]!}`]).toHaveProperty(
+            "key",
+            `synthetic-${fixture.agentIds[1]!}`,
+          );
+          expect(events).toEqual(["task", "close"]);
+        } finally {
+          dispatch.mockRestore();
+          posting.mockRestore();
+        }
+      } else {
+        await retire();
+      }
       closeOpenClawAgentDatabasesForTest();
 
       try {

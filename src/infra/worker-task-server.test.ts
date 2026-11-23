@@ -240,43 +240,54 @@ it("retains admission context for asynchronous resource cleanup and successor ta
   }
 });
 
-it("closes a deleted agent's readers without waiting for the in-flight task", async () => {
-  const { port, task, serveOwnedWorkerTasks } = await workerFixture();
-  const entered = createDeferred();
-  const finishTask = createDeferred();
-  const { encodeAgentDatabaseReaderRequest: encode, isDeletedAgentDatabasePath } =
-    await import("./agent-database-readers.js");
-  serveOwnedWorkerTasks(
-    async () => {
-      entered.resolve();
-      await finishTask.promise;
-      return "catalog";
-    },
-    { closeResource: vi.fn() },
-  );
-  const deleted = resourceReceipt();
-  const maintenance = resourceReceipt();
-  const close = (key: string, resourcePort: ReturnType<typeof resourceReceipt>) =>
-    port.emit("message", { closeResource: true, key, resourcePort });
-  try {
-    // Another agent's long catalog build is running when this agent is deleted.
-    const result = task(1);
-    await entered.promise;
-    const candidates = [{ path: "/synthetic/doomed.sqlite" }];
-    close(encode({ kind: "close", deleted: true, agentId: "doomed", candidates }), deleted);
-    await vi.waitFor(() => expect(deleted.postMessage).toHaveBeenCalledWith({ ok: true }, []));
-    expect(isDeletedAgentDatabasePath("/synthetic/doomed.sqlite")).toBe(true);
-    // Offline maintenance can target readers the running task holds, so it still waits.
-    close(encode({ kind: "close", deleted: false, candidates }), maintenance);
-    finishTask.resolve();
-    await result;
-    await maintenance.closed;
-    expect(port.postMessage).toHaveBeenCalledBefore(maintenance.postMessage);
-    expect(maintenance.postMessage).toHaveBeenCalledWith({ ok: true }, []);
-  } finally {
-    finishTask.resolve();
-  }
-});
+it.each(["database", "owner"])(
+  "closes %s resources beside execution without changing maintenance ordering",
+  async (kind) => {
+    const { port, task, serveOwnedWorkerTasks } = await workerFixture();
+    const entered = createDeferred();
+    const finishTask = createDeferred();
+    const { encodeAgentDatabaseReaderRequest: encode, isDeletedAgentDatabasePath } =
+      await import("./agent-database-readers.js");
+    serveOwnedWorkerTasks(
+      async () => {
+        entered.resolve();
+        await finishTask.promise;
+        return "catalog";
+      },
+      {
+        closeResource: vi.fn(),
+        closesBesideExecution: (key) => key === "owner-retirement",
+      },
+    );
+    const deleted = resourceReceipt();
+    const maintenance = resourceReceipt();
+    const close = (key: string, resourcePort: ReturnType<typeof resourceReceipt>) =>
+      port.emit("message", { closeResource: true, key, resourcePort });
+    try {
+      // Another agent's long catalog build is running when this agent is deleted.
+      const result = task(1);
+      await entered.promise;
+      const candidates = [{ path: "/synthetic/doomed.sqlite" }];
+      close(
+        kind === "database"
+          ? encode({ kind: "close", deleted: true, agentId: "doomed", candidates })
+          : "owner-retirement",
+        deleted,
+      );
+      await vi.waitFor(() => expect(deleted.postMessage).toHaveBeenCalledWith({ ok: true }, []));
+      expect(isDeletedAgentDatabasePath("/synthetic/doomed.sqlite")).toBe(kind === "database");
+      // Offline maintenance can target readers the running task holds, so it still waits.
+      close(encode({ kind: "close", deleted: false, candidates }), maintenance);
+      finishTask.resolve();
+      await result;
+      await maintenance.closed;
+      expect(port.postMessage).toHaveBeenCalledBefore(maintenance.postMessage);
+      expect(maintenance.postMessage).toHaveBeenCalledWith({ ok: true }, []);
+    } finally {
+      finishTask.resolve();
+    }
+  },
+);
 
 it("expires a task's admission budget without poisoning its successor or resource cleanup", async () => {
   const { port, task, expectResult, serveOwnedWorkerTasks } = await workerFixture();

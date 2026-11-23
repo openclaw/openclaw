@@ -4,7 +4,7 @@ import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import { createOwnedWorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
@@ -28,6 +28,7 @@ import type {
   AuthProfileStore,
   OAuthCredential,
 } from "../auth-profiles/types.js";
+import { encodePreparedCatalogRetirement } from "../prepared-model-catalog-contexts.js";
 import { prepareModelCatalogWorkerContext } from "../prepared-model-catalog-fingerprints.js";
 import { createPreparedModelCatalogWorkerInput } from "../prepared-model-catalog-worker.js";
 import {
@@ -45,6 +46,8 @@ type HeldCatalogOAuthRefresh = {
   pending: Promise<PreparedModelWorkerResult>;
   waitForRefresh: () => Promise<void>;
   retire: (reason: Error) => void;
+  retireOwner: () => Promise<void>;
+  retirementObserved: () => boolean;
   releaseResponse: () => void;
   closeWorker: () => Promise<void>;
   readCredential: () => AuthProfileCredential | undefined;
@@ -65,6 +68,7 @@ export async function withHeldCatalogOAuthRefresh(
     makeTempDir: (prefix: string) => string;
     signal: AbortSignal;
     sharedStatePeers?: "empty" | "matching" | "conflicting";
+    observeRetirement?: true;
   },
   run: (fixture: HeldCatalogOAuthRefresh) => Promise<void>,
 ): Promise<void> {
@@ -75,6 +79,7 @@ export async function withHeldCatalogOAuthRefresh(
   const profileId = `${PROVIDER_ID}:oauth`;
   const discoveryMarker = path.join(root, "oauth-discovery-started");
   const refreshFailure = path.join(root, "oauth-refresh-failure");
+  const retirementMarker = path.join(root, "oauth-owner-retired");
   const store = (entry?: OAuthCredential): AuthProfileStore => ({
     version: 1,
     profiles: entry ? { [profileId]: entry } : {},
@@ -115,13 +120,31 @@ export async function withHeldCatalogOAuthRefresh(
       response.end(JSON.stringify(rotated));
     }
   };
-  let pool: WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult> | undefined;
+  let pool:
+    | ReturnType<
+        typeof createOwnedWorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>
+      >
+    | undefined;
   try {
     server.listen(portClaim.port, "127.0.0.1");
     await once(server, "listening", { signal });
     fs.writeFileSync(
       path.join(root, "plugin", "index.cjs"),
-      `module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
+      `${
+        params.observeRetirement
+          ? `
+const { parentPort } = require("node:worker_threads");
+function observeRetirement(message) {
+  if (!message.closeResource) return;
+  parentPort.off("message", observeRetirement);
+  // The server's queued close callback runs before this next-turn observation.
+  setImmediate(() => require("node:fs").writeFileSync(${JSON.stringify(retirementMarker)}, ""));
+}
+parentPort.on("message", observeRetirement);
+`
+          : ""
+      }
+module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
 api.registerProvider({
   id: ${JSON.stringify(PROVIDER_ID)}, label: "OAuth retirement fixture", auth: [],
   async refreshOAuth() {
@@ -179,20 +202,22 @@ api.registerProvider({
           agentFacts: makeCatalogAgentFacts(catalogInput(fixture), { authStore }),
           pluginMetadataSnapshot: metadata,
         });
-        pool = new WorkerTaskPool({
-          workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
-          maxWorkers: 1,
-          idleTimeoutMs: 0,
-          restartOnError: false,
-          workerOptions: {
-            resourceLimits: { maxOldGenerationSizeMb: 512 },
-            workerData: {
-              kind: "gateway",
-              sourceCaptureDirectory: makeTempDir("openclaw-catalog-oauth-captures-"),
+        pool = createOwnedWorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>(
+          {
+            workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
+            maxWorkers: 1,
+            idleTimeoutMs: 0,
+            restartOnError: false,
+            workerOptions: {
+              resourceLimits: { maxOldGenerationSizeMb: 512 },
+              workerData: {
+                kind: "gateway",
+                sourceCaptureDirectory: makeTempDir("openclaw-catalog-oauth-captures-"),
+              },
+              env,
             },
-            env,
           },
-        });
+        );
         const controller = new AbortController();
         const pending = pool.run(
           {
@@ -224,6 +249,13 @@ api.registerProvider({
               ]);
             },
             retire: (reason) => controller.abort(reason),
+            retireOwner: () => {
+              if (!input.owner) {
+                throw new Error("OAuth fixture has no catalog owner");
+              }
+              return pool!.closeResources(encodePreparedCatalogRetirement([input.owner]));
+            },
+            retirementObserved: () => fs.existsSync(retirementMarker),
             releaseResponse,
             closeWorker: () => pool!.close(),
             readCredential: () =>

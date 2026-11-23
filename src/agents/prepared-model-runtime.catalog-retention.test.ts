@@ -16,8 +16,10 @@ import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { collectForRetentionCheck, expectCollected, forceFullGc } from "../test-utils/retention.js";
 import { retireAgentDeleteRuntime } from "./agent-delete-databases.js";
+import { normalizeAgentDirRegistryPath } from "./agent-dir-registry.js";
 import { withAgentDeletion } from "./agent-lifecycle-registry.js";
 import type { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
+import * as catalogWorker from "./prepared-model-catalog-worker.js";
 import { loadPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
 import * as discoveryRetry from "./prepared-model-runtime.discovery-retry.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
@@ -37,6 +39,21 @@ import { resolvePreparedModelRuntimeOwnerBySnapshot } from "./prepared-model-run
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime-retention" });
 const { mocks } = fixture;
+
+it("notifies catalog retirement even when no parent owner remains", async () => {
+  const agentDir = fixture.state.agentDir("deleted");
+  const retire = vi.spyOn(catalogWorker, "retirePreparedModelCatalogAgent").mockResolvedValue();
+  try {
+    expect(mocks.createPreparedModelCatalogWorker).not.toHaveBeenCalled();
+    await retirePreparedModelRuntimeAgent({ agentId: "DELETED", agentDirs: [agentDir] });
+    expect(retire).toHaveBeenCalledExactlyOnceWith(
+      "deleted",
+      new Set([normalizeAgentDirRegistryPath(agentDir)]),
+    );
+  } finally {
+    retire.mockRestore();
+  }
+});
 
 async function publishSettledCatalogBatch(
   config: Parameters<typeof refreshPreparedModelRuntimeSnapshots>[0],
