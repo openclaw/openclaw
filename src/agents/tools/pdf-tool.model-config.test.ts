@@ -114,17 +114,17 @@ it.each([
   {
     provider: "Minimax",
     primary: "openai/gpt-5.4",
-    model: "MiniMax-M2.7-highspeed",
+    model: "MiniMax-M3.1-Flash",
     expected: {
-      primary: "minimax/MiniMax-M2.7-highspeed",
-      fallbacks: ["minimax-portal/MiniMax-M2.7"],
+      primary: "minimax/MiniMax-M3.1-Flash",
+      fallbacks: ["minimax-portal/MiniMax-M3"],
     },
   },
   {
     provider: "minimax-portal",
-    primary: "minimax-portal/MiniMax-M2.7",
+    primary: "minimax-portal/MiniMax-M3.1-Flash",
     model: undefined,
-    expected: { primary: "minimax-portal/MiniMax-M2.7", fallbacks: ["minimax/MiniMax-M2.7"] },
+    expected: { primary: "minimax-portal/MiniMax-M3.1-Flash", fallbacks: ["minimax/MiniMax-M3"] },
   },
 ])("selects a text-extraction model for $primary", ({ provider, primary, model, expected }) => {
   available.add("minimax");
