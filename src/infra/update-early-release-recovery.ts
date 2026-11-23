@@ -507,7 +507,7 @@ export async function runEarlyGitReleaseRecovery(
       return fail(
         "early-release-recovery-start-failed",
         `The new release migrated state but did not report ready (${tail(served)}).`,
-        "run `openclaw triage` on this machine",
+        `from the checkout, run \`${REBUILD} && openclaw gateway install --force\``,
       );
     }
   }
