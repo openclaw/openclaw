@@ -466,6 +466,10 @@ describe("session hovercard", () => {
       },
       container,
     );
+    expect(Boolean(container.querySelector(".session-hovercard__plan-row"))).toBe(Boolean(step));
+    expect(Boolean(container.querySelector(".session-hovercard__notepad"))).toBe(
+      Boolean(step || markdown),
+    );
     expect(container.querySelector(".session-hovercard__plan-step")?.textContent ?? null).toBe(
       step,
     );
