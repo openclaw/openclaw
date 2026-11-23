@@ -7,9 +7,9 @@ const POST_READY_WORK_START_DELAY_MS = 500;
 // memory with the maintenance isolates that work starts. The cap bounds how long a
 // continuously busy Gateway can postpone maintenance and cron. Post-ready consumers wait
 // for the barrier before admitting their own root work, so they never hold it busy.
-const LEAN_POST_READY_FIRST_CHECK_MS = 2_000;
-const LEAN_POST_READY_RETRY_MS = 1_000;
-const LEAN_POST_READY_MAX_DEFER_MS = 60_000;
+export const LEAN_POST_READY_FIRST_CHECK_MS = 2_000;
+export const LEAN_POST_READY_RETRY_MS = 1_000;
+export const LEAN_POST_READY_MAX_DEFER_MS = 60_000;
 
 const POST_READY_JOB_ID = "startup:post-ready-work";
 

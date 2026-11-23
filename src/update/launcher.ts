@@ -8,7 +8,7 @@ import { ROLLBACK_SOURCE } from "./rollback-source.js";
 
 const LAUNCHER_FORMAT = 3;
 // Both starts share the wall-clock ceiling; migration keeps the full allowance.
-const TRIAL_BUDGET_MS = 20 * 60 * 1000;
+export const TRIAL_BUDGET_MS = 20 * 60 * 1000;
 // A reported healthy host needed 496 seconds for agent preparation before ready.
 const POST_UPGRADE_BUDGET_MS = 10 * 60 * 1000;
 

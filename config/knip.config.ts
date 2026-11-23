@@ -1267,6 +1267,16 @@ const config = {
     "src/auto-reply/reply/request-native-subagent.ts": ["exports"],
     // Scheduled-command tests exercise registry replacement and persisted-job validation at the owner.
     "src/gateway/plugin-command-scheduled-run.ts": ["exports"],
+    // Cron regression fixtures reset the process-wide provider backoff between cases.
+    "src/cron/service/provider-backoff.ts": ["exports"],
+    // Cookie and plugin-route tests exercise the authorization step directly.
+    "src/gateway/http-auth-plugin-cookie.ts": ["exports"],
+    // Post-ready release tests drive the lean deferral clock with these bounds.
+    "src/gateway/server-post-ready-release.ts": ["exports"],
+    // Launcher rollback tests age the trial record against this budget.
+    "src/update/launcher.ts": ["exports"],
+    // Session and cron state type this slot through `import(...)` type queries.
+    "src/cron/service/timer-execution-timeout.ts": ["types"],
     // Diagnostic fixtures reset owner-private state; the full-tree audit checks these consumers.
     "src/logging/diagnostic-memory.ts": ["exports"],
     "src/logging/diagnostic-phase.ts": ["exports"],
