@@ -456,7 +456,11 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
             batchRunIds: [delivered.runId, running.runId],
           });
         }
-        expect(schedule).not.toHaveBeenCalled();
+        expect(schedule).toHaveBeenCalledExactlyOnceWith(
+          delivered.runId,
+          subagentRuns.get(delivered.runId),
+          "settle",
+        );
       } finally {
         subagentRuns.clear();
         source.source.release();
