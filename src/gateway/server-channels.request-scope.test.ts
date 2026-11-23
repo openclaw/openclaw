@@ -83,7 +83,7 @@ it.each(["operator client", "agent run", "operator tool"] as const)(
                 agentId: "main",
                 sessionKey: "agent:main:main",
                 operationalRunInstance: { runId: "channel-start", instanceId: "starting-run" },
-                receiptAuthority: () => !callerLifetime.signal.aborted,
+                receiptAuthority: () => callerLifetime.signal.throwIfAborted(),
               },
               start,
             );

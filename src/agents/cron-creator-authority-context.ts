@@ -153,6 +153,7 @@ export function captureActiveCronManagementAuthority(params: {
   }
   const isActive = () => {
     try {
+      caller.receiptAuthority?.();
       return (
         scope.active &&
         !scope.signal.aborted &&
@@ -160,7 +161,6 @@ export function captureActiveCronManagementAuthority(params: {
         (scope.managementEntitlement?.source !== "channel-owner" ||
           scope.managementEntitlement.isCurrent()) &&
         !caller.approvalSignals?.some((signal) => signal.aborted) &&
-        caller.approvalAuthorityCheck?.() !== false &&
         getAgentRunContext(params.runId) === context &&
         validateAgentRunDelegatedAuthority(authority)
       );
@@ -222,13 +222,13 @@ export function bindRequesterOwnerIdentity(params: {
   const runId = params.runId;
   const isCurrent = () => {
     try {
+      caller.receiptAuthority?.();
       return (
         scope.active &&
         !scope.signal.aborted &&
         scope.isCurrent?.() === true &&
         owner.isCurrent() &&
         !caller.approvalSignals?.some((signal) => signal.aborted) &&
-        caller.approvalAuthorityCheck?.() !== false &&
         getAgentRunContext(runId) === context &&
         validateAgentRunDelegatedAuthority(authority)
       );

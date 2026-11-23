@@ -103,10 +103,7 @@ describe("gateway caller context wrapper", () => {
       },
     });
     const owner = expectDefined(captureCommandOwnerAssertion(context), "command owner");
-    const receipt = Object.assign(() => {
-      owner();
-      return true;
-    }, owner);
+    const receipt = Object.assign(() => owner(), owner);
     await withCallers(
       [{ operationalRunInstance: runInstance("prepared-owner"), receiptAuthority: receipt }, {}],
       async () => {
@@ -394,8 +391,16 @@ describe("gateway caller context wrapper", () => {
     const run = runInstance("outer");
     let outerActive = sameRun;
     let innerActive = true;
-    const outer = () => outerActive;
-    const inner = () => innerActive;
+    const outer = () => {
+      if (!outerActive) {
+        throw new Error("outer revoked");
+      }
+    };
+    const inner = () => {
+      if (!innerActive) {
+        throw new Error("inner revoked");
+      }
+    };
     const outerSignal = sameRun ? new AbortController().signal : AbortSignal.abort();
     const innerSignal = new AbortController().signal;
     const identity = await withCallers(
@@ -406,13 +411,13 @@ describe("gateway caller context wrapper", () => {
       })),
       getCaller,
     );
-    expect(identity?.receiptAuthority?.()).toBe(true);
+    expect(() => identity?.receiptAuthority?.()).not.toThrow();
     if (sameRun) {
       outerActive = false;
-      expect(identity?.receiptAuthority?.()).toBe(false);
+      expect(() => identity?.receiptAuthority?.()).toThrow("outer revoked");
       outerActive = true;
       innerActive = false;
-      expect(identity?.receiptAuthority?.()).toBe(false);
+      expect(() => identity?.receiptAuthority?.()).toThrow("inner revoked");
       expect(identity?.approvalSignals).toEqual([outerSignal, innerSignal]);
     } else {
       expect(identity?.approvalSignals).toEqual([innerSignal]);
