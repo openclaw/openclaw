@@ -77,6 +77,7 @@ export type PreparedAgentRunUserTurn = {
   inputProvenance?: InputProvenance;
   recorder?: UserTurnTranscriptRecorder;
   requesterOrigin?: RequesterOrigin;
+  assertRequesterCurrent?: () => void;
   senderIsOwner: boolean;
   suppressPromptPersistence: boolean;
   releaseProcessingAbortObserver?: () => void;
@@ -464,6 +465,15 @@ export async function prepareAgentRunUserTurn(params: {
       senderIsOwner =
         requesterOwner?.isCurrent(params.cfg) === true || resolveRuntimeSenderIsOwner();
     }
+    const assertRequesterCurrent =
+      requesterOwner && senderIsOwner
+        ? () => {
+            if (!requesterOwner.isCurrent(params.context.getRuntimeConfig())) {
+              throw new Error("Requester owner authority changed; send a new request.");
+            }
+          }
+        : undefined;
+    assertRequesterCurrent?.();
 
     let releaseProcessingAbortObserver: (() => void) | undefined;
     if (trackRequesterCompletion && recorder && !recorder.getProcessingCompletion?.()) {
@@ -510,6 +520,7 @@ export async function prepareAgentRunUserTurn(params: {
       ...(recorder ? { recorder } : {}),
       senderIsOwner,
       requesterOrigin,
+      assertRequesterCurrent,
       suppressPromptPersistence,
     };
   } catch (error) {
