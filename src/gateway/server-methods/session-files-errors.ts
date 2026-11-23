@@ -35,7 +35,7 @@ export function respondSessionFileTooLarge(
     sessionFilesError("session_file_too_large", "session file is too large to preview", {
       maxPreviewBytes: WORKSPACE_PREVIEW_MAX_BYTES,
       path: file.path || filePath,
-      ...(file.workspacePath ? { workspacePath: file.workspacePath } : {}),
+      ...(metadata.root && file.workspacePath ? { workspacePath: file.workspacePath } : {}),
       size: file.size,
       ...(metadata.root ? { root: metadata.root } : {}),
       ...(metadata.source ? { source: metadata.source } : {}),
