@@ -299,13 +299,16 @@ suite.define(() => {
     );
   });
 
-  it.each([390, 1440])(
+  it.each([390, 820, 1180, 1440])(
     "keeps similar child names distinguishable and the longest heading readable at %i px",
     async (width) => {
       const mobile = width === 390;
       await suite.withPage(
         {
-          viewport: { width, height: 844 },
+          viewport: {
+            width,
+            height: width === 820 ? 1180 : width === 1180 ? 820 : width === 1440 ? 900 : 844,
+          },
           hasTouch: mobile,
           isMobile: mobile,
           reducedMotion: "reduce",
@@ -324,6 +327,7 @@ suite.define(() => {
             sessions: [parent, child, other, finished],
             historyMessages: [{ role: "assistant", content: "Parent report." }],
             sessionTranscripts: {
+              [other.key]: { messages: [{ role: "assistant", content: "South sampling report." }] },
               [finished.key]: {
                 messages: [{ role: "assistant", content: "The observation report is ready." }],
               },
@@ -339,10 +343,31 @@ suite.define(() => {
             );
             await name.waitFor();
             expect(await name.textContent()).toBe(entry.label);
+            const suffix = name.locator(".subagent-list-name__tail");
+            expect(await suffix.textContent()).toContain(
+              entry === child ? "North district" : "South district",
+            );
+            expect(await suffix.evaluate((e) => e.scrollWidth <= e.clientWidth + 1)).toBe(true);
+            expect(
+              await name.evaluate((e) => e.getBoundingClientRect().height),
+            ).toBeLessThanOrEqual(22);
             expect(await name.evaluate((e) => e.scrollWidth - e.clientWidth)).toBeLessThanOrEqual(
               1,
             );
           }
+          const south = row(other.key).locator(
+            ".chat-subagents-mobile__open,.subagents-desktop__open",
+          );
+          await south.press("Enter");
+          const detailPane = panel.locator(".chat-subagents__detail-pane");
+          await detailPane.getByText("South sampling report.", { exact: true }).waitFor();
+          expect(
+            await detailPane
+              .locator(".chat-subagents-mobile__title,.subagents-desktop__child-name")
+              .textContent(),
+          ).toBe(other.label);
+          await detailPane.getByRole("button", { name: "Back to Subagents" }).press("Enter");
+          await expect.poll(() => south.evaluate((e) => e === document.activeElement)).toBe(true);
           const open = row(finished.key).locator(
             ".chat-subagents-mobile__open,.subagents-desktop__open",
           );
@@ -358,11 +383,13 @@ suite.define(() => {
           const heading = detail.locator(
             ".chat-subagents-mobile__title,.subagents-desktop__child-name",
           );
-          await expect.poll(() => heading.evaluate((e) => e.tabIndex)).toBe(0);
+          expect(await heading.textContent()).toBe(finished.label);
+          const overflows = await heading.evaluate((e) => e.scrollHeight > e.clientHeight + 1);
+          await expect.poll(() => heading.evaluate((e) => e.tabIndex)).toBe(overflows ? 0 : -1);
           expect(await heading.evaluate((e) => e.scrollWidth - e.clientWidth)).toBeLessThanOrEqual(
             1,
           );
-          await heading.press("End");
+          if (overflows) await heading.press("End");
           await expect
             .poll(() => heading.evaluate((e) => e.scrollHeight - e.clientHeight - e.scrollTop))
             .toBeLessThanOrEqual(1);

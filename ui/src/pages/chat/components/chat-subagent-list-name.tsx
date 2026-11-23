@@ -2,12 +2,12 @@ import { createMemo, Show } from "solid-js";
 
 const segments = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
-/** Let ordinary names wrap. For unusually long names, clamp the middle, not the identifying end. */
+/** Shrink the shared prefix before the identifying end of a child name. */
 export function SubagentListName(props: { name: string }) {
   const split = createMemo(() => {
     const name = props.name;
-    if (name.length <= 128) return undefined;
-    const tail = segments.segment(name).containing(name.length - 28)?.index ?? 0;
+    if (name.length <= 16) return undefined;
+    const tail = segments.segment(name).containing(name.length - 12)?.index ?? 0;
     const separator = Math.max(
       name.lastIndexOf(" ", tail),
       name.lastIndexOf("-", tail),
@@ -19,10 +19,10 @@ export function SubagentListName(props: { name: string }) {
   return (
     <Show when={split()} fallback={props.name}>
       {(parts) => (
-        <>
+        <span class="subagent-list-name" title={props.name}>
           <span class="subagent-list-name__head">{parts().head}</span>
-          {parts().tail}
-        </>
+          <span class="subagent-list-name__tail">{parts().tail}</span>
+        </span>
       )}
     </Show>
   );
