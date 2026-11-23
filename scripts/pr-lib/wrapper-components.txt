@@ -580,6 +580,7 @@ src/commands/doctor/shared/include-migration-ownership.ts
 src/commands/doctor/shared/legacy-config-binding-repair-input.ts
 src/commands/doctor/shared/legacy-config-compat.ts
 src/commands/doctor/shared/legacy-config-issues.ts
+src/commands/doctor/shared/legacy-config-migrations.agent-profiles.ts
 src/commands/doctor/shared/legacy-config-migrations.audio.ts
 src/commands/doctor/shared/legacy-config-migrations.channels.ts
 src/commands/doctor/shared/legacy-config-migrations.plugin-prompts.ts
@@ -630,6 +631,7 @@ src/commands/doctor/shared/legacy-tools-by-sender.ts
 src/commands/doctor/shared/legacy-web-tools-migrate.ts
 src/commands/doctor/shared/legacy-webhook-pins.ts
 src/compat/legacy-names.ts
+src/config/agent-profile-ids.ts
 src/config/agent-dirs.ts
 src/config/agent-limits.ts
 src/config/agent-list-projection.ts
