@@ -34,10 +34,8 @@ import {
   isSessionTranscriptIndexReconcileRunning,
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
-import {
-  searchSessionTranscripts,
-  searchSessionTranscriptsReadOnlySync,
-} from "./session-transcript-search.js";
+import { searchSessionTranscripts } from "./session-transcript-search.js";
+import { searchSessionTranscriptsReadOnlySync } from "./session-transcript-search.worker.js";
 import {
   clearDatabaseWorkerIdleRetirement,
   historyLane,

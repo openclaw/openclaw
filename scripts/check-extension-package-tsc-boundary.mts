@@ -695,7 +695,8 @@ async function runBoundaryCheck(argv: string[]) {
         summary,
         await runCompileCheck(
           selection.selected.map((row) => row.package),
-          selection.mode === "affected",
+          // A complete inventory uses full preparation, not per-consumer graph discovery.
+          selection.mode === "affected" && selection.selected.length < optInExtensionIds.length,
         ),
       );
     }

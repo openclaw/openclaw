@@ -8,7 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { migrateDaemonRuntimePins } from "../../infra/state-migrations.daemon-runtime-pins.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import { readUpdateDatabaseGenerations } from "../../infra/update-database-generations.js";
-import { runUpdateSqliteMigration } from "../../infra/update-doctor-migration-attribution.js";
+import { runUpdateSqliteMigration } from "../../infra/update-doctor-migration-context.js";
 import { createUpdateDoctorDatabaseWriteCapture } from "../../infra/update-doctor-result.js";
 import { completeAgentDeletionJournalInDatabase } from "../../state/agent-deletion-journal.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";

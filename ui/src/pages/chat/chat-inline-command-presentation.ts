@@ -6,7 +6,7 @@ export type InlineCommandPresentation =
 
 export type InlineCommandDisclosurePolicy = Pick<
   InlineCommandPresentation,
-  "inlineActivityDisclosureCalls"
+  "readInlineToolExpansion"
 >;
 
 const presentationModule = lazyModule(

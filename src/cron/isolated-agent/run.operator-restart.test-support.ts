@@ -160,6 +160,7 @@ export function principalRecoveryFixture(
 ) {
   const captured = expectDefined(authority.recoverySnapshot, "creator recovery source");
   const {
+    automationAdmin: _automationAdmin,
     authPolicy: _auth,
     sharedGeneration: _generation,
     device: _device,

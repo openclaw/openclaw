@@ -431,6 +431,50 @@ export function registerCliReplyCompletionTests({
     expect(result.meta.terminalReply).toEqual({ disposition: "empty" });
   });
 
+  it("keeps the final answer after WebChat progress in message_tool_only", async () => {
+    const sessionKey = "agent:main:main";
+    const { dir, sessionTarget } = createSessionFixture({ sessionKey });
+    const config: OpenClawConfig = { agents: { entries: { main: { workspace: dir } } } };
+    setRuntimeConfigSnapshot(config);
+    const context = createContext({
+      sessionKey,
+      runId: "cli-webchat-progress",
+      ...sessionParams(sessionTarget, dir),
+      persistAssistantTranscript: true,
+      config,
+      messageChannel: "webchat",
+      messageProvider: "webchat",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    context.backendResolved.config.output = "jsonl";
+    const tool = createMessageTool({
+      config,
+      preparedMessageToolCatalog: { version: 0, channels: [], getChannel: () => undefined },
+      currentChannelProvider: "webchat",
+      sourceReplyDeliveryMode: "message_tool_only",
+      agentSessionKey: sessionKey,
+      runSessionKey: sessionKey,
+      sessionId: sessionTarget.sessionId,
+      agentId: "main",
+      runId: context.params.runId,
+    });
+    const [progress, answer] = ["Build started.", "Build installed."];
+    supervisorSpawnMock.mockImplementationOnce(async (input) => {
+      const args = { action: "send", message: progress, final: false };
+      captureMessage(input, args, await tool.execute("cli-webchat-progress", args));
+      emitResult(input, answer);
+      return makeManagedRun();
+    });
+
+    const result = await run(context);
+
+    const transcriptTexts = (await readTranscriptMessages(sessionTarget))
+      .filter((message) => isRecord(message) && message.role === "assistant")
+      .map((message) => extractStoredAssistantText(message));
+    expect(transcriptTexts).toEqual([progress, answer]);
+    expect(result.payloads?.map((payload) => payload.text)).toContain(answer);
+  });
+
   it.each([false, true])(
     "requires a real child result even when continuation custody is %s",
     async (expectsCompletionMessage) => {

@@ -213,8 +213,10 @@ vi.mock("./command-execution-startup.js", () => ({
   ensureCliExecutionBootstrap: ensureCliExecutionBootstrapMock,
 }));
 
+// mock-isolation: a fixed version and no build identity keep CLI output deterministic.
 vi.mock("../version.js", () => ({
   VERSION: "9.9.9-test",
+  resolveRuntimeServiceBuildId: () => null,
   resolveRuntimeServiceCommit: () => null,
 }));
 

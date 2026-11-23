@@ -136,6 +136,8 @@ export type UserProfileEmailBinding = {
 
 export type UserProfileAccessFacts = Readonly<{
   profileId: string;
+  /** Provider identity only; never proof of current membership or role. */
+  hasOpenClawIdIdentity?: boolean;
   emails: readonly string[];
   githubAccountIds?: readonly number[];
   enterpriseGitHubAccounts?: ReadonlyArray<Readonly<{ host: string; accountId: number }>>;
@@ -203,6 +205,7 @@ export type ProfileDisplayRow = Pick<
   | "role"
 > & {
   has_avatar: SqlBool;
+  hasOpenClawIdIdentity?: boolean;
   githubAccountIds?: readonly number[];
   /** The canonical Enterprise reader's proof-validated host/account pairs; aliases alone never set them. */
   enterpriseGitHubAccounts?: ReadonlyArray<Readonly<{ host: string; accountId: number }>>;

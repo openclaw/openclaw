@@ -723,7 +723,11 @@ describe("MemoryImportPage", () => {
     },
   );
 
-  it("previews past-session candidates with the selected date range", async () => {
+  it.each([
+    { from: "2026-07-01", to: "2026-07-31" },
+    { from: "2026-07-01", to: "" },
+    { from: "", to: "2026-07-31" },
+  ])("previews past-session candidates from $from to $to", async ({ from, to }) => {
     const request = createRequest({
       "migrations.memory.plan": () => createPlan(),
       "memory.sessionBackfill.preview": () => ({
@@ -741,15 +745,17 @@ describe("MemoryImportPage", () => {
     const dates = page.querySelectorAll<HTMLInputElement>(
       ".memory-import__backfill-dates input[type='date']",
     );
-    setDate(dates[0]!, "2026-07-01");
-    setDate(dates[1]!, "2026-07-31");
+    expect(page.textContent).toContain("Leave both dates blank to scan the full available range.");
+    setDate(dates[0]!, from);
+    setDate(dates[1]!, to);
     findButton(page, "backfill-preview")?.click();
 
     await waitForMemoryImport(() => expect(page.textContent).toContain("First memory"));
     expect(page.textContent).toContain("preview shows the first bounded batch");
+    expect(page.textContent).toContain("Candidates: 2 · Days: 1");
     expect(request.mock.calls.at(-1)).toEqual([
       "memory.sessionBackfill.preview",
-      { agentId: "research", from: "2026-07-01", to: "2026-07-31", limitDays: 14 },
+      { agentId: "research", ...(from ? { from } : {}), ...(to ? { to } : {}), limitDays: 14 },
     ]);
   });
 

@@ -405,14 +405,11 @@ it.each<{
           ]
         : []),
     ]);
-    mocks.validateCanary.mockResolvedValue({
+    mocks.checkCandidate.mockResolvedValue({
       status: "ok",
-      phase: "readiness",
       candidateSchemaVersions: { state: 15, agent: 19 },
       gatewayRestartCompletion: capable,
       steps: [],
-      durationMs: 1,
-      logTail: [],
     });
     const events: string[] = [];
     handoff.park.mockImplementation(async ({ run }) => {
@@ -488,14 +485,11 @@ it("parks a foreground Gateway that holds PostgreSQL ownership instead of refusi
   vi.spyOn(candidateState, "readUpdateStateSchemaVersions").mockResolvedValue([
     { path: path.join(root, "state", "openclaw.sqlite"), userVersion: 15 },
   ]);
-  mocks.validateCanary.mockResolvedValue({
+  mocks.checkCandidate.mockResolvedValue({
     status: "ok",
-    phase: "readiness",
     candidateSchemaVersions: { state: 15, agent: 19 },
     gatewayRestartCompletion: true,
     steps: [],
-    durationMs: 1,
-    logTail: [],
   });
   const events: string[] = [];
   // The foreground Gateway holds state ownership until the handoff parks it.
@@ -521,7 +515,7 @@ it("parks a foreground Gateway that holds PostgreSQL ownership instead of refusi
     return executeMutableUpdate(await bindExecutionGuards(params));
   });
 
-  expect(mocks.validateCanary).toHaveBeenCalled();
+  expect(mocks.checkCandidate).toHaveBeenCalled();
   expect(events, JSON.stringify(result?.failure)).toEqual(["validated", "park", "publish"]);
   expect(result?.result.status).toBe("ok");
 });

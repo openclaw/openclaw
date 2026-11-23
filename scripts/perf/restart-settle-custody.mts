@@ -6,6 +6,7 @@
  * --allocation samples a separate run; setup/imports/GC are outside owner timing.
  * --fixture loads session metadata from a generated Team fixture before owner timing.
  * This isolates the registry owner; it does not time database hydration or workspace I/O.
+ * --discovery measures startup selection from that database, including unmarked requesters.
  */
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -24,6 +25,7 @@ const { values } = parseArgs({
     fixture: { type: "string" },
     control: { type: "boolean", default: false },
     allocation: { type: "boolean", default: false },
+    discovery: { type: "boolean", default: false },
   },
 });
 assert(values.output && global.gc, "Pass --output and launch with --expose-gc");
@@ -37,7 +39,9 @@ process.env.OPENCLAW_HOME = stateDir;
 process.env.OPENCLAW_STATE_DIR = stateDir;
 process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
 const ownerUrl = new URL(
-  "../../src/agents/subagents/registry/subagent-registry-read.ts",
+  values.discovery
+    ? "../../src/gateway/session-restart-resume-discovery.ts"
+    : "../../src/agents/subagents/registry/subagent-registry-read.ts",
   import.meta.url,
 ).href;
 let sourceLoaded = false;
@@ -60,6 +64,9 @@ const { subagentRuns } =
   await import("../../src/agents/subagents/registry/subagent-registry-memory.js");
 const { buildRequesterSettleWakeIdentity } =
   await import("../../src/agents/subagents/registry/subagent-requester-settle-identity.js");
+const { prepareRestartStores } =
+  await import("../../src/gateway/session-restart-resume-discovery.js");
+const { resolveSessionStorePathCore } = await import("../../src/config/sessions/paths.js");
 assert(!values.source || sourceLoaded, "Baseline source was not loaded");
 assert.equal(subagentRuns.size, 0);
 let sessions: Array<{ key: string; entry: InternalSessionEntry }> = Array.from(
@@ -79,7 +86,7 @@ if (values.fixture) {
   sessions = listSessionEntriesReadOnly({ agentId: "main" }, { deferParticipants: true }).map(
     ({ sessionKey, entry }) => ({ key: sessionKey, entry }),
   );
-  assert.equal(sessions.length, 10_800);
+  assert(sessions.length >= 10_800, "Fixture must contain at least 10,800 sessions");
 }
 const parents = sessions.filter(({ entry }) => entry.archivedAt === undefined && !entry.incognito);
 assert(parents.length >= 2_150);
@@ -112,6 +119,9 @@ for (let index = 0; index < 4_300; index++) {
     },
   };
   subagentRuns.set(entry.runId, entry);
+  if (values.discovery) {
+    continue;
+  }
   parent.entry.status = "killed";
   parent.entry.endedAt = 3;
   parent.entry.lastRunId = values.control
@@ -124,7 +134,29 @@ for (let index = 0; index < 4_300; index++) {
       }).runId;
   parent.entry.lifecycleRunId = parent.entry.lastRunId;
 }
-function classify() {
+async function classify() {
+  if (values.discovery) {
+    assert(values.fixture, "Discovery requires --fixture");
+    const prepared = await prepareRestartStores(
+      {
+        context: {},
+        signal: new AbortController().signal,
+        log: {
+          warn: (message) => {
+            throw new Error(message);
+          },
+        },
+      },
+      [
+        {
+          agentId: "main",
+          physicalAgentId: "main",
+          storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+        },
+      ],
+    );
+    return prepared?.[0]?.entries.length ?? 0;
+  }
   let waiting = 0;
   for (const session of sessions) {
     waiting += Number(resolveSessionYieldWait(session.key, session.entry, "main") === "waiting");
@@ -132,7 +164,7 @@ function classify() {
   return waiting;
 }
 for (let warmup = 0; warmup < 20; warmup++) {
-  classify();
+  await classify();
 }
 global.gc();
 const inspector = new Session();
@@ -146,11 +178,11 @@ if (values.allocation) {
 }
 const trials = [];
 for (let trial = 0; trial < 20; trial++) {
-  const cpu = process.threadCpuUsage();
+  const cpu = process.cpuUsage();
   const start = performance.now();
-  const waiting = classify();
+  const waiting = await classify();
   const wallMs = performance.now() - start;
-  const used = process.threadCpuUsage(cpu);
+  const used = process.cpuUsage(cpu);
   trials.push({ wallMs, cpuMs: (used.user + used.system) / 1000, waiting });
 }
 let sampledBytes: number | undefined;
@@ -166,6 +198,7 @@ writeFileSync(
     source: values.source ?? "candidate",
     fixture: values.fixture,
     control: values.control,
+    discovery: values.discovery,
     sessions: sessions.length,
     children: subagentRuns.size,
     load: loadavg(),
@@ -176,3 +209,10 @@ writeFileSync(
 );
 subagentRuns.clear();
 hook.deregister();
+const { closeOpenClawAgentDatabasesAsync } = await import("../../src/state/openclaw-agent-db.js");
+const { closeOpenClawStateDatabaseAsync } = await import("../../src/state/openclaw-state-db.js");
+const { closeDefaultRetainedNativeWorkerSource } =
+  await import("../../src/infra/worker-native-lifecycle.js");
+await closeOpenClawAgentDatabasesAsync();
+await closeOpenClawStateDatabaseAsync();
+await closeDefaultRetainedNativeWorkerSource();

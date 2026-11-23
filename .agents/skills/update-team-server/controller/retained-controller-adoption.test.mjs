@@ -54,6 +54,33 @@ for (const lock of ["none", "unlocked", "shared"]) test("real FD9 proof refuses 
   assert.equal(existsSync(f.gate), false); untouched(f);
 });
 
+for (const legacy of [false, true]) for (const completed of [false, true])
+  (legacy ? rootTest : test)(`reboot lock replacement ${completed ? "admits completed" : "fences unfinished"} ${legacy ? "bootstrap adoption" : "adoption"}`, t => {
+    const f = fixture(t, { legacy });
+    if (legacy) closeBootstrap(f);
+    const binding = ok(call(f, "prepare", f.request));
+    if (completed) ok(call(f, "apply", binding));
+    const lock = f.env.OPENCLAW_TEAM_LOCK_FILE, before = descriptor(lock);
+    replace(lock, readFileSync(lock), 0o600);
+    assert.notEqual(descriptor(lock).inode, before.inode);
+    if (!completed) {
+      fenced(f);
+      denied(call(f, "prepare", f.request), /lock inode changed/);
+      denied(call(f, "apply", binding), /lock inode changed/);
+      denied(call(f, "context", binding), /lock inode changed|ENOENT.*complete/);
+      return;
+    }
+    dispatchReached(f);
+    const shell = executable(f);
+    denied(shell, /health-check work has not settled/);
+    assert.match(shell.stdout, /CONTROLLER_CLOSURE_READY/);
+    ok(call(f, "context", binding));
+    for (const ownership of ["none", "unlocked", "shared"])
+      denied(call(f, "context", binding, { lock: ownership }));
+    replace(f.env.OPENCLAW_TEAM_RELEASE_LIB, readFileSync(f.env.OPENCLAW_TEAM_RELEASE_LIB), 0o644);
+    denied(invoke(f), /complete installed closure/);
+  });
+
 test("synthetic gate-free canonical readers reproduce the old-reader gap and cannot skip bootstrap", async t => {
   const f = fixture(t, { legacy: true }), result = oldRead(f);
   assert.equal(result.status, 0, result.stderr); assert.equal(result.stdout.trim(), "ROLLBACK_FAILED");

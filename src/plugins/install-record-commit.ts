@@ -24,6 +24,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { composeConfigWriteAssertions } from "../config/write-authority.js";
 import { realpathViaExistingPrefixSync } from "../infra/path-containment.js";
+import { canAccess } from "../infra/path-existence.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { pluginCohortPublicationContext } from "../infra/update-plugin-cohort-context.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
@@ -276,7 +277,7 @@ async function markRetiredManagedNpmInstallRecords(params: {
       return;
     }
     const markerPath = resolveRetainedManagedNpmInstallMarkerPath(packageDir);
-    const markerAlreadyExisted = fs.existsSync(markerPath);
+    const markerAlreadyExisted = await canAccess(markerPath);
     // The outer update recorded this protection before candidate effects. Its
     // activation verifier owns retirement, including the exact marker preimage.
     if (retainReplacedFiles && markerAlreadyExisted) {

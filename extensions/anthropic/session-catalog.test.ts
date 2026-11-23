@@ -102,9 +102,8 @@ const nodeHostMocks = await vi.hoisted(async () => {
 // mock-isolation: Shared owner preserves real exports with fresh command-resolution mocks.
 vi.mock("openclaw/plugin-sdk/node-host", nodeHostMocks.mockRuntime);
 
-function projectFile(home: string, ...parts: string[]): string {
-  return path.join(home, ".claude", "projects", "-workspace", ...parts);
-}
+const projectFile = (home: string, ...parts: string[]) =>
+  path.join(home, ".claude", "projects", "-workspace", ...parts);
 
 async function writeClaudeExecutable(directory: string, source = "#!/bin/sh\n"): Promise<string> {
   await fs.mkdir(directory, { recursive: true });
@@ -268,25 +267,27 @@ async function writeIndexedDesktopSession(
 
 const DESKTOP_SESSION_ID = "local_11111111-1111-1111-1111-111111111111";
 
-// Fixed SSTables from the synthetic Desktop store. The first three use Snappy
-// literal/copy records; the others exercise invalid labels and last-sequence wins.
+// Fixed synthetic stores with Chromium's encoding byte. The first three use
+// Snappy literal/copy records; the others cover mixed encodings, deletion and WAL alignment.
 const DESKTOP_TABLES = {
   Release:
-    "0gHwoAAongFfaHR0cHM6Ly9jbGF1ZGUuYWkAAWRmcmFtZS1zdG9yZQEBAAAAAAAAeyJpZCI6ImNnLTIyMjIyMjIyLTIyMjItMjIyMi0yMjIyLTIyMjIyMjIyMjIyMiIsIm5hbWUiOiJSZWxlYXNlIn17ImNvZGU6bG9jYWxfMTExMTExMTEtMTExMS0xMTExLTExMTEtMTExMTExMTExMTExIjoimm4AJCJ9AAAAAAEAAAABAAAAAAABA3gAswEAAAAAAQAAAAAAAAAAAAC4AQ8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "0wHwoQAonwFfaHR0cHM6Ly9jbGF1ZGUuYWkAAWRmcmFtZS1zdG9yZQEBAAAAAAAAAXsiaWQiOiJjZy0yMjIyMjIyMi0yMjIyLTIyMjItMjIyMi0yMjIyMjIyMjIyMjIiLCJuYW1lIjoiUmVsZWFzZSJ9eyJjb2RlOmxvY2FsXzExMTExMTExLTExMTEtMTExMS0xMTExLTExMTExMTExMTExMSI6IppuACQifQAAAAABAAAAAefpa/4AAQN4ALQBAAAAAAEAAAAAj9ki1AAAuQEPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABX+4CLJHVH2w==",
   Changed:
-    "0gHwoAAongFfaHR0cHM6Ly9jbGF1ZGUuYWkAAWRmcmFtZS1zdG9yZQEBAAAAAAAAeyJpZCI6ImNnLTIyMjIyMjIyLTIyMjItMjIyMi0yMjIyLTIyMjIyMjIyMjIyMiIsIm5hbWUiOiJDaGFuZ2VkIn17ImNvZGU6bG9jYWxfMTExMTExMTEtMTExMS0xMTExLTExMTEtMTExMTExMTExMTExIjoimm4AJCJ9AAAAAAEAAAABAAAAAAABA3gAswEAAAAAAQAAAAAAAAAAAAC4AQ8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "0wHwoQAonwFfaHR0cHM6Ly9jbGF1ZGUuYWkAAWRmcmFtZS1zdG9yZQEBAAAAAAAAAXsiaWQiOiJjZy0yMjIyMjIyMi0yMjIyLTIyMjItMjIyMi0yMjIyMjIyMjIyMjIiLCJuYW1lIjoiQ2hhbmdlZCJ9eyJjb2RlOmxvY2FsXzExMTExMTExLTExMTEtMTExMS0xMTExLTExMTExMTExMTExMSI6IppuACQifQAAAAABAAAAAU1BpcIAAQN4ALQBAAAAAAEAAAAAj9ki1AAAuQEPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABX+4CLJHVH2w==",
   "Normal poll update":
-    "3QHwqwAoqQFfaHR0cHM6Ly9jbGF1ZGUuYWkAAWRmcmFtZS1zdG9yZQEBAAAAAAAAeyJpZCI6ImNnLTIyMjIyMjIyLTIyMjItMjIyMi0yMjIyLTIyMjIyMjIyMjIyMiIsIm5hbWUiOiJOb3JtYWwgcG9sbCB1cGRhdGUifXsiY29kZTpsb2NhbF8xMTExMTExMS0xMTExLTExMTEtMTExMS0xMTExMTExMTExMTEiOiKaeQAkIn0AAAAAAQAAAAEAAAAAAAEDeAC+AQAAAAABAAAAAAAAAAAAAMMBDwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-  "decoder garbage":
-    "ACjiAV9odHRwczovL2NsYXVkZS5haQABZGZyYW1lLXN0b3JlAQEAAAAAAAB7ImlkIjoiY2ctMjIyMjIyMjItMjIyMi0yMjIyLTIyMjItMjIyMjIyMjIyMjIyIiwibmFtZSI6IlJlbGUSKQxhc2UifXsiaWQiOiJjZy0yMjIyMjIyMi0yMjIyLTIyMjItMjIyMi0yMjIyMjIyMjIyMjIiLCJuYW1lIjoiUmVsZWFzZSJ9eyJjb2RlOmxvY2FsXzExMTExMTExLTExMTEtMTExMS0xMTExLTExMTExMTExMTExMSI6ImNnLTIyMjIyMjIyLTIyMjItMjIyMi0yMjIyLTIyMjIyMjIyMjIyMiJ9AAAAAAEAAAAAAAAAAAABA3gAlgIAAAAAAQAAAAAAAAAAAACbAg8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-  "newer empty entry":
-    "ACieAV9odHRwczovL2NsYXVkZS5haQABZGZyYW1lLXN0b3JlAQEAAAAAAAB7ImlkIjoiY2ctMjIyMjIyMjItMjIyMi0yMjIyLTIyMjItMjIyMjIyMjIyMjIyIiwibmFtZSI6IlJlbGVhc2UifXsiY29kZTpsb2NhbF8xMTExMTExMS0xMTExLTExMTEtMTExMS0xMTExMTExMTExMTEiOiJjZy0yMjIyMjIyMi0yMjIyLTIyMjItMjIyMi0yMjIyMjIyMjIyMjIifSEHAgIAAAAAAAB7fQAAAAABAAAAAAAAAAAAAQN4AN4BAAAAAAEAAAAAAAAAAAAA4wEPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+    "3gHwrAAoqgFfaHR0cHM6Ly9jbGF1ZGUuYWkAAWRmcmFtZS1zdG9yZQEBAAAAAAAAAXsiaWQiOiJjZy0yMjIyMjIyMi0yMjIyLTIyMjItMjIyMi0yMjIyMjIyMjIyMjIiLCJuYW1lIjoiTm9ybWFsIHBvbGwgdXBkYXRlIn17ImNvZGU6bG9jYWxfMTExMTExMTEtMTExMS0xMTExLTExMTEtMTExMTExMTExMTExIjoimnkAJCJ9AAAAAAEAAAABNGNRxwABA3gAvwEAAAAAAQAAAAAPuebJAADEAQ8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFf7gIskdUfb",
+  "encoded groups":
+    "ACOgAV9odHRwczovL2NsYXVkZS5haQABYS1sYXRpbgEBAAAAAAAAAXsiaWQiOiJjZy0xIiwibmFtZSI6IlJlbGUSKQxhc2UifXsiY29kZTpsb2NhbF8xIjoiY2ctMSJ9eyJpZCI6ImNnLTEiLCJuYW1lIjoiUmVsZWFzZSJ9eyJjb2RlOmxvY2FsXzEiOiJjZy0xIn17ImlkIjoiY2ctMiIsIm5hbWUiOiJDYWbpIn17ImNvZGU6bG9jYWxfMiI6ImNnLTIifRQPpwJiLW1peGVkAQEAAAAAAAAAewAiAGkAZAAiADoAIgBjAGcALQAzACIALAAiAG4AYQBtAGUAIgA6ACIAFHjRUyIAfQB7ACIAYwBvAGQAZQA6AGwAbwBjAGEAbABfADMAIgA6ACIAYwBnAC0AMwAiAH0AewAiAGkAZAAiADoAIgBjAGcALQA0ACIALAAiAG4AYQBtAGUAIgA6ACIAPtie3SIAfQB7ACIAYwBvAGQAZQA6AGwAbwBjAGEAbABfADQAIgA6ACIAYwBnAC0ANAAiAH0AewAiAGkAZAAiADoAIgBjAGcALQA1ACIALAAiAG4AYQBtAGUAIgA6ACIAUABsAGEAaQBuACIAfQB7ACIAYwBvAGQAZQA6AGwAbwBjAGEAbABfADUAIgA6ACIAYwBnAC0ANQAiAH0AFA8DYy1lbXB0eQECAAAAAAAAAXt9HAc2AQAAAAAAAAF7ImlkIjoiY2ctNiIsIm5hbWUiOiJSZW1vdmVkIn17ImNvZGU6bG9jYWxfNiI6ImNnLTYifRQRAGQtZGVsZXRlZAACAAAAAAAAHQg2AQEAAAAAAAABeyJpZCI6ImNnLTciLCJuYW1lIjoiRGVsZXRlZCJ9eyJjb2RlOmxvY2FsXzciOiJjZy03In0AAAAAAQAAAACd8iUQAAEDeACzBQAAAAABAAAAAIdnuwQAALgFDwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAV/uAiyR1R9s=",
+  "WAL encoded groups":
+    "xm3qWssAAQEAAAAAAAAAAQAAAAEbX2h0dHBzOi8vY2xhdWRlLmFpAAFhLWxhdGluoAEBeyJpZCI6ImNnLTEiLCJuYW1lIjoiUmVsZRIpDGFzZSJ9eyJjb2RlOmxvY2FsXzEiOiJjZy0xIn17ImlkIjoiY2ctMSIsIm5hbWUiOiJSZWxlYXNlIn17ImNvZGU6bG9jYWxfMSI6ImNnLTEifXsiaWQiOiJjZy0yIiwibmFtZSI6IkNhZukifXsiY29kZTpsb2NhbF8yIjoiY2ctMiJ9ekJJHIkAAQIAAAAAAAAAAQAAAAEZX2h0dHBzOi8vY2xhdWRlLmFpAAFiLWNqa2EAewAiAGkAZAAiADoAIgBjAGcALQAzACIALAAiAG4AYQBtAGUAIgA6ACIAFHjRUyIAfQB7ACIAYwBvAGQAZQA6AGwAbwBjAGEAbABfADMAIgA6ACIAYwBnAC0AMwAiAH0A+jIeafIAAQMAAAAAAAAAAQAAAAEbX2h0dHBzOi8vY2xhdWRlLmFpAAFjLWVtb2ppxwEAewAiAGkAZAAiADoAIgBjAGcALQA0ACIALAAiAG4AYQBtAGUAIgA6ACIAPtie3SIAfQB7ACIAYwBvAGQAZQA6AGwAbwBjAGEAbABfADQAIgA6ACIAYwBnAC0ANAAiAH0AewAiAGkAZAAiADoAIgBjAGcALQA1ACIALAAiAG4AYQBtAGUAIgA6ACIAUABsAGEAaQBuACIAfQB7ACIAYwBvAGQAZQA6AGwAbwBjAGEAbABfADUAIgA6ACIAYwBnAC0ANQAiAH0A",
 };
 
 async function writeDesktopGroupStore(home: string, fixture: keyof typeof DESKTOP_TABLES) {
   const dir = path.join(home, "Library/Application Support/Claude/Local Storage/leveldb");
+  const file = path.join(dir, fixture.startsWith("WAL") ? "000001.log" : "000001.ldb");
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, "000001.ldb"), Buffer.from(DESKTOP_TABLES[fixture], "base64"));
+  await fs.writeFile(file, Buffer.from(DESKTOP_TABLES[fixture], "base64"));
+  return file;
 }
 
 async function writeBrokenClaudeNpmShim(binDir: string): Promise<string> {
@@ -959,12 +960,7 @@ describe("Claude session catalog", () => {
     vi.spyOn(performance, "now").mockImplementation(() => now);
     const sessionId = "desktop-custom-group";
     await writeIndexedDesktopSession(home, sessionId);
-    await writeDesktopGroupStore(home, "Release");
-
-    const groupFile = path.join(
-      home,
-      "Library/Application Support/Claude/Local Storage/leveldb/000001.ldb",
-    );
+    const groupFile = await writeDesktopGroupStore(home, "Release");
     const fixedGroupTime = new Date("2026-07-20T12:00:00.000Z");
     await fs.utimes(groupFile, fixedGroupTime, fixedGroupTime);
     await expect(listPage({}, home)).resolves.toMatchObject({
@@ -1023,19 +1019,19 @@ describe("Claude session catalog", () => {
     });
   });
 
-  it.each(["decoder garbage", "newer empty entry"] as const)(
+  it.each(["encoded groups", "WAL encoded groups"] as const)(
     "reads Desktop custom groups with %s",
     async (scenario) => {
-      const home = await createHome();
-      const sessionId = "desktop-group";
-      await writeIndexedDesktopSession(home, sessionId);
-      await writeDesktopGroupStore(home, scenario);
-      const page = await listPage({}, home);
-      expect(page.sessions[0]).toMatchObject({ threadId: sessionId, source: "claude-desktop" });
-      if (scenario === "decoder garbage") {
-        expect(page.sessions[0]).toMatchObject({ customGroup: "Release" });
-      } else {
-        expect(page.sessions[0]).not.toHaveProperty("customGroup");
+      const names = ["Release", "Café", "研发", "🦞", "Plain", null, null];
+      for (const [index, name] of names.entries()) {
+        const home = await createHome();
+        const sessionId = "desktop-group";
+        await writeIndexedDesktopSession(home, sessionId, { sessionId: `local_${index + 1}` });
+        await writeDesktopGroupStore(home, scenario);
+        const page = await listPage({}, home);
+        expect(page.sessions[0]).toMatchObject({ threadId: sessionId, source: "claude-desktop" });
+        expect(page.sessions[0]?.customGroup).toBe(name ?? undefined);
+        expect(Object.hasOwn(page.sessions[0]!, "customGroup")).toBe(name !== null);
       }
     },
   );
@@ -1539,7 +1535,7 @@ describe("Claude session catalog", () => {
         expect(page.items[0]?.truncated).toBe(true);
         await expect(
           provider.read({ ...request, cursor: cursor?.replace(/^block:\d+:/u, "block:999:") }),
-        ).rejects.toThrow("transcript cursor is invalid");
+        ).rejects.toThrow("chat history cursor is invalid");
         await fs.appendFile(
           projectFile(home, `${sessionId}.jsonl`),
           `${JSON.stringify(message(sessionId, "assistant", "Appended reply", 5))}\n`,
@@ -1583,20 +1579,21 @@ describe("Claude session catalog", () => {
           cursor,
           limit: 1,
         }),
-      ).rejects.toThrow("transcript cursor is invalid");
+      ).rejects.toThrow("chat history cursor is invalid");
     }
     expect(listNodes).not.toHaveBeenCalled();
   });
 
-  it("forwards paired-node cursors exactly and rejects malformed response cursors", async () => {
+  it("preserves paired-node metadata and cursors, rejecting malformed cursors", async () => {
     const catalogCursor = "catalog+/=_cursor";
     const transcriptCursor = "transcript+/=_cursor";
+    const sessions = [nodeSession("session-a", { customGroup: "相談ごと 🦞" })];
     let catalogNextCursor = "catalog+/=_next";
     let transcriptNextCursor = "transcript+/=_next";
     const invoke = vi.fn(async ({ command }: Parameters<PluginRuntime["nodes"]["invoke"]>[0]) => ({
       payloadJSON: JSON.stringify(
         command === CLAUDE_SESSIONS_LIST_COMMAND
-          ? { sessions: [], nextCursor: catalogNextCursor }
+          ? { sessions, nextCursor: catalogNextCursor }
           : { threadId: "session-a", items: [], nextCursor: transcriptNextCursor },
       ),
     }));
@@ -1615,7 +1612,7 @@ describe("Claude session catalog", () => {
 
     await expect(
       provider.list({ hostIds: ["node:node-a"], cursors: { "node:node-a": catalogCursor } }),
-    ).resolves.toMatchObject([{ nextCursor: catalogNextCursor }]);
+    ).resolves.toMatchObject([{ nextCursor: catalogNextCursor, sessions }]);
     expect(invoke).toHaveBeenLastCalledWith(
       expect.objectContaining({
         command: CLAUDE_SESSIONS_LIST_COMMAND,
@@ -1645,7 +1642,7 @@ describe("Claude session catalog", () => {
     transcriptNextCursor = " ";
     await expect(
       provider.read({ hostId: "node:node-a", threadId: "session-a", limit: 1 }),
-    ).rejects.toThrow("Claude node returned an invalid transcript page");
+    ).rejects.toThrow("Claude node returned an invalid chat history page");
   });
 
   it("pages transcripts identically when every reverse-scan read returns short", async () => {
@@ -1668,7 +1665,7 @@ describe("Claude session catalog", () => {
     expect(older.nextCursor).toBeUndefined();
     for (const cursor of [` ${latest.nextCursor} `, " ", null]) {
       await expect(readPage({ threadId: sessionId, cursor, limit: 1 }, home)).rejects.toThrow(
-        "transcript cursor is invalid",
+        "chat history cursor is invalid",
       );
     }
   });
@@ -1684,7 +1681,7 @@ describe("Claude session catalog", () => {
     );
 
     await expect(readPage({ threadId: sessionId, limit: 2 }, home)).rejects.toThrow(
-      "Claude transcript changed while it was being read",
+      "Claude chat history changed while it was being read",
     );
   });
 

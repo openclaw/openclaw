@@ -1,6 +1,6 @@
-import fs from "node:fs";
 import path from "node:path";
 import { root as fsRoot } from "../infra/fs-safe.js";
+import { canAccess } from "../infra/path-existence.js";
 import { resolveSkillFileHost } from "../skills/skill-file-host.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import {
@@ -114,7 +114,7 @@ function wrapWorkspaceSkillRead(
       const physicalMatch =
         physicalMatches.length === 1 &&
         physicalPath &&
-        !fs.existsSync(physicalPath) &&
+        !(await canAccess(physicalPath)) &&
         !localSkills.some(
           (candidate) => relativePathInsideSandboxRoot(candidate.baseDir, physicalPath) !== null,
         )

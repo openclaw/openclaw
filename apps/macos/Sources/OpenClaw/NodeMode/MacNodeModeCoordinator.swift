@@ -499,8 +499,8 @@ final class MacNodeModeCoordinator: NSObject {
             }
 
             if self.openClawIDToolsOff {
-                // This Mac is an owner device of its OpenClaw ID claw without a node: it must not
-                // fall back to pairing a node over the owner's own connection.
+                // This Mac is an owner or member device of its OpenClaw ID claw without a node: it
+                // must not fall back to pairing a node over its own operator connection.
                 self.channelStatus.record(.idle)
                 guard await refreshIterator.next() != nil else { return }
                 continue

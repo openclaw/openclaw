@@ -132,6 +132,7 @@ describe("committed transcript rewrite notifications", () => {
         const outcome = await precheck({
           attempt: { ...caller, provider: "openai", modelId: "gpt-5.5", contextTokenBudget: 1_000 },
           request: {
+            pressure: "overflow",
             route: "truncate_tool_results_only",
             estimatedPromptTokens: 20_000,
             promptBudgetBeforeReserve: 900,

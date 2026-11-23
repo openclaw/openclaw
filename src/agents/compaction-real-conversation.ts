@@ -103,28 +103,17 @@ export function isRealConversationMessage(
   return false;
 }
 
-/** Content-independent facts let compaction reuse classification after releasing a payload. */
-export function prepareRealConversationFacts(message: AgentMessage) {
-  return {
-    toolResult: message.role === "toolResult",
-    meaningful: message.role !== "toolResult" && isRealConversationMessage(message, [], 0),
-    anchor: isToolResultConversationAnchor(message),
-  };
-}
-
-export function createRealConversationFactClassifier() {
+/** Classifies an ordered transcript without retaining earlier pages. */
+export function createRealConversationClassifier(): (message: AgentMessage) => boolean {
   let anchorLookback = 0;
-  return (facts: ReturnType<typeof prepareRealConversationFacts>) => {
-    const real = facts.toolResult ? anchorLookback > 0 : facts.meaningful;
-    anchorLookback = facts.anchor
+  return (message) => {
+    const real =
+      message.role === "toolResult"
+        ? anchorLookback > 0
+        : isRealConversationMessage(message, [], 0);
+    anchorLookback = isToolResultConversationAnchor(message)
       ? TOOL_RESULT_REAL_CONVERSATION_LOOKBACK
       : Math.max(0, anchorLookback - 1);
     return real;
   };
-}
-
-/** Classifies an ordered transcript without retaining earlier pages. */
-export function createRealConversationClassifier(): (message: AgentMessage) => boolean {
-  const classify = createRealConversationFactClassifier();
-  return (message) => classify(prepareRealConversationFacts(message));
 }

@@ -22,13 +22,7 @@ export type NativeHookRelayCommandPlan = Pick<
 export function buildNativeHookRelayCommandPlan(
   params: Pick<
     RegisterNativeHookRelayParams,
-    | "provider"
-    | "agentId"
-    | "sessionKey"
-    | "config"
-    | "preToolUseLoopDetection"
-    | "requirePreToolUse"
-    | "command"
+    "provider" | "agentId" | "sessionKey" | "config" | "requirePreToolUse" | "command"
   > & {
     relayId: string;
     generation: string;
@@ -38,7 +32,7 @@ export function buildNativeHookRelayCommandPlan(
   },
 ): NativeHookRelayCommandPlan {
   const stateDbPath = resolveOpenClawStateSqlitePath();
-  const policy = { ...params, preToolUseLoopDetection: params.preToolUseLoopDetection !== false };
+  const policy = params;
   const facts = new Map(
     NATIVE_HOOK_RELAY_EVENTS.map((event) => [
       event,

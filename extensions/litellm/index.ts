@@ -13,14 +13,10 @@ import {
   buildApiKeyCredential,
   captureProviderApiKey,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
-import {
-  buildOpenAICompatibleLiveModels,
-  buildOpenAICompatibleProviderCatalog,
-} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildOpenAICompatibleProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { resolveMergedModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildLitellmImageGenerationProvider } from "./image-generation-provider.js";
 import {
   applyLitellmConfig,
@@ -271,21 +267,7 @@ export default definePluginEntry({
             providerId: PROVIDER_ID,
             buildProvider: buildLitellmProvider,
             allowExplicitBaseUrl: true,
-            modelDiscovery: {
-              endpointPath: versionedBaseUrl ? "models" : "v1/models",
-              // LiteLLM declares a chat model with `mode: "chat"`, which the shared owner
-              // does not read. Other modes keep the shared rules.
-              projectRows: (rows, fallback) =>
-                buildOpenAICompatibleLiveModels(
-                  rows.map((row) => {
-                    const record = asOptionalRecord(row);
-                    return record?.mode === "chat"
-                      ? { ...record, capabilities: { chat: true } }
-                      : row;
-                  }),
-                  fallback,
-                ),
-            },
+            modelDiscovery: { endpointPath: versionedBaseUrl ? "models" : "v1/models" },
           });
         },
       },

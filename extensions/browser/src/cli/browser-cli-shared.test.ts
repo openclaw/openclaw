@@ -1,7 +1,7 @@
 import { AsyncWorkScope } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { createNonExitingRuntime, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const gatewayMocks = vi.hoisted(() => ({
@@ -20,9 +20,7 @@ beforeEach(() => {
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
   vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-  vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
-    throw new Error(`test exit:${code}`);
-  });
+  vi.spyOn(defaultRuntime, "exit").mockImplementation(createNonExitingRuntime().exit);
 });
 afterEach(() => {
   process.argv = argv;
@@ -71,13 +69,17 @@ it.each([true, false])(
     const run = (method: "GET" | "POST", path = "/resize", query?: { labels: boolean }) =>
       runBrowserCliRequest({ parent: { json }, method, path, query, errorPolicy: "inline" });
     if (json) {
-      await expect(run("POST")).rejects.toBe(failure);
+      await expect(run("POST")).rejects.toMatchObject({
+        name: "ExpectedCliError",
+        message: "Request refused",
+        cause: failure,
+        humanOutputWritten: true,
+      });
     } else {
-      await expect(run("POST")).rejects.toThrow("test exit:1");
-      expect(defaultRuntime.error).toHaveBeenCalledExactlyOnceWith("Error: Request refused");
+      await expect(run("POST")).rejects.toMatchObject({ name: "ExitError", code: 1 });
     }
-    expect(defaultRuntime.error).toHaveBeenCalledTimes(json ? 0 : 1);
-    expect(defaultRuntime.exit).toHaveBeenCalledTimes(json ? 0 : 1);
+    expect(defaultRuntime.error).toHaveBeenCalledExactlyOnceWith("Error: Request refused");
+    expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(1);
     vi.mocked(defaultRuntime.error).mockClear();
     vi.mocked(defaultRuntime.exit).mockClear();
     for (const labels of [false, true]) {

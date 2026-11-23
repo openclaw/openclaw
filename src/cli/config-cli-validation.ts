@@ -239,7 +239,7 @@ export function assertStrictConfigForMutation(
   );
 }
 
-async function collectConfigSecretProviderErrors(params: {
+export async function collectConfigSecretProviderErrors(params: {
   config: OpenClawConfig;
   selection?: ConfigMutationSecretSelection;
 }): Promise<ConfigValidationIssue[]> {

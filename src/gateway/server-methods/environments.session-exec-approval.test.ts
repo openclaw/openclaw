@@ -73,13 +73,14 @@ it.for([
       NonNullable<
         NonNullable<GatewayRequestContext["execApprovalIosPushDelivery"]>["handleRequested"]
       >
-    >(async (request, delivery) => {
-      expect(
-        ["requester-device", "other-device"].map((deviceId) =>
-          delivery?.isTargetVisible?.({ deviceId, scopes: ["operator.approvals"] }),
-        ),
-      ).toEqual([true, false]);
-      delivered.resolve(request);
+    >(async (record) => {
+      expect(record).toMatchObject({
+        requestedByConnId: "requester-connection",
+        requestedByDeviceId: "requester-device",
+        requestedByDeviceTokenAuth: true,
+        agentRuntimeDelegatedAuthority: { ...authority, kind: "local" },
+      });
+      delivered.resolve(buildRequestedApprovalEvent(record, "exec"));
       return true;
     });
     const expired = vi.fn(async () => {});

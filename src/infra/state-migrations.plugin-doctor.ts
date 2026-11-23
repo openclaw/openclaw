@@ -565,11 +565,14 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
     assertDeferredPluginMigrationsCurrent({ env: params.env, expectedPending });
   };
   let completed: MigrationMessages = { changes: [], warnings: [] };
+  // Gateways older than 2026.11.5 (including 2026.10 extended-stable) record no process
+  // namespace, so a lease their failed release or stop left behind ends only at expiry.
+  const pluginLeaseOptions = { env: params.env, assertCurrent: () => maintenance.assertCurrent() };
   try {
     const result = await withAgentDatabaseMaintenanceLease(
       { env: params.env },
       async (agentLease) =>
-        withPluginLifecycleLease({ env: params.env, waitMs: 5_000 }, async (pluginLease) => {
+        withPluginLifecycleLease(pluginLeaseOptions, async (pluginLease) => {
           let active = true;
           const assertCurrent = () => {
             if (!active) {

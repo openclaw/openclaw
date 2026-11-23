@@ -182,7 +182,7 @@ describe("createSmsIngressSpool", () => {
       media: {
         saveRemoteMedia: async (options: Parameters<typeof saveRemoteMedia>[0]) => {
           expect(options).toMatchObject({
-            ssrfPolicy: { hostnameAllowlist: ["api.twilio.com"] },
+            ssrfPolicy: { hostnameAllowlist: ["api.twilio.com", "mms.twiliocdn.com"] },
             requestInit: { signal: expect.any(AbortSignal) },
           });
           return await saveRemoteMedia({

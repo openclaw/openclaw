@@ -269,7 +269,7 @@ for (const engine of ["sqlite", "postgres"] as const) {
               expect(read()).toEqual({ kind: "source", current: false });
             }
           } finally {
-            receipt?.finish("interrupted");
+            receipt?.finish("interrupted", "failed");
             await receipt?.settled?.();
           }
         },

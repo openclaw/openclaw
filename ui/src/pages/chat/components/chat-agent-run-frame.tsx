@@ -24,7 +24,14 @@ import {
   chatItemGroups,
   type AgentRunFrameRenderItem,
 } from "../chat-agent-run-grouping.ts";
+import { readHandoffDisplay } from "../chat-sessions-yield.ts";
 import { rawMessageTimestamp } from "../chat-thread-items.ts";
+import {
+  readProjectedContinuation,
+  type ProjectedContinuationSource,
+} from "../chat-turn-boundary.ts";
+import { ChatHandoffResume } from "./chat-handoff-sessions.tsx";
+import { ChatInlineSwarm, type InlineSwarm } from "./chat-inline-swarm.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
   ActivityGroup,
@@ -50,6 +57,7 @@ const ChatSourcePreviews = lazy(() => import("./chat-source-previews.tsx"), {
 type AgentRunFrameOptions = {
   basePath?: string;
   sessionPublicOrigin?: string;
+  swarms?: readonly InlineSwarm[];
   streamOptions: StreamGroupOptions;
   renderGroupOptions: (group: MessageGroupData) => NativeMessageGroupOptions;
   partDependencies: (part: BodyPart) => readonly unknown[];
@@ -268,6 +276,37 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
         sessionPublicOrigin: opts.sessionPublicOrigin,
       })
     : [];
+  // Work that resumed after a hidden wake marks where it picked up again. Rows
+  // split from one resumed message share its time, so only the first draws it.
+  // A virtualized fragment scans its whole run: work may stop in an earlier one.
+  const resumes = new Map<
+    string,
+    { yieldedAt: number; resumedAt: number; source: ProjectedContinuationSource }
+  >();
+  let stopped: unknown;
+  const runParts = fragment
+    ? fragment.source.parts.flatMap<BodyPart>((part) =>
+        part.kind === "stream-run" ? part.parts : [part],
+      )
+    : bodyParts;
+  for (const part of runParts) {
+    const partGroups = chatItemGroups(part);
+    const first = partGroups[0]?.messages[0]?.message;
+    const wokenBy = readProjectedContinuation(first);
+    const resumedAt = rawMessageTimestamp(first);
+    const yieldedAt = rawMessageTimestamp(stopped);
+    // A spoken acknowledgment already marks where its handoff resumed.
+    if (
+      wokenBy &&
+      resumedAt &&
+      yieldedAt &&
+      yieldedAt < resumedAt &&
+      !readHandoffDisplay(stopped)
+    ) {
+      resumes.set(`${part.kind}:${part.key}`, { yieldedAt, resumedAt, source: wokenBy });
+    }
+    stopped = partGroups.at(-1)?.messages.at(-1)?.message ?? stopped;
+  }
   return {
     shell,
     actionOwner,
@@ -275,14 +314,28 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
     bodyParts,
     firstBubbleKey,
     sourcePreviews,
+    resumes,
   };
+}
+
+function FrameSwarms(props: { swarms: readonly InlineSwarm[] | undefined }) {
+  return (
+    <For each={props.swarms} keyed={(swarm) => swarm.group.groupId}>
+      {(swarm) => <ChatInlineSwarm swarm={swarm()} />}
+    </For>
+  );
 }
 
 export function AgentRunFrame(props: FrameProps) {
   const statusParts = createMemo(() => agentRunFrameActiveStatusParts(props.frame));
   return (
     <Show when={statusParts()} fallback={<RunFrame frame={props.frame} options={props.options} />}>
-      {(parts) => <StreamGroup parts={parts()} options={props.options.streamOptions} />}
+      {(parts) => (
+        <>
+          <FrameSwarms swarms={props.options.swarms} />
+          <StreamGroup parts={parts()} options={props.options.streamOptions} />
+        </>
+      )}
     </Show>
   );
 }
@@ -295,6 +348,7 @@ function RunFrame(props: FrameProps) {
     shellOptions().bubbleMode ? undefined : state().actionOwner?.key;
   const firstBubbleKey = createMemo(() => state().firstBubbleKey);
   const frameContent = [
+    <FrameSwarms swarms={props.options.swarms} />,
     <FrameBody
       parts={state().bodyParts}
       options={props.options}
@@ -334,66 +388,78 @@ function RunFrame(props: FrameProps) {
           const value = part();
           return value.kind === "group" ? value : undefined;
         };
+        const resume = () => state().resumes.get(`${part().kind}:${part().key}`);
         return (
-          <Switch>
-            <Match when={streamPart()}>
-              {(stream) => (
-                <StreamPartView part={stream()} options={streamOptions} presentation="standalone" />
+          <>
+            <Show when={resume()}>
+              {(display) => (
+                <ChatHandoffResume handoff={display()} source={display().source} sessions={[]} />
               )}
-            </Match>
-            <Match when={workPart()}>
-              {(work) => (
-                <>
-                  <WorkGroupSummary
-                    item={work()}
-                    options={{
-                      expanded: options().isWorkExpanded(work().key),
-                      bubbleMode: options().streamOptions.bubbleMode,
-                      onToggle: () =>
-                        options().onToggleWork(work().key, options().isWorkExpanded(work().key)),
-                      presentation: "continuation",
-                    }}
+            </Show>
+            <Switch>
+              <Match when={streamPart()}>
+                {(stream) => (
+                  <StreamPartView
+                    part={stream()}
+                    options={streamOptions}
+                    presentation="standalone"
                   />
-                  <Show when={!props.frame.fragment && options().isWorkExpanded(work().key)}>
-                    <For each={work().groups} keyed={(group) => group.key}>
-                      {(group) => (
-                        <MessageGroupContent
-                          group={group()}
-                          options={groupOptions(group())}
-                          footerReactionMessageKey={footerReactionMessageKey()}
+                )}
+              </Match>
+              <Match when={workPart()}>
+                {(work) => (
+                  <>
+                    <WorkGroupSummary
+                      item={work()}
+                      options={{
+                        expanded: options().isWorkExpanded(work().key),
+                        bubbleMode: options().streamOptions.bubbleMode,
+                        onToggle: () =>
+                          options().onToggleWork(work().key, options().isWorkExpanded(work().key)),
+                        presentation: "continuation",
+                      }}
+                    />
+                    <Show when={!props.frame.fragment && options().isWorkExpanded(work().key)}>
+                      <For each={work().groups} keyed={(group) => group.key}>
+                        {(group) => (
+                          <MessageGroupContent
+                            group={group()}
+                            options={groupOptions(group())}
+                            footerReactionMessageKey={footerReactionMessageKey()}
+                          />
+                        )}
+                      </For>
+                    </Show>
+                  </>
+                )}
+              </Match>
+              <Match when={activityPart()}>
+                {(activity) => {
+                  const groups = () => activity().groups;
+                  return (
+                    <Show when={groups()[0]}>
+                      {(first) => (
+                        <ActivityGroup
+                          groups={groups()}
+                          options={options().renderGroupOptions(first())}
+                          presentation="continuation"
                         />
                       )}
-                    </For>
-                  </Show>
-                </>
-              )}
-            </Match>
-            <Match when={activityPart()}>
-              {(activity) => {
-                const groups = () => activity().groups;
-                return (
-                  <Show when={groups()[0]}>
-                    {(first) => (
-                      <ActivityGroup
-                        groups={groups()}
-                        options={options().renderGroupOptions(first())}
-                        presentation="continuation"
-                      />
-                    )}
-                  </Show>
-                );
-              }}
-            </Match>
-            <Match when={messageGroup()}>
-              {(group) => (
-                <MessageGroupContent
-                  group={group()}
-                  options={groupOptions(group())}
-                  footerReactionMessageKey={footerReactionMessageKey()}
-                />
-              )}
-            </Match>
-          </Switch>
+                    </Show>
+                  );
+                }}
+              </Match>
+              <Match when={messageGroup()}>
+                {(group) => (
+                  <MessageGroupContent
+                    group={group()}
+                    options={groupOptions(group())}
+                    footerReactionMessageKey={footerReactionMessageKey()}
+                  />
+                )}
+              </Match>
+            </Switch>
+          </>
         );
       }}
     </FrameBody>,
