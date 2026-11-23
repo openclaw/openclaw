@@ -7,14 +7,14 @@ import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { VERSION } from "../version.js";
 import { resolveUserPath } from "./home-dir.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, resolveReadOnlyShmSqliteFileUri } from "./node-sqlite.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import { collectRegisteredPaths } from "./update-candidate-state.shared.js";
 
 /** The one-time rebuild, run from the checkout. It names no path, because the early updater
  * redacts the state and home directories out of this check's output before printing it. */
 const EARLY_GIT_RELEASE_REBUILD =
-  "git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force || openclaw gateway start";
+  "git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force || { openclaw gateway start; false; }";
 
 /**
  * Updaters built from `main` between #199706 (6747b1ec5ae, 2026-11-17) and #201917
@@ -63,8 +63,16 @@ export function refuseEarlyGitReleaseSchemaChange(
     for (const id of fs.existsSync(agentsDir) ? fs.readdirSync(agentsDir) : []) {
       agentPaths.add(path.join(agentsDir, id, "agent", "openclaw-agent.sqlite"));
     }
-    const db = openNodeSqliteDatabase(shared, { readOnly: true });
+    // readonly_shm reads committed WAL content without touching the serving Gateway's sidecars.
+    const open = (file: string) =>
+      openNodeSqliteDatabase(resolveReadOnlyShmSqliteFileUri(file), { readOnly: true });
+    const db = open(shared);
     try {
+      // A PostgreSQL store keeps a version-0 SQLite anchor; its schema lives on the server and
+      // migrates through Doctor with writers stopped, which this rebuild does not cover.
+      if (readSqliteUserVersion(db) === 0) {
+        return null;
+      }
       state = readStateSchemaContentVersion(db);
       for (const { source } of collectRegisteredPaths(db, shared, new Map())) {
         agentPaths.add(source);
@@ -73,9 +81,13 @@ export function refuseEarlyGitReleaseSchemaChange(
       db.close();
     }
     for (const file of [...agentPaths].filter((candidate) => fs.existsSync(candidate))) {
-      const agent = openNodeSqliteDatabase(file, { readOnly: true });
+      const agent = open(file);
       try {
-        agents.push(readSqliteUserVersion(agent));
+        const version = readSqliteUserVersion(agent);
+        if (version === 0) {
+          return null;
+        }
+        agents.push(version);
       } finally {
         agent.close();
       }
