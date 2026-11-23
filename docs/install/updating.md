@@ -2104,11 +2104,21 @@ serves. Dev-channel installs on `main` builds from 2026-11-17 until this change 
 version 2026.11.5; no published release has the release layout) keep the link and releases under
 `git-install/lib/node_modules/openclaw`, where Node refuses to load a bundled plugin's
 TypeScript sources ([#201874](https://github.com/openclaw/openclaw/issues/201874)). When a
-web search provider is configured, their Gateway fails at startup. The old release cannot run
-its own updater either, so update from a terminal with the checkout's `openclaw`, not from the
-Control UI or another Gateway-started update. Run `openclaw update` twice: the older build
-runs the first update and moves the checkout to this change; the second, run by this change,
-rebuilds the serving commit at the new path and removes the old link.
+web search provider is configured, their Gateway fails at startup.
+
+The updater in a checkout built from `main` between 2026-11-17 and 2026-11-19 (it builds
+releases under `git-install/releases/<release>/build`) cannot finish an update that changes a
+database schema: it refuses before restarting the Gateway, and after a migration neither it nor
+the checkout's `openclaw` command can open the migrated data. The new release's check stops that
+update before anything changes, keeps the Gateway serving, and prints the one-time rebuild to run
+from the checkout:
+
+```sh
+openclaw gateway stop --force && git pull --ff-only && pnpm install --frozen-lockfile && pnpm build && openclaw doctor --fix && openclaw gateway install --force && openclaw gateway start
+```
+
+Later `openclaw update` runs then use the rebuilt checkout's updater. Updates that change no
+schema still go through that older updater.
 
 The inspection reports data at risk only on evidence: a schema that moved, or a store it
 cannot read after a new-version Doctor or boot check may have written it. When no
