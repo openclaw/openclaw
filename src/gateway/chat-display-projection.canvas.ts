@@ -302,16 +302,17 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
             pending.push(preview);
           }
         }
-      } else if (
-        // Claude CLI history records thinking as its own row before the visible reply.
-        !Array.isArray(entry.content) ||
-        entry.content.length === 0 ||
-        !entry.content.every((block) =>
-          isAssistantInternalReasoningContentType(readObjectRecord(block)?.type),
-        )
-      ) {
+      } else {
         lastRenderableAssistantIndex = index;
-        if (pending.length > 0) {
+        // Claude CLI history records thinking as its own row before the visible reply.
+        // Only the reply consumes previews; a thinking row stays the fallback for an unanswered turn.
+        const reasoningOnly =
+          Array.isArray(entry.content) &&
+          entry.content.length > 0 &&
+          entry.content.every((block) =>
+            isAssistantInternalReasoningContentType(readObjectRecord(block)?.type),
+          );
+        if (pending.length > 0 && !reasoningOnly) {
           next[index] = appendChatCanvasBlocksToMessage(entry, pending);
           pending.length = 0;
           changed = true;

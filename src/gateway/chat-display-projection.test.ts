@@ -506,6 +506,13 @@ it("restores widgets from Claude CLI results coalesced into the tool-call messag
   expect(augmentChatHistoryWithCanvasBlocks(messages)[2]).toMatchObject({
     content: [text("Done."), { type: "canvas", preview: { viewId: "cv_cli", url: "/cv_cli" } }],
   });
+  // A turn that ends before its visible reply keeps the widget off the previous answer.
+  const earlier = assistant([text("Earlier answer.")], {});
+  const unanswered = augmentChatHistoryWithCanvasBlocks([earlier, ...messages.slice(0, 2)]);
+  expect(unanswered[0]).toBe(earlier);
+  expect(unanswered[2]).toMatchObject({
+    content: [{ type: "thinking" }, { type: "canvas", preview: { viewId: "cv_cli" } }],
+  });
 });
 
 const hostTab = { targetId: "tab-1", target: "host", profile: "work" };
