@@ -46,6 +46,7 @@ export function buildCommonCommandRunParams(
     swarmExecutionLane: params.opts.swarmExecutionLane,
     extraSystemPrompt: params.opts.extraSystemPrompt,
     extraSystemPromptTurnContext: params.opts.extraSystemPromptTurnContext,
+    promptCacheKey: params.opts.promptCacheKey,
     inputProvenance: params.opts.inputProvenance,
     privateCompletion: params.opts.privateCompletion,
     skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
