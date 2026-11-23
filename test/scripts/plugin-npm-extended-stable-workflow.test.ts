@@ -58,6 +58,27 @@ type Workflow = {
   jobs?: Record<string, Job>;
 };
 
+it("bootstraps the complete publication verifier before consuming immutable packages", () => {
+  const publish = workflow().jobs!.publish_plugins_npm;
+  const checkout = step(publish, "Checkout trusted publication tooling");
+  const setup = step(publish, "Setup trusted plugin tooling package manager");
+  const install = step(publish, "Install trusted plugin tooling dependencies");
+  expect(checkout.with?.ref).toBe("${{ github.workflow_sha }}");
+  expect(checkout.with).not.toHaveProperty("sparse-checkout");
+  expect(setup.uses).toBe("./.github/actions/setup-pnpm-store-cache");
+  expect(setup.if).toBeUndefined();
+  expect(install.if).toBeUndefined();
+  expect(install.run).toBe("pnpm install --frozen-lockfile --prefer-offline --ignore-scripts");
+  const steps = publish!.steps!;
+  expect(steps.indexOf(setup)).toBeGreaterThan(steps.indexOf(checkout));
+  expect(steps.indexOf(install)).toBeGreaterThan(steps.indexOf(setup));
+  const consumers = steps.filter((entry) => entry.run?.includes("plugin-npm-prepared-release.mjs"));
+  expect(consumers.length).toBeGreaterThan(0);
+  for (const consumer of consumers) {
+    expect(steps.indexOf(consumer)).toBeGreaterThan(steps.indexOf(install));
+  }
+});
+
 it("uses live evidence when a failed-job rerun retains an earlier preview", () => {
   const jobs = workflow().jobs!;
   expect(jobs.preview_plugins_npm?.outputs?.evidence_attempt).toBe(
@@ -878,7 +899,7 @@ it("binds preflight to an exact source SHA without release-publish approval", ()
     ).toBe(expected);
   }
   const sourceSetup = step(preview, "Setup Node environment");
-  const preparedSetup = step(preview, "Setup trusted Node for prepared publication");
+  const preparedSetup = step(preview, "Setup trusted plugin tooling package manager");
   const preparedPlan = step(preview, "Read qualified npm preparation");
   const toolingInstall = step(preview, "Install trusted plugin tooling dependencies");
   const preparationSteps = previewSteps.filter((candidate) =>
@@ -892,19 +913,37 @@ it("binds preflight to an exact source SHA without release-publish approval", ()
     );
     expect(enabled.map((candidate) => candidate.name)).toEqual(
       preparedArtifact
-        ? ["Setup trusted Node for prepared publication", "Read qualified npm preparation"]
-        : ["Setup Node environment", "Install trusted plugin tooling dependencies"],
+        ? [
+            "Setup trusted plugin tooling package manager",
+            "Install trusted plugin tooling dependencies",
+            "Read qualified npm preparation",
+          ]
+        : [
+            "Setup Node environment",
+            "Setup trusted plugin tooling package manager",
+            "Install trusted plugin tooling dependencies",
+          ],
     );
   }
   expect(sourceSetup.uses).toBe("./.github/actions/setup-node-env");
   expect(sourceSetup.if).toBe("inputs.prepared_artifact == ''");
-  expect(preparedSetup.if).toBe("inputs.prepared_artifact != ''");
-  expect(preparedPlan.if).toBe(preparedSetup.if);
-  expect(preparedSetup.uses).toBe("actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1");
+  expect(preparedSetup.if).toBeUndefined();
+  expect(toolingInstall.if).toBeUndefined();
+  expect(preparedPlan.if).toBe("inputs.prepared_artifact != ''");
+  expect(preparedSetup.uses).toBe("./.release-tooling/.github/actions/setup-pnpm-store-cache");
   expect(preparedSetup.with).toMatchObject({ "node-version": "${{ env.NODE_VERSION }}" });
   expect(previewSteps.indexOf(sourceSetup)).toBeGreaterThan(trustedIndex);
   expect(previewSteps.indexOf(preparedSetup)).toBeGreaterThan(trustedIndex);
-  expect(previewSteps.indexOf(preparedPlan)).toBeGreaterThan(previewSteps.indexOf(preparedSetup));
+  expect(previewSteps.indexOf(toolingInstall)).toBeGreaterThan(previewSteps.indexOf(preparedSetup));
+  expect(previewSteps.indexOf(preparedPlan)).toBeGreaterThan(previewSteps.indexOf(toolingInstall));
+  expect(preparedSetup.with).toMatchObject({
+    "package-manager-file": ".release-tooling/package.json",
+    "lockfile-path": ".release-tooling/pnpm-lock.yaml",
+  });
+  expect(toolingInstall["working-directory"]).toBe(".release-tooling");
+  expect(toolingInstall.run).toBe(
+    "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
+  );
   expect(trusted.env).toMatchObject({
     RELEASE_CANDIDATE_BRANCH:
       "${{ github.event_name == 'workflow_dispatch' && inputs.release_candidate_branch || '' }}",

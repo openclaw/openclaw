@@ -251,11 +251,28 @@ jobs:
           set -euo pipefail
           exec python3 -I -S "$CI_GIT_OWNER" --policy .release-tooling/scripts/plugin-npm-release-admission.py
 
-      - name: Setup trusted Node for prepared publication
-        if: inputs.prepared_artifact != ''
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - name: Setup Node environment
+        if: inputs.prepared_artifact == ''
+        uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Setup trusted plugin tooling package manager
+        uses: ./.release-tooling/.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: off
+          package-manager-file: .release-tooling/package.json
+          lockfile-path: .release-tooling/pnpm-lock.yaml
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install trusted plugin tooling dependencies
+        working-directory: .release-tooling
+        env:
+          CI: "true"
+        # Corepack reads this checkout's packageManager before pnpm processes arguments.
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Read qualified npm preparation
         id: prepared_plan
@@ -300,22 +317,6 @@ jobs:
           path: ${{ runner.temp }}/plugin-npm-evidence.json
           if-no-files-found: error
           retention-days: 7
-
-      - name: Setup Node environment
-        if: inputs.prepared_artifact == ''
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "false"
-
-      - name: Install trusted plugin tooling dependencies
-        if: inputs.prepared_artifact == ''
-        working-directory: .release-tooling
-        env:
-          CI: "true"
-        # Corepack reads this checkout's packageManager before pnpm processes arguments.
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Validate publishable plugin metadata
         if: inputs.prepared_artifact == ''
@@ -1467,16 +1468,23 @@ jobs:
           persist-credentials: false
           ref: ${{ github.workflow_sha }}
           fetch-depth: 1
-          # Publication consumes attested tarballs and the exact source manifest.
-          # Keep the workflow policy and its dependency-free verifier closure.
-          sparse-checkout: |
-            .github/workflows
-            scripts
+          # Install only trusted tooling; publication still consumes attested tarballs.
 
       - name: Setup trusted Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup trusted plugin tooling package manager
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: off
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install trusted plugin tooling dependencies
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Resolve immutable npm publication artifact
         if: inputs.prepared_artifact == ''
