@@ -9,7 +9,9 @@ import {
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "../agent-tools.policy.js";
+import { CORE_TOOL_DEFINITIONS } from "../core-tool-facts.js";
 import { DEFAULT_PROVIDER } from "../defaults.js";
+import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
 import { buildModelAliasIndex, resolveModelRefFromString } from "../model-selection.js";
 import { resolveSessionModelRef } from "../session-model-ref.js";
 import { isToolAllowedByPolicies } from "../tool-policy-match.js";
@@ -22,8 +24,6 @@ import {
 import { resolveSandboxConfigForAgent } from "./config.js";
 import type { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import type { SandboxToolPolicy } from "./types.js";
-
-type RestrictiveWorkspaceToolPolicy = SandboxToolPolicy & { allow: string[] };
 
 const WORKSPACE_CONFINED_SANDBOX_TOOLS = new Set([
   "apply_patch",
@@ -43,27 +43,56 @@ const WORKSPACE_CONFINED_SANDBOX_TOOLS = new Set([
   "write",
 ]);
 
+function policyToolNames(policies: Array<SandboxToolPolicy | undefined>): string[] {
+  const names = new Set<string>();
+  const globs: string[] = [];
+  for (const policy of policies) {
+    for (const entry of policy?.allow ?? []) {
+      for (const expanded of expandToolGroups([entry])) {
+        const normalized = normalizeToolPolicyName(expanded);
+        if (!normalized) {
+          continue;
+        }
+        if (normalized.includes("*")) {
+          globs.push(normalized);
+        } else {
+          names.add(normalized);
+        }
+      }
+    }
+  }
+  if (globs.length > 0) {
+    const patterns = compileGlobPatterns({
+      raw: globs,
+      normalize: normalizeToolPolicyName,
+    });
+    for (const tool of CORE_TOOL_DEFINITIONS) {
+      const id = normalizeToolPolicyName(tool.id);
+      if (matchesAnyGlobPattern(id, patterns)) {
+        names.add(id);
+      }
+    }
+  }
+  return [...names];
+}
+
 function findUnconfinedAllowedTool(
   policies: Array<SandboxToolPolicy | undefined>,
   confinedToolNames: ReadonlySet<string>,
 ) {
-  const candidatePolicy = policies
-    .filter((policy): policy is RestrictiveWorkspaceToolPolicy => Boolean(policy?.allow?.length))
-    .toSorted((left, right) => left.allow.length - right.allow.length)[0];
-  if (!candidatePolicy?.allow?.length) {
+  if (!policies.some((policy) => policy?.allow?.length)) {
     return "unbounded allow policy";
   }
-  for (const entry of candidatePolicy.allow) {
-    for (const candidate of expandToolGroups([entry])) {
-      const normalized = normalizeToolPolicyName(candidate);
-      if (!isToolAllowedByPolicies(normalized, policies)) {
-        continue;
-      }
-      if (WORKSPACE_CONFINED_SANDBOX_TOOLS.has(normalized) || confinedToolNames.has(normalized)) {
-        continue;
-      }
-      return entry;
+  // Judge the tools the runtime would allow. A glob such as sessions_* is not
+  // itself a tool name, and a shorter allow list must not hide it.
+  for (const name of policyToolNames(policies)) {
+    if (WORKSPACE_CONFINED_SANDBOX_TOOLS.has(name) || confinedToolNames.has(name)) {
+      continue;
     }
+    if (!isToolAllowedByPolicies(name, policies)) {
+      continue;
+    }
+    return name;
   }
   return undefined;
 }

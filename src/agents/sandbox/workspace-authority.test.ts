@@ -138,6 +138,20 @@ it("uses the runtime session visibility clamp", async () => {
   expect(await confinement(cfg)).toContain("host-wide sessions");
 });
 
+it("rejects a glob allow list that admits sessions_spawn", async () => {
+  expect(
+    await confinement(
+      config(
+        {},
+        {
+          sandbox: { tools: { allow: ["sessions_*"] } },
+          subagents: { tools: { allow: [...safeTools, "sessions_spawn"] } },
+        },
+      ),
+    ),
+  ).toContain("sessions_spawn");
+});
+
 it("ignores unconfined tools denied by the effective policy stack", async () => {
   expect(
     await confinement(
