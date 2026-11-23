@@ -3829,7 +3829,16 @@ class ChatController internal constructor(
       }
 
       "users.prefs.changed" -> {
-        val keys = payloadJson?.let { runCatching { json.parseToJsonElement(it).asObjectOrNull()?.get("keys").asArrayOrNull() }.getOrNull() }
+        val keys =
+          payloadJson?.let {
+            runCatching {
+              json
+                .parseToJsonElement(it)
+                .asObjectOrNull()
+                ?.get("keys")
+                .asArrayOrNull()
+            }.getOrNull()
+          }
         if (keys?.any { it.asStringOrNull() == "ui.railShortcuts" } == true) refreshSessionsForCurrentWindow()
       }
 

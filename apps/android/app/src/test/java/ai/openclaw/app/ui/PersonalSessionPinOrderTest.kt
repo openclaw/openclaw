@@ -29,7 +29,10 @@ class PersonalSessionPinOrderTest {
 
   @Test
   fun browserSortChangesOrdinaryRowsWithoutReversingThePersonsPins() {
-    fun sections(recentFirst: Boolean, personalPins: Boolean): List<List<String>> {
+    fun sections(
+      recentFirst: Boolean,
+      personalPins: Boolean,
+    ): List<List<String>> {
       val entries = resolveSessionBrowserEntries(rows, "", SessionFilter.Recent, recentFirst, nowMs = 100, personalPins = personalPins)
       return buildSessionTreeSections(entries, collapsedSessionKeys = setOf("a-second"), nowMs = 100)
         .map { section -> section.entries.map { it.session.key } }

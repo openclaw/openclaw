@@ -1246,8 +1246,8 @@ class NodeRuntime internal constructor(
   val skillsState: StateFlow<GatewaySummaryState<GatewaySkillsSummary>> = skillsSummary.state
   private val _sessionCatalogAvailable = MutableStateFlow(false)
   val sessionCatalogAvailable: StateFlow<Boolean> = _sessionCatalogAvailable.asStateFlow()
-  private val _personalSessionPinsAvailable = MutableStateFlow(false)
-  internal val personalSessionPinsAvailable = _personalSessionPinsAvailable.asStateFlow()
+  private val personalSessionPinsAvailableState = MutableStateFlow(false)
+  internal val personalSessionPinsAvailable = personalSessionPinsAvailableState.asStateFlow()
   private val _sessionDiffAvailable = MutableStateFlow(false)
   val sessionDiffAvailable: StateFlow<Boolean> = _sessionDiffAvailable.asStateFlow()
   private val chatPermissionSettingsAvailableState = MutableStateFlow(false)
@@ -8148,7 +8148,7 @@ class NodeRuntime internal constructor(
   private fun replaceGatewayCapabilities(capabilities: Set<String>?) {
     synchronized(gatewayMethodsLock) {
       gatewayAdvertisedCapabilities = capabilities
-      _personalSessionPinsAvailable.value = PERSONAL_SESSION_PINS_CAPABILITY in capabilities.orEmpty()
+      personalSessionPinsAvailableState.value = PERSONAL_SESSION_PINS_CAPABILITY in capabilities.orEmpty()
       chatPermissionSettingsAvailableState.value = chat.canSetSessionPermissionMode()
     }
   }

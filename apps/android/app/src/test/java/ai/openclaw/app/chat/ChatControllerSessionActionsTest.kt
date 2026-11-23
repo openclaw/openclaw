@@ -1,7 +1,7 @@
 package ai.openclaw.app.chat
 
-import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
+import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -100,16 +100,20 @@ class ChatControllerSessionActionsTest {
       gateway.respondWith("sessions.patch", "{}")
       gateway.respondWith("sessions.list", """{"sessions":[]}""")
       var caps = emptySet<String>()
-      val controller = ChatController(
-        scope = this, json = json, commandOutbox = createChatCommandOutbox(),
-        cacheScope = { ChatCacheScope("gateway-test", 1L) }, requestGateway = gateway::request,
-        captureRequestLease = {
-          GatewaySession.RequestLease("gateway-test", advertisedCapabilities = caps) { method, params, _, enqueue ->
-            enqueue {}
-            gateway.request(method, params)
-          }
-        },
-      )
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          commandOutbox = createChatCommandOutbox(),
+          cacheScope = { ChatCacheScope("gateway-test", 1L) },
+          requestGateway = gateway::request,
+          captureRequestLease = {
+            GatewaySession.RequestLease("gateway-test", advertisedCapabilities = caps) { method, params, _, enqueue ->
+              enqueue {}
+              gateway.request(method, params)
+            }
+          },
+        )
       controller.outboxPresentationRestored.first { it }
       val pin = ChatSessionPatch(key = "thread", ownerAgentId = "main", expectedSessionId = "thread-id", pinned = true)
       assertFalse(controller.patchSession(pin))
@@ -128,19 +132,30 @@ class ChatControllerSessionActionsTest {
   fun personalPinChangesRefreshTheOpenRosterButUnrelatedPreferencesDoNot() =
     runTest {
       val gateway = ScriptedGateway(json)
+
       fun roster(pinned: Boolean) = """{"sessions":[{"key":"custom","sessionId":"session-custom","archived":true,"pinned":$pinned}]}"""
       gateway.respondWith("sessions.list", roster(false))
       val controller = controller(this, gateway)
       controller.refreshSessions(limit = 7, archived = true)
       runCurrent()
-      assertEquals(false, controller.sessions.value.single().pinned)
+      assertEquals(
+        false,
+        controller.sessions.value
+          .single()
+          .pinned,
+      )
       gateway.respondWith("sessions.list", roster(true))
       controller.handleGatewayEvent("users.prefs.changed", """{"keys":["ui.theme"]}""")
       runCurrent()
       assertEquals(1, gateway.callCount("sessions.list"))
       controller.handleGatewayEvent("users.prefs.changed", """{"keys":["ui.railShortcuts"]}""")
       runCurrent()
-      assertEquals(true, controller.sessions.value.single().pinned)
+      assertEquals(
+        true,
+        controller.sessions.value
+          .single()
+          .pinned,
+      )
       val reads = gateway.calls.filter { it.method == "sessions.list" }.map { json.parseToJsonElement(it.paramsJson!!).jsonObject }
       assertEquals(2, reads.size)
       assertEquals(reads.first()["agentId"], reads.last()["agentId"])
