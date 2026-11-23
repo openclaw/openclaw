@@ -64,11 +64,14 @@ describe("resolveAgentToolSurfacePlan", () => {
     });
   });
 
-  it("enables Tool Search for a model that only reports a total parameter count", () => {
+  it.each([
+    { name: "a total parameter count", model: { parameterCount: 8_190_735_360 } },
+    { name: "a trusted size class", model: { modelSizeClass: "small" as const } },
+  ])("enables Tool Search for a model that only reports $name", ({ model }) => {
     const plan = resolveAgentToolSurfacePlan({
       ...basePlanParams,
       config: autoConfig,
-      model: { parameterCount: 8_190_735_360 },
+      model,
       modelProvider: "custom",
       modelId: "unbound-model",
     });
@@ -87,19 +90,6 @@ describe("resolveAgentToolSurfacePlan", () => {
     });
 
     expect(presentation.toolSearchDirectoryLean).toBe(true);
-  });
-
-  it("enables Tool Search from trusted model-size metadata", () => {
-    const plan = resolveAgentToolSurfacePlan({
-      ...basePlanParams,
-      config: autoConfig,
-      model: { modelSizeClass: "small" },
-      modelProvider: "custom",
-      modelId: "unbound-model",
-    });
-
-    expect(plan.toolSearchControlsEnabled).toBe(true);
-    expect(plan.toolSearchConfig.mode).toBe("tools");
   });
 
   it.each(
