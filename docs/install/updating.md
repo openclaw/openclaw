@@ -121,6 +121,10 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    it restores the previous release and the SQLite migration originals.
 6. The Gateway that serves after the switch records the outcome. Only a Gateway
    that runs the target build records success.
+7. After success is recorded, the serving release runs advisory Doctor inspections
+   in the background. The same update details receive their results without a page
+   reload. Only warning and error findings add advice; inspections do not delay
+   completion, fail the update, or trigger rollback.
 
 Rules for update changes:
 

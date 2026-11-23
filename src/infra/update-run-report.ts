@@ -303,12 +303,13 @@ export function renderUpdateRunReport(
       run.reason === "preflight-node-runtime-incompatible");
   const owed = listUpdateOwedSteps(run);
   // An owed step restates the warning it was recorded with; report that failure once.
-  const warnings = [
-    ...updateRunWarningMessages(run.steps).filter(
+  const warningMessages = (steps: UpdateRunRecord["steps"]) => [
+    ...updateRunWarningMessages(steps).filter(
       (message) => !owed.some((step) => message.startsWith(step.reason)),
     ),
     ...owed.map(formatUpdateOwedStep),
-  ].map((message) => `Warning: ${message}`);
+  ];
+  const warnings = warningMessages(run.steps).map((message) => `Warning: ${message}`);
   // A fresh prerequisite refusal leads with its producer's refusal block: the problem line,
   // then the owner's recovery steps. Saved records keep the historical-advice layout below.
   const refusalBlock =
@@ -319,10 +320,17 @@ export function renderUpdateRunReport(
   let headline: string;
   switch (run.status) {
     case "succeeded": {
-      // A skipped post-swap step keeps the version change; the headline must not read as clean.
+      // Post-activation inspections are advice, not unfinished activation work.
+      const attentionCount = warningMessages(
+        run.steps.filter(
+          ({ step }) =>
+            step !== "warning:post-activation doctor inspections" &&
+            !step.startsWith("warning:post-activation doctor inspections:"),
+        ),
+      ).length;
       const attention =
-        warnings.length > 0
-          ? `; ${warnings.length} warning${warnings.length === 1 ? " needs" : "s need"} attention`
+        attentionCount > 0
+          ? `; ${attentionCount} warning${attentionCount === 1 ? " needs" : "s need"} attention`
           : "";
       headline = repairRun
         ? `✅ OpenClaw repair completed${after ? ` for ${after}` : ""}${attention}.`

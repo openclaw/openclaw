@@ -495,10 +495,8 @@ async function selectPostActivationInspections(
     }
     // These runners also report diagnostics their lint checks do not preserve:
     // snapshot scan errors and the identities of errored workspace plugins.
-    if (
-      contribution.id === "doctor:session-snapshots" ||
-      contribution.id === "doctor:workspace-status"
-    ) {
+    const { id } = contribution;
+    if (id === "doctor:session-snapshots" || id === "doctor:workspace-status") {
       return [];
     }
     const checks = resolveContributionHealthChecks(contribution, checksById);
@@ -507,6 +505,12 @@ async function selectPostActivationInspections(
       ? [{ contribution, checks }]
       : [];
   });
+}
+
+/** The serving release owns which advisory inspections can run after activation. */
+export async function resolvePostActivationInspectionCheckIds(): Promise<string[]> {
+  const inspections = await selectPostActivationInspections(resolveDoctorHealthContributions());
+  return [...new Set(inspections.flatMap(({ checks }) => checks.map((check) => check.id)))];
 }
 
 async function runDoctorHealthContributionList(

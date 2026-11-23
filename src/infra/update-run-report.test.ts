@@ -150,6 +150,39 @@ it("reports repeated database-path advisories once across Doctor phases", () => 
   ]);
   expect(report.headline).toContain("1 warning needs attention");
 });
+it.each([false, true])(
+  "keeps post-activation advice out of the success headline (other warning=%s)",
+  (otherWarning) => {
+    const report = render({
+      steps: [
+        {
+          step: "warning:post-activation doctor inspections",
+          status: "completed",
+          detail: "Plaintext secret found.",
+        },
+        {
+          step: "warning:post-activation doctor inspections:2",
+          status: "completed",
+          detail: "Review hooks model.",
+        },
+        ...(otherWarning
+          ? [
+              {
+                step: "warning:plugins",
+                status: "completed" as const,
+                detail: "Plugin update failed.",
+              },
+            ]
+          : []),
+      ],
+    });
+    expect(report.headline).toBe(
+      `✅ OpenClaw updated to 2026.9.2 (from 2026.9.1)${otherWarning ? "; 1 warning needs attention" : ""}.`,
+    );
+    expect(report.lines).toContain("Warning: Plaintext secret found.");
+    expect(report.lines).toContain("Warning: Review hooks model.");
+  },
+);
 it.each([true, false])("bounds runtime guidance (saved=%s)", (saved) => {
   const action = `Keep the candidate installed and do not roll back code alone. ${"🦞".repeat(600)}`;
   const reason = saved ? "node-runtime-preflight" : "preflight-node-runtime-incompatible";

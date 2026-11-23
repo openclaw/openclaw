@@ -4,8 +4,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import type * as InspectionOwner from "../cli/update-cli/update-command-post-activation-inspections.js";
+import { runPostActivationInspections } from "../cli/update-cli/update-command-post-activation-inspections.js";
+import type * as DoctorContributions from "../flows/doctor-health-contributions.js";
+import type * as UpdateNotices from "../gateway/update-run-notice.runtime.js";
 import { getUpdateRunAsync } from "../infra/update-run-reader.js";
+import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import { createUpdateRunAsync, recordUpdateRunStepAsync } from "../infra/update-run-write.async.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -24,12 +30,26 @@ import {
 
 const notices = vi.hoisted(() => [] as Array<{ runId: string; kind: string; status: string }>);
 vi.mock("../gateway/update-run-notice.runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../gateway/update-run-notice.runtime.js")>()),
+  ...(await importOriginal<typeof UpdateNotices>()),
   createUpdateRunNotifier:
     async () => async (run: { runId: string; status: string }, kind: string) => {
       notices.push({ runId: run.runId, kind, status: run.status });
       return { delivered: true, owned: true };
     },
+}));
+
+vi.mock(
+  "../cli/update-cli/update-command-post-activation-inspections.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<typeof InspectionOwner>()),
+    runPostActivationInspections: vi.fn<typeof InspectionOwner.runPostActivationInspections>(
+      async ({ result }) => result,
+    ),
+  }),
+);
+vi.mock("../flows/doctor-health-contributions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof DoctorContributions>()),
+  resolvePostActivationInspectionCheckIds: async () => ["core/doctor/secrets"],
 }));
 
 const directories: string[] = [];
@@ -72,7 +92,9 @@ it.each(["succeeded", "rolled-back"] as const)(
       },
     };
     await writeTrial(trial);
-    await settleRunFromTrial(trial);
+    const work = new AsyncWorkScope();
+    await work.run(() => settleRunFromTrial(trial));
+    await work.drain();
     const finished = await getUpdateRunAsync(run.runId, options);
     expect(finished).toMatchObject({
       status: status === "succeeded" ? "succeeded" : "failed",
@@ -190,5 +212,99 @@ it.each(["dead", "same-pid", "live"] as const)(
         await exited;
       }
     }
+  },
+);
+
+it.each(["warning", "error"] as const)(
+  "keeps a committed update successful while background inspections report %s",
+  async (finding) => {
+    const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-advice-"));
+    directories.push(state);
+    vi.stubEnv("OPENCLAW_STATE_DIR", state);
+    const options = { env: process.env };
+    openOpenClawStateDatabase(options);
+    const run = await createUpdateRunAsync({ trigger: "control-ui" }, options);
+    const gate = Promise.withResolvers<void>();
+    const entered = Promise.withResolvers<void>();
+    vi.mocked(runPostActivationInspections).mockImplementationOnce(async ({ result }) => {
+      entered.resolve();
+      await gate.promise;
+      if (finding === "error") {
+        throw new Error("inspection process could not start");
+      }
+      return {
+        ...result,
+        steps: [
+          {
+            name: "post-activation doctor inspections",
+            command: "doctor --lint",
+            cwd: state,
+            durationMs: 1,
+            exitCode: 1,
+            advisory: { kind: "recoverable-maintenance", message: "Review plaintext secrets." },
+            warnings: ["Plaintext secret found."],
+            doctorLintFindings: [
+              {
+                checkId: "core/doctor/secrets",
+                severity: "warning",
+                message: "Plaintext secret found.",
+              },
+            ],
+          },
+        ],
+      };
+    });
+    const trial: Trial = {
+      v: 2,
+      runId: run.runId,
+      phase: "committed",
+      target: "releases/new/openclaw",
+      previous: "releases/old/openclaw",
+      version: VERSION,
+      attempts: 1,
+      createdAt: Date.now(),
+      outcome: { status: "succeeded", at: Date.now() },
+    };
+    const work = new AsyncWorkScope();
+    try {
+      await work.run(() => settleRunFromTrial(trial));
+      await entered.promise;
+      const committed = await getUpdateRunAsync(run.runId, options);
+      expect(committed?.status).toBe("succeeded");
+      expect(committed?.steps).toContainEqual(
+        expect.objectContaining({
+          step: "post-activation doctor inspections",
+          status: "in_progress",
+        }),
+      );
+      expect(await readTrial()).toMatchObject({ reported: true });
+    } finally {
+      gate.resolve();
+      await work.drain();
+    }
+    const inspected = await getUpdateRunAsync(run.runId, options);
+    expect(inspected?.status).toBe("succeeded");
+    expect(inspected?.steps).toContainEqual(
+      expect.objectContaining({
+        step: "post-activation doctor inspections",
+        status: "completed",
+      }),
+    );
+    if (finding === "warning") {
+      expect(inspected?.steps).toContainEqual(
+        expect.objectContaining({
+          step: expect.stringContaining("warning:"),
+          detail: "Plaintext secret found.",
+        }),
+      );
+      expect(inspected?.steps).toContainEqual(
+        expect.objectContaining({
+          step: "finalize:doctor-lint:post-activation doctor inspections",
+          detail: expect.stringContaining("Plaintext secret found."),
+        }),
+      );
+    }
+    expect(renderUpdateRunReport(inspected!).headline).toContain("updated");
+    expect(renderUpdateRunReport(inspected!).headline).not.toContain("attention");
   },
 );
