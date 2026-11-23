@@ -4,6 +4,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import type { WebSocket } from "ws";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { hashCliImageTurnEntryId } from "../agents/cli-image-turn-correlation.js";
+import { prepareCliPromptImagePayload } from "../agents/cli-runner/helpers.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import {
   createClaudeTextHistoryLines,
@@ -94,6 +96,60 @@ async function writeStoredMainSession(sessionDir: string, sessionId: string, cli
   };
   await writeSessionStore({ entries: { main: entry } });
 }
+
+test("chat.history keeps the submitted documents instead of a second expanded Claude prompt", async () => {
+  await withGatewayChatHarness(async ({ ws, createSessionDir, filePath, cliSessionId }) => {
+    await connectOk(ws);
+    const sessionDir = await createSessionDir({ fresh: true });
+    const sessionId = "document-history";
+    const id = "local-document-turn";
+    const caption = "Compare these notes";
+    const media = ["first.md", "second.md"].map((fileName) => ({
+      kind: "document" as const,
+      contentType: "text/markdown",
+      fileName,
+      url: `media://inbound/${fileName}`,
+    }));
+    const expanded = `[media attached: 2 files]\n${caption}\n\n<file name="first.md">private document content</file>`;
+    const { prompt } = await prepareCliPromptImagePayload({
+      backend: { command: "claude", imageArg: "@" },
+      workspaceDir: sessionDir,
+      media,
+      preparedImages: [],
+      prompt: expanded,
+      imageTurnKey: hashCliImageTurnEntryId(id),
+    });
+    expect(prompt).toContain(expanded);
+    await fs.writeFile(
+      filePath,
+      createClaudeTextHistoryLines([
+        { role: "user", uuid: "native-document-turn", content: prompt },
+        { role: "user", uuid: "unrelated-native-turn", content: expanded },
+      ]),
+    );
+    await writeStoredMainSession(sessionDir, sessionId, cliSessionId);
+    await writeMainSessionTranscript(
+      [createTextTranscriptEvent("user", caption, { id, message: { __openclaw: { media } } })],
+      sessionId,
+    );
+    const history = await readHistory(ws, { limit: 100 });
+    expect(history.ok, JSON.stringify(history.error)).toBe(true);
+    const users = history.payload?.messages?.filter((message) => message.role === "user");
+    expect(users).toHaveLength(2);
+    expect(users).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          __openclaw: expect.objectContaining({
+            id,
+            media: media.map((fact) => expect.objectContaining({ fileName: fact.fileName })),
+            externalId: "native-document-turn",
+          }),
+        }),
+        expect.objectContaining({ content: expanded }),
+      ]),
+    );
+  });
+});
 
 test("chat.history deduplicates a structured local Claude delivery with managed audio", async () => {
   await withGatewayChatHarness(async ({ ws, createSessionDir, filePath, cliSessionId }) => {

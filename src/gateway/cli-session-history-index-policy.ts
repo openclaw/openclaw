@@ -11,7 +11,7 @@ import {
 import { stripCliSessionDriftNote } from "../agents/cli-session-drift.js";
 import { isOpenClawCliImageCachePath } from "../agents/embedded-agent-runner/run/images.media-refs.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
-import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
+import { readPersistedMediaFacts } from "../media/media-facts.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 
 export const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
@@ -105,9 +105,9 @@ function extractComparableText(
   const storedImageTurnKey = normalizeOptionalString(meta?.cliImageTurnKey);
   return {
     hasCliImageMentions: stripResult.stripped,
-    ...(stripResult.stripped && isClaudeImport
-      ? { cliImageTurnKey: storedImageTurnKey ?? readCliImageTurnContext(joined) }
-      : {}),
+    cliImageTurnKey: isClaudeImport
+      ? (storedImageTurnKey ?? (stripResult.stripped ? readCliImageTurnContext(joined) : undefined))
+      : undefined,
     ...(normalized ? { text: normalized } : {}),
     ...(driftNoteText ? { driftNoteText } : {}),
   };
@@ -140,8 +140,8 @@ export type HistoryRow = {
   drift_text: string | null;
   timestamp: number | null;
   external_key: string | null;
-  image_key: string | null;
-  image_mentions: number;
+  media_key: string | null;
+  media_prompt: number;
   metadata: string | null;
   consumed: number;
   ordinal: number | null;
@@ -154,8 +154,7 @@ export function createCliHistoryRow(message: unknown, id: number, localSeq?: num
     record && role
       ? extractComparableText(record, role, localSeq === undefined)
       : { hasCliImageMentions: false };
-  const localImage =
-    record?.role === "user" && (readPersistedMediaFacts(record) ?? []).some(isImageMediaFact);
+  const localMedia = record?.role === "user" && Boolean(readPersistedMediaFacts(record)?.length);
   const entryId = normalizeOptionalString(meta?.id);
   const serialized = JSON.stringify(message);
   return {
@@ -171,13 +170,13 @@ export function createCliHistoryRow(message: unknown, id: number, localSeq?: num
       comparable.driftNoteText === undefined ? null : JSON.stringify(comparable.driftNoteText),
     timestamp: asFiniteNumber(record?.timestamp) ?? null,
     external_key: resolveImportedExternalIdentityKey(meta) ?? null,
-    image_key:
+    media_key:
       localSeq === undefined
         ? (comparable.cliImageTurnKey ?? null)
-        : localImage
+        : localMedia
           ? ((entryId ? hashCliImageTurnEntryId(entryId) : comparable.cliImageTurnKey) ?? null)
           : null,
-    image_mentions: comparable.hasCliImageMentions ? 1 : 0,
+    media_prompt: comparable.hasCliImageMentions || comparable.cliImageTurnKey ? 1 : 0,
     metadata: meta ? JSON.stringify(meta) : null,
     consumed: 0,
     ordinal: null,
@@ -197,7 +196,7 @@ type HistoryTextMatchers = Record<
 >;
 export type CliHistoryMergeStore = {
   matchExternal: (key: string) => HistoryMatch | undefined;
-  matchImage: (key: string) => HistoryMatch | undefined;
+  matchMedia: (key: string) => HistoryMatch | undefined;
   matchers: HistoryTextMatchers;
   minimumOrder: (role: string | null, text: string) => number;
   advanceOrderFloor: (floor: { role: string; text: string; minimumOrder: number }) => void;
@@ -213,7 +212,7 @@ export function mergeCliHistoryRow(
   imported: Omit<HistoryRow, "payload">,
   store: CliHistoryMergeStore,
 ): boolean {
-  const { matchExternal, matchImage, matchers, minimumOrder, consume } = store;
+  const { matchExternal, matchMedia, matchers, minimumOrder, consume } = store;
   const advance = (matched: Pick<HistoryRow, "id" | "text">) => {
     for (const text of new Set([
       imported.text,
@@ -230,10 +229,10 @@ export function mergeCliHistoryRow(
     advance(duplicate);
     return true;
   }
-  if (imported.image_mentions && imported.image_key) {
-    duplicate = matchImage(imported.image_key);
+  if (imported.media_key) {
+    duplicate = matchMedia(imported.media_key);
   }
-  if (!duplicate && !imported.image_mentions) {
+  if (!duplicate && !imported.media_prompt) {
     const importedFloor = imported.text ? minimumOrder(imported.role, imported.text) : 0;
     for (const text of [imported.text, imported.drift_text]) {
       if (!text || !imported.role) {
@@ -255,7 +254,7 @@ export function mergeCliHistoryRow(
     }
   }
   if (duplicate) {
-    store.onMatch?.(imported, duplicate, Boolean(imported.image_mentions));
+    store.onMatch?.(imported, duplicate, Boolean(imported.media_prompt));
     const meta: Record<string, unknown> = duplicate.metadata ? JSON.parse(duplicate.metadata) : {};
     const importedMeta: Record<string, unknown> = imported.metadata
       ? JSON.parse(imported.metadata)

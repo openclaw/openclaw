@@ -77,8 +77,8 @@ export class CliSessionHistoryIndex {
     this.db = getNodeSqliteKysely<HistoryDatabase>(this.database);
     // Only imported bodies live here; local rows retain their canonical sequence.
     const columns = `id INTEGER PRIMARY KEY, local_seq INTEGER, import_ref INTEGER, message_id TEXT, payload TEXT, bytes INTEGER NOT NULL, role TEXT,
-      text TEXT, drift_text TEXT, timestamp REAL, external_key TEXT, image_key TEXT,
-      image_mentions INTEGER NOT NULL, metadata TEXT, consumed INTEGER NOT NULL,
+      text TEXT, drift_text TEXT, timestamp REAL, external_key TEXT, media_key TEXT,
+      media_prompt INTEGER NOT NULL, metadata TEXT, consumed INTEGER NOT NULL,
       ordinal INTEGER`;
     // sqlite-allow-raw -- Reconstructible temporary schema; no canonical writes or durability.
     this.database
@@ -89,7 +89,7 @@ export class CliSessionHistoryIndex {
       CREATE INDEX match_text ON messages(role, text, consumed, id);
       CREATE INDEX match_timed_text ON messages(role, text, consumed, id) WHERE timestamp IS NOT NULL;
       CREATE INDEX match_undated_text ON messages(role, text, consumed, id) WHERE timestamp IS NULL;
-      CREATE INDEX match_image ON messages(image_key, consumed, id);
+      CREATE INDEX match_media ON messages(media_key, consumed, id);
       CREATE INDEX message_identity ON messages(message_id);
       CREATE INDEX local_sequence ON messages(local_seq);
       CREATE UNIQUE INDEX history_ordinal ON messages(ordinal);
@@ -185,8 +185,8 @@ export class CliSessionHistoryIndex {
         drift_text: parameter((row) => row.drift_text),
         timestamp: parameter((row) => row.timestamp),
         external_key: parameter((row) => row.external_key),
-        image_key: parameter((row) => row.image_key),
-        image_mentions: parameter((row) => row.image_mentions),
+        media_key: parameter((row) => row.media_key),
+        media_prompt: parameter((row) => row.media_prompt),
         metadata: parameter((row) => row.metadata),
         consumed: parameter((row) => row.consumed),
         ordinal: parameter((row) => row.ordinal),
@@ -327,12 +327,12 @@ export class CliSessionHistoryIndex {
           .orderBy("id", "desc")
           .limit(1),
     );
-    const matchImage = prepareSqliteQueryTakeFirstSync<string, HistoryMatch>(
+    const matchMedia = prepareSqliteQueryTakeFirstSync<string, HistoryMatch>(
       this.database,
       (parameter) =>
         candidates()
           .where(
-            "image_key",
+            "media_key",
             "=",
             parameter((key) => key),
           )
@@ -407,7 +407,7 @@ export class CliSessionHistoryIndex {
     );
     const store: CliHistoryMergeStore = {
       matchExternal,
-      matchImage,
+      matchMedia,
       matchers,
       consume,
       onMatch: this.hasAggregates
@@ -436,8 +436,8 @@ export class CliSessionHistoryIndex {
             "drift_text",
             "timestamp",
             "external_key",
-            "image_key",
-            "image_mentions",
+            "media_key",
+            "media_prompt",
             "metadata",
             "consumed",
             "ordinal",

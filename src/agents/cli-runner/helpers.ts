@@ -364,6 +364,13 @@ export async function prepareCliPromptImagePayload(
 }> {
   let prompt = params.prompt;
   const resolvedImages = params.preparedImages ?? (await loadCliPromptImages(params));
+  const inlinePaths =
+    !params.backend.imageArg || params.backend.input === "stdin" || params.backend.imageArg === "@";
+  // Documents expand into model-facing text without an @image path. Correlate
+  // that native prompt with its persisted attachment turn just as for images.
+  if (params.imageTurnKey && (params.media?.length || (resolvedImages.length && inlinePaths))) {
+    prompt = `${prompt.trimEnd()}\n\n${formatCliImageTurnContext(params.imageTurnKey)}`;
+  }
   if (resolvedImages.length === 0) {
     return { prompt };
   }
@@ -372,14 +379,7 @@ export async function prepareCliPromptImagePayload(
     workspaceDir: params.workspaceDir,
     images: resolvedImages,
   });
-  if (
-    !params.backend.imageArg ||
-    params.backend.input === "stdin" ||
-    params.backend.imageArg === "@"
-  ) {
-    if (params.imageTurnKey) {
-      prompt = `${prompt.trimEnd()}\n\n${formatCliImageTurnContext(params.imageTurnKey)}`;
-    }
+  if (inlinePaths) {
     prompt = appendImagePathsToPrompt(
       prompt,
       imagePaths,
