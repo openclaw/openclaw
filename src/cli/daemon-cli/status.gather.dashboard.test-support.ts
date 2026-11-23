@@ -42,7 +42,12 @@ export function registerStatusDashboardTargetTests(params: {
       // With a host: a custom bind to 10.0.0.5, so only that host is the service's endpoint.
       params.setDaemonConfig({
         gateway: host
-          ? { ...gateway, bind: "custom", customBindHost: "10.0.0.5", tls: { enabled: !!tls } }
+          ? {
+              ...gateway,
+              bind: "custom",
+              customBindHost: "10.0.0.5",
+              tls: { enabled: tls !== false },
+            }
           : gateway,
       });
       if (tls === "unreadable") {
