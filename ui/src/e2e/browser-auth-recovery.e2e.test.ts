@@ -294,7 +294,6 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         const draft = "Keep this unsent draft while I sign in.";
         await composer.fill(draft);
-        await page.waitForFunction(() => customElements.get("openclaw-modal-dialog"));
         const sockets = await gateway.getSocketCount();
         signedIn = false;
         await gateway.setOnline(false);

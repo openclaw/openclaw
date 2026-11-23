@@ -314,16 +314,29 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await expect.poll(() => panel.getAttribute("data-phase")).toBe("hidden");
       // Sample every visible entry frame of the second open.
-      const heights = page.evaluate(
+      const frames = page.evaluate(
         () =>
-          new Promise<string[]>((resolve) => {
-            const seen: string[] = [];
+          new Promise<
+            { phase: string | undefined; visible: boolean; height: string; inlineHeight: string }[]
+          >((resolve) => {
+            const seen: {
+              phase: string | undefined;
+              visible: boolean;
+              height: string;
+              inlineHeight: string;
+            }[] = [];
             const tick = () => {
               const surface = document.querySelector<HTMLElement>(
                 ".agent-chat__capability-menu-panel",
               );
-              if (surface && Number(getComputedStyle(surface).opacity) > 0) {
-                seen.push(getComputedStyle(surface).height);
+              if (surface) {
+                const style = getComputedStyle(surface);
+                seen.push({
+                  phase: surface.dataset.phase,
+                  visible: surface.checkVisibility() && Number(style.opacity) > 0,
+                  height: style.height,
+                  inlineHeight: surface.style.height,
+                });
               }
               if (surface?.dataset.phase === "open") {
                 resolve(seen);
@@ -335,7 +348,10 @@ suite.define(() => {
           }),
       );
       await trigger.click();
-      expect(new Set(await heights).size).toBe(1);
+      const sampled = await frames;
+      const visibleHeights = sampled.filter((frame) => frame.visible).map((frame) => frame.height);
+      expect(visibleHeights.length, JSON.stringify(sampled)).toBeGreaterThan(0);
+      expect(new Set(visibleHeights).size, JSON.stringify(sampled)).toBe(1);
       await page.emulateMedia({ reducedMotion: "reduce" });
       await page
         .getByRole("menuitem", { name: /Skills/ })
