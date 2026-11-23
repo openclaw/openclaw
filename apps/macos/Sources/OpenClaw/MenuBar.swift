@@ -129,7 +129,7 @@ struct OpenClawApp: App {
                 Button(String(localized: "Reload")) {
                     DashboardManager.shared.reloadDashboard()
                 }
-                .keyboardShortcut("r", modifiers: .command)
+                .keyboardShortcut("r", modifiers: [.command, .shift])
 
                 Button("Systems") {
                     AppNavigationActions.openSelectedWebRoute(DashboardRouteMap.systemsPagePath)
