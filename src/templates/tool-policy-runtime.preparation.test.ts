@@ -86,9 +86,9 @@ it("tells Doctor which consent fact is missing, not only that authority is unver
     refusal = error;
   }
   expect(scrubDoctorErrorMessage(refusal)).toBe(
-    'Cannot verify the installed tool authority for Template-managed agent "worker". ' +
-      "Repair the OpenClaw state database before running it. " +
-      "Cause: OpenClaw state database has not initialized Template consent provenance.",
+    'Cannot verify the installed tool authority for Template-managed agent "worker": ' +
+      "OpenClaw state database has not initialized Template consent provenance. " +
+      "Repair the OpenClaw state database before running it.",
   );
 });
 
