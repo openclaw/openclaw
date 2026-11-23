@@ -88,7 +88,6 @@ export async function handleCompactCommand(
     return unauthorized;
   }
   const operatorAuthority = params.opts?.operatorAuthority;
-  operatorAuthority?.assertCurrent();
   const targetSessionEntry = params.commandInvocationSignal
     ? params.compactionSessionEntry
     : (params.sessionStore?.[params.sessionKey] ?? params.sessionEntry);
@@ -154,7 +153,6 @@ export async function handleCompactCommand(
   let compactionAccepted = false;
   let ingressAdopted = false;
   const assertOwnerBeforeAcceptance = () => {
-    operatorAuthority?.assertCurrent();
     if (!compactionAccepted) {
       assertOwnerCurrent?.();
     }
