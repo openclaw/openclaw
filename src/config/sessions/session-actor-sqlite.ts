@@ -401,10 +401,7 @@ export function createSqliteSessionActorExecutor(
                     committed.receipt.transcript.authorityReceipts,
                   );
                   try {
-                    observer?.committed(committed);
-                  } finally {
-                    // Record input custody before fallible identity notifications; row facts
-                    // still settle when the receipt observer reports a committed failure.
+                    // Publish committed row facts before observers read the resident list.
                     if (target.database.kind === "file" && metadata?.length) {
                       // Terminal accounting may change the row without appending a transcript event.
                       const databaseIdentity = target.database.physicalIdentity;
@@ -433,6 +430,9 @@ export function createSqliteSessionActorExecutor(
                         publication.settle(undefined, false);
                       }
                     }
+                  } finally {
+                    // Input custody must still be recorded if publication notification fails.
+                    observer?.committed(committed);
                   }
                 } catch (error) {
                   result = preserveFailure(error);

@@ -157,12 +157,6 @@ describe("McpLoopbackToolCache", () => {
       expect(withSource.toolSchema.map((tool) => tool.name)).toEqual(["sessions"]);
       expect(await cache.resolve(writerParams)).toBe(withSource);
       expect(await cache.resolve(params)).toBe(withoutSource);
-
-      const reason = new Error("archive operator source revoked");
-      controller.abort(reason);
-      await expect(cache.resolve(writerParams)).rejects.toThrow(
-        "admitted run operator authority is no longer active",
-      );
       expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
     } finally {
       admission.close();

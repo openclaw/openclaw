@@ -20,7 +20,6 @@ import { getPairedDevice, updatePairedDeviceMetadata } from "../infra/device-pai
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -315,18 +314,13 @@ describe("scheduled authenticated operator source", () => {
       withRecovery(
         async (fixture, _stateDir, profile) => {
           const snapshot = expectDefined(fixture.snapshot, "authenticated continuation source");
-          let current = true;
+          let current = change === "current";
           const restore = restoreGatewayOperatorSource({
             snapshot,
             context: fixture.context,
             assertCurrent: () => {
               if (!current) {
                 throw new Error("Continuation owner closed");
-              }
-            },
-            prepareCurrent: async () => {
-              if (change === "owner closed") {
-                current = false;
               }
             },
           });
@@ -842,9 +836,8 @@ describe("scheduled authenticated operator source", () => {
         publish();
         expect(restored.authority.signal?.aborted).toBe(false);
         expectCurrent(restored.authority);
-        using next = await restoreFixture(fixture);
-        expect(operatorScopeSatisfied("operator.write", next.authority.scopes)).toBe(false);
-        expect(operatorScopeSatisfied("operator.read", next.authority.scopes)).toBe(true);
+        // Admission narrows to read; a read-only requester starts no new chat-like work.
+        await expect(fixture.restore()).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
         fixture.setConfig(cfg);
         publish();
         expectCurrent(restored.authority);

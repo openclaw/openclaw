@@ -191,10 +191,9 @@ export async function saveKey(page: ModelProvidersPageTestElement, value: string
 }
 
 export async function openApiKeyProvider(page: ModelProvidersPageTestElement, provider: string) {
-  await page.view.scope.onConnect();
   await page.updateComplete;
   const choice = page.querySelector<HTMLButtonElement>(
-    `[data-models-login-provider="${provider}"]`,
+    `[data-models-catalog-provider="${provider}"] button`,
   );
   expect(choice).not.toBeNull();
   choice!.click();

@@ -15,7 +15,8 @@ import { installMockGateway } from "./new-session-page.test-support.ts";
 import {
   expectComposerSurface,
   expectMobileComposer,
-  readArtwork,
+  readBundledArtwork,
+  readPlainCanvas,
 } from "./theme-background.test-support.ts";
 
 const builtinThemes = BUILTIN_THEME_IDS.flatMap((family) =>
@@ -59,8 +60,8 @@ async function changeTheme(
 }
 
 suite.define(() => {
-  it("shares one readable app canvas across new, chat, and settings without losing drafts", async () => {
-    await suite.withPage(pageOptions, async ({ context, page }) => {
+  it("keeps a readable plain canvas across new, chat, and settings when themes change", async () => {
+    await suite.withPage(pageOptions, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         agentModel: "example/demo",
         models: [{ id: "demo", name: "Demo model", provider: "example" }],
@@ -73,8 +74,6 @@ suite.define(() => {
           ),
         ],
       });
-      const images = new Map<string, string>();
-      const decoded = new Set<string>();
       for (const route of ["new", "chat", "settings/appearance"] as const) {
         if (route === "new") {
           await page.goto(`${suite.server.baseUrl}${route}`);
@@ -128,77 +127,26 @@ suite.define(() => {
               }
             }
             const label = `${resolved}-${route.replace("/", "-")}-${viewport}`;
-            const fingerprint = route === "new" && viewport === "desktop";
-            const artwork = await readArtwork(shell, fingerprint ? "fingerprint" : undefined);
-            expect(artwork.failures, label).toEqual([]);
-            expect(artwork.canvasOwner, label).toBe(
-              route === "chat" && viewport === "mobile" ? "native-mobile" : "shell-artwork",
-            );
+            const canvas = await readPlainCanvas(shell);
+            expect(canvas, label).toMatchObject({
+              backgroundImage: "none",
+              nativeImage: "none",
+              opaqueCanvas: true,
+              paintedPanes: 0,
+              canvasOwner: route === "chat" && viewport === "mobile" ? "native-mobile" : "shell",
+            });
             const minimumContrast = selection.family === "beacon" ? 7 : 4.5;
-            expect
-              .soft(artwork.canvasContrast, `${label}: muted text on app artwork`)
-              .toBeGreaterThanOrEqual(minimumContrast);
+            expect.soft(canvas.canvasContrast, label).toBeGreaterThanOrEqual(minimumContrast);
             if (composer) {
-              expect
-                .soft(artwork.composerContrast, `${label}: placeholder contrast`)
-                .toBeGreaterThanOrEqual(minimumContrast);
+              expect.soft(canvas.composerContrast, label).toBeGreaterThanOrEqual(minimumContrast);
             }
             if (route === "chat") {
-              expect(
-                artwork.transcriptContrast,
-                `${label}: conversation text on artwork`,
-              ).toBeGreaterThanOrEqual(4.5);
+              expect(canvas.transcriptContrast, label).toBeGreaterThanOrEqual(4.5);
             }
-            if (fingerprint) {
-              if (artwork.pixels === null) {
-                throw new Error(`Missing decoded artwork fingerprint for ${label}`);
-              }
-              images.set(resolved, artwork.backgroundImage);
-              decoded.add(artwork.pixels);
-            } else {
-              expect(artwork.backgroundImage, label).toBe(images.get(resolved));
-            }
-          }
-        }
-        await changeTheme(page, gateway, { family: "dash", mode: "light" }, "dash-light");
-        const background = () =>
-          shell.evaluate((element) => getComputedStyle(element).backgroundImage);
-        for (const media of [
-          { contrast: "more", forcedColors: "none" },
-          { contrast: "no-preference", forcedColors: "active" },
-        ] as const) {
-          await page.emulateMedia(media);
-          await expect.poll(background).toBe("none");
-          await expectDraft();
-        }
-        await page.emulateMedia({ contrast: "no-preference", forcedColors: "none" });
-        await expect.poll(background).toBe(images.get("dash-light"));
-        if (composer && textarea) {
-          // Playwright exposes reduced transparency only through Chromium's protocol.
-          const session = await context.newCDPSession(page);
-          try {
-            await session.send("Emulation.setEmulatedMedia", {
-              features: [
-                { name: "prefers-color-scheme", value: "light" },
-                { name: "prefers-reduced-transparency", value: "reduce" },
-              ],
-            });
-            expect(
-              await page.evaluate(
-                () => matchMedia("(prefers-reduced-transparency: reduce)").matches,
-              ),
-            ).toBe(true);
-            await expectDraft();
-            expect(await background()).toBe(images.get("dash-light"));
-          } finally {
-            await session.send("Emulation.setEmulatedMedia", { features: [] });
-            await session.detach();
           }
         }
         await page.setViewportSize({ width: 1440, height: 900 });
       }
-      expect(new Set(images.values()).size).toBe(builtinThemes.length);
-      expect(decoded.size).toBe(builtinThemes.length);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });
@@ -226,20 +174,23 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         methodResponses: { "config.get": themeConfig("custom", "dark") },
       });
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await page.locator('[data-background-source="theme"]').click();
       await page.goto(`${suite.server.baseUrl}chat`);
+      const layer = page.locator(".session-background__image--theme");
       const composer = page.locator(".agent-chat__input");
       await composer.locator("textarea").fill("Keep imported palettes local and quiet");
       const images = new Set<string>();
       for (const mode of ["dark", "light"] as const) {
         const resolved = mode === "dark" ? "custom" : "custom-light";
         await changeTheme(page, gateway, { family: "custom", mode }, resolved);
-        const artwork = await readArtwork(page.locator(".shell"), "color-spread");
-        expect(artwork.failures, `custom ${mode}`).toEqual([]);
+        await layer.waitFor({ state: "visible" });
+        const artwork = await readBundledArtwork(layer);
         await expectComposerSurface(composer);
         expect(artwork.maxColorSpread).toBeLessThanOrEqual(32);
         images.add(artwork.backgroundImage);
         // Removing palette declarations must not remove static bundled artwork.
-        const withoutPalette = await page.locator(".shell").evaluate((element) => {
+        const withoutPalette = await layer.evaluate((element) => {
           const palette = document.querySelector<HTMLStyleElement>("#openclaw-custom-theme");
           if (!palette?.sheet) {
             throw new Error("The imported custom palette was not applied");

@@ -32,6 +32,8 @@ Sampling starts within one second. Quiet workloads below half the aggregate allo
 
 Sampled enforcement and soft limits can overshoot during rapid allocation. Shared resident pages across different processes may count more than once. Without writable delegation, ordinary process-tree sampling does not bound file cache. Ordinary file-cache charges and durable units occupy separate cgroups, so their combined kernel charges can exceed the sampled RAM allowance. Virtual address reservations are excluded. Ordinary child execution retains a tree owner for reparented descendants. PTY sampling follows the live command's descendants; daemonized children that reparent outside that tree need `background: true` without PTY for supervised long-running work. Unreadable usage produces a degradation warning. There is no pressure-only automatic killer or host-wide coordinator across independent installations.
 
+Dedicated Azure Sandbox workers use the provider's outer memory boundary instead of reserving Gateway-host headroom inside the Sandbox. The admitted dedicated lease supplies this fact through authenticated worker launch authority; command arguments and environment variables cannot change it. Other workers retain the host safeguard. Retained nodes negotiate the field with their running supervisor. Older supervisors keep host protection until their node host is updated; refreshing the sealed worker bundle alone does not add support.
+
 Sandbox backends retain their own limits. This policy does not apply to remote `host=node`, Codex-native shell commands, or non-Linux hosts. If work exceeds the shared allowance, reduce concurrency or input size and inspect completed side effects before retrying.
 
 ## Host I/O isolation

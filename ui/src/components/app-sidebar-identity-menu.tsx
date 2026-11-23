@@ -20,7 +20,7 @@ import {
   selectSidebarHelpLink,
 } from "./sidebar-identity-menu-links.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { Kbd, KeyboardShortcut } from "./solid/kbd.tsx";
+import { KeyboardShortcut } from "./solid/kbd.tsx";
 import { MenuHeading } from "./solid/menu-heading.tsx";
 import "./solid/viewer-facepile.tsx";
 import "./tooltip.ts";
@@ -134,7 +134,7 @@ function renderIdentityGateways(
   }
   const current = snapshot?.gateways.find((gateway) => gateway.id === snapshot.currentId);
   const gateways: MenuEntry[] = [
-    ...(snapshot?.gateways ?? []).map((gateway, index): MenuItem => {
+    ...(snapshot?.gateways ?? []).map((gateway): MenuItem => {
       const selected = gateway.id === snapshot?.currentId;
       const openWindow = (event: MouseEvent) => {
         if (capability.openWindow && (event.metaKey || event.ctrlKey)) {
@@ -157,9 +157,6 @@ function renderIdentityGateways(
           <span class="sidebar-gateway-details">
             {gateway.isPrimary ? (
               <span class="sidebar-gateway-primary">{t("nav.gateway.primaryTag")}</span>
-            ) : undefined}
-            {capability.openWindow && !selected && index < 9 ? (
-              <Kbd class="session-menu__shortcut" ariaHidden keys={["⌘", String(index + 1)]} />
             ) : undefined}
             {selected ? (
               <span class="sidebar-gateway-check" aria-hidden="true">

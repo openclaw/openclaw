@@ -67,7 +67,7 @@ export function createDelegatedUpdateRequesterAuthority(
 }
 
 /** Identity facts alone grant no effects; the helper composes them with its native owner. */
-export async function prepareManagedUpdateRequesterIdentity(
+export async function prepareUpdateRequesterIdentity(
   requester: UpdateRequester,
   env: NodeJS.ProcessEnv = process.env,
 ) {
@@ -105,7 +105,7 @@ export async function createManagedUpdateRequesterContinuationAuthority(
   ) {
     throw new UpdateRequesterRevokedError();
   }
-  const identity = await prepareManagedUpdateRequesterIdentity(admittedRequester, authorityEnv);
+  const identity = await prepareUpdateRequesterIdentity(admittedRequester, authorityEnv);
   assertOperationCurrent();
   return Object.freeze({
     requester: identity.requester,

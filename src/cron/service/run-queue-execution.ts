@@ -16,6 +16,7 @@ import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { isJobEnabled } from "./jobs-scheduling.js";
 import { assertExecutionPolicy } from "./jobs-validation.js";
 import { clearManualCronJobActive, markManualCronJobActive } from "./ops-shared.js";
+import type { createCronExtraRunCharge } from "./provider-backoff.js";
 import { createCronRunHandle } from "./run-history.js";
 import type { CronRunOptions as RunOptions } from "./run-queue-requests.js";
 import { awaitCronRunQueueTurn, wakeCronRunQueues } from "./run-queue-wake.js";
@@ -51,15 +52,17 @@ export type CronLaunchContext = {
 };
 
 /**
- * A fired condition stops counting as a check and takes a run slot for its payload. A timed
- * check holds no slot, so it waits, holding neither, for the queue drain to hand it one in due
- * order, and asks again each time the queue moves. A failed request is retried the same way.
+ * Wait on the existing receipt after a fired condition or a provider returns a provisional
+ * extra slot. The queue owns regrant and order, including across a scheduler handover.
  */
 async function takeRunSlot(
   state: CronServiceState,
   run: CronQueuedRun,
   pending: CronLaunchContext,
-  wait: ConditionFiredWait,
+  wait: ConditionFiredWait & {
+    parkProvider?: string;
+    onGranted: (extra: boolean) => void;
+  },
 ): Promise<ConditionFiredRunSlot> {
   const { context } = pending;
   const signal = wait.signal ?? new AbortController().signal;
@@ -67,17 +70,23 @@ async function takeRunSlot(
   // payload goes on, and the replacement's drain hands it the slot.
   const ended = () =>
     signal.aborted || (state.lifecycleGeneration !== pending.generation && !state.handedOver);
+  let parkProvider = wait.parkProvider;
   const settle = async () => {
     const { job, runSlot, stale } = await runOpenClawStateWorkerOperation(context, (scope) =>
       scope.execute({
-        type: "cron.settleConditionCheck",
+        type: "cron.reconcileRunSlot",
         input: {
           storeKey: state.deps.storeKey,
           jobId: run.job.id,
           receiptId: run.runReceipt.receiptId,
+          parkProvider,
         },
       }),
     );
+    parkProvider = undefined;
+    if (job && runSlot) {
+      wait.onGranted(job.state.extraRunSlotReceiptId === run.runReceipt.receiptId);
+    }
     if (job) {
       applyCronRuntimeRowsToState(state, [job]);
       // Its check is free for the next waiting condition, and a waiting payload needs a drain
@@ -104,7 +113,7 @@ async function takeRunSlot(
       }
       if (answer === "stale") {
         // Before any wait a stale receipt goes ahead: the checks that follow the trigger stop it.
-        return waited ? "stopped" : "taken";
+        return waited || wait.parkProvider !== undefined ? "stopped" : "taken";
       }
       if (!waited) {
         waited = true;
@@ -125,6 +134,7 @@ export async function launchCronRun(
   state: CronServiceState,
   entry: CronQueuedRun,
   pending: CronLaunchContext,
+  charge: ReturnType<typeof createCronExtraRunCharge>,
   cancel: (reason: string) => Promise<void>,
 ) {
   const { options } = pending;
@@ -215,7 +225,6 @@ export async function launchCronRun(
   }
   if (isImmediateCronRunMode(options.mode)) {
     executionJob.state.nextRunAtMs = options.scheduleOwnershipAtMs;
-    executionJob.trigger = options.evaluateTrigger ? executionJob.trigger : undefined;
   }
   const activeJobMarker = manual
     ? markManualCronJobActive(state, entry.job, entry.runReceipt)
@@ -255,7 +264,25 @@ export async function launchCronRun(
       streamBatch: options.streamBatch,
       streamScheduleKey: options.streamScheduleKey,
       streamSourceIdentity: options.streamSourceIdentity,
-      onConditionFired: (wait) => takeRunSlot(state, entry, pending, wait),
+      onConditionFired: (wait) =>
+        takeRunSlot(state, entry, pending, { ...wait, onGranted: charge.onGranted }),
+      providerRunSlot: {
+        tryStart: charge.tryStart,
+        wait: async (provider, signal) => {
+          while (!charge.tryStart(provider)) {
+            const slot = await takeRunSlot(state, entry, pending, {
+              signal,
+              parkProvider: provider,
+              onGranted: charge.onGranted,
+            });
+            if (slot === "stopped") {
+              signal.throwIfAborted();
+              throw new Error("Automation stopped while waiting for a provider run slot");
+            }
+          }
+        },
+      },
+      onProviderAttempt: charge.move,
       runReceipt: entry.runReceipt,
       runReceiptContext: pending.context,
       executionIdentity: createCronReceiptExecutionIdentity(
@@ -290,6 +317,11 @@ export async function launchCronRun(
       interruptedByRestart:
         resolveAgentRunErrorLifecycleFields(error, undefined).stopReason === "restart",
     });
+  }
+  if (result.executionSettlement) {
+    void result.executionSettlement.then(charge.release, charge.release);
+  } else {
+    charge.release();
   }
   options.onTriggerDisposition?.(
     hasUnstartedCronAdmission(result) && result.admissionDeferredReason === "busy"

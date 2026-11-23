@@ -50,12 +50,18 @@ function tightenSecretDirectoryModes(params: {
 
 export async function writePrivateSecretFileAtomic(params: SecretFileWriteParams): Promise<void> {
   await tightenSecretDirectoryModes(params);
-  await writeSecretFileAtomicImpl(params);
+  await writeSecretFileAtomicImpl({
+    ...params,
+    allowDrvfsRenameRecovery: params.allowDrvfsRenameRecovery ?? true,
+  });
 }
 
 export async function createSecretFileAtomic(params: SecretFileWriteParams): Promise<void> {
   await tightenSecretDirectoryModes(params);
-  await createSecretFileAtomicImpl(params);
+  await createSecretFileAtomicImpl({
+    ...params,
+    allowDrvfsRenameRecovery: params.allowDrvfsRenameRecovery ?? true,
+  });
 }
 
 export type SecretFileReadResult =

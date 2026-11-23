@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Errored, For, isPending, latest, Loading } from "solid-js";
+import { createMemo, createSignal, Errored, For, isPending, latest, Loading, Show } from "solid-js";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import { dedupeByKey } from "../../../../src/shared/dedupe-by-key.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
@@ -86,6 +86,8 @@ export type DefaultModelsViewProps = {
   onFastModeChange: (mode: FastMode) => void;
   onFastModeReset: () => void;
   onCatalogRetry: () => void;
+  /** The selected agent's own model when it differs from the default, as a sentence. */
+  agentModel?: string;
 };
 
 const AUTOMATIC_UTILITY_VALUE = "__openclaw_automatic_utility__";
@@ -506,6 +508,15 @@ export function DefaultModels(props: DefaultModelsViewProps) {
 
   // Discovery reports on the heading line, so the rows below it never move.
   const catalogProgress = <CatalogProgress {...props} />;
+  // Fallback, utility and decision models stay folded until one of them is set. Once open they
+  // stay open, so clearing the last one never folds the row under the pointer; a click wins.
+  const [moreOpen, setMoreOpen] = createSignal<boolean>(
+    (open) =>
+      open === true ||
+      props.selection.fallbacks.length > 0 ||
+      props.selection.utilityModel !== null ||
+      Boolean(props.selection.decisionModel),
+  );
   return (
     <SettingsSection
       title={t("modelProviders.defaults.title")}
@@ -515,6 +526,7 @@ export function DefaultModels(props: DefaultModelsViewProps) {
       <div class="model-providers__defaults">
         <SettingsRow
           title={t("modelProviders.defaults.primary")}
+          description={props.agentModel}
           control={
             <ModelPicker
               windowed
@@ -525,17 +537,6 @@ export function DefaultModels(props: DefaultModelsViewProps) {
               title={title()}
               onChange={(value) => selectChatChoice(value, props.onPrimaryChange)}
             />
-          }
-        />
-        <FallbackModel
-          label={t("modelProviders.defaults.fallback")}
-          fallbacks={props.selection.fallbacks}
-          primary={props.selection.primary}
-          options={chatOptions()}
-          disabled={modelControlsDisabled() || saving() || !props.selection.primary}
-          title={title()}
-          onChange={(value) =>
-            value ? selectChatChoice(value, props.onFallbackChange) : props.onFallbackChange(null)
           }
         />
         <BehaviorSetting
@@ -560,71 +561,100 @@ export function DefaultModels(props: DefaultModelsViewProps) {
           }}
           onReset={props.onFastModeReset}
         />
-        <SettingsRow
-          title={
-            <HelpTitle
-              title={t("modelProviders.defaults.utility")}
-              label={t("modelProviders.defaults.utilityHelpLabel")}
-              triggerId={UTILITY_MODEL_HELP_ID}
-              paragraphs={[
-                t("modelProviders.defaults.utilityHelpPurpose"),
-                t("modelProviders.defaults.utilityHelpAutomatic"),
-              ]}
-            />
-          }
-          description={
-            props.utilityOverrides?.length ? (
-              <UtilityOverrides
-                overrides={props.utilityOverrides}
-                basePath={props.basePath}
-                onOpen={props.onOpenAgent}
+        <button
+          type="button"
+          class="settings-row settings-row--nav settings-details-toggle"
+          aria-expanded={moreOpen() ? "true" : "false"}
+          data-models-more-settings
+          onClick={() => setMoreOpen(!moreOpen())}
+        >
+          <div class="settings-row__text">
+            <span class="settings-row__title">{t("modelProviders.defaults.moreSettings")}</span>
+          </div>
+          <div class="settings-row__control">
+            <span class="settings-row__chevron">
+              <Icon name="chevronRight" />
+            </span>
+          </div>
+        </button>
+        <Show when={moreOpen()}>
+          <FallbackModel
+            label={t("modelProviders.defaults.fallback")}
+            fallbacks={props.selection.fallbacks}
+            primary={props.selection.primary}
+            options={chatOptions()}
+            disabled={modelControlsDisabled() || saving() || !props.selection.primary}
+            title={title()}
+            onChange={(value) =>
+              value ? selectChatChoice(value, props.onFallbackChange) : props.onFallbackChange(null)
+            }
+          />
+          <SettingsRow
+            title={
+              <HelpTitle
+                title={t("modelProviders.defaults.utility")}
+                label={t("modelProviders.defaults.utilityHelpLabel")}
+                triggerId={UTILITY_MODEL_HELP_ID}
+                paragraphs={[
+                  t("modelProviders.defaults.utilityHelpPurpose"),
+                  t("modelProviders.defaults.utilityHelpAutomatic"),
+                ]}
               />
-            ) : undefined
-          }
-          control={
-            <ModelPicker
-              windowed
-              id={UTILITY_MODEL_PICKER_ID}
-              label={t("modelProviders.defaults.utility")}
-              value={utilityValue()}
-              options={utilityOptions()}
-              disabled={modelControlsDisabled() || saving()}
-              title={title() || utilityRoute()?.detail || ""}
-              onChange={(value) =>
-                props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value)
-              }
-            />
-          }
-        />
-        <FallbackModel
-          label={t("modelProviders.defaults.utilityFallback")}
-          fallbacks={modelSettingFallbacks(props.selection.utilityModel)}
-          primary={modelSettingPrimary(props.selection.utilityModel)}
-          options={options()}
-          disabled={modelControlsDisabled() || saving() || utilityValue() === ""}
-          title={title()}
-          onChange={props.onUtilityFallbackChange}
-        />
-        <SettingsRow
-          title={
-            <HelpTitle
-              title={t("chat.modelControls.decisionLabel")}
-              label={t("modelProviders.defaults.decisionHelpLabel")}
-              triggerId={DECISION_MODEL_HELP_ID}
-              paragraphs={[t("chat.modelControls.decisionHelp")]}
-            />
-          }
-          control={
-            <DecisionModelPicker
-              id={"model-providers-decision-model"}
-              models={props.decisionModels}
-              value={props.selection.decisionModel}
-              disabled={!props.canMutate || saving()}
-              title={title()}
-              onChange={props.onDecisionChange}
-            />
-          }
-        />
+            }
+            description={
+              props.utilityOverrides?.length ? (
+                <UtilityOverrides
+                  overrides={props.utilityOverrides}
+                  basePath={props.basePath}
+                  onOpen={props.onOpenAgent}
+                />
+              ) : undefined
+            }
+            control={
+              <ModelPicker
+                windowed
+                id={UTILITY_MODEL_PICKER_ID}
+                label={t("modelProviders.defaults.utility")}
+                value={utilityValue()}
+                options={utilityOptions()}
+                disabled={modelControlsDisabled() || saving()}
+                title={title() || utilityRoute()?.detail || ""}
+                onChange={(value) =>
+                  props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value)
+                }
+              />
+            }
+          />
+          <FallbackModel
+            label={t("modelProviders.defaults.utilityFallback")}
+            fallbacks={modelSettingFallbacks(props.selection.utilityModel)}
+            primary={modelSettingPrimary(props.selection.utilityModel)}
+            options={options()}
+            disabled={modelControlsDisabled() || saving() || utilityValue() === ""}
+            title={title()}
+            onChange={props.onUtilityFallbackChange}
+          />
+          <SettingsRow
+            title={
+              <HelpTitle
+                title={t("chat.modelControls.decisionLabel")}
+                label={t("modelProviders.defaults.decisionHelpLabel")}
+                triggerId={DECISION_MODEL_HELP_ID}
+                paragraphs={[t("chat.modelControls.decisionHelp")]}
+              />
+            }
+            control={
+              <DecisionModelPicker
+                id={"model-providers-decision-model"}
+                models={props.decisionModels}
+                value={props.selection.decisionModel}
+                disabled={!props.canMutate || saving()}
+                title={title()}
+                onChange={props.onDecisionChange}
+              />
+            }
+          />
+        </Show>
         {props.canMutate ? renderMutationMessage(props.message) : undefined}
       </div>
     </SettingsSection>

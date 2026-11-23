@@ -117,7 +117,6 @@ async function managedWorkspace() {
 async function namedReader(
   email: string,
   definitions: GatewayOperatorRolesConfig["definitions"] = { viewer: viewerRole },
-  hasCurrentClientAuthority?: () => boolean,
 ) {
   cfg.gateway = { roles: { default: "viewer", definitions } };
   const profile = ensureProfileForEmail(email);
@@ -126,7 +125,6 @@ async function namedReader(
   state.auth.mockResolvedValue({
     authMethod: "trusted-proxy",
     operatorScopes: readScopes,
-    ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
     ...resolveHttpProfile(profile.id, cfg),
   });
   return profile;
@@ -691,23 +689,14 @@ it("withholds member media when attribution did not resolve a durable profile", 
   await expectWithheld(await image("unattributed.png"));
 });
 
-it.each(
-  (["metadata", "bytes"] as const).flatMap((operation) =>
-    (["session", "gateway"] as const).map((authority) => ({ operation, authority })),
-  ),
-)(
+it.each((["metadata", "bytes"] as const).map((operation) => ({ operation, authority: "session" })))(
   "revalidates $authority reader access after asynchronous $operation file preparation",
   async ({ operation, authority }) => {
-    let current = true;
-    await namedReader("yielding-media-reader@example.test", undefined, () => current);
+    await namedReader("yielding-media-reader@example.test");
     const source = await image("shared.png");
     const ticket = await mediaTicket(source);
     onOpen(source, () => {
-      if (authority === "session") {
-        entry.visibility = "draft";
-      } else {
-        current = false;
-      }
+      entry.visibility = "draft";
     });
     await expectWithheld(source, {
       ...(authority === "session" ? { ticket } : {}),

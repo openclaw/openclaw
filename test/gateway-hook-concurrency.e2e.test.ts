@@ -1,6 +1,10 @@
 // E2E: hook dispatch and cron complete inside the shared capacity budget.
 import type { ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  DEFAULT_CRON_MAX_CONCURRENT_RUNS as HOOK_BUDGET,
+  MAX_CRON_CONCURRENT_RUNS as SHARED_BUDGET,
+} from "../src/config/cron-limits.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { readRequestText } from "./helpers/gateway-integration-fixtures.js";
 import {
@@ -15,10 +19,9 @@ import {
 import { createDeferred } from "./helpers/promise.js";
 
 const TEST_TIMEOUT_MS = 180_000;
-const SHARED_BUDGET = 8;
 const FAIRNESS_CRON_MARKER = "capacity group fairness cron marker";
 const FAIRNESS_HOOK_OFFSET = 100;
-const FAIRNESS_LATE_HOOK_INDEX = FAIRNESS_HOOK_OFFSET + SHARED_BUDGET;
+const FAIRNESS_LATE_HOOK_INDEX = FAIRNESS_HOOK_OFFSET + HOOK_BUDGET;
 const WAIT_OPTS = { interval: 20, timeout: 30_000 };
 
 type HookResponse = {
@@ -30,6 +33,7 @@ type HeldModelServer = Awaited<ReturnType<typeof startHeldModelServer>>;
 
 const instances: OpenClawTestInstance[] = [];
 const modelServers: HeldModelServer[] = [];
+const pendingHookRequests: Promise<HookResponse>[] = [];
 
 async function startScenario(name: string) {
   const modelServer = await startHeldModelServer();
@@ -46,6 +50,10 @@ async function startScenario(name: string) {
 }
 
 afterEach(async () => {
+  // Join held HTTP work before stopping its Gateway; an assertion failure must
+  // not strand requests that reject later during teardown.
+  modelServers.forEach((server) => server.releaseAll());
+  await Promise.allSettled(pendingHookRequests.splice(0));
   await Promise.allSettled(instances.splice(0).map((instance) => instance.cleanup()));
   await Promise.allSettled(modelServers.splice(0).map((server) => server.close()));
 });
@@ -74,31 +82,34 @@ describe("Gateway hook concurrency", () => {
   );
 
   it(
-    "bounds hook admission and completes queued cron and hook turns",
+    "bounds hook admission while cron uses spare shared capacity",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
       const { instance, modelServer } = await startScenario("gateway-hook-concurrency");
       modelServer.hold();
 
       const responses: Array<HookResponse | undefined> = Array.from({
-        length: SHARED_BUDGET + 1,
+        length: HOOK_BUDGET + 1,
       });
-      const requests = responses.map((_, index) =>
-        postHook(instance, index).then((response) => {
-          responses[index] = response;
-          return response;
-        }),
-      );
+      const requests = responses.map((_, index) => postHook(instance, index));
+      requests.forEach((request, index) => {
+        void request.then(
+          (response) => {
+            responses[index] = response;
+          },
+          () => {},
+        );
+      });
       await vi.waitFor(
         () =>
           expect(responses.filter((response) => response?.status === 200)).toHaveLength(
-            SHARED_BUDGET,
+            HOOK_BUDGET,
           ),
         WAIT_OPTS,
       );
       await vi.waitFor(() => expect(responses.every(Boolean)).toBe(true), WAIT_OPTS);
 
-      expect(responses.filter((response) => response?.status === 200)).toHaveLength(SHARED_BUDGET);
+      expect(responses.filter((response) => response?.status === 200)).toHaveLength(HOOK_BUDGET);
       const timedOut = responses.find((response) => response?.status === 503);
       expect(timedOut?.status).toBe(503);
       expect(JSON.parse(timedOut?.body ?? "{}")).toMatchObject({
@@ -110,15 +121,15 @@ describe("Gateway hook concurrency", () => {
         () => expect(modelServer.active(), instance.logs()).toBeGreaterThan(0),
         WAIT_OPTS,
       );
-      expect(modelServer.peak(), instance.logs()).toBeLessThanOrEqual(SHARED_BUDGET);
-      expect(modelServer.requestCount(), instance.logs()).toBeLessThanOrEqual(SHARED_BUDGET + 1);
+      expect(modelServer.peak(), instance.logs()).toBeLessThanOrEqual(HOOK_BUDGET);
+      expect(modelServer.requestCount(), instance.logs()).toBeLessThanOrEqual(HOOK_BUDGET + 1);
 
       // Completing the admitted work frees shared capacity. A fresh request
       // must then cross the same real Gateway admission fence.
       const requestCountBeforeRelease = modelServer.requestCount();
       modelServer.releaseAll();
-      await expect(Promise.all(requests)).resolves.toHaveLength(SHARED_BUDGET + 1);
-      const afterRelease = await postHook(instance, SHARED_BUDGET + 1);
+      await expect(Promise.all(requests)).resolves.toHaveLength(HOOK_BUDGET + 1);
+      const afterRelease = await postHook(instance, HOOK_BUDGET + 1);
       expect(afterRelease.status, afterRelease.body).toBe(200);
       await vi.waitFor(
         () => expect(modelServer.requestCount()).toBeGreaterThan(requestCountBeforeRelease),
@@ -126,18 +137,18 @@ describe("Gateway hook concurrency", () => {
       );
       await vi.waitFor(() => expect(modelServer.active()).toBe(0), WAIT_OPTS);
 
-      // Saturate the real hook-dispatch lane again, then queue cron inner work
-      // and a later hook against the same shared capacity.
+      // Hooks keep their own cap when cron's shared budget grows. Cron must use
+      // spare group capacity while a later hook still waits for a hook slot.
       modelServer.hold();
       const fairnessRequestStart = modelServer.requestCount();
-      const fairnessHooks = Array.from({ length: SHARED_BUDGET }, (_, offset) =>
+      const fairnessHooks = Array.from({ length: HOOK_BUDGET }, (_, offset) =>
         postHook(instance, FAIRNESS_HOOK_OFFSET + offset, true),
       );
       await vi.waitFor(
-        () => expect(modelServer.requestCount()).toBe(fairnessRequestStart + SHARED_BUDGET),
+        () => expect(modelServer.requestCount()).toBe(fairnessRequestStart + HOOK_BUDGET),
         WAIT_OPTS,
       );
-      expect(modelServer.active(), instance.logs()).toBe(SHARED_BUDGET);
+      expect(modelServer.active(), instance.logs()).toBe(HOOK_BUDGET);
 
       const cronJob = await cliJson<{ id?: string }>(instance, [
         "cron",
@@ -165,41 +176,29 @@ describe("Gateway hook concurrency", () => {
         runId: expect.any(String),
       });
 
-      // The outer cron acknowledgment is not inner-lane admission. Observe both
-      // contenders queued behind the occupied budget rather than sleeping.
-      await waitForQueuedSharedLane(instance, "cron-nested", 0);
+      // The outer acknowledgment is not admission: observe the real model call
+      // and lane ownership before checking that the ninth hook remains queued.
+      const cronProviderRequest = fairnessRequestStart + HOOK_BUDGET;
+      await vi.waitFor(
+        () => expect(modelServer.requestCount()).toBe(cronProviderRequest + 1),
+        WAIT_OPTS,
+      );
+      expect(modelServer.requestBody(cronProviderRequest)).toContain(FAIRNESS_CRON_MARKER);
+      await waitForSharedLane(instance, "cron-nested", 1, 0);
       const lateHook = postHook(instance, FAIRNESS_LATE_HOOK_INDEX, true);
-      await waitForQueuedSharedLane(instance, "hook-dispatch", SHARED_BUDGET);
-      expect(modelServer.requestCount()).toBe(fairnessRequestStart + SHARED_BUDGET);
-      expect(modelServer.active()).toBe(SHARED_BUDGET);
+      await waitForSharedLane(instance, "hook-dispatch", HOOK_BUDGET, 1);
+      expect(modelServer.requestCount()).toBe(cronProviderRequest + 1);
+      expect(modelServer.active()).toBe(HOOK_BUDGET + 1);
 
       modelServer.release(fairnessRequestStart);
-      const firstQueuedProviderRequest = fairnessRequestStart + SHARED_BUDGET;
+      const lateHookProviderRequest = cronProviderRequest + 1;
       await vi.waitFor(
-        () => expect(modelServer.requestCount()).toBe(firstQueuedProviderRequest + 1),
+        () => expect(modelServer.requestCount()).toBe(lateHookProviderRequest + 1),
         WAIT_OPTS,
       );
-      modelServer.release(firstQueuedProviderRequest);
-      const secondQueuedProviderRequest = firstQueuedProviderRequest + 1;
-      await vi.waitFor(
-        () => expect(modelServer.requestCount()).toBe(secondQueuedProviderRequest + 1),
-        WAIT_OPTS,
-      );
-      // Hooks are normal priority; cron is background. Exact bounded-priority
-      // ordering is covered with a controlled clock in command-queue.capacity-groups.test.ts.
-      // Here real preparation time may put cron on either side of that boundary,
-      // but each contender must reach the provider exactly once, one freed slot at a time.
       const lateHookMarker = `hook concurrency request ${FAIRNESS_LATE_HOOK_INDEX}`;
-      const admittedMarkers = [firstQueuedProviderRequest, secondQueuedProviderRequest].map(
-        (index) =>
-          [FAIRNESS_CRON_MARKER, lateHookMarker].filter((marker) =>
-            modelServer.requestBody(index)?.includes(marker),
-          ),
-      );
-      expect(admittedMarkers).toEqual(
-        expect.arrayContaining([[FAIRNESS_CRON_MARKER], [lateHookMarker]]),
-      );
-      expect(modelServer.peak(), instance.logs()).toBeLessThanOrEqual(SHARED_BUDGET);
+      expect(modelServer.requestBody(lateHookProviderRequest)).toContain(lateHookMarker);
+      expect(modelServer.peak(), instance.logs()).toBeLessThanOrEqual(HOOK_BUDGET + 1);
 
       modelServer.releaseAll();
       for (const response of await Promise.all([...fairnessHooks, lateHook])) {
@@ -207,7 +206,7 @@ describe("Gateway hook concurrency", () => {
         expect(JSON.parse(response.body)).toMatchObject({ ok: true, completion: { status: "ok" } });
       }
       await waitForCronRun(instance, cronJob.id ?? "", cronRun.runId ?? "");
-      expect(modelServer.requestCount()).toBe(fairnessRequestStart + SHARED_BUDGET + 2);
+      expect(modelServer.requestCount()).toBe(fairnessRequestStart + HOOK_BUDGET + 2);
       expect(modelServer.active()).toBe(0);
     },
   );
@@ -255,13 +254,13 @@ async function warmGatewayHook(
   throw new Error("Gateway hook warmup did not reach the model after three attempts");
 }
 
-async function postHook(
+function postHook(
   instance: OpenClawTestInstance,
   index: number | string,
   waitForCompletion = false,
 ): Promise<HookResponse> {
   const kind = typeof index === "number" ? "concurrency" : "completion";
-  const response = await fetch(`http://127.0.0.1:${instance.port}/hooks/agent`, {
+  const request = fetch(`http://127.0.0.1:${instance.port}/hooks/agent`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${instance.hookToken}`,
@@ -276,11 +275,13 @@ async function postHook(
       deliver: false,
       waitForCompletion,
     }),
-  });
-  return {
+  }).then(async (response) => ({
     body: await response.text(),
     status: response.status,
-  };
+  }));
+  pendingHookRequests.push(request);
+  void request.catch(() => {});
+  return request;
 }
 
 async function startHeldModelServer() {
@@ -363,10 +364,11 @@ async function waitForCronRun(
   );
 }
 
-async function waitForQueuedSharedLane(
+async function waitForSharedLane(
   instance: OpenClawTestInstance,
   lane: string,
   activeCount: number,
+  queuedCount: number,
 ): Promise<void> {
   await vi.waitFor(
     async () => {
@@ -380,9 +382,9 @@ async function waitForQueuedSharedLane(
         expect.objectContaining({
           lane,
           activeCount,
-          queuedCount: 1,
+          queuedCount,
           group: "cron-hooks",
-          groupActive: SHARED_BUDGET,
+          groupActive: HOOK_BUDGET + 1,
           groupBudget: SHARED_BUDGET,
         }),
       );
