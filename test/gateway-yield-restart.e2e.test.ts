@@ -62,6 +62,8 @@ it
     let childKey: string | undefined;
     let childRunId: string | undefined;
     let childCalls = 0;
+    let childRestartRequests = 0;
+    let mainToolCalls = 0;
     let childCallsAfterStop: number | undefined;
     const childRequests: Array<{ phase: string; ordinal: number; execResult: boolean }> = [];
     let lastExecOrdinal: number | undefined;
@@ -129,7 +131,13 @@ it
               childRequests.shift();
             }
             if (mainTool) {
+              if (text.includes("The Gateway restarted while you were working.")) {
+                childRestartRequests++;
+                reply("CHILD_RECONCILED_RESTART");
+                return;
+              }
               if (text.includes("RUN_MAIN_LANE_TOOL")) {
+                mainToolCalls++;
                 call("exec", {
                   command: `printf ready > '${toolMarker.replaceAll("'", "'\\''")}' ; sleep 600`,
                   yieldMs: 120_000,
@@ -380,7 +388,7 @@ it
     let phase = "startup";
     onTestFailed(() => {
       process.stderr.write(
-        `yield restart ${JSON.stringify({ phase, childCallsAfterStop, childRequests })}\n${instance.logs()}\n`,
+        `yield restart ${JSON.stringify({ phase, childCallsAfterStop, childRestartRequests, mainToolCalls, childRequests })}\n${instance.logs()}\n`,
       );
     });
     await runQaGatewayFixture(
@@ -476,6 +484,7 @@ it
         await client.stopAndWait();
         client = undefined;
         if (mainTool) {
+          expect(childCallsAfterStop).toBe(callsBeforeRestart);
           expect(readChildRun()).toMatchObject({
             execution: {
               status: "terminal",
@@ -572,8 +581,23 @@ it
             },
             { timeout: 15_000 },
           );
-          expect(childCalls).toBe(callsBeforeRestart);
           if (mainTool) {
+            // The direct chat.send continuation owns its own restart, while the
+            // stopped delegated run still owes its original parent a terminal notice.
+            await vi.waitFor(
+              async () => {
+                const history = await client!.request<{
+                  messages: unknown[];
+                  sessionInfo: { hasActiveRun: boolean };
+                }>("chat.history", { sessionKey: childKey });
+                expect(JSON.stringify(history.messages)).toContain("CHILD_RECONCILED_RESTART");
+                expect(history.sessionInfo.hasActiveRun).toBe(false);
+              },
+              { timeout: 15_000 },
+            );
+            expect(childRestartRequests).toBe(1);
+            expect(mainToolCalls).toBe(1);
+            expect(childCalls).toBe(callsBeforeRestart + 1);
             await vi.waitFor(
               () => {
                 const db = openNodeSqliteDatabase(
@@ -602,6 +626,8 @@ it
               },
               { timeout: 15_000 },
             );
+          } else {
+            expect(childCalls).toBe(callsBeforeRestart);
           }
           return;
         }
