@@ -106,10 +106,10 @@ on GitHub; this tool does not rerun jobs or download log archives.
 
 This tool works for permitted sandboxed agents without GitHub credentials or
 outbound network access inside the sandbox. The Gateway selects the invoking
-agent's managed identity, or uses the same service-token/anonymous fallback as
-the reader. The tool cannot select another agent or expose the credential.
-Current invocation, tool and identity authority remain required through delivery,
-including cached reads.
+agent's managed identity, or uses the same service-token, native identity, and
+anonymous fallback as the reader. The tool cannot select another agent or expose
+the credential. Current invocation, tool and identity authority remain required
+through delivery, including cached reads.
 
 `github_read` is included in the coding profile and default sandbox tool allowlist.
 Explicit tool allowlists and deny rules remain authoritative. If you maintain a
@@ -171,12 +171,15 @@ hovercard, and GitHub links open externally.
 
 - The reader is public-only and read-only. Use **Open on GitHub** for private
   repositories, posting comments, or merging pull requests.
-- Previews and reader documents use the selected agent’s managed GitHub identity,
-  or the configured Control UI GitHub token and Gateway environment fallback when
-  no managed identity is selected. Without credentials they use GitHub’s shared
-  anonymous IP quota. Authenticated documents remain public-only: the reader checks
-  repository visibility and identity before returning fresh or cached content.
-  Identity changes abort stale requests. Attachment images remain anonymous.
+- Previews and reader documents use the selected agent's OpenClaw-managed GitHub
+  account (its own or the shared agent account). If the agent has no managed
+  account, they use an explicit `gateway.controlUi.github.token` when set, or
+  the Gateway's native GitHub identity (`GH_TOKEN`/`GITHUB_TOKEN`, then its
+  GitHub CLI login). When no credential is available, they use GitHub's shared
+  anonymous IP quota of 60 requests per hour. Authenticated documents remain
+  public-only: the reader checks repository visibility and identity before
+  returning fresh or cached content. Identity changes abort stale requests.
+  Attachment images remain anonymous.
 - Each comment collection is limited to 20 entries; PR discussion and inline
   review comments have separate limits. Up to 30 changed files are shown.
 - PR checks use at most one page each of check runs and commit statuses and show

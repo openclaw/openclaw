@@ -220,6 +220,8 @@ describe("controlUi.githubPreview", () => {
     { mode: "managed", method: "controlUi.githubDetail" },
     { mode: "service", method: "controlUi.githubDetail" },
     { mode: "anonymous", method: "controlUi.githubPreview" },
+    { mode: "native", method: "controlUi.githubPreview" },
+    { mode: "native", method: "controlUi.githubDetail" },
   ])("reads $method as $mode", async ({ mode, method }) => {
     vi.stubEnv("GH_TOKEN", mode === "service" ? "different-ambient-token" : "");
     vi.stubEnv("GITHUB_TOKEN", "");
@@ -240,13 +242,20 @@ describe("controlUi.githubPreview", () => {
       },
     };
     const prepare = vi.spyOn(githubIdentity, "prepareGitHubReadIdentity");
+    const nativeIdentity = {
+      ...identity,
+      token: "detected-cli-token",
+      selection: { source: "system-detected" as const, accountId: 102 },
+    };
     if (mode === "managed") {
       prepare.mockResolvedValue(identity);
+    } else if (mode === "native") {
+      prepare.mockResolvedValue(nativeIdentity);
     } else {
       prepare.mockRejectedValue(new githubIdentity.GitHubIdentityError("rate_limited"));
     }
     const cfg: OpenClawConfig =
-      mode === "anonymous"
+      mode === "anonymous" || mode === "native"
         ? { agents: { entries: { main: {} } } }
         : configuredGitHub(
             mode === "managed" ? "old-preview-service-token" : "configured-reader-token",
@@ -263,7 +272,11 @@ describe("controlUi.githubPreview", () => {
       setRuntimeConfigSnapshot(cfg);
     }
     const title =
-      mode === "managed" ? "Use the selected GitHub identity" : "Public metadata without a login";
+      mode === "managed"
+        ? "Use the selected GitHub identity"
+        : mode === "native"
+          ? "Use the detected GitHub CLI login"
+          : "Public metadata without a login";
     const anonymousResponse = json(issueFields(title));
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
       if (mode === "anonymous") {
@@ -274,7 +287,7 @@ describe("controlUi.githubPreview", () => {
       return json(
         issue
           ? issueFields(mode === "service" ? "Authenticated reader" : title, {
-              ...(mode === "managed"
+              ...(mode === "managed" || mode === "native"
                 ? { repository_url: "https://api.github.com/repos/openclaw/openclaw" }
                 : {}),
               body: mode === "managed" ? "Authenticated reader body" : "Reader body",
@@ -288,7 +301,8 @@ describe("controlUi.githubPreview", () => {
     await send(
       {
         kind: "issue",
-        number: mode === "managed" ? 88120 : mode === "service" ? 1 : 88121,
+        number:
+          mode === "managed" ? 88120 : mode === "service" ? 1 : mode === "native" ? 88122 : 88121,
         owner: mode === "service" ? "octocat" : "openclaw",
         repo: mode === "service" ? "reader-auth" : "openclaw",
         agentId: mode === "managed" ? "alternate" : "main",
@@ -301,13 +315,20 @@ describe("controlUi.githubPreview", () => {
     );
     if (mode === "anonymous") {
       expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).has("Authorization")).toBe(false);
-      expect(prepare).not.toHaveBeenCalled();
+      // No detected login: the native probe falls back to public anonymous access.
+      expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ allowAnonymous: true }));
     } else {
       expect(
         fetchMock.mock.calls.every(
           ([, options]) =>
             new Headers(options?.headers).get("Authorization") ===
-            `Bearer ${mode === "managed" ? identity.token : "configured-reader-token"}`,
+            `Bearer ${
+              mode === "managed"
+                ? identity.token
+                : mode === "native"
+                  ? nativeIdentity.token
+                  : "configured-reader-token"
+            }`,
         ),
       ).toBe(true);
       if (mode === "managed") {
@@ -315,6 +336,10 @@ describe("controlUi.githubPreview", () => {
           expect.objectContaining({ agentId: "alternate", config: cfg }),
         );
         expect(identity.revalidate).toHaveBeenCalled();
+      } else if (mode === "native") {
+        expect(prepare).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: "main", allowAnonymous: true }),
+        );
       } else {
         expect(prepare).not.toHaveBeenCalled();
       }

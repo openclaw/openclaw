@@ -1,4 +1,5 @@
 import { resolveConfiguredGitHubHost } from "../agents/github-host.js";
+import type { PreparedGitHubSourceReadIdentity } from "../agents/github-read-identity.js";
 import {
   GitHubIdentityError,
   prepareGitHubReadIdentity,
@@ -25,20 +26,39 @@ export async function prepareGitHubReaderIdentity(
       resolveConfiguredGitHubToolIdentity({ config: current, agentId, scope: "system" })
     );
   };
+  const managed = configuredIdentity() !== undefined;
+  // The agent's account, own or shared, serves its reads. Without a managed
+  // selection that is the detected GitHub CLI login, unless an explicit web app
+  // service credential owns these reads.
+  const native =
+    !managed &&
+    resolveConfiguredGitHubHost(config) === "github.com" &&
+    config.gateway?.controlUi?.github?.token === undefined;
   assertActive();
-  // Without a managed selection, retain service/env/anonymous access without
-  // probing native gh. Both paths must still own the selection at delivery.
-  const identity = configuredIdentity()
-    ? await prepareGitHubReadIdentity({
+  let prepared: PreparedGitHubSourceReadIdentity | undefined;
+  if (managed || native) {
+    try {
+      prepared = await prepareGitHubReadIdentity({
         config,
         sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? config,
         agentId,
         allowStale: true,
+        allowAnonymous: true,
         getCurrentConfig: () => context.getRuntimeConfig(),
         assertActive,
         refresh: () => requestCurrentGitHubOAuthRefresh(agentId),
-      })
-    : undefined;
+      });
+    } catch (error) {
+      // A managed selection fails visibly. A broken detected login keeps the
+      // previous environment/anonymous public access instead of blocking reads.
+      if (managed || !(error instanceof GitHubIdentityError)) {
+        throw error;
+      }
+    }
+  }
+  // Without a detected login, keep the cheap anonymous path; an anonymous native
+  // identity would re-run the gh absence probe on every GitHub dispatch.
+  const identity = prepared?.token === undefined ? undefined : prepared;
   return {
     identity,
     assertSelected:
