@@ -47,8 +47,8 @@ export type ChannelIngressDispatchLifecycle = {
 export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDispatchLifecycle): {
   turnAdoptionLifecycle: Omit<
     ChannelIngressDispatchLifecycle,
-    "onAdoptionFinalizing" | "onFailed" | "onCancelled" | "readLaneBacklog"
-  > & { admission: "exclusive" };
+    "onAdoptionFinalizing" | "onFailed" | "onCancelled" | "onAbandoned" | "readLaneBacklog"
+  > & { admission: "exclusive"; onAbandoned: (cause?: "cancelled") => void | Promise<void> };
 } {
   return {
     turnAdoptionLifecycle: {
@@ -57,7 +57,10 @@ export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDisp
       onDeferred: lifecycle.onDeferred,
       onDeferredHeartbeat: lifecycle.onDeferredHeartbeat,
       deferredHeartbeatIntervalMs: lifecycle.deferredHeartbeatIntervalMs,
-      onAbandoned: lifecycle.onAbandoned,
+      onAbandoned: (cause?: "cancelled") =>
+        cause === "cancelled" && lifecycle.onCancelled
+          ? lifecycle.onCancelled()
+          : lifecycle.onAbandoned(),
       onDropped: lifecycle.onDropped,
       abortSignal: lifecycle.abortSignal,
     },

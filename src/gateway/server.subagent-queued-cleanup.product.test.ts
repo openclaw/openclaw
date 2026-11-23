@@ -111,6 +111,26 @@ it("bounds public child Stop while yielded queued-input cleanup remains pending"
   await runQaGatewayFixture(
     async () => {
       await gateway.server.startupSettled;
+      // At the same threshold as Stop below, a real Gateway rejection must exhaust
+      // the delivery. Use an invalid RPC payload so this path cannot reach a model.
+      const rejectedQueue = createTestIngressQueue(state.stateDir);
+      const rejectedDrain = createChannelIngressDrain({
+        queue: rejectedQueue,
+        retryPolicy: { maxAttempts: 1, deadLetterMinAgeMs: 0 },
+        dispatchClaimedEvent: async () => {
+          await gateway.client.request("chat.send", { message: 42 });
+        },
+      });
+      try {
+        await rejectedQueue.enqueue("rejected-input", { text: "invalid RPC" });
+        await rejectedDrain.drainOnce();
+        await rejectedDrain.waitForIdle();
+        expect(await rejectedQueue.listFailed?.()).toMatchObject([
+          { id: "rejected-input", reason: "retry-limit-exceeded" },
+        ]);
+      } finally {
+        rejectedDrain.dispose();
+      }
       const parentRunId = "subagent-yielded-queued-cleanup-parent";
       await expect(
         gateway.client.request("chat.send", {
@@ -140,6 +160,7 @@ it("bounds public child Stop while yielded queued-input cleanup remains pending"
       let deferredMode: "followup" | "steer" | undefined;
       drain = createChannelIngressDrain({
         queue,
+        retryPolicy: { maxAttempts: 1, deadLetterMinAgeMs: 0 },
         dispatchClaimedEvent: async (event, lifecycle) => {
           const result = await dispatchReplyWithBufferedBlockDispatcherCore({
             ctx: buildTestCtx({
@@ -211,6 +232,7 @@ it("bounds public child Stop while yielded queued-input cleanup remains pending"
       await expect(queue.listPending()).resolves.toEqual([
         expect.objectContaining({
           id: "queued-child-input",
+          attempts: 0,
           payload: { text: child.childSessionKey },
         }),
       ]);

@@ -374,7 +374,13 @@ export const createTelegramMessageProcessor = (
           },
           onDeferredHeartbeat: () => participant.heartbeat(),
           deferredHeartbeatIntervalMs: participant.heartbeatIntervalMs,
-          onAbandoned: () => {
+          onAbandoned: (cause) => {
+            if (cause === "cancelled") {
+              if (!adopted) {
+                return settle({ kind: "cancelled" }, "terminal").then(() => {});
+              }
+              return;
+            }
             if (!adopted) {
               void settle({ kind: "failed-retryable", error: "turn-abandoned" }, "terminal");
             }

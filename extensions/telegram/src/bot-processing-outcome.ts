@@ -4,6 +4,7 @@ import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type TelegramMessageProcessingResult =
+  | { kind: "cancelled" }
   | { kind: "completed" }
   | { kind: "skipped" }
   | {

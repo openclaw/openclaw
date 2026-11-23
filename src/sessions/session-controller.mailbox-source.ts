@@ -406,7 +406,12 @@ export function abortSessionControllerInput(
           !input.custody.adopted &&
           !input.custody.completed
         ) {
-          void notifySessionControllerSourceAbandonment(input.source, input.custody);
+          void notifySessionControllerSourceAbandonment(
+            input.source,
+            input.custody,
+            undefined,
+            "cancelled",
+          );
         }
       }
     }
@@ -532,6 +537,7 @@ function notifySessionControllerSourceAbandonment(
   run: Pick<FollowupRun, "turnAdoptionLifecycle">,
   state: SessionControllerSourceCustody,
   dropReason?: FollowupQueueDisposition,
+  cause?: "cancelled",
 ): void | Promise<void> {
   const prior = state.abandonment;
   if (prior) {
@@ -546,7 +552,7 @@ function notifySessionControllerSourceAbandonment(
     const completion =
       dropReason && run.turnAdoptionLifecycle?.onDropped
         ? run.turnAdoptionLifecycle.onDropped(dropReason)
-        : run.turnAdoptionLifecycle?.onAbandoned?.();
+        : run.turnAdoptionLifecycle?.onAbandoned?.(cause);
     if (completion) {
       notification.completion = Promise.resolve(completion);
       void notification.completion.catch(() => {});
