@@ -19,7 +19,10 @@ import * as realtimeTalkInput from "./talk/input.ts";
 
 const discover = vi.fn();
 const { navigateToModelProvider } = vi.hoisted(() => ({ navigateToModelProvider: vi.fn() }));
-vi.mock("../model-providers/navigation.ts", () => ({ navigateToModelProvider }));
+vi.mock(import("../model-providers/navigation.ts"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  navigateToModelProvider,
+}));
 const copy = (key: string) => t(`chat.composer.${key}`);
 const emptyDevices = { devices: [], issue: "none-found" };
 const studio = { deviceId: "studio-mic", label: "Studio microphone" };

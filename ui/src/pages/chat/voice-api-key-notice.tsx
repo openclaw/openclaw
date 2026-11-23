@@ -10,7 +10,6 @@ export type VoiceApiKeyNoticeProps = {
   provider: string;
   onConfigure?: (provider: string) => void;
   onDismiss?: () => void;
-  compact?: boolean;
   class?: string;
 };
 
@@ -22,13 +21,11 @@ export function voiceApiKeyDetail(): string {
   return t("chat.voiceApiKey.detail");
 }
 
-/** One look for every voice surface: the shared callout, pointing at the provider's API key. */
 export function VoiceApiKeyNotice(props: VoiceApiKeyNoticeProps) {
   return (
     <InlineAlert
       tone="warning"
       class={props.class}
-      compact={props.compact}
       title={voiceApiKeyTitle(props.kind, props.provider)}
       onDismiss={props.onDismiss}
       action={
