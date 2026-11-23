@@ -230,6 +230,7 @@ By default, the first message in an unknown club sends the owner one enablement 
 it enables automatic replies for that club and processes the saved message. Later messages need no
 further approval, even when their claimed authors change. The first message is retained while the
 request is pending; additional messages do not generate more prompts and must be resent if needed.
+Ships invited to the club later may also trigger the agent after it has been enabled.
 
 Enabling a club means accepting **unverified input delivered under that club ID**, with the agent's
 normal permitted tools. It does not verify the sender, participant list, or membership. Only enable
