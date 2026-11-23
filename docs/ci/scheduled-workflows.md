@@ -59,26 +59,24 @@ Normal CI no longer appends a second, partial extension inventory. Inspect both
 `CI` and `Plugin Prerelease` for hourly coverage; Full Release Validation pins
 both existing children to its exact target.
 
-Full Release Validation and ordinary manual CI retain `validation_tier=full`
+Full Release Validation and ordinary manual CI retain the full validation tier
 by default. They additionally run release-only runtime/UI tests,
-minimum-Node compatibility, iOS screenshots, native Release builds, Android
-packaging, and all six Docker seed scenarios. Hourly iOS retains
-`ios-build (tests)`: Swift lint, Rust tests, voice cleanup, native Access, and
-the complete focused app/notification lifecycle inventory. Managed attachment
-UI/export proof, Watch operation simulator suites, and Watch delivery UI proof
-run only in full-tier manual/release validation, with every case and assertion
-retained there. Android retains phone/Wear tests and lint. The Docker survivor uses the existing main smoke package,
-including runtime, assets, public SDK declarations, and tarball integrity.
-The manual SDK API diff report stays manual-only: a scheduled tip has no change
-range to compare.
+minimum-Node compatibility, macOS Release builds, and all six Docker seed
+scenarios. They do not qualify candidate-source iOS or Android apps. Mobile
+release E2E belongs to the dedicated store-release workflows, not Gateway CI.
+Hourly and explicit main-tier iOS retain the tests phase: Swift lint,
+Rust tests, voice cleanup, native Access, and the complete focused
+app/notification lifecycle inventory. Android retains phone/Wear tests and lint.
+The Docker survivor uses the existing main smoke package, including runtime,
+assets, public SDK declarations, and tarball integrity. The manual SDK API diff
+report stays manual-only: a scheduled tip has no change range to compare.
 
 Main-tier iOS builds target the selected simulator's native architecture and
 disable compiler indexing, as PR smoke already does. Voice and lifecycle tests
 disable Xcode's verbose diagnostic collection while retaining their logs and
-xcresult bundles. Full-tier manual/release validation keeps universal simulator
-builds and failure diagnostics. This removes duplicate architecture work and
-diagnostic stalls observed in 76–94-minute hourly jobs; it does not establish a
-new completion bound.
+xcresult bundles. This removes duplicate architecture work and diagnostic
+stalls observed in 76–94-minute hourly jobs; it does not establish a new
+completion bound.
 
 Scheduled CI uses automatic-main [runner placement](/ci/runners), including
 hybrid placement on the first attempt when configured. Native runner labels,
@@ -144,9 +142,8 @@ For an immediate main-tier CI run, choose **CI → Run workflow → main**, sele
 gh workflow run ci.yml --ref main -f validation_tier=main -f include_android=true
 ```
 
-The individual standalone workflows can also be run manually. Direct `CI`
-dispatches and release-validation children retain their existing inputs and
-behavior; set `include_android=true` when requesting complete platform coverage.
+The individual standalone workflows can also be run manually. Direct CI dispatches use Gateway qualification by default; select the main
+validation tier and include Android when requesting ordinary main-tier app coverage.
 To measure hourly coverage on a development branch, dispatch `ci.yml` on that
 branch with `validation_tier=main` and `include_android=true`. The main tier
 requires the workflow and checkout to share one revision; it cannot qualify a
