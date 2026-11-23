@@ -4329,7 +4329,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/auto-reply/reply/agent-runner.media-ownership.test.ts",
   "src/auto-reply/reply/commands-account-policy.test.ts",
   "src/auto-reply/reply/commands-acp.owner.test.ts",
-  "src/auto-reply/reply/commands-allowlist.owner.test.ts",
   "src/auto-reply/reply/session-hooks-context.test.ts",
   "src/auto-reply/reply/stage-sandbox-media.scp.test.ts",
   "src/boards/sqlite-board-store.worker.test.ts",
