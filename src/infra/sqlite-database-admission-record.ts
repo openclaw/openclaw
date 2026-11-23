@@ -341,6 +341,7 @@ export function createSqliteDatabaseAdmissionCursor(): SqliteDatabaseAdmissionCu
 
 export type SqliteDatabaseDescriptorCustody = Pick<Admission, "descriptor" | "facts"> & {
   file: BigIntStats;
+  location: string;
   additionalDescriptors?: Set<number>;
 };
 
@@ -459,7 +460,7 @@ export class SqliteDatabaseAdmissionRegistry {
   }
 
   /** Physical custody survives a cancelled caller without publishing native authority. */
-  retainDescriptorCustody(descriptor: number, opened: BigIntStats): void {
+  retainDescriptorCustody(location: string, descriptor: number, opened: BigIntStats): void {
     const identity = readSqliteDatabaseAdmissionIdentity(opened);
     const existing = this.descriptors.get(identity);
     if (existing && existing.descriptor !== descriptor) {
@@ -468,7 +469,7 @@ export class SqliteDatabaseAdmissionRegistry {
       (existing.additionalDescriptors ??= new Set()).add(descriptor);
     }
     if (!existing) {
-      this.descriptors.set(identity, { descriptor, file: opened, facts: new Map() });
+      this.descriptors.set(identity, { location, descriptor, file: opened, facts: new Map() });
     }
   }
 
@@ -500,7 +501,8 @@ export class SqliteDatabaseAdmissionRegistry {
     const custody =
       retained?.descriptor === descriptor
         ? retained
-        : { descriptor, file: opened, facts: new Map<string, AdmissionFact>() };
+        : { location, descriptor, file: opened, facts: new Map<string, AdmissionFact>() };
+    custody.location = location;
     custody.file = opened;
     custody.facts = new Map();
     this.descriptors.set(record.identity, custody);
