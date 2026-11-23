@@ -123,6 +123,10 @@ function detectInsertion(path: OcPath, kind: OcAst["kind"]): InsertionInfo | nul
   return { parentPath, marker };
 }
 
+function isJsonlAppendTarget({ parentPath, marker }: InsertionInfo): boolean {
+  return parentPath.section === undefined && marker === "+";
+}
+
 export function resolveOcPath(ast: OcAst, path: OcPath): OcMatch | null {
   // Single-match verb: wildcards belong to findOcPaths. Throw with a
   // structured code so consumers can route to the right verb.
@@ -157,7 +161,7 @@ export function resolveOcPath(ast: OcAst, path: OcPath): OcMatch | null {
     if (ast.kind === "jsonl") {
       // jsonl insertion only makes sense at file level (`oc://FILE/+`).
       // Surfaced line is lastLine+1 so consumers render correctly.
-      if (insertion.parentPath.section !== undefined) {
+      if (!isJsonlAppendTarget(insertion)) {
         return null;
       }
       const lastLine = ast.lines.at(-1)?.line ?? 0;
@@ -333,7 +337,7 @@ export function setOcPath(
       return setJsoncInsertion(ast, insertion, value);
     }
     if (ast.kind === "jsonl") {
-      if (insertion.parentPath.section !== undefined || insertion.marker !== "+") {
+      if (!isJsonlAppendTarget(insertion)) {
         throw new OcPathEditError(
           "not-writable",
           "jsonl insertion only supports oc://FILE/+ append",

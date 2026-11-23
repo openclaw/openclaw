@@ -70,6 +70,9 @@ describe("resolveOcPath", () => {
 
   it.each([
     [parseJsonc('{ "k": 42 }'), "oc://config/k/+"],
+    [parseJsonl(""), "oc://log/+event"],
+    [parseJsonl(""), "oc://log/+0"],
+    [parseJsonl('{"event":"start"}\n'), "oc://log/L1/+"],
     [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/name/absent"],
     [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/name/+added"],
   ])("returns null for an invalid target at %s %s", (ast, uri) => {
