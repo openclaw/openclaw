@@ -10,6 +10,7 @@ import type { CallGatewayOptions } from "../gateway/call-options.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
+import { VERSION } from "../version.js";
 import { runReleaseUpdateCli } from "./cli.js";
 import { resolvePrefix, switchLink } from "./store.js";
 import type * as TargetModule from "./target.js";
@@ -22,13 +23,15 @@ beforeEach(async () => {
   root = path.join(home.home, "checkout");
   await fs.mkdir(root);
   await runCommandWithTimeout(["git", "init", root], { timeoutMs: 10_000 });
+  // The selected release is this build's version unless a case asks for a downgrade.
+  packageTarget.version = VERSION;
 });
 
 const sent = vi.hoisted(() => [] as unknown[]);
 const missingCredentials = vi.hoisted(() => ({ enabled: false }));
 const install = vi.hoisted(() => ({ kind: "git" }));
 const localRun = vi.hoisted(() => ({ status: "skipped", phase: "finished" }));
-const packageTarget = vi.hoisted(() => ({ version: "2026.11.6" }));
+const packageTarget = vi.hoisted(() => ({ version: "" }));
 const confirmDowngrade = vi.hoisted(() =>
   vi.fn<() => Promise<"confirmed" | "cancelled" | "confirmation-required">>(),
 );
@@ -129,7 +132,6 @@ afterEach(async () => {
   missingCredentials.enabled = false;
   localRun.status = "skipped";
   localRun.phase = "finished";
-  packageTarget.version = "2026.11.6";
   confirmDowngrade.mockReset();
   createRun.mockClear();
   mutateConfig.mockClear();
@@ -358,7 +360,7 @@ it.each([
   "requires downgrade consent before admission (yes=$yes, decision=$decision)",
   async ({ yes, decision, code }) => {
     install.kind = "package";
-    packageTarget.version = "2026.11.5";
+    packageTarget.version = "2000.1.1";
     confirmDowngrade.mockResolvedValueOnce(decision);
     const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     await runReleaseUpdateCli({
