@@ -1,6 +1,9 @@
 /** Owns captured destinations and cancellation for background exec completion notifications. */
 import { enqueueBatchedSessionEventForHost as enqueueSessionEvent } from "../auto-reply/reply/session-event-batch.js";
-import type { SessionEventOutcome } from "../auto-reply/reply/session-event-contract.js";
+import type {
+  SessionEventOptions,
+  SessionEventOutcome,
+} from "../auto-reply/reply/session-event-contract.js";
 import { captureSessionEventTargetForHost as captureSessionEventTarget } from "../auto-reply/reply/session-event-handoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveEventSessionKeyForPolicy } from "../infra/event-session-routing.js";
@@ -258,25 +261,38 @@ function prepareExecExitWake(
   return appendExecTimeoutRetryGuidance(summary, session.exitReason);
 }
 
-/** Wakes a chat from its stored exec result; admission captures the chat's current target. */
-export function wakeOwedExec(owed: Owed) {
-  return enqueueSessionEvent(owed.text, {
+/**
+ * Wakes a chat from its stored exec result; admission captures the chat's current target.
+ * Its settlement ends the row if this stored wake also fails.
+ */
+export function wakeOwedExec(
+  owed: Owed,
+  options: Omit<SessionEventOptions, "agentId" | "sessionKey" | "source"> = {},
+) {
+  const receipt = enqueueSessionEvent(owed.text, {
+    ...options,
     agentId: owed.to.agentId,
     sessionKey: owed.to.sessionKey,
     source: "exec",
     contextKey: owed.id,
     sourceTurnId: owed.id,
   });
+  void receipt.settled.then((outcome) => settleOwedExecWake(owed, outcome));
+  return receipt;
 }
 
 /**
  * Settles a wake by the stored row, not by its outcome; a row its turn appended needs nothing.
  * A completed wake that left the row pending answered it inside a shared turn's input, which
- * carries every result it answers; the row is hidden. A wake that failed wakes the chat once more
- * from stored state. A stop, or a stored wake that also fails, withholds the result with that
- * cause. Restart drains leave the row owed for restart recovery.
+ * carries every result it answers; the row is hidden. A live wake that failed wakes the chat
+ * once more from stored state. A stop, or a stored wake that also fails, withholds the result
+ * with that cause. Restart drains leave the row owed for restart recovery.
  */
-async function settleOwedExecWake(owed: Owed, outcome: SessionEventOutcome, fromStored = false) {
+async function settleOwedExecWake(
+  owed: Owed,
+  outcome: SessionEventOutcome,
+  wakeAgain?: () => void,
+) {
   if (outcome.status === "failed") {
     logWarn(`exec: completion delivery failed (${outcome.error}); inspect the process result.`);
   }
@@ -286,9 +302,8 @@ async function settleOwedExecWake(owed: Owed, outcome: SessionEventOutcome, from
     }
     if (outcome.status === "completed") {
       await withhold(owed, "failed", "interrupted");
-    } else if (outcome.status === "failed" && !fromStored) {
-      const receipt = wakeOwedExec(owed);
-      void receipt.settled.then((next) => settleOwedExecWake(owed, next, true));
+    } else if (outcome.status === "failed" && wakeAgain) {
+      wakeAgain();
     } else {
       await withhold(owed, outcome.status === "cancelled" ? "user-stop" : "failed");
     }
@@ -339,12 +354,15 @@ async function notifyOnExit(
       };
       await owe(owed);
       // Admission resolves the chat by key: a deleted chat refuses the wake.
-      const receipt = enqueueExecExitNotification(eventText, target, instanceId, {
-        ...eventOptions,
-        sourceRunId: session.startedByRunId,
-      });
+      const wakeOptions = { ...eventOptions, sourceRunId: session.startedByRunId };
+      const receipt = enqueueExecExitNotification(eventText, target, instanceId, wakeOptions);
       recordNotifyOnExitRemoval(session, receipt.cancel);
-      void receipt.settled.then((outcome) => settleOwedExecWake(owed, outcome));
+      // The retry keeps the request owners and takes over the removal handle.
+      void receipt.settled.then((outcome) =>
+        settleOwedExecWake(owed, outcome, () =>
+          recordNotifyOnExitRemoval(session, wakeOwedExec(owed, wakeOptions).cancel),
+        ),
+      );
     } catch (error) {
       logWarn(
         `exec: completion was not admitted (${formatErrorMessage(error)}); inspect the result with process log.`,

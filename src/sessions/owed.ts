@@ -168,6 +168,14 @@ export async function shouldWake(chat: ChatRef): Promise<boolean> {
   if (!entry) {
     return false;
   }
-  const { rows } = await readSessionQueuedInputPage({ ...chat, sessionId: entry.sessionId });
-  return rows.some((row) => readOwedKind(row.message_json) !== undefined);
+  const scope = { ...chat, sessionId: entry.sessionId };
+  let before: number | undefined;
+  do {
+    const page = await readSessionQueuedInputPage(scope, { before });
+    if (page.rows.some((row) => readOwedKind(row.message_json) !== undefined)) {
+      return true;
+    }
+    before = page.nextBefore;
+  } while (before !== undefined);
+  return false;
 }
