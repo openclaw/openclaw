@@ -26,6 +26,7 @@ const agentId = "main";
 const sessionKey = "agent:main:telegram:dm:chat-1";
 const probeConversation = { provider: "telegram", accountId: "acct-1", conversationId: "chat-1" };
 
+// An unavailable or cold projection abstains instead of marking the cache inactive.
 describe("inactive transcript identity probes", () => {
   const tempDirs = createTempDirTracker();
 
