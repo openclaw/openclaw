@@ -458,6 +458,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
     <>
       <openclaw-modal-dialog
         prop:initialFocus={() => initialInput}
+        native-browser-backdrop
         class="cmd-palette-overlay palette"
         label={t("palette.placeholder")}
         style={COMMAND_PALETTE_DIALOG_STYLE}
