@@ -22,7 +22,7 @@ export async function prepareGit(params: {
   staging: string;
   node: string;
   timeoutMs: number;
-  onStep?: (name: string) => void | Promise<void>;
+  onStep?: (name: string, status: "in_progress" | "completed") => void | Promise<void>;
 }): Promise<PrepareResult> {
   const releaseRoot = path.join(params.staging, "openclaw");
   const deadline = Date.now() + params.timeoutMs;
@@ -59,7 +59,12 @@ export async function prepareGit(params: {
     results: steps,
     progress: {
       onStepStart: async ({ name: stepName }) => {
-        await params.onStep?.(stepName);
+        await params.onStep?.(stepName, "in_progress");
+      },
+      onStepComplete: async ({ name: stepName, exitCode }) => {
+        if (exitCode === 0) {
+          await params.onStep?.(stepName, "completed");
+        }
       },
     },
   });
@@ -84,11 +89,12 @@ export async function prepareGit(params: {
       commandEnv: NodeJS.ProcessEnv = env,
     ) => {
       reason = `${name}-failed`;
-      await params.onStep?.(name);
+      await params.onStep?.(name, "in_progress");
       const result = await runCommand(argv, { cwd, env: commandEnv, timeoutMs: remaining() });
       if (result.code !== 0 || result.killed || result.signal) {
         throw new Error(result.stderr || result.stdout || `${name} exited ${result.code}`);
       }
+      await params.onStep?.(name, "completed");
     };
     await run(
       "worktree",

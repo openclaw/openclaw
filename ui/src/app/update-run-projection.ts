@@ -141,21 +141,31 @@ export function projectUpdateRun(
   const booleanState = (value: boolean | undefined): "pass" | "warn" | "fail" | "pending" =>
     value === undefined ? (terminal ? "warn" : "pending") : value ? "pass" : "fail";
   const oracles = [
-    { name: "service", state: booleanState(facts.serviceRunning) },
+    {
+      name: "service",
+      state: booleanState(facts.serviceRunning),
+      observed: facts.serviceRunning !== undefined,
+    },
     {
       name: "version",
       state:
         identity.kind === "unavailable"
           ? "warn"
           : booleanState(identity.kind === "unobserved" ? undefined : identity.kind === "verified"),
+      observed: identity.kind !== "unobserved",
     },
     {
       name: "plugins",
       state: booleanState(
         facts.pluginErrors === undefined ? undefined : facts.pluginErrors.length === 0,
       ),
+      observed: facts.pluginErrors !== undefined,
     },
-    { name: "channels", state: booleanState(facts.channelsReady) },
+    {
+      name: "channels",
+      state: booleanState(facts.channelsReady),
+      observed: facts.channelsReady !== undefined,
+    },
   ] as const;
   const completed = phases.filter((phase) => phase.status === "completed").length;
   const total = phases.filter((phase) => phase.status !== "skipped").length;
@@ -188,6 +198,6 @@ export function projectUpdateRun(
     detailStep: detailStep?.step,
     details,
     historicalVerificationLabel: historical ? t("updates.run.recordedVerification") : undefined,
-    oracles: managedByOcm ? [] : oracles,
+    oracles: managedByOcm ? [] : oracles.filter((oracle) => !terminal || oracle.observed),
   };
 }

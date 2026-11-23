@@ -1,5 +1,6 @@
 import {
   finishUpdateRunAsync,
+  recordUpdateRunStepAsync,
   recordUpdateRunVerificationAsync,
 } from "../infra/update-run-write.async.js";
 import { redactSensitiveText } from "../logging/redact.js";
@@ -35,22 +36,35 @@ export async function settleRunFromTrial(
     return;
   }
   const outcome = trial.outcome;
+  const buildId = resolveRuntimeServiceBuildId();
+  if (outcome.status === "rolled-back" && outcome.stderrTail) {
+    const stderrTail = redactSensitiveText(outcome.stderrTail, { mode: "tools" });
+    await recordUpdateRunStepAsync(trial.runId, {
+      step: "diagnostic:startup",
+      status: "completed",
+      detail: stderrTail,
+      stderrTail,
+    });
+  }
   const finished =
     outcome.status === "succeeded"
       ? await finishSucceeded(trial)
       : await finishUpdateRunAsync(trial.runId, {
           status: "failed",
-          reason: outcome.reason,
-          ...(outcome.stderrTail
-            ? {
-                diagnostics: {
-                  failure: {
-                    step: "outcome",
-                    detail: redactSensitiveText(outcome.stderrTail, { mode: "tools" }),
-                  },
-                },
-              }
-            : {}),
+          reason: `${outcome.reason ?? "The new version did not start"}; v${VERSION} is still running`,
+          diagnostics: {
+            rollbackOutcome: {
+              status: "succeeded",
+              reason: outcome.reason ?? "new build failed to start",
+            },
+            verification: {
+              runningVersion: VERSION,
+              ...(buildId ? { runningBuildId: buildId } : {}),
+              booted: true,
+              serviceRunning: true,
+              coreReady: true,
+            },
+          },
         });
   if (finished === null) {
     return;
@@ -76,6 +90,9 @@ async function finishSucceeded(trial: Trial & { runId: string }) {
     runningVersion: VERSION,
     ...(buildId ? { runningBuildId: buildId } : {}),
     booted: true,
+    serviceRunning: true,
+    coreReady: true,
+    versionMatch: true,
   });
   return await finishUpdateRunAsync(trial.runId, {
     status: "succeeded",

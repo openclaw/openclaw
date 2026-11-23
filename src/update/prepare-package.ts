@@ -22,7 +22,7 @@ export async function preparePackage(params: {
   node: string;
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
-  onStep?: (name: string) => void | Promise<void>;
+  onStep?: (name: string, status: "in_progress" | "completed") => void | Promise<void>;
 }): Promise<PrepareResult> {
   const releaseRoot = path.join(params.staging, "openclaw");
   const deadline = Date.now() + params.timeoutMs;
@@ -39,7 +39,7 @@ export async function preparePackage(params: {
   let reason = "package-install-failed";
   try {
     await fs.mkdir(params.staging, { recursive: true });
-    await params.onStep?.("pack");
+    await params.onStep?.("pack", "in_progress");
     const packed = await runCommandWithTimeout(
       [...params.npm, "pack", params.spec, "--ignore-scripts", "--quiet"],
       {
@@ -72,6 +72,7 @@ export async function preparePackage(params: {
       durable: false,
     });
     await fs.rm(archivePath);
+    await params.onStep?.("pack", "completed");
     const manifestPath = path.join(releaseRoot, "package.json");
     const manifest: {
       name?: string;
@@ -124,7 +125,7 @@ export async function preparePackage(params: {
     }
     // Bun also imports checkout workspaces from pnpm's configuration.
     await fs.rm(path.join(releaseRoot, "pnpm-workspace.yaml"), { force: true });
-    await params.onStep?.("install");
+    await params.onStep?.("install", "in_progress");
     // Bun rejects --production with --trust; this manifest already has no development dependencies.
     const result = await runCommandWithTimeout(
       bun
@@ -149,6 +150,7 @@ export async function preparePackage(params: {
         result.stderr || result.stdout || `${bun ? "bun" : "npm"} exited ${result.code}`,
       );
     }
+    await params.onStep?.("install", "completed");
     const buildId = await readBuiltGatewayBuildId(releaseRoot);
     return { ok: true, releaseRoot, version, ...(buildId ? { buildId } : {}) };
   } catch (error) {

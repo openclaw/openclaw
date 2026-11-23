@@ -23,6 +23,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { runReleaseUpdateCli } from "./cli.js";
 import * as serviceConversion from "./convert-service.js";
+import { settleRunFromTrial } from "./gateway-trial.js";
 import { preflight } from "./preflight.js";
 import { prepareGit } from "./prepare-git.js";
 import { preparePackage } from "./prepare-package.js";
@@ -238,6 +239,11 @@ fs.copyFileSync(${JSON.stringify(pnpm)}, path.join(args[args.indexOf('--install-
       });
       const { lastRun } = await getUpdateRunStatusAsync();
       expect(lastRun).toMatchObject({ status: "failed", reason: "build-failed" });
+      expect(lastRun?.steps.find(({ step }) => step === "prepare:install")).toMatchObject({
+        status: "completed",
+        endedAtMs: expect.any(Number),
+      });
+      expect(lastRun?.steps.find(({ step }) => step === "prepare:build")?.status).toBe("failed");
       const detail = lastRun?.steps.find(({ step }) => step === "outcome")?.detail;
       expect(detail).toContain("fixture build failed");
       expect(detail).not.toContain("\x1b");
@@ -593,6 +599,14 @@ if (process.argv[2] !== 'install') {
           channel: "stable",
           node: runner,
         });
+        // Preparation owns these facts before the trial (or a later refusal) can settle.
+        const preparedRun = await getUpdateRunAsync(run.runId);
+        for (const name of ["pack", "install"]) {
+          expect(preparedRun?.steps.find(({ step }) => step === `prepare:${name}`)).toMatchObject({
+            status: "completed",
+            endedAtMs: expect.any(Number),
+          });
+        }
         if (!releaseAware) {
           expect(outcome).toMatchObject({
             status: "failed",
@@ -628,6 +642,20 @@ if (process.argv[2] !== 'install') {
           expect(result.stdout.trim()).toBe("running");
         }
         expect((await readTrial(prefix))?.phase).toBe("pending");
+        await settleRunFromTrial({
+          ...(await readTrial(prefix))!,
+          phase: "rolled-back",
+          outcome: { status: "rolled-back", reason: "new build failed to start", at: Date.now() },
+        });
+        const rolledBack = await getUpdateRunAsync(run.runId);
+        expect(rolledBack?.status).toBe("failed");
+        for (const name of ["pack", "install"]) {
+          expect(rolledBack?.steps.find(({ step }) => step === `prepare:${name}`)).toMatchObject({
+            status: "completed",
+            startedAtMs: expect.any(Number),
+            endedAtMs: expect.any(Number),
+          });
+        }
       } finally {
         await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
@@ -651,10 +679,11 @@ describe("already-current update", () => {
 
   it.each([
     {
-      name: "a change",
+      name: "a change despite a runtime security warning",
       result: pluginResult({ changed: true }),
       changed: true,
       detail: undefined,
+      exitCode: 0,
     },
     {
       // The existing updater's warning result is a note, not a failed step.
@@ -671,6 +700,22 @@ describe("already-current update", () => {
       }),
       changed: false,
       detail: linked,
+      exitCode: 0,
+    },
+    {
+      name: "a plugin failure without failing the core update",
+      result: pluginResult({ status: "error", reason: "fixture plugin update failed" }),
+      changed: false,
+      detail: "fixture plugin update failed\nRun `openclaw plugins update` to retry.",
+      exitCode: 0,
+    },
+    {
+      name: "the CLI refusal after a runtime security warning",
+      result: pluginResult({ status: "error" }),
+      changed: false,
+      detail:
+        "OpenClaw refused shared state schema mutation because another Gateway owns that state directory.\nRun `openclaw plugins update` to retry.",
+      exitCode: 1,
     },
   ])("still maintains plugins with the serving code and records $name", async (expected) => {
     const { checkout, sha } = await repository();
@@ -683,7 +728,11 @@ describe("already-current update", () => {
       [
         "import fs from 'node:fs';",
         "fs.writeFileSync('plugins-argv.json', JSON.stringify(process.argv.slice(2)));",
-        `console.log(${JSON.stringify(JSON.stringify(expected.result))});`,
+        "process.stderr.write('openclaw: SECURITY WARNING: upgrade Node to the recommended security patch level.\\n');",
+        expected.exitCode === 0
+          ? `console.log(${JSON.stringify(JSON.stringify(expected.result))});`
+          : "process.stderr.write('[openclaw] The CLI command failed.\\n[openclaw] Reason: OpenClaw refused shared state schema mutation because another Gateway owns that state directory.\\n[openclaw] Another OpenClaw process is using your data. Wait for it to finish before trying again.\\n');",
+        `process.exitCode = ${expected.exitCode};`,
       ].join("\n"),
     );
     try {
@@ -696,7 +745,7 @@ describe("already-current update", () => {
         channel: "dev",
         sha,
         node,
-        acceptCapabilities: expected.name === "a change",
+        acceptCapabilities: expected.changed,
       });
       expect(outcome).toMatchObject({ status: "current", pluginsChanged: expected.changed });
       expect(
@@ -709,12 +758,12 @@ describe("already-current update", () => {
         "dev",
         "--timeout",
         expect.stringMatching(/^\d+$/),
-        ...(expected.name === "a change" ? ["--accept-capabilities"] : []),
+        ...(expected.changed ? ["--accept-capabilities"] : []),
       ]);
       const record = await getUpdateRunAsync(run.runId);
       expect(record).toMatchObject({ status: "skipped", reason: "already-current" });
       const plugins = record?.steps.find(({ step }) => step === "plugins");
-      expect(plugins?.status).toBe("completed");
+      expect(plugins?.status).toBe(expected.result.status === "error" ? "failed" : "completed");
       expect(plugins?.detail).toBe(expected.detail);
     } finally {
       await closeOpenClawStateDatabaseAsync();

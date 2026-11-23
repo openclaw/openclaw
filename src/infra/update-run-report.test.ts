@@ -104,6 +104,28 @@ function render(patch: Partial<ReportRecord>) {
 
 afterEach(() => vi.restoreAllMocks());
 
+it("gives a restored update one next step without claiming an unknown cause", () => {
+  const report = render({
+    status: "failed",
+    reason: "The new version did not finish starting within 10 minutes; v2026.9.1 is still running",
+    origin: { cause: "unknown" },
+    verification: {
+      runningVersion: "2026.9.1",
+      serviceRunning: true,
+      coreReady: true,
+      rollbackOutcome: { status: "succeeded", reason: "startup timed out" },
+    },
+  });
+  expectText(
+    report.markdown,
+    [
+      "The new version did not finish starting within 10 minutes; v2026.9.1 is still running",
+      "Retry the update. If it fails again, choose Report update failure in Settings → Updates.",
+    ],
+    ["Cause: unknown", "triage", "Diagnose"],
+  );
+});
+
 it("labels standalone repair and leads with the update it repaired", () => {
   const detail =
     "Update 2b6f7c1e-9a41-4c2d-8f3e-5d6a7b8c9d0e to 2026.11.5 failed at activating: post-update-failed. finalize:doctor: database is locked";

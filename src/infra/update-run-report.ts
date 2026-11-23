@@ -213,6 +213,15 @@ function recoveryHints(run: ReportInput, nextAction?: string): string[] {
   if (run.status !== "failed") {
     return [];
   }
+  if (
+    run.verification.rollbackOutcome?.status === "succeeded" &&
+    run.verification.serviceRunning &&
+    run.verification.coreReady
+  ) {
+    return [
+      "Retry the update. If it fails again, choose Report update failure in Settings → Updates.",
+    ];
+  }
   const refusalNextAction = updateRepairRefusalNextAction(run.reason);
   if (refusalNextAction) {
     return nextAction ? [] : [refusalNextAction];
@@ -578,7 +587,7 @@ export function renderUpdateRunReport(
             ),
           ];
   // The terminal record owner stamps the cause; the Control UI loads this renderer.
-  if (run.status !== "succeeded" && run.origin.cause) {
+  if (run.status !== "succeeded" && run.origin.cause && run.origin.cause !== "unknown") {
     lines.unshift(`Cause: ${run.origin.cause}`);
   }
   const repairedDetail = run.steps.find((step) => step.step === UPDATE_RUN_REPAIRED_STEP)?.detail;
