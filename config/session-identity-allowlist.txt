@@ -1216,7 +1216,7 @@ src/gateway/worker-environments/worker-turn-retained.ts	1
 src/gateway/worker-environments/worker-turn-rpc.ts	11
 src/gateway/worker-environments/worker-turn-run-owner.ts	6
 src/gateway/worker-environments/worker-turn-transcript-target.ts	21
-src/gateway/worker-environments/worker-turn-user-message.ts	3
+src/gateway/worker-environments/worker-turn-user-message.ts	2
 src/gateway/worker-environments/workspace-quiescence-scripts.ts	4
 src/gateway/worker-environments/workspace-result-finalize.ts	10
 src/gateway/worker-environments/workspace-result-settlement.ts	4
