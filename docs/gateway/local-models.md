@@ -388,9 +388,11 @@ smaller output, then start a new turn.
 
 ## Background automations on a shared local server
 
-New installs get one **Proactive check** automation for the owner agent (see
-[First setup](/gateway/heartbeat#first-setup)). It runs every 30 minutes as an
-agent turn in that agent's main conversation, so each run sends the
+Setup creates one **Proactive check** automation for the owner agent (see
+[First setup](/gateway/heartbeat#first-setup)). Fresh installs leave it
+disabled; installs that already had it enabled keep running it. When enabled,
+it runs every 30 minutes as an agent turn in that agent's main conversation, so
+each run sends the
 conversation's full prompt: system prompt, tool definitions, and history. On a
 hosted model this is an ordinary request. On a local server it holds one of
 the server's parallel slots while it runs, and when the server has no cached
