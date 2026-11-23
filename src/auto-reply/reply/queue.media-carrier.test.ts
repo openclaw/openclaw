@@ -8,11 +8,7 @@ import { applyRunHydrationSuppression, readPersistedMediaFacts } from "../../med
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
-import {
-  bindCommandOwnerAuthority,
-  captureCommandOwnerAssertion,
-  getCommandOwnerAuthority,
-} from "../command-owner-authority.js";
+import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import { createSteerParams } from "./agent-runner-steer-adoption.test-support.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
@@ -257,20 +253,18 @@ it.each(["same", "mixed"] as const)("preserves deferred %s-participant facts", a
       ...requesterOrigin,
       ...(mixed ? { senderId: undefined, senderE164: undefined } : {}),
     });
-    const assertOwner = captureCommandOwnerAssertion(run.run);
-    expect(assertOwner).toBeDefined();
     if (mixed) {
       expect(getCommandOwnerAuthority(run.run)).toMatchObject({
         channelPrincipal: undefined,
         recoveryReference: undefined,
       });
-      expect(assertOwner).toThrow("Channel operator authority changed");
+      expect(getCommandOwnerAuthority(run.run)?.isCurrent()).toBe(false);
     } else {
       expect(getCommandOwnerAuthority(run.run)).toMatchObject({
         channelPrincipal: owner.channelPrincipal,
         recoveryReference: owner.recoveryReference,
       });
-      expect(assertOwner).not.toThrow();
+      expect(getCommandOwnerAuthority(run.run)?.isCurrent()).toBe(true);
     }
     if (mixed) {
       expect(run.run).toMatchObject({

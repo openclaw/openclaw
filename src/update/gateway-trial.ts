@@ -1,9 +1,13 @@
+import { wakeUpdateRunWatcher } from "../gateway/update-run-watcher.js";
+import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { updateRunStepsFromResultStep } from "../infra/update-run-step.js";
 import {
   finishUpdateRunAsync,
   recordUpdateRunStepAsync,
   recordUpdateRunVerificationAsync,
 } from "../infra/update-run-write.async.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import {
   readTrial,
@@ -13,6 +17,8 @@ import {
   writeTrial,
   type Trial,
 } from "./store.js";
+
+const log = createSubsystemLogger("gateway/update-run");
 
 // IPC also reaches Windows, where POSIX signals cannot request a graceful child stop.
 if (process.env.OPENCLAW_LAUNCHER_IPC === "1") {
