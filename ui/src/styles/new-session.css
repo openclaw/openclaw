@@ -1761,6 +1761,13 @@ span.new-session-page__select {
   max-width: 300px;
 }
 
+/* Checkout has no desktop loading placeholder to reserve label space for. */
+.new-session-page__context-tray
+  .new-session-page__select--checkout
+  .new-session-page__trigger-label {
+  min-inline-size: 0;
+}
+
 .new-session-page__picker-chevron {
   display: none;
 }
