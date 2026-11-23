@@ -1,5 +1,5 @@
 // OpenClaw test instance helper spawns isolated OpenClaw processes.
-import { type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";

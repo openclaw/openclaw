@@ -38,13 +38,13 @@ export async function createOpenClawTestProcess(params: {
     params.startDeadline === undefined
       ? undefined
       : scheduleAbsoluteDeadline(params.startDeadline, startupExpired);
-  const signal = params.signal
+  const startupSignal = params.signal
     ? AbortSignal.any([params.signal, startupDeadline.signal])
     : startupDeadline.signal;
   const startupFailure = (error: unknown) =>
-    signal.aborted && signal.reason !== error
-      ? new AggregateError([signal.reason, error], "Gateway startup aborted", {
-          cause: signal.reason,
+    startupSignal.aborted && startupSignal.reason !== error
+      ? new AggregateError([startupSignal.reason, error], "Gateway startup aborted", {
+          cause: startupSignal.reason,
         })
       : error;
   let constructionCleanup: Promise<ProcessExtinctionResult> | undefined;
@@ -55,7 +55,7 @@ export async function createOpenClawTestProcess(params: {
     exactEnv: true,
     ownProcessTree: true,
     stdinMode: "pipe-closed",
-    abortSignal: signal,
+    abortSignal: startupSignal,
     onSpawnCleanup: (cleanup) => {
       constructionCleanup = cleanup.then(requireProcessExtinction);
       params.onSpawnCleanup(constructionCleanup);
@@ -78,7 +78,7 @@ export async function createOpenClawTestProcess(params: {
       if (params.startDeadline !== undefined && Date.now() >= params.startDeadline) {
         startupExpired();
       }
-      signal.throwIfAborted();
+      startupSignal.throwIfAborted();
     })
     .catch((error: unknown) => {
       throw startupFailure(error);

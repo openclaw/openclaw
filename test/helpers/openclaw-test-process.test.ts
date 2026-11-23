@@ -91,7 +91,7 @@ it.for(["construction", "readiness"] as const)(
   "aborts stalled %s at the startup deadline",
   async (phase) => {
     vi.useFakeTimers();
-    const admitted = createDeferred<void>();
+    const admitted = createDeferred();
     const cleanup = createDeferred<ProcessExtinctionResult>();
     const startup = completedAdapter(cleanup.promise);
     createChildAdapter.mockImplementation(async (params) => {
@@ -151,7 +151,7 @@ it("keeps caller cancellation first when readiness cleanup crosses the deadline"
   vi.useFakeTimers();
   const caller = new AbortController();
   const cancelled = new Error("caller cancelled startup");
-  const ready = createDeferred<void>();
+  const ready = createDeferred();
   const startup = completedAdapter(Promise.resolve());
   createChildAdapter.mockResolvedValue({ ...startup, ready: ready.promise });
   const owner = await createOpenClawTestProcess({
