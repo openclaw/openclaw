@@ -270,11 +270,11 @@ one cache rewrite: `(write − read) / (2 × read)` prices relative to input, at
 most 24, or 3 when the route has no prices. A wake that arrives after the cache
 may have expired sends nothing.
 
-The first prewarm of an idle stretch is planned from the transcript, so it also
-fires after a Gateway restart. Later prewarms are kept in memory: a restart ends
-the series, and the next turn pays one cache rewrite as it would without
-keep-warm. Cache-TTL pruning counts a prewarm as a cache touch, so a prewarmed
-cache is not pruned as expired.
+The schedule comes from stored facts: the transcript's last reply and the
+session row's `promptCacheKeepWarm` record of the last prewarm (its time, route,
+the reply it warmed and the prewarm count since the last human turn). A Gateway
+restart therefore resumes a series where it stopped. Cache-TTL pruning reads the
+same record as a cache touch, so a prewarmed cache is not pruned as expired.
 
 Set `agents.defaults.promptCacheKeepWarm: false` to turn it off.
 

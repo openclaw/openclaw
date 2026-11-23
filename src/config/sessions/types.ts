@@ -615,6 +615,22 @@ type SessionEntryCore = SessionEntryProvenance &
     /** A committed lossy compaction affected this history; cleared with a new session. */
     compactionQualityDegraded?: true;
     memoryFlush?: MemoryFlushState;
+    /**
+     * Last read-only prompt-cache prewarm of this transcript (`agents.defaults.promptCacheKeepWarm`).
+     * It keeps a keep-warm series and the cache-TTL pruning clock across Gateway restarts. Stale
+     * values are ignored by their readers: another `sessionId`, route or tail reply.
+     */
+    promptCacheKeepWarm?: {
+      sessionId: string;
+      /** Transcript entry of the provider reply whose cached prefix the pings keep warm. */
+      anchorEntryId: string;
+      provider: string;
+      model: string;
+      /** Request start of the last successful prewarm. */
+      lastPingAt: number;
+      /** Successful prewarms since the last human turn. */
+      pings: number;
+    };
     cliSessionIds?: Record<string, string>;
     cliSessionBindings?: Record<string, CliSessionBinding>;
     /** Initialization fence for seeding canonical ACP metadata; cleared after creation. */

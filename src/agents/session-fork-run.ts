@@ -638,6 +638,8 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
       ...(params.cachePrewarm ? {} : { cliBackendDispatch: "subscription-auth" as const }),
       requestedRouteResolution: "resolved",
       sessionPersistence: "detached",
+      // The source's prewarms count on the cache-TTL clock, so the copy prunes as the source would.
+      ...(entry?.promptCacheKeepWarm ? { promptCacheKeepWarm: entry.promptCacheKeepWarm } : {}),
       // A prewarm is one request; it never compacts the copy it reads.
       ...(params.cachePrewarm ? { disableCompactionRecovery: true } : {}),
       // Every session tool stays listed for the provider's cached prefix; the run gates execution.

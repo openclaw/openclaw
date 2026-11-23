@@ -19,7 +19,6 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 import {
   isCacheTtlEligibleProvider as isEligible,
   readLastCacheTtlTimestamp,
-  recordPromptCacheTouch,
 } from "./cache-ttl.js";
 
 describe("isCacheTtlEligibleProvider", () => {
@@ -110,25 +109,26 @@ describe("readLastCacheTtlTimestamp", () => {
     const entries = [
       marker({ timestamp: 1_000, provider: "anthropic", modelId: "claude-sonnet-4-5" }),
     ];
-    const session = (sessionId: string) => ({
-      getEntries: () => entries,
-      getSessionId: () => sessionId,
-    });
-    recordPromptCacheTouch("warmed", {
+    const session = { getEntries: () => entries, getSessionId: () => "s1" };
+    const prewarm = {
+      sessionId: "s1",
+      anchorEntryId: "reply-1",
       provider: "anthropic",
-      modelId: "claude-sonnet-4-5",
-      timestamp: 5_000,
-    });
-    recordPromptCacheTouch("other-route", {
-      provider: "openai",
-      modelId: "gpt-6.1-sol",
-      timestamp: 5_000,
-    });
-    expect(readLastCacheTtlTimestamp(session("warmed"), target)).toBe(5_000);
-    expect(readLastCacheTtlTimestamp(session("other-route"), target)).toBe(1_000);
+      model: "claude-sonnet-4-5",
+      lastPingAt: 5_000,
+      pings: 1,
+    };
+    expect(readLastCacheTtlTimestamp(session, target, prewarm)).toBe(5_000);
+    // Another route or transcript did not touch this cache.
+    expect(readLastCacheTtlTimestamp(session, target, { ...prewarm, model: "other" })).toBe(1_000);
+    expect(readLastCacheTtlTimestamp(session, target, { ...prewarm, sessionId: "s0" })).toBe(1_000);
     // Without a transcript clock there is nothing to move.
     expect(
-      readLastCacheTtlTimestamp({ getEntries: () => [], getSessionId: () => "warmed" }, target),
+      readLastCacheTtlTimestamp(
+        { getEntries: () => [], getSessionId: () => "s1" },
+        target,
+        prewarm,
+      ),
     ).toBeNull();
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   readObservedPromptCacheTtlMs,
+  readStoredPromptCacheKeepWarm,
   resolvePromptCacheKeepWarmMaxPings,
 } from "./prompt-cache-keep-warm.js";
 import type { SessionEntry as TranscriptEntry } from "./sessions/session-manager.js";
@@ -79,5 +80,45 @@ describe("resolvePromptCacheKeepWarmMaxPings", () => {
     expect(
       resolvePromptCacheKeepWarmMaxPings({ input: 4, cacheRead: 0.001, cacheWrite: 5 }, 5 * 60_000),
     ).toBe(24);
+  });
+});
+
+describe("readStoredPromptCacheKeepWarm", () => {
+  const record = {
+    sessionId: "s1",
+    anchorEntryId: "reply-1",
+    ...route,
+    lastPingAt: 10_000,
+    pings: 4,
+  };
+  const entry = (lastInteractionAt: number, promptCacheKeepWarm = record) => ({
+    sessionId: "s1",
+    lastInteractionAt,
+    promptCacheKeepWarm,
+  });
+
+  it("resumes a series after a restart from the row", () => {
+    expect(readStoredPromptCacheKeepWarm(entry(5_000), "reply-1", route)).toEqual({
+      pings: 4,
+      pingedAt: 10_000,
+    });
+  });
+
+  it("keeps the budget across an automation turn and renews it on a human turn", () => {
+    // A wake or cron reply re-anchors: the old prewarm no longer touched this prefix.
+    expect(readStoredPromptCacheKeepWarm(entry(5_000), "reply-2", route)).toEqual({
+      pings: 4,
+      pingedAt: 0,
+    });
+    expect(readStoredPromptCacheKeepWarm(entry(12_000), "reply-2", route).pings).toBe(0);
+  });
+
+  it("ignores another transcript's or route's record", () => {
+    expect(
+      readStoredPromptCacheKeepWarm(entry(5_000, { ...record, sessionId: "s0" }), "reply-1", route),
+    ).toEqual({ pings: 0, pingedAt: 0 });
+    expect(
+      readStoredPromptCacheKeepWarm(entry(5_000), "reply-1", { ...route, model: "other" }).pingedAt,
+    ).toBe(0);
   });
 });

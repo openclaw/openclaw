@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { resolveOpenAIResponsesPromptCacheLifetimeMs } from "@openclaw/ai/transports";
 import { getRuntimeConfig } from "../config/config.js";
+import { applySessionEntryOperation } from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
   readSessionEntryReadOnlyInWorker,
   readSessionEntrySummariesInWorker,
@@ -16,7 +17,6 @@ import type { AssistantHistoryMessage } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope-config.js";
-import { readPromptCacheTouch, recordPromptCacheTouch } from "./embedded-agent-runner/cache-ttl.js";
 import { resolveExtraParams } from "./embedded-agent-runner/extra-params.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { parseCacheRetention } from "./embedded-agent-runner/prompt-cache-retention.js";
@@ -28,8 +28,6 @@ import {
   promptCacheKeepWarmState as state,
   resolvePromptCacheKeepWarmLeadMs,
   type PromptCacheKeepWarmCandidate as Candidate,
-  type PromptCacheKeepWarmSeries as Series,
-  type PromptCacheRoute as Route,
 } from "./prompt-cache-keep-warm-candidates.js";
 import {
   prepareSessionFork,
@@ -47,12 +45,11 @@ import {
  * lifetime ends, send one read-only prewarm of the session's own request (a tool-free session
  * fork with `cachePrewarm`), so the user's next turn reads the cache instead of rewriting it.
  *
- * Every decision comes from stored facts read when a ping is due: the session row and the
- * transcript's last provider response (its request time, route, prompt size and cache-write
- * tier). Cron maintenance owns the wake; this module holds only derived plans, so a Gateway
- * restart rebuilds the first ping of an idle stretch from the transcript. Later pings in that
- * stretch exist only in memory: after a restart the series ends (the next turn pays one
- * rewrite, as without keep-warm).
+ * Every decision comes from stored facts read when a ping is due: the session row (its
+ * `promptCacheKeepWarm` record of the last prewarm) and the transcript's last provider
+ * response (its request time, route, prompt size and cache-write tier). Cron maintenance owns
+ * the wake; this module keeps only due times, so a Gateway restart resumes a series where the
+ * stored record left it.
  */
 
 const log = createSubsystemLogger("agents/prompt-cache-keep-warm");
@@ -70,6 +67,22 @@ const EGRESS_MARGIN_MS = 10_000;
 const PING_TIMEOUT_MS = 60_000;
 /** The prewarm's trailing item; it is never cached or answered. */
 const PREWARM_PROMPT = ".";
+
+type Route = { provider: string; model: string };
+
+/** One idle stretch on one prefix, as read from the row and transcript at a wake. */
+type Series = {
+  sessionId: string;
+  anchorEntryId: string;
+  route: Route;
+  ttlMs: number;
+  maxPings: number;
+  pings: number;
+  /** The last human interaction; the series ends 12 hours after it. */
+  interactionAt: number;
+  promptTokens: number;
+};
+
 // Omit tool result bodies: the plan reads usage and timestamps only.
 const TRANSCRIPT_LIMITS = {
   maxBytes: 8_388_608,
@@ -136,10 +149,12 @@ async function recoverCandidates(cfg: OpenClawConfig, now: number): Promise<void
       storePath: target.storePath,
     });
     for (const { sessionKey, entry } of rows) {
-      if (
-        (entry.lastActivityAt ?? 0) < now - MAX_WARM_TTL_MS ||
-        !isWarmableSessionKey(sessionKey)
-      ) {
+      // Mid-series rows have an old activity time and a recent recorded prewarm.
+      const touchedAt = Math.max(
+        entry.lastActivityAt ?? 0,
+        entry.promptCacheKeepWarm?.lastPingAt ?? 0,
+      );
+      if (touchedAt < now - MAX_WARM_TTL_MS || !isWarmableSessionKey(sessionKey)) {
         continue;
       }
       const key = candidateKey(target.agentId, sessionKey);
@@ -156,6 +171,34 @@ async function recoverCandidates(cfg: OpenClawConfig, now: number): Promise<void
 }
 
 type Plan = { series: Series; touchAt: number; source: TranscriptEntryAnchor | undefined };
+
+/**
+ * What the row's prewarm record still says about this transcript. Its count stands until a
+ * human turn after the last prewarm (an automation turn re-anchors the same idle stretch);
+ * its time is a cache touch only for the tail reply and route it warmed.
+ */
+export function readStoredPromptCacheKeepWarm(
+  entry: Pick<SessionEntry, "sessionId" | "lastInteractionAt" | "promptCacheKeepWarm">,
+  anchorEntryId: string,
+  route: Route,
+): { pings: number; pingedAt: number } {
+  const stored =
+    entry.promptCacheKeepWarm?.sessionId === entry.sessionId
+      ? entry.promptCacheKeepWarm
+      : undefined;
+  if (!stored) {
+    return { pings: 0, pingedAt: 0 };
+  }
+  return {
+    pings: (entry.lastInteractionAt ?? 0) <= stored.lastPingAt ? stored.pings : 0,
+    pingedAt:
+      stored.anchorEntryId === anchorEntryId &&
+      stored.provider === route.provider &&
+      stored.model === route.model
+        ? stored.lastPingAt
+        : 0,
+  };
+}
 
 /** Reads the stored facts and returns the session's plan, or why it gets no ping. */
 async function readPlan(
@@ -240,32 +283,29 @@ async function readPlan(
     return "no known warmable lifetime";
   }
   const anchorAt = reply.timestamp;
-  if (!((entry.lastInteractionAt ?? 0) >= anchorAt - ttlMs)) {
+  // A person started the turn that made the last request: the row records an interaction at
+  // (chat) or after (agent command) that turn's input. Automation and event turns record none.
+  const turnInput = branch
+    .slice(0, lastMessageIndex)
+    .findLast((item) => item.type === "message" && item.message.role === "user");
+  const inputAt = turnInput?.type === "message" ? turnInput.message.timestamp : undefined;
+  const turnStartedAt = typeof inputAt === "number" ? inputAt : anchorAt;
+  if (!((entry.lastInteractionAt ?? 0) >= turnStartedAt - 60_000)) {
     return "not interactive";
   }
-  const previous = candidate.series;
-  const sameAnchor = previous?.anchorEntryId === last.id && previous.sessionId === entry.sessionId;
-  // Only a human turn renews the budget; an automation turn re-anchors the same idle stretch.
-  const renewed =
-    !previous ||
-    previous.sessionId !== entry.sessionId ||
-    (entry.lastInteractionAt ?? 0) > previous.interactionAt;
+  const { pings, pingedAt } = readStoredPromptCacheKeepWarm(entry, last.id, route);
   const series: Series = {
     sessionId: entry.sessionId,
     anchorEntryId: last.id,
     route,
     ttlMs,
     maxPings: resolvePromptCacheKeepWarmMaxPings(resolved.model.cost, ttlMs),
-    pings: renewed ? 0 : previous.pings,
-    startedAt: renewed ? anchorAt : previous.startedAt,
-    interactionAt: entry.lastInteractionAt ?? 0,
+    pings,
+    interactionAt: entry.lastInteractionAt ?? anchorAt,
     promptTokens,
   };
-  const pingedAt = sameAnchor
-    ? readPromptCacheTouch(entry.sessionId, { provider: route.provider, modelId: route.model })
-    : null;
   const source = await readActiveTranscriptEntryAnchorAsync({ ...scope, entryId: last.id }, signal);
-  return { series, touchAt: Math.max(anchorAt, pingedAt ?? 0), source };
+  return { series, touchAt: Math.max(anchorAt, pingedAt), source };
 }
 
 /** One candidate at its due time: plan, wait, lapse, or ping. Returns its next wake. */
@@ -289,7 +329,6 @@ async function processCandidate(
     return undefined;
   }
   const { series, touchAt, source } = plan;
-  candidate.series = series;
   const now = Date.now();
   const leadMs = resolvePromptCacheKeepWarmLeadMs(series.ttlMs);
   const dueAt = touchAt + series.ttlMs - leadMs;
@@ -301,7 +340,7 @@ async function processCandidate(
     log.debug(`Keep-warm lapsed for ${candidate.sessionKey}: the cache may already be cold`);
     return undefined;
   }
-  if (series.pings >= series.maxPings || now - series.startedAt > MAX_SERIES_MS) {
+  if (series.pings >= series.maxPings || now - series.interactionAt > MAX_SERIES_MS) {
     return undefined;
   }
   if ((state.providerBackoffUntil.get(series.route.provider) ?? 0) > now) {
@@ -383,13 +422,31 @@ async function processCandidate(
   if (read === 0 || written > read || read < series.promptTokens / 2) {
     return undefined;
   }
-  series.pings += 1;
-  recordPromptCacheTouch(series.sessionId, {
-    provider: series.route.provider,
-    modelId: series.route.model,
-    timestamp: startedAt,
-  });
-  return series.pings < series.maxPings ? startedAt + series.ttlMs - leadMs : undefined;
+  const pings = series.pings + 1;
+  await applySessionEntryOperation(
+    {
+      kind: "fields",
+      expected: {
+        sessionId: entry.sessionId,
+        ...(entry.lifecycleRevision !== undefined
+          ? { lifecycleRevision: entry.lifecycleRevision }
+          : {}),
+      },
+      patch: {
+        promptCacheKeepWarm: {
+          sessionId: series.sessionId,
+          anchorEntryId: series.anchorEntryId,
+          provider: series.route.provider,
+          model: series.route.model,
+          lastPingAt: startedAt,
+          pings,
+        },
+      },
+    },
+    // Bookkeeping: the session's activity order and maintenance stay as they were.
+    { preserveActivity: true, skipMaintenance: true, result: "none" },
+  );
+  return pings < series.maxPings ? startedAt + series.ttlMs - leadMs : undefined;
 }
 
 /**

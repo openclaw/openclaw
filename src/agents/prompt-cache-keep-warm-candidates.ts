@@ -18,27 +18,11 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 export const MAX_WARM_TTL_MS = 60 * 60_000;
 const MIN_WARM_TTL_MS = 5 * 60_000;
 
-export type PromptCacheRoute = { provider: string; model: string };
-
-/** One idle stretch on one prefix: the pings it sent and may still send. */
-export type PromptCacheKeepWarmSeries = {
-  sessionId: string;
-  anchorEntryId: string;
-  route: PromptCacheRoute;
-  ttlMs: number;
-  maxPings: number;
-  pings: number;
-  startedAt: number;
-  interactionAt: number;
-  promptTokens: number;
-};
-
 export type PromptCacheKeepWarmCandidate = {
   agentId: string;
   sessionKey: string;
   storePath: string;
   dueAtMs: number;
-  series?: PromptCacheKeepWarmSeries;
 };
 
 export const promptCacheKeepWarmState = resolveGlobalSingleton(
@@ -87,15 +71,8 @@ export function notePromptCacheKeepWarmChange(
   }
   const agentId = change.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
   const key = promptCacheKeepWarmCandidateKey(agentId, sessionKey);
-  const previous = promptCacheKeepWarmState.candidates.get(key);
   const dueAtMs = now + MIN_WARM_TTL_MS - resolvePromptCacheKeepWarmLeadMs(MAX_WARM_TTL_MS);
-  promptCacheKeepWarmState.candidates.set(key, {
-    agentId,
-    sessionKey,
-    storePath,
-    dueAtMs,
-    ...(previous?.series ? { series: previous.series } : {}),
-  });
+  promptCacheKeepWarmState.candidates.set(key, { agentId, sessionKey, storePath, dueAtMs });
   return dueAtMs;
 }
 

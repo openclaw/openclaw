@@ -302,10 +302,11 @@ export function installEmbeddedAttemptContextGuards(input: {
   const previousCacheTtlTransform = activeSession.agent.transformContext;
   const cacheTouch = createCacheTouchRecorder(
     cacheTtlSettings
-      ? readLastCacheTtlTimestamp(input.sessionManager, {
-          provider: attempt.provider,
-          modelId: attempt.modelId,
-        })
+      ? readLastCacheTtlTimestamp(
+          input.sessionManager,
+          { provider: attempt.provider, modelId: attempt.modelId },
+          attempt.promptCacheKeepWarm,
+        )
       : null,
   );
   if (cacheTtlSettings) {
@@ -390,10 +391,11 @@ export function installEmbeddedAttemptContextGuards(input: {
               messagesSnapshot: messages,
               prePromptMessageCount,
               retention: input.getPromptCacheRetention(),
-              fallbackLastCacheTouchAt: readLastCacheTtlTimestamp(input.sessionManager, {
-                provider: attempt.provider,
-                modelId: attempt.modelId,
-              }),
+              fallbackLastCacheTouchAt: readLastCacheTtlTimestamp(
+                input.sessionManager,
+                { provider: attempt.provider, modelId: attempt.modelId },
+                attempt.promptCacheKeepWarm,
+              ),
             }),
         }),
       runtimeSettings,

@@ -2,10 +2,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { isAnthropicFamilyCacheTtlEligible } from "../../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import { resolveProviderCacheTtlEligibility } from "../../plugins/provider-runtime.js";
 import type { ProviderCacheTtlEligibilityContext } from "../../plugins/provider-transport.types.js";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { isGooglePromptCacheEligible } from "./prompt-cache-retention.js";
 
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
@@ -58,32 +58,6 @@ export function isCacheTtlEligibleProvider(
   );
 }
 
-/**
- * Cache reads that leave no transcript entry (keep-warm prewarms), by transcript session id.
- * The cache clock owns them beside the transcript marker; they live only in this process,
- * so after a restart the clock falls back to the transcript.
- */
-const promptCacheTouches = resolveGlobalSingleton(
-  Symbol.for("openclaw.promptCacheTouches"),
-  () => new Map<string, Required<CacheTtlContext> & { timestamp: number }>(),
-);
-
-/** Records a request start that read the session's cached prefix without a transcript write. */
-export function recordPromptCacheTouch(
-  sessionId: string,
-  touch: Required<CacheTtlContext> & { timestamp: number },
-): void {
-  promptCacheTouches.delete(sessionId);
-  promptCacheTouches.set(sessionId, touch);
-  // Oldest first: one entry per recently warmed session is enough.
-  for (const key of promptCacheTouches.keys()) {
-    if (promptCacheTouches.size <= 1024) {
-      break;
-    }
-    promptCacheTouches.delete(key);
-  }
-}
-
 function matchesCacheTtlContext(
   data: Partial<CacheTtlContext> | undefined,
   context: CacheTtlContext | undefined,
@@ -97,27 +71,27 @@ function matchesCacheTtlContext(
   );
 }
 
-/** The latest recorded prewarm of this session on the route, if this process sent one. */
-export function readPromptCacheTouch(sessionId: string, context: CacheTtlContext): number | null {
-  const touch = promptCacheTouches.get(sessionId);
-  return touch && matchesCacheTtlContext(touch, context) ? touch.timestamp : null;
-}
-
 /**
- * Last cache touch of this session on the route: the transcript marker, moved forward by a
- * later recorded prewarm. No marker means no clock, as before.
+ * Last cache touch of this session on the route: the transcript marker, moved forward by the
+ * session's recorded prewarm (`SessionEntry.promptCacheKeepWarm`) on the same transcript and
+ * route. No marker means no clock, as before.
  */
 export function readLastCacheTtlTimestamp(
   sessionManager: unknown,
   context?: CacheTtlContext,
+  keepWarm?: SessionEntry["promptCacheKeepWarm"],
 ): number | null {
   try {
     const sm = sessionManager as {
       getEntries?: () => CustomEntryLike[];
       getSessionId?: () => string;
     };
-    const touch = sm?.getSessionId ? promptCacheTouches.get(sm.getSessionId()) : undefined;
-    const touchedAt = touch && matchesCacheTtlContext(touch, context) ? touch.timestamp : 0;
+    const touchedAt =
+      keepWarm &&
+      sm?.getSessionId?.() === keepWarm.sessionId &&
+      matchesCacheTtlContext({ provider: keepWarm.provider, modelId: keepWarm.model }, context)
+        ? keepWarm.lastPingAt
+        : 0;
     const entries = sm?.getEntries ? sm.getEntries() : [];
     for (let i = entries.length - 1; i >= 0; i--) {
       const entry = entries[i];

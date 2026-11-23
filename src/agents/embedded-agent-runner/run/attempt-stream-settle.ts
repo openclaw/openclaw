@@ -228,10 +228,11 @@ export async function settleEmbeddedAttemptStream(input: {
     const usageAssistant = hasNonzeroUsage(completedAssistantUsage)
       ? currentAttemptCompletedAssistant
       : transcriptUsageSnapshot?.assistant;
-    const fallbackLastCacheTouchAt = readLastCacheTtlTimestamp(sessionManager, {
-      provider: attempt.provider,
-      modelId: attempt.modelId,
-    });
+    const fallbackLastCacheTouchAt = readLastCacheTtlTimestamp(
+      sessionManager,
+      { provider: attempt.provider, modelId: attempt.modelId },
+      attempt.promptCacheKeepWarm,
+    );
     const promptCache = buildContextEnginePromptCacheInfo({
       retention: input.cache.retention,
       lastCallUsage,
