@@ -27,6 +27,37 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+function stubXaiDeviceCodeFetch(tokens: () => object, catalog?: object) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>(async (input) => {
+      const pathname = new URL(requestUrl(input)).pathname;
+      switch (pathname) {
+        case "/.well-known/openid-configuration":
+          return jsonResponse({
+            device_authorization_endpoint: "https://auth.x.ai/oauth2/device/code",
+            token_endpoint: "https://auth.x.ai/oauth2/token",
+          });
+        case "/oauth2/device/code":
+          return jsonResponse({
+            device_code: "fixture-device",
+            user_code: "FIXTURE",
+            verification_uri: "https://auth.x.ai/device",
+            expires_in: 600,
+            interval: 1,
+          });
+        case "/oauth2/token":
+          return jsonResponse(tokens());
+        case "/v1/models":
+          if (catalog) {
+            return jsonResponse(catalog);
+          }
+      }
+      throw new Error(`Unexpected xAI fixture request: ${pathname}`);
+    }),
+  );
+}
+
 it("removes copied xAI thinking fields from disk through runModelsAuthLoginFlowCore", async () => {
   const gatewayPort = await acquireTestPortBlock({ offsets: [0] });
   onTestFinished(() => gatewayPort.release());
@@ -72,46 +103,22 @@ it("removes copied xAI thinking fields from disk through runModelsAuthLoginFlowC
     const payload = Buffer.from(
       JSON.stringify({ sub: "fixture-account", exp: Math.floor(Date.now() / 1000) + 86400 }),
     ).toString("base64url");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async (input) => {
-        const url = requestUrl(input);
-        if (url.includes("/.well-known/")) {
-          return jsonResponse({
-            device_authorization_endpoint: "https://auth.x.ai/oauth2/device/code",
-            token_endpoint: "https://auth.x.ai/oauth2/token",
-          });
-        }
-        if (url.endsWith("/device/code")) {
-          return jsonResponse({
-            device_code: "fixture-device",
-            user_code: "FIXTURE",
-            verification_uri: "https://auth.x.ai/device",
-            expires_in: 600,
-            interval: 1,
-          });
-        }
-        if (url.endsWith("/token")) {
-          return jsonResponse({
-            access_token: `eyJhbGciOiJub25lIn0.${payload}.signature`,
-            refresh_token: "fixture-refresh",
-            expires_in: 86400,
-          });
-        }
-        if (url.endsWith("/models")) {
-          return jsonResponse({
-            data: [
-              {
-                id: model.id,
-                api_backend: "responses",
-                supports_reasoning_effort: true,
-                reasoning_efforts: ["low", "high", "xhigh"],
-              },
-            ],
-          });
-        }
-        throw new Error(`Unexpected xAI login request: ${url}`);
+    stubXaiDeviceCodeFetch(
+      () => ({
+        access_token: `eyJhbGciOiJub25lIn0.${payload}.signature`,
+        refresh_token: "fixture-refresh",
+        expires_in: 86400,
       }),
+      {
+        data: [
+          {
+            id: model.id,
+            api_backend: "responses",
+            supports_reasoning_effort: true,
+            reasoning_efforts: ["low", "high", "xhigh"],
+          },
+        ],
+      },
     );
     const result = await runModelsAuthLoginFlowCore({
       provider: "xai",
@@ -151,43 +158,17 @@ it.each([
       });
       let subject: string | undefined = "fixture-account";
       let exchanges = 0;
-      vi.stubGlobal(
-        "fetch",
-        vi.fn<typeof fetch>(async (input) => {
-          switch (new URL(requestUrl(input)).pathname) {
-            case "/.well-known/openid-configuration":
-              return jsonResponse({
-                device_authorization_endpoint: "https://auth.x.ai/oauth2/device/code",
-                token_endpoint: "https://auth.x.ai/oauth2/token",
-              });
-            case "/oauth2/device/code":
-              return jsonResponse({
-                device_code: "fixture-device",
-                user_code: "FIXTURE",
-                verification_uri: "https://auth.x.ai/device",
-                expires_in: 600,
-                interval: 1,
-              });
-            case "/oauth2/token": {
-              const payload = Buffer.from(
-                JSON.stringify({
-                  sub: subject,
-                  email: "fixture@example.test",
-                  name: "Provider name",
-                }),
-              ).toString("base64url");
-              return jsonResponse({
-                access_token: "fixture-access-" + ++exchanges,
-                refresh_token: "fixture-refresh",
-                id_token: ["eyJhbGciOiJub25lIn0", payload, "signature"].join("."),
-                expires_in: 86400,
-              });
-            }
-            default:
-              throw new Error("Unexpected xAI fixture request");
-          }
-        }),
-      );
+      stubXaiDeviceCodeFetch(() => {
+        const payload = Buffer.from(
+          JSON.stringify({ sub: subject, email: "fixture@example.test", name: "Provider name" }),
+        ).toString("base64url");
+        return {
+          access_token: "fixture-access-" + ++exchanges,
+          refresh_token: "fixture-refresh",
+          id_token: ["eyJhbGciOiJub25lIn0", payload, "signature"].join("."),
+          expires_in: 86400,
+        };
+      });
       const login = (forceLogin = false) =>
         runModelsAuthLoginFlowCore({
           provider: "xai",
