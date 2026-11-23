@@ -26,6 +26,7 @@ import {
 import { shortHash } from "../utils/hash.js";
 import { prepareSystemPrompt } from "../utils/system-prompt-cache-boundary.js";
 import { parseOpenAIResponsesTextSignature } from "../utils/text-signature.js";
+import { anchorRuntimeContextCarriers } from "./openai-responses-carrier-anchoring.js";
 import {
   buildOpenAIResponsesCompactionReplayPlan,
   readOpenAIResponsesItemRecoveryAnchor,
@@ -373,29 +374,11 @@ function convertResponsesMessagesWithStyle(
   if (systemPrompt && nativeOpenAI) {
     messages.push(systemPrompt);
   }
-  let replayMessages = transformedMessages;
-  // Responses continuation requires the complete prior input before tool output.
-  // A turn's carrier stays with its user/checkpoint; a steering carrier stays where first sent.
-  const isCarrier = (message: (typeof replayMessages)[number]) => hasRuntimeContextMarker(message);
-  if (replayMessages.some(isCarrier)) {
-    const anchored: typeof replayMessages = [];
-    // A checkpoint is already emitted above; it anchors an otherwise userless tail.
-    let insertionIndex = replayPlan.compactedWindow || replayPlan.compaction ? 0 : undefined;
-    for (const [index, message] of replayMessages.entries()) {
-      const next = replayMessages[index + 1];
-      const previous = anchored[(insertionIndex ?? 0) - 1];
-      const steering = previous && isCarrier(previous) && next?.role === "user" && !isCarrier(next);
-      if (isCarrier(message) && insertionIndex !== undefined && !steering) {
-        anchored.splice(insertionIndex++, 0, message);
-        continue;
-      }
-      anchored.push(message);
-      if (!isCarrier(message) && message.role === "user") {
-        insertionIndex = anchored.length;
-      }
-    }
-    replayMessages = anchored;
-  }
+  // A checkpoint is already emitted above; it anchors an otherwise userless tail.
+  const replayMessages = anchorRuntimeContextCarriers(
+    transformedMessages,
+    Boolean(replayPlan.compactedWindow || replayPlan.compaction),
+  );
   let msgIndex = 0;
   let recoveryAnchor = replayPlan.itemRecovery?.anchor;
   let pastRecoveryBoundary = false;

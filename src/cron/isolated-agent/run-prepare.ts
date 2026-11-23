@@ -176,22 +176,18 @@ export async function resolveCronRunPreparation(params: CronRunPreparationParams
       onInterrupt: params.onLifecycleInterrupt,
       onLaneWait: input.onLaneWait,
     },
-    prepare: async (signal: AbortSignal, operatorAuthority?: AdmittedRunOperatorAuthority) => {
-      input = { ...input, abortSignal: signal };
-      return await prepareAdmittedSession(operatorAuthority);
-    },
+    prepare: prepareAdmittedSession,
   };
 
-  async function prepareAdmittedSession(operatorAuthority?: AdmittedRunOperatorAuthority) {
+  async function prepareAdmittedSession(
+    signal: AbortSignal,
+    admitOperator: (
+      wait?: () => Promise<void>,
+    ) => Promise<AdmittedRunOperatorAuthority | undefined>,
+  ) {
+    input = { ...input, abortSignal: signal };
+    let operatorAuthority = await admitOperator();
     const now = Date.now();
-    // Stored sources already froze their creator's role at this start; attribution is not authority.
-    const creatorSandbox = operatorAuthority
-      ? operatorAuthority.rolePolicy?.sandboxRequired
-        ? "required"
-        : undefined
-      : resolveCreatorSandbox(runtimeCfg, { actor: cronExecutionActor(input.job) });
-    // A child run never runs looser than its parent.
-    const sandbox = creatorSandbox ?? input.occurrence.childParent?.sandbox;
     const usesExactRunSession = usesDetachedRunSession || baseSessionKey.startsWith("cron:");
     const cronSession: MutableCronSession = await prepareCronSession({
       cfg: runtimeCfg,
@@ -244,33 +240,6 @@ export async function resolveCronRunPreparation(params: CronRunPreparationParams
     let workspaceLease: CronWorkspaceLease | undefined;
     let workspaceLeaseTransferred = false;
     try {
-      const selectedWorkspace = await prepareCronSessionWorkspace({
-        cfg: runtimeCfg,
-        agentId,
-        input,
-        agentCfg,
-        sessionKey: agentSessionKey,
-        cronSession,
-        defaultWorkspaceDir: modelOwner.workspaceDir,
-        sessionPreparationEffect,
-        isFastTestEnv: params.isFastTestEnv,
-        childParent: input.occurrence.childParent,
-      });
-      workspaceLease = selectedWorkspace.lease;
-      const workspaceDir = selectedWorkspace.workspaceDir;
-      const persistCronSessionRow = createCronSessionRowWriter({
-        agentId,
-        agentSessionKey,
-        assertCurrent: input.assertCurrent,
-      });
-      const persistSessionEntry = createPersistCronSessionEntry({
-        cronSession,
-        agentSessionKey,
-        createdActor: cronExecutionActor(input.job),
-        sandbox,
-        workspaceDir,
-        persistSessionEntry: persistCronSessionRow,
-      });
       const withRunSession: WithRunSession = (result) => ({
         ...result,
         sessionId: currentRunSessionId(),
@@ -293,7 +262,7 @@ export async function resolveCronRunPreparation(params: CronRunPreparationParams
         isGmailHook,
         agentId,
         agentDir,
-        workspaceDir,
+        workspaceDir: modelOwner.workspaceDir,
       });
       if (!resolvedModelSelection.ok) {
         return {
@@ -342,6 +311,49 @@ export async function resolveCronRunPreparation(params: CronRunPreparationParams
         };
       }
       const { provider, model, modelFallbacksOverride, runtimePluginCandidates } = preflight;
+      const providerRunSlot = input.providerRunSlot;
+      if (providerRunSlot?.tryStart(provider) === false) {
+        // A parked receipt has not started. Re-admit its requester when it regains a slot.
+        operatorAuthority = await admitOperator(async () => {
+          await providerRunSlot.wait(provider, signal);
+          input.assertCurrent?.();
+        });
+      }
+      // Stored sources already froze their creator's role at this start; attribution is not authority.
+      const creatorSandbox = operatorAuthority
+        ? operatorAuthority.rolePolicy?.sandboxRequired
+          ? "required"
+          : undefined
+        : resolveCreatorSandbox(runtimeCfg, { actor: cronExecutionActor(input.job) });
+      // A child run never runs looser than its parent.
+      const sandbox = creatorSandbox ?? input.occurrence.childParent?.sandbox;
+      const selectedWorkspace = await prepareCronSessionWorkspace({
+        cfg: runtimeCfg,
+        agentId,
+        input,
+        agentCfg,
+        sessionKey: agentSessionKey,
+        cronSession,
+        defaultWorkspaceDir: modelOwner.workspaceDir,
+        sessionPreparationEffect,
+        isFastTestEnv: params.isFastTestEnv,
+        childParent: input.occurrence.childParent,
+      });
+      workspaceLease = selectedWorkspace.lease;
+      const workspaceDir = selectedWorkspace.workspaceDir;
+      const persistCronSessionRow = createCronSessionRowWriter({
+        agentId,
+        agentSessionKey,
+        assertCurrent: input.assertCurrent,
+      });
+      const persistSessionEntry = createPersistCronSessionEntry({
+        cronSession,
+        agentSessionKey,
+        createdActor: cronExecutionActor(input.job),
+        sandbox,
+        workspaceDir,
+        persistSessionEntry: persistCronSessionRow,
+      });
       // A captured runtime replaces the override the cron session copied from its source row.
       const runtimeSessionEntryFor = (candidateProvider: string) =>
         resolveCronRuntimeSessionEntry(

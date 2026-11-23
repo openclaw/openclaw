@@ -293,7 +293,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       try {
         if (sessionManager && resourceLoader) {
           ({ session } = await createAgentSession({
-            cleanupProviderSessionResourcesOnDispose: false,
             systemPrompt: systemPromptText,
             cwd: effectiveCwd,
             modelRegistry,

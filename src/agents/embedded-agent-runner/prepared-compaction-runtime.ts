@@ -41,6 +41,7 @@ import {
   resolveSessionPermissionExecMode,
   SESSION_PERMISSION_BY_EXEC_MODE,
 } from "../session-permission-exec-mode.js";
+import { isSessionProjectMoveEligible } from "../session-project-guidance.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { resolveRuntimeAgentName } from "../system-prompt-params.js";
@@ -306,6 +307,11 @@ export async function buildPreparedCompactionRuntime(
             pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
             oneShotCliRun: params.oneShotCliRun,
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+            sessionProjectMoveEligible: isSessionProjectMoveEligible(
+              params.config,
+              sessionAgentId,
+              params.sessionEntry,
+            ),
             webSearchEnabled: params.toolOverrides?.webSearch !== false,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             modelHasVision: effectiveModel.input?.includes("image") ?? false,

@@ -83,8 +83,6 @@ function authorizedRequest(overrides: Partial<RequestAuth> = {}): RequestAuth {
   return {
     trustDeclaredOperatorScopes: false,
     hasCurrentClientAuthority: () => true,
-    assertCurrent: () => {},
-    revalidate: async () => {},
     ...overrides,
   };
 }
@@ -159,38 +157,6 @@ function invokeAbortProbe(signal?: AbortSignal): Promise<Response> {
 }
 
 describe("POST /tools/invoke request cancellation", () => {
-  it("rejects a tool when policy authority changes during its awaited hook", async () => {
-    const hookStarted = createDeferred();
-    const releaseHook = createDeferred();
-    let current = true;
-    lifecycle.authorize.mockResolvedValueOnce({
-      cfg: {},
-      requestAuth: authorizedRequest({ hasCurrentClientAuthority: () => current }),
-      operatorScopes: [],
-    });
-    lifecycle.beforeHook.mockImplementationOnce(async ({ params }) => {
-      hookStarted.resolve();
-      await releaseHook.promise;
-      return { blocked: false, params };
-    });
-    const pending = invokeAbortProbe();
-    try {
-      await hookStarted.promise;
-      current = false;
-      releaseHook.resolve();
-      const response = await pending;
-      expect(response.status).toBe(403);
-      expect(await response.json()).toMatchObject({
-        ok: false,
-        error: { message: "Gateway requester authority changed" },
-      });
-      expect(lifecycle.execute).not.toHaveBeenCalled();
-    } finally {
-      releaseHook.resolve();
-      await pending;
-    }
-  });
-
   it("never attaches a disconnect watcher to an unauthorized request", async () => {
     lifecycle.authorize.mockImplementationOnce(async ({ res }) => {
       res.statusCode = 401;
@@ -258,6 +224,33 @@ describe("POST /tools/invoke request cancellation", () => {
     expect(lifecycle.beforeHook).toHaveBeenCalledWith(
       expect.objectContaining({ signal: toolSignal }),
     );
+  });
+
+  it("finishes an admitted tool when operator access is revoked mid-run", async () => {
+    const grant = new AbortController();
+    lifecycle.authorize.mockResolvedValueOnce({
+      cfg: {},
+      requestAuth: authorizedRequest({
+        operatorAccessAuthority: {
+          signal: grant.signal,
+          assertCurrent: () => grant.signal.throwIfAborted(),
+        },
+      }),
+      operatorScopes: [],
+    });
+    let abortedAfterRevoke: boolean | undefined;
+    lifecycle.execute.mockImplementationOnce(async (_toolCallId, _args, signal) => {
+      grant.abort();
+      await Promise.resolve();
+      abortedAfterRevoke = signal?.aborted;
+      return { ok: true };
+    });
+
+    const response = await invokeAbortProbe();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, result: { ok: true } });
+    expect(abortedAfterRevoke).toBe(false);
   });
 
   it("retains each child's admitted authority after HTTP completion and grant revocation", async () => {

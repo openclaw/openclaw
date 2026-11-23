@@ -1,9 +1,6 @@
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
 import { readQuestionDispatchCapability } from "../agents/harness/host-private-capabilities.js";
-import {
-  captureGatewayToolCallerAssertion,
-  withoutGatewayToolCallerIdentity,
-} from "../agents/tools/gateway-caller-context.js";
+import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
@@ -293,7 +290,6 @@ export async function runWithInProcessGatewaySessionMutation<T>(
   ) => Promise<T> | T,
 ): Promise<T> {
   const method = "sessions.send";
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
   const requestParams = { key: params.sessionKey, agentId: params.agentId };
   return await withInProcessGatewayDispatch(
     method,
@@ -312,7 +308,6 @@ export async function runWithInProcessGatewaySessionMutation<T>(
           import("./server-methods.js"),
         ]);
       const assertInvocationCurrent = () => {
-        assertCallerCurrent?.(method);
         resolved.assertContextCurrent();
         resolved.assertInvocationCurrent();
       };

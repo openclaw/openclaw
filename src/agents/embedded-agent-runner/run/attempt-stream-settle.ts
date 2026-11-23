@@ -1,4 +1,8 @@
-import { PROVIDER_DEFERRED_TOOL_NAMES, PROVIDER_MODEL_INPUT } from "@openclaw/ai/provider-types";
+import {
+  PROVIDER_DEFERRED_TOOL_NAMES,
+  PROVIDER_MODEL_INPUT,
+  PROVIDER_STATE_SCOPE,
+} from "@openclaw/ai/provider-types";
 import {
   isAnthropicServerToolClearingEnabled,
   isCompactionReplayCheckpoint,
@@ -44,7 +48,7 @@ import {
   type ProviderPromptState,
   wrapStreamFnWithProviderPromptState,
 } from "../provider-prompt-state.js";
-import { applySessionForkRequest } from "../session-fork-request.js";
+import { applySessionForkRequest, sessionForkGatesHostedTools } from "../session-fork-request.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveEmbeddedAgentApiKey,
@@ -543,6 +547,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
       openclawThinkingExplicit: attempt.thinkingExplicit,
       ...(providerInput ? { [PROVIDER_MODEL_INPUT]: providerInput } : {}),
       ...(deferredToolNames ? { [PROVIDER_DEFERRED_TOOL_NAMES]: deferredToolNames } : {}),
+      ...(attempt.providerStateScope ? { [PROVIDER_STATE_SCOPE]: attempt.providerStateScope } : {}),
     };
     // Async payload preparation outlives stream admission; managed fetch rechecks Access at egress.
     return withGuardedFetchBeforeRequest(assertAccessCurrent, () =>
@@ -589,13 +594,15 @@ export async function prepareEmbeddedAttemptTransport(input: {
     });
   }
   const nativeWebSearchPolicyContext = {
-    // Provider-hosted search bypasses local execute hooks, so its request must
-    // honor the same execution cap without changing foreground function schemas.
+    // Hosted search executes before client-side gates, so it must honor the execution cap.
+    // Tool-free forks may keep it listed only when the provider blocks it with tool_choice none.
     webSearchEnabled:
       attempt.disableTools !== true &&
       attempt.toolOverrides?.webSearch !== false &&
       (!attempt.toolExecutionAllow ||
-        isToolExecutionAllowed(attempt.toolExecutionAllow, "web_search")),
+        isToolExecutionAllowed(attempt.toolExecutionAllow, "web_search") ||
+        (attempt.sessionForkRequest !== undefined &&
+          sessionForkGatesHostedTools(attempt.model.api, attempt.toolExecutionAllow))),
     runtimeToolAllowlist: attempt.toolsAllow,
     sessionKey: input.sandboxSessionKey,
     sandboxToolPolicy: input.sandbox?.tools,

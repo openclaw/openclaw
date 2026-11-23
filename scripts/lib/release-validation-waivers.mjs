@@ -30,6 +30,10 @@ export function parseReleaseValidationWaivers(source) {
         (key) => typeof waiver[key] === "string" && waiver[key].length > 0,
       ) ||
       (waiver.targetSha !== undefined && !/^[a-f0-9]{40}$/u.test(waiver.targetSha)) ||
+      (waiver.cancelledStep !== undefined &&
+        (typeof waiver.cancelledStep !== "string" ||
+          waiver.cancelledStep.length === 0 ||
+          waiver.testFailures !== undefined)) ||
       !Array.isArray(waiver.aggregates) ||
       waiver.aggregates.some(
         (aggregate) =>
@@ -179,7 +183,9 @@ export function evaluateReleaseChildPolicy({
           waiver.evidence.runAttempt === child.runAttempt)) &&
       child.jobs.some(
         (job) =>
-          job.name === waiver.jobName && job.status === "completed" && job.conclusion === "failure",
+          job.name === waiver.jobName &&
+          job.status === "completed" &&
+          job.conclusion === (waiver.cancelledStep ? "cancelled" : "failure"),
       ),
   );
   const aggregates = new Map();
@@ -261,6 +267,26 @@ function exactAggregateCauses(log) {
 
 export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog }) {
   for (const waiver of policy.waivers) {
+    if (waiver.cancelledStep) {
+      const matches = jobs.filter((job) => job.name === waiver.jobName);
+      const job = matches[0];
+      const incompleteSteps = job?.steps?.filter(
+        (step) => !["success", "skipped"].includes(step.conclusion),
+      );
+      if (
+        matches.length !== 1 ||
+        job.status !== "completed" ||
+        job.conclusion !== "cancelled" ||
+        incompleteSteps?.length !== 1 ||
+        incompleteSteps[0].name !== waiver.cancelledStep ||
+        incompleteSteps[0].conclusion !== "cancelled"
+      ) {
+        throw new ReleaseAggregateValidationError(
+          `Release test job has a non-policy cancellation: ${waiver.jobName}`,
+        );
+      }
+      continue;
+    }
     if (!waiver.testFailures) {
       continue;
     }

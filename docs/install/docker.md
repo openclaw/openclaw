@@ -268,6 +268,9 @@ image entrypoint runs `openclaw doctor --fix --non-interactive` under exclusive
 maintenance ownership before starting the Gateway. This covers the default image
 command and Compose's foreground Gateway command, including its selected profile.
 Routine image upgrades do not require a separate Doctor pass.
+`openclaw update` inside the official image does not replace its code: the
+image declares itself the owner of its installation, so the command and the
+Control UI tell you to pull the new image and recreate the container.
 
 Keep one Gateway replica per state volume, and stop the old container before
 starting its replacement. The startup repair needs exclusive maintenance

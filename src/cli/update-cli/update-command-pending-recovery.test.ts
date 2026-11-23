@@ -16,7 +16,6 @@ import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import * as failureArtifacts from "../../infra/update-failure-report-artifact.js";
-import * as updateGlobal from "../../infra/update-global.js";
 import {
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
@@ -35,8 +34,6 @@ import { resolveProfileStateDir } from "../profile-utils.js";
 import { registerSignalExitGate, waitForCliSignalExit } from "../signal-exit-barrier.js";
 import * as updateShared from "./shared.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import * as updateConfig from "./update-command-config.js";
-import * as updateExecutor from "./update-command-executor.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import { resultFixture } from "./update-command-fixtures.test-support.js";
 import {
@@ -297,84 +294,6 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
       f.restore();
     }
   });
-
-  it.each([false, true])(
-    "reports pending after lease acquisition (existing history and service drift=%s) without changing retained material",
-    async (existingRun) => {
-      const serviceDrift = existingRun;
-      const f = pendingPackageInvocation({ existingRun, serviceDrift });
-      const withExecutor = updateExecutor.withUpdateCommandExecutor;
-      let anchor: string | undefined;
-      let record: ReturnType<typeof ledger.getUpdateRun> | undefined;
-      const retainedMaterial = () => ({
-        source: materialSnapshot(f.source),
-        service: materialSnapshot(f.serviceRoot),
-        anchor: anchor ? materialSnapshot(anchor) : undefined,
-        config: fs.readFileSync(path.join(f.state, "openclaw.json")),
-        triage: fs.readFileSync(path.join(f.home, "triage.json")),
-        sentinel: fs.readFileSync(path.join(f.home, "sentinel.json")),
-      });
-      let before: ReturnType<typeof retainedMaterial> | undefined;
-      vi.spyOn(updateConfig, "readUpdateChannelConfig").mockResolvedValue({
-        configSnapshot: await config.readConfigFileSnapshot({
-          skipPluginValidation: true,
-          observe: false,
-        }),
-        configReadFailure: undefined,
-        legacyConfigPlan: undefined,
-        storedChannel: null,
-      });
-      const metadata = vi
-        .spyOn(updateGlobal, "createGlobalInstallEnv")
-        .mockRejectedValue(
-          new Error("package metadata must not run after pending lease admission"),
-        );
-      vi.spyOn(updateExecutor, "withUpdateCommandExecutor").mockImplementation(
-        (runId, operation, options) =>
-          withExecutor(
-            runId,
-            async (executor) =>
-              operation({
-                async enter(root, enterOptions) {
-                  expect(root).toBe(f.source);
-                  const fence = await executor.enter(root, enterOptions);
-                  if (!anchor) {
-                    anchor = f.addPending();
-                    record = ledger.getUpdateRun(runId);
-                    before = retainedMaterial();
-                  }
-                  return fence;
-                },
-              }),
-            options,
-          ),
-      );
-      try {
-        await expect(updateCommand({ json: true, yes: true })).rejects.toMatchObject({ code: 1 });
-        expect(anchor).toBeDefined();
-        if (existingRun) {
-          expect(record).toMatchObject({ status: "running" });
-        } else {
-          expect(record).toBeUndefined();
-          expect(f.writers.createRun).not.toHaveBeenCalled();
-          expect(fs.existsSync(path.join(f.state, "state", "openclaw.sqlite"))).toBe(false);
-        }
-        expectPendingReport({
-          status: "error",
-          reason: "update-recovery-pending",
-          root: serviceDrift ? f.serviceRoot : f.source,
-        });
-        const { disableAutoStart, loadPlugins, writeTriage, runTriage } = f.writers;
-        expectNoCalls(metadata, disableAutoStart, loadPlugins, writeTriage, runTriage);
-        expect(retainedMaterial()).toEqual(before);
-        if (record) {
-          expect(ledger.getUpdateRun(record.runId)).toMatchObject({ runId: record.runId });
-        }
-      } finally {
-        f.restore();
-      }
-    },
-  );
 });
 
 async function fixture() {
