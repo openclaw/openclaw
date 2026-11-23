@@ -7,7 +7,7 @@
 }
 
 .cmd-palette__attachments {
-  --chat-composer-editor-inset-inline: var(--cmd-palette-text-inset);
+  --chat-composer-editor-inset-inline: var(--cmd-palette-inset);
   --chat-box-inset: 8px;
   flex: 0 0 auto;
   min-width: 0;
