@@ -73,6 +73,7 @@ import { withUpdateDoctorChild } from "./update-command-doctor-child.js";
 import { createPackageUpdateDoctorCompletion } from "./update-command-doctor-completion.js";
 import { readPackageUpdateIdentity } from "./update-command-package-identity.js";
 import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
+import { resolveUpdateSnapshotScratch } from "./update-command-snapshot-scratch.js";
 
 type PackageDoctorContext = {
   runId: string;
@@ -117,6 +118,7 @@ type PackageDoctorOptions = {
   progress: UpdateStepProgress;
   assertCurrent?: () => void;
   results?: UpdateStepResult[];
+  candidateSteps?: UpdateStepResult[];
   managedServiceEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;
   nodeRunner?: string;
@@ -144,6 +146,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     serviceEnv: params.managedServiceEnv,
     invocationCwd: params.invocationCwd,
   });
+  const doctorScratch = resolveUpdateSnapshotScratch(params.candidateSteps ?? [], doctorEnv);
   // Backup and Doctor must select the same installation before Doctor can rewrite it.
   await createUpdateConfigSnapshot(doctorEnv);
   const candidateHostVersion = await readPackageVersion(params.root);
@@ -244,6 +247,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
           compatibilityHostVersion: candidateHostVersion,
         }),
         ...sectionTiming.env,
+        ...(doctorScratch ? { TMPDIR: doctorScratch } : {}),
         [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath,
         // finishUpdate runs the deferred inspections once the restarted Gateway is ready.
         [UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV]:
@@ -559,6 +563,7 @@ export async function runPackageInstallUpdate(
 
   const before = pkgRoot ? await readPackageUpdateIdentity(pkgRoot) : { version: null };
   const doctorReceipts: UpdateStepResult[] = [];
+  let candidateSteps: UpdateStepResult[] | undefined;
 
   const packageUpdate = await runGlobalPackageUpdateSteps({
     localOverrides: {
@@ -568,7 +573,10 @@ export async function runPackageInstallUpdate(
         invocationCwd: params.invocationCwd,
       }),
     },
-    validateCandidate: params.validateCandidate,
+    validateCandidate: async (root) => {
+      candidateSteps = await params.validateCandidate(root);
+      return candidateSteps;
+    },
     beforeVerifyCandidate: params.beforeVerifyCandidate,
     resolveLifecycleNodeRunner: params.resolveLifecycleNodeRunner ?? (() => params.nodeRunner),
     beforeActivate: params.beforeActivate,
@@ -596,7 +604,12 @@ export async function runPackageInstallUpdate(
       }),
     postVerifyStep: async (root, results) => {
       try {
-        return await runPackageUpdateDoctor({ ...resolveDoctorOptions(), root, results });
+        return await runPackageUpdateDoctor({
+          ...resolveDoctorOptions(),
+          root,
+          results,
+          candidateSteps,
+        });
       } finally {
         doctorReceipts.push(
           ...(results?.filter(

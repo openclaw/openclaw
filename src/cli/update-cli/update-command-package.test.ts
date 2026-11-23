@@ -655,6 +655,48 @@ it.each([
   },
 );
 
+it("uses the rehearsal fallback volume only for the package Doctor child", async () => {
+  const { root, params } = await packageFixture(base, "2026.6.10");
+  const originalScratch = path.join(base, "original-scratch");
+  const fallback = path.join(base, "state-volume");
+  const { managedServiceEnv } = await doctorEnvironment();
+  await withEnvAsync({ TMPDIR: originalScratch }, async () => {
+    const commands = mockDoctor(async (_argv, options) => {
+      expect(options).toMatchObject({
+        env: { ...managedServiceEnv, TMPDIR: fallback },
+      });
+      expect(process.env.TMPDIR).toBe(originalScratch);
+      return createCommandResult();
+    });
+    const result = await runPackageInstallUpdate({
+      ...params,
+      managedServiceEnv,
+      validateCandidate: async () => [
+        {
+          name: "candidate-state-snapshot",
+          command: "candidate-state-snapshot",
+          cwd: root,
+          durationMs: 0,
+          exitCode: 0,
+          snapshotCapacity: {
+            reason: "state-volume",
+            sqliteBytes: 100,
+            pluginBytes: 0,
+            requiredBytes: 264,
+            candidates: [
+              { kind: "explicit-tmpdir", directory: originalScratch, availableBytes: 201 },
+              { kind: "state-volume", directory: fallback, availableBytes: 1024 },
+            ],
+            selection: { kind: "state-volume", directory: path.join(fallback, "removed-canary") },
+          },
+        },
+      ],
+    });
+    expect(result).toMatchObject({ status: "ok", root });
+    expect(commands.mock.calls.filter(([argv]) => argv[2] === "doctor")).toHaveLength(1);
+  });
+});
+
 it.each(["settlement", "database writes", "reporting failure"] as const)(
   "retains Doctor %s warnings through the package activation result",
   async (receiptKind) => {
