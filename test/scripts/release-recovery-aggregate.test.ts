@@ -16,6 +16,7 @@ import {
   validateFullReleaseNpmPreflight,
   verifyNpmPreflightPublicationLineage,
 } from "../../scripts/npm-preflight-tooling-identity.mjs";
+import { authenticatePreparedNpmArtifact } from "../../scripts/plugin-npm-prepared-release.mjs";
 import {
   validateReleaseRunEvidence,
   runReleaseRecoveryCli,
@@ -188,7 +189,7 @@ function fixture(substitute = false) {
       source: origin.source,
       candidate: validateFullReleaseCandidateBinding(origin.plan.candidate),
       outputs: {},
-      publicationArtifacts: { ...origin.manifest.publicationArtifacts, pluginNpm: null },
+      publicationArtifacts: { pluginNpm: null, ...origin.manifest.publicationArtifacts },
     })),
     verifyReleaseRecoveryProducer: vi.fn((options) =>
       verifyReleaseRecoveryProducer({
@@ -468,7 +469,21 @@ it("wires the protected workflow only to evidence sealing, with read-only permis
 });
 
 it("substitutes original CI through the prepare/seal CLI without changing the immutable plan", async () => {
-  const { f, normalCiSelection, producer, client, rerun, setSealed } = fixture(true);
+  const { f, origin, normalCiSelection, producer, client, rerun, setSealed } = fixture(true);
+  const pluginArtifact = {
+    repository: f.repository,
+    runId: 501,
+    runAttempt: 1,
+    workflowPath: ".github/workflows/plugin-npm-release.yml",
+    workflowEvent: "workflow_dispatch",
+    workflowHeadBranch: origin.branch,
+    workflowSha: origin.q,
+    artifactId: 502,
+    artifactName: `plugin-npm-prepared-${f.c}-501-1`,
+    artifactDigest: "sha256:" + "a".repeat(64),
+    artifactSizeBytes: 1024,
+  };
+  Object.assign(origin.manifest.publicationArtifacts, { pluginNpm: pluginArtifact });
   const originalPlan = JSON.stringify(f.plan);
   const { env, request, manifestPath } = await cliFixture(f, producer, client, normalCiSelection);
   expect(request.normalCiSelection).toEqual(normalCiSelection);
@@ -508,6 +523,40 @@ it("substitutes original CI through the prepare/seal CLI without changing the im
   expect(manifest.sourceAdmission).toEqual(f.plan.sourceAdmission);
   expect(client.getRun).not.toHaveBeenCalledWith("998");
   expect(rerun).not.toHaveBeenCalled();
+  const params = {
+    repository: f.repository,
+    sourceSha: f.c,
+    workflowSha: f.p,
+    workflowFullRef: producer.workflowFullRef,
+    fullReleaseValidationRunId: "991",
+    fullReleaseValidationRunAttempt: 1,
+    artifact: pluginArtifact,
+    selectionMode: "all-publishable",
+    npmDistTag: "default",
+    evidenceClient: {
+      ...client,
+      getRunAttempt: (id: string, attempt: number) =>
+        id === "991" ? client.getRun(id) : client.getRunAttempt(id, attempt),
+    },
+  };
+  // Current qualification Q and retained artifact Q are independently admitted.
+  expect(origin.q).not.toBe(f.q);
+  const adopted = await authenticatePreparedNpmArtifact(params);
+  expect(adopted.artifact).toEqual(pluginArtifact);
+  expect(adopted.workflowSha).toBe(origin.q);
+  expect(adopted.publisherPolicySha256).toBe(
+    createHash("sha256")
+      .update(client.getWorkflowSource(origin.q, pluginArtifact.workflowPath))
+      .digest("hex"),
+  );
+  await expect(
+    authenticatePreparedNpmArtifact({
+      ...params,
+      artifact: { ...pluginArtifact, artifactDigest: "sha256:" + "b".repeat(64) },
+    }),
+  ).rejects.toThrow("authenticated FRV descriptor");
+  f.admission.authority.permission = "read";
+  await expect(authenticatePreparedNpmArtifact(params)).rejects.toThrow();
 });
 
 it.each(["origin", "receipt", "inputs"])(
