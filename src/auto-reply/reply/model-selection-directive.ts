@@ -79,6 +79,8 @@ export function resolveModelDirectiveSelection(params: {
   const resolveFuzzy = (paramsLocal: {
     provider?: string;
     fragment: string;
+    /** An explicit ref already names a model; edit distance may only change it into a different one. */
+    allowTypoTolerance?: boolean;
   }): ModelDirectiveSelection | undefined => {
     const fragment = normalizeLowercaseStringOrEmpty(paramsLocal.fragment);
     if (!fragment) {
@@ -143,8 +145,12 @@ export function resolveModelDirectiveSelection(params: {
           scoreFragment(modelLower, 160, 110, 80);
 
         // Best-effort typo tolerance for common near-misses like "claud" vs "claude".
-        // Bounded to keep this cheap across large model sets.
-        const distModel = levenshteinDistance(fragment, modelLower, 3);
+        // Bounded to keep this cheap across large model sets. Explicit refs keep only
+        // prefix/substring matches so a denied model cannot become a different near-match.
+        const distModel =
+          paramsLocal.allowTypoTolerance === false
+            ? null
+            : levenshteinDistance(fragment, modelLower, 3);
         if (distModel != null) {
           score += (3 - distModel) * 70;
         }
@@ -251,7 +257,7 @@ export function resolveModelDirectiveSelection(params: {
     const slash = rawTrimmed.indexOf("/");
     const provider = normalizeProviderId(rawTrimmed.slice(0, slash).trim());
     const fragment = rawTrimmed.slice(slash + 1).trim();
-    const fuzzy = resolveFuzzy({ provider, fragment });
+    const fuzzy = resolveFuzzy({ provider, fragment, allowTypoTolerance: false });
     if (fuzzy) {
       return { selection: fuzzy };
     }
