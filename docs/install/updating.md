@@ -136,6 +136,40 @@ Rules for update changes:
   them, the update routes not yet moved to `src/update/`, and the rules for fixing
   legacy update code are in `src/cli/update-cli/AGENTS.md`.
 
+### Proof for update changes
+
+A change to `src/update/`, the `src/daemon` service stage functions,
+`release-launcher-forward.mjs`, `openclaw.mjs` or the `Dockerfile` needs real
+update runs, recorded with these rules. A missing run is written as "unproven"
+and blocks a stable release. The rules come from the 2026-11-23 audit, which
+found that earlier receipts did not prove what they claimed.
+
+- **Platforms:** a Linux systemd user service, a Linux container without a user
+  bus, a macOS LaunchAgent and a Windows Scheduled Task. (#203497 merged with
+  macOS-only package proof; #203735 and #203769 fixed Linux container failures
+  afterwards.)
+- **Route:** each run records the update run's `trigger` (`control-ui` or `api`),
+  the Gateway log line for `update.run`, and the environment of the Gateway and the
+  CLI. A run with `OPENCLAW_UPDATE_PACKAGE_SPEC`, `--tag` or `--no-restart` does
+  not prove the Gateway route: those select a local route or a different target
+  resolution. A run that ends at a shortened `--timeout` is not a product result.
+- **Service:** in the managed-service lanes, the service comes from `openclaw
+  gateway install`, and the effective service state is saved after each run
+  (`systemctl --user show -p ExecStart,NeedDaemonReload`, `launchctl print`, or
+  the task definition and script). A hand-written service definition is not
+  proof. The container lane runs with no service on purpose.
+- **Next build:** `T+1` has its own build ID and a higher state schema, and the
+  crash candidate crashes after its migration. A pass shows the state files equal
+  to the `.pre-` originals after a rollback. A re-stamped copy of `T` proves only
+  the switch.
+- **Freshness:** each receipt names the tested commit and `npm view openclaw
+  dist-tags`. It is stale when an update-path file changes or `latest` moves.
+- **Installed code:** a change to `src/update/launcher.ts`, `run.ts`,
+  `preflight.ts` or `convert-service.ts` after a release needs `T → T+1 → T+2`,
+  because the installed release runs that code for its next update.
+- **Fault lanes:** a removed update fault lane names the lane that replaces it, or
+  the accepted gap.
+
 ### Recorded contract notes
 
 Add a note here when a change alters a contract. A note about the in-place update

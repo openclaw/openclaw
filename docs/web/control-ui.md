@@ -355,9 +355,11 @@ The selected chat loads before automatic sidebar session lists refresh. Live eve
 A foreground create uses its reply to keep the confirmed title and an actionless current-session display row available independently of the sidebar refresh. This display row does not add the session to filtered membership or counts; those still come from the Gateway. The first message and run status appear from local submission facts and live events without waiting for the list refresh.
 
 After the current page and transcript are ready, the browser can prepare code for
-Pages, New Session, and common dialogs during idle time. Hovering or focusing a
-navigation link, the Settings menu item, the command-palette button, or the model picker prepares
-that destination sooner.
+Pages, New Session, and common dialogs during idle time. In Chat, it first prepares
+the effort picker, composer attachment menu, and side-panel launcher and layout menu.
+Pointing at or focusing a navigation link, the Settings menu item, the command
+palette button, the model picker, or a session or account menu button can prepare
+that destination sooner. Warming Chat controls does not open panels or fetch their data.
 Navigation preparation pauses while a page loads, the tab is hidden, or the
 connection is offline, and respects the browser's Save-Data setting. Page data
 still loads through its normal navigation flow. Hashed assets remain cached for

@@ -1,20 +1,29 @@
-import { hasNativeBrowserBridge } from "../app/native-browser-host.ts";
+import type { NativeBrowserCutout } from "../app/native-browser-bridge.ts";
+import {
+  hasNativeBrowserBridge,
+  supportsNativeBrowserCutouts,
+} from "../app/native-browser-host.ts";
 import { listen } from "./reactive/listener.ts";
 
 type SurfaceElements = () => Iterable<Element>;
 export type NativeOverlayOcclusion = "live" | "hidden" | "backdrop" | "hidden-backdrop";
 const surfaces = new Set<SurfaceElements>();
 const listeners = new Set<() => void>();
+const cutoutSurfaces = new Set<SurfaceElements>();
+let lastCutouts = "[]";
+// Mirror the bound checked by the native bridge.
+const CUTOUT_LIMIT = 64;
 let activeOverlays = 0;
 let activeBackdrops = 0;
 let frame: number | null = null;
 
 function notify() {
   listeners.forEach((listener) => listener());
+  syncCutouts();
 }
 
 function trackSurfaceLayout() {
-  if (surfaces.size === 0 || listeners.size === 0) {
+  if ((surfaces.size === 0 && cutoutSurfaces.size === 0) || listeners.size === 0) {
     if (frame !== null) {
       cancelAnimationFrame(frame);
       frame = null;
@@ -30,6 +39,66 @@ function trackSurfaceLayout() {
       trackSurfaceLayout();
     });
   }
+}
+
+function syncCutouts() {
+  const hasSurfaces = listeners.size > 0 && cutoutSurfaces.size > 0;
+  if (!hasSurfaces && lastCutouts === "[]") {
+    return;
+  }
+  const cutouts: NativeBrowserCutout[] = [];
+  if (hasSurfaces) {
+    collect: for (const elements of cutoutSurfaces) {
+      for (const element of elements()) {
+        if (!(element instanceof HTMLElement) || !element.isConnected) {
+          continue;
+        }
+        const { x, y, width, height } = element.getBoundingClientRect();
+        if (width <= 0 || height <= 0) {
+          continue;
+        }
+        const style = getComputedStyle(element);
+        if (style.visibility === "hidden" || style.opacity === "0") {
+          continue;
+        }
+        const scale = Math.min(
+          width / Math.max(1, element.offsetWidth),
+          height / Math.max(1, element.offsetHeight),
+        );
+        const radius = (Number.parseFloat(style.borderTopLeftRadius) || 0) * scale;
+        cutouts.push({ x, y, width, height, radius: Math.min(radius, width / 2, height / 2) });
+        if (cutouts.length === CUTOUT_LIMIT) {
+          break collect;
+        }
+      }
+    }
+  }
+  const key = JSON.stringify(cutouts);
+  if (key !== lastCutouts) {
+    lastCutouts = key;
+    // Native presenters already load the bridge; keep it off the web overlay boot path.
+    void import("../app/native-browser-bridge.ts").then(({ postNativeBrowserMessage }) => {
+      if (lastCutouts === key) {
+        void postNativeBrowserMessage({ type: "overlay-cutouts", cutouts });
+      }
+    });
+  }
+}
+
+/** Keep passive overlays above the page without suspending the entire native tab. */
+export function acquireNativeOverlayCutouts(elements: SurfaceElements): () => void {
+  if (!supportsNativeBrowserCutouts()) {
+    return () => {};
+  }
+  cutoutSurfaces.add(elements);
+  syncCutouts();
+  trackSurfaceLayout();
+  return () => {
+    if (cutoutSurfaces.delete(elements)) {
+      syncCutouts();
+      trackSurfaceLayout();
+    }
+  };
 }
 
 function overlapsSurface(bounds: DOMRectReadOnly): boolean {
@@ -101,9 +170,11 @@ export function subscribeNativeOverlayOcclusion(
   };
   listeners.add(update);
   update();
+  syncCutouts();
   trackSurfaceLayout();
   return () => {
     listeners.delete(update);
+    syncCutouts();
     trackSurfaceLayout();
   };
 }
