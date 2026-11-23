@@ -42,6 +42,10 @@ import {
 } from "./store.js";
 
 const notices = vi.hoisted(() => [] as Array<{ runId: string; kind: string; status: string }>);
+const backgroundWork = vi.hoisted(() => {
+  const jobs: Promise<void>[] = [];
+  return jobs;
+});
 vi.mock("../gateway/update-run-notice.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof UpdateNotices>()),
   createUpdateRunNotifier:
@@ -93,7 +97,7 @@ vi.mock("../gateway/update-run-watcher.js", async (importOriginal) => ({
   ...(await importOriginal<typeof UpdateRunWatcher>()),
   wakeUpdateRunWatcher: (_runId?: string, advisoryWork?: () => Promise<void>) => {
     if (advisoryWork) {
-      void trackAsyncWork(advisoryWork);
+      backgroundWork.push(trackAsyncWork(advisoryWork));
     }
     return true;
   },
@@ -101,6 +105,7 @@ vi.mock("../gateway/update-run-watcher.js", async (importOriginal) => ({
 
 const directories: string[] = [];
 afterEach(async () => {
+  await Promise.all(backgroundWork.splice(0));
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
@@ -340,6 +345,7 @@ it.each(["warning", "error"] as const)(
       expect(await readTrial()).toMatchObject({ reported: true });
     } finally {
       gate.resolve();
+      await Promise.all(backgroundWork);
       await work.drain();
     }
     const inspected = await getUpdateRunAsync(run.runId, options);
@@ -380,7 +386,7 @@ it.each(["warning", "error"] as const)(
   },
 );
 
-it.each([undefined, true])(
+it.each([undefined, true, false])(
   "finishes core before plugin maintenance, preserving late failures (consent=%s)",
   async (acceptCapabilities) => {
     const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-plugins-"));
@@ -391,12 +397,21 @@ it.each([undefined, true])(
     const run = await createUpdateRunAsync({ trigger: "control-ui" }, options);
     const entered = Promise.withResolvers<void>();
     const command = Promise.withResolvers<SpawnResult>();
+    const targets = [
+      { pluginId: "updated", installHash: "1".repeat(64) },
+      { pluginId: "restored", installHash: "2".repeat(64) },
+    ];
     const reload = vi.fn(async () => ({
       operationId: "plugin-maintenance-reload",
       generation: 2,
-      pluginIds: ["updated", "bundled"],
+      pluginIds: ["updated", "restored"],
     }));
     vi.mocked(resolvePluginBatchReload).mockResolvedValueOnce(reload);
+    if (acceptCapabilities === false) {
+      reload.mockRejectedValueOnce(
+        new Error("Plugin updated changed after the installation batch."),
+      );
+    }
     vi.mocked(runCommandWithTimeout).mockImplementationOnce(async () => {
       entered.resolve();
       return await command.promise;
@@ -420,7 +435,7 @@ it.each([undefined, true])(
       sync: {
         changed: true,
         switchedToBundled: ["bundled"],
-        switchedToNpm: [],
+        switchedToNpm: ["restored"],
         warnings: [],
         errors: [],
       },
@@ -442,6 +457,7 @@ it.each([undefined, true])(
         ],
       },
       integrityDrifts: [],
+      reloadTargets: targets,
     };
     const work = new AsyncWorkScope();
     let finishedAtMs: number | null | undefined;
@@ -469,6 +485,7 @@ it.each([undefined, true])(
         killed: false,
         termination: "exit",
       });
+      await Promise.all(backgroundWork);
       await work.drain();
     }
     const maintained = await getUpdateRunAsync(run.runId, options);
@@ -480,13 +497,10 @@ it.each([undefined, true])(
     expect(maintained?.steps).toContainEqual(
       expect.objectContaining({
         step: "plugins",
-        status: failed ? "failed" : "completed",
+        status: failed || acceptCapabilities === false ? "failed" : "completed",
       }),
     );
-    expect(reload).toHaveBeenCalledExactlyOnceWith([
-      { pluginId: "updated" },
-      { pluginId: "bundled" },
-    ]);
+    expect(reload).toHaveBeenCalledExactlyOnceWith(targets);
     expect(runPostActivationInspections).toHaveBeenCalledOnce();
     const report = renderUpdateRunReport(maintained!);
     if (failed) {
@@ -496,6 +510,11 @@ it.each([undefined, true])(
       expect(report.headline).toMatch(/; 1 warning needs attention\.$/u);
       expect(report.lines.join("\n")).toContain("broken: package download failed");
       expect(report.lines.join("\n")).toContain("openclaw plugins update broken");
+    } else if (acceptCapabilities === false) {
+      const pluginStep = maintained?.steps.find(({ step }) => step === "plugins");
+      expect(pluginStep?.detail).toContain("changed after the installation batch");
+      expect(pluginStep?.detail).toContain("openclaw plugins reload updated restored");
+      expect(report.headline).toMatch(/; 1 warning needs attention\.$/u);
     } else {
       expect(report.headline).not.toContain("needs attention");
     }

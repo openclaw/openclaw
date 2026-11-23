@@ -30,7 +30,7 @@ async function maintainTrialPlugins(trial: Trial): Promise<void> {
   try {
     // Updater and plugin-install modules stay off the Gateway's startup path.
     const [
-      { maintainPlugins },
+      { runPluginMaintenance },
       { readUpdateChannelConfig },
       { resolveEffectiveUpdateChannel },
       { resolveStartupInstallStatus },
@@ -47,11 +47,11 @@ async function maintainTrialPlugins(trial: Trial): Promise<void> {
       throw new Error("Running release root not found");
     }
     const [{ storedChannel }, { status }, reload] = await Promise.all([
-      readUpdateChannelConfig(),
+      readUpdateChannelConfig(false),
       resolveStartupInstallStatus(false, new AbortController().signal),
       resolvePluginBatchReload(),
     ]);
-    const result = await maintainPlugins({
+    const result = await runPluginMaintenance({
       root,
       node: process.execPath,
       env: process.env,
@@ -65,28 +65,18 @@ async function maintainTrialPlugins(trial: Trial): Promise<void> {
       acceptCapabilities: trial.acceptCapabilities === true,
     });
     step = result.step;
-    const plugins = result.plugins;
-    if (plugins) {
-      pluginIds = [
-        ...new Set([
-          ...plugins.npm.outcomes
-            .filter((outcome) => outcome.status === "updated")
-            .map((outcome) => outcome.pluginId),
-          ...plugins.sync.switchedToNpm,
-          ...plugins.sync.switchedToBundled,
-        ]),
-      ];
-      if (pluginIds.length > 0) {
-        if (!reload) {
-          throw new Error("The serving Gateway was not found for plugin reload");
-        }
-        // The child has exited and released the lease that the runtime application also needs.
-        const application = await reload(pluginIds.map((pluginId) => ({ pluginId })));
-        if (application.restartRequired || application.warnings?.length) {
-          throw new Error(
-            application.warnings?.join("\n") || "Gateway restart required to load edited code.",
-          );
-        }
+    const targets = result.plugins?.reloadTargets ?? [];
+    pluginIds = targets.map((target) => target.pluginId);
+    if (targets.length > 0) {
+      if (!reload) {
+        throw new Error("The serving Gateway was not found for plugin reload");
+      }
+      // The child released its lease; the batch owner verifies its exact published install hashes.
+      const application = await reload(targets);
+      if (application.restartRequired || application.warnings?.length) {
+        throw new Error(
+          application.warnings?.join("\n") || "Gateway restart required to load edited code.",
+        );
       }
     }
     getAsyncWorkSignal()?.throwIfAborted();

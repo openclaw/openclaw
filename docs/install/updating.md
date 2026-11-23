@@ -196,6 +196,10 @@ Core rollback does not wait for plugin maintenance, and a candidate that fails
 before readiness does not update plugins. The candidate must contain the post-ready
 maintenance call; the installed updater must contain the removal of the
 pre-restart call.
+The internal maintenance-command result carries exact install-record hashes into
+the existing batch reload check. A record changed again before reload is refused.
+Removed records do not hot-unload a running plugin; the existing metadata-only
+removal policy takes effect at the next Gateway start.
 
 Candidate Doctor's retirement-only pass retains deferred advisory inspection
 selectors in its result. Shipped v2026.11.7 and v2026.11.10-beta.1 updaters read

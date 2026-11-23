@@ -101,7 +101,7 @@ export async function prepareUpdate(params: {
   // Already current: plugins are still maintained, by the running core; the caller restarts
   // a running Gateway only when they changed.
   const current = async (version: string): Promise<UpdateRunOutcome> => {
-    const { plugins, step } = await maintainPlugins({
+    const { plugins, step } = await runPluginMaintenance({
       root: params.runningRoot,
       node,
       env,
@@ -472,7 +472,7 @@ async function runCheckRelease(releaseRoot: string, node: string, env: NodeJS.Pr
  * Plugins follow the core that will serve, so that core's own code maintains them. A plugin
  * problem, or a release without `update plugins`, is a recorded warning, never a failed update.
  */
-export async function maintainPlugins(params: {
+export async function runPluginMaintenance(params: {
   root: string;
   node: string;
   env: NodeJS.ProcessEnv;
