@@ -13,7 +13,7 @@ import { controlUiPluginAssetUrls } from "./control-ui-assets.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 // Native views and contributions must be defined before activation can publish registrations.
-import "./control-ui-view.solid.tsx";
+import { preloadNativeViews } from "./control-ui-surfaces.solid.tsx";
 import "./control-ui-contributions.solid.tsx";
 
 // Install action feedback before activation can publish buttons or menu entries.
@@ -34,13 +34,16 @@ export async function initializeControlUiPlugin(
   const complete: ControlUiPluginOwner = Object.assign(owner, {
     host: createControlUiPluginHost(getContext, runtime, owner),
   });
-  const module = await loadControlUiPluginAssets(
-    descriptor.pluginId,
-    urls,
-    abort.signal,
-    (stop) => complete.disposers.add(stop),
-    styles,
-  );
+  const [module] = await Promise.all([
+    loadControlUiPluginAssets(
+      descriptor.pluginId,
+      urls,
+      abort.signal,
+      (stop) => complete.disposers.add(stop),
+      styles,
+    ),
+    preloadNativeViews(),
+  ]);
   if (!runtime.isCurrent(owner)) {
     dispose();
     return undefined;

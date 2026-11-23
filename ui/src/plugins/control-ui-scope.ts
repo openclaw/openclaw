@@ -139,5 +139,6 @@ export function scopeControlUiHost(
     dock: host.dock ? services(host.dock) : undefined,
     ui: services(host.ui),
     components: services(host.components),
+    presentation: services(host.presentation),
   };
 }

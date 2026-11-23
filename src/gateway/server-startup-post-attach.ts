@@ -19,6 +19,7 @@ import {
 import type { PluginServiceCronHost } from "../plugins/service-cron.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { enabledLocalPresentations } from "./control-ui-local-presentations.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import type { GatewayClient, GatewayContextResolver } from "./server-methods/shared-types.js";
@@ -223,6 +224,9 @@ export async function startGatewayPostAttachRuntime(params: {
       return await disposeUnattached();
     }
     pluginRegistry = loaded.pluginRegistry;
+    if (enabledLocalPresentations(pluginRegistry)?.length) {
+      params.broadcast?.("controlUi.localPresentations.changed", {}, { dropIfSlow: true });
+    }
     params.broadcast?.(
       "plugins.changed",
       { generation: getPluginRegistryVersion(pluginRegistry) },

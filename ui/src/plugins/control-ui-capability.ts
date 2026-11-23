@@ -1,7 +1,10 @@
-import type { PluginControlUiDiagnostic } from "../../../packages/gateway-protocol/src/schema/plugins.js";
+import type {
+  PluginControlUiDiagnostic,
+  PluginControlUiModule,
+} from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import type {
   ControlUiAction,
-  ControlUiAccessory,
+  ControlUiAccessoryRegistration,
   ControlUiDisposer,
   ControlUiHost,
   ControlUiNavigationItem,
@@ -29,7 +32,7 @@ export type ControlUiContributions = {
   navigation: ControlUiNavigationItem;
   panels: ControlUiPanel;
   actions: ControlUiAction;
-  accessories: ControlUiAccessory;
+  accessories: ControlUiAccessoryRegistration;
   widgets: ControlUiWidget;
   inlineViews: Parameters<ControlUiHost["ui"]["registerInlineView"]>[0];
   replacements: ControlUiReplacement;
@@ -76,3 +79,36 @@ export type ControlUiPluginCapability = {
   selectReplacement: (surface: ControlUiSurface, key: string | null) => void;
   reportError: (pluginId: string, error: unknown) => void;
 };
+
+const UI_CAPABILITY_BY_CONTRIBUTION = {
+  pages: "page",
+  navigation: "navigation",
+  panels: "panel",
+  actions: "action",
+  accessories: "accessory",
+  widgets: "widget",
+  inlineViews: "inline",
+  replacements: "replacement",
+} as const satisfies Record<
+  keyof ControlUiContributions,
+  import("../../../packages/gateway-protocol/src/plugin-ui-capabilities.ts").PluginUiCapability
+>;
+
+/** Diagnostics follow live contributions, not catalog refreshes or activation receipts. */
+export function controlUiCapabilityWarnings(owner: {
+  descriptor: Pick<PluginControlUiModule, "pluginId" | "uiCapabilities">;
+  contributions: { [K in keyof ControlUiContributions]: { size: number } };
+}): PluginControlUiDiagnostic[] {
+  // SAFETY: the canonical mapping satisfies exactly the contribution registry keys.
+  return (Object.keys(UI_CAPABILITY_BY_CONTRIBUTION) as (keyof ControlUiContributions)[])
+    .filter(
+      (kind) =>
+        owner.contributions[kind].size > 0 &&
+        owner.descriptor.uiCapabilities &&
+        !owner.descriptor.uiCapabilities.includes(UI_CAPABILITY_BY_CONTRIBUTION[kind]),
+    )
+    .map((kind) => ({
+      pluginId: owner.descriptor.pluginId,
+      message: `Registered UI capability "${UI_CAPABILITY_BY_CONTRIBUTION[kind]}" is missing from uiCapabilities in openclaw.plugin.json.`,
+    }));
+}

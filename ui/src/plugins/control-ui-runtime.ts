@@ -15,7 +15,6 @@ import type {
 } from "../../../src/plugin-sdk/control-ui-settings.js";
 import type {
   ControlUiDisposer,
-  ControlUiHost,
   ControlUiReplacement,
   ControlUiSurface,
 } from "../../../src/plugin-sdk/control-ui.js";
@@ -32,41 +31,16 @@ import {
   controlUiPluginDistribution,
   ControlUiPluginAssetPreloads,
 } from "./control-ui-assets.ts";
+import { controlUiCapabilityWarnings } from "./control-ui-capability.ts";
 import type {
   ControlUiContributions,
   ControlUiPluginCapability,
   ControlUiRegistration,
 } from "./control-ui-capability.ts";
+import { packagedLocalPresentations } from "./control-ui-local-presentations.ts";
+import { createPluginUiOwner, type ControlUiPluginOwner } from "./control-ui-owner.ts";
 
-export type ControlUiPluginOwner = {
-  descriptor: PluginControlUiModule;
-  deliveryIdentity?: string;
-  client: GatewayBrowserClient;
-  abort: AbortController;
-  disposers: Set<ControlUiDisposer>;
-  contributions: {
-    [K in keyof ControlUiContributions]: Map<
-      string,
-      { value: ControlUiContributions[K]; signal: AbortSignal }
-    >;
-  };
-  selections: Map<ControlUiSurface, string | null>;
-  host: ControlUiHost;
-};
-
-const UI_CAPABILITY_BY_CONTRIBUTION = {
-  pages: "page",
-  navigation: "navigation",
-  panels: "panel",
-  actions: "action",
-  accessories: "accessory",
-  widgets: "widget",
-  inlineViews: "inline",
-  replacements: "replacement",
-} as const satisfies Record<
-  keyof ControlUiContributions,
-  import("../../../packages/gateway-protocol/src/plugin-ui-capabilities.ts").PluginUiCapability
->;
+export type { ControlUiPluginOwner };
 
 const CONTRIBUTION_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 const ACTIVATION_TIMEOUT_MS = 15_000;
@@ -97,19 +71,8 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   get errors(): readonly PluginControlUiDiagnostic[] {
     // Warnings belong to live registrations, so ordinary catalog refreshes retain
     // them and retiring a contribution removes them without hiding activation errors.
-    const warnings = [...this.owners.values(), ...this.loadingOwners].flatMap((owner) =>
-      // SAFETY: the canonical mapping satisfies exactly the contribution registry keys.
-      (Object.keys(UI_CAPABILITY_BY_CONTRIBUTION) as (keyof ControlUiContributions)[])
-        .filter(
-          (kind) =>
-            owner.contributions[kind].size > 0 &&
-            owner.descriptor.uiCapabilities &&
-            !owner.descriptor.uiCapabilities.includes(UI_CAPABILITY_BY_CONTRIBUTION[kind]),
-        )
-        .map((kind) => ({
-          pluginId: owner.descriptor.pluginId,
-          message: `Registered UI capability "${UI_CAPABILITY_BY_CONTRIBUTION[kind]}" is missing from uiCapabilities in openclaw.plugin.json.`,
-        })),
+    const warnings = [...this.owners.values(), ...this.loadingOwners].flatMap(
+      controlUiCapabilityWarnings,
     );
     return [...this.diagnostics, ...warnings];
   }
@@ -201,16 +164,64 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       );
     // Owner publications drive asset preloads and revoke obsolete plugin activations synchronously.
     this.stops.push(
-      context.config.subscribe(preload),
+      context.config.subscribe(() => {
+        preload();
+        this.syncLocalPresentations(context.config.current.enabledLocalPresentations);
+      }),
       context.gateway.subscribe(() => this.syncConnection()),
       context.gateway.subscribeEvents((event) => {
-        if (event.event === "plugins.controlUi.changed" || event.event === "plugins.changed") {
+        if (
+          event.event === "controlUi.localPresentations.changed" &&
+          hasSameOriginGatewayTransport(context.gateway.connection.gatewayUrl)
+        ) {
+          void context.config.refresh({ signal: context.lifecycleAbortSignal });
+        } else if (
+          event.event === "plugins.controlUi.changed" ||
+          event.event === "plugins.changed"
+        ) {
           void this.refresh();
         }
       }),
     );
     preload();
     this.syncConnection();
+    this.syncLocalPresentations(context.config.current.enabledLocalPresentations);
+  }
+
+  private syncLocalPresentations(confirmed?: readonly string[]): void {
+    if (this.disposed) {
+      return;
+    }
+    const { gateway, resourceBasePath } = this.getContext();
+    const url = gateway.connection.gatewayUrl;
+    const next = packagedLocalPresentations(url, resourceBasePath, confirmed);
+    for (const owner of [...this.owners.values(), ...this.loadingOwners]) {
+      if (
+        !owner.packagedLocal ||
+        next.some((d) => d.pluginId === owner.descriptor.pluginId && owner.localGatewayUrl === url)
+      ) {
+        continue;
+      }
+      if (this.owners.get(owner.descriptor.pluginId) === owner) {
+        this.owners.delete(owner.descriptor.pluginId);
+      }
+      this.loadingOwners.delete(owner);
+      this.disposeOwner(owner);
+      this.publish();
+    }
+    for (const descriptor of next) {
+      if (
+        !this.owners.has(descriptor.pluginId) &&
+        ![...this.loadingOwners].some((o) => o.descriptor.pluginId === descriptor.pluginId)
+      ) {
+        void this.activate(
+          descriptor,
+          null,
+          () => !this.disposed && gateway.connection.gatewayUrl === url,
+          true,
+        );
+      }
+    }
   }
 
   private syncConnection(): void {
@@ -227,10 +238,23 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     });
     const recoveryChanged = this.recoveryScope !== recoveryScope;
     this.recoveryScope = recoveryScope;
-    if (this.client === client && this.connectionId === connectionId && !recoveryChanged) {
+    const localTargetChanged = [...this.owners.values(), ...this.loadingOwners].some(
+      (owner) =>
+        owner.localGatewayUrl !== undefined &&
+        owner.localGatewayUrl !== this.getContext().gateway.connection.gatewayUrl,
+    );
+    if (
+      this.client === client &&
+      this.connectionId === connectionId &&
+      !recoveryChanged &&
+      !localTargetChanged
+    ) {
       return;
     }
-    this.retireOwners();
+    this.retireOwners(true);
+    if (localTargetChanged) {
+      this.syncLocalPresentations();
+    }
     this.inlineLabels.clear();
     this.client = client;
     this.connectionId = connectionId;
@@ -241,6 +265,12 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       const reuseBootstrap = this.firstConnection;
       this.firstConnection = false;
       void this.refresh(reuseBootstrap);
+    } else if (
+      snapshot.phase === "connected" &&
+      hasSameOriginGatewayTransport(this.getContext().gateway.connection.gatewayUrl)
+    ) {
+      const context = this.getContext();
+      void context.config.refresh({ signal: context.lifecycleAbortSignal });
     }
   }
 
@@ -254,9 +284,12 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     // Explicit reload supersedes pending activation even when a plugin's async
     // initializer never settles; retained host closures are revoked immediately.
     for (const owner of this.loadingOwners) {
+      if (owner.packagedLocal) {
+        continue;
+      }
+      this.loadingOwners.delete(owner);
       this.disposeOwner(owner);
     }
-    this.loadingOwners.clear();
     this.catalogStatus = "pending";
     this.loadingCatalog = "pending";
     this.inlineLabels.clear();
@@ -288,6 +321,9 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       const installed = new Set(catalog.plugins.map((plugin) => plugin.pluginId));
       this.loadingCatalog = installed;
       for (const [id, owner] of this.owners) {
+        if (owner.packagedLocal) {
+          continue;
+        }
         const next = catalog.plugins.find((descriptor) => descriptor.pluginId === id);
         if (
           !next ||
@@ -330,7 +366,15 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       // Each plugin owns its deadline. A slow initializer must not prevent
       // unrelated plugins from becoming available or keep Reload pending.
       const activations = catalog.plugins
-        .filter((descriptor) => installed.has(descriptor.pluginId))
+        .filter(
+          (descriptor) =>
+            installed.has(descriptor.pluginId) &&
+            !(
+              descriptor.activation === "browser-local" &&
+              bootstrap?.enabledLocalPresentations !== undefined &&
+              controlUiPluginDistribution(descriptor)
+            ),
+        )
         .map((descriptor) =>
           // A superseding refresh retains published owners whose receipt has not been sent yet.
           this.owners.get(descriptor.pluginId)?.descriptor.revision === descriptor.revision
@@ -395,28 +439,17 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
 
   private async activate(
     descriptor: PluginControlUiModule,
-    client: GatewayBrowserClient,
+    client: GatewayBrowserClient | null,
     current: () => boolean,
+    packagedLocal = false,
   ): Promise<PluginControlUiActivation | undefined> {
-    const abort = new AbortController();
-    const owner: Omit<ControlUiPluginOwner, "host"> = {
+    const owner = createPluginUiOwner(
       descriptor,
-      deliveryIdentity: controlUiPluginDeliveryIdentity(descriptor),
       client,
-      abort,
-      disposers: new Set<ControlUiDisposer>(),
-      contributions: {
-        pages: new Map(),
-        navigation: new Map(),
-        panels: new Map(),
-        actions: new Map(),
-        replacements: new Map(),
-        accessories: new Map(),
-        widgets: new Map(),
-        inlineViews: new Map(),
-      },
-      selections: new Map<ControlUiSurface, string | null>(),
-    };
+      this.getContext().gateway.connection.gatewayUrl,
+      packagedLocal,
+    );
+    const { abort } = owner;
     this.loadingOwners.add(owner);
     try {
       const styles: HTMLLinkElement[] = [];
@@ -439,7 +472,11 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
           );
         },
       );
-      if (!complete || !current() || abort.signal.aborted) {
+      if (
+        !complete ||
+        !(owner.localGatewayUrl !== undefined ? this.isCurrent(owner) : current()) ||
+        abort.signal.aborted
+      ) {
         this.disposeOwner(owner);
         return undefined;
       }
@@ -517,7 +554,13 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   }
 
   isCurrent(owner: Omit<ControlUiPluginOwner, "host">): boolean {
-    return !this.disposed && !owner.abort.signal.aborted && this.client === owner.client;
+    return (
+      !this.disposed &&
+      !owner.abort.signal.aborted &&
+      (owner.localGatewayUrl !== undefined
+        ? owner.localGatewayUrl === this.getContext().gateway.connection.gatewayUrl
+        : this.client === owner.client)
+    );
   }
 
   register<K extends keyof ControlUiContributions>(
@@ -528,6 +571,16 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   ): ControlUiDisposer {
     if (!this.isCurrent(owner)) {
       throw new Error("This plugin UI activation has ended.");
+    }
+    if (
+      owner.localGatewayUrl !== undefined &&
+      kind !== "pages" &&
+      kind !== "navigation" &&
+      !(kind === "accessories" && "placement" in value && value.placement !== "session-header")
+    ) {
+      throw new Error(
+        "Browser-local plugins can register only local pages, navigation, and presentation accessories.",
+      );
     }
     const entries = owner.contributions[kind];
     // A disposer owns the registered ID even if the plugin later mutates its definition.
@@ -619,18 +672,11 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
 
   reportError(pluginId: string, error: unknown): void {
     const message = formatUiError(error, "Plugin UI failed.");
-    if (
-      this.diagnostics.some((entry) => entry.pluginId === pluginId && entry.message === message)
-    ) {
+    if (this.diagnostics.find((d) => d.pluginId === pluginId)?.message === message) {
       return;
     }
-    this.diagnostics = [
-      ...this.diagnostics.filter((entry) => entry.pluginId !== pluginId),
-      {
-        pluginId,
-        message,
-      },
-    ].slice(-20);
+    const others = this.diagnostics.filter((entry) => entry.pluginId !== pluginId);
+    this.diagnostics = [...others, { pluginId, message }].slice(-20);
     this.publish();
   }
 
@@ -664,7 +710,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     }
   }
 
-  private retireOwners(): void {
+  private retireOwners(preserveLocal = false): void {
     this.refreshGeneration += 1;
     this.catalogStatus = "pending";
     this.loadingCatalog = null;
@@ -673,9 +719,18 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       this.grantTimer = null;
     }
     const owners = [...this.owners.values(), ...this.loadingOwners];
-    this.owners.clear();
-    this.loadingOwners.clear();
     for (const owner of owners) {
+      if (
+        preserveLocal &&
+        owner.localGatewayUrl !== undefined &&
+        owner.localGatewayUrl === this.getContext().gateway.connection.gatewayUrl
+      ) {
+        continue;
+      }
+      if (this.owners.get(owner.descriptor.pluginId) === owner) {
+        this.owners.delete(owner.descriptor.pluginId);
+      }
+      this.loadingOwners.delete(owner);
       this.disposeOwner(owner);
     }
   }

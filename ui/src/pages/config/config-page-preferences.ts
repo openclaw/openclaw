@@ -1,3 +1,4 @@
+import { agentTabIconShape } from "../../../../packages/gateway-protocol/src/schema/tab-icon.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { resetServerUiPref, selectThemeSettings } from "../../app/server-prefs-controls.ts";
 import { canSyncAppearancePreference } from "../../app/server-prefs-profile-runtime.ts";
@@ -11,10 +12,9 @@ import {
 } from "../../app/settings.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import type { TypefaceId } from "../../app/typography.ts";
-import { getLobsterdex } from "../../components/lobster-dex.ts";
-import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { i18n, isSupportedLocale, type Locale } from "../../i18n/index.ts";
 import { currentDisplayConfig } from "../../lib/config/config-state-model.ts";
+import { tabIconContributions } from "../../plugins/control-ui-tab-icons.ts";
 
 /** Resolves preference provenance and delegates changes to the canonical preference owners. */
 export function createConfigPagePreferences(context: ApplicationContext, invalidate: () => void) {
@@ -83,10 +83,9 @@ export function createConfigPagePreferences(context: ApplicationContext, invalid
         onAppearanceChange: apply,
         setTabIconMode: (preference: NonNullable<UiSettings["tabIcon"]>) => {
           if (
-            preference.startsWith("lobster:") &&
-            (!context.theme.branding.lobsterdex ||
-              !LOBSTER_PET_PALETTES.some((palette) => palette.id === preference.slice(8)) ||
-              !getLobsterdex().has(preference.slice(8)))
+            preference !== "default" &&
+            agentTabIconShape(preference) === null &&
+            !tabIconContributions(context.plugins).some((entry) => entry.value.accepts(preference))
           ) {
             return;
           }

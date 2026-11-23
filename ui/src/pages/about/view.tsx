@@ -1,9 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { For, Show, createMemo } from "solid-js";
+import {
+  canonicalLobsterLook,
+  lobsterLookStyle,
+  LOBSTER_PET_PALETTES,
+} from "../../../../extensions/lobsterdex/browser/api.ts";
+import { LobsterSvg } from "../../../../extensions/lobsterdex/browser/runtime-api.ts";
 import type { ControlUiBuildInfo } from "../../build-info.ts";
-import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
-import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
-import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import {
   BrandIcon,

@@ -1,30 +1,29 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import {
   agentTabIconShape,
+  normalizeTabIconPreference,
   type TabIconPreference,
 } from "../../../../packages/gateway-protocol/src/schema/tab-icon.ts";
 import { controlUiFaviconBaseSvg } from "../../app/control-ui-environment-presentation.runtime.ts";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
-import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
-import type { LobsterPetPalette } from "../../components/lobster-pet-contract.ts";
-import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
-import { lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
 import {
   IdentityAvatarImage,
   createIdentityAvatarPresentation,
 } from "../../components/solid/identity-avatar-image.tsx";
 import { SettingsRow } from "../../components/solid/settings-ui.tsx";
 import { ThemeBrandIcon } from "../../components/theme-brand-icon.tsx";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { themeBrandingProjection } from "../../lib/reactive/theme-branding.ts";
+import { PluginAccessories } from "../../plugins/control-ui-accessories.solid.tsx";
+import { tabIconContributions } from "../../plugins/control-ui-tab-icons.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 
 export type TabIconViewProps = {
   tabIcon: TabIconPreference | undefined;
-  lobsterdexEnabled?: boolean;
   tabIconAgentAvatar?: string | null;
-  tabIconLobsters?: readonly LobsterPetPalette[];
   setTabIconMode: (mode: TabIconPreference) => void;
 };
 
@@ -75,19 +74,6 @@ function TabIconAvatar(props: {
   );
 }
 
-function LobsterPreview(props: { palette: LobsterPetPalette }) {
-  const look = createMemo(() => canonicalLobsterLook(props.palette));
-  return (
-    <span
-      class={["lobster-pet settings-tab-icon__lobster", `lobster-pet--palette-${props.palette.id}`]}
-      style={lobsterLookStyle(look())}
-      aria-hidden="true"
-    >
-      <LobsterSvg look={look()} standalone />
-    </span>
-  );
-}
-
 function TabIconPick(props: {
   label: string;
   pressed: boolean;
@@ -114,39 +100,34 @@ export function TabIconRow(props: TabIconViewProps) {
   const defaultSource = createMemo(
     () => controlUiFaviconBaseSvg() ?? inferControlUiPublicAssetPath("favicon.svg"),
   );
-  const lobsterdexEnabled = () => props.lobsterdexEnabled !== false;
-  const lobsters = createMemo(() => (lobsterdexEnabled() ? (props.tabIconLobsters ?? []) : []));
-  const lobsterMode = () => lobsterdexEnabled() && (props.tabIcon?.startsWith("lobster:") ?? false);
+  const context = useOptionalApplication();
+  const plugins = context?.plugins && projectOwner(context.plugins, (owner) => owner);
+  const contributed = createMemo(() => {
+    themeBrandingProjection.read();
+    return tabIconContributions(plugins?.read()).map((entry) =>
+      entry.value.describe(props.tabIcon ?? "default"),
+    );
+  });
+  const selected = createMemo(() => contributed().find((entry) => entry.selected));
+  const hasChoices = () => contributed().some((entry) => entry.hasChoices);
   const selectedShape = createMemo(() => agentTabIconShape(props.tabIcon));
-  const selected = createMemo(() =>
-    lobsters().find((palette) => props.tabIcon === `lobster:${palette.id}`),
-  );
-  const selectionName = () => {
-    const palette = selected();
-    const shape = selectedShape();
-    return palette
-      ? lobsterPaletteName(palette.id)
-      : shape
-        ? t("configView.appearance.tabIcon.agent")
-        : t("configView.appearance.tabIcon.default");
-  };
+  const selectionName = () =>
+    selected()?.label ??
+    t(
+      selectedShape()
+        ? "configView.appearance.tabIcon.agent"
+        : "configView.appearance.tabIcon.default",
+    );
   const description = () => {
-    if (lobsterMode() && !selected()) {
-      return t("configView.appearance.tabIcon.unavailable");
-    }
-    if (selected()) {
-      return `${selectionName()} · ${t("configView.appearance.tabIcon.localCollection")}`;
-    }
-    return lobsterdexEnabled() && lobsters().length === 0
-      ? `${selectionName()} · ${t("configView.appearance.tabIcon.empty")}`
-      : selectionName();
+    const detail = contributed().find((entry) => entry.detail)?.detail;
+    return detail ? selectionName() + " · " + detail : selectionName();
   };
   return (
     <div id={APPEARANCE_SETTINGS_TARGET_IDS.tabIcon} class="settings-tab-icon">
       <SettingsRow
         title={t("configView.appearance.tabIcon.title")}
         description={description()}
-        stacked={lobsters().length > 0}
+        stacked={hasChoices()}
         stackedOnNarrow
         control={
           <div
@@ -172,17 +153,18 @@ export function TabIconRow(props: TabIconViewProps) {
                 fallbackUrl={defaultSource()}
               />
             </TabIconPick>
-            <For each={lobsters()} keyed={(entry) => entry.id}>
-              {(palette) => (
-                <TabIconPick
-                  label={lobsterPaletteName(palette().id)}
-                  pressed={selected()?.id === palette().id}
-                  onSelect={() => props.setTabIconMode(`lobster:${palette().id}`)}
-                >
-                  <LobsterPreview palette={palette()} />
-                </TabIconPick>
-              )}
-            </For>
+            <PluginAccessories
+              placement="tab-icon"
+              value={{
+                value: props.tabIcon ?? "default",
+                onChange: (value) => {
+                  const normalized = normalizeTabIconPreference(value);
+                  if (normalized) {
+                    props.setTabIconMode(normalized);
+                  }
+                },
+              }}
+            />
           </div>
         }
       />

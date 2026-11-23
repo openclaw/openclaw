@@ -206,7 +206,7 @@ Its id must match the plugin manifest. Register contributions through
 | `registerPage` and `registerNavigation` | Plugin-owned routes and sidebar destinations.                                                                                           |
 | `registerAction`                        | Composer, header, or session menu actions. An optional `resolve` function supplies the current label, hidden state, and disabled state. |
 | `registerPanel`                         | Session panels.                                                                                                                         |
-| `registerAccessory`                     | Session header content.                                                                                                                 |
+| `registerAccessory`                     | Session headers, composer decorations, ambient Appearance controls, Memory scenes, and tab-icon choices.                                |
 | `registerInlineView`                    | Data-populated native views in the chat transcript.                                                                                     |
 | `registerWidget`                        | Native dashboard widget views.                                                                                                          |
 | `registerReplacement`                   | `workspace`, `session-list`, `composer`, `transcript`, `tool-result`, or `run-failure-feedback`.                                        |
@@ -398,6 +398,26 @@ operations retire when the view stops being presented, even while its DOM and
 host lifetime survive. Use the fresh operations supplied by `update` when the
 view is presented again; previously captured operations remain retired.
 
+### Additive presentation accessories
+
+Use accessories rather than replacing the composer for decorative UI. The
+`composer-decoration` placement receives a stable draft identity, activity and
+run-outcome facts, browser visit/sound preferences, and read-only access to the
+composer's actual editor surface, footer, controls, and obstacles. The host
+keeps the draft, focus, keyboard handling, and layout. Its callbacks retire with
+the native view; use the current callbacks from `update`.
+
+`ambient-appearance` receives browser-local preference values and an `onChange`
+callback. `memory-scene` receives an identity and scene flags. `tab-icon` adds
+choices to the existing picker and supplies `prefix`, `accepts`, `describe`, and
+`loadImage`; the host retains the saved preference and falls back to its normal
+artwork when the provider is disabled or cannot render it. Registration does not
+extend the host's accepted preference schema.
+
+Pages may request `layout: "settings-wide"` to use the host's Settings shell.
+Use `host.components.mountContextMenu` and `mountToggleRow` for the corresponding
+native controls; each returns the usual update/dispose handle.
+
 ### Host capabilities
 
 Use the host for shared application behavior:
@@ -405,10 +425,11 @@ Use the host for shared application behavior:
 | Capability                   | Purpose                                                                                                       |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `agents`                     | Agent snapshots, selection, scope, and refresh.                                                               |
-| `components`                 | Host-owned dialogs, pickers, and session dashboards.                                                          |
+| `components`                 | Host-owned dialogs, pickers, session dashboards, context menus, and toggle rows.                              |
 | `connection`                 | Current connection and operator capabilities.                                                                 |
 | `dock` (optional)            | Open a conversation beside the current page with `openSession`, close the dock, and observe `openSessionKey`. |
-| `navigation`                 | Open plugin pages and build their URLs.                                                                       |
+| `navigation`                 | Open plugin pages, build their URLs, or open host Appearance/Plugins Settings.                                |
+| `presentation`               | Versioned branding, shared translations, and admitted theme artwork.                                          |
 | `request` and `onEvent`      | Authenticated Gateway requests and event subscriptions.                                                       |
 | `recoveryStorage` (optional) | Account-bound, tab-local recovery data for this plugin.                                                       |
 | `sessions`                   | Session snapshots, independent queries, navigation, creation, and updates.                                    |
@@ -842,9 +863,30 @@ The shared cache holds at most 256 revisions and 64 MiB across all native
 plugins. When it fills, reload refuses the new build and preserves advertised
 assets. Restart the Gateway, then retry the reload.
 
+### Browser-local presentation lifetime
+
+A plugin whose UI needs no Gateway services can declare
+`controlUi.activation: "browser-local"`. For a packaged local presentation, the serving Gateway's authenticated bootstrap lists only the enabled, canonical local presentation IDs. A session reader does not need plugin-catalog access, private config, or an asset grant. Package membership alone never enables the feature. On a live enablement change the browser refreshes that same viewer-safe decision. A fresh offline document uses only its last known presentation decision for this Gateway: enabled loads shipped artwork, disabled stays off, and unknown waits. This does not restore an authenticated plugin client. The ordinary service worker must have cached the shell and its build-owned assets before an offline reopen. Other native plugin assets and private Gateway responses are not part of this offline inventory.
+
+This mode has presentation, locale, local navigation, context-menu/toggle
+components, and local page/navigation/accessory registration. `subscribe`
+observes theme and locale only. Gateway requests/events, session and agent
+operations, protected recovery storage, docks, remote components, and
+session-bound registrations are unavailable. Connection permissions are false,
+rosters are empty, and recovery storage is null. It is a lifecycle contract,
+**not a sandbox**: native JavaScript still runs in the trusted Control UI origin.
+Ordinary authenticated plugins retain their connection-bound lifetime.
+
+The bundled, enabled-by-default **Lobsterdex** uses this mode. Its collection,
+first/shiny-visit dates, familiarity, visit/sound preferences, composer visitors,
+Memory artwork, and collected tab icons remain browser-local. Disabling it
+removes its native views without deleting that data or its saved icon choice.
+The existing `/settings/lobsterdex` route and card links remain valid. Shared
+static lobster avatars and theme artwork are independent of visitor activation.
+
 On first activation, plugin pages and dashboard widgets show a loading state
 while the catalog, asset authorization, and initializer complete. Each plugin
-becomes available independently of other plugins that are still loading. A
+becomes available independently of other plugins that are still loading. An ordinary authenticated
 disconnected view waits for the Gateway connection before checking availability.
 Widgets show initialization failures with a Retry action.
 

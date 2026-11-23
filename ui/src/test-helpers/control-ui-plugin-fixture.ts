@@ -47,6 +47,7 @@ export async function prepareNativeControlUiPluginFixtures(
     }
     plugins.push({
       pluginId: fixture.pluginId,
+      ...(declaration.activation === "browser-local" ? { activation: declaration.activation } : {}),
       name: fixture.pluginId,
       revision,
       entryUrl: `${prefix}${path.basename(declaration.entry)}`,

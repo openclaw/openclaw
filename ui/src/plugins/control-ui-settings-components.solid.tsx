@@ -1,10 +1,8 @@
 import { render, type JSX } from "@solidjs/web";
-import { createMemo, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
 import type { ControlUiComponentHandle } from "../../../src/plugin-sdk/control-ui-components.js";
 import type { ControlUiSettingsComponents } from "../../../src/plugin-sdk/control-ui-settings.js";
-import { LobsterSvg } from "../components/lobster-pet-artwork.tsx";
-import { lobsterPetSeed } from "../components/lobster-pet-contract.ts";
-import { createLobsterPetLook, lobsterLookStyle } from "../components/lobster-pet-identity.ts";
+import type { ApplicationContext } from "../app/context.ts";
 import {
   SettingsNavRow,
   SettingsRow,
@@ -12,10 +10,13 @@ import {
   SettingsStatus,
   SettingsValue,
 } from "../components/solid/settings-ui.tsx";
+import { ApplicationProvider } from "../lib/reactive/context.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { PluginAccessories } from "./control-ui-accessories.solid.tsx";
 
 export function createControlUiSettingsComponents(
   signal: AbortSignal,
+  application: ApplicationContext,
 ): ControlUiSettingsComponents {
   function mount<P extends object>(
     container: HTMLElement,
@@ -93,19 +94,19 @@ export function createControlUiSettingsComponents(
         true,
       ),
     mountLobster: (container, initial) =>
-      mount(container, initial, (props) => {
-        const look = createMemo(() => createLobsterPetLook(lobsterPetSeed(props().seed)));
-        return (
-          <div style={`${lobsterLookStyle(look())};display:contents`}>
-            <LobsterSvg
-              look={look()}
-              sleeping={props().sleeping}
-              reading={props().reading}
-              grumpy={props().grumpy}
-              standalone={props().standalone}
-            />
-          </div>
-        );
-      }),
+      mount(container, initial, (props) => (
+        <ApplicationProvider value={application}>
+          <PluginAccessories
+            placement="memory-scene"
+            value={{
+              identity: props().seed,
+              sleeping: props().sleeping,
+              reading: props().reading,
+              grumpy: props().grumpy,
+              standalone: props().standalone,
+            }}
+          />
+        </ApplicationProvider>
+      )),
   };
 }

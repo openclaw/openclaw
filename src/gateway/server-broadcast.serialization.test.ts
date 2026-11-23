@@ -370,6 +370,7 @@ describe("broadcast serialization failures", () => {
     broadcast("mentions.changed", { gatewayInstanceId: "gateway", revision: 1 });
     broadcast("projects.checkoutOptions.changed", { projectId: "project" });
     broadcast("chat.metadata.changed", { content: "Hidden content" });
+    broadcast("controlUi.localPresentations.changed", { enabled: ["example"] });
     broadcastToConnIds("sessions.changed", dynamic, recipients);
     expect(scoped.socket.send).not.toHaveBeenCalled();
     expect(getter).not.toHaveBeenCalled();
@@ -386,12 +387,14 @@ describe("broadcast serialization failures", () => {
       recipients,
     );
     broadcastToConnIds("projects.checkoutOptions.changed", { projectId: "project" }, recipients);
+    broadcast("controlUi.localPresentations.changed", {});
     expect(frameSummaries(scoped)).toEqual([
       { event: "chat.metadata.changed", seq: 1 },
       { event: "sessions.changed", seq: 2 },
       { event: "users.prefs.changed", seq: 3 },
       { event: "mentions.changed", seq: 4 },
       { event: "projects.checkoutOptions.changed", seq: 5 },
+      { event: "controlUi.localPresentations.changed", seq: 6 },
     ]);
   });
 

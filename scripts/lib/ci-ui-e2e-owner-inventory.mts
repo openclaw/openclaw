@@ -46,7 +46,6 @@ const pageStyles = {
   "cloud-workers": ["ui/src/styles/settings-controls.css", "ui/src/styles/settings.css"],
   config: [
     "ui/src/styles/config.css",
-    "ui/src/styles/lobster-pet.css",
     "ui/src/styles/memory-memories.css",
     "ui/src/styles/memory-overview.css",
     "ui/src/styles/select-picker.css",
@@ -417,7 +416,11 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-comment-lifecycle.e2e.test.ts",
     ["chat"],
-    ["ui/src/lib/toast.ts", "ui/src/plugins/control-ui-view.solid.tsx"],
+    [
+      "ui/src/lib/toast.ts",
+      "ui/src/plugins/control-ui-view.solid.tsx",
+      "ui/src/plugins/control-ui-surfaces.solid.tsx",
+    ],
   ),
   pageWatch(
     "ui/src/e2e/chat-comment-pane-retirement.e2e.test.ts",
@@ -1159,7 +1162,16 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/lobster-pet.e2e.test.ts",
     ["chat", "new-session"],
-    ["ui/src/components/lobster-pet-plans.ts", "ui/src/components/lobster-pet.tsx"],
+    ["extensions/lobsterdex/browser/**", "extensions/lobsterdex/test-fixtures/geometry.tsx"],
+  ),
+  pageWatch(
+    "ui/src/e2e/lobsterdex-plugin.e2e.test.ts",
+    ["config", "new-session"],
+    [
+      "extensions/lobsterdex/**",
+      "ui/src/plugins/control-ui-runtime.ts",
+      "ui/src/plugins/control-ui-host.ts",
+    ],
   ),
   pageWatch(
     "ui/src/e2e/logs-autofollow.e2e.test.ts",

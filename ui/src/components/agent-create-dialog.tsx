@@ -7,11 +7,13 @@ import {
   Errored,
   Show,
 } from "solid-js";
+import {
+  canonicalLobsterLook,
+  LOBSTER_PALETTE_WEIGHTS,
+} from "../../../extensions/lobsterdex/browser/api.ts";
+import { LobsterSvg } from "../../../extensions/lobsterdex/browser/runtime-api.ts";
 import type { AgentsAvatarGenerateResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../app/context.ts";
-import { LobsterSvg } from "../components/lobster-pet-artwork.tsx";
-import { canonicalLobsterLook } from "../components/lobster-pet-identity.ts";
-import { LOBSTER_PALETTE_WEIGHTS } from "../components/lobster-pet-palettes.ts";
 import { AgentIdentityAvatar } from "../components/solid/identity-avatar.tsx";
 import { registerAgentCreationEnglish } from "../i18n/locales/en-agent-creation.ts";
 import { formatUiError } from "../lib/format-error.ts";

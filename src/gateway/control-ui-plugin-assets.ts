@@ -22,8 +22,8 @@ import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.j
 import type { PluginRecord, PluginRegistry } from "../plugins/registry.js";
 import { catalogOperations, createPluginBrowserCompiler } from "../plugins/runtime-compiler.js";
 import { getPluginRegistryForContext } from "../plugins/runtime.js";
-import { isOpenClawIdPluginVisible } from "../shared/openclaw-id-policy.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
+import { browserOwners, getActiveBrowserRegistry } from "./control-ui-local-presentations.js";
 import {
   controlUiPluginAssetPrefix,
   controlUiPluginAssetRoot,
@@ -62,11 +62,6 @@ type BrowserPluginState = {
 // registry publications. Replaced records cannot inherit their predecessor's snapshots.
 const browserPluginStates = new WeakMap<PluginRecord, BrowserPluginState>();
 
-function getActiveBrowserRegistry(): PluginRegistry | null {
-  const registry = getPluginRegistryForContext();
-  return registry && capturePluginLifecycleAuthority(registry)?.() ? registry : null;
-}
-
 function pluginState(record: PluginRecord): BrowserPluginState {
   let state = browserPluginStates.get(record);
   if (!state) {
@@ -78,19 +73,6 @@ function pluginState(record: PluginRecord): BrowserPluginState {
     browserPluginStates.set(record, state);
   }
   return state;
-}
-
-function browserOwners(registry: PluginRegistry): PluginRecord[] {
-  return registry.plugins
-    .filter(
-      (record) =>
-        isOpenClawIdPluginVisible(record.id, getRuntimeConfigSnapshot()) &&
-        record.enabled &&
-        record.status === "loaded" &&
-        record.controlUi &&
-        record.controlUi.activation !== "settings-only",
-    )
-    .toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
 async function snapshotBrowserBuild(
@@ -155,6 +137,7 @@ async function snapshotBrowserBuild(
     bytes,
     module: {
       pluginId: record.id,
+      ...(declaration.activation === "browser-local" ? { activation: declaration.activation } : {}),
       name: record.name,
       revision,
       entryUrl: assetUrl(entryName),

@@ -17,8 +17,6 @@ import {
   SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
   setStoredSessionCatalogHidden,
 } from "../../components/app-sidebar-session-types.ts";
-import { getLobsterdex, subscribeLobsterdex } from "../../components/lobster-dex.ts";
-import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
@@ -34,7 +32,7 @@ import {
 import { modelSettingPrimary, readModelSetting } from "../../lib/model-setting.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { createAppearanceCatalogs } from "./appearance-catalogs.ts";
@@ -82,11 +80,6 @@ export function createConfigPage(
   const agents = projectOwner(context.agents, (owner) => owner.state);
   const identities = projectOwner(context.agentIdentity, (owner) => owner);
   const applicationConfig = projectOwner(context.config, (owner) => owner.current);
-  const lobsterdex = projectSource(subscribeLobsterdex, {
-    read: getLobsterdex,
-    subscribe: (subscribe, notify) => subscribe(notify),
-    equality: "revision",
-  });
   const webPush = projectOwner(context.webPush, (owner) => owner.snapshot);
   const notifications = context.nativeNotifications
     ? projectOwner(context.nativeNotifications, (owner) => owner.snapshot)
@@ -401,7 +394,6 @@ export function createConfigPage(
     const utilityModel = readModelSetting(agentsDefaults?.utilityModel);
     const id = context.agentSelection.state.selectedId;
     const agent = agents.read().agentsList?.agents.find((entry) => entry.id === id);
-    const unlocked = lobsterdex.read();
     const observerLifetime = commandLifetime.promise;
     const observerResult = (saved: boolean) => {
       if (!saved && observerLifetime === commandLifetime.promise && configState.lastError) {
@@ -549,9 +541,7 @@ export function createConfigPage(
         customThemeImportOwner.open();
       },
       tabIcon: settings().tabIcon,
-      lobsterdexEnabled: context.theme.branding.lobsterdex,
       tabIconAgentAvatar: agent ? resolveAgentAvatarUrl(agent, identities.read().get(id)) : null,
-      tabIconLobsters: LOBSTER_PET_PALETTES.filter((palette) => unlocked.has(palette.id)),
       textScale: settings().textScale ?? UI_APPEARANCE_DEFAULTS.textScale,
       textScaleOverridden: settings().textScale !== undefined,
       setTextScale: (value: number) =>
@@ -613,8 +603,6 @@ export function createConfigPage(
       sessionDeleteConfirm:
         settings().sessionDeleteConfirm ?? UI_APPEARANCE_DEFAULTS.sessionDeleteConfirm,
       lobsterPetSounds: settings().lobsterPetSounds ?? UI_APPEARANCE_DEFAULTS.lobsterPetSounds,
-      lobsterdexHref: pathForRoute("lobsterdex", context.basePath),
-      onOpenLobsterdex: () => context.navigate("lobsterdex"),
       serverQueueMode: resolveControlUiServerQueueMode(currentDisplayRuntimeConfig(configState), {
         configNeedsApply: configState.configNeedsApply,
       }),

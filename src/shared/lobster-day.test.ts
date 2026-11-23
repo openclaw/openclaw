@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isLobsterDay } from "./lobster-day.js";
+import { isLobsterDay } from "../../extensions/lobsterdex/calendar-api.js";
 
 describe("isLobsterDay", () => {
   it("stays rare across a year of days", () => {

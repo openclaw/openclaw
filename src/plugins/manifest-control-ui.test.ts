@@ -73,6 +73,11 @@ it("carries normalized built entrypoints through discovery into runtime ownershi
   });
 });
 
+it("preserves browser-local lifetime metadata without requiring a Settings placement", () => {
+  const controlUi = { entry, activation: "browser-local" };
+  expect(readManifest(controlUi)).toMatchObject({ ok: true, manifest: { controlUi } });
+});
+
 it.each([[["overview"]], [["memories"]], [["overview", "memories"]]])(
   "preserves settings-only presentations: %j",
   (panels) => {

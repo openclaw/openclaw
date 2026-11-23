@@ -604,13 +604,19 @@ self.addEventListener("fetch", (event) => {
   // still require the current version; private reads never need cache policy.
   const publicAsset =
     OFFLINE_BOOT?.publicAssets.includes(pathname.slice(1)) && /^\?v=[^&]+$/u.test(url.search);
+  const packagedPresentation =
+    pathname.startsWith("/assets/local-presentations/") &&
+    !url.search &&
+    OFFLINE_BOOT?.deferredAssets.some((asset) => asset.path === pathname.slice(1));
   const permitsCache =
-    (hashedAsset || publicAsset) &&
+    (hashedAsset || publicAsset || packagedPresentation) &&
     !event.request.headers.has("Authorization") &&
     event.request.cache !== "no-store";
 
   respondToControlUiRequest(event, async () => {
-    const cacheable = permitsCache && (hashedAsset || isVersionedPublicAsset(url, pathname));
+    const cacheable =
+      permitsCache &&
+      (hashedAsset || packagedPresentation || isVersionedPublicAsset(url, pathname));
     const cached = permitsCache ? await matchControlUiAsset(event.request, cacheable) : undefined;
     return cached || fetchControlUiRequest(event, cacheable);
   });

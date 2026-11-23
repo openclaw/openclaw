@@ -1,13 +1,14 @@
 import { vi } from "vitest";
+import type { LobsterComposerElements } from "../../../extensions/lobsterdex/browser/api.ts";
 import type { ThemeArtwork } from "../../../packages/gateway-protocol/src/theme.ts";
 import { t } from "../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
-import { resolveLobsterPetMode, type LobsterComposerElements } from "./lobster-pet-contract.ts";
-import "./lobster-pet.tsx";
+import { resolveComposerActivity } from "../plugins/composer-decoration-state.ts";
+import "../test-helpers/lobster-pet-fixture.tsx";
 
 registerNewSessionSetupEnglish();
 
-type LobsterPetMode = ReturnType<typeof resolveLobsterPetMode>;
+type LobsterPetMode = ReturnType<typeof resolveComposerActivity>;
 
 export type LobsterPetElement = HTMLElement & {
   composerElements: () => LobsterComposerElements | null;
@@ -57,6 +58,7 @@ export function createPet(seed: number, mode: LobsterPetMode = "idle"): LobsterP
     root: wrapper,
     composer,
     editor,
+    editorSurface: editor,
     footer,
     controls: controls.filter((control) => control.isConnected),
     obstacles: [],

@@ -1,0 +1,17 @@
+.plugin-context-dismiss-menu {
+  pointer-events: auto;
+}
+.plugin-context-dismiss-menu__panel {
+  --oc-overlay-distance: 0px;
+}
+.plugin-context-dismiss-menu__trigger {
+  position: fixed;
+  left: var(--plugin-context-menu-x);
+  top: var(--plugin-context-menu-y);
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}

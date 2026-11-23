@@ -1,0 +1,20 @@
+{
+  "id": "lobsterdex",
+  "name": "Lobsterdex",
+  "description": "Browser-local lobster visitors, discoveries, and collected artwork.",
+  "enabledByDefault": true,
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "uiCapabilities": [
+    "page",
+    "accessory"
+  ],
+  "controlUi": {
+    "entry": "dist/control-ui/index.js",
+    "activation": "browser-local"
+  }
+}

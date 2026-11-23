@@ -22,6 +22,7 @@ it.each(["load", "error", "abort"] as const)(
       config: createApplicationConfigCapability({ resourceBasePath: "" }),
       resourceBasePath: "",
       gateway: {
+        connection: { gatewayUrl: client.gatewayUrl },
         snapshot: {
           phase: "connected",
           client,

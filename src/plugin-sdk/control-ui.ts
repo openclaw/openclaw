@@ -5,6 +5,7 @@ import type {
   SessionRow,
   SessionsListParams,
 } from "@openclaw/gateway-protocol";
+import type { ThemeBranding } from "@openclaw/gateway-protocol/theme";
 import type { ControlUiComponents } from "./control-ui-components.js";
 export { createSessionHeaderLink } from "./control-ui-session-link.js";
 export { translateControlUiMessage } from "./control-ui-translation.js";
@@ -154,6 +155,8 @@ export type ControlUiView<T = Readonly<Record<string, string>>> = (
 export type ControlUiPage = {
   id: string;
   label: string;
+  /** Host-owned Settings chrome and wide content geometry. */
+  layout?: "settings-wide";
   mount: ControlUiView;
 };
 
@@ -308,11 +311,83 @@ export type ControlUiAction = {
   attach?: ControlUiAction["run"];
 };
 
+/** Composer-owned geometry; decoration plugins only measure these surfaces. */
+export type ControlUiComposerElements = {
+  root: HTMLElement;
+  composer: HTMLElement;
+  editor: HTMLTextAreaElement;
+  editorSurface: HTMLElement;
+  footer: HTMLElement;
+  controls: readonly HTMLElement[];
+  obstacles: readonly HTMLElement[];
+};
+
+export type ControlUiComposerDecorationProps = {
+  identity: string;
+  composerElements: () => ControlUiComposerElements | null;
+  mode: "idle" | "busy" | "offline";
+  runOutcome: "ok" | "error" | "aborted";
+  visitsEnabled: boolean;
+  soundsEnabled: boolean;
+  floorEnabled: boolean;
+  gatewayVersion: string | null;
+  onVisitsDisabled: () => void;
+};
+
+export type ControlUiAccessoryProps = {
+  "session-header": BoardGetParams;
+  "composer-decoration": ControlUiComposerDecorationProps;
+  "ambient-appearance": {
+    visitsEnabled: boolean;
+    soundsEnabled: boolean;
+    themeName: string;
+    onChange: (change: { visitsEnabled?: boolean; soundsEnabled?: boolean }) => void;
+  };
+  "memory-scene": {
+    identity: string;
+    sleeping?: boolean;
+    reading?: boolean;
+    grumpy?: boolean;
+    standalone?: boolean;
+  };
+  "tab-icon": { value: string; onChange: (value: string) => void };
+};
+
+export type ControlUiTabIconAccessory = {
+  id: string;
+  placement: "tab-icon";
+  mount: ControlUiView<ControlUiAccessoryProps["tab-icon"]>;
+  prefix: string;
+  accepts: (value: string) => boolean;
+  describe: (value: string) => {
+    selected: boolean;
+    hasChoices: boolean;
+    label?: string;
+    detail?: string;
+  };
+  loadImage: (value: string) => Promise<HTMLImageElement | null>;
+};
+/** The shipped session-header accessory contract. */
 export type ControlUiAccessory = {
   id: string;
   placement: "session-header";
   mount: ControlUiView<BoardGetParams>;
 };
+
+type LocalAccessoryPlacement = Exclude<
+  keyof ControlUiAccessoryProps,
+  "session-header" | "tab-icon"
+>;
+export type ControlUiAccessoryRegistration =
+  | ControlUiAccessory
+  | {
+      [P in LocalAccessoryPlacement]: {
+        id: string;
+        placement: P;
+        mount: ControlUiView<ControlUiAccessoryProps[P]>;
+      };
+    }[LocalAccessoryPlacement]
+  | ControlUiTabIconAccessory;
 
 export type ControlUiWidget = {
   id: string;
@@ -335,6 +410,15 @@ export type ControlUiReplacement<S extends ControlUiSurface = ControlUiSurface> 
   };
 }[S];
 
+/** Shared presentation owners; no access to application state or mutation internals. */
+export type ControlUiPresentationV1 = {
+  readonly version: 1;
+  readonly branding: Readonly<ThemeBranding>;
+  translate: (key: string, params?: Record<string, string>) => string;
+  /** Read current admitted theme artwork through the host resource owner. */
+  loadThemeArtwork: (url: string) => Promise<string | null>;
+};
+
 export type ControlUiHost = {
   readonly apiVersion: 1;
   readonly pluginId: string;
@@ -346,9 +430,11 @@ export type ControlUiHost = {
   /** Absent or null until the authenticated recovery owner is available. Storage errors throw. */
   readonly recoveryStorage?: ControlUiRecoveryStorageV1 | null;
   readonly components: ControlUiComponents;
+  readonly presentation: ControlUiPresentationV1;
   /**
    * Native modules share the operator's authenticated Gateway authority.
    * The Gateway enforces connection scopes, not a per-plugin RPC allowlist.
+   * A browser-local activation has no Gateway services; this operation throws.
    */
   request: <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>;
   /**
@@ -407,6 +493,8 @@ export type ControlUiHost = {
     readonly openSessionKey: string | null;
   };
   navigation: {
+    /** Open host Settings without reloading the document or losing retained drafts. */
+    openSettings: (section: "appearance" | "plugins") => void;
     openPage: (target: ControlUiPageTarget, options?: ControlUiPageNavigationOptions) => void;
     pageHref: (
       target: ControlUiPageTarget,
@@ -428,7 +516,7 @@ export type ControlUiHost = {
     /** Open an owned registered panel beside the supplied or currently selected session. */
     openPanel: (id: string, session?: BoardGetParams) => void;
     registerAction: (action: ControlUiAction) => ControlUiDisposer;
-    registerAccessory: (accessory: ControlUiAccessory) => ControlUiDisposer;
+    registerAccessory: (accessory: ControlUiAccessoryRegistration) => ControlUiDisposer;
     registerWidget: (widget: ControlUiWidget) => ControlUiDisposer;
     registerInlineView: (view: ControlUiInlineView) => ControlUiDisposer;
     registerReplacement: (replacement: ControlUiReplacement) => ControlUiDisposer;

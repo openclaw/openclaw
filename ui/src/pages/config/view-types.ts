@@ -61,8 +61,6 @@ type ConfigViewOptions = Partial<
     | "sessionObserverDisabled"
     | "setSessionObserverEnabled"
     | "setSessionObserverUtilityModel"
-    | "lobsterdexHref"
-    | "onOpenLobsterdex"
     | "onMicrophoneRefresh"
     | "onMicrophoneSelect"
     | "onCameraRefresh"

@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, lazy, Loading, Show, type Accessor } from "solid-js";
+import { AVATAR_HAT_ARTWORK } from "../../../../extensions/lobsterdex/browser/artwork-api.ts";
 import {
   isThemeAvatarHatId,
   type ThemeBranding,
@@ -17,7 +18,6 @@ import { resolveAvatarHat } from "../agent-avatar-hat.ts";
 import type { AgentSelectOption } from "../agent-select-types.ts";
 import { PluginThemeArtwork } from "../plugin-theme-artwork.tsx";
 import { ThemeBrandIcon } from "../theme-brand-icon.tsx";
-import { AVATAR_HAT_ARTWORK } from "../theme-flair-artwork.tsx";
 import { Icon } from "./icon.tsx";
 import { IdentityAvatarImage, createIdentityAvatarPresentation } from "./identity-avatar-image.tsx";
 import { useAvatarGatewayContext, useIdentityAvatarView } from "./identity-avatar-view.ts";

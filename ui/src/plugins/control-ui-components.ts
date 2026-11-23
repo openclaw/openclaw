@@ -14,6 +14,7 @@ import {
   sharedAgentIdentityProjection,
   sharedAgentsProjection,
 } from "../lib/reactive/shared-application-projections.ts";
+import { createControlUiPresentationComponents } from "./control-ui-presentation-components.solid.tsx";
 
 function resolveAppearanceColor(value: string | null | undefined): string {
   const color = normalizeSessionColorValue(value ?? "");
@@ -26,6 +27,7 @@ function resolveAppearanceColor(value: string | null | undefined): string {
 
 export function createControlUiComponents(options: {
   current: () => ApplicationContext;
+  presentationCurrent?: () => ApplicationContext;
   signal: AbortSignal;
   onError: (error: unknown) => void;
 }): ControlUiComponents {
@@ -123,8 +125,13 @@ export function createControlUiComponents(options: {
   }
 
   return {
+    ...createControlUiPresentationComponents({
+      assertCurrent: options.presentationCurrent ?? options.current,
+      signal: options.signal,
+      onError: options.onError,
+    }),
     resolveAppearanceColor(value) {
-      options.current();
+      (options.presentationCurrent ?? options.current)();
       options.signal.throwIfAborted();
       return resolveAppearanceColor(value);
     },

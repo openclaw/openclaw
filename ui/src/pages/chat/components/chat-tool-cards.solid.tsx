@@ -20,7 +20,7 @@ import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectSource } from "../../../lib/reactive/projection.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
-import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
+import { PluginSurface } from "../../../plugins/control-ui-surfaces.solid.tsx";
 import { addressedSession } from "../chat-spawned-subagent.ts";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import { ChatImportBoundary } from "./chat-import-boundary.tsx";

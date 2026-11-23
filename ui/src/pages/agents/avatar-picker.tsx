@@ -9,14 +9,15 @@ import {
   onSettled,
   Show,
 } from "solid-js";
-import type { AgentsAvatarGenerateResult } from "../../../../packages/gateway-protocol/src/index.js";
-import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
-import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
-import { lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
 import {
+  canonicalLobsterLook,
+  lobsterLookStyle,
+  lobsterPaletteName,
   LOBSTER_PALETTE_WEIGHTS,
   LOBSTER_PET_PALETTES,
-} from "../../components/lobster-pet-palettes.ts";
+} from "../../../../extensions/lobsterdex/browser/api.ts";
+import { LobsterSvg } from "../../../../extensions/lobsterdex/browser/runtime-api.ts";
+import type { AgentsAvatarGenerateResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -94,7 +95,8 @@ export function AvatarPicker(props: AvatarPickerProps) {
   });
   const prepare = async (request: Preparation): Promise<PreparedAvatar> => {
     if ("paletteId" in request) {
-      const { loadLobsterImage } = await import("../../components/lobster-image.ts");
+      const { loadLobsterImage } =
+        await import("../../../../extensions/lobsterdex/browser/runtime-api.ts");
       const image = await loadLobsterImage(request.paletteId);
       if (!image) {
         throw new Error(t("agents.identity.imageUnusable"));

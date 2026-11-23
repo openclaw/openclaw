@@ -1,9 +1,10 @@
+import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { planLobsterPasser } from "../components/lobster-pet-plans.ts";
-import type { LobsterPetElement as BrowserLobsterPet } from "../components/lobster-pet.test-support.ts";
+import { planLobsterPasser } from "../../../extensions/lobsterdex/browser/api.ts";
+import type { LobsterPetProps } from "../../../extensions/lobsterdex/browser/api.ts";
+import { installNativePluginMockGateway } from "../test-helpers/control-ui-plugin-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { installMockGateway } from "./new-session-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI lobster pet",
@@ -15,14 +16,13 @@ let context: BrowserContext;
 let page: Page;
 async function configureComposerPet(
   seed: number,
-  mode: BrowserLobsterPet["mode"] = "offline",
-  runOutcome: BrowserLobsterPet["runOutcome"] = "ok",
+  mode: LobsterPetProps["mode"] = "offline",
+  runOutcome: LobsterPetProps["runOutcome"] = "ok",
 ) {
   const composerPet = page.locator(".new-session-page__composer openclaw-lobster-pet");
   await composerPet.evaluate(
-    async (element, fixture) => {
-      const pet = Object.assign(element as BrowserLobsterPet, fixture);
-      await pet.updateComplete;
+    (element, fixture) => {
+      element.dispatchEvent(new CustomEvent("lobster-fixture-config", { detail: fixture }));
     },
     { seed, mode, runOutcome },
   );
@@ -30,9 +30,6 @@ async function configureComposerPet(
 
 async function advancePet(ms: number, fast = false) {
   await page.clock[fast ? "fastForward" : "runFor"](ms);
-  await page.evaluate(
-    () => (document.querySelector("openclaw-lobster-pet") as BrowserLobsterPet).updateComplete,
-  );
 }
 
 suite.define(() => {
@@ -43,12 +40,19 @@ suite.define(() => {
     });
     page = await context.newPage();
     await page.clock.install({ time: new Date("2026-07-09T12:00:00") });
-    await installMockGateway(page, {
+    await installNativePluginMockGateway(page, {
+      nativePlugins: [
+        {
+          pluginId: "lobsterdex",
+          rootDir: path.resolve("extensions/lobsterdex"),
+          source: "test-fixtures/geometry.tsx",
+        },
+      ],
       agentModel: "openai/demo",
       models: [{ id: "demo", name: "Demo model", provider: "openai" }],
     });
     await page.goto(`${suite.server.baseUrl}new`);
-    await page.waitForFunction(() => Boolean(customElements.get("openclaw-lobster-pet")));
+    await page.locator("openclaw-lobster-pet").waitFor({ state: "attached" });
     const loadedAt = await page.evaluate(() => Date.now());
     await page.clock.pauseAt(loadedAt + 1_000);
   });

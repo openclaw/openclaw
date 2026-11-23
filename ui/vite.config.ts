@@ -443,12 +443,14 @@ export async function refreshControlUiBuildOutput(
   bootAssets?: string[],
   publicDir: string | false = path.join(here, "public"),
   consumedInputs?: Set<string>,
+  packagedLocalAssets: string[] = [],
 ) {
   const publicContent = publicDir ? collectControlUiPublicAssets(publicDir) : undefined;
   const publicAssets = publicContent?.paths ?? [];
   const cacheId = publicContent ? `${buildInfo.buildId}-${publicContent.hash}` : undefined;
   const publicAssetVersion = publicContent?.hash;
   let selectedBootAssets = bootAssets;
+  let localPresentationAssets = packagedLocalAssets;
   if (!selectedBootAssets) {
     // Reuse the build-owned graph already serialized by this producer, never a fetched document.
     const worker = fs.readFileSync(path.join(buildOutDir, "sw.js"), "utf8");
@@ -456,7 +458,13 @@ export async function refreshControlUiBuildOutput(
     if (!encoded) {
       throw new Error("Cached Control UI service worker has no offline build inventory");
     }
-    const previous = JSON.parse(encoded) as { assets: Array<{ path: string }> };
+    const previous = JSON.parse(encoded) as {
+      assets: Array<{ path: string }>;
+      deferredAssets: Array<{ path: string }>;
+    };
+    localPresentationAssets = previous.deferredAssets
+      .map((asset) => asset.path)
+      .filter((file) => file.startsWith("assets/local-presentations/"));
     selectedBootAssets = previous.assets
       .map((asset) => asset.path)
       .filter((asset) => asset.startsWith("assets/"));
@@ -541,6 +549,7 @@ export async function refreshControlUiBuildOutput(
         !bootPaths.has(file) &&
         !isControlUiOptionalAsset(file),
     )
+    .concat(localPresentationAssets)
     .toSorted()
     .map((file) => {
       const assetSource = fs.readFileSync(path.join(buildOutDir, file));
@@ -755,6 +764,9 @@ function controlUiBuildOutputPlugin(
           [...bootAssets.chat, ...bootAssets.new, ...bootAssets.login],
           publicDir,
           copiedInputs,
+          Object.keys(bundle).filter(
+            (file) => file.startsWith("assets/local-presentations/") && /\.(?:css|js)$/u.test(file),
+          ),
         );
         const inputs = [...new Set([...this.getModuleIds(), ...copiedInputs])]
           .map((file) => file.split("?")[0])

@@ -61,7 +61,6 @@ rebindable subscription; use `projectOwner` for those lifetimes.
 | `application-native.ts`             | Native device settings                                                     |
 | `domain-capabilities.ts`            | Per-consumer agents, channels, runtime config, session lists               |
 | `shared-application-projections.ts` | Shared agents, identity, runtime config, profiles, sessions, pull requests |
-| `events-browser.ts`                 | Lobster visits                                                             |
 
 `projectTheme()` exposes preference and applied-palette projections separately.
 Preferences change immediately; `appliedPalette` advances only after the theme

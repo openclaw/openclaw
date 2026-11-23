@@ -1,27 +1,89 @@
 import "../../styles/settings.css";
 import { createSignal } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { expect, it, vi, onTestFinished } from "vitest";
 import { userEvent } from "vitest/browser";
-import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
+import {
+  LOBSTER_PET_PALETTES,
+  recordLobsterVisit,
+  subscribeLobsterdex,
+} from "../../../../extensions/lobsterdex/browser/api.ts";
+import { createTabIcons } from "../../../../extensions/lobsterdex/browser/tab-icons.ts";
+import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { createInertViewHost } from "../../plugins/control-ui-view.test-support.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { accessoryFixture } from "../../test-helpers/control-ui-accessory-fixture.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { TabIconRow, type TabIconViewProps } from "./view-tab-icon.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
-function setup(overrides: Partial<TabIconViewProps> = {}) {
-  const props: TabIconViewProps = {
+type FixtureProps = TabIconViewProps & {
+  tabIconLobsters?: typeof LOBSTER_PET_PALETTES;
+  lobsterdexEnabled?: boolean;
+};
+async function setup(overrides: Partial<FixtureProps> = {}) {
+  localStorage.clear();
+  onTestFinished(() => localStorage.clear());
+  for (const palette of overrides.tabIconLobsters ?? []) {
+    recordLobsterVisit(palette.id);
+  }
+  const props: FixtureProps = {
     tabIcon: "default",
     setTabIconMode: (choice) => rerender({ tabIcon: choice }),
     ...overrides,
   };
   const [current, setCurrent] = createSignal({ ...props });
-  const { container } = mountSolid(() => <TabIconRow {...current()} />);
+  const listeners = new Set<() => void>();
+  const host = createInertViewHost(new AbortController().signal);
+  Object.assign(host, {
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    presentation: {
+      version: 1,
+      get branding() {
+        return resolveThemeBranding({ lobsterdex: props.lobsterdexEnabled ?? true });
+      },
+      translate: t,
+    },
+  });
+  const icons = createTabIcons(host);
+  const mount = icons.mount;
+  const fixture = accessoryFixture([{ ...icons, mount }], host);
+  onTestFinished(subscribeLobsterdex(fixture.publish));
+  // SAFETY: this row consumes the registry only; the native bundle test uses a complete application.
+  const context = { plugins: fixture.plugins } as ApplicationContext;
+  const provider = createApplicationContextProvider(context);
+  document.body.append(provider);
+  onTestFinished(() => provider.remove());
+  const container = provider.appendChild(document.createElement("div"));
+  mountSolid(
+    () => (
+      <ApplicationProvider value={context}>
+        <TabIconRow {...current()} />
+      </ApplicationProvider>
+    ),
+    { container },
+  );
+  await waitForSolid(() =>
+    expect(container.querySelectorAll(".settings-tab-icon__pick")).toHaveLength(
+      2 + (props.lobsterdexEnabled === false ? 0 : (props.tabIconLobsters?.length ?? 0)),
+    ),
+  );
   flush();
-  const rerender = (patch: Partial<TabIconViewProps> = {}) => {
+  const rerender = (patch: Partial<FixtureProps> = {}) => {
     Object.assign(props, patch);
     setCurrent({ ...props });
+    fixture.publish();
+    for (const listener of listeners) {
+      listener();
+    }
     flush();
   };
   const button = (name: string) =>
@@ -37,7 +99,9 @@ const pressedLabels = (container: HTMLElement) =>
 const AGENT = "Agent avatar";
 
 it("offers every choice in one row without adding or removing rows", async () => {
-  const { props, container, button } = setup({ tabIconLobsters: palettes("crimson", "pixel") });
+  const { props, container, button } = await setup({
+    tabIconLobsters: palettes("crimson", "pixel"),
+  });
   const rows = () => container.querySelectorAll(".settings-row").length;
   expect(rows()).toBe(1);
   expect(container.querySelectorAll(".settings-tab-icon__pick")).toHaveLength(4);
@@ -58,8 +122,8 @@ it("offers every choice in one row without adding or removing rows", async () =>
   expect(pixel.getAnimations({ subtree: true })).toHaveLength(0);
 });
 
-it("hides collected artwork without changing the saved preference and restores it when enabled", () => {
-  const { props, container, rerender, button } = setup({
+it("hides collected artwork without changing the saved preference and restores it when enabled", async () => {
+  const { props, container, rerender, button } = await setup({
     tabIcon: "lobster:crimson",
     lobsterdexEnabled: false,
     tabIconLobsters: palettes("crimson"),
@@ -71,7 +135,9 @@ it("hides collected artwork without changing the saved preference and restores i
   expect(props.setTabIconMode).not.toHaveBeenCalled();
 
   rerender({ lobsterdexEnabled: true });
-  expect(container.querySelectorAll(".settings-tab-icon__pick")).toHaveLength(3);
+  await waitForSolid(() =>
+    expect(container.querySelectorAll(".settings-tab-icon__pick")).toHaveLength(3),
+  );
   expect(button("Default").getAttribute("aria-pressed")).toBe("false");
   expect(pressedLabels(container)).toHaveLength(1);
 });
@@ -79,7 +145,7 @@ it("hides collected artwork without changing the saved preference and restores i
 it.each(["agent", "agent:rounded", "agent:circle"] as const)(
   "shows one circular choice for saved %s artwork and keeps its preview mounted",
   async (tabIcon) => {
-    const { props, container, button } = setup({ tabIcon });
+    const { props, container, button } = await setup({ tabIcon });
     expect(pressedLabels(container)).toEqual([AGENT]);
     expect(container.querySelectorAll(".settings-tab-icon__pick")).toHaveLength(2);
     const circle = button(AGENT);
@@ -97,8 +163,8 @@ it.each(["agent", "agent:rounded", "agent:circle"] as const)(
   },
 );
 
-it("keeps unavailable saved choices and makes an empty collection quietly unavailable", () => {
-  const { props, container, rerender } = setup({
+it("keeps unavailable saved choices and makes an empty collection quietly unavailable", async () => {
+  const { props, container, rerender } = await setup({
     tabIcon: "lobster:gold",
     setTabIconMode: vi.fn(),
   });
@@ -113,7 +179,7 @@ it("keeps unavailable saved choices and makes an empty collection quietly unavai
 it("selects personal artwork with a circular preview", async () => {
   const source = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="32"><rect width="64" height="32" fill="blue"/></svg>')}`;
   const setTabIconMode = vi.fn();
-  const { rerender, button } = setup({ tabIconAgentAvatar: source, setTabIconMode });
+  const { rerender, button } = await setup({ tabIconAgentAvatar: source, setTabIconMode });
   const agent = button(AGENT);
   await userEvent.click(agent);
   expect(setTabIconMode).toHaveBeenLastCalledWith("agent");

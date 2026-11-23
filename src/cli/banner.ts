@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
+import { isLobsterDay, lobsterDayHash } from "../../extensions/lobsterdex/calendar-api.js";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import {
   decorativeEmoji,
@@ -8,7 +9,6 @@ import {
 } from "../../packages/terminal-core/src/decorative-emoji.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveCommitHash } from "../infra/git-commit.js";
-import { isLobsterDay, lobsterDayHash } from "../shared/lobster-day.js";
 import { hasRootVersionAlias } from "./argv.js";
 
 type BannerOptions = {

@@ -1,12 +1,15 @@
 /* @vitest-environment jsdom */
 
 import { beforeEach, afterEach, expect, it, onTestFinished, vi } from "vitest";
+import {
+  getLobsterdex,
+  LOBSTER_PET_PALETTES,
+  planLobsterPasser,
+  resolveLobsterPasserCrossMs,
+} from "../../../extensions/lobsterdex/browser/api.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import * as artworkLoader from "../pages/plugins/icon-loader.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import { getLobsterdex } from "./lobster-dex.ts";
-import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
-import { planLobsterPasser, resolveLobsterPasserCrossMs } from "./lobster-pet-plans.ts";
 import { arrive, createPet, spritePresent } from "./lobster-pet.test-support.ts";
 type Pet = ReturnType<typeof createPet>;
 

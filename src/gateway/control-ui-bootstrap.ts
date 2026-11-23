@@ -13,6 +13,7 @@ import type {
   ControlUiPluginFrameGrantAck,
 } from "./control-ui-contract.js";
 import type { ControlUiDocumentDiagnostics } from "./control-ui-document-diagnostics.js";
+import { enabledLocalPresentations } from "./control-ui-local-presentations.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
@@ -119,6 +120,7 @@ export async function prepareControlUiBootstrapConfig(
     cliAgentsEnabled: config?.gateway?.cliAgents?.enabled !== false,
     pluginAssetsRequireAuth: opts?.auth !== undefined && opts.auth.mode !== "none",
     pluginControlUiModules,
+    enabledLocalPresentations: enabledLocalPresentations(),
     pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path: grantPath, match }) => ({
       pluginId,
       path: grantPath,

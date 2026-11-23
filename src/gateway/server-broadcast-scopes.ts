@@ -90,6 +90,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "sessions.processes.changed": [SESSION_READ_SCOPE],
   "controlUi.sessionPullRequests.changed": [SESSION_READ_SCOPE],
   "plugins.controlUi.changed": [READ_SCOPE],
+  "controlUi.localPresentations.changed": [SESSION_READ_SCOPE],
   "mcp.app.resourceUpdated": [READ_SCOPE],
   "mcp.app.hostContextChanged": [READ_SCOPE],
   "session.approval": [APPROVALS_SCOPE],
@@ -169,6 +170,10 @@ export function isSessionReadInvalidation(
 ): boolean {
   if (!isPlainEventPayload(payload)) {
     return false;
+  }
+  if (event === "controlUi.localPresentations.changed") {
+    // Every Control UI reader can refresh its own bootstrap; the notice carries no data.
+    return Reflect.ownKeys(payload).length === 0;
   }
   const fields = Object.entries(Object.getOwnPropertyDescriptors(payload));
   if (event === "mentions.changed") {

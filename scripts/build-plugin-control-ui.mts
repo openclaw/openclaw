@@ -69,7 +69,10 @@ async function prepareBundledSettingsControlUi(repoRoot: string): Promise<void> 
     if (!declaration.ok) {
       throw new Error(`Invalid Control UI declaration for ${entry.id}: ${declaration.error}`);
     }
-    if (!declaration.value?.settingsViews?.length) {
+    if (
+      declaration.value?.activation !== "browser-local" &&
+      !declaration.value?.settingsViews?.length
+    ) {
       continue;
     }
     await buildBundledPluginControlUi(rootDir);

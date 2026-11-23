@@ -2,6 +2,7 @@ import { agentTabIconShape } from "../../../packages/gateway-protocol/src/schema
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { registerAvatarGatewayReset } from "../lib/identity-avatar-context.ts";
 import { resolveAvatarImageUrl, retainAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
+import { tabIconContributions } from "../plugins/control-ui-tab-icons.ts";
 import type { ApplicationContext } from "./context.ts";
 import { applyControlUiFaviconImage } from "./control-ui-environment-presentation.runtime.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
@@ -22,9 +23,10 @@ async function decodeFaviconImage(url: string): Promise<HTMLImageElement> {
 /** Personal and theme artwork share one lifecycle; the status owner remains independent. */
 export function connectControlUiFaviconArtwork(context: {
   gateway: ApplicationContext["gateway"];
+  plugins?: ApplicationContext["plugins"];
   theme: ChangeSource & {
     settings: Pick<ApplicationContext["theme"]["settings"], "tabIcon">;
-    branding: Pick<ApplicationContext["theme"]["branding"], "lobsterdex" | "brandIcon" | "artwork">;
+    branding: Pick<ApplicationContext["theme"]["branding"], "brandIcon" | "artwork">;
   };
   agents: ChangeSource & {
     state: Pick<ApplicationContext["agents"]["state"], "agentsList">;
@@ -36,8 +38,7 @@ export function connectControlUiFaviconArtwork(context: {
   let request = 0;
   let sourceKey = "";
   let avatarRevision = 0;
-  let lobsterRevision = 0;
-  let stopLobsterdex: (() => void) | undefined;
+  let artworkRevision = 0;
   let releaseImage = () => {};
 
   function retireImage() {
@@ -54,15 +55,12 @@ export function connectControlUiFaviconArtwork(context: {
     const branding = context.theme.branding;
     const themeSource = branding.artwork?.icons?.[branding.brandIcon]?.url;
     const preference = context.theme.settings.tabIcon ?? "default";
-    // Theme suppression is presentation-only; switching back restores the saved choice.
-    const mode = !branding.lobsterdex && preference.startsWith("lobster:") ? "default" : preference;
+    const mode = preference;
     // Control UI draws every agent tab icon as a circle; saved shape variants stay valid.
     const shape = agentTabIconShape(mode) === null ? null : "circle";
-    const lobsterId = mode.startsWith("lobster:") ? mode.slice("lobster:".length) : null;
-    if (!lobsterId) {
-      stopLobsterdex?.();
-      stopLobsterdex = undefined;
-    }
+    const provider = tabIconContributions(context.plugins).find((entry) =>
+      mode.startsWith(entry.value.prefix),
+    );
     const agentId = context.agentSelection.state.selectedId;
     const agent = context.agents.state.agentsList?.agents.find((entry) => entry.id === agentId);
     if (shape !== null && agentId && context.gateway.snapshot.phase === "connected") {
@@ -78,7 +76,11 @@ export function connectControlUiFaviconArtwork(context: {
       shape !== null ? agentId : null,
       source,
       themeSource,
-      shape !== null ? avatarRevision : lobsterId ? lobsterRevision : null,
+      shape !== null
+        ? avatarRevision
+        : provider
+          ? [provider.key, context.plugins?.revision, artworkRevision]
+          : null,
     ]);
     if (sourceKey === nextKey) {
       return;
@@ -118,23 +120,11 @@ export function connectControlUiFaviconArtwork(context: {
         }
       }
     };
-    if (lobsterId) {
-      void Promise.all([
-        import("../components/lobster-favicon.ts"),
-        import("../components/lobster-dex.ts"),
-      ])
-        .then(([{ loadUnlockedLobsterFavicon }, { subscribeLobsterdex }]) => {
-          if (!current()) {
-            return null;
-          }
-          stopLobsterdex ??= subscribeLobsterdex(() => {
-            lobsterRevision += 1;
-            synchronize();
-          });
-          return loadUnlockedLobsterFavicon(lobsterId);
-        })
+    if (provider) {
+      void provider.value
+        .loadImage(mode)
         .then((image) => {
-          if (current()) {
+          if (current() && !provider.signal.aborted) {
             if (image) {
               applyControlUiFaviconImage(image);
             } else {
@@ -183,10 +173,11 @@ export function connectControlUiFaviconArtwork(context: {
   // Keep document artwork and its scoped image lease current without a mounted view.
   const stops = [
     context.gateway.subscribe(synchronize),
+    context.plugins?.subscribe(synchronize) ?? (() => {}),
     context.theme.subscribe(() => {
       // Theme publications include applied lazy palettes and system-mode changes,
       // not just preference intent. Re-bake CSS-dependent artwork after either.
-      lobsterRevision += 1;
+      artworkRevision += 1;
       synchronize();
     }),
     context.agents.subscribe(synchronize),
@@ -204,7 +195,6 @@ export function connectControlUiFaviconArtwork(context: {
   synchronize();
   return () => {
     disposed = true;
-    stopLobsterdex?.();
     stops.forEach((stop) => stop());
     retireImage();
     applyControlUiFaviconImage(null);

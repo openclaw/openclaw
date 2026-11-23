@@ -3,7 +3,6 @@ import type { ControlUiSessionPullRequest } from "../../../src/gateway/control-u
 import type { ControlUiSurfaceProps } from "../../../src/plugin-sdk/control-ui.js";
 import type { ClawHubRecommendation } from "../../../src/shared/clawhub-recommendations.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
-import type { LobsterPetProps } from "../components/lobster-pet-contract.ts";
 import type { MascotMood } from "../components/mascot-pose.ts";
 import type { MessageActionDetails } from "../pages/chat/components/chat-message-markdown.types.ts";
 export type { JSX } from "@solidjs/web";
@@ -110,7 +109,6 @@ declare module "@solidjs/web" {
       "openclaw-update-run-view": HTMLAttributes<HTMLElement>;
       "openclaw-plugins-page": HTMLAttributes<HTMLElement>;
       "openclaw-dashboards-page": HTMLAttributes<HTMLElement>;
-      "openclaw-lobster-pet": HTMLAttributes<HTMLElement> & ElementProperties<LobsterPetProps>;
       // Each caller validates the picker option/callback pairing before the DOM boundary.
       "openclaw-select-picker": HTMLAttributes<HTMLElementTagNameMap["openclaw-select-picker"]> & {
         "prop:params": unknown;

@@ -4,27 +4,16 @@ import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { buildPluginLoaderAliasMap } from "./sdk-alias.js";
-import { createPluginSdkAliasFixtureFactory, writePluginEntry } from "./sdk-alias.test-fixtures.js";
-import { createSyncSuiteTempRootTracker, mkdirSafeDir } from "./test-helpers/fs-fixtures.js";
+import {
+  createPluginSdkAliasFixtureFactory,
+  writePluginEntry,
+  writeWorkspacePackageEntry,
+} from "./sdk-alias.test-fixtures.js";
+import { createSyncSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
 
 const temp = createSyncSuiteTempRootTracker("openclaw-workspace-alias");
 const createPluginSdkAliasFixture = createPluginSdkAliasFixtureFactory(temp.makeTempDir);
 afterAll(() => temp.cleanup());
-
-function writeWorkspacePackageEntry(params: {
-  root: string;
-  packageDir: string;
-  srcFile: string;
-  distFile: string;
-}) {
-  const srcFile = path.join(params.root, "packages", params.packageDir, "src", params.srcFile);
-  const distFile = path.join(params.root, "packages", params.packageDir, "dist", params.distFile);
-  for (const filename of [srcFile, distFile]) {
-    mkdirSafeDir(path.dirname(filename));
-    fs.writeFileSync(filename, "export {};\n", "utf-8");
-  }
-  return { srcFile, distFile };
-}
 
 describe("plugin workspace package export aliases", () => {
   it("resolves workspace export targets and excludes unsupported or missing entries", () => {

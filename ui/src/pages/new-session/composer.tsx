@@ -2,19 +2,14 @@ import {
   createEffect,
   createMemo,
   createSignal,
-  lazy,
   onSettled,
   Show,
   useContext,
   type Element as SolidElement,
 } from "solid-js";
+import type { ControlUiComposerElements } from "../../../../src/plugin-sdk/control-ui.ts";
+import { patchSettings } from "../../app/settings.ts";
 import { createFooterControlRef } from "../../app/shell-layout-traits-solid.tsx";
-import {
-  lobsterPetSeed,
-  resolveLobsterPetMode,
-  resolveLobsterRunOutcome,
-  type LobsterComposerElements,
-} from "../../components/lobster-pet-contract.ts";
 import { createBackgroundLayoutRef } from "../../components/session-background-layout-context.tsx";
 import { createSidebarRendererLoader } from "../../components/sidebar-renderer-loader.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
@@ -23,6 +18,7 @@ import { isMobileBrowserPlatform, keepMobileReturnNative } from "../../lib/brows
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import {
   composerInputHasFocus,
+  composerInputElement,
   focusComposerInput,
   syncComposerInput,
 } from "../../lib/composer-input.ts";
@@ -36,6 +32,8 @@ import { connectedElementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
+import { composerDecorationFacts } from "../../plugins/composer-decoration-state.ts";
+import { PluginAccessories } from "../../plugins/control-ui-accessories.solid.tsx";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import { createChatAttachmentInputHandle } from "../chat/components/chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "../chat/components/chat-attachment-inputs.tsx";
@@ -294,9 +292,6 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
 // Gate rendering, not a shared pending promise: drafts retired before idle
 // must not leave lazy read callbacks retaining their DOM. Admission stays warm.
 const [petAdmitted, admitPet] = createSignal(false);
-const LobsterPet = lazy(() => import("../../components/lobster-pet.tsx"), {
-  export: "LobsterPet",
-});
 
 type NewSessionComposerFrame = ReturnType<typeof prepareComposer>;
 
@@ -439,12 +434,11 @@ function NewSessionComposerInput(props: {
 export function NewSessionComposer(props: {
   contextControls?: SolidElement;
   options: NewSessionComposerOptions;
-  surroundings?: () => Pick<LobsterComposerElements, "root" | "obstacles"> | undefined;
+  surroundings?: () => Pick<ControlUiComposerElements, "root" | "obstacles"> | undefined;
 }) {
   const textarea = useContext(NewSessionComposerTextareaContext);
   const petLoader = createSidebarRendererLoader(async () => {
     admitPet(true);
-    await LobsterPet.preload();
   });
   const PetBoundary = petLoader.Boundary;
   onSettled(() => {
@@ -491,7 +485,7 @@ export function NewSessionComposer(props: {
   let lead: HTMLDivElement | undefined;
   let model: HTMLDivElement | undefined;
   let actions: HTMLDivElement | undefined;
-  const composerElements = (): LobsterComposerElements | null => {
+  const composerElements = (): ControlUiComposerElements | null => {
     const editor = input.read();
     if (!composer || !editor || !footer) {
       return null;
@@ -501,6 +495,7 @@ export function NewSessionComposer(props: {
       root: surroundings?.root ?? composer,
       composer,
       editor,
+      editorSurface: composerInputElement(editor),
       footer,
       controls: [lead, model, actions].filter(
         (element): element is HTMLDivElement => element?.isConnected === true,
@@ -552,35 +547,30 @@ export function NewSessionComposer(props: {
       >
         <PetBoundary>
           <Show when={petAdmitted()}>
-            <LobsterPet
-              composerElements={composerElements}
-              seed={lobsterPetSeed(`${textarea.critterVisit}:${options().draftOwnerKey}`)}
-              mode={resolveLobsterPetMode(
-                !options().context?.gateway.snapshot.offlineStable,
-                options().context?.sessions.state.result?.sessions,
-              )}
-              runOutcome={resolveLobsterRunOutcome(
-                options().context?.sessions.state.result?.sessions,
-              )}
-              visitsEnabled={options().context?.theme.settings.lobsterPetVisits !== false}
-              residentEnabled={options().context?.theme.branding.mascot !== "none"}
-              critters={options().context?.theme.branding.critters}
-              critterArtwork={options().context?.theme.branding.artwork?.critters}
-              soundsEnabled={options().context?.theme.settings.lobsterPetSounds === true}
-              gatewayVersion={
-                options().context?.config.current.serverVersion ??
-                options().context?.gateway.snapshot.hello?.server?.version ??
-                null
-              }
-              onVisitsDisabled={() => options().context?.theme.refresh()}
-              floorEnabled={
-                !frame().composerLocked &&
-                frame().visibleMessage.length === 0 &&
-                options().attachmentDraft.attachments.length === 0 &&
-                options().attachmentDraft.reads.pendingReads === 0 &&
-                !frame().menuVisible &&
-                !textarea.capabilityMenuOpen
-              }
+            <PluginAccessories
+              placement="composer-decoration"
+              value={{
+                composerElements,
+                identity: `${textarea.critterVisit}:${options().draftOwnerKey}`,
+                ...composerDecorationFacts(options().context),
+                visitsEnabled: options().context?.theme.settings.lobsterPetVisits !== false,
+                soundsEnabled: options().context?.theme.settings.lobsterPetSounds === true,
+                gatewayVersion:
+                  options().context?.config.current.serverVersion ??
+                  options().context?.gateway.snapshot.hello?.server?.version ??
+                  null,
+                onVisitsDisabled: () => {
+                  patchSettings({ lobsterPetVisits: false });
+                  options().context?.theme.refresh();
+                },
+                floorEnabled:
+                  !frame().composerLocked &&
+                  frame().visibleMessage.length === 0 &&
+                  options().attachmentDraft.attachments.length === 0 &&
+                  options().attachmentDraft.reads.pendingReads === 0 &&
+                  !frame().menuVisible &&
+                  !textarea.capabilityMenuOpen,
+              }}
             />
           </Show>
         </PetBoundary>

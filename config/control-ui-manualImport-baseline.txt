@@ -7,7 +7,6 @@ ui/src/app/boot-capabilities.ts	1
 ui/src/app/bootstrap-theme.ts	1
 ui/src/app/bootstrap.ts	1
 ui/src/app/config.ts	1
-ui/src/app/control-ui-favicon-artwork.runtime.ts	2
 ui/src/app/gateway-canvas-surface.ts	1
 ui/src/app/gateway-store.ts	1
 ui/src/app/mcp-app-link-routing.ts	1

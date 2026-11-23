@@ -17,7 +17,11 @@ import {
   resolvePluginRuntimeModulePathWithDiagnostics,
   type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
-import { createPluginSdkAliasFixtureFactory, writePluginEntry } from "./sdk-alias.test-fixtures.js";
+import {
+  createPluginSdkAliasFixtureFactory,
+  writePluginEntry,
+  writeWorkspacePackageEntry,
+} from "./sdk-alias.test-fixtures.js";
 import {
   cleanupTrackedTempDirs,
   makeTrackedTempDir,
@@ -134,21 +138,6 @@ function writePluginSdkSubpathArtifacts(root: string, subpaths: readonly string[
       }
     }
   }
-}
-
-function writeWorkspacePackageEntry(params: {
-  root: string;
-  packageDir: string;
-  srcFile: string;
-  distFile: string;
-}) {
-  const srcFile = path.join(params.root, "packages", params.packageDir, "src", params.srcFile);
-  const distFile = path.join(params.root, "packages", params.packageDir, "dist", params.distFile);
-  mkdirSafeDir(path.dirname(srcFile));
-  mkdirSafeDir(path.dirname(distFile));
-  writeFile(srcFile, "export {};\n");
-  writeFile(distFile, "export {};\n");
-  return { srcFile, distFile };
 }
 
 function writeWorkspacePackageExports(
@@ -955,6 +944,7 @@ describe("plugin sdk alias helpers", () => {
       ["gateway-protocol/frame-guards"],
       ["gateway-protocol/gateway-error-details"],
       ["gateway-protocol/restart-unavailable"],
+      ["gateway-protocol/theme"],
       ["markdown-core"],
       ["markdown-core/tables"],
       ["media-generation-core"],
@@ -1003,6 +993,7 @@ describe("plugin sdk alias helpers", () => {
       ["gateway-protocol/frame-guards"],
       ["gateway-protocol/gateway-error-details"],
       ["gateway-protocol/restart-unavailable"],
+      ["gateway-protocol/theme"],
       ["markdown-core/render"],
       ["media-generation-core/catalog"],
       ["media-core/attachment-classify"],

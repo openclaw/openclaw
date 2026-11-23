@@ -1,6 +1,22 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
-import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
+import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
+import { installNativePluginMockGateway } from "../../test-helpers/control-ui-plugin-e2e.ts";
+
+function installLobsterdex(page: Page) {
+  return installNativePluginMockGateway(page, {
+    nativePlugins: [
+      {
+        pluginId: "lobsterdex",
+        rootDir: path.resolve("extensions/lobsterdex"),
+        source: "browser/index.tsx",
+      },
+    ],
+  });
+}
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Lobsterdex E2E",
@@ -14,7 +30,7 @@ suite.define(() => {
       await suite.withPage(
         { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, locale: "en-US" },
         async ({ page, context }) => {
-          await installMockGateway(page);
+          await installLobsterdex(page);
           if (scale === 140) {
             await page.goto(suite.server.baseUrl + "settings/general");
             const typography = page.locator("#settings-appearance-typography");
@@ -68,7 +84,7 @@ suite.define(() => {
     await suite.withPage(
       { viewport: { width: 390, height: 844 }, locale: "en-US" },
       async ({ page }) => {
-        await installMockGateway(page);
+        await installLobsterdex(page);
         await page.addInitScript(() => {
           localStorage.setItem(
             "openclaw.control.lobsterdex.v1",
@@ -91,6 +107,15 @@ suite.define(() => {
         await page.evaluate(() => document.fonts.ready.then(() => undefined));
         const copper = await firstLines("crimson");
         const harbor = await firstLines("blue");
+        expect(await page.locator(".lobsterdex-page__card").count()).toBe(52);
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          page.locator("#lobsterdex-crimson"),
+          [page.getByRole("heading", { name: "Copper" })],
+          { animations: "disabled" },
+        );
+        await writeFile(suite.artifactDir + "/collection-mobile.png", frame.png);
+        console.log("Collection comparison:", suite.artifactDir);
         for (const [index, top] of copper.entries()) {
           expect(Math.abs(harbor[index]! - top)).toBeLessThanOrEqual(1);
         }
@@ -102,7 +127,7 @@ suite.define(() => {
     await suite.withPage(
       { viewport: { width: 390, height: 844 }, locale: "en-US" },
       async ({ page }) => {
-        await installMockGateway(page);
+        await installLobsterdex(page);
         await page.goto(`${suite.server.baseUrl}settings/lobsterdex#lobsterdex-taylorpinch`, {
           waitUntil: "commit",
         });

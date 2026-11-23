@@ -1,12 +1,16 @@
 import { createSignal, onCleanup, Show } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import { PluginContribution, PluginSurface } from "./control-ui-view.solid.tsx";
+import {
+  PluginContribution,
+  PluginSurface,
+  preloadNativeViews,
+} from "./control-ui-surfaces.solid.tsx";
 import {
   composerProps,
   createInertViewHost,
@@ -14,6 +18,8 @@ import {
   recordReplacement,
   replacement,
 } from "./control-ui-view.test-support.ts";
+
+beforeAll(preloadNativeViews);
 
 function runtime(initial?: ControlUiReplacement) {
   return createViewRuntime(initial, {

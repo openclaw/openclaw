@@ -21,7 +21,7 @@ import {
 } from "./control-ui-actions.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
 import { observeSolidBridgeProperties } from "./control-ui-properties.ts";
-import { PluginContribution } from "./control-ui-view.solid.tsx";
+import { PluginContribution } from "./control-ui-surfaces.solid.tsx";
 import { navigationItemCurrent } from "./navigation-sections.ts";
 
 type ContributionsProps = {

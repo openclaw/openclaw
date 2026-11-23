@@ -245,7 +245,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/lib/worktrees/create-worktree.ts":
     case "ui/src/pages/new-session/rejected-initial-turn.ts":
     case "ui/src/lib/model-catalog-reader.ts":
-    case "ui/src/components/lobster-pet-contract.ts":
+    case "ui/src/plugins/composer-decoration-state.ts":
     case "ui/src/lib/mac-form-factor.ts":
     case "ui/src/pages/new-session/model-location.ts":
     case "ui/src/components/agent-select.tsx":

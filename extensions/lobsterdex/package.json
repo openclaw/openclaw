@@ -1,0 +1,41 @@
+{
+  "name": "@openclaw/lobsterdex",
+  "version": "2026.11.7",
+  "private": true,
+  "description": "OpenClaw Lobsterdex bundled plugin",
+  "type": "module",
+  "dependencies": {
+    "@openclaw/gateway-protocol": "workspace:*",
+    "@openclaw/normalization-core": "workspace:*",
+    "@solidjs/web": "2.0.0-rc.18",
+    "solid-js": "2.0.0-rc.18",
+    "@zag-js/dom-query": "2.0.0-next.3"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*",
+    "@solidjs/compiler": "2.0.0-rc.18",
+    "esbuild": "0.28.2"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.11.7"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "controlUi": "./browser/index.tsx",
+    "assetScripts": {
+      "build": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/lobsterdex",
+      "copy": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/lobsterdex --copy",
+      "buildOutputs": [
+        "dist/openclaw.plugin.json"
+      ]
+    }
+  }
+}

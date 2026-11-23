@@ -40,6 +40,7 @@ type ApplicationConfig = {
   cliAgentsEnabled?: boolean;
   pluginAssetsRequireAuth: boolean;
   pluginFrameGrants: ControlUiPluginFrameGrantAck[];
+  enabledLocalPresentations?: readonly string[];
   pluginControlUiModules: NonNullable<ControlUiBootstrapConfig["pluginControlUiModules"]>;
 };
 
@@ -138,6 +139,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
     cliAgentsEnabled: Boolean(parsed.cliAgentsEnabled),
     pluginAssetsRequireAuth: parsed.pluginAssetsRequireAuth !== false,
     pluginControlUiModules: parsed.pluginControlUiModules ?? [],
+    enabledLocalPresentations: parsed.enabledLocalPresentations,
     pluginFrameGrants: (parsed.pluginFrameGrants ?? [])
       .filter(
         (grant): grant is ControlUiPluginFrameGrantAck =>

@@ -15,6 +15,7 @@ export function createInertViewHost(signal: AbortSignal): ControlUiHost {
     navigation: {},
     ui: {},
     components: {},
+    presentation: {},
   } as unknown as ControlUiHost;
 }
 

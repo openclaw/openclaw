@@ -33,7 +33,6 @@ it("hides the collection and visit controls without changing their saved prefere
     themeCatalog: catalog(theme("user/quiet", "Quiet", { lobsterdex: false })),
     lobsterPetVisits: true,
     lobsterPetSounds: true,
-    lobsterdexHref: "/settings/lobsterdex",
   });
   expect(container.querySelector(".lobsterdex__gallery, .lobsterdex__open")).toBeNull();
   expect(container.textContent).not.toContain("Lobster visits");

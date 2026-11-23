@@ -2,9 +2,12 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { lobsterPetSeed } from "./lobster-pet-contract.ts";
-import { canonicalLobsterLook, createLobsterPetLook } from "./lobster-pet-identity.ts";
-import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
+import {
+  canonicalLobsterLook,
+  createLobsterPetLook,
+  LOBSTER_PET_PALETTES,
+  lobsterPetSeed,
+} from "../../../extensions/lobsterdex/browser/api.ts";
 
 describe("lobster pet variants", () => {
   it("mixes four stable, distinct donor palettes only for chimera", () => {

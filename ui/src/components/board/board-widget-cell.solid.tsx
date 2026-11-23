@@ -31,7 +31,7 @@ import { sharedPluginsProjection } from "../../lib/reactive/shared-application-p
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { showToast } from "../../lib/toast.ts";
 import { CustomPluginUiDisabled } from "../../plugins/control-ui-disabled.solid.tsx";
-import { PluginContribution } from "../../plugins/control-ui-view.solid.tsx";
+import { PluginContribution } from "../../plugins/control-ui-surfaces.solid.tsx";
 import type { MenuHandle } from "../solid/menu.tsx";
 import { BoardMcpAppContent } from "./board-mcp-app-content.tsx";
 import { createBoardMcpAppLifecycle } from "./board-mcp-app-lifecycle.ts";

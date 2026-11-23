@@ -11,7 +11,6 @@ import {
   Show,
   untrack,
 } from "solid-js";
-import "../../styles/lobster-pet.css";
 import { countSensitiveConfigValues } from "../../components/config-form.shared.ts";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";

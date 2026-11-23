@@ -10,6 +10,7 @@ import { loadRatchetSources } from "./lib/shrink-ratchet.mts";
 export const PLUGIN_UI_SOURCE_ROOTS = [
   "extensions/workboard/browser",
   "extensions/memory-core/browser",
+  "extensions/lobsterdex/browser",
   "extensions/nostr/browser",
   "extensions/whatsapp/browser",
   "extensions/clawrouter/src/control-ui.tsx",

@@ -1,13 +1,14 @@
 /* @vitest-environment jsdom */
 
 import { createComponent, createSignal } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { beforeAll, expect, it, vi } from "vitest";
 import type {
   ControlUiSurfaceProps,
   ControlUiViewContext,
 } from "../../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
+import { preloadNativeViews } from "../../../plugins/control-ui-surfaces.solid.tsx";
 import { createInertViewHost } from "../../../plugins/control-ui-view.test-support.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
@@ -15,6 +16,8 @@ import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { chatRunPresentation } from "../chat-run-presentation.ts";
 import { buildToolStreamIdentity } from "../tool-stream-identity.ts";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
+
+beforeAll(preloadNativeViews);
 
 it("passes raw Tool Search identity and live then terminal output to plugin replacements", async () => {
   const lifetime = new AbortController();

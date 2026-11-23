@@ -1,15 +1,9 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { insert, type JSX } from "@solidjs/web";
-import {
-  createRoot,
-  createSignal,
-  getOwner,
-  onSettled,
-  runWithOwner,
-  Show,
-  useContext,
-} from "solid-js";
+import { createRoot, createSignal, getOwner, onSettled, runWithOwner, Show } from "solid-js";
 import type {
+  ControlUiAccessoryRegistration,
+  ControlUiAccessoryProps,
   ControlUiSurface,
   ControlUiSurfaceProps,
   ControlUiView,
@@ -19,15 +13,19 @@ import { formatUiError } from "../lib/format-error.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
-import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
-import { projectOwner } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import { ContentPresentation } from "../lib/solid/presentation.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
 import { observeSolidBridgeProperties } from "./control-ui-properties.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
+import type { PluginSurfaceProps } from "./control-ui-surfaces.solid.tsx";
 
-type ViewKind = "pages" | "panels" | "accessories" | "widgets" | "inlineViews" | "replacements";
+export type ViewKind =
+  | "pages"
+  | "panels"
+  | "accessories"
+  | "widgets"
+  | "inlineViews"
+  | "replacements";
 
 type ViewRegistration = ControlUiRegistration<{ mount: ControlUiView<unknown> }>;
 type PluginViewProps = {
@@ -128,13 +126,18 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
         return;
       }
       // SAFETY: the prior bridge value is a host-rendered SDK props record; page props may omit session identity.
-      const previous = before as (Partial<BoardGetParams> & { toolCallId?: string }) | undefined;
+      const previous = before as
+        | (Partial<BoardGetParams> & { toolCallId?: string; identity?: string })
+        | undefined;
       // SAFETY: the next bridge value follows the same host-rendered SDK props contract.
-      const next = after as (Partial<BoardGetParams> & { toolCallId?: string }) | undefined;
+      const next = after as
+        | (Partial<BoardGetParams> & { toolCallId?: string; identity?: string })
+        | undefined;
       if (
         previous?.sessionKey !== next?.sessionKey ||
         previous?.agentId !== next?.agentId ||
-        (host.kind === "inlineViews" && previous?.toolCallId !== next?.toolCallId)
+        (host.kind === "inlineViews" && previous?.toolCallId !== next?.toolCallId) ||
+        (host.kind === "accessories" && previous?.identity !== next?.identity)
       ) {
         ownerChanged = true;
         mountAbort?.abort();
@@ -154,11 +157,6 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
     }),
   );
   const scopedProps = (signal: AbortSignal): unknown => {
-    if (host.kind !== "replacements" || host.surface !== "composer") {
-      return structuredClone(host.props);
-    }
-    // SAFETY: host renderers supply SDK composer props for the kind and surface checked above.
-    const value = host.props as ControlUiSurfaceProps["composer"];
     const generation = composerGeneration;
     const check = () => {
       if (
@@ -172,6 +170,52 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
         throw new Error("This plugin UI view has ended.");
       }
     };
+    if (host.kind === "accessories") {
+      // SAFETY: the registry kind identifies the SDK accessory discriminant and host-rendered props.
+      const accessory = registration?.value as ControlUiAccessoryRegistration | undefined;
+      if (accessory?.placement === "composer-decoration") {
+        // SAFETY: this slot is rendered only with the matching typed host geometry and actions.
+        const value = host.props as ControlUiAccessoryProps["composer-decoration"];
+        return {
+          ...value,
+          composerElements: () => {
+            check();
+            return value.composerElements();
+          },
+          onVisitsDisabled: () => {
+            check();
+            value.onVisitsDisabled();
+          },
+        };
+      }
+      if (accessory?.placement === "ambient-appearance") {
+        // SAFETY: the checked Settings slot supplies these browser-local preference actions.
+        const value = host.props as ControlUiAccessoryProps["ambient-appearance"];
+        return {
+          ...value,
+          onChange: (change: Parameters<typeof value.onChange>[0]) => {
+            check();
+            value.onChange(change);
+          },
+        };
+      }
+      if (accessory?.placement === "tab-icon") {
+        // SAFETY: the checked artwork slot supplies the selected value and its host setter.
+        const value = host.props as ControlUiAccessoryProps["tab-icon"];
+        return {
+          ...value,
+          onChange: (next: string) => {
+            check();
+            value.onChange(next);
+          },
+        };
+      }
+    }
+    if (host.kind !== "replacements" || host.surface !== "composer") {
+      return structuredClone(host.props);
+    }
+    // SAFETY: host renderers supply SDK composer props for the kind and surface checked above.
+    const value = host.props as ControlUiSurfaceProps["composer"];
     return {
       ...value,
       setDraft: (text: string) => {
@@ -376,27 +420,9 @@ export const PluginView = defineSolidBridge<
   methods: { focus: (host, options) => views.get(host)?.focus(options) },
 });
 
-/** Native callers keep built-in views in their Solid owner, including plugin delegation. */
-export function PluginSurface<S extends ControlUiSurface>(props: {
-  surface: S;
-  props: ControlUiSurfaceProps[S];
-  renderDefault: () => JSX.Element;
-  renderCompanion?: () => JSX.Element;
-  presented?: boolean;
-  enabled?: boolean;
-  replacementRef?: (element: HTMLElement) => void | (() => void);
-}) {
-  // Delegated mounts run later inside a foreign plugin and retain the host's owner.
+export function PluginReplacement<S extends ControlUiSurface>(props: PluginSurfaceProps<S>) {
+  // Delegated mounts retain the host owner inside the replacement.
   const owner = getOwner();
-  const context = useOptionalApplication();
-  const runtime = context && projectOwner(context.plugins, (source) => source);
-  const contentPresented = useContext(ContentPresentation);
-  const presented = () => (props.presented ?? true) && contentPresented();
-  const selected = createParkedProjection(
-    () =>
-      props.enabled === false ? undefined : runtime?.read().selectedReplacement(props.surface),
-    presented,
-  );
   const mount = (target: HTMLElement, view: () => JSX.Element) =>
     runWithOwner(owner, () =>
       createRoot((dispose) => {
@@ -422,44 +448,19 @@ export function PluginSurface<S extends ControlUiSurface>(props: {
   const mountDefault = (target: HTMLElement) => mount(target, DefaultView);
   const mountCompanion = (target: HTMLElement) =>
     mount(target, () => <>{props.renderCompanion?.()}</>);
-  function ReplacementView() {
-    let host!: HTMLElement;
-    onSettled(() => props.replacementRef?.(host));
-    return (
-      <PluginView
-        ref={(element) => {
-          host = element;
-        }}
-        data-plugin-composer={props.surface === "composer" ? "" : undefined}
-        surface={props.surface}
-        props={props.props}
-        presented={presented()}
-        mountDefaultView={mountDefault}
-        mountReplacementCompanion={mountCompanion}
-      />
-    );
-  }
-  return (
-    <Show when={selected()} fallback={props.renderDefault()}>
-      <ReplacementView />
-    </Show>
-  );
-}
-
-export function PluginContribution(props: {
-  kind: Exclude<ViewKind, "replacements">;
-  contributionKey: string;
-  props: unknown;
-  presented?: boolean;
-  fallback?: () => JSX.Element;
-}) {
+  let host!: HTMLElement;
+  onSettled(() => props.replacementRef?.(host));
   return (
     <PluginView
-      kind={props.kind}
-      fallback={props.fallback}
-      contributionKey={props.contributionKey}
+      ref={(element) => {
+        host = element;
+      }}
+      data-plugin-composer={props.surface === "composer" ? "" : undefined}
+      surface={props.surface}
       props={props.props}
-      presented={props.presented ?? true}
+      presented={props.presented}
+      mountDefaultView={mountDefault}
+      mountReplacementCompanion={mountCompanion}
     />
   );
 }

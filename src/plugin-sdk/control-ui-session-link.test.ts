@@ -5,7 +5,10 @@ import type { ControlUiAccessory, ControlUiHost, ControlUiViewContext } from "./
 
 // Mirrors the 2026.10.1 Discord/Slack browser entries; the plugin-sdk test typecheck
 // compiles this file, so the shipped consumer shape must still type-check.
-const shippedAccessory: ControlUiAccessory = {
+interface ConversationLinkAccessory extends ControlUiAccessory {
+  id: "conversation-link";
+}
+const shippedAccessory: ConversationLinkAccessory = {
   id: "conversation-link",
   placement: "session-header",
   mount: createSessionHeaderLink(({ conversationLink }) => conversationLink),

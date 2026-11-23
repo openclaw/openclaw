@@ -1,12 +1,19 @@
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  recordLobsterVisit,
+  subscribeLobsterdex,
+} from "../../../extensions/lobsterdex/browser/api.ts";
+import { loadUnlockedLobsterFavicon } from "../../../extensions/lobsterdex/browser/lobster-favicon.ts";
+import { createTabIcons } from "../../../extensions/lobsterdex/browser/tab-icons.ts";
 import type { TabIconPreference } from "../../../packages/gateway-protocol/src/schema/tab-icon.ts";
 import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
-import { recordLobsterVisit } from "../components/lobster-dex.ts";
-import { loadUnlockedLobsterFavicon } from "../components/lobster-favicon.ts";
+import { t } from "../i18n/index.ts";
 import { resolveAvatarImageUrl, retainAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
 import { fetchPluginThemeArtworkBlobUrl } from "../pages/plugins/icon-loader.ts";
+import { createInertViewHost } from "../plugins/control-ui-view.test-support.ts";
+import { accessoryFixture } from "../test-helpers/control-ui-accessory-fixture.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { makeBootRoster } from "./bootstrap.test-support.ts";
 import { applyControlUiFaviconImage } from "./control-ui-environment-presentation.runtime.ts";
@@ -23,7 +30,9 @@ vi.mock("../lib/identity-avatar-loader.ts", () => ({
   retainAvatarImageUrl: vi.fn(() => vi.fn()),
 }));
 // mock-isolation: Pixel decoding is covered at the real browser boundary; this owner fences asynchronous results.
-vi.mock("../components/lobster-favicon.ts", () => ({ loadUnlockedLobsterFavicon: vi.fn() }));
+vi.mock("../../../extensions/lobsterdex/browser/lobster-favicon.ts", () => ({
+  loadUnlockedLobsterFavicon: vi.fn(),
+}));
 // mock-isolation: The validated loader owns HTTP admission; this owner fences decoding and publication.
 vi.mock("../pages/plugins/icon-loader.ts", () => ({ fetchPluginThemeArtworkBlobUrl: vi.fn() }));
 const cleanups: Array<() => void> = [];
@@ -72,7 +81,21 @@ function setup(preference?: TabIconPreference) {
     subscribe,
   };
   const identity = { get: () => null, ensure: vi.fn(async () => {}), subscribe };
+  const host = createInertViewHost(new AbortController().signal);
+  Object.assign(host, {
+    subscribe,
+    presentation: {
+      version: 1,
+      get branding() {
+        return theme.branding;
+      },
+      translate: t,
+    },
+  });
+  const fixture = accessoryFixture([createTabIcons(host)], host);
+  cleanups.push(subscribeLobsterdex(fixture.publish));
   const disconnect = connectControlUiFaviconArtwork({
+    plugins: fixture.plugins,
     gateway: gateway.gateway,
     theme,
     agentSelection: selection,

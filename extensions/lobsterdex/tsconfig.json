@@ -1,0 +1,6 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "rootDir": "../..", "jsx": "preserve", "jsxImportSource": "@solidjs/web" },
+  "include": ["*.ts", "browser/**/*.ts", "browser/**/*.tsx", "../../src/**/*.d.ts", "../../packages/**/*.d.ts"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.test.tsx"]
+}

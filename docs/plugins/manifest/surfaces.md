@@ -555,6 +555,13 @@ the plugin’s backend APIs or the sandboxed dashboard bindings below.
 }
 ```
 
+`controlUi.activation` is optional. Omission keeps the authenticated
+connection-bound runtime. `"settings-only"` declares only packaged Settings
+presentations. `"browser-local"` admits local pages and presentation accessories
+without Gateway services and retains them across a temporary disconnect. See
+[Browser-local presentation lifetime](/plugins/feature-plugins#browser-local-presentation-lifetime)
+for admission, disablement, and trust boundaries.
+
 `controlUi.panelIcon` optionally names a plugin-relative SVG file for every side-chat
 panel registered with `host.ui.registerPanel`. It appears in the new-side-chat picker,
 panel list, and panel tabs on desktop and mobile. This is separate from the plugin

@@ -1,8 +1,6 @@
-import { createMemo, For } from "solid-js";
-import { LobsterSvg } from "../../../components/lobster-pet-artwork.tsx";
-import { lobsterPetSeed } from "../../../components/lobster-pet-contract.ts";
-import { createLobsterPetLook } from "../../../components/lobster-pet-identity.ts";
+import { For } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { PluginAccessories } from "../../../plugins/control-ui-accessories.solid.tsx";
 import { DREAM_PHRASE_KEYS } from "./dreaming.ts";
 import type { DreamingProps } from "./view-types.ts";
 
@@ -34,9 +32,6 @@ export function DreamingScene(props: DreamingProps) {
       "-",
       "-\u2060",
     );
-  // Keep the sleeper's seeded identity consistent with this agent's sidebar pet.
-  const look = createMemo(() => createLobsterPetLook(lobsterPetSeed(props.selectedAgentId)));
-  const style = () => `--lob-shell:${look().palette.shell};--lob-claw:${look().palette.claw}`;
   return (
     <section class={["dreams", { "dreams--idle": !props.active }]}>
       <For each={STARS}>
@@ -68,8 +63,11 @@ export function DreamingScene(props: DreamingProps) {
       ) : undefined}
 
       <div class="dreams__glow" />
-      <div class="dreams__lobster" style={style()}>
-        <LobsterSvg look={look()} sleeping />
+      <div class="dreams__lobster">
+        <PluginAccessories
+          placement="memory-scene"
+          value={{ identity: props.selectedAgentId, sleeping: true }}
+        />
       </div>
       <span class="dreams__z">z</span>
       <span class="dreams__z">z</span>

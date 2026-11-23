@@ -73,6 +73,7 @@ function connectedContext(
     resourceBasePath,
     config: configuration,
     gateway: {
+      connection: { gatewayUrl: client?.gatewayUrl ?? localGateway() },
       snapshot: client
         ? {
             phase: "connected",
@@ -723,3 +724,125 @@ it.each([true, false])(
     expect(translate).toHaveBeenCalledWith("pluginUi.activationTimedOut");
   },
 );
+
+it("keeps browser-local presentations offline without retaining Gateway services", async () => {
+  const descriptor = { ...pluginDescriptor(), activation: "browser-local" as const };
+  let enabled = true;
+  const request = vi.fn(async (method: string) =>
+    method === "plugins.controlUi.list" ? catalog(enabled ? [descriptor] : []) : {},
+  );
+  const client = clientFor(request);
+  const context = connectedContext(client);
+  let changed = () => {};
+  context.gateway.subscribe = (listener) => {
+    changed = () => listener(context.gateway.snapshot);
+    return () => {};
+  };
+  initializeWith((host, owner) => {
+    expect(owner.client).toBeNull();
+    host.ui.registerPage(view("local"));
+  });
+  const runtime = runtimeFor(context);
+  runtime.start();
+  await vi.waitFor(() => expect(runtime.registrations("pages")).toHaveLength(1));
+  const entry = runtime.registrations("pages")[0]!;
+  expect(entry.host.recoveryStorage).toBeNull();
+  expect(entry.host.connection).toMatchObject({
+    canRead: false,
+    canWrite: false,
+    canAdmin: false,
+    assistantAgentId: null,
+  });
+  expect(entry.host.sessions.rows).toEqual([]);
+  await expect(entry.host.request("sessions.list")).rejects.toThrow("no Gateway services");
+  expect(() => entry.host.onEvent("session.message", () => {})).toThrow("no Gateway services");
+  expect(() => entry.host.agents.select("private")).toThrow("no Gateway services");
+  expect(() =>
+    entry.host.components.mountAgentAvatar(document.createElement("div"), {
+      agentId: "private",
+      label: "Private",
+    }),
+  ).toThrow("no Gateway services");
+  expect(() => entry.host.ui.registerPanel({ id: "private", label: "Private", mount })).toThrow(
+    "only local",
+  );
+  expect(() =>
+    entry.host.ui.registerAccessory({ id: "private", placement: "session-header", mount }),
+  ).toThrow("only local");
+
+  Object.assign(context.gateway.snapshot, { phase: "disconnected", client: null, hello: null });
+  changed();
+  expect(entry.signal.aborted).toBe(false);
+  expect(runtime.registrations("pages")[0]?.host).toBe(entry.host);
+  expect(runtime.registrations("pages")[0]?.signal).toBe(entry.signal);
+  entry.host.ui.invalidate();
+  Object.assign(context.gateway.snapshot, connectedContext(client).gateway.snapshot);
+  changed();
+  await vi.waitFor(() => expect(runtime.registryStatus).toBe("complete"));
+  expect(runtime.registrations("pages")[0]?.host).toBe(entry.host);
+  enabled = false;
+  await runtime.refresh();
+  expect(entry.signal.aborted).toBe(true);
+  expect(runtime.registrations("pages")).toEqual([]);
+});
+
+it("admits local bootstrap before connection and retires it on a Gateway switch", async () => {
+  const configuration = configForRuntime();
+  const descriptor = {
+    ...pluginDescriptor("local", assetPath("local") + "index.js"),
+    activation: "browser-local" as const,
+  };
+  packaged.push({
+    ...descriptor,
+    bundledDistribution: { packageName: "@openclaw/review", packageVersion: "1" },
+    entry: "/assets/local-presentations/review/index.js",
+    imports: [],
+  });
+  const context = connectedContext(undefined, {
+    ...configuration,
+    current: {
+      ...configuration.current,
+      pluginAssetsRequireAuth: false,
+      pluginControlUiModules: [],
+      enabledLocalPresentations: [descriptor.pluginId],
+    },
+  });
+  let changed = () => {};
+  context.gateway.subscribe = (listener) => {
+    changed = () => listener(context.gateway.snapshot);
+    return () => {};
+  };
+  initializeWith((host) => {
+    host.ui.registerPage(view("local"));
+  });
+  const runtime = runtimeFor(context);
+  runtime.start();
+  await vi.waitFor(() => expect(runtime.registrations("pages")).toHaveLength(1));
+  const entry = runtime.registrations("pages")[0]!;
+  Object.assign(context.gateway.connection, { gatewayUrl: "wss://other.example" });
+  changed();
+  expect(entry.signal.aborted).toBe(true);
+  expect(runtime.registrations("pages")).toEqual([]);
+});
+
+it("a packaged module without a decision stays off; a previous Gateway's decision is not shared", async () => {
+  const { packagedLocalPresentations } = await import("./control-ui-local-presentations.ts");
+  const { createStorageMock } = await import("../test-helpers/storage.ts");
+  vi.stubGlobal("localStorage", createStorageMock());
+  const url = localGateway();
+  packaged.push({
+    pluginId: "review",
+    revision: "one",
+    activation: "browser-local",
+    bundledDistribution: { packageName: "@openclaw/review", packageVersion: "1" },
+    entry: "/assets/local-presentations/review/one/index.js",
+    styles: [],
+    imports: [],
+  });
+  expect(packagedLocalPresentations(url, "")).toEqual([]);
+  expect(packagedLocalPresentations(url, "", ["review", "not-packaged"])).toHaveLength(1);
+  expect(packagedLocalPresentations(url, "")).toHaveLength(1);
+  expect(packagedLocalPresentations(url + "/other", "/other")).toEqual([]);
+  expect(packagedLocalPresentations(url, "", [])).toEqual([]);
+  expect(packagedLocalPresentations(url, "")).toEqual([]);
+});

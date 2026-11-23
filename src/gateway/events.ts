@@ -45,6 +45,7 @@ export const GATEWAY_EVENTS = [
   "socket.drain",
   "controlUi.sessionPullRequests.changed",
   "plugins.controlUi.changed",
+  "controlUi.localPresentations.changed",
   "presence",
   "tick",
   "talk.mode",

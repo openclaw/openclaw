@@ -180,6 +180,10 @@ export function createVitestResolveConfig(repoRoot: string) {
         ),
       },
       {
+        find: "@openclaw/gateway-protocol/theme",
+        replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "theme.ts"),
+      },
+      {
         find: "@openclaw/gateway-protocol/version",
         replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "version.ts"),
       },

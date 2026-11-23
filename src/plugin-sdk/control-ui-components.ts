@@ -83,7 +83,31 @@ export type ControlUiAppearancePickerProps = {
   onChange: (appearance: { icon: string | null; color: string | null }) => void;
 };
 
+export type ControlUiContextMenuProps = {
+  position: { x: number; y: number };
+  label: string;
+  items: readonly { id: string; label: string; disabled?: boolean }[];
+  onSelect: (id: string) => void;
+  onClose: () => void;
+};
+
+export type ControlUiToggleRowProps = {
+  title: string;
+  description?: string;
+  checked: boolean;
+  onChange: (checked: boolean) => boolean | void;
+  onAct?: (checked: boolean) => void;
+};
+
 export type ControlUiComponents = {
+  mountToggleRow: (
+    container: HTMLElement,
+    props: ControlUiToggleRowProps,
+  ) => ControlUiComponentHandle<ControlUiToggleRowProps>;
+  mountContextMenu: (
+    container: HTMLElement,
+    props: ControlUiContextMenuProps,
+  ) => ControlUiComponentHandle<ControlUiContextMenuProps>;
   /** Resolve a shared palette or custom hex color; invalid or cleared values return an empty string. */
   resolveAppearanceColor: (value: string | null | undefined) => string;
   mountAgentAvatar: (

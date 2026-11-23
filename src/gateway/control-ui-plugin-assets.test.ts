@@ -185,6 +185,16 @@ function activateFixture(origin: PluginRecord["origin"] = "bundled") {
   return { rootDir, directory, registry, record, write, link, unlink, manifest };
 }
 
+it("carries browser-local activation through the enabled native catalog", async () => {
+  const fixture = activateFixture();
+  fixture.record.controlUi!.activation = "browser-local";
+  fixture.manifest(fixture.record.uiCapabilities);
+  const catalog = await listControlUiPluginCatalog();
+  expect(catalog.plugins[0]?.activation).toBe("browser-local");
+  publishOwner(fixture, []);
+  expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
+});
+
 function cookieForGrant(
   overrides: { pluginId?: string; generation?: string; profileId?: string } = {},
 ): string {

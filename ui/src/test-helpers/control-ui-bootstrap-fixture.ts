@@ -29,10 +29,11 @@ export function buildControlUiMockBootstrapConfig(
   normalizedScenario: BootstrapFixtureScenario,
 ): ControlUiBootstrapConfig {
   const nativeCatalog = normalizedScenario.methodResponses["plugins.controlUi.list"] as
-    | { plugins?: { pluginId: string }[] }
+    | { plugins?: NonNullable<ControlUiBootstrapConfig["pluginControlUiModules"]> }
     | undefined;
   return {
     preferences: normalizedScenario.bootstrapPreferences,
+    pluginControlUiModules: nativeCatalog?.plugins ?? [],
     pluginAssetsRequireAuth: normalizedScenario.pluginAssetsRequireAuth,
     openclawIdEnabled: normalizedScenario.openclawIdEnabled,
     pluginFrameGrants: (normalizedScenario.pluginAssetsRequireAuth

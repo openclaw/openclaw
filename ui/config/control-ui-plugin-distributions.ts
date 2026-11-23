@@ -82,7 +82,10 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
                   `Invalid Control UI declaration for ${entry.id}: ${declaration.error}`,
                 );
               }
-              return Boolean(declaration.value?.settingsViews?.length);
+              return (
+                declaration.value?.activation === "browser-local" ||
+                Boolean(declaration.value?.settingsViews?.length)
+              );
             })
             .map((entry) => entry.id)
         : [];
@@ -158,7 +161,9 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
         const urls = new Map<string, string>();
         for (const [name, asset] of build.assets) {
           consume(path.join(rootDir, build.directory, name));
-          const fileName = `assets/plugins/${encodeURIComponent(pluginId)}/${revision}/${name}`;
+          const namespace =
+            controlUi.activation === "browser-local" ? "local-presentations" : "plugins";
+          const fileName = `assets/${namespace}/${encodeURIComponent(pluginId)}/${revision}/${name}`;
           if (serving) {
             const url = `${base}${fileName}`;
             servedAssets.set(url, asset);

@@ -6,7 +6,7 @@ import { createIntersectionObserver, createResizeObserver } from "../lib/reactiv
 import { sharedPluginsProjection } from "../lib/reactive/shared-application-projections.ts";
 import { ContentPresentation } from "../lib/solid/presentation.ts";
 import { CustomPluginUiDisabled } from "./control-ui-disabled.solid.tsx";
-import { PluginContribution } from "./control-ui-view.solid.tsx";
+import { PluginContribution } from "./control-ui-surfaces.solid.tsx";
 
 const NativeTemplateReview = lazy(() => import("../pages/templates/creator-inline-review.tsx"), {
   export: "TemplateCreatorInlineReview",

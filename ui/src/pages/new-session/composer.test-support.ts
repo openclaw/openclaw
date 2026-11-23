@@ -3,6 +3,8 @@ import { onTestFinished, vi } from "vitest";
 import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
@@ -51,6 +53,12 @@ export function renderComposer(
 ) {
   onTestFinished(installChatComposerPickerDismissal(document));
   const container = document.createElement("div");
+  if (overrides.context) {
+    const provider = createApplicationContextProvider(overrides.context);
+    provider.append(container);
+    document.body.append(provider);
+    onTestFinished(() => provider.remove());
+  }
   const attachmentDraft = new NewSessionAttachmentDraft(
     () => undefined,
     () => undefined,
@@ -134,6 +142,7 @@ export function mountNewSessionComposer(
   textarea: NewSessionComposerTextarea,
   container: HTMLElement,
 ) {
+  const context = read().context;
   let update: (options: NewSessionComposerOptions) => void;
   const mounted = mountSolid(
     () => {
@@ -151,7 +160,14 @@ export function mountNewSessionComposer(
         createComponent(NewSessionComposerTextareaContext, {
           value: textarea,
           get children() {
-            return props.children;
+            return context
+              ? createComponent(ApplicationProvider, {
+                  value: context,
+                  get children() {
+                    return props.children;
+                  },
+                })
+              : props.children;
           },
         }),
     },

@@ -20,7 +20,6 @@ import { createPluginCache, retirePluginCache, withPluginCache } from "../plugin
 import { runAfterPluginLifecycleCommit } from "../plugins/plugin-lifecycle-lease.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import { withPluginRegistryPreparationScope } from "../plugins/registry-lifecycle.js";
-import { getPluginRegistryVersion } from "../plugins/runtime-state.js";
 import { waitForPluginRegistryRetirement } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
@@ -29,6 +28,7 @@ import {
   getGatewayRestartDrainSignal,
   waitForGatewayRestartFenceSettlement,
 } from "../process/gateway-work-admission.js";
+import { createPluginChangePublisher } from "./control-ui-local-presentations.js";
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { preparePluginNodeCapabilityPublication } from "./plugin-node-capability.js";
 import type * as PluginBootstrap from "./server-plugin-bootstrap.js";
@@ -79,6 +79,7 @@ export async function reloadGatewayPlugins(
     broadcast,
   } = runtime;
   const previousRegistry = pluginRuntime.registry;
+  const publishChange = createPluginChangePublisher(previousRegistry, broadcast);
   const previousConfig = getRuntimeConfig();
   const { pluginRuntimeGeneration } = kernel;
   const previousMetadata = runtime.pluginMetadataSnapshot;
@@ -427,11 +428,7 @@ export async function reloadGatewayPlugins(
             },
             afterCommit: () => {
               try {
-                broadcast(
-                  "plugins.changed",
-                  { generation: getPluginRegistryVersion(nextRegistry) },
-                  { dropIfSlow: true },
-                );
+                publishChange(nextRegistry);
               } catch (error) {
                 activationErrors.push(error);
               }
@@ -606,11 +603,7 @@ export async function reloadGatewayPlugins(
                 await attempt(recoveryErrors, () =>
                   services.resumeMemory(memoryReplacement, previousConfig),
                 );
-                broadcast(
-                  "plugins.changed",
-                  { generation: getPluginRegistryVersion(restoredRegistry) },
-                  { dropIfSlow: true },
-                );
+                publishChange(restoredRegistry);
               } else {
                 // Restored preparation must be able to retain the still-callable instances.
                 facts.releaseResourceHandoff?.();

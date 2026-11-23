@@ -20,6 +20,7 @@ const WORKSPACE_PACKAGE_ALIAS_SUBPATHS = [
       "restart-unavailable",
       "schema",
       "startup-unavailable",
+      "theme",
       "version",
     ],
   ],

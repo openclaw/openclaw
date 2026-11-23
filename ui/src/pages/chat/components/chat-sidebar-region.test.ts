@@ -5,11 +5,12 @@ import { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { createOverlay } from "../../../components/overlay-lifecycle.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../../lib/presentation.ts";
 import { createControlUiPluginHost } from "../../../plugins/control-ui-host.ts";
-import "../../../components/resizable-divider.ts";
 import {
   ControlUiPluginRuntime,
   type ControlUiPluginOwner,
 } from "../../../plugins/control-ui-runtime.ts";
+import "../../../components/resizable-divider.ts";
+import { preloadNativeViews } from "../../../plugins/control-ui-surfaces.solid.tsx";
 import { sidebarPanelFixtureParams } from "../../../test-helpers/chat-pane-embedded-panels.ts";
 import { createSidebarRegionCallbackMocks } from "../../../test-helpers/sidebar-region-callbacks.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -429,7 +430,7 @@ describe("chat sidebar region", () => {
     state.sessionKey = "agent:main:main";
     state.sidebarLayout = layout;
     const runtime = new ControlUiPluginRuntime(() => context);
-    const owner: Omit<ControlUiPluginOwner, "host"> = {
+    const owner = {
       descriptor: {
         pluginId: "fixture",
         name: "Fixture",
@@ -451,7 +452,7 @@ describe("chat sidebar region", () => {
         inlineViews: new Map(),
       },
       selections: new Map(),
-    };
+    } satisfies Omit<ControlUiPluginOwner, "host">;
     onTestFinished(() => {
       owner.abort.abort();
       owner.client.stop();
@@ -501,6 +502,7 @@ describe("chat sidebar region", () => {
     expect(query(region, '[data-panel-slot="workspace"]')?.hasAttribute("hidden")).toBe(false);
     expect(query(region, '[data-panel="workspace"]')?.textContent).toBe("Workspace panel");
 
+    await preloadNativeViews();
     params.pluginPanels = [entry];
     await refresh();
     expect(query(region, `[data-panel-slot="${slot}"] openclaw-plugin-view`)).not.toBeNull();

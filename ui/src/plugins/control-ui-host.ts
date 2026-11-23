@@ -37,6 +37,14 @@ export function createControlUiPluginHost(
     }
     return getContext();
   };
+  const local = owner.descriptor.activation === "browser-local";
+  const authenticated = () => {
+    const context = current();
+    if (local) {
+      throw new Error("Browser-local plugin UI has no Gateway services.");
+    }
+    return context;
+  };
   const retain = (dispose: ControlUiDisposer) => {
     if (!runtime.isCurrent(owner)) {
       dispose();
@@ -53,6 +61,8 @@ export function createControlUiPluginHost(
     current();
     return result;
   };
+  const callAuthenticated = <T>(operation: (context: ApplicationContext) => Promise<T>) =>
+    call(() => operation(authenticated()));
   const pageLocation = (
     target: ControlUiPageTarget,
     options?: Pick<ControlUiPageNavigationOptions, "preserveSearch">,
@@ -88,7 +98,7 @@ export function createControlUiPluginHost(
       search: search.size ? `?${search}` : "",
     };
   };
-  const dock = getContext().assistantDock;
+  const dock = local ? undefined : getContext().assistantDock;
   // Only an activation that actually docked a conversation owns a close-on-dispose.
   let dockCloseRetained = false;
   return {
@@ -103,12 +113,48 @@ export function createControlUiPluginHost(
     },
     redact: redactToolDetail,
     components: createControlUiComponents({
-      current,
+      current: authenticated,
+      presentationCurrent: current,
       signal: owner.abort.signal,
       onError: (error) => runtime.reportError(owner.descriptor.pluginId, error),
     }),
+    presentation: {
+      version: 1,
+      get branding() {
+        return current().theme.branding;
+      },
+      translate(key, params) {
+        current();
+        return i18n.t(key, params);
+      },
+      async loadThemeArtwork(url) {
+        const { fetchPluginThemeArtworkBlobUrl } = await import("../pages/plugins/icon-loader.ts");
+        const context = current();
+        if (
+          local &&
+          (context.gateway.snapshot.phase !== "connected" ||
+            !Object.values(context.theme.branding.artwork?.critters ?? {}).some(
+              (art) => art.url === url,
+            ))
+        ) {
+          return null;
+        }
+        return fetchPluginThemeArtworkBlobUrl({ url });
+      },
+    },
     get connection() {
-      const snapshot = current().gateway.snapshot;
+      if (local) {
+        current();
+        return {
+          connected: false,
+          canRead: false,
+          canWrite: false,
+          canGrant: false,
+          canAdmin: false,
+          assistantAgentId: null,
+        };
+      }
+      const snapshot = authenticated().gateway.snapshot;
       const access = readGatewayOperatorAccess(snapshot);
       return {
         connected: snapshot.phase === "connected",
@@ -120,6 +166,14 @@ export function createControlUiPluginHost(
       };
     },
     get recoveryStorage() {
+      if (local) {
+        current();
+        return null;
+      }
+      authenticated();
+      if (!owner.client) {
+        return null;
+      }
       return createPluginRecoveryStorage(
         current().gateway,
         owner.client,
@@ -129,10 +183,17 @@ export function createControlUiPluginHost(
         },
       );
     },
-    request: (method, params = {}) => call(() => owner.client.request(method, params)),
+    request: (method, params = {}) =>
+      call(() => {
+        authenticated();
+        if (!owner.client) {
+          throw new Error("This plugin has no Gateway connection.");
+        }
+        return owner.client.request(method, params);
+      }),
     onEvent(event, listener) {
       return retain(
-        current().gateway.subscribeEvents(
+        authenticated().gateway.subscribeEvents(
           (frame) => {
             if (
               runtime.isCurrent(owner) &&
@@ -154,27 +215,39 @@ export function createControlUiPluginHost(
         }
       };
       // The public SDK subscription delivers each owner publication within its activation.
-      const stops = [
-        context.gateway,
-        context.sessions,
-        context.agents,
-        context.agentSelection,
-        context.theme,
-        i18n,
-        ...(dock ? [dock] : []),
-      ].map((source) => source.subscribe(notify));
+      const stops = (
+        local
+          ? [context.theme, i18n]
+          : [
+              context.gateway,
+              context.sessions,
+              context.agents,
+              context.agentSelection,
+              context.theme,
+              i18n,
+              ...(dock ? [dock] : []),
+            ]
+      ).map((source) => source.subscribe(notify));
       return retain(() => stops.forEach((stop) => stop()));
     },
     sessions: {
       get rows() {
-        return structuredClone(current().sessions.state.result?.sessions ?? []);
+        if (local) {
+          current();
+          return [];
+        }
+        return structuredClone(authenticated().sessions.state.result?.sessions ?? []);
       },
       get selectedKey() {
-        return current().gateway.snapshot.sessionKey;
+        if (local) {
+          current();
+          return "";
+        }
+        return authenticated().gateway.snapshot.sessionKey;
       },
       normalizeKey: normalizeSessionKeyForUiComparison,
       refresh: () =>
-        call(async (context) => {
+        callAuthenticated(async (context) => {
           if ((await context.sessions.refreshReplacement()) === null) {
             throw new Error("The session refresh did not complete. Try again.");
           }
@@ -182,7 +255,7 @@ export function createControlUiPluginHost(
       observe(query, listener) {
         const { archived, ...options } = query;
         let disposed = false;
-        const observer = current().sessions.observeList(
+        const observer = authenticated().sessions.observeList(
           {
             ...options,
             archivedFilter: archived === "all" ? "all" : archived ? "archived" : "active",
@@ -213,7 +286,7 @@ export function createControlUiPluginHost(
           disposed = true;
           observer.dispose();
         });
-        const refresh = () => call(() => observer.refresh());
+        const refresh = () => callAuthenticated(() => observer.refresh());
         void refresh().catch((error: unknown) => {
           if (!disposed && runtime.isCurrent(owner)) {
             runtime.reportError(owner.descriptor.pluginId, error);
@@ -222,12 +295,14 @@ export function createControlUiPluginHost(
         return { refresh, dispose };
       },
       open({ sessionKey, agentId }) {
-        openPreferredApplicationSession(current(), sessionKey, agentId);
+        openPreferredApplicationSession(authenticated(), sessionKey, agentId);
       },
       create: (params) =>
-        call((context) => context.sessions.create(params, { signal: owner.abort.signal })),
+        callAuthenticated((context) =>
+          context.sessions.create(params, { signal: owner.abort.signal }),
+        ),
       patch: ({ sessionKey, agentId }, patch) =>
-        call(async (context) => {
+        callAuthenticated(async (context) => {
           // A plugin query may target another global owner. Its mutation does not
           // own the primary roster's optimistic model or remembered list scope.
           const result = await context.sessions.patch(sessionKey, patch, {
@@ -238,7 +313,7 @@ export function createControlUiPluginHost(
           if (!result) {
             throw new Error("The session update did not complete. Try again.");
           }
-          current();
+          authenticated();
           if ((await context.sessions.refreshReplacement()) === null) {
             throw new Error(
               "The session was updated, but the session list could not be refreshed. Refresh the list to see the change.",
@@ -248,25 +323,41 @@ export function createControlUiPluginHost(
     },
     agents: {
       get rows() {
-        return structuredClone(current().agents.state.agentsList?.agents ?? []);
+        if (local) {
+          current();
+          return [];
+        }
+        return structuredClone(authenticated().agents.state.agentsList?.agents ?? []);
       },
       get selectedId() {
-        return current().agentSelection.state.selectedId;
+        if (local) {
+          current();
+          return null;
+        }
+        return authenticated().agentSelection.state.selectedId;
       },
       get defaultId() {
-        return current().agents.state.agentsList?.defaultId ?? null;
+        if (local) {
+          current();
+          return null;
+        }
+        return authenticated().agents.state.agentsList?.defaultId ?? null;
       },
       get scopeId() {
-        return current().agentSelection.state.scopeId;
+        if (local) {
+          current();
+          return null;
+        }
+        return authenticated().agentSelection.state.scopeId;
       },
       select(agentId) {
-        current().agentSelection.set(agentId);
+        authenticated().agentSelection.set(agentId);
       },
       setScope(agentId) {
-        current().agentSelection.setScope(agentId);
+        authenticated().agentSelection.setScope(agentId);
       },
       refresh: () =>
-        call(async (context) => {
+        callAuthenticated(async (context) => {
           if ((await context.agents.refreshList()) === null) {
             throw new Error("The agent refresh did not complete. Try again.");
           }
@@ -275,21 +366,24 @@ export function createControlUiPluginHost(
     dock: dock
       ? {
           openSession(params) {
-            current().assistantDock.openSession(params, owner.abort);
+            authenticated().assistantDock.openSession(params, owner.abort);
             if (!dockCloseRetained) {
               dockCloseRetained = true;
               retain(() => dock.close(owner.abort));
             }
           },
           close() {
-            current().assistantDock.close();
+            authenticated().assistantDock.close();
           },
           get openSessionKey() {
-            return current().assistantDock.openSessionKey;
+            return authenticated().assistantDock.openSessionKey;
           },
         }
       : undefined,
     navigation: {
+      openSettings(section) {
+        current().navigate(section);
+      },
       openPage(target, options) {
         const location = pageLocation(target, options);
         const context = current();
@@ -340,7 +434,7 @@ export function createControlUiPluginHost(
       },
       registerPanel: (value) => runtime.register(owner, "panels", value),
       openPanel(id, session) {
-        const context = current();
+        const context = authenticated();
         if (!owner.contributions.panels.has(id)) {
           throw new Error("A plugin can open only its own registered panel.");
         }
@@ -375,7 +469,7 @@ export function createControlUiPluginHost(
       },
       registerReplacement: (value) => runtime.register(owner, "replacements", value),
       selectReplacement(surface, id) {
-        current();
+        authenticated();
         if (id !== null && owner.contributions.replacements.get(id)?.value.surface !== surface) {
           throw new Error("A plugin can select only its own registered UI replacement.");
         }

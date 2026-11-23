@@ -10,6 +10,7 @@ import {
   Show,
   Switch,
 } from "solid-js";
+import "../../styles/settings.css";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import {
   isStaleChunkImportError,
@@ -26,7 +27,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { CustomPluginUiDisabled } from "../../plugins/control-ui-disabled.solid.tsx";
-import { PluginContribution } from "../../plugins/control-ui-view.solid.tsx";
+import { PluginContribution } from "../../plugins/control-ui-surfaces.solid.tsx";
 import { PluginPageOwner, type PluginPageProps } from "./plugin-page-lifecycle.ts";
 export type { PluginPageProps } from "./plugin-page-lifecycle.ts";
 
@@ -53,7 +54,7 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
     const key = lifecycle.tabKey();
     const contribution = plugins?.()
       .registrations("pages")
-      .some((entry) => entry.key === key);
+      .find((entry) => entry.key === key);
     const authKey = lifecycle.externalTabAuthKey(info, false);
     let mode = "unavailable";
     if (contribution) {
@@ -80,6 +81,7 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
     return {
       info,
       key,
+      layout: contribution?.value.layout,
       mode,
       generation: lifecycle.pluginFrameGeneration,
       bundledHost: lifecycle.bundledViewHost,
@@ -162,7 +164,24 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
   return (
     <Switch>
       <Match when={view().mode === "native"}>
-        <PluginContribution kind="pages" contributionKey={view().key} props={props.params ?? {}} />
+        <ShellLayoutBoundary
+          traits={
+            view().layout === "settings-wide"
+              ? {
+                  toolbarHeader: true,
+                  settingsWorkspace: true,
+                  settingsPage: true,
+                  settingsWide: true,
+                }
+              : {}
+          }
+        >
+          <PluginContribution
+            kind="pages"
+            contributionKey={view().key}
+            props={props.params ?? {}}
+          />
+        </ShellLayoutBoundary>
       </Match>
       <Match when={view().mode === "bundled"}>
         <BundledView />

@@ -19,10 +19,6 @@ import {
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
 import { ImageLightboxItemView } from "../../components/image-lightbox.tsx";
-import {
-  resolveLobsterPetMode,
-  resolveLobsterRunOutcome,
-} from "../../components/lobster-pet-contract.ts";
 import { SessionBackgroundLayoutScope } from "../../components/session-background-layout-context.tsx";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -35,11 +31,12 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createMediaQuerySource } from "../../lib/reactive/platform.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
+import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
 import "../../styles/new-session.css";
 import "../../styles/new-session-attachment-panel.css";
-import { defineSolidBridge } from "../../lib/solid-bridge.ts";
+import { composerDecorationFacts } from "../../plugins/composer-decoration-state.ts";
 import { focusChatComposerFromKeydown } from "../chat/chat-pane-shared.ts";
 import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";
@@ -365,15 +362,11 @@ function renderPageContent(host: PageHost, shell: NewSessionPageProps) {
         (sessions) => ({
           defaults: Object.entries(sessions.state.result?.defaults ?? {}),
           groupStatus: sessions.groupsStatus(),
-          petMode: resolveLobsterPetMode(
-            !context.gateway.snapshot.offlineStable,
-            sessions.state.result?.sessions,
-          ),
-          runOutcome: resolveLobsterRunOutcome(sessions.state.result?.sessions),
+          ...composerDecorationFacts(context),
         }),
         (previous, next) =>
           previous.groupStatus === next.groupStatus &&
-          previous.petMode === next.petMode &&
+          previous.mode === next.mode &&
           previous.runOutcome === next.runOutcome &&
           previous.defaults.length === next.defaults.length &&
           previous.defaults.every(

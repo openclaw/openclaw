@@ -5,9 +5,12 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { LobsterPetProps } from "../../components/lobster-pet-contract.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import {
+  installComposerDecorationProbe,
+  type ComposerDecorationProbe,
+} from "../../test-helpers/control-ui-accessory-fixture.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
@@ -90,6 +93,7 @@ async function mountSessionDraft(agents = [{ id: "main", name: "Assistant" }]) {
     },
   });
   const context = createSessionContext(client);
+  installComposerDecorationProbe(context);
   const lifetime = new AbortController();
   Object.assign(context, {
     lifecycleAbortSignal: lifetime.signal,
@@ -129,8 +133,9 @@ async function mountSessionDraft(agents = [{ id: "main", name: "Assistant" }]) {
   await waitForSolid(() =>
     expect(page.querySelector("[data-chat-model-select]")?.textContent).toContain("Initial model"),
   );
-  const pet = () => page.querySelector<HTMLElement & LobsterPetProps>("openclaw-lobster-pet");
-  await waitForSolid(() => expect(pet()).not.toBeNull());
+  const pet = () =>
+    page.querySelector<ComposerDecorationProbe>("[data-composer-decoration-probe]")?.value;
+  await waitForSolid(() => expect(pet()).toBeDefined());
   const describe = async (next: GatewaySessionRow) => {
     described = next;
     const observation = context.sessions.observeRow({ key: next.key, agentId: "main" }, () => {});

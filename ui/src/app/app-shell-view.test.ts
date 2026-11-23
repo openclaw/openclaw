@@ -2,14 +2,14 @@
 
 import { createRouter, definePage } from "@openclaw/uirouter";
 import { createRoot, flush } from "solid-js";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { beforeAll, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
 import { GatewayBrowserClient, type GatewayBrowserClientOptions } from "../api/gateway.ts";
 import * as settingsSidebar from "../components/settings-sidebar-shell.tsx";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { ChatRouteData } from "../pages/chat/session-route-data.ts";
-import "../plugins/control-ui-view.solid.tsx";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
+import { preloadNativeViews } from "../plugins/control-ui-surfaces.solid.tsx";
 import { createInertViewHost } from "../plugins/control-ui-view.test-support.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
@@ -29,6 +29,7 @@ vi.mock("../components/app-sidebar.tsx", async (importOriginal) => {
   return importOriginal();
 });
 
+beforeAll(preloadNativeViews);
 setupSidebarTest();
 
 // The drawer layout above phone width, where the topbar row stays.

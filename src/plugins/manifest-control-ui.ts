@@ -32,8 +32,12 @@ export function normalizeManifestControlUi(
   ) {
     return err("controlUi contains an unknown field");
   }
-  if (value.activation !== undefined && value.activation !== "settings-only") {
-    return err("controlUi.activation must be settings-only when specified");
+  if (
+    value.activation !== undefined &&
+    value.activation !== "settings-only" &&
+    value.activation !== "browser-local"
+  ) {
+    return err("controlUi.activation must be settings-only or browser-local when specified");
   }
   const ownedChannels = new Set(Array.isArray(channels) ? channels : []);
   const settingsViews: ControlUiSettingsPlacement[] = [];
@@ -118,7 +122,7 @@ export function normalizeManifestControlUi(
     entry,
     ...(panelIcon ? { panelIcon } : {}),
     ...(styles.length > 0 ? { styles } : {}),
-    ...(value.activation === "settings-only" ? { activation: value.activation } : {}),
+    ...(value.activation ? { activation: value.activation } : {}),
     ...(settingsViews.length > 0 ? { settingsViews } : {}),
   });
 }

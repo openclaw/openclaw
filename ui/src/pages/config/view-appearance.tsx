@@ -29,7 +29,7 @@ import { SessionSources } from "./session-sources.tsx";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
 import {
   ChatPreferencesSection,
-  LobsterPetSection,
+  AmbientAppearanceSection,
   MediaDevicesSection,
   serverUiPrefsScopeHint,
   SidebarPreferencesSection,
@@ -590,7 +590,7 @@ export function AppearanceSection(props: ConfigProps) {
       <MediaDevicesSection {...props} />
       <SidebarPreferencesSection {...props} sectionRef={(element) => (sidebar = element)} />
       <SessionSources {...props} sectionRef={(element) => (sessionSources = element)} />
-      <LobsterPetSection {...props} />
+      <AmbientAppearanceSection {...props} />
     </SettingsPage>
   );
 }

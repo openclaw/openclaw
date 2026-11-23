@@ -123,4 +123,6 @@ export type ControlUiBootstrapConfig = {
   pluginAssetsRequireAuth?: boolean;
   pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
   pluginControlUiModules?: PluginControlUiModule[];
+  /** Complete enabled set for the web app's own packaged, local-only presentations; no asset grants. */
+  enabledLocalPresentations?: string[];
 };

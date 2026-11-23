@@ -199,7 +199,7 @@ it.each(["success", "failure"] as const)(
 );
 
 it("prepares a confirmed preset without publishing a retired preparation", async () => {
-  const lobsterImage = await import("../../components/lobster-image.ts");
+  const lobsterImage = await import("../../../../extensions/lobsterdex/browser/runtime-api.ts");
   const prepared = createDeferred<HTMLImageElement | null>();
   const retired = createDeferred<HTMLImageElement | null>();
   vi.spyOn(lobsterImage, "loadLobsterImage")

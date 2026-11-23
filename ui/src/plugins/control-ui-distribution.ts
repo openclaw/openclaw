@@ -7,7 +7,7 @@ export type ControlUiPluginDistribution = Pick<
   entry: string;
   styles: string[];
   imports: string[];
-  activation?: "settings-only";
+  activation?: "settings-only" | "browser-local";
   settingsViews?: readonly import("../../../src/plugin-sdk/control-ui-settings.js").ControlUiSettingsPlacement[];
 };
 

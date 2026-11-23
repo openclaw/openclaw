@@ -34,7 +34,7 @@ function languageLabel(locale: Locale) {
   return t(`languages.${key}`);
 }
 
-export { LobsterPetSection } from "./view-appearance-lobster.tsx";
+export { AmbientAppearanceSection } from "./view-appearance-lobster.tsx";
 function serverUiPrefProvenanceHint(provenance: ServerUiPrefProvenance): string {
   if (provenance === "profile") {
     return t("configView.profileSyncedHint");

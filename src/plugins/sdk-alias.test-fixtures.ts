@@ -66,3 +66,18 @@ export function writePluginEntry(root: string, relativePath: string) {
   fs.writeFileSync(pluginEntry, 'export const plugin = "demo";\n', "utf-8");
   return pluginEntry;
 }
+
+export function writeWorkspacePackageEntry(params: {
+  root: string;
+  packageDir: string;
+  srcFile: string;
+  distFile: string;
+}) {
+  const srcFile = path.join(params.root, "packages", params.packageDir, "src", params.srcFile);
+  const distFile = path.join(params.root, "packages", params.packageDir, "dist", params.distFile);
+  for (const filename of [srcFile, distFile]) {
+    mkdirSafeDir(path.dirname(filename));
+    fs.writeFileSync(filename, "export {};\n", "utf-8");
+  }
+  return { srcFile, distFile };
+}

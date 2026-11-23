@@ -1,8 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { getLobsterdex, recordLobsterVisit, subscribeLobsterdex } from "./lobster-dex.ts";
-import { loadUnlockedLobsterFavicon } from "./lobster-favicon.ts";
-import { loadLobsterImage } from "./lobster-image.ts";
+import {
+  getLobsterdex,
+  recordLobsterVisit,
+  subscribeLobsterdex,
+} from "../../../extensions/lobsterdex/browser/api.ts";
+import {
+  loadUnlockedLobsterFavicon,
+  loadLobsterImage,
+} from "../../../extensions/lobsterdex/browser/runtime-api.ts";
 
 const dexKey = "openclaw.control.lobsterdex.v1";
 const cleanups: Array<() => void> = [];

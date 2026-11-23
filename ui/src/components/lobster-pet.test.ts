@@ -2,14 +2,22 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import {
+  getLobsterdex,
+  getLobsterdexEntries,
+  canonicalLobsterLook,
+  createLobsterPetLook,
+  LOBSTER_PET_PALETTES,
+  pickLobsterEntrance,
+  resolveLobsterLoadIdentity,
+} from "../../../extensions/lobsterdex/browser/api.ts";
+import { renderLobsterSvg } from "../../../extensions/lobsterdex/browser/runtime-api.ts";
 import { loadSettings, settingsKeyForGateway } from "../app/settings.ts";
+import {
+  resolveComposerActivity,
+  resolveComposerRunOutcome,
+} from "../plugins/composer-decoration-state.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
-import { resolveLobsterPetMode, resolveLobsterRunOutcome } from "./lobster-pet-contract.ts";
-import { canonicalLobsterLook, createLobsterPetLook } from "./lobster-pet-identity.ts";
-import { renderLobsterSvg } from "./lobster-pet-look.tsx";
-import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
-import { pickLobsterEntrance, resolveLobsterLoadIdentity } from "./lobster-pet-plans.ts";
 import {
   advanceUntil,
   arrive,
@@ -89,7 +97,9 @@ async function openDismissMenu(
 async function settleDismissMenu(element: LobsterPetElement) {
   await vi.dynamicImportSettled();
   await waitForSolid(() => {
-    const firstItem = element.querySelector('.lobster-pet-dismiss-menu [role="menuitem"]');
+    const firstItem = element.ownerDocument.querySelector(
+      '.lobster-pet-dismiss-menu [role="menuitem"]',
+    );
     expect(firstItem).not.toBeNull();
     expect(document.activeElement).toBe(firstItem);
   });
@@ -97,7 +107,9 @@ async function settleDismissMenu(element: LobsterPetElement) {
 
 function selectDismissal(element: LobsterPetElement, value: "dismiss" | "dismiss-permanently") {
   expectDefined(
-    element.querySelector<HTMLButtonElement>(`[role="menuitem"][data-value="${value}"]`),
+    element.ownerDocument.querySelector<HTMLButtonElement>(
+      `.lobster-pet-dismiss-menu [role="menuitem"][data-value="${value}"]`,
+    ),
     `${value} menu item`,
   ).click();
 }
@@ -143,8 +155,12 @@ async function updatePet(element: LobsterPetElement, props: Partial<LobsterPetEl
 }
 
 afterEach(async () => {
-  document.body.replaceChildren();
+  // Disconnect the owners before their portaled menus are cleared from the document.
+  for (const pet of document.querySelectorAll("openclaw-lobster-pet")) {
+    pet.remove();
+  }
   await Promise.resolve();
+  document.body.replaceChildren();
   vi.useRealTimers();
   vi.unstubAllGlobals();
   localStorage.clear();
@@ -176,14 +192,14 @@ describe("seasonal wardrobe", () => {
 });
 
 describe("connection and run outcomes", () => {
-  it.each<[boolean, Parameters<typeof resolveLobsterPetMode>[1], string]>([
+  it.each<[boolean, Parameters<typeof resolveComposerActivity>[1], string]>([
     [false, [{ hasActiveRun: true }], "offline"],
     [true, null, "idle"],
     [true, [{ hasActiveRun: false }, { hasActiveRun: true }], "busy"],
   ])("resolves connected=%s sessions=%j as %s", (connected, sessions, expected) => {
-    expect(resolveLobsterPetMode(connected, sessions)).toBe(expected);
+    expect(resolveComposerActivity(connected, sessions)).toBe(expected);
   });
-  it.each<[Parameters<typeof resolveLobsterRunOutcome>[0], string]>([
+  it.each<[Parameters<typeof resolveComposerRunOutcome>[0], string]>([
     [null, "ok"],
     [[activity("done", 10), activity("failed", 20)], "error"],
     [[activity("failed", 10), activity("done", 20)], "ok"],
@@ -193,7 +209,7 @@ describe("connection and run outcomes", () => {
     // endedAt outranks activity stamps touched by unrelated events.
     [[activity("failed", 10, 30), activity("done", 40, 20)], "error"],
   ])("resolves terminal sessions %j as %s", (sessions, expected) => {
-    expect(resolveLobsterRunOutcome(sessions)).toBe(expected);
+    expect(resolveComposerRunOutcome(sessions)).toBe(expected);
   });
 });
 
@@ -258,14 +274,14 @@ describe("lobster pet element", () => {
     const clientX = 1200;
     const clientY = 850;
     await openDismissMenu(element, { clientX, clientY });
-    const menu = element.querySelector(".lobster-pet-dismiss-menu__panel");
+    const menu = element.ownerDocument.querySelector(".plugin-context-dismiss-menu__panel");
     expect(menu?.getAttribute("data-placement")).toBe("top-start");
-    const trigger = element.querySelector<HTMLElement>(
+    const trigger = element.ownerDocument.querySelector<HTMLElement>(
       ".lobster-pet-dismiss-menu .oc-menu-trigger",
     );
-    const position = trigger?.closest<HTMLElement>(".lobster-pet-dismiss-menu__position");
-    expect(position?.style.getPropertyValue("--lobster-pet-menu-x")).toBe(`${clientX}px`);
-    expect(position?.style.getPropertyValue("--lobster-pet-menu-y")).toBe(`${clientY}px`);
+    const position = trigger?.closest<HTMLElement>(".plugin-context-dismiss-menu__position");
+    expect(position?.style.getPropertyValue("--plugin-context-menu-x")).toBe(`${clientX}px`);
+    expect(position?.style.getPropertyValue("--plugin-context-menu-y")).toBe(`${clientY}px`);
     expect(trigger?.tabIndex).toBe(-1);
     expect(trigger?.getAttribute("aria-hidden")).toBe("true");
     composer.focus();
@@ -290,9 +306,9 @@ describe("lobster pet element", () => {
     expect(spriteClasses(element)).not.toContain("lobster-pet--act-startle");
     await settleDismissMenu(element);
     expect(
-      [...element.querySelectorAll('.lobster-pet-dismiss-menu [role="menuitem"]')].map((item) =>
-        item.textContent?.trim(),
-      ),
+      [
+        ...element.ownerDocument.querySelectorAll('.lobster-pet-dismiss-menu [role="menuitem"]'),
+      ].map((item) => item.textContent?.trim()),
     ).toEqual(["Dismiss", "Dismiss and don't show again"]);
 
     const veto = (event: Event) => event.preventDefault();
@@ -301,9 +317,13 @@ describe("lobster pet element", () => {
       selectDismissal(element, "dismiss");
       await element.updateComplete;
       expect(spriteClasses(element)).not.toContain("lobster-pet--away");
-      expect(element.querySelector('[role="menu"]')?.matches(":popover-open")).toBe(true);
+      expect(
+        element.ownerDocument
+          .querySelector('.lobster-pet-dismiss-menu [role="menu"]')
+          ?.matches(":popover-open"),
+      ).toBe(true);
       expect(document.activeElement).toBe(
-        element.querySelector('.lobster-pet-dismiss-menu [role="menuitem"]'),
+        element.ownerDocument.querySelector('.lobster-pet-dismiss-menu [role="menuitem"]'),
       );
     } finally {
       document.removeEventListener("overlay-hide", veto);

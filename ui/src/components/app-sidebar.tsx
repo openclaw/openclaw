@@ -23,7 +23,7 @@ import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
 import { createTimeout } from "../lib/reactive/timers.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
+import { PluginSurface } from "../plugins/control-ui-surfaces.solid.tsx";
 import { navigationSectionForPage, pluginPageKeyForRoute } from "../plugins/navigation-sections.ts";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
 import { AppSidebarOwner } from "./app-sidebar-owner.tsx";

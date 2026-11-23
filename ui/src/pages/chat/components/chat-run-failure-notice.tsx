@@ -17,7 +17,7 @@ import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
-import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
+import { PluginSurface } from "../../../plugins/control-ui-surfaces.solid.tsx";
 import type { FailedMessageEditSource } from "../failed-message-edit.ts";
 import { openChatRewindConfirmation } from "./chat-message-confirmation-view.tsx";
 

@@ -12,6 +12,12 @@ When you open a new session in the [Control UI](/web/control-ui), a small lobste
 
 This is normal. This is OpenClaw.
 
+The experience comes from the bundled **Lobsterdex** plugin, enabled by default.
+Disabling the plugin removes its visitors, collection page, Memory-scene artwork,
+and collected-lobster tab-icon choices. It keeps your browser-local discoveries
+and preferences, so re-enabling it brings them back. A selected lobster tab icon
+falls back to the normal icon while the plugin is disabled.
+
 ## What you are looking at
 
 Each new composer opening gets its own cast: color, size, claw proportions, accessories, and personality stay stable while you type or change controls. Their bodies keep their natural proportions; some are small, some are large, and some have claws that are frankly too big for them. Some nap constantly. Some never sit still. One of them waves a lot.

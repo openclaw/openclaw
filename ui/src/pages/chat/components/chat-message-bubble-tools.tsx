@@ -9,7 +9,7 @@ import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
+import { PluginSurface } from "../../../plugins/control-ui-surfaces.solid.tsx";
 import { ChatImportBoundary } from "./chat-import-boundary.tsx";
 import { ActivityOperation } from "./chat-message-activity-operation.tsx";
 import { OmittedMedia } from "./chat-message-attachment-status-solid.tsx";

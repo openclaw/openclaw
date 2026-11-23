@@ -330,7 +330,7 @@ export type PluginManifestControlUi = {
   /** SVG used for this plugin's side-panel picker entries and tabs, relative to its root. */
   panelIcon?: string;
   /** Omission retains ordinary runtime activation. */
-  activation?: "settings-only";
+  activation?: "settings-only" | "browser-local";
   settingsViews?: import("../../packages/gateway-protocol/src/plugin-control-ui-settings.js").ControlUiSettingsPlacement[];
 };
 
