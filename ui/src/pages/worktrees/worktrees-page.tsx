@@ -34,6 +34,7 @@ import {
 import { sessionHubTabs } from "../sessions/session-hub-tabs.ts";
 import "../../styles/settings.css";
 import "../../styles/hub-tabs.css";
+import "./worktree-row.css";
 import { WorktreeReferenceChoice } from "./reference-choice.tsx";
 import { WorktreesModel } from "./worktrees-model.ts";
 
@@ -103,21 +104,26 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
       description: value,
     })),
   );
-  const ambiguousRepoLabels = createMemo(() => {
-    const seen = new Set<string>();
-    const repeated = new Set<string>();
-    for (const { label } of repositories()) {
-      if (seen.has(label)) {
-        repeated.add(label);
-      }
-      seen.add(label);
-    }
-    return repeated;
+  const repoLabels = createMemo(() => {
+    const paths = repositories().map(({ value }) => ({
+      value,
+      parts: value.split(/[\\/]+/u).filter(Boolean),
+    }));
+    return new Map(
+      paths.map(({ value, parts }) => {
+        for (let n = 1; n <= parts.length; n++) {
+          const suffix = parts.slice(-n).join("/");
+          if (
+            !paths.some(
+              (other) => other.value !== value && other.parts.slice(-n).join("/") === suffix,
+            )
+          )
+            return [value, suffix] as const;
+        }
+        return [value, value] as const;
+      }),
+    );
   });
-  const repoLabel = (root: string) => {
-    const label = pathDisplayName(root);
-    return ambiguousRepoLabels().has(label) ? root : label;
-  };
   const operation = () => pending().operation() ?? view().operation;
   const busy = () => operation() !== null || view().operationPending;
 
@@ -285,14 +291,19 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                   <For each={view().records} keyed={(record) => record.id}>
                     {(record) => (
                       <SettingsRow
-                        title={record().name}
+                        title={
+                          <span class="worktree-row__name" title={record().name}>
+                            <span>{record().name.slice(0, -10)}</span>
+                            <span>{record().name.slice(-10)}</span>
+                          </span>
+                        }
                         description={
-                          <>
-                            <span
-                              id={`worktree-repository-${record().id}`}
-                              title={record().repoRoot}
-                            >
-                              {repoLabel(record().repoRoot)}
+                          <details class="worktree-row__details">
+                            <summary title={record().repoRoot}>
+                              {repoLabels().get(record().repoRoot)}
+                            </summary>
+                            <span id={`worktree-repository-${record().id}`}>
+                              {record().repoRoot}
                             </span>
                             {" · "}
                             {record().branch}
@@ -300,7 +311,7 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                             {owner(record())}
                             {" · "}
                             {formatRelativeTimestamp(record().lastActiveAt)}
-                          </>
+                          </details>
                         }
                         control={
                           <>
