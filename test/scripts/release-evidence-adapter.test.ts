@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 const { validate } = vi.hoisted(() => ({ validate: vi.fn() }));
-vi.mock("../../scripts/lib/full-release-child-reuse.mjs", () => ({
+vi.mock("../../scripts/lib/full-release-child-reuse.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../scripts/lib/full-release-child-reuse.mjs")>()),
   validateReusableReleaseChild: validate,
 }));
 import { createReleaseEvidenceClient } from "../../scripts/release-ci-summary.mjs";
