@@ -53,7 +53,12 @@ import {
 } from "./systemd-unit-load-paths.js";
 
 export type { ExtraGatewayService } from "./inspect-files.js";
-export { renderGatewayServiceCleanupHints } from "./inspect-cleanup-hints.js";
+export {
+  formatGatewayServiceInspectionErrors,
+  gatewayServiceCleanupHintLabel,
+  isGatewayRemovalHint,
+  renderGatewayServiceCleanupHints,
+} from "./inspect-cleanup-hints.js";
 
 export type FindExtraGatewayServicesOptions = {
   deep?: boolean;
@@ -622,15 +627,22 @@ async function scanGatewayServices(
       let missingRecoveryLauncher: string | undefined;
       let offerRecoveryDeletion = false;
       if (!marker && !selected && !isOpenClawGatewayTaskName(name)) {
-        const recovery = await classifyWindowsRecoveryTask(task.actions);
+        const recovery = await classifyWindowsRecoveryTask(task.actions, { env, deadline });
+        if (recovery.status === "deadline") {
+          recordDeadline();
+          break;
+        }
         if (recovery.status === "missing") {
           marker = "openclaw";
           missingRecoveryLauncher = recovery.path;
           offerRecoveryDeletion = recovery.soleAction;
-        } else if (recovery.status === "unreadable") {
+        } else if (recovery.status === "unreadable" || recovery.status === "unresolved") {
           errors.push({
             source: name,
-            message: "Gateway recovery launcher could not be inspected.",
+            message:
+              recovery.status === "unresolved"
+                ? "Gateway recovery launcher path is unresolved, so it was not classified as missing."
+                : "Gateway recovery launcher could not be inspected.",
           });
         }
       }

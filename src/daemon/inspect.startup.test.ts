@@ -864,4 +864,128 @@ describe("inventory projections", () => {
       errors: [{ source: label, message: "Gateway recovery launcher could not be inspected." }],
     });
   });
+
+  it("checks a present package-qualified recovery alias without calling it missing", async () => {
+    const family = "OpenClawFoundation.OpenClawGateway_example";
+    const local = "C:\\AliasFixture";
+    const alias = "openclaw-gateway-recovery.exe";
+    const stored = `%LOCALAPPDATA%\\Microsoft\\WindowsApps\\${family}\\${alias}`;
+    const resolved = `C:\\AliasFixture\\Microsoft\\WindowsApps\\${family}\\${alias}`;
+    const label = "\\OpenClaw Gateway Recovery Alias";
+    const access = vi.spyOn(fs, "access").mockImplementation(async (target) => {
+      if (target === resolved) {
+        return;
+      }
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    });
+    vi.mocked(taskProbe.listScheduledTasks).mockReturnValue([task(label, stored, "")]);
+
+    const result = await findExtraGatewayServices(
+      { ...nativeEnv, LOCALAPPDATA: local },
+      { deep: true },
+    );
+
+    expect(access).toHaveBeenCalledWith(resolved);
+    expect(result).toEqual({ services: [], errors: [] });
+    expect(renderGatewayServiceCleanupHints(result.services)).toEqual([]);
+  });
+
+  it("reports a missing package-qualified side-by-side recovery alias", async () => {
+    const family = "OpenClawFoundation.OpenClawGateway-ab_example";
+    const local = "C:\\AliasFixture";
+    const alias = "openclaw-gateway-recovery-ab.exe";
+    const stored = `%LOCALAPPDATA%\\Microsoft\\WindowsApps\\${family}\\${alias}`;
+    const resolved = `C:\\AliasFixture\\Microsoft\\WindowsApps\\${family}\\${alias}`;
+    const label = "\\OpenClaw Gateway Recovery Alias ab";
+    vi.spyOn(fs, "access").mockImplementation(async (target) => {
+      if (target !== resolved) {
+        throw Object.assign(new Error(`unexpected probe ${String(target)}`), { code: "ENOENT" });
+      }
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    });
+    vi.mocked(taskProbe.listScheduledTasks).mockReturnValue([task(label, stored, "")]);
+
+    const result = await findExtraGatewayServices(
+      { ...nativeEnv, LOCALAPPDATA: local },
+      { deep: true },
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.services).toEqual([
+      expect.objectContaining({
+        label,
+        detail: `missing recovery launcher: ${resolved}`,
+        windowsMissingRecoveryLauncher: resolved,
+      }),
+    ]);
+    expect(renderGatewayServiceCleanupHints(result.services)).toEqual([
+      `schtasks /Query /TN "${label}" /V /FO LIST`,
+      `schtasks /Delete /F /TN "${label}"`,
+    ]);
+  });
+
+  it.each([
+    "openclaw-gateway-recovery.exe",
+    ".\\openclaw-gateway-recovery.exe",
+    "%TEMP%\\openclaw-gateway-recovery.exe",
+    "%LOCALAPPDATA%\\..\\openclaw-gateway-recovery.exe",
+    "\\\\server\\share\\openclaw-gateway-recovery.exe",
+  ])("does not confirm %s missing without a resolved local path", async (launcher) => {
+    const label = "\\OpenClaw Gateway Recovery Unresolved";
+    const access = vi
+      .spyOn(fs, "access")
+      .mockRejectedValue(Object.assign(new Error("missing"), { code: "ENOENT" }));
+    vi.mocked(taskProbe.listScheduledTasks).mockReturnValue([task(label, launcher, "")]);
+
+    const result = await findExtraGatewayServices(nativeEnv, { deep: true });
+
+    expect(access).not.toHaveBeenCalled();
+    expect(result.services).toEqual([]);
+    expect(result.errors).toEqual([
+      {
+        source: label,
+        message:
+          "Gateway recovery launcher path is unresolved, so it was not classified as missing.",
+      },
+    ]);
+    expect(renderGatewayServiceCleanupHints(result.services)).toEqual([]);
+  });
+
+  it("ignores a recovery filename outside the supported alias names", async () => {
+    const launcher =
+      "C:\\WindowsApps\\OpenClawFoundation.OpenClawGateway_example\\openclaw-gateway-recovery-this-name-is-too-long.exe";
+    const access = vi.spyOn(fs, "access");
+    vi.mocked(taskProbe.listScheduledTasks).mockReturnValue([
+      task("\\OpenClaw Gateway Recovery Other", launcher, ""),
+    ]);
+
+    await expect(findExtraGatewayServices(nativeEnv, { deep: true })).resolves.toEqual({
+      services: [],
+      errors: [],
+    });
+    expect(access).not.toHaveBeenCalled();
+  });
+
+  it("finishes recovery inventory when the launcher probe never settles", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const launcher =
+      "C:\\WindowsApps\\OpenClawFoundation.OpenClawGateway_example\\openclaw-gateway-recovery.exe";
+    const label = "\\OpenClaw Gateway Recovery Slow";
+    vi.spyOn(fs, "access").mockImplementation(() => new Promise(() => {}));
+    vi.mocked(taskProbe.listScheduledTasks).mockReturnValue([task(label, launcher, "")]);
+
+    const inventory = findExtraGatewayServices(nativeEnv, { deep: true });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await expect(inventory).resolves.toEqual({
+      services: [],
+      errors: [
+        {
+          source: "schtasks",
+          message:
+            "Scheduled Task inventory deadline expired; some services could not be inspected.",
+        },
+      ],
+    });
+  }, 2_500);
 });

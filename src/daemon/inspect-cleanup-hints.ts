@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import type { ExtraGatewayService } from "./inspect-files.js";
 import { isWindowsGatewayRecoveryExecutable } from "./inspect-markers.js";
 
@@ -9,14 +11,67 @@ export type WindowsRecoveryTaskInspection =
   | { status: "missing"; path: string; soleAction: boolean }
   | { status: "present" }
   | { status: "unreadable" }
+  | { status: "unresolved" }
+  | { status: "deadline" }
   | { status: "none" };
+
+const PACKAGE_QUALIFIED_RECOVERY_ALIAS =
+  /^%LOCALAPPDATA%\\Microsoft\\WindowsApps\\(?<family>[^\\/%:*?"<>|\r\n]+)\\(?<alias>openclaw-gateway-recovery(?:-[a-z0-9](?:[a-z0-9-]{0,13}[a-z0-9])?)?\.exe)$/i;
+
+function isDriveOrHostAbsolute(executable: string): boolean {
+  if (/[%\r\n"]/.test(executable) || executable.startsWith("\\\\") || executable.startsWith("//")) {
+    return false;
+  }
+  return /^[a-z]:[\\/]/i.test(executable) || path.posix.isAbsolute(executable);
+}
+
+function recoveryProbePath(
+  executable: string,
+  env: Record<string, string | undefined>,
+): { kind: "probe"; path: string } | { kind: "unresolved" } | { kind: "ignore" } {
+  const command = executable.trim().replace(/^"+|"+$/g, "");
+  if (!isWindowsGatewayRecoveryExecutable(command)) {
+    return { kind: "ignore" };
+  }
+  const qualified = PACKAGE_QUALIFIED_RECOVERY_ALIAS.exec(command);
+  if (qualified?.groups) {
+    const family = qualified.groups.family;
+    const local = env.LOCALAPPDATA?.trim();
+    if (
+      !family ||
+      family === "." ||
+      family === ".." ||
+      family.includes("..") ||
+      !local ||
+      !/^[a-z]:[\\/]/i.test(local) ||
+      /[%\r\n"]/.test(local)
+    ) {
+      return { kind: "unresolved" };
+    }
+    const root = path.win32.normalize(path.win32.join(local, "Microsoft", "WindowsApps"));
+    const resolved = path.win32.normalize(
+      path.win32.join(root, family, qualified.groups.alias ?? ""),
+    );
+    const prefix = root.endsWith("\\") ? root : `${root}\\`;
+    if (!resolved.toLowerCase().startsWith(prefix.toLowerCase())) {
+      return { kind: "unresolved" };
+    }
+    return { kind: "probe", path: resolved };
+  }
+  if (!isDriveOrHostAbsolute(command)) {
+    return { kind: "unresolved" };
+  }
+  return { kind: "probe", path: command };
+}
 
 /**
  * A present recovery executable still belongs to the Windows package.
  * Deletion advice is limited to a task whose only action is that missing executable.
+ * Env-var, relative, and UNC paths are not probed and are not confirmed missing.
  */
 export async function classifyWindowsRecoveryTask(
   actions: readonly { path: string }[] | undefined,
+  options: { env?: Record<string, string | undefined>; deadline?: number } = {},
 ): Promise<WindowsRecoveryTaskInspection> {
   const normalized = (actions ?? []).map((action) => action.path.trim().replace(/^"+|"+$/g, ""));
   const recoveryPaths = normalized.filter((executable) =>
@@ -25,27 +80,67 @@ export async function classifyWindowsRecoveryTask(
   if (recoveryPaths.length === 0) {
     return { status: "none" };
   }
+  const env = options.env ?? {};
   let missingPath: string | undefined;
+  let unresolved = false;
   for (const recoveryPath of recoveryPaths) {
+    const probe = recoveryProbePath(recoveryPath, env);
+    if (probe.kind === "ignore") {
+      continue;
+    }
+    if (probe.kind === "unresolved") {
+      unresolved = true;
+      continue;
+    }
+    if (options.deadline !== undefined && performance.now() >= options.deadline) {
+      return { status: "deadline" };
+    }
     try {
-      await fs.access(recoveryPath);
+      const accessed = await awaitWithinDeadline(
+        () => fs.access(probe.path),
+        options.deadline,
+        () => performance.now(),
+      );
+      if (accessed === ABSOLUTE_DEADLINE_EXPIRED) {
+        return { status: "deadline" };
+      }
       return { status: "present" };
     } catch (error) {
       if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
-        missingPath ??= recoveryPath;
+        missingPath ??= probe.path;
         continue;
       }
       return { status: "unreadable" };
     }
   }
-  if (!missingPath) {
-    return { status: "present" };
+  if (unresolved || !missingPath) {
+    return unresolved ? { status: "unresolved" } : { status: "present" };
   }
   return {
     status: "missing",
     path: missingPath,
     soleAction: normalized.length === 1 && recoveryPaths.length === 1,
   };
+}
+
+export function isGatewayRemovalHint(hint: string): boolean {
+  return /^\s*(?:sudo\s+)?(?:rm\b|schtasks\s+\/Delete\b|launchctl\s+bootout\b)/i.test(hint);
+}
+
+export function gatewayServiceCleanupHintLabel(hint: string): string {
+  return isGatewayRemovalHint(hint) ? "Cleanup hint:" : "Inspection hint:";
+}
+
+export function formatGatewayServiceInspectionErrors(
+  errors: readonly { source: string; message: string }[] | undefined,
+): string[] {
+  if (!errors?.length) {
+    return [];
+  }
+  return [
+    "Gateway service inspection failed:",
+    ...errors.map((error) => `- ${error.source}: ${error.message}`),
+  ];
 }
 
 export function renderGatewayServiceCleanupHints(

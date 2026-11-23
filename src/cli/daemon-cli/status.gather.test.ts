@@ -66,6 +66,7 @@ import {
 } from "./status.gather.probes.test-support.js";
 import {
   createStatusCommand,
+  expectObservedGatewayExtras,
   registerServiceInspectionStatusTests,
 } from "./status.gather.service-inspection.test-support.js";
 import { registerStatusTimeoutTests } from "./status.gather.timeout.test-support.js";
@@ -577,8 +578,7 @@ describe("gatherDaemonStatus", () => {
     try {
       const status = await gatherStatus({ probe: false, deep: true });
 
-      expect(status.extraServices).toEqual([userService, otherService]);
-      expect(status.service.label).toBe("systemd system");
+      expectObservedGatewayExtras(status, [userService, otherService]);
     } finally {
       serviceFixture.label = "LaunchAgent";
       Object.defineProperty(process, "platform", originalPlatform);

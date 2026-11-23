@@ -162,10 +162,17 @@ export function isOpenClawGatewayTaskName(name: string): boolean {
   return stripped === defaultName || /^openclaw gateway \(.+\)$/.test(stripped);
 }
 
-/** WindowsApps recovery launcher. It has no gateway argv, so command markers miss it. */
+/**
+ * WindowsApps recovery launcher. It has no gateway argv, so command markers miss it.
+ * Packaging also renames the alias for a side-by-side patch:
+ * openclaw-gateway-recovery-<1-15 letters, digits, or hyphens>.exe.
+ */
+const WINDOWS_GATEWAY_RECOVERY_ALIAS =
+  /^openclaw-gateway-recovery(?:-[a-z0-9](?:[a-z0-9-]{0,13}[a-z0-9])?)?\.exe$/i;
+
 export function isWindowsGatewayRecoveryExecutable(command: string): boolean {
   const executable = command.trim().replace(/^"+|"+$/g, "");
-  return /(?:^|[\\/])openclaw-gateway-recovery\.exe$/i.test(executable);
+  return WINDOWS_GATEWAY_RECOVERY_ALIAS.test(path.win32.basename(executable));
 }
 
 export function detectWindowsServiceExecutionMarker(args: string[], cwd?: string): Marker | null {

@@ -10,6 +10,7 @@ import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { isDefaultInstallIdentity, resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { formatGatewayHeapLimitReport, inspectGatewayHeapLimit } from "../daemon/gateway-heap.js";
+import { isGatewayRemovalHint } from "../daemon/inspect-cleanup-hints.js";
 import {
   findExtraGatewayServices,
   renderGatewayServiceCleanupHints,
@@ -733,11 +734,13 @@ export async function maybeScanExtraGatewayServices(
   const cleanupHints = renderGatewayServiceCleanupHints(
     extraServices.filter((service) => service.legacy !== true),
   );
-  if (cleanupHints.length > 0) {
-    note(
-      cleanupHints.map((hint) => `- ${hint}`).join("\n"),
-      process.platform === "darwin" ? "Cleanup hints" : "Inspection hints",
-    );
+  const removalHints = cleanupHints.filter((hint) => isGatewayRemovalHint(hint));
+  const inspectionHints = cleanupHints.filter((hint) => !isGatewayRemovalHint(hint));
+  if (inspectionHints.length > 0) {
+    note(inspectionHints.map((hint) => `- ${hint}`).join("\n"), "Inspection hints");
+  }
+  if (removalHints.length > 0) {
+    note(removalHints.map((hint) => `- ${hint}`).join("\n"), "Cleanup hints");
   }
 
   note(

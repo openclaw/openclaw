@@ -327,23 +327,35 @@ async function gatherDaemonStatusImpl(
     gatewayMode: shouldInspectLocalGateway ? "local" : "remote",
   });
 
-  const extraServices = opts.deep
-    ? await import("../../daemon/inspect.js")
-        .then(({ findExtraGatewayServices }) =>
-          findExtraGatewayServices(process.env, {
-            deep: true,
-          }),
-        )
-        .then(({ services }) =>
-          services.filter(
-            (extra) =>
-              extra.platform !== "linux" ||
-              extra.scope !== runtime?.systemd?.scope ||
-              extra.label !== runtime?.systemd?.unit,
-          ),
-        )
-        .catch(() => [])
-    : [];
+  let extraServices: Awaited<
+    ReturnType<typeof import("../../daemon/inspect.js").findExtraGatewayServices>
+  >["services"] = [];
+  let extraServiceInspectionErrors: Awaited<
+    ReturnType<typeof import("../../daemon/inspect.js").findExtraGatewayServices>
+  >["errors"] = [];
+  if (opts.deep) {
+    try {
+      const found = await import("../../daemon/inspect.js").then(({ findExtraGatewayServices }) =>
+        findExtraGatewayServices(process.env, {
+          deep: true,
+        }),
+      );
+      extraServices = found.services.filter(
+        (extra) =>
+          extra.platform !== "linux" ||
+          extra.scope !== runtime?.systemd?.scope ||
+          extra.label !== runtime?.systemd?.unit,
+      );
+      extraServiceInspectionErrors = found.errors;
+    } catch {
+      extraServiceInspectionErrors = [
+        {
+          source: "gateway-services",
+          message: "Gateway service inspection failed.",
+        },
+      ];
+    }
+  }
   const launchdDiagnostics =
     process.platform === "darwin"
       ? await import("./status.launchd.js").then(({ gatherLaunchdJobDiagnostics }) =>
@@ -647,6 +659,7 @@ async function gatherDaemonStatusImpl(
         }
       : {}),
     extraServices,
+    ...(extraServiceInspectionErrors.length > 0 ? { extraServiceInspectionErrors } : {}),
     ...(pluginVersionDrift ? { pluginVersionDrift } : {}),
     ...(pluginVersionRestartReadiness ? { pluginVersionRestartReadiness } : {}),
   };
