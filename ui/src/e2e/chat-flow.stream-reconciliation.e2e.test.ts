@@ -111,6 +111,45 @@ async function openRun(runId: string, options: Parameters<typeof installMockGate
 }
 
 suite.define(() => {
+  it("does not replay imported Claude tool updates in the active reply", async () => {
+    const runId = "claude-tool-turn";
+    const first = "I will check the two review points.";
+    const second = "The type check passed.";
+    const startedAt = Date.now() - 75_000;
+    const imported = (id: string, content: unknown[], offset: number) => ({
+      role: "assistant",
+      provider: "claude-cli",
+      api: "anthropic-messages",
+      timestamp: startedAt + offset,
+      __openclaw: { id, importedFrom: "claude-cli", cliSessionId: "native-turn", externalId: id },
+      content,
+    });
+    const call = (id: string) => [{ type: "toolcall", id, name: "exec", arguments: {} }];
+    const buffer = first + "\n\n" + second;
+    const { page, events } = await openRun(runId, {
+      historyMessages: [
+        savedUser(runId, "Check the review."),
+        imported("first", textContent(first), 1_010),
+        imported("check", call("check"), 1_020),
+        imported("second", textContent(second), 1_030),
+        imported("test", call("test"), 1_040),
+      ],
+      inFlightRun: activeRun(runId, buffer, startedAt),
+    });
+    const thread = page.locator(".chat-thread");
+    const visibleSteps = () =>
+      thread
+        .locator(".chat-group.assistant .chat-text p")
+        .or(thread.getByText("Script execution", { exact: true }))
+        .allTextContents();
+    const savedSteps = [first, "Script execution", second, "Script execution"];
+    await expect.poll(visibleSteps).toEqual(savedSteps);
+    // Identical words in a later delta are a new occurrence, not part of the saved prefix.
+    const deltaText = "\n\n" + first;
+    await events.chat("delta", chatMessage("assistant", buffer + deltaText), { seq: 3, deltaText });
+    await expect.poll(visibleSteps).toEqual([...savedSteps, first]);
+  });
+
   it("recovers a retired final when its session message was missed", async () => {
     const runId = "missed-terminal-publication";
     const answer = "Review complete. The verified fix is ready.";

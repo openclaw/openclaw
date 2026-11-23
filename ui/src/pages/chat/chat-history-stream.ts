@@ -25,7 +25,11 @@ import {
   reconcileChatRunFromSessionRow,
   setChatRunError,
 } from "./run-lifecycle.ts";
-import { replaceChatStream } from "./stream-causal-boundary.ts";
+import {
+  knownStreamCausalInterval,
+  replaceChatStream,
+  resolveAssistantTextTail,
+} from "./stream-causal-boundary.ts";
 import { materializeVisibleStreamState } from "./stream-reconciliation.ts";
 import type { handleAgentEvent } from "./tool-stream.ts";
 
@@ -57,6 +61,41 @@ function resolveInFlightAssistantText(bufferedText: unknown): string | null {
     !isHiddenAssistantStreamText(bufferedText)
     ? bufferedText
     : null;
+}
+
+// Claude's native transcript is read independently of Gateway transcript commits.
+// Only its imported rows in this turn can cover part of the still-cumulative reply.
+function reconcileImportedClaudePrefix(state: ChatState, runId: string, text: string): void {
+  if (!state.chatMessages.some((message) => asOptionalRecord(message)?.provider === "claude-cli")) {
+    return;
+  }
+  const interval = knownStreamCausalInterval(state.chatMessages, { runId });
+  if (!interval) {
+    return;
+  }
+  const texts = state.chatMessages.slice(interval.start, interval.end).map((message) => {
+    const identity = readSessionMessageIdentity(message);
+    return identity?.isImported &&
+      identity.role === "assistant" &&
+      (!identity.runId || identity.runId === runId) &&
+      asOptionalRecord(message)?.provider === "claude-cli"
+      ? (extractText(message)?.trim() ?? null)
+      : null;
+  });
+  const tail = resolveAssistantTextTail(texts, text);
+  const prefix = text.slice(0, text.length - (tail?.length ?? 0));
+  if (
+    prefix &&
+    !state.chatStreamSegments.some(
+      (part) => part.persisted && part.runId === runId && part.text === prefix,
+    )
+  ) {
+    // Retain wire coordinates for the next delta, including genuinely repeated words.
+    state.chatStreamSegments = [
+      ...state.chatStreamSegments,
+      { runId, text: prefix, ts: state.chatStreamStartedAt ?? Date.now(), persisted: true },
+    ];
+  }
 }
 
 function runProjectionsUnchanged(
@@ -269,6 +308,9 @@ export function applyHistoryRun(params: {
     replaceChatStream(state, resolveInFlightAssistantText(run.text));
   }
   state.chatStreamStartedAt = snapshotStartedAt ?? state.chatStreamStartedAt ?? Date.now();
+  if (state.chatStream) {
+    reconcileImportedClaudePrefix(state, inFlightRunId, state.chatStream);
+  }
   const startup = run.events?.findLast(
     (event) => event.runId === inFlightRunId && event.stream === "run_status",
   );
