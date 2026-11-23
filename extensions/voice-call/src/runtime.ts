@@ -21,6 +21,7 @@ import {
   resolveVoiceCallNumberRouteKeyForCall,
   resolveVoiceCallSessionKey,
   resolveVoiceCallStreamExposurePaths,
+  resolveRealtimeElevationPin,
   resolveTwilioAuthToken,
 } from "./config.js";
 import { CallManager } from "./manager.js";
@@ -40,6 +41,7 @@ import {
   providerRequiresPublicWebhook,
 } from "./webhook-exposure.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
+import type { DtmfElevationGate } from "./webhook/realtime-dtmf-elevation.js";
 import { cleanupTailscaleExposure, setupTailscaleExposure } from "./webhook/tailscale.js";
 
 export type VoiceCallRuntime = {
@@ -243,6 +245,16 @@ export async function createVoiceCallRuntime(params: {
   );
   if (realtimeVoiceRuntime) {
     const { RealtimeCallHandler } = await import("./webhook/realtime-handler.js");
+    const elevationPin = resolveRealtimeElevationPin(config);
+    let elevation: DtmfElevationGate | undefined;
+    if (elevationPin) {
+      const { DtmfElevationGate } = await import("./webhook/realtime-dtmf-elevation.js");
+      elevation = new DtmfElevationGate({
+        pin: elevationPin,
+        config: config.realtime.elevation,
+        allowFrom: config.allowFrom,
+      });
+    }
     const resolveRealtimeInstructions = await createRealtimeInstructionsResolver({
       config,
       coreConfig: cfg,
@@ -280,6 +292,7 @@ export async function createVoiceCallRuntime(params: {
       webhookServer.getStreamDisconnectLifecycle(),
       cfg,
       config.voicemail.holdOpeningMaxMs,
+      elevation,
     );
     if (config.realtime.toolPolicy !== "none") {
       realtimeHandler.registerToolHandler(
@@ -293,13 +306,19 @@ export async function createVoiceCallRuntime(params: {
           const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
           const effectiveConfig = resolveVoiceCallEffectiveConfig(config, numberRouteKey).config;
           const agentId = resolveCallAgentId(call);
-          const sessionKey = resolveVoiceCallSessionKey({
+          const callerSessionKey = resolveVoiceCallSessionKey({
             config: { ...effectiveConfig, agentId },
             callId: call.callId,
             phone: call.direction === "outbound" ? call.to : call.from,
             explicitSessionKey: call.sessionKey,
             coreSession: cfg.session,
           });
+          // Results from owner tools must not reach the caller's shared session, where a later
+          // call without the PIN could read them back. Elevated consults get a session that
+          // belongs to this call only.
+          const sessionKey = handlerContext.elevated
+            ? `${callerSessionKey}:elevated:${call.callId}`
+            : callerSessionKey;
           const requesterSessionKey =
             typeof call.metadata?.requesterSessionKey === "string"
               ? call.metadata.requesterSessionKey
@@ -378,8 +397,9 @@ export async function createVoiceCallRuntime(params: {
             spawnedBy: requesterSessionKey,
             contextMode: requesterSessionKey ? "fork" : undefined,
             toolsAllow: (() => {
+              // The realtime handler supplies this call's policy, including keypad elevation.
               const allowed = resolveRealtimeVoiceAgentConsultToolsAllow(
-                effectiveConfig.realtime.toolPolicy,
+                handlerContext.toolPolicy ?? effectiveConfig.realtime.toolPolicy,
               );
               return allowed?.length ? [...allowed, "voice_call"] : allowed;
             })(),

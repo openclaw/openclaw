@@ -69,6 +69,8 @@ async function connectWs(url: string) {
   return ws;
 }
 
+const CONSULT_CONTEXT = { abortSignal: expect.any(AbortSignal), toolPolicy: "safe-read-only" };
+
 const PROVIDER_WITH_LOCAL_BARGE_IN_CAPABILITIES = {
   transports: ["gateway-relay"],
   inputAudioFormats: [{ encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }],
@@ -1238,7 +1240,7 @@ describe("RealtimeCallHandler path routing", () => {
       expect(consult.mock.calls[1]).toEqual([
         { question: "Check the new deployment." },
         "call-1",
-        { abortSignal: expect.any(AbortSignal) },
+        CONSULT_CONTEXT,
       ]);
       expect(clearAudio).toHaveBeenCalledTimes(3);
     } finally {
@@ -1413,10 +1415,7 @@ describe("RealtimeCallHandler path routing", () => {
       context: "Realtime provider supplied a shorter consult question: message",
     });
     expect(callId).toBe("call-1");
-    expect(context).toEqual({
-      partialUserTranscript: text,
-      abortSignal: expect.any(AbortSignal),
-    });
+    expect(context).toEqual({ ...CONSULT_CONTEXT, partialUserTranscript: text });
     await expectToolResult(submitToolResult, "consult-call", { text: "I sent it." }, true);
   });
 

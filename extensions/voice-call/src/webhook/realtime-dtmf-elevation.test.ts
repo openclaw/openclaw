@@ -1,0 +1,199 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  DtmfElevationGate,
+  type DtmfElevationOutcome,
+  resolveElevationConsultPolicy,
+} from "./realtime-dtmf-elevation.js";
+
+const INTER_DIGIT_TIMEOUT_MS = 3_000;
+
+const PIN = "4321";
+const inbound = {
+  callId: "call-in",
+  direction: "inbound" as const,
+  from: "+1 (555) 000-1234",
+  to: "+15550007777",
+};
+const outbound = {
+  callId: "call-out",
+  direction: "outbound" as const,
+  from: "+15550007777",
+  to: "+15550001234",
+};
+
+function open(
+  gate = new DtmfElevationGate({
+    pin: PIN,
+    config: { prefix: "*", elevatedToolPolicy: "owner", maxAttempts: 3, lockoutMs: 60_000 },
+    allowFrom: ["+15550001234"],
+  }),
+  call: { callId: string; direction: "inbound" | "outbound"; from: string; to: string } = inbound,
+) {
+  const outcomes: DtmfElevationOutcome[] = [];
+  const session = gate.openCall(call, (outcome) => outcomes.push(outcome));
+  const press = (digits: string) => {
+    for (const digit of digits) {
+      session?.acceptDigit(digit);
+    }
+  };
+  return { gate, session, outcomes, press };
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("DtmfElevationGate", () => {
+  it("keeps a call marked elevated across rebinding while its tool policy resets", () => {
+    const gate = new DtmfElevationGate({
+      pin: PIN,
+      config: { prefix: "*", elevatedToolPolicy: "owner", maxAttempts: 3, lockoutMs: 60_000 },
+      allowFrom: ["+15550001234"],
+    });
+    const first = open(gate, inbound);
+    first.press(`*${PIN}#`);
+    expect(first.session?.toolPolicy).toBe("owner");
+    first.session?.close();
+
+    const reconnected = open(gate, inbound);
+    expect(reconnected.session?.toolPolicy).toBeUndefined();
+    expect(reconnected.session?.wasElevated).toBe(true);
+    expect(resolveElevationConsultPolicy(reconnected.session, "safe-read-only")).toEqual({
+      toolPolicy: "safe-read-only",
+      elevated: true,
+    });
+    // Another call from the same number starts unmarked.
+    const otherCall = open(gate, { ...inbound, callId: "call-later" });
+    expect(otherCall.session?.wasElevated).toBe(false);
+    expect(resolveElevationConsultPolicy(otherCall.session, "safe-read-only")).toEqual({
+      toolPolicy: "safe-read-only",
+    });
+  });
+
+  it("opens only when the other party is allowlisted, in either direction", () => {
+    expect(open().session).toBeDefined();
+    expect(open(undefined, { ...inbound, from: "+15550009999" }).session).toBeUndefined();
+    // Outbound: the callee is the other party; an allowlisted caller id on our side is not.
+    expect(open(undefined, outbound).session).toBeDefined();
+    expect(
+      open(undefined, { ...outbound, from: "+15550001234", to: "+15550009999" }).session,
+    ).toBeUndefined();
+  });
+
+  it("shares failures and lockout between inbound and outbound calls with one number", () => {
+    const gate = new DtmfElevationGate({
+      pin: PIN,
+      config: { prefix: "*", elevatedToolPolicy: "owner", maxAttempts: 2, lockoutMs: 60_000 },
+      allowFrom: ["+15550001234"],
+    });
+    open(gate, inbound).press("*0000#");
+    const later = open(gate, outbound);
+    later.press("*0000#");
+    expect(later.outcomes).toEqual([{ kind: "locked-out", attempt: 2, maxAttempts: 2 }]);
+  });
+
+  it("ignores digits until the prefix and submits on #", () => {
+    const { session, outcomes, press } = open();
+    press(`${PIN}#`);
+    expect(outcomes).toEqual([]);
+    press("*");
+    expect(session?.collecting).toBe(true);
+    press(`${PIN}#`);
+    expect(outcomes).toEqual([{ kind: "elevated", toolPolicy: "owner" }]);
+    expect(session?.collecting).toBe(false);
+    expect(session?.toolPolicy).toBe("owner");
+  });
+
+  it("restarts entry on * and ignores keys outside 0-9", () => {
+    const { session, outcomes, press } = open();
+    press("*99*A4D321#");
+    expect(outcomes).toEqual([{ kind: "elevated", toolPolicy: "owner" }]);
+    expect(session?.toolPolicy).toBe("owner");
+  });
+
+  it("submits after the inter-digit timeout and idles on a bare prefix", () => {
+    vi.useFakeTimers();
+    const { session, outcomes, press } = open();
+    press("*");
+    vi.advanceTimersByTime(INTER_DIGIT_TIMEOUT_MS);
+    expect(session?.collecting).toBe(false);
+    expect(outcomes).toEqual([]);
+    press(`*${PIN}`);
+    vi.advanceTimersByTime(INTER_DIGIT_TIMEOUT_MS - 1);
+    expect(outcomes).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(outcomes).toEqual([{ kind: "elevated", toolPolicy: "owner" }]);
+  });
+
+  it("submits at 12 digits without revealing the configured length", () => {
+    const { outcomes, press } = open();
+    press(`*${PIN}`);
+    expect(outcomes).toEqual([]);
+    press("00000000");
+    expect(outcomes).toEqual([{ kind: "rejected", attempt: 1, maxAttempts: 3 }]);
+  });
+
+  it("rejects wrong PINs, then locks the caller out across calls until expiry", () => {
+    vi.useFakeTimers();
+    const first = open();
+    first.press("*1#*12345#*4320#");
+    expect(first.outcomes).toEqual([
+      { kind: "rejected", attempt: 1, maxAttempts: 3 },
+      { kind: "rejected", attempt: 2, maxAttempts: 3 },
+      { kind: "locked-out", attempt: 3, maxAttempts: 3 },
+    ]);
+    // A locked-out call accepts nothing more.
+    first.press(`*${PIN}#`);
+    expect(first.outcomes).toHaveLength(3);
+    expect(first.session?.toolPolicy).toBeUndefined();
+
+    // During lockout even the correct PIN is refused without comparison, and the call ends.
+    const locked = open(first.gate);
+    locked.press(`*${PIN}#`);
+    expect(locked.outcomes).toEqual([{ kind: "locked-out", attempt: 3, maxAttempts: 3 }]);
+    expect(locked.session?.toolPolicy).toBeUndefined();
+
+    vi.advanceTimersByTime(60_000);
+    const afterLockout = open(first.gate);
+    afterLockout.press(`*${PIN}#`);
+    expect(afterLockout.outcomes).toEqual([{ kind: "elevated", toolPolicy: "owner" }]);
+  });
+
+  it("counts failed attempts per caller across calls, so redialing does not reset them", () => {
+    vi.useFakeTimers();
+    const first = open();
+    first.press("*1111#*2222#");
+    first.session?.close();
+    const second = open(first.gate);
+    second.press("*3333#");
+    expect(second.outcomes).toEqual([{ kind: "locked-out", attempt: 3, maxAttempts: 3 }]);
+    const third = open(first.gate);
+    third.press(`*${PIN}#`);
+    expect(third.session?.toolPolicy).toBeUndefined();
+  });
+
+  it("forgets old failures after the lockout window and clears them on success", () => {
+    vi.useFakeTimers();
+    const first = open();
+    first.press("*1111#*2222#");
+    vi.advanceTimersByTime(60_000);
+    const second = open(first.gate);
+    second.press("*3333#");
+    expect(second.outcomes).toEqual([{ kind: "rejected", attempt: 1, maxAttempts: 3 }]);
+    second.press(`*${PIN}#`);
+    expect(second.session?.toolPolicy).toBe("owner");
+    const third = open(first.gate);
+    third.press("*1111#");
+    expect(third.outcomes).toEqual([{ kind: "rejected", attempt: 1, maxAttempts: 3 }]);
+  });
+
+  it("drops pending entry on close", () => {
+    const { session, outcomes, press } = open();
+    press(`*${PIN}`);
+    session?.close();
+    press("#");
+    expect(outcomes).toEqual([]);
+    expect(session?.collecting).toBe(false);
+    expect(session?.toolPolicy).toBeUndefined();
+  });
+});

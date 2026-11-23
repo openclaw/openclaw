@@ -62,8 +62,18 @@ export function managedHandler(
   manager: CallManager,
   resolve: ResolveRealtimeCallRegistration,
   lifecycle = new StreamDisconnectGrace(() => {}),
+  elevation?: ConstructorParameters<typeof RealtimeCallHandler>[7],
 ) {
-  const handler = new RealtimeCallHandler(config, manager, resolve, "/voice/webhook", lifecycle);
+  const handler = new RealtimeCallHandler(
+    config,
+    manager,
+    resolve,
+    "/voice/webhook",
+    lifecycle,
+    undefined,
+    undefined,
+    elevation,
+  );
   onTestFinished(async () => {
     try {
       await handler.close();
