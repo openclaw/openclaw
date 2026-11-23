@@ -114,7 +114,7 @@ export function hasVerifiedProvider(card: ModelProviderCard): boolean {
   return card.catalogStatus === "ready" && !needsAuthAttention(card);
 }
 
-export function probeStatus(result: ModelsProbeResult): {
+function probeStatus(result: ModelsProbeResult): {
   kind: "ok" | "warn" | "danger";
   label: string;
 } {

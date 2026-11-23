@@ -18,7 +18,7 @@ function one(values, label) {
 
 // Contents are discovery indexes, not authority. The receipt owner authenticates
 // every selected descriptor before the operator can send a POST.
-export async function artifactJson(client, run, name, file) {
+async function artifactJson(client, run, name, file) {
   const metadata = one(
     (await client.getRunArtifacts(String(run.id))).filter((entry) => entry.name === name),
     name,
@@ -45,7 +45,7 @@ export async function artifactJson(client, run, name, file) {
   return { metadata, bytes, value: JSON.parse(bytes.toString("utf8")) };
 }
 
-export async function witnessedRun(client, jobs, jobName, workflow, allowReuse = false) {
+async function witnessedRun(client, jobs, jobName, workflow, allowReuse = false) {
   const job = one(
     jobs.filter((entry) => entry.name === jobName),
     "original " + jobName,

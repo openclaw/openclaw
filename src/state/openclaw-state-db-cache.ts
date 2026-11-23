@@ -565,7 +565,7 @@ export function closeOpenClawStateDatabaseByPath(
 }
 
 /** Seal after final release unless a read still borrows a handle; the next owner validates. */
-export function sealOpenClawStateDatabaseByPath(pathname: string): boolean {
+function sealOpenClawStateDatabaseByPath(pathname: string): boolean {
   const resolvedPath = resolveDatabasePath({ path: pathname });
   const identity = asyncResources.identity(pathname);
   if (

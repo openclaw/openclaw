@@ -155,5 +155,3 @@ export const PROMETHEUS_FAMILY_LIMITS = {
 
 export type PrometheusMetricName = keyof typeof PROMETHEUS_FAMILY_LIMITS;
 export const MAX_PROMETHEUS_SERIES = 16576;
-// Host-admitted plugin families use the default ceiling.
-export const MAX_PROMETHEUS_FAMILY_SERIES = 128;
