@@ -222,6 +222,8 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
   if (observer.check) {
     return observer.check;
   }
+  // A chunk failure during this read is decided by the fresh check its classifier chains.
+  const runtimeMissing = observer.runtimeMissing;
   observer.check = readInstallationMetadata(path.join(root, "dist", "build-info.json"))
     .then(async (value) => {
       // Package managers extract the pending marker before build metadata, so reading it
@@ -252,7 +254,7 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
         !(observer.updateKey && (await isInstallationHeldByUpdateRun(observer.updateKey)))
       ) {
         recordReplacement(observer, { version, buildId });
-      } else if (observer.runtimeMissing) {
+      } else if (runtimeMissing) {
         recordReplacement(observer);
       }
     })

@@ -252,6 +252,22 @@ describe("running installation replacement", () => {
     expectPending(handoff);
   });
 
+  it("decides a chunk failure during a check from a fresh observation", async () => {
+    await writeIdentity("2026.9.4", "build-before");
+    const marker = createDeferredCore<void>();
+    const access = vi.spyOn(fs, "access").mockImplementationOnce(() => marker.promise);
+    const handoff = registerReplacement();
+    const checking = owner.checkGatewayInstallationReplacement();
+    await vi.waitFor(() => expect(access).toHaveBeenCalledOnce());
+    // npm retires the tree after the identity read and a request hits a retired chunk.
+    await fs.rm(path.join(fixture.root, "dist"), { recursive: true });
+    expect(owner.classifyGatewayStaleInstall(missingChunk("dist/cron-old.js"))).not.toBeNull();
+    marker.reject(Object.assign(new Error("absent"), { code: "ENOENT" }));
+    await checking;
+    await owner.checkGatewayInstallationReplacement();
+    expectPending(handoff);
+  });
+
   it("stops waiting for a lifecycle that blocked package scripts never complete", async () => {
     const handoff = registerReplacement();
     await fs.writeFile(path.join(fixture.root, ".openclaw-lifecycle-pending"), "");
