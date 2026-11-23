@@ -92,7 +92,9 @@ it("AppSidebar retains roster mode after remount, then restores chip sessions", 
   await vi.waitFor(() => expect(R.agentIds(restored)).toHaveLength(3));
   expect(R.sessionKeys(restored)).toEqual([]);
   await R.toggleRoster(restored);
-  await vi.waitFor(() => expect(restored.querySelector(".sidebar-agent-roster")).toBeNull());
+  await vi.waitFor(() =>
+    expect(restored.querySelector("openclaw-sidebar-agent-roster")).toBeNull(),
+  );
   expect(loadSettings().sidebarAgentsMode).toBe("chip");
   await vi.waitFor(() =>
     expect(R.sessionKeys(restored)).toEqual(["agent:main:pinned", "agent:main:recent"]),

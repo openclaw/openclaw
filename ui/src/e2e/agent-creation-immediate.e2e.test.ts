@@ -1,6 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -16,6 +16,7 @@ import {
   createControlUiE2eSuite,
   holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { openSelectedAgentRowMenu, selectedAgentRow } from "./sidebar-agent-row.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI immediate agent creation" });
 const creationStatus = "Creating new agent";
@@ -27,12 +28,18 @@ const pageOptions = {
   viewport: { width: 1440, height: 1000 },
 };
 
+async function expectEnabled(item: Locator) {
+  await expect.poll(() => item.getAttribute("aria-disabled")).not.toBe("true");
+}
+
 async function openCreationDialog(page: Page) {
   await page.goto(`${suite.server.baseUrl}chat`);
   await waitForControlUiRoute(page, { routeId: "chat" });
   const sidebar = page.locator("openclaw-app-sidebar");
-  await sidebar.locator(".sidebar-agent-card__main").click();
-  await sidebar.locator('[data-value="command:new-agent"]').click();
+  const row = await openSelectedAgentRowMenu(sidebar);
+  const create = row.locator('[data-value="new-agent"]');
+  await expectEnabled(create);
+  await create.click();
   const dialog = page.locator(".agent-create-dialog");
   await dialog.waitFor({ state: "visible" });
   return dialog;
@@ -169,15 +176,13 @@ suite.define(() => {
       const originalUrl = page.url();
       const historySubscriptions = await getInitialHistoryRequests(gateway);
       const sidebar = page.locator("openclaw-app-sidebar");
-      const selectorButton = sidebar.locator(".sidebar-agent-card__main");
-      await selectorButton.click();
+      const selector = await openSelectedAgentRowMenu(sidebar);
       await renderer.request;
-      const selector = sidebar.locator(".sidebar-agent-menu");
-      const create = selector.locator('[data-value="command:new-agent"]');
+      const create = selector.locator('[data-value="new-agent"]');
       // A ready Create action must already own the renderer; clicking cannot wait on this chunk.
-      expect(await create.count()).toBe(0);
+      expect(await create.getAttribute("aria-disabled")).toBe("true");
       renderer.release();
-      await create.waitFor({ state: "visible" });
+      await expectEnabled(create);
       await gateway.deferNext("agents.create");
 
       await create.click();
@@ -205,7 +210,7 @@ suite.define(() => {
                   status?.textContent?.trim() === text &&
                   status.getBoundingClientRect().height > 0 &&
                   location.pathname !== originalPath &&
-                  !document.querySelector(".sidebar-agent-menu");
+                  !document.querySelector(".sidebar-agent-roster__menu [role='menu']:popover-open");
                 if (presented || elapsedMs >= 5_000) {
                   resolve({
                     elapsedMs: presented ? elapsedMs : -1,
@@ -257,13 +262,10 @@ suite.define(() => {
       expect(new URL(page.url()).pathname).toBe(`/chat/${agentId}`);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       expect(await getInitialHistoryRequests(gateway)).toEqual(historySubscriptions);
-      await selectorButton.click();
-      const firstAgent = selector.locator('[data-value^="agent:"]').first();
-      await expect.poll(() => firstAgent.getAttribute("data-value")).toBe(`agent:${agentId}`);
-      expect(await firstAgent.textContent()).toContain("New agent");
-      expect(await firstAgent.textContent()).not.toContain(agentId);
-      expect(await firstAgent.getAttribute("aria-disabled")).toBe("true");
-      await page.keyboard.press("Escape");
+      // The pending agent leads the list under its placeholder name, never its id.
+      const pendingName = selectedAgentRow(sidebar).locator(".sidebar-agent-roster__name");
+      await expect.poll(() => pendingName.textContent()).toBe("New agent");
+      expect(await selectedAgentRow(sidebar).textContent()).not.toContain(agentId);
       await gateway.rejectDeferred("agents.create", {
         code: "UNAVAILABLE",
         message: "Synthetic inference unavailable",
@@ -273,9 +275,8 @@ suite.define(() => {
       expect(await page.locator("openclaw-pending-session-create").count()).toBe(0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       expect(await getInitialHistoryRequests(gateway)).toEqual(historySubscriptions);
-      await selectorButton.click();
-      await selector.waitFor({ state: "visible" });
-      expect(await selector.locator(`[data-value="agent:${agentId}"]`).count()).toBe(0);
+      // The cancelled agent never reaches the sidebar.
+      expect(await sidebar.locator(`[data-agent-id="${agentId}"]`).count()).toBe(0);
     });
   });
 });

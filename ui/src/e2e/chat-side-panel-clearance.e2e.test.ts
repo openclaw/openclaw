@@ -398,7 +398,7 @@ suite.define(() => {
             await page.locator(".sidebar-rail__bottom .sidebar-issues-button").waitFor();
           }
           const expectedControl = home
-            ? ".sidebar-rail__bottom .sidebar-footer-bar__home"
+            ? ".sidebar-rail .sidebar-rail__home"
             : deviceLess
               ? ".sidebar-rail__bottom .sidebar-issues-button"
               : ".sidebar-brand__search";

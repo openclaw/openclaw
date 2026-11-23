@@ -76,6 +76,7 @@ export function createAssistantPanel(
   let builtInDestination: "home" | "custodian" = "custodian";
   let pendingPrimaryPane: { pane: ChatPaneElement } | null = null;
   let publishedSessionKey: string | null = null;
+  let publishedHomeOpen = false;
   let handledMinimizeRequestId = 0;
   // Explicit opens and closes release the first-use hold; the saved choice returns on the next page.
   let firstUseHold: "none" | "held" | "released" = "none";
@@ -403,10 +404,16 @@ export function createAssistantPanel(
       : null;
   }
 
+  function homeOpen(): boolean {
+    return destination === "home" && dockLayout.open && !suppressed();
+  }
+
   function publishSessionKey(): void {
     const key = openSessionKey();
-    if (key !== publishedSessionKey) {
+    const home = homeOpen();
+    if (key !== publishedSessionKey || home !== publishedHomeOpen) {
       publishedSessionKey = key;
+      publishedHomeOpen = home;
       getContext()?.assistantDock?.notify();
     }
   }
@@ -535,6 +542,9 @@ export function createAssistantPanel(
       (props.custodianAvailable && props.minimizeRequestId > handledMinimizeRequestId),
     get openSessionKey() {
       return openSessionKey();
+    },
+    get homeOpen() {
+      return homeOpen();
     },
     dockLayout,
     availableFor,

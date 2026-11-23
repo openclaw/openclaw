@@ -183,7 +183,15 @@ suite.define(() => {
       const subscription = await gateway.waitForRequest("sessions.messages.subscribe");
       expect(subscription.params).toMatchObject({ key: "agent:main:main" });
       await expect
-        .poll(async () => (await page.locator(".sidebar-agent-card__name").textContent())?.trim())
+        .poll(async () =>
+          (
+            await page
+              .locator(
+                ".sidebar-agent-roster--selected .sidebar-agent-roster__header .sidebar-agent-roster__name",
+              )
+              .textContent()
+          )?.trim(),
+        )
         .toBe("Clawd");
     });
   });

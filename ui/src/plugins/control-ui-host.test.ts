@@ -630,6 +630,7 @@ it("adapts dock operations, publishes snapshots, and retires activation and view
     get openSessionKey() {
       return session?.key ?? null;
     },
+    homeOpen: false,
   };
   const detach = dock.attach(panel);
   const fixture = createRosterHost(vi.fn(), dock);

@@ -4,5 +4,5 @@ import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 export const sidebarSnapshot: SidebarSnapshotModel = {
   ...sidebarBootSnapshot(null),
   footer: { id: "operator", name: "Riley" },
-  brand: { name: "Harbor", avatar: null, icon: "claw", environment: null },
+  brand: { name: "Harbor", avatar: null },
 };

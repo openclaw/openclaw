@@ -11,17 +11,20 @@ import {
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
 import {
+  openSelectedAgentRowMenu,
+  selectedAgentRow,
+  showAllSidebarAgents,
+  showOnlySidebarAgent,
+} from "./sidebar-agent-row.test-support.ts";
+import {
   expectPath,
   catalogList,
   mockRequests,
   expectText,
-  expectAttribute,
-  expectCount,
   expectFocused,
   pressAndExpectFocus,
 } from "./sidebar-assertions.test-support.ts";
 import {
-  captureSidebarUiProof,
   createSidebarCustomizationSuite,
   openSidebarCustomizationPage,
   openSidebarPinMenu,
@@ -236,9 +239,9 @@ suite.define(() => {
     }
   });
 
-  it("shows one row per agent plus Show all and reaches them with menu keys", async () => {
+  it("opens settings from the agent row and switches agents through Show all", async () => {
     await suite.withPage(desktop, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
+      await installMockGateway(page, {
         methodResponses: {
           "agent.identity.get": {
             cases: [
@@ -262,100 +265,26 @@ suite.define(() => {
       const draft = "Keep this draft while opening agent settings";
       await composer.fill(draft);
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-      const menu = sidebar.locator(".sidebar-agent-menu");
-      const mainSwitch = menu.getByRole("menuitem", { name: "Scheduled Automations", exact: true });
-      const researchSwitch = menu.getByRole("menuitem", { name: "Research", exact: true });
+      const row = await openSelectedAgentRowMenu(sidebar);
+      const items = row.locator('[role="menu"] [role^="menuitem"]');
       await expect
-        .poll(() =>
-          menu
-            .locator(".sidebar-agent-menu__agent-list .agent-select__option-label")
-            .allTextContents(),
-        )
-        .toEqual(["Show all", "Scheduled Automations", "Research", "Forge", "Support"]);
-      await expect
-        .poll(() => researchSwitch.locator(".agent-select__avatar img").getAttribute("src"))
-        .toContain("data:image/png;base64,");
-      await expectCount(menu.getByText(/^New session —/), 0);
-      await menu.evaluate(async (dropdown) => {
-        await document.fonts.ready;
-        await Promise.all(dropdown.getAnimations().map((animation) => animation.finished));
-      });
-      const createAgent = menu.getByRole("menuitem", {
-        name: "Create new agent",
-        exact: true,
-      });
-      for (const scale of [1, 1.4]) {
-        await page.evaluate((value) => {
-          document.documentElement.style.setProperty("--control-ui-text-scale", String(value));
-        }, scale);
-        await expect
-          .poll(() =>
-            createAgent.evaluate((item) => {
-              const label = item.querySelector(".agent-select__option-label");
-              if (!label) {
-                throw new Error("Create agent label is missing");
-              }
-              return label.getBoundingClientRect().right - item.getBoundingClientRect().right;
-            }),
-          )
-          .toBeLessThanOrEqual(0);
-      }
-      await expectFocused(mainSwitch);
-      await pressAndExpectFocus(page, "r", researchSwitch);
-      const researchSettings = researchSwitch.getByRole("button", { name: "Research settings" });
-      await pressAndExpectFocus(page, "Tab", researchSettings);
-      const refreshAfter = (await gateway.getRequests("agent.identity.get", { agentId: "forge" }))
-        .length;
-      await gateway.deferNext("agent.identity.get", { agentId: "forge" });
-      await gateway.emitGatewayEvent("agent.identity.changed", { agentId: "forge" });
-      await gateway.waitForRequest("agent.identity.get", {
-        after: refreshAfter,
-        match: { agentId: "forge" },
-      });
-      await gateway.resolveDeferred(
-        "agent.identity.get",
-        { agentId: "forge", avatar: "", emoji: "🔧", name: "Forge refreshed" },
-        { match: { agentId: "forge" } },
-      );
-      await menu.getByRole("menuitem", { name: "Forge refreshed", exact: true }).waitFor();
-      await expectFocused(researchSettings);
-      await page.keyboard.press("Enter");
-      await waitForControlUiRoute(page, {
-        routeId: "agents",
-        pathname: "/settings/agents/research",
-      });
-      expect(await page.evaluate(() => window.openclawControlUi?.snapshot().sessionKey)).toBe(
-        "agent:main:main",
-      );
+        .poll(() => items.evaluateAll((entries) => entries.map((item) => item.dataset.value)))
+        .toEqual(["show-all", "new-agent", "pin", "sessions", "settings", "delete"]);
+      await row.locator('[role="menu"] [data-value="settings"]').click();
+      await waitForControlUiRoute(page, { routeId: "agents", pathname: "/settings/agents/main" });
       await page.locator(".settings-sidebar__back").click();
       await waitForControlUiRoute(page, { routeId: "chat" });
       expect(await composer.inputValue()).toBe(draft);
-      await sidebar.locator(".sidebar-agent-card__main").click();
-      await expectAttribute(mainSwitch, "aria-current", "true");
-      await researchSwitch.focus();
-      await page.keyboard.press("Enter");
+      await showOnlySidebarAgent(sidebar, "research");
       await expectPath(page, controlUiSessionPath("agent:research:main"));
-      const card = sidebar.locator("openclaw-sidebar-agent-card");
-      await expectText(card.locator(".sidebar-agent-card__name"), "Research");
-      const image = card.locator(".sidebar-agent-card__avatar img");
+      const selected = selectedAgentRow(sidebar);
+      await expectText(selected.locator(".sidebar-agent-roster__name"), "Research");
+      const image = selected.locator(".sidebar-agent-roster__avatar img");
       await expect.poll(() => image.getAttribute("src")).toBe(pixelAvatar);
-      await expect
-        .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
-        .toBe(1);
-      await sidebar.locator(".sidebar-agent-card__main").click();
-      await menu.getByRole("menuitem", { name: "Show all", exact: true }).click();
-      await waitForControlUiRoute(page, { routeId: "sessions", pathname: "/sessions" });
-      await sidebar.locator(".sidebar-workspace-header__main").click();
-      await expectAttribute(
-        menu.getByRole("menuitem", { name: "Show all", exact: true }),
-        "aria-current",
-        "true",
-      );
     });
   });
 
-  it("shares an agent from its menu row by asking in its main session", async () => {
+  it("shares the selected agent from its row menu by asking in its main session", async () => {
     await suite.withPage(desktop, async ({ page }) => {
       const config = { gateway: { controlUi: { experimental: { templates: true } } } };
       const gateway = await installMockGateway(page, {
@@ -368,7 +297,6 @@ suite.define(() => {
             valid: true,
             issues: [],
           },
-          // The default chat fixture keeps the sent message in the opened transcript.
           "agents.list": {
             agents: [
               { id: "main", name: "Main" },
@@ -383,46 +311,25 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}chat`);
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-      const menu = sidebar.locator(".sidebar-agent-menu");
-      const research = menu.getByRole("menuitem", { name: "Research", exact: true });
-      const share = research.getByRole("button", { name: "Share Research" });
-      const settings = research.getByRole("button", { name: "Research settings" });
-      await research.hover();
-      const resting = await share.evaluate((button) => getComputedStyle(button).color);
-      for (const action of [share, settings]) {
-        await action.hover();
-        // Hover brightens the icon without drawing a box behind it.
-        await expect
-          .poll(() =>
-            action.evaluate((button, restingColor) => {
-              const style = getComputedStyle(button);
-              return [style.backgroundColor, style.color !== restingColor];
-            }, resting),
-          )
-          .toEqual(["rgba(0, 0, 0, 0)", true]);
-      }
-      await share.hover();
-      await captureSidebarUiProof(suite, page, "agent-row-actions.png", menu, [share, settings]);
-      await pressAndExpectFocus(page, "r", research);
-      await pressAndExpectFocus(page, "Tab", share);
-      await pressAndExpectFocus(page, "Tab", settings);
-
-      await share.click();
+      await showOnlySidebarAgent(sidebar, "research");
+      const research = await openSelectedAgentRowMenu(sidebar);
+      await research
+        .locator('[role="menu"]')
+        .getByRole("menuitem", { name: "Share Research", exact: true })
+        .click();
       const sent = await gateway.waitForRequest("chat.send");
       expect(sent.params).toMatchObject({
         sessionKey: "agent:research:main",
         message: "Create a shareable template of yourself",
       });
       await expectPath(page, controlUiSessionPath("agent:research:main"));
-      await page.getByText("Create a shareable template of yourself", { exact: true }).waitFor();
-      await expectCount(menu, 0);
+      // The mocked Gateway does not echo sends into an already open transcript.
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       expect(await gateway.getRequests("templates.drafts.create")).toHaveLength(0);
     });
   });
 
-  it("keeps crowded agent-menu actions inside the available viewport", async () => {
+  it("keeps the agent row menu inside a short viewport beside a crowded roster", async () => {
     await suite.withPage(
       { ...desktop, viewport: { width: 1440, height: 480 } },
       async ({ page }) => {
@@ -443,27 +350,21 @@ suite.define(() => {
           },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
-        await page.locator("openclaw-app-sidebar .sidebar-agent-card__main").click();
-        const menu = page.locator("openclaw-app-sidebar .sidebar-agent-menu");
-        await menu.evaluate(async (dropdown) => {
-          await document.fonts.ready;
-          await Promise.all(dropdown.getAnimations().map((animation) => animation.finished));
-        });
+        const sidebar = page.locator("openclaw-app-sidebar");
+        const row = await openSelectedAgentRowMenu(sidebar);
+        const menu = row.locator('[role="menu"]');
         expect(
-          await menu.evaluate((dropdown) =>
-            [...dropdown.querySelectorAll<HTMLElement>(':scope > [role^="menuitem"]')].every(
-              (action) => {
-                const box = action.getBoundingClientRect();
-                return box.top >= 0 && box.bottom <= innerHeight;
-              },
-            ),
+          await menu.evaluate((surface) =>
+            [...surface.querySelectorAll<HTMLElement>('[role^="menuitem"]')].every((action) => {
+              const box = action.getBoundingClientRect();
+              return box.top >= 0 && box.bottom <= innerHeight;
+            }),
           ),
         ).toBe(true);
-        const duplicateNames = menu
-          .locator('.sidebar-agent-menu__agent-list > [role^="menuitem"]')
-          .filter({ hasText: "Support" });
-        expect(await duplicateNames.count()).toBe(2);
-        expect(await duplicateNames.locator(".agent-select__option-description").count()).toBe(0);
+        await page.keyboard.press("Escape");
+        await showAllSidebarAgents(sidebar);
+        // Agents that share a name stay separate rows, without exposing their ids.
+        expect(await sidebar.locator('[data-agent-group][aria-label="Support"]').count()).toBe(2);
       },
     );
   });

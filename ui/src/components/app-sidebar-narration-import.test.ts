@@ -26,7 +26,7 @@ it("keeps navigation usable after narration fails and retries on live-activity r
   sidebar.connected = true;
   await sidebar.updateComplete;
   await waitForSolid(() => expect(narration.create).toHaveBeenCalledTimes(1));
-  const home = sidebar.querySelector(".sidebar-footer-bar__home");
+  const home = sidebar.querySelector(".sidebar-rail__home");
   expect(home, "Home navigation remains mounted after narration fails").not.toBeNull();
   expect(sidebar.narration).toBeNull();
   sidebar.sidebarLiveActivity = false;
@@ -36,5 +36,5 @@ it("keeps navigation usable after narration fails and retries on live-activity r
     expect(sidebar.narration, "Narration recovers after live-activity reactivation").not.toBeNull(),
   );
   expect(narration.create).toHaveBeenCalledTimes(2);
-  expect(sidebar.querySelector(".sidebar-footer-bar__home")).toBe(home);
+  expect(sidebar.querySelector(".sidebar-rail__home")).toBe(home);
 });

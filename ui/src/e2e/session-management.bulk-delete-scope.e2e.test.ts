@@ -12,6 +12,7 @@ import {
   sessionsListResponse,
   waitForConfirmModal,
 } from "./session-management.test-support.ts";
+import { showOnlySidebarAgent } from "./sidebar-agent-row.test-support.ts";
 import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 import { showNextSidebarPage } from "./sidebar-session-pagination.test-support.ts";
 
@@ -133,8 +134,7 @@ suite.define(() => {
         const confirmation = await waitForConfirmModal(page);
         await ui.button(confirmation, "Delete").click();
         await gateway.waitForRequest("sessions.delete", { match: { key: targets[0]!.key } });
-        await ui.button(sidebar, /Switch agent/, false).click();
-        await ui.menuItem(sidebar.locator(".sidebar-agent-menu"), "Research").click();
+        await showOnlySidebarAgent(sidebar, "Research");
         await revealSidebarTarget(viewport, rowFor(research[0]!.key));
         const loadMore = sidebar.locator(".sidebar-session-pagination--roster > button");
         await loadMore.waitFor({ state: "visible" });

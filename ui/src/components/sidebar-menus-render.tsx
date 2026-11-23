@@ -4,22 +4,13 @@ import { createMemo, lazy, Loading, Show } from "solid-js";
 import { isRailSectionPin } from "../app-navigation.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
-import { patchSettings } from "../app/settings.ts";
 import { registerAgentCreationEnglish } from "../i18n/locales/en-agent-creation.ts";
 import { openEditor } from "../lib/editor-links.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
-import type { IdentityAvatars } from "../lib/identity-avatar-loader.ts";
+import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
-import {
-  projectApplicationConfig,
-  projectGateway,
-  projectOverlays,
-} from "../lib/reactive/application.ts";
-import { projectAgents, projectRuntimeConfig } from "../lib/reactive/domain-capabilities.ts";
+import { projectApplicationConfig, projectOverlays } from "../lib/reactive/application.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { projectOwner } from "../lib/reactive/projection.ts";
-import { projectTheme } from "../lib/reactive/theme.ts";
 import { categoryClearReturnsToGroups } from "../lib/sessions/grouping.ts";
 import {
   canArchiveSessionRow,
@@ -32,13 +23,10 @@ import {
   runSessionNavigationAction,
 } from "../lib/sessions/session-menu-navigation.ts";
 import { showToast } from "../lib/toast.ts";
-import { shareAgentAsTemplate } from "../pages/templates/creator-owner.ts";
-import { canCreateTemplateDraft } from "../pages/templates/draft-navigation.ts";
 import {
   pluginSessionMenuActions,
   runControlUiPluginAction,
 } from "../plugins/control-ui-actions.ts";
-import { renderSidebarAgentMenu as SidebarAgentMenu } from "./app-sidebar-agent-menu.tsx";
 import { renderSidebarAutomationsFilterMenuForMenus } from "./app-sidebar-automations-filter.tsx";
 import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-dropdown.tsx";
 import { renderSidebarIdentityMenu as SidebarIdentityMenu } from "./app-sidebar-identity-menu.tsx";
@@ -61,12 +49,10 @@ import {
   runBatchSessionAction,
 } from "./session-organizer-menu.runtime.ts";
 import { moveSessionFromMenu, sessionMenuPlacementAction } from "./session-placement-action.ts";
-import { resolveAgentMenuSessionKey } from "./sidebar-agent-menu-session-key.ts";
 import { isUpdateAttentionForced } from "./sidebar-attention-dismissals.ts";
 import { isReleaseUpdateAvailable } from "./sidebar-attention-update.ts";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import type { SidebarMenus } from "./sidebar-menus.tsx";
-import { useAvatarGatewayContext } from "./solid/identity-avatar-view.ts";
 import type { MenuEntry } from "./solid/menu.tsx";
 
 export { SidebarCatalogMenu as CatalogSessionMenu } from "./app-sidebar-catalog-menu.runtime.tsx";
@@ -85,19 +71,16 @@ registerAgentCreationEnglish();
 export function SidebarMenusRenderer(props: {
   menus: SidebarMenus;
   host: SidebarMenusOwner;
-  avatars: IdentityAvatars;
   revision: () => number;
 }) {
-  return <>{renderSidebarMenus(props.menus, props.host, props.avatars, props.revision)}</>;
+  return <>{renderSidebarMenus(props.menus, props.host, props.revision)}</>;
 }
 
 function renderSidebarMenus(
   menus: SidebarMenus,
   view: SidebarMenusOwner,
-  agentMenuAvatars: IdentityAvatars,
   revision: () => number,
 ): JSX.Element {
-  const avatars = projectOwner(agentMenuAvatars, (owner) => owner);
   // Read through without copying identities or filtering same-owner publications.
   const projected = new Proxy(menus, {
     get(target, key, receiver) {
@@ -160,116 +143,6 @@ function renderSidebarMenus(
     </Show>,
     <Show when={projected.pluginNavigationMenuPosition} keyed>
       {(menu) => renderSidebarPluginNavigationMenuForMenus(projected, view, menu)}
-    </Show>,
-    <Show when={projected.agentMenuPosition} keyed>
-      {(menu) =>
-        agentMenuAvatars.withActiveRoutes(() => {
-          const avatarReader = avatars.read;
-          const avatarGateway = useAvatarGatewayContext();
-          const trigger = projected.triggers.get("agent");
-          const menuRef = projected.menuRef("agent");
-          const chipAgent = createMemo(() => view.activeChipAgent());
-          const agents = createMemo(() => {
-            const source = view.sessionDataContext?.agents;
-            return source && projectAgents(source);
-          });
-          const gateway = createMemo(() => {
-            const source = view.sessionDataContext?.gateway;
-            return source && projectGateway(source);
-          });
-          const preferences = createMemo(() => {
-            const source = view.sessionDataContext?.theme;
-            return source && projectTheme(source).preferences;
-          });
-          const creationDisabledReason = createMemo(() => {
-            const snapshot = gateway()?.read().snapshot;
-            if (canCallGatewayMethod(snapshot, "agents.create", "operator.admin")) {
-              return null;
-            }
-            if (!snapshot?.client || snapshot.phase !== "connected" || !snapshot.hello) {
-              return t("agentChip.creationRequiresConnection");
-            }
-            if (isGatewayMethodAdvertised(snapshot, "agents.create") !== true) {
-              return t("agentChip.creationUnsupported");
-            }
-            return t("agentChip.creationRequiresAdmin");
-          });
-          const runtimeConfig = createMemo(() => {
-            const source = view.sessionDataContext?.runtimeConfig;
-            return source && projectRuntimeConfig(source);
-          });
-          const shareAgent = createMemo(() => {
-            const context = view.sessionDataContext;
-            gateway()?.read();
-            runtimeConfig()?.read();
-            return context && canCreateTemplateDraft(context)
-              ? (agentId: string) => void shareAgentAsTemplate(context, agentId)
-              : undefined;
-          });
-          return (
-            <SidebarAgentMenu
-              {...{
-                position: menu,
-                ref: menuRef,
-                basePath: view.basePath,
-                activeId: chipAgent().agent ? chipAgent().activeId : "",
-                agents: chipAgent().agents,
-                identities: chipAgent().identities,
-                pendingAgent: agents()?.read().pendingAgent,
-                recentlyCreatedAgentId:
-                  agents()?.read().recentlyCreatedAgentId ??
-                  preferences()?.read().sidebarRecentlyCreatedAgentId,
-                rosterMode: view.sidebarAgentsMode === "roster" && !chipAgent().pending,
-                creationDisabledReason: creationDisabledReason(),
-                onShowAllAgents: () => {
-                  view.navigationView = "sessions";
-                  view.sessionDataContext?.navigation.update({ navCollapsed: false });
-                  patchSettings({ sidebarAgentsMode: "roster" });
-                  view.sessionDataContext?.agentSelection.setScope(null);
-                  view.onNavigate?.("sessions");
-                  void projected.commit().then((committed) => {
-                    if (!committed) {
-                      return;
-                    }
-                    projected.focusAgentRoster?.();
-                  });
-                },
-                resolveAvatarUrl: (url) => {
-                  avatarGateway();
-                  return avatarReader().resolve(url);
-                },
-                avatarErrorHandler: (url) => avatarReader().imageErrorHandler(url),
-                openMode: projected.agentMenuMode,
-                agentUnreadCount: (agentId) => view.agentUnreadCount(agentId),
-                onPointerEnter: () => projected.handleAgentMenuPointerEnter(),
-                onPointerLeave: () => projected.handleAgentMenuPointerLeave(),
-                onAfterShow: () => projected.restoreFocusAfterAgentMenuHoverOpen(),
-                onSwitchAgent: (agentId) => {
-                  if (view.sidebarAgentsMode === "roster") {
-                    patchSettings({ sidebarAgentsMode: "chip" });
-                  }
-                  view.switchChipAgent(agentId, resolveAgentMenuSessionKey);
-                },
-                onShareAgent: shareAgent(),
-                onCreateAgent: () => {
-                  if (view.sessionDataContext) {
-                    projected.closeAgentMenu();
-                    projected.openAgentCreateDialog();
-                  }
-                },
-                anchor: trigger ?? undefined,
-                onClose: (restoreFocus) => {
-                  if (projected.agentMenuPosition !== menu) {
-                    return;
-                  }
-                  projected.closeAgentMenu({ restoreFocus });
-                },
-                onNavigate: (routeId, options) => view.onNavigate?.(routeId, options),
-              }}
-            />
-          );
-        })
-      }
     </Show>,
     <Show when={projected.agentCreateDialogOpen && view.sessionDataContext} keyed>
       {(context) => (

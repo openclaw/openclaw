@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { serializeSidebarEntry } from "../app-navigation.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { createQuestionPromptState } from "../app/question-prompt.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
@@ -563,27 +564,24 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     });
   }
 
-  switchChipAgent(
-    agentId: string,
-    resolveKey: typeof import("./sidebar-agent-menu-session-key.ts").resolveAgentMenuSessionKey,
-  ) {
-    this.sidebarMenus.closeAgentMenu();
-    this.expandAgent(agentId);
+  /** Narrows the sidebar to one agent; a conversation that is not that agent's gives way to its main one. */
+  switchChipAgent(agentId: string) {
+    const nextAgentId = normalizeAgentId(agentId);
+    const routeKey = isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : "";
+    const stays =
+      Boolean(routeKey) &&
+      normalizeAgentId(this.sessionNavigationAgentId({ key: routeKey })) === nextAgentId;
+    this.expandAgent(nextAgentId);
     // Skills uses the shared agent selection in place; opening chat would
     // discard the discovery page instead of updating its workspace scope.
-    if (this.activeRouteId !== "skills") {
-      if (this.connected) {
-        this.selectSession(
-          resolveKey({
-            agentId,
-            result: this.selectedAgentSessionResult(agentId),
-            context: this.context,
-            mainKey: this.sessionMainKey(),
-          }),
-        );
-      } else {
-        this.onNavigate?.("appearance");
-      }
+    if (stays || this.activeRouteId === "skills") {
+      return;
+    }
+    if (this.connected) {
+      // Global session keys do not name their agent; the switch must.
+      this.selectSession(this.selectedAgentMainSessionKey(nextAgentId), nextAgentId);
+    } else {
+      this.onNavigate?.("appearance");
     }
   }
 

@@ -15,6 +15,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { showOnlySidebarAgent } from "./sidebar-agent-row.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI #93041 desktop chat quota popover (mocked Gateway E2E)",
@@ -214,9 +215,7 @@ type ChatPane = HTMLElement & {
 };
 
 async function setSelectedAgent(page: Page, name: string): Promise<void> {
-  const sidebar = page.locator("openclaw-app-sidebar");
-  await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-  await sidebar.getByRole("menuitem", { name, exact: true }).click();
+  await showOnlySidebarAgent(page.locator("openclaw-app-sidebar"), name);
 }
 
 async function replyToAgentMetadata(gateway: MockGatewayControls, agentId: "main" | "work") {

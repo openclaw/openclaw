@@ -22,11 +22,10 @@ background work reports back to it, and activity elsewhere flows up to it.
 
 ## Home
 
-In the web app, the main session is the **Home** page — the first entry in the
-sidebar. The identity row at the top is your agent (click it for the agent
-menu); Home is where you talk to it. Sessions that fork off the main
-conversation appear under **Threads**, group chats under **Groups**, and
-coding/CLI sessions under **Coding**.
+In the web app, your selected agent's row leads the session list. Click it to
+open that agent's main conversation (Home), or open its **⋯** menu for agent
+actions. Sessions that fork off the main conversation appear under **Threads**,
+group chats under **Groups**, and coding/CLI sessions under **Coding**.
 
 **New Session** opens an independent chat, not a child of Home. Home can still
 receive the one-time creation notice below; it does not automatically watch the
@@ -34,12 +33,11 @@ new chat for later activity.
 
 ### Talk to Home while working
 
-Select **Talk to your Home agent** in the sidebar footer (or press
+Select **Home** at the top of the sidebar rail (or press
 `Cmd/Ctrl+Shift+H`) to open Home beside your current page. The assistant
 sidebar can dock on the right or bottom.
-It follows the agent selected in the sidebar's agent switcher, so there is one
-place to change agents. **Ask OpenClaw** remains a separate system-care
-conversation in the same sidebar.
+It follows the agent selected in the sidebar. **Ask OpenClaw** remains a
+separate system-care conversation in the same sidebar.
 
 The dock uses your real Home conversation, including its history, tools,
 approvals, and message queue. **Open Home full page** opens that conversation

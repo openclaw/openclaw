@@ -77,7 +77,7 @@ describe("AppSidebar gateway footer subtitle", () => {
         await router.navigate("systems", {});
       }
       await settleRoster(sidebar);
-      const home = q(".sidebar-footer-bar__home")!;
+      const home = q(".sidebar-rail__home")!;
       expect(home).not.toBeNull();
       expect(home.querySelector(".session-glyph__ring")).toBeNull();
       const prepare = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "prepareRender");

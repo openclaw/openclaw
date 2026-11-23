@@ -47,8 +47,9 @@ describe("AppSidebar outbox attention badges", () => {
     const incognitoRow = sidebar.querySelector(`[data-session-key="${incognitoKey}"]`);
     expect(incognitoRow).not.toBeNull();
     expect(incognitoRow?.querySelector(".session-row-badge--draft")).toBeNull();
+    // The agent row carries the main conversation's draft while the list is open.
     const homeDraft = () =>
-      sidebar.querySelector(".sidebar-footer-bar__home .session-row-badge--draft");
+      sidebar.querySelector(".sidebar-agent-roster--selected .session-row-badge--draft");
     expect(homeDraft()).not.toBeNull();
     sidebar.sessionKey = "agent:main:main";
     await sidebar.updateComplete;

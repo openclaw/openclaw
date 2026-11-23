@@ -265,7 +265,7 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
       host = options.host
         ? options.host()
         : (label.closest<HTMLElement>(
-            ".session-row-host, .sidebar-recent-sessions__head, .sidebar-identity-card, .sidebar-agent-card__main, .sidebar-workspace-header__main",
+            ".session-row-host, .sidebar-recent-sessions__head, .sidebar-identity-card",
           ) ?? undefined);
       if (!host && options.stationaryWithoutHost) {
         host = label;

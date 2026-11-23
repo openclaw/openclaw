@@ -9,6 +9,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedChatRoute } from "./new-session-page.test-support.ts";
+import { selectedAgentRow } from "./sidebar-agent-row.test-support.ts";
 import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Saved split conversation owner" });
@@ -103,8 +104,8 @@ suite.define(() => {
       expect(await cells.count()).toBe(1);
       await expectUnbound(unbound);
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.locator(".sidebar-agent-card__main").click();
-      await sidebar.locator('.sidebar-agent-menu [data-value="agent:main"]').click();
+      // The agent row opens its main conversation, the explicit Home selection.
+      await selectedAgentRow(sidebar).locator(".sidebar-agent-roster__row").click();
       const visiblePane = cells
         .first()
         .locator("openclaw-chat-pane.chat-pane-cache__pane--visible");

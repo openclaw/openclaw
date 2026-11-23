@@ -269,13 +269,8 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     if (this.context.plugins.registryStatus === "complete") {
       this.sidebarPluginSnapshot = null;
     }
-    // An open switcher tracks roster/reconnect updates; otherwise only hydrate
-    // the active card and avoid background RPCs for every configured agent.
-    const identityIds =
-      this.sidebarMenus.agentMenuPosition === null
-        ? [this.expandedAgentId()]
-        : this.activeChipAgent().agents.map((agent) => agent.id);
-    this.ensureAgentIdentities(identityIds);
+    // Hydrate only the selected agent's row; the roster loads its own identities.
+    this.ensureAgentIdentities([this.expandedAgentId()]);
   }
 
   ensureAgentIdentities(agentIds: readonly string[]): void {

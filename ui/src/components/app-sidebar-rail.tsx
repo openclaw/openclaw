@@ -33,7 +33,8 @@ import { isSidebarRouteActive } from "./app-sidebar-nav-menus.tsx";
 import { SidebarPagesMenu } from "./app-sidebar-pages.tsx";
 import {
   sidebarCollapsedByChoice,
-  renderSidebarAgentCard,
+  sidebarSessionsListShown,
+  SidebarRailHome,
   renderAppSidebarFooterBar,
   renderAppSidebarPluginTab,
   type AppSidebarRenderHost,
@@ -180,15 +181,10 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
   // Saved order is kept; the rail shows native sections first, then everything else.
   const sectionPins = createMemo(() => pins().filter(isRailSectionPin));
   const otherPins = createMemo(() => pins().filter((entry) => !isRailSectionPin(entry)));
-  // The agent avatar above only switches agents; Sessions below it opens the session list, and
-  // "more" below the sections opens a page menu. A page that brings its own sidebar list, like
-  // Systems, is not the Sessions list.
-  const sessionsPressed = () =>
-    host.navigationVisible &&
-    !host.onExitSettings &&
-    !host.navigationCollapsed &&
-    host.navigationView === "sessions" &&
-    !host.contextualSidebar;
+  // Home above opens the selected agent's conversation; Sessions below it opens the session list,
+  // and "more" below the sections opens a page menu. A page that brings its own sidebar list,
+  // like Systems, is not the Sessions list.
+  const sessionsPressed = () => sidebarSessionsListShown(host);
   // Focus returns to the open view's button, and shell chrome anchors to it.
   const registerView = (view: "sessions" | "online") =>
     elementRef((element: HTMLButtonElement) => {
@@ -268,7 +264,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
       data-tooltip-placement="right"
       onMouseDown={beginNativeWindowDragFromTopInset}
     >
-      {renderSidebarAgentCard(host)}
+      <SidebarRailHome host={host} />
       <div class="sidebar-rail__views">
         <openclaw-tooltip prop:content={titleForRoute("sessions")}>
           <button

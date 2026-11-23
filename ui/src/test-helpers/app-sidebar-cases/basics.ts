@@ -2,11 +2,9 @@ import { expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { sessionRefFromPath } from "../../app-session-route-paths.ts";
+import { patchSettings } from "../../app/settings.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
-import {
-  SESSION_FACE_PREFERENCE_PARAM,
-  SESSION_NAVIGATION_KEY_PARAM,
-} from "../../lib/sessions/route-navigation.ts";
+import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
 import {
   createGateway,
   createSessions,
@@ -15,7 +13,7 @@ import {
   TWO_AGENTS,
 } from "../app-sidebar.ts";
 import { agentList, sessionList } from "./compact.test-support.ts";
-import { settleRoster } from "./roster.test-support.ts";
+import { settleRoster, toggleRoster } from "./roster.test-support.ts";
 import "../../components/app-sidebar.tsx";
 
 await import("../../components/solid/viewer-facepile.tsx");
@@ -37,15 +35,15 @@ async function mountAgentSidebar(
   };
 }
 
-async function clickAgentMenu(
+/** Show all agents, then Show only this agent on the given agent's roster row. */
+async function showOnlyAgent(
   sidebar: Awaited<ReturnType<typeof mountSidebar>>["sidebar"],
-  value?: string,
+  agentId: string,
 ) {
-  const selector = value
-    ? `.sidebar-agent-menu [data-value="${value}"]`
-    : ".sidebar-agent-card__main";
-  sidebar.querySelector<HTMLElement>(selector)!.click();
-  await sidebar.updateComplete;
+  patchSettings({ sidebarAgentsMode: "roster" });
+  await settleRoster(sidebar);
+  await toggleRoster(sidebar, agentId);
+  await settleRoster(sidebar);
 }
 
 async function mountNavigation(
@@ -230,39 +228,26 @@ it("qualifies unscoped session rows with the selected agent", async () => {
   });
 });
 
-it.each([true, false])(
-  "switches to cached=%s sessions without confusing agent ids with commands",
-  async (cached) => {
-    const agent = cached ? "main" : "settings";
-    const taskKey = "agent:main:dashboard:00000002-0000-4000-8000-000000000000";
-    const { sidebar, setSessionKey, onNavigate, find } = await mountNavigation(
-      createSessions("main", cached ? [MAIN, taskKey] : [MAIN]),
-      cached ? TWO_AGENTS : agentList([{ id: "main" }, { id: agent }]),
-    );
-    await sidebar.updateComplete;
+it("shows only an agent named like a menu action and opens its main conversation", async () => {
+  const { sidebar, setSessionKey, onNavigate, find } = await mountNavigation(
+    createSessions("main", [MAIN]),
+    agentList([{ id: "main" }, { id: "settings" }]),
+  );
+  await sidebar.updateComplete;
 
-    await clickAgentMenu(sidebar);
-    const entry = find<HTMLElement>(`.sidebar-agent-menu [data-value="agent:${agent}"]`);
-    expect(entry).not.toBeNull();
-    if (cached) {
-      expect(entry?.textContent).toContain("Molty");
-    }
-    entry!.click();
-    await sidebar.updateComplete;
-    if (cached) {
-      expect(setSessionKey).not.toHaveBeenCalled();
-    } else {
-      expect(setSessionKey).toHaveBeenCalledWith("agent:settings:main");
-    }
-    expect(onNavigate).toHaveBeenCalledWith("chat", {
-      pathname: cached ? "/chat/main/00000002000040008000000000000000" : "/chat/settings",
-      search: cached
-        ? `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(taskKey)}`
-        : `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
-    });
-    expect(onNavigate).not.toHaveBeenCalledWith("appearance");
-  },
-);
+  await showOnlyAgent(sidebar, "settings");
+
+  expect(sidebar.sidebarAgentsMode).toBe("chip");
+  expect(find(".sidebar-agent-roster--selected .sidebar-agent-roster__name")?.textContent).toBe(
+    "settings",
+  );
+  expect(setSessionKey).toHaveBeenCalledWith("agent:settings:main");
+  expect(onNavigate).toHaveBeenCalledWith("chat", {
+    pathname: "/chat/settings",
+    search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
+  });
+  expect(onNavigate).not.toHaveBeenCalledWith("appearance");
+});
 
 it("switches the Skills owner without opening an agent conversation", async () => {
   const { sidebar, context, find } = await mountAgentSidebar();
@@ -276,12 +261,12 @@ it("switches the Skills owner without opening an agent conversation", async () =
   sidebar.invalidate();
   await sidebar.updateComplete;
 
-  await clickAgentMenu(sidebar);
-  await clickAgentMenu(sidebar, "agent:research");
+  await showOnlyAgent(sidebar, "research");
 
   expect(context.agentSelection.state).toEqual({ selectedId: "research", scopeId: "research" });
-  expect(find(".sidebar-agent-card__name")?.textContent).toContain("research");
-  expect(find(".sidebar-agent-menu")).toBeNull();
+  expect(find(".sidebar-agent-roster--selected .sidebar-agent-roster__name")?.textContent).toBe(
+    "research",
+  );
   expect(onNavigate).not.toHaveBeenCalled();
 });
 
@@ -293,10 +278,7 @@ it("keeps the identity card available during recovery and offers retry only offl
   await sidebar.updateComplete;
 
   expect(find(".sidebar-identity-card__subtitle")).toBeNull();
-  expect(find(".sidebar-agent-card__main")).toBeNull();
-  expect(find(".sidebar-workspace-header__main")?.getAttribute("aria-label")).not.toContain(
-    "Online",
-  );
+  expect(find(".sidebar-agent-roster--selected")).toBeNull();
 
   sidebar.connected = false;
   sidebar.connectionStatus = "reconnecting";
@@ -308,7 +290,6 @@ it("keeps the identity card available during recovery and offers retry only offl
   expect(card?.getAttribute("data-connection-status")).toBe("reconnecting");
   expect(card?.querySelector(".sidebar-identity-card__status")).not.toBeNull();
   expect(card?.getAttribute("aria-label")).toBe("Identity and app menu for Owner: Reconnecting");
-  expect(find(".sidebar-agent-card__subtitle-row")).toBeNull();
 
   card?.click();
   await sidebar.updateComplete;
@@ -357,10 +338,11 @@ it("keeps the sessions list flat for the selected agent and flags other-agent un
   harness.publishList(mainSnapshot);
   await sidebar.updateComplete;
 
-  expect(find(".sidebar-agent-card__subtitle-row")).toBeNull();
   expect(find(".sidebar-agent-section")).toBeNull();
   expect(findAll(".sidebar-recent-session")).toHaveLength(0);
-  expect(find(".sidebar-agent-card__avatar .sidebar-agent-card__menu-unread")).not.toBeNull();
+  expect(
+    find(".sidebar-agent-roster--selected .sidebar-agent-roster__header--attention"),
+  ).not.toBeNull();
 
   // Retire Main before admitting cached Research, then deliver a stale Main result.
   context.agentSelection.set("research");
@@ -383,7 +365,7 @@ it("routes the agent header to its main session and marks it active there", asyn
 
   const home = find<HTMLAnchorElement>('[data-agent-id="main"]');
   expect(home).not.toBeNull();
-  expect(findAll(".sidebar-footer-bar__home")).toHaveLength(1);
+  expect(findAll(".sidebar-rail__home")).toHaveLength(1);
   expect(home?.getAttribute("aria-current")).toBe("page");
 
   home?.click();

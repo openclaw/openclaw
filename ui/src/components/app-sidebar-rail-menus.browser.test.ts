@@ -15,7 +15,7 @@ import { registryFor } from "./overlay-registry.ts";
 afterEach(() => document.body.replaceChildren());
 
 describe.runIf("__vitest_browser__" in globalThis)("navigation rail menus", () => {
-  it("opens all three menus beside the rail and restores their real trigger on Escape", async () => {
+  it("opens both menus beside the rail and restores their real trigger on Escape", async () => {
     await import("./app-sidebar.tsx");
     // Browser shards share the registry even when the sidebar helper mocks this module.
     if (!customElements.get("openclaw-sidebar-attention")) {
@@ -51,7 +51,6 @@ describe.runIf("__vitest_browser__" in globalThis)("navigation rail menus", () =
     const rail = sidebar.querySelector<HTMLElement>(".sidebar-rail")!;
     expect(rail).not.toBeNull();
     for (const [triggerSelector, panelSelector, eventType] of [
-      [".sidebar-agent-card__main", ".sidebar-agent-menu", "overlay-after-show"],
       [".sidebar-identity-card", ".sidebar-identity-menu", "overlay-after-show"],
       [".sidebar-issues-button", ".sidebar-issues-panel", "focusin"],
     ] as const) {
@@ -98,7 +97,6 @@ describe.runIf("__vitest_browser__" in globalThis)("navigation rail menus", () =
           connected: surface.isConnected,
           phase: surface.dataset.phase,
           open: overlay?.open,
-          agentMenuOpen: sidebar.sidebarMenus.agentMenuPosition !== null,
           hasFocus: document.hasFocus(),
           active: identify(document.activeElement),
           top: top && {

@@ -1,5 +1,4 @@
 import type { SessionCatalogProfileRelation } from "../../../packages/gateway-protocol/src/index.ts";
-import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import type {
   NavigationRouteId,
   ShellNavigationIntent,
@@ -82,21 +81,7 @@ export interface SidebarMenusOwner extends SidebarRouteView {
   setSessionOwnerFilter(ownerId: string | null, involvingMe?: boolean): void;
   readonly terminalAvailable: boolean;
   readonly themeMode: ThemeMode;
-  activeChipAgent(): {
-    activeId: string;
-    pending?: boolean;
-    agent: GatewayAgentRow | undefined;
-    agents: readonly GatewayAgentRow[];
-    identity: AgentIdentityResult | null;
-    identities: ReadonlyMap<string, AgentIdentityResult>;
-  };
-  agentUnreadCount(agentId: string): number;
-  ensureAgentIdentities(agentIds: readonly string[]): void;
   findSidebarMenuSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
   getSessionNavigationState(): { selectedAgentId: string };
   selectedVisibleSessions(): SidebarRecentSession[];
-  switchChipAgent(
-    agentId: string,
-    resolveKey: typeof import("./sidebar-agent-menu-session-key.ts").resolveAgentMenuSessionKey,
-  ): void;
 }

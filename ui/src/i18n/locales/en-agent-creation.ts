@@ -11,7 +11,7 @@ const enAgentCreation = {
     creationUnavailable: "You need admin access to create an agent.",
     rosterUnavailable: "Couldn’t load your agents. Reconnect and try again.",
     creationUncertain:
-      "The Gateway hasn’t confirmed whether your agent was saved. Reconnect, then choose Create new agent to check before trying again.",
+      "The Gateway hasn’t confirmed whether your agent was saved. Reconnect, then choose New agent to check before trying again.",
     creationRecovered:
       "Your agent was recovered, but its first message wasn’t confirmed. If its session is unavailable, apply the saved configuration or restart the Gateway.",
     creationFailed: "Couldn’t create an agent. Check your account in Models and try again. {error}",

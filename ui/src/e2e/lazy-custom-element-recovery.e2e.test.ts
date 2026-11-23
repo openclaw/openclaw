@@ -176,7 +176,7 @@ const dockedCases = [
     frame: (page: Page) => page.locator(".assistant-panel"),
     close: (page: Page) => button(page, "Close assistant sidebar"),
     open: async (page: Page) => {
-      await page.locator(".sidebar-footer-bar__home").click();
+      await page.locator(".sidebar-rail__home").click();
     },
     ready: (page: Page) =>
       page.locator("openclaw-assistant-panel .agent-chat__composer-combobox textarea"),
@@ -350,7 +350,7 @@ suite.define(() => {
         controlUiE2eRouteStylesheetRequest("chat", "new"),
         async (held) => {
           const composer = await installDockedScenario(page, "right", "new");
-          await page.locator(".sidebar-footer-bar__home").click();
+          await page.locator(".sidebar-rail__home").click();
           await held.request;
           const header = page.locator(".assistant-panel-header");
           const headerBounds = await header.boundingBox();

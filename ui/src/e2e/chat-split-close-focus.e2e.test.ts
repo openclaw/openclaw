@@ -86,7 +86,7 @@ suite.define(() => {
           await expect.poll(() => composerA.isVisible()).toBe(false);
         }
         if (editable) {
-          await page.locator(".sidebar-footer-bar__home").click();
+          await page.locator(".sidebar-rail__home").click();
         }
         const homeComposer = page.locator(
           "openclaw-assistant-panel .agent-chat__composer-combobox textarea",

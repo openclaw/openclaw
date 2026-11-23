@@ -126,7 +126,11 @@ suite.define(() => {
 
       const hero = page.locator(".agent-chat__welcome h2");
       const sidebar = page.locator("openclaw-app-sidebar");
-      await pollLocatorText(sidebar.locator(".sidebar-agent-card__name")).toContain("Pacino");
+      await pollLocatorText(
+        sidebar.locator(
+          ".sidebar-agent-roster--selected .sidebar-agent-roster__header .sidebar-agent-roster__name",
+        ),
+      ).toContain("Pacino");
       await hero.waitFor();
       const welcomeEmoji = page.locator(".agent-chat__welcome-avatar .identity-avatar__text");
       await pollAttribute(welcomeEmoji, "data-avatar").toBe("🎬");

@@ -26,7 +26,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("keeps WebKit responsive when a picker replaces the opening agent menu", async () => {
+  it("keeps WebKit responsive when a picker replaces the opening identity menu", async () => {
     const context = await webkitBrowser!.newContext({
       viewport: { width: 1440, height: 900 },
       serviceWorkers: "block",
@@ -45,9 +45,9 @@ suite.define(() => {
       const fontTrigger = page.locator("#settings-font-ui");
       await fontTrigger.waitFor();
 
-      // Playwright input cannot land in the agent menu's first frame, so the page clicks
-      // for the user: open the agent menu, then open Home and the font picker as soon as
-      // the menu reaches the top layer. Opening the picker closes the agent menu.
+      // Playwright input cannot land in the identity menu's first frame, so the page clicks
+      // for the user: open the identity menu, then open Home and the font picker as soon as
+      // the menu reaches the top layer. Opening the picker closes the identity menu.
       void page
         .evaluate(async () => {
           const press = (target: Element) => {
@@ -60,16 +60,13 @@ suite.define(() => {
             );
             (target as HTMLElement).click();
           };
-          // The context menu opens the agent menu like a click.
-          document
-            .querySelector("button.sidebar-agent-card__main")!
-            .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+          press(document.querySelector("button.sidebar-identity-card")!);
           while (!document.querySelector("[id^='sidebar-menu-'][id$=':content']:popover-open")) {
             await new Promise((resolve) => {
               setTimeout(resolve, 5);
             });
           }
-          press(document.querySelector("button.sidebar-footer-bar__home")!);
+          press(document.querySelector("button.sidebar-rail__home")!);
           press(document.querySelector("#settings-font-ui")!);
         })
         .catch(() => undefined);

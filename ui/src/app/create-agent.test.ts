@@ -20,7 +20,6 @@ import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import type { ApplicationContext } from "./context.ts";
 import { createApplicationAgent } from "./create-agent.ts";
-import { loadSettings, patchSettings } from "./settings.ts";
 
 const mainAgent = { id: "main", name: "Molty" };
 const mainLocation = { pathname: "/chat/main", search: "", hash: "" };
@@ -212,7 +211,7 @@ describe("application agent creation", () => {
     });
   });
 
-  it("keeps the created agent first after reconnect and a fresh sidebar", async () => {
+  it("keeps the created agent after reconnect and a fresh sidebar", async () => {
     const { context, roster, publishGateway, settledNavigation } = await fixture();
     await createApplicationAgent(context);
     await settledNavigation();
@@ -234,15 +233,11 @@ describe("application agent creation", () => {
     const { sidebar } = await mountSidebarContext(resumed);
     sidebar.connected = true;
     await sidebar.updateComplete;
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector('[data-value^="agent:"]')?.getAttribute("data-value")).toBe(
-      `agent:${createdId}`,
-    );
-    expect(sidebar.querySelector('[data-value="agent:main"]')?.getAttribute("aria-current")).toBe(
-      "true",
-    );
-    expect(sidebar.querySelector('[data-value="scope:all"]')?.textContent).toContain("Show all");
+    expect(
+      sidebar
+        .querySelector(".sidebar-agent-roster--selected .sidebar-agent-roster__row")
+        ?.getAttribute("data-agent-id"),
+    ).toBe("main");
     expect(resumed.navigation.snapshot.pinnedAgentIds).toEqual([]);
   });
 
@@ -250,13 +245,6 @@ describe("application agent creation", () => {
     const { context, roster, replace, toast, settledNavigation } = await fixture({
       verification: Promise.resolve({ ok: false, error: "Provider credentials expired" }),
     });
-    patchSettings(
-      {
-        gatewayUrl: context.gateway.connection.gatewayUrl,
-        sidebarRecentlyCreatedAgentId: "previous",
-      },
-      { selectGateway: false },
-    );
     vi.useFakeTimers();
     await createApplicationAgent(context);
     await settledNavigation();
@@ -268,9 +256,6 @@ describe("application agent creation", () => {
     expect(replace).toHaveBeenCalledWith("chat", mainLocation);
     expect(context.chatSubmissions.creation).toBeUndefined();
     expectSelected(context, "main");
-    expect(loadSettings(context.gateway.connection.gatewayUrl).sidebarRecentlyCreatedAgentId).toBe(
-      "previous",
-    );
     expect(toast.toasts[0]?.active).toBe(true);
     expect(toast.querySelector(".app-toast__description")?.textContent).toContain(
       "Provider credentials expired",
@@ -329,9 +314,6 @@ describe("application agent creation", () => {
       expect(context.agentSelection.state).toEqual(selection);
       expect(context.gateway.snapshot.sessionKey).toBe("agent:main:home");
       expect(navigate).not.toHaveBeenCalled();
-      expect(
-        loadSettings(context.gateway.connection.gatewayUrl).sidebarRecentlyCreatedAgentId,
-      ).toBe(roster.agents[1]?.id);
       expect(toast.toasts).toEqual([]);
     },
   );

@@ -16,6 +16,11 @@ import {
   openSidebarSortMenu,
   routeAvatarFixtures,
 } from "./session-ownership-visuals.test-support.ts";
+import {
+  openSelectedAgentRowMenu,
+  showAllSidebarAgents,
+  showOnlySidebarAgent,
+} from "./sidebar-agent-row.test-support.ts";
 import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 import {
   chooseSidebarMenuOption,
@@ -97,12 +102,7 @@ suite.define(() => {
         const sidebar = page.locator("openclaw-app-sidebar");
         const row = (index: number) =>
           sidebar.locator(`[data-session-key="${rows[index]!.key}"]`).first();
-        const switchAgent = async (id: string) => {
-          await sidebar
-            .locator(".sidebar-agent-card__main, .sidebar-workspace-header__main")
-            .click();
-          await sidebar.locator(`[data-value="agent:${id}"]`).click();
-        };
+        const switchAgent = (id: string) => showOnlySidebarAgent(sidebar, id);
         await expectBrowser(row(0)).toBeVisible();
         const resizer = page.getByRole("separator", { name: "Resize sidebar" });
         await resizer.focus();
@@ -130,10 +130,8 @@ suite.define(() => {
             path.join(suite.artifactDir, "selected-agent-sidebar.png"),
             frame.elements[0]!.png,
           );
-          await sidebar.locator(".sidebar-agent-card__main").click();
-          const selected = sidebar.locator('[data-value="agent:main"][aria-current="true"]');
-          await expectBrowser(selected).toBeVisible();
-          const menu = sidebar.locator(".sidebar-agent-menu");
+          const selected = await openSelectedAgentRowMenu(sidebar);
+          const menu = selected.locator('[role="menu"]');
           const selection = await takeControlUiScreenshotFrame(page, menu, [selected], {
             elements: [menu],
             animations: "disabled",
@@ -164,8 +162,7 @@ suite.define(() => {
         await expectBrowser(row(0)).toHaveCount(0);
         await switchAgent("main");
         await expectBrowser(row(0)).toBeVisible();
-        await sidebar.locator(".sidebar-agent-card__main").click();
-        await page.getByRole("menuitem", { name: "Show all", exact: true }).click();
+        await showAllSidebarAgents(sidebar);
         await expectBrowser(sidebar.locator('[data-agent-group="main"]')).toBeVisible();
         await expectBrowser(sidebar.locator('[data-agent-group="research"]')).toBeVisible();
         await expectBrowser(row(1)).toBeVisible();

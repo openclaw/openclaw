@@ -12,6 +12,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import { createApplicationRouter } from "../app-routes.ts";
+import { AssistantDock } from "../app/assistant-dock.ts";
 import { createApplicationNavigationPreferences } from "../app/bootstrap-navigation-preferences.ts";
 import { createChatSubmissions } from "../app/chat-submissions.ts";
 import { createApplicationConfigCapability } from "../app/config.ts";
@@ -533,6 +534,7 @@ export function createContext(
       ensureDisplayLoaded: async () => undefined,
       subscribe: () => () => undefined,
     },
+    assistantDock: new AssistantDock(),
     scopeUpgrade: hiddenScopeUpgradeCapability,
     overlays: {
       snapshot: { approvalQueue },

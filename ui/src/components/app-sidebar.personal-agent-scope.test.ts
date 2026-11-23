@@ -73,14 +73,9 @@ it("intersects selected owners with each agent and opens an unloaded agent's Hom
 
     const onNavigate = vi.fn();
     sidebar.onNavigate = onNavigate;
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
-    await settleLitElement(sidebar);
-    const researchMenuItem = sidebar.querySelector<HTMLElement>(
-      '.sidebar-agent-menu [data-value="agent:research"]',
-    )!;
     // The other agent has no loaded window under this owner/status selection.
-    expect.soft(researchMenuItem.querySelector('[aria-label="Unread"]')).toBeNull();
-    researchMenuItem.click();
+    expect.soft(sidebar.querySelector(".sidebar-agent-roster__header--attention")).toBeNull();
+    sidebar.switchChipAgent("research");
     await vi.waitFor(() =>
       expect(onNavigate).toHaveBeenCalledWith(
         "chat",
@@ -91,18 +86,14 @@ it("intersects selected owners with each agent and opens an unloaded agent's Hom
     );
 
     await visit(rows[2]!, false);
-    const home = sidebar.querySelector<HTMLElement>(".sidebar-footer-bar__home")!;
-    expect.soft(home.querySelector('[aria-label="Active run"]')).not.toBeNull();
+    const agentRow = sidebar.querySelector<HTMLElement>(
+      ".sidebar-agent-roster--selected .sidebar-agent-roster__header",
+    )!;
+    expect.soft(agentRow.querySelector('[aria-label="Active run"]')).not.toBeNull();
 
     rows[2]!.unread = false;
     await visit(rows[0]!);
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
-    await settleLitElement(sidebar);
-    expect(
-      sidebar.querySelector(
-        '.sidebar-agent-menu [data-value="agent:research"] [aria-label="Unread"]',
-      ),
-    ).toBeNull();
+    expect(sidebar.querySelector(".sidebar-agent-roster__header--attention")).toBeNull();
   });
 });
 

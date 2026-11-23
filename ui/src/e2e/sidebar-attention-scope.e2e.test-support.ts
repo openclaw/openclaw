@@ -10,6 +10,7 @@ import {
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { twoFrames } from "./chat-presentation.test-support.ts";
+import { showOnlySidebarAgent } from "./sidebar-agent-row.test-support.ts";
 import { expectCount, expectVisible } from "./sidebar-assertions.test-support.ts";
 import { openSidebarPages, sidebarCronJob } from "./sidebar-customization.test-support.ts";
 import { setSidebarProofTheme } from "./sidebar-footer-proof.test-support.ts";
@@ -159,8 +160,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await captureProof("08b-desktop-inbox-row-navigation.png");
     // Sessions returns to the conversation with its list and agent switcher.
     await sidebar.locator('.sidebar-rail [data-navigation-view="sessions"]').click();
-    await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-    await sidebar.locator('.sidebar-agent-menu [data-value="agent:writer"]').click();
+    await showOnlySidebarAgent(sidebar, "writer");
     await waitForCronScope("writer");
     // The agent's cron refresh can precede the Chat route commit that closes Inbox.
     await waitForControlUiRoute(page, { pathname: "/chat/writer", routeId: "chat" });

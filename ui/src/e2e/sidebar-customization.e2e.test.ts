@@ -777,8 +777,12 @@ suite.define(() => {
 
         await page.goto(`${suite.server.baseUrl}chat`);
         const sidebar = page.locator("openclaw-app-sidebar");
-        await sidebar.locator('[data-navigation-view="sessions"]').click();
-        const home = sidebar.locator(".sidebar-footer-bar__home");
+        // With the session list closed, the rail Home carries the conversation's activity.
+        await page.keyboard.press("ControlOrMeta+B");
+        await expect
+          .poll(() => page.locator(".shell").getAttribute("class"))
+          .toContain("shell--nav-collapsed");
+        const home = sidebar.locator(".sidebar-rail__home");
         await expect.poll(() => home.isVisible()).toBe(true);
 
         const activity = home.locator(".session-glyph");
@@ -815,7 +819,7 @@ suite.define(() => {
               centerDelta: Math.abs(
                 activityBox.x + activityBox.width / 2 - (homeBox.x + homeBox.width / 2),
               ),
-              clearOfShortcut: shortcutBox.y + shortcutBox.height < homeBox.y,
+              clearOfShortcut: homeBox.y + homeBox.height < shortcutBox.y,
             };
           })
           .toEqual({ activityShift: 0, centerDelta: 0, clearOfShortcut: true });

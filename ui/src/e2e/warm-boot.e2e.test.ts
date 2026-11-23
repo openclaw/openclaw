@@ -736,7 +736,7 @@ suite.define(() => {
           });
         }
         await page.reload({ waitUntil: "commit" });
-        await sidebar.locator(".sidebar-footer-bar__home").waitFor();
+        await sidebar.locator(".sidebar-rail__home").waitFor();
         await sidebar.getByText("Cached only session", { exact: true }).waitFor();
         await transcript.getByText(transcriptText, { exact: true }).waitFor();
         expect(await gateway.getRequests("sessions.list")).toEqual([]);
@@ -744,7 +744,11 @@ suite.define(() => {
         if (profile === "trusted-proxy") {
           await capture("bootstrap-before-hello.png");
           expect(bootstrapRequests).toBe(0);
-          await sidebar.getByRole("button", { name: /^Observatory ·/u }).waitFor();
+          // Same-origin bootstrap config names the agent before the Gateway says hello.
+          await sidebar
+            .locator(".sidebar-agent-roster--selected .sidebar-agent-roster__name")
+            .getByText("Observatory", { exact: true })
+            .waitFor();
         }
         if (profile === "matching") {
           await expectOwnMessageAlignment(page);
@@ -874,7 +878,7 @@ suite.define(() => {
           expect(startup.params).toMatchObject({ sessionKey, cursor: "warm-reload-cursor" });
         }
         await gateway.waitForRequest("sessions.list");
-        await sidebar.locator(".sidebar-footer-bar__home").waitFor();
+        await sidebar.locator(".sidebar-rail__home").waitFor();
         await sidebar.getByText("Live only session", { exact: true }).waitFor();
         expect(await sidebar.getByText("Cached only session", { exact: true }).count()).toBe(0);
         const finalText =

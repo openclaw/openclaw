@@ -7,7 +7,6 @@ import {
   type NavigationRouteId,
 } from "../app-navigation.ts";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
-import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
@@ -30,10 +29,6 @@ import { createSidebarRendererLoader } from "./sidebar-renderer-loader.tsx";
 import { Icon } from "./solid/icon.tsx";
 import type { MenuHandle } from "./solid/menu.tsx";
 
-const AGENT_MENU_HOVER_OPEN_DELAY_MS = 300;
-const AGENT_MENU_HOVER_CLOSE_DELAY_MS = 200;
-const AGENT_MENU_WIDTH_PX = 300;
-
 type MenuPosition = { x: number; y: number };
 const positionedMenus = [
   "railPin",
@@ -45,7 +40,7 @@ const positionedMenus = [
   "identity",
 ] as const;
 type PositionedMenu = (typeof positionedMenus)[number];
-type MenuTrigger = PositionedMenu | "session" | "sessionGroup" | "agent";
+type MenuTrigger = PositionedMenu | "session" | "sessionGroup";
 
 function menuPosition(x: number, y: number, width: number, height: number): MenuPosition {
   return {
@@ -75,8 +70,6 @@ type SidebarMenusState = {
   automationsFilterMenuPosition: MenuPosition | null;
   catalogViewMenuPosition: (MenuPosition & { catalogId: string }) | null;
   filterMenuView: SidebarFilterMenuView;
-  agentMenuPosition: { x: number; top: number; placement?: "right-start" } | null;
-  agentMenuMode: "hover" | "click";
   agentCreateDialogOpen: boolean;
   // Anchored by its bottom edge so the footer menu grows upward.
   identityMenuPosition: {
@@ -111,20 +104,15 @@ export function createSidebarMenus(deps: {
     automationsFilterMenuPosition: null,
     catalogViewMenuPosition: null,
     filterMenuView: "root",
-    agentMenuPosition: null,
-    agentMenuMode: "click",
     agentCreateDialogOpen: false,
     identityMenuPosition: null,
   };
   const listeners = new Set<() => void>();
   const triggers = new Map<MenuTrigger, HTMLElement | null>();
-  const menuHandles = new Map<"catalogView" | "agent", MenuHandle>();
-  let focusAgentRoster: (() => void) | undefined;
-  const agentMenuAvatars = createIdentityAvatars();
+  const menuHandles = new Map<"catalogView", MenuHandle>();
+  // Switching list modes replaces the row whose menu was used.
+  let pendingAgentRowFocus: string | undefined;
   let sessionMenuWork: ReturnType<SidebarMenusRenderer["createSessionMenuWork"]> | undefined;
-  let agentMenuHoverOpenTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  let agentMenuHoverCloseTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  let agentMenuFocusBeforeHover: HTMLElement | null = null;
   let pluginActionLifetime = new AbortController();
   let disposed = false;
   let catalogMenuView: CatalogMenuView | undefined;
@@ -181,67 +169,12 @@ export function createSidebarMenus(deps: {
     setField(`${menu}MenuPosition`, position);
   }
 
-  function openAgentMenu(trigger: HTMLElement, mode: "hover" | "click") {
-    clearAgentMenuHoverTimers();
-    loadMenuRenderer();
-    const rect = trigger.getBoundingClientRect();
-    const rail = !trigger.closest(".shell--mobile-nav") ? trigger.closest(".sidebar-rail") : null;
-    menus.closeSessionMenu();
-    menus.closeSessionGroupMenu();
-    menus.closePositionedMenu("sessionSort");
-    menus.closePositionedMenu("catalogView");
-    menus.closePositionedMenu("identity");
-    menus.closePositionedMenu("peopleFilter");
-    triggers.set("agent", trigger);
-    agentMenuFocusBeforeHover =
-      mode === "hover" && document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-    host.ensureAgentIdentities(host.activeChipAgent().agents.map((agent) => agent.id));
-    setField("agentMenuMode", mode);
-    setField(
-      "agentMenuPosition",
-      rail
-        ? { x: rail.getBoundingClientRect().right, top: rect.top, placement: "right-start" }
-        : {
-            x: Math.max(8, Math.min(rect.left, window.innerWidth - AGENT_MENU_WIDTH_PX - 8)),
-            top: Math.min(rect.bottom + 4, window.innerHeight - 8),
-          },
-    );
-  }
-
-  function scheduleAgentMenuHoverClose() {
-    if (!state.agentMenuPosition || state.agentMenuMode !== "hover") {
-      return;
-    }
-    globalThis.clearTimeout(agentMenuHoverCloseTimer ?? undefined);
-    // The menu is top-layer content separated from its trigger by a gap.
-    // A short grace period keeps crossing that gap from collapsing the target.
-    agentMenuHoverCloseTimer = globalThis.setTimeout(() => {
-      agentMenuHoverCloseTimer = null;
-      if (!state.agentMenuPosition || state.agentMenuMode !== "hover") {
-        return;
-      }
-      if (document.activeElement?.closest(".sidebar-agent-menu")) {
-        return;
-      }
-      menus.closeAgentMenu();
-    }, AGENT_MENU_HOVER_CLOSE_DELAY_MS);
-  }
-
   function releaseTrigger(menu: MenuTrigger, restoreFocus = false) {
     const trigger = triggers.get(menu);
     triggers.delete(menu);
     if (restoreFocus) {
       trigger?.focus();
     }
-  }
-
-  function clearAgentMenuHoverTimers() {
-    globalThis.clearTimeout(agentMenuHoverOpenTimer ?? undefined);
-    globalThis.clearTimeout(agentMenuHoverCloseTimer ?? undefined);
-    agentMenuHoverOpenTimer = null;
-    agentMenuHoverCloseTimer = null;
   }
 
   const menus = merge(state, {
@@ -270,13 +203,18 @@ export function createSidebarMenus(deps: {
     element,
     triggers,
     railPins: new Map<string, HTMLElement>(),
-    get focusAgentRoster() {
-      return focusAgentRoster;
+    requestAgentRowFocus(agentId: string) {
+      pendingAgentRowFocus = agentId;
     },
-    set focusAgentRoster(focus: (() => void) | undefined) {
-      focusAgentRoster = focus;
+    /** The replacement row takes the request once; any other row leaves focus alone. */
+    claimAgentRowFocus(agentId: string): boolean {
+      if (pendingAgentRowFocus !== agentId) {
+        return false;
+      }
+      pendingAgentRowFocus = undefined;
+      return true;
     },
-    menuRef(menu: "catalogView" | "agent") {
+    menuRef(menu: "catalogView") {
       let bound: MenuHandle | undefined;
       onCleanup(() => {
         if (menuHandles.get(menu) === bound) {
@@ -293,7 +231,6 @@ export function createSidebarMenus(deps: {
       return pluginActionLifetime;
     },
     connect(): void {
-      agentMenuAvatars.connect();
       if (pluginActionLifetime.signal.aborted) {
         pluginActionLifetime = new AbortController();
         if (state.sessionMenu) {
@@ -303,11 +240,9 @@ export function createSidebarMenus(deps: {
     },
 
     disconnect(): void {
-      agentMenuAvatars.disconnect();
       pluginActionLifetime.abort();
       menuRendererImport.dispose();
       sessionMenuWork?.release();
-      clearAgentMenuHoverTimers();
     },
 
     async preloadMenuRenderer() {
@@ -338,8 +273,7 @@ export function createSidebarMenus(deps: {
         positionedMenus.some((menu) => state[`${menu}MenuPosition`]) ||
         state.sessionMenu ||
         catalogMenu.isOpen() ||
-        state.sessionGroupMenu ||
-        state.agentMenuPosition,
+        state.sessionGroupMenu,
       );
       for (const menu of positionedMenus) {
         menus.closePositionedMenu(menu);
@@ -347,7 +281,6 @@ export function createSidebarMenus(deps: {
       menus.closeSessionMenu();
       catalogMenu.close();
       menus.closeSessionGroupMenu();
-      menus.closeAgentMenu();
       return hadTransientMenu;
     },
 
@@ -477,100 +410,10 @@ export function createSidebarMenus(deps: {
       });
     },
 
-    toggleAgentMenu(trigger: HTMLElement) {
-      clearAgentMenuHoverTimers();
-      if (state.agentMenuPosition && state.agentMenuMode === "click") {
-        menus.closeAgentMenu();
-        return;
-      }
-      if (state.agentMenuPosition && state.agentMenuMode === "hover") {
-        agentMenuFocusBeforeHover = null;
-        setField("agentMenuMode", "click");
-        // Promotion does not reopen the dropdown, so after-show will not move focus.
-        void commit().then((committed) => {
-          if (!committed) {
-            return;
-          }
-          if (
-            !state.agentMenuPosition ||
-            state.agentMenuMode !== "click" ||
-            triggers.get("agent") !== trigger
-          ) {
-            return;
-          }
-          menuHandles.get("agent")?.focusFirst();
-        });
-        return;
-      }
-      openAgentMenu(trigger, "click");
-    },
-
-    scheduleAgentMenuHoverOpen(trigger: HTMLElement, event: PointerEvent) {
-      globalThis.clearTimeout(agentMenuHoverCloseTimer ?? undefined);
-      agentMenuHoverCloseTimer = null;
-      // Pointer motion establishes intent; layout-only entry must not open the menu.
-      if (
-        state.agentMenuPosition ||
-        agentMenuHoverOpenTimer !== null ||
-        event.pointerType === "touch" ||
-        !globalThis.matchMedia("(hover: hover) and (pointer: fine)").matches
-      ) {
-        return;
-      }
-      loadMenuRenderer();
-      agentMenuHoverOpenTimer = globalThis.setTimeout(() => {
-        agentMenuHoverOpenTimer = null;
-        openAgentMenu(trigger, "hover");
-      }, AGENT_MENU_HOVER_OPEN_DELAY_MS);
-    },
-
-    handleAgentMenuTriggerPointerLeave() {
-      globalThis.clearTimeout(agentMenuHoverOpenTimer ?? undefined);
-      agentMenuHoverOpenTimer = null;
-      scheduleAgentMenuHoverClose();
-    },
-
-    handleAgentMenuPointerEnter() {
-      globalThis.clearTimeout(agentMenuHoverCloseTimer ?? undefined);
-      agentMenuHoverCloseTimer = null;
-    },
-
-    handleAgentMenuPointerLeave: scheduleAgentMenuHoverClose,
-
-    restoreFocusAfterAgentMenuHoverOpen() {
-      const chip = host.activeChipAgent();
-      const activeItem =
-        host.sidebarAgentsMode === "roster" && chip.agents.length > 1
-          ? "scope:all"
-          : `agent:${encodeURIComponent(chip.activeId)}`;
-      menuHandles.get("agent")?.itemElement(activeItem)?.scrollIntoView?.({ block: "nearest" });
-      if (!state.agentMenuPosition || state.agentMenuMode !== "hover") {
-        return;
-      }
-      const previous = agentMenuFocusBeforeHover;
-      agentMenuFocusBeforeHover = null;
-      if (previous && previous !== document.body && previous.isConnected) {
-        previous.focus({ preventScroll: true });
-      } else if (
-        document.activeElement instanceof HTMLElement &&
-        document.activeElement.closest(".sidebar-agent-menu")
-      ) {
-        document.activeElement.blur();
-      }
-    },
-
-    closeAgentMenu(options: { restoreFocus?: boolean } = {}) {
-      clearAgentMenuHoverTimers();
-      agentMenuFocusBeforeHover = null;
-      setField("agentMenuPosition", null);
-      releaseTrigger("agent", options.restoreFocus);
-    },
-
     openAgentCreateDialog() {
       if (!host.sessionDataContext) {
         return;
       }
-      menus.closeAgentMenu();
       loadMenuRenderer();
       setField("agentCreateDialogOpen", true);
     },
@@ -608,7 +451,6 @@ export function createSidebarMenus(deps: {
           when={
             projection.read().railPinMenuPosition ||
             projection.read().pluginNavigationMenuPosition ||
-            projection.read().agentMenuPosition ||
             projection.read().agentCreateDialogOpen ||
             projection.read().identityMenuPosition ||
             projection.read().sessionMenu ||
@@ -620,12 +462,7 @@ export function createSidebarMenus(deps: {
           }
         >
           <Boundary>
-            <MenuRenderer
-              menus={menus}
-              host={view}
-              avatars={agentMenuAvatars}
-              revision={projection.revision}
-            />
+            <MenuRenderer menus={menus} host={view} revision={projection.revision} />
           </Boundary>
         </Show>,
         menus.catalogMenuView.render(CatalogMenu),

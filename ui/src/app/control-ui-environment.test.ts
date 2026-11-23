@@ -1,19 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
-import type {
-  ControlUiBootstrapConfig,
-  ControlUiEnvironment,
-} from "../../../src/gateway/control-ui-bootstrap-contract.js";
-import { renderSidebarAgentCard } from "../components/app-sidebar-render.tsx";
-import { AppSidebarOwner, type AppSidebarElement } from "../components/app-sidebar.tsx";
-import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
-import { createContext, createGateway, createSessions } from "../test-helpers/app-sidebar.ts";
-import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { makeBootRoster } from "./bootstrap.test-support.ts";
+import type { ControlUiBootstrapConfig } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { createApplicationConfigCapability } from "./config.ts";
 import * as documentHead from "./control-ui-document-head.ts";
 
@@ -56,45 +44,22 @@ afterEach(() => {
   root.style.removeProperty("--accent");
 });
 
-setupSidebarTest();
-
-it("renders and clears environment presentation, including the sidebar badge and avatar ring", async () => {
+// The sidebar label and avatar ring live in the agent-row sidebar cases.
+it("renders and clears environment presentation", async () => {
   document.title = "OpenClaw Control";
   const favicon = icon("/favicon.svg", "image/svg+xml");
   const png = icon("/favicon-32.png", "image/png");
   documentHead.initializeControlUiDocumentHead();
 
   const config = setupConfig({ environment: edge, seamColor: "#123456" }, {});
-  const [cardEnvironment, setCardEnvironment] = createSignal<ControlUiEnvironment | null>(null);
-  const context = {
-    ...createContext(
-      createGateway(createTestGatewayClient(async () => ({}))),
-      createSessions("main", []),
-      makeBootRoster({ agents: [{ id: "main", name: "OpenClaw" }] }),
-    ),
-    get config() {
-      cardEnvironment();
-      return config;
-    },
-  };
-  const sidebarProps = document.createElement("openclaw-app-sidebar") as AppSidebarElement;
-  sidebarProps.sidebarAgentsMode = "chip";
-  const host = new AppSidebarOwner(context, sidebarProps);
-  const { container: sidebar } = mountSolid(() => renderSidebarAgentCard(host));
   expect(document.querySelector(".control-ui-environment-stripe")).toBeNull();
-  expect(document.querySelector(".control-ui-environment-pill")).toBeNull();
   expect(favicon.getAttribute("href")).toBe("/favicon.svg");
 
   await refresh(config);
-  setCardEnvironment(config.current.environment);
 
   expect(document.querySelector(".control-ui-environment-stripe")).not.toBeNull();
   expectStyle("--control-ui-environment-color", "var(--control-ui-environment-amber)");
   expectStyle("--ring", "#ffffff");
-  await waitForSolid(() =>
-    expect(sidebar.querySelector(".control-ui-environment-pill")?.textContent).toBe("edge"),
-  );
-  expect(sidebar.querySelector(".sidebar-agent-card__avatar--environment")).not.toBeNull();
   expect(favicon.href).toContain("data:image/svg+xml,");
   expect(decodeURIComponent(favicon.href)).toContain("#f59e0b");
   expect(png.type).toBe("image/svg+xml");

@@ -23,7 +23,9 @@ suite.define(() =>
           { sessionKey: mainKey },
         );
         await page.goto(support.controlUiSessionUrl(suite.server.baseUrl, mainKey));
-        const homeRow = page.locator(".sidebar-footer-bar__home");
+        const homeRow = page.locator(
+          ".sidebar-agent-roster--selected .sidebar-agent-roster__header",
+        );
         const secondRow = page.locator(`[data-session-key="${secondKey}"]`);
         const composer = page.locator(
           'openclaw-chat-pane[aria-hidden="false"] .agent-chat__composer-combobox > textarea',
@@ -34,9 +36,10 @@ suite.define(() =>
         await support.captureUiProof(suite, page, "draft-indicator-before.png");
 
         const homeBox = await ui.bounds(homeRow);
-        const restingActivity = await ui.bounds(homeRow.getByRole("img", { name: "Active run" }));
+        // The row's avatar is decorative; its ring still marks the active run.
+        const activity = homeRow.locator('.session-glyph__ring[aria-label="Active run"]');
+        const restingActivity = await ui.bounds(activity);
         await composer.fill("Keep this unsent");
-        const activity = homeRow.getByRole("img", { name: "Active run" });
         const draft = homeRow.getByRole("img", { name: "Unsent draft" });
         await activity.waitFor();
         await expect.poll(() => draft.count()).toBe(0);

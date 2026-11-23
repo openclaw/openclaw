@@ -320,7 +320,7 @@ async function keepsHomeActionsClearOfCaption(page: Page) {
   });
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
   await page.locator(".chat-pane__header").waitFor();
-  await page.locator(".sidebar-footer-bar__home").click();
+  await page.locator(".sidebar-rail__home").click();
   const actions = page.locator(".assistant-panel--right .assistant-panel-actions button");
   const caption = page.locator(".openclaw-window-controls");
   await Promise.all([actions.first().waitFor(), caption.waitFor()]);
@@ -371,7 +371,7 @@ async function alignsNativeHeaders(
     return {
       row: element.getBoundingClientRect().toJSON(),
       title: element.firstElementChild!.getBoundingClientRect().toJSON(),
-      agent: box(".sidebar-agent-card__main"),
+      agent: box(".sidebar-rail__home"),
       panelPadding: getComputedStyle(document.querySelector(".sidebar-shell")!).paddingTop,
     };
   });

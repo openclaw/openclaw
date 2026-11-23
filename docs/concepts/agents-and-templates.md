@@ -39,8 +39,8 @@ include:
 
 A one-off task does not need its own agent. Ask the agent you already have.
 
-To make an agent in the Control UI, choose **Create new agent** in the agent
-selector and give it a name. From the command line:
+To make an agent in the Control UI, open the **⋯** menu on the agent row in
+the sidebar, choose **New agent**, and give it a name. From the command line:
 
 ```bash
 openclaw agents add pr-review --workspace ~/.openclaw/workspace-pr-review

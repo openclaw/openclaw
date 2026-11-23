@@ -19,7 +19,7 @@ export function CollapsedHomeToggle() {
         aria-label={t("assistantPanel.toggle")}
         onClick={() => window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT))}
       >
-        <Icon name="home" />
+        <Icon name="house" />
       </button>
     </openclaw-tooltip>
   );
