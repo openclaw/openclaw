@@ -1,5 +1,9 @@
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { z } from "zod";
+import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { formatStateLeaseLoss } from "../shared/state-lease-loss-format.js";
+import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
 import type {
   UpdateDestinationFailureSchema,
   UpdateFailureFactSchema,
@@ -44,4 +48,20 @@ export function formatUpdateFailureFact(fact: UpdateFailureFact): string {
     ? formatUpdateDestinationFailure(fact.destination)
     : fact.message;
   return `Failing check ${fact.check} (${fact.code})${fact.location ? ` at ${fact.location}` : ""}${fact.pluginId ? `; plugin ${fact.pluginId}` : ""}${fact.affectedKey ? `; key ${fact.affectedKey}` : ""}${message ? `: ${message}` : ""}${fact.leaseLoss ? `; ${formatStateLeaseLoss(fact.leaseLoss)}` : ""}`;
+}
+
+export function formatRepairedUpdateRun(run: UpdateRunRecord): string {
+  const version = run.target.version ?? run.after.version;
+  const phase = run.steps.find(
+    (step) => UPDATE_RUN_PHASES.some((name) => name === step.step) && step.status === "failed",
+  );
+  const failure = selectUpdateFailureReportSteps(
+    run.steps.filter(
+      (step) => step.status === "failed" && !UPDATE_RUN_PHASES.some((name) => name === step.step),
+    ),
+  )[0];
+  const text = `Update ${run.runId}${version ? ` to ${version}` : ""} failed${phase ? ` at ${phase.step}` : ""}: ${run.reason ?? "unknown reason"}.${failure?.detail ? ` ${failure.step}: ${failure.detail}` : ""}`;
+  return text.length <= UPDATE_RUN_TEXT_LIMIT
+    ? text
+    : `${sliceUtf16Safe(text, 0, UPDATE_RUN_TEXT_LIMIT - 1)}…`;
 }
