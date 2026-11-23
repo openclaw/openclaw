@@ -153,7 +153,7 @@ suite.define(() => {
 
       const composer = page.locator(".agent-chat__input");
       const model = composer.locator('[data-chat-model-select="true"]');
-      const voice = page.getByRole("button", { name: "Start voice input" });
+      const voice = page.getByRole("button", { name: "Dictate" });
       await polledAttribute(model, "aria-busy").toBe("false");
       await polledVisible(voice).toBe(true);
 
@@ -262,7 +262,9 @@ suite.define(() => {
       await page.goto(suite.server.baseUrl + "chat");
       await gateway.waitForRequest("sessions.messages.subscribe");
       const textarea = page.locator(".agent-chat__input textarea");
-      const voice = page.getByRole("button", { name: "Start voice input" });
+      const voice = page.locator(
+        ".agent-chat__composer-actions > .chat-talk-control > openclaw-tooltip > button",
+      );
       const microphonePicker = page.getByRole("button", { name: "Microphone input" });
       const microphonePickerShell = page.locator(".chat-talk-input-picker");
       const shellWidth = () =>
@@ -328,9 +330,7 @@ suite.define(() => {
       await page.mouse.down();
       await page.clock.runFor(150);
       await expect
-        .poll(() =>
-          voice.evaluate((node) => node.classList.contains("chat-send-btn--dictation-arming")),
-        )
+        .poll(() => voice.evaluate((node) => node.classList.contains("chat-send-btn--talk-arming")))
         .toBe(true);
       await polledVisible(microphonePicker).toBe(true);
       await expect.poll(pickerWidth).toBeGreaterThanOrEqual(12);
@@ -339,6 +339,7 @@ suite.define(() => {
       expect(Math.abs((voiceDuringHold?.x ?? 0) - (voiceBeforeHold?.x ?? 0))).toBeLessThanOrEqual(
         1,
       );
+      await page.keyboard.press("Escape");
       await page.mouse.up();
       await page.mouse.move(0, 0);
       await page.clock.resume();

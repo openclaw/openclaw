@@ -209,9 +209,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   gatewayClient?: GatewayBrowserClient | null;
   chatMessageMaxWidth?: string | null;
   onComposerWidthChange?: (value: string | undefined) => void;
-  composerHoldToRecord?: boolean;
   realtimeTalkInputDeviceId?: string;
-  onComposerHoldToRecordChange?: (enabled: boolean) => void;
   onOpenTalkSettings?: () => void;
   onOpenDictationSettings?: () => void;
   suggestionComposer?: boolean;

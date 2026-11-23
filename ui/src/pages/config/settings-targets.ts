@@ -439,8 +439,6 @@ export const SETTINGS_SEARCH_TARGETS = {
       "chat.composer.systemDefaultCamera",
       "chat.composer.microphoneInput",
       "chat.composer.systemDefaultMicrophone",
-      "chat.composer.holdToRecordSetting",
-      "chat.composer.holdToRecordSettingDescription",
     ],
     aliases: "voice audio input dictation dictate",
   },

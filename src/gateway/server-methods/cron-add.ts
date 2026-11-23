@@ -242,6 +242,20 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   }
   // Resolve the preview before durable add so a preview failure cannot duplicate a retry.
   const previewContext = { cfg, defaultAgentId: context.cron.getDefaultAgentId() };
+  const setupSession = creator.session;
+  const keepDeclarationFor =
+    !commandCreation.creation &&
+    setupSession &&
+    callerScope &&
+    setupSession.entry.templateSetup?.requiredAutomationIds?.some(
+      (id) => jobCreate.declarationKey?.trim() === `template:${setupSession.agentId}:${id}`,
+    )
+      ? {
+          agentId: setupSession.agentId,
+          sessionKey: setupSession.sessionKey,
+          accountId: callerScope.accountId,
+        }
+      : undefined;
   let deliveryPreview: CronDeliveryPreview | undefined;
   let result: Awaited<ReturnType<typeof context.cron.add>>;
   try {
@@ -284,6 +298,8 @@ export const cronAddHandler: GatewayRequestHandler = async ({
           sessionEntryCurrent: creator.sessionEntryCurrent,
 
           enabledExplicit,
+          // Pending chat setup only fills verified slots. Ordinary adds still converge after setup.
+          keepDeclarationFor,
           ...creatorOptions,
           ...(commandCreation.creation
             ? {

@@ -5,6 +5,7 @@ import {
   installTalkGateway,
 } from "./browser-talk-regression.test-support.ts";
 import {
+  holdComposerForTalk,
   dispatchOpenAiTalkEvent,
   installOpenAiTalkFixture,
   waitForTalkReady,
@@ -17,7 +18,7 @@ async function startTalk(page: Page, voiceSessionId: string) {
   await installOpenAiTalkFixture(page);
   await page.goto(`${suite.server.baseUrl}chat`);
   await waitForTalkReady(page);
-  await page.getByRole("button", { name: "Start voice input" }).click();
+  await holdComposerForTalk(page);
   await gateway.waitForRequest("talk.client.create");
   await expect
     .poll(() =>

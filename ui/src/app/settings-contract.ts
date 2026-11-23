@@ -174,7 +174,6 @@ export const UI_APPEARANCE_DEFAULTS = {
   chatCollapseTaskProgress: false,
   chatSendShortcut: UI_PREFERENCE_DEFAULTS.chatSendShortcut,
   catalogOpenTarget: "viewer",
-  composerHoldToRecord: true,
   lobsterPetVisits: true,
   lobsterPetSounds: false,
   sessionDeleteConfirm: true,
@@ -212,7 +211,6 @@ export type UiSettings = {
   catalogOpenTarget?: CatalogOpenTarget;
   realtimeTalkInputDeviceId?: string;
   realtimeTalkVideoDeviceId?: string;
-  composerHoldToRecord?: boolean;
   // Camera intent is device-local, not per-agent or synced through config ui.prefs.
   talkCameraAutoEnable?: boolean;
   chatSplitLayout?: ChatSplitLayout;

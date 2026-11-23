@@ -270,33 +270,29 @@ describe("renderChatComposer controls", () => {
     expect(query(container, ".chat-mobile-talk-action .chat-send-btn")?.disabled).toBe(true);
   });
 
-  it.each([true, false])(
-    "holds Talk during initial history while preserving draft input (hold-to-record=%s)",
-    async (composerHoldToRecord) => {
-      const request = vi.fn().mockResolvedValue({
-        realtime: { ready: true },
-        transcription: { ready: true },
-      });
-      const onToggleRealtimeTalk = vi.fn();
-      const { container } = renderComposer({
-        composerHoldToRecord,
-        gatewayClient: createTestGatewayClient(request),
-        onToggleRealtimeTalk,
-        submitDisabledReason: t("chat.thread.loading"),
-      });
-      await vi.waitFor(() =>
-        expect(request).toHaveBeenCalledWith("talk.catalog", { sessionKey: "main" }),
-      );
-      const microphone = button(container, t("chat.composer.startVoiceInput"));
-      const talk = button(container, t("chat.composer.realtimeTalkCapability"));
-      microphone.click();
-      talk.click();
-      expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
-      expect(talk.disabled).toBe(true);
-      expect(microphone.disabled).toBe(!composerHoldToRecord);
-      expect(textarea(container).disabled).toBe(false);
-    },
-  );
+  it("holds Talk during initial history while preserving dictation and draft input", async () => {
+    const request = vi.fn().mockResolvedValue({
+      realtime: { ready: true },
+      transcription: { ready: true },
+    });
+    const onToggleRealtimeTalk = vi.fn();
+    const { container } = renderComposer({
+      gatewayClient: createTestGatewayClient(request),
+      onToggleRealtimeTalk,
+      submitDisabledReason: t("chat.thread.loading"),
+    });
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("talk.catalog", { sessionKey: "main" }),
+    );
+    const microphone = button(container, t("chat.composer.startVoiceInput"));
+    const talk = button(container, t("chat.composer.realtimeTalkCapability"));
+    microphone.click();
+    talk.click();
+    expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
+    expect(talk.disabled).toBe(true);
+    expect(microphone.disabled).toBe(false);
+    expect(textarea(container).disabled).toBe(false);
+  });
 
   it("disables live voice offline", () => {
     const view = renderComposer({ connected: false, onToggleRealtimeTalk: vi.fn() });

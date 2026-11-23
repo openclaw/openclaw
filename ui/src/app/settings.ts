@@ -385,7 +385,6 @@ export function loadUiPreferences(
     sidebarLiveActivity: UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
     showAdvancedSettings: false,
     pinnedAgentIds: [],
-    composerHoldToRecord: UI_APPEARANCE_DEFAULTS.composerHoldToRecord,
   };
 
   try {
@@ -448,7 +447,6 @@ export function loadUiPreferences(
       catalogOpenTarget: normalizeCatalogOpenTarget(parsed.catalogOpenTarget),
       realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
       realtimeTalkVideoDeviceId: normalizeOptionalString(parsed.realtimeTalkVideoDeviceId),
-      composerHoldToRecord: booleanSetting("composerHoldToRecord"),
       talkCameraAutoEnable:
         typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
@@ -609,7 +607,6 @@ export function saveSettings(
     catalogOpenTarget: next.catalogOpenTarget === "terminal" ? "terminal" : undefined,
     realtimeTalkInputDeviceId: normalizeOptionalString(next.realtimeTalkInputDeviceId),
     realtimeTalkVideoDeviceId: normalizeOptionalString(next.realtimeTalkVideoDeviceId),
-    composerHoldToRecord: next.composerHoldToRecord === false ? false : undefined,
     talkCameraAutoEnable: next.talkCameraAutoEnable,
     chatSplitLayout: next.chatSplitLayout || undefined,
     // Right dock is the default; only the opt-in bottom dock persists.

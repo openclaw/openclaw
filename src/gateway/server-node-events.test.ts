@@ -404,7 +404,7 @@ describe("voice transcript events", () => {
               loaded: buildSessionLookup(sessionKey),
               assertCurrent: () => {
                 if (opts === firstConnection && !current) {
-                  throw new Error("Node event session authority changed");
+                  throw new Error("Node event session changed. Retry the event.");
                 }
               },
               pending,
@@ -420,7 +420,7 @@ describe("voice transcript events", () => {
         firstConnection,
       );
       if (phase === "reservation") {
-        await expect(first).rejects.toThrow("Node event session authority changed");
+        await expect(first).rejects.toThrow("Node event session changed. Retry the event.");
       } else {
         await entered.promise;
       }

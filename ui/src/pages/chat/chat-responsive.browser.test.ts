@@ -384,7 +384,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                     </div>
                     ${composerControlsHtml()}
                       <div class="agent-chat__composer-actions">
-                        <button class="chat-send-btn chat-send-btn--voice" aria-label="Start voice input">${iconSvg()}</button>
+                        <button class="chat-send-btn chat-send-btn--voice" aria-label="Dictate">${iconSvg()}</button>
                       </div>
                     </div>
                   </div>

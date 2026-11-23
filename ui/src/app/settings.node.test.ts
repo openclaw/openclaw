@@ -161,6 +161,23 @@ describe("gateway settings and layout persistence", () => {
     );
   });
 
+  it("ignores the retired hold-to-dictate preference and drops it on the next save", () => {
+    const preferences = {
+      realtimeTalkInputDeviceId: "desk-mic",
+      chatShowTaskProgress: false,
+    };
+    writeStored({ ...preferences, composerHoldToRecord: false });
+
+    const settings = loadSettings();
+    expect.soft(settings).not.toHaveProperty("composerHoldToRecord");
+    expect(settings).toMatchObject(preferences);
+
+    saveSettings(settings);
+    expect.soft(readStored()).not.toHaveProperty("composerHoldToRecord");
+    expect(readStored()).toMatchObject(preferences);
+    expect(loadSettings()).not.toHaveProperty("composerHoldToRecord");
+  });
+
   it("keeps development credentials scoped to the upstream when the Vite target changes", () => {
     setTestLocation({ protocol: "http:", host: "localhost:5173", pathname: "/" });
     vi.stubGlobal("OPENCLAW_UI_DEV_SERVER", true);
@@ -530,11 +547,11 @@ describe("gateway settings and layout persistence", () => {
 
       persistSessionToken(first.gatewayUrl, "synthetic-rotated-credential");
       credentialReads.mockClear();
-      patchSettings({ composerHoldToRecord: false });
+      patchSettings({ chatShowTaskProgress: false });
       expect(credentialReads.mock.calls.map(([readKey]) => readKey)).toEqual([
         `openclaw.control.token.v1:${first.gatewayUrl}`,
       ]);
-      expect(theme.settings.composerHoldToRecord).toBe(false);
+      expect(theme.settings.chatShowTaskProgress).toBe(false);
       expect(JSON.parse(localStorage.getItem(key) ?? "{}")).not.toHaveProperty("token");
       expect(loadSettings().token).toBe("synthetic-rotated-credential");
     } finally {

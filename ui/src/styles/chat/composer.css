@@ -956,17 +956,12 @@
   padding-top: 8px;
 }
 
-/* Capability and preference entries are ordinary rows: the shared row inset,
-   no frame of their own; dividers between sections come from the menu. */
-.chat-talk-input-picker__capability,
-.chat-talk-input-picker__preference {
+/* Capability entries use the shared row inset; dividers come from the menu. */
+.chat-talk-input-picker__capability {
   display: flex;
   align-items: center;
   justify-content: space-between;
   line-height: 1.35;
-}
-
-.chat-talk-input-picker__capability {
   gap: var(--space-3);
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
@@ -1018,12 +1013,12 @@
   cursor: var(--cursor-action);
 }
 
-.chat-talk-input-picker__preference {
-  gap: var(--space-4);
-  color: var(--text);
+.chat-talk-input-picker__gesture {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  white-space: nowrap;
 }
 
-.chat-talk-input-picker__preference > .oc-menu-item__check,
 .chat-talk-input-picker__item > .oc-menu-item__check {
   display: none;
 }
@@ -1034,19 +1029,21 @@
   user-select: none;
 }
 
-@property --chat-dictation-hold-angle {
+@property --chat-talk-hold-angle {
   syntax: "<angle>";
   inherits: false;
   initial-value: 0deg;
 }
 
 /* The hold threshold is functional feedback, not decoration: the ring fills
-   linearly until dictation latches, then the ordinary Stop state takes over. */
-.chat-send-btn--dictation-arming {
+   linearly until Talk starts, then the live voice control takes over. */
+.chat-send-btn--talk-arming {
   position: relative;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
 }
 
-.chat-send-btn--dictation-arming::after {
+.chat-send-btn--talk-arming::after {
   content: "";
   position: absolute;
   inset: -3px;
@@ -1054,27 +1051,27 @@
   border-radius: inherit;
   background: conic-gradient(
     from -90deg,
-    var(--accent) 0deg var(--chat-dictation-hold-angle),
-    transparent var(--chat-dictation-hold-angle) 360deg
+    var(--accent) 0deg var(--chat-talk-hold-angle),
+    transparent var(--chat-talk-hold-angle) 360deg
   );
   -webkit-mask:
     linear-gradient(white 0 0) content-box,
     linear-gradient(white 0 0);
   mask-composite: exclude;
   /* Keep the visible fill aligned with HOLD_PROGRESS_MS in composer-dictation.ts. */
-  animation: chat-dictation-hold-progress 350ms linear forwards;
+  animation: chat-talk-hold-progress 350ms linear forwards;
   pointer-events: none;
 }
 
-@keyframes chat-dictation-hold-progress {
+@keyframes chat-talk-hold-progress {
   to {
-    --chat-dictation-hold-angle: 360deg;
+    --chat-talk-hold-angle: 360deg;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chat-send-btn--dictation-arming::after {
-    --chat-dictation-hold-angle: 360deg;
+  .chat-send-btn--talk-arming::after {
+    --chat-talk-hold-angle: 360deg;
     background: color-mix(in srgb, var(--accent) 52%, transparent);
     animation: none;
   }

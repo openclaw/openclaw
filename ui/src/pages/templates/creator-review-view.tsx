@@ -182,7 +182,12 @@ export function TemplateCreatorReviewView(props: { flow: TemplateCreator; view: 
             </Match>
             <Match when={status() === "pending" && state().publication?.url}>
               {(url) => (
-                <a class="btn primary" href={url()} target="_blank" rel="noopener noreferrer">
+                <a
+                  class="btn primary"
+                  href={`${url()}?view=submission`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
                   {t("templatesDraft.viewSubmission")}
                 </a>
               )}

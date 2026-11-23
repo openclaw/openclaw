@@ -509,9 +509,10 @@ export function createChatComposerContext(
       devicePicker.handleOpen();
       return;
     }
-    if (props.submitDisabledReason) {
+    if (props.submitDisabledReason || voice.dictation.active || voice.dictation.transcribing) {
       return;
     }
+    devicePicker.handleClose();
     props.onToggleRealtimeTalk?.();
   };
   const handleVoicePrimaryAction = () => {
@@ -535,7 +536,6 @@ export function createChatComposerContext(
         selectedDeviceId: selectedMicrophoneId,
         voiceActive: Boolean(props.realtimeTalkActive),
         issue: devicePicker.issue,
-        holdToDictate: props.composerHoldToRecord !== false,
         realtimeStatus: devicePicker.realtimeStatus,
         dictationStatus: devicePicker.dictationStatus,
         onOpen: devicePicker.handleOpen,
@@ -544,13 +544,13 @@ export function createChatComposerContext(
           patchSettings({ realtimeTalkInputDeviceId: deviceId.trim() || undefined });
           devicePicker.handleClose();
         },
-        onHoldToDictateChange: (enabled: boolean) => {
-          if (props.onComposerHoldToRecordChange) {
-            props.onComposerHoldToRecordChange(enabled);
-          } else {
-            patchSettings({ composerHoldToRecord: enabled });
-          }
-        },
+        onStartTalk: startRealtimeTalk,
+        talkDisabled: Boolean(
+          props.realtimeTalkActive ||
+          props.submitDisabledReason ||
+          voice.dictation.active ||
+          voice.dictation.transcribing,
+        ),
         onOpenTalkSettings: devicePicker.canConfigure ? props.onOpenTalkSettings : undefined,
         onOpenDictationSettings: devicePicker.canConfigure
           ? props.onOpenDictationSettings
@@ -562,12 +562,9 @@ export function createChatComposerContext(
     state,
     devicePicker,
     interaction.setError,
-    visibleDraft.trim() || props.attachments?.length ? startRealtimeTalk : handleVoicePrimaryAction,
+    startRealtimeTalk,
   );
-  const dictation =
-    props.onToggleRealtimeTalk && props.composerHoldToRecord !== false
-      ? voice.dictation
-      : undefined;
+  const dictation = props.onToggleRealtimeTalk ? voice.dictation : undefined;
   const handleDictationStart = (event?: PointerEvent) => {
     interaction.setError(null);
     const target = state.composerTextarea;

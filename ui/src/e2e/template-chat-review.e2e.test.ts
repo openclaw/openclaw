@@ -238,7 +238,7 @@ it.skipIf(!available).each([true, false])(
       await compact.locator("header [role=status]").getByText("Pending", { exact: true }).waitFor();
       expect(
         await compact.getByRole("link", { name: "View submission" }).getAttribute("href"),
-      ).toBe(publication.url);
+      ).toBe("https://example.test/maker/templates/research-brief?view=submission");
       await capture("pending", compact);
       expect(await compact.getByText("Published", { exact: true }).count()).toBe(0);
       await gateway.setMethodResponse("templates.drafts.review", {

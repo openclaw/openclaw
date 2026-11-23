@@ -120,6 +120,8 @@ if (process.env.OPENCLAW_LAUNCHER_IPC === "1") {
       process.kill(process.pid, "SIGTERM");
     }
   });
+  // The listener must receive stop requests without keeping a settled Gateway alive.
+  process.channel?.unref();
 }
 
 export async function settleRunFromTrial(
@@ -245,8 +247,10 @@ export async function settleRunFromTrial(
 /** Called after the listener is serving, including the old release after a rollback. */
 export async function announceReady(buildId: string | null): Promise<void> {
   const lock = await readUpdateLock();
-  // A restarted container can reuse the old Gateway's PID (including PID 1).
-  if (lock && (lock.dead || lock.pid === process.pid)) {
+  // A restarted container can reuse the old Gateway's PID (including PID 1). A lock with this
+  // PID taken after this process started is this Gateway's own update in progress, not a leftover.
+  const startedAt = Date.now() - process.uptime() * 1000;
+  if (lock && (lock.dead || (lock.pid === process.pid && lock.startedAt < startedAt))) {
     await finishUpdateRunAsync(lock.runId, { status: "failed", reason: "interrupted" });
     await releaseUpdateLock();
   }

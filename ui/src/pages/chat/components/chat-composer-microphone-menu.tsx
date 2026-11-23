@@ -4,7 +4,6 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
 import type { MenuEntry } from "../../../components/solid/menu.tsx";
-import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { MicrophonePickerProps } from "../composer-microphone-picker.ts";
 import { type RealtimeTalkDeviceIssue, realtimeTalkDeviceIssueMessage } from "../talk/input.ts";
@@ -180,17 +179,17 @@ export function MicrophoneMenu(props: {
           ) : undefined,
         });
       }
-      if (props.picker.onHoldToDictateChange) {
-        separator("preferences-separator");
+      if (props.picker.onStartTalk) {
+        separator("talk-separator");
         entries.push({
-          id: "hold-to-dictate",
-          label: t("chat.composer.holdToDictate"),
-          type: "checkbox",
-          checked: props.picker.holdToDictate !== false,
-          class: "oc-menu-item--switch chat-talk-input-picker__preference",
-          attributes: { "data-chat-talk-preference": "hold-to-dictate" },
+          id: "start-talk",
           closeOnSelect: false,
-          details: <SwitchIndicator checked={props.picker.holdToDictate !== false} size="sm" />,
+          label: t("chat.composer.startTalk"),
+          disabled: props.picker.talkDisabled,
+          icon: <Icon name="audioLines" />,
+          details: (
+            <span class="chat-talk-input-picker__gesture">{t("chat.composer.holdGesture")}</span>
+          ),
         });
       }
       return entries;

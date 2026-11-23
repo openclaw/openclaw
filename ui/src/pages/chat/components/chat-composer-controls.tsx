@@ -131,8 +131,8 @@ export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
             if (pointer) {
               queueMicrotask(() => handle?.overlay.trigger?.blur());
             }
-          } else if (item.id === "hold-to-dictate") {
-            props.onHoldToDictateChange?.(props.holdToDictate === false);
+          } else if (item.id === "start-talk") {
+            props.onStartTalk?.();
           } else if (item.id === "capability:realtime") {
             props.onOpenTalkSettings?.();
           } else if (item.id === "capability:dictation") {
@@ -168,15 +168,19 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
   const label = () =>
     active()
       ? t("chat.composer.dictationStopAndKeep")
-      : (props.idleLabel ?? t("chat.composer.startVoiceInput"));
+      : arming()
+        ? t("chat.composer.holdForTalk")
+        : (props.idleLabel ?? t("chat.composer.startVoiceInput"));
   const tooltip = () =>
-    props.readDictation && !startsDictationDirectly() && !(active() || finalizing())
-      ? [props.submitDisabledReason, t("chat.composer.voiceGestureHint")]
-          .filter(Boolean)
-          .join(" · ")
-      : active()
-        ? label()
-        : (props.submitDisabledReason ?? label());
+    arming()
+      ? label()
+      : props.readDictation && !startsDictationDirectly() && !(active() || finalizing())
+        ? [props.submitDisabledReason, t("chat.composer.voiceGestureHint")]
+            .filter(Boolean)
+            .join(" · ")
+        : active()
+          ? label()
+          : (props.submitDisabledReason ?? label());
   // This shape owns pointer capture. Keep it stable while dictation rerenders,
   // or replacing the button releases capture and cancels the active hold.
   return (
@@ -195,33 +199,26 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
                   {
                     "chat-send-btn--hold-enabled":
                       props.readDictation && !startsDictationDirectly(),
-                    "chat-send-btn--dictation-arming": arming(),
+                    "chat-send-btn--talk-arming": arming(),
                   },
                 ],
           ]}
           type="button"
           onPointerDown={(event: PointerEvent) => props.onDictationPointerDown?.(event)}
           onClick={(event: MouseEvent) => {
-            if (active()) {
-              event.preventDefault();
-              // The controller owns hold suppression: releasing a latched hold
-              // also clicks this button, and that click must not mean Stop.
-              if (!finalizing()) {
-                props.readDictation?.()?.handleClick(event);
-              }
-              return;
-            }
-            if (startsDictationDirectly()) {
-              event.preventDefault();
-              props.onDirectDictationStart?.();
-              props.readDictation?.()?.startDirect();
-              return;
-            }
-            if (props.readDictation) {
-              props.readDictation().handleClick(event);
-            } else {
+            const dictation = props.readDictation?.();
+            if (!dictation) {
               props.onToggleVoice?.();
+              return;
             }
+            if (dictation.finalizing) {
+              event.preventDefault();
+              return;
+            }
+            if (!dictation.active) {
+              props.onDirectDictationStart?.();
+            }
+            dictation.handleClick(event);
           }}
           onContextMenu={(event: MouseEvent) => props.readDictation?.()?.handleContextMenu(event)}
           disabled={
@@ -237,7 +234,7 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
             <Icon name="stop" />
           ) : (
             <>
-              <Icon name="mic" />
+              <Icon name={arming() ? "audioLines" : "mic"} />
               <span class="agent-chat__control-label">{label()}</span>
             </>
           )}
@@ -491,7 +488,11 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
                   "chat-send-btn chat-send-btn--voice-live",
                   { "chat-send-btn--voice-error": voiceErrored() },
                 ]}
-                onClick={() => props.onToggleVoice?.()}
+                onClick={(event) => {
+                  if (!props.readDictation?.()?.consumeGestureClick(event)) {
+                    props.onToggleVoice?.();
+                  }
+                }}
                 aria-label={t("chat.composer.stopVoiceInput")}
               >
                 {voiceErrored() ? null : (

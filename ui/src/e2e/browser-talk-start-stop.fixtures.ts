@@ -7,6 +7,10 @@ export const TALK_READY_HISTORY_MESSAGE = {
   __openclaw: { id: "talk-ready" },
 };
 
+export async function holdComposerForTalk(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "Dictate", exact: true }).click({ delay: 600 });
+}
+
 export async function waitForTalkReady(page: Page): Promise<void> {
   // Dictation keeps the microphone enabled before Talk's history/catalog admission.
   await page.getByText(TALK_READY_HISTORY_MESSAGE.content, { exact: true }).waitFor();

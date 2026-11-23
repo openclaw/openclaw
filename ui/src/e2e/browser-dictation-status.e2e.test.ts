@@ -108,6 +108,32 @@ const expectDraft = async (textarea: Locator, value: string) => {
 };
 
 suite.define(() => {
+  it("keeps Talk disabled until dictation has placed its final text in the draft", () =>
+    suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
+      const { gateway, textarea, admit, emit, close } = await openDictation(page, {
+        methodResponses: { "talk.catalog": catalog(true, true) },
+      });
+      await textarea.waitFor();
+      await button(page, "Dictate", true).click();
+      await admit();
+      await emit("Keep these dictated words.");
+      await expectDraft(textarea, "Keep these dictated words.");
+      const picker = button(page, "Microphone input", true);
+      const talk = page.getByRole("menuitem", { name: "Start Talk", exact: true });
+      expect(await picker.count()).toBe(0);
+      expect(await gateway.getRequests("talk.client.create")).toHaveLength(0);
+      await button(page, "Stop and keep text", true).click();
+      await gateway.waitForRequest("talk.session.close");
+      await picker.click();
+      await expect.poll(() => talk.isDisabled()).toBe(true);
+      await emit("Keep these dictated words.", true);
+      await close();
+      await expect.poll(() => talk.isEnabled()).toBe(true);
+      await expectDraft(textarea, "Keep these dictated words.");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await picker.click();
+    }));
+
   it("dictates for a session-only guest without reading operator configuration", () =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const { gateway, textarea, admit, emit, close } = await openDictation(page, {
@@ -116,7 +142,7 @@ suite.define(() => {
         sessionInfo: { key: "agent:main:main", sharingRole: "owner" },
       });
       await textarea.waitFor();
-      await button(page, "Start voice input", true).hover();
+      await button(page, "Dictate", true).hover();
       await button(page, "Microphone input", true).click();
       await captureComposer(page, "guest-dictation-ready.png");
       await captureFullPage(page, "guest-dictation-capabilities");
@@ -133,10 +159,8 @@ suite.define(() => {
           .locator(".agent-chat__composer-shell")
           .evaluate((shell) => shell.getBoundingClientRect().height);
       const idleHeight = await composerHeight();
-      await button(page, "Start voice input", true).hover();
-      await page.mouse.down();
+      await button(page, "Dictate", true).click();
       await gateway.waitForRequest("talk.session.create");
-      await page.mouse.up();
       await admit();
       await emit("Guest dictation stays in this draft.");
       await expectDraft(textarea, "Guest dictation stays in this draft.");
@@ -327,10 +351,8 @@ suite.define(() => {
           element.setSelectionRange(selection.start, selection.end),
         { start, end },
       );
-      await button(page, "Start voice input").hover();
-      await page.mouse.down();
+      await button(page, "Dictate").click();
       await admit();
-      await page.mouse.up();
       await emit("please");
       await expectDraft(textarea, expected);
       await page.mouse.move(0, 0);
@@ -387,10 +409,8 @@ suite.define(() => {
           await textarea.evaluate((element: HTMLTextAreaElement) =>
             element.setSelectionRange(5, 5),
           );
-          await button(page, "Start voice input").hover();
-          await page.mouse.down();
+          await button(page, "Dictate").click();
           await admit();
-          await page.mouse.up();
         }
         await button(page, "Stop and keep text").click();
         await gateway.waitForRequest("talk.session.close");
@@ -649,13 +669,14 @@ suite.define(() => {
       // The enabled dictation microphone can be clicked before history/catalog admission.
       await gateway.waitForRequest("chat.startup");
       await gateway.waitForRequest("talk.catalog");
-      await button(page, "Start voice input").click();
+      await button(page, "Dictate").click();
       await gateway.resolveDeferred("talk.catalog");
       await gateway.resolveDeferred("chat.startup");
       await page.getByText(TALK_READY_HISTORY_MESSAGE.content, { exact: true }).waitFor();
       const unavailable = page.locator('[data-status="unavailable"]');
       await expect.poll(() => unavailable.count()).toBe(2);
       const picker = page.locator(".chat-talk-input-picker");
+      await picker.getByRole("menuitem", { name: "Start Talk", exact: true }).click();
       await expect.poll(() => picker.getByRole("menuitem", { name: /Configure/ }).count()).toBe(2);
       await captureComposer(page, "microphone-picker-capability-gating.png");
       await captureFullPage(page, "microphone-picker-capability-gating-full");

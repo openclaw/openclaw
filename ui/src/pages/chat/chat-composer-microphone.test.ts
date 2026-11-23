@@ -14,6 +14,7 @@ import {
   resetComposerFixture,
   renderComposerInto,
 } from "./chat-composer.test-support.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import * as realtimeTalkInput from "./talk/input.ts";
 
@@ -151,10 +152,10 @@ it("persists microphone selection and preserves focused items across redraws", a
     "open",
   );
   focused.focus();
-  v.props.composerHoldToRecord = false;
+  v.props.draft = "Keep focus through an updated draft";
   v.draw();
   await waitForSolid(() => {
-    expect(v.part("preference")?.getAttribute("aria-checked")).toBe("false");
+    expect(v.root.querySelector('[data-chat-talk-preference="hold-to-dictate"]')).toBeNull();
     expect(v.root.querySelector('[value="studio-mic"]')).toBe(focused);
     expect(document.activeElement).toBe(focused);
   });
@@ -166,31 +167,65 @@ it("persists microphone selection and preserves focused items across redraws", a
   expect(v.checked()).toEqual(["false", "false", "true"]);
 });
 
-it("keeps hold-to-dictate controlled without changing the selected microphone", async () => {
+it("offers Talk without the retired preference or changing the microphone", async () => {
   discover.mockResolvedValue(emptyDevices);
   patchSettings({ realtimeTalkInputDeviceId: studio.deviceId });
-  const onComposerHoldToRecordChange = vi.fn((enabled: boolean) => {
-    v.props.composerHoldToRecord = patchSettings({
-      composerHoldToRecord: enabled,
-    }).composerHoldToRecord;
-    v.draw();
-  });
-  const v = await mountPicker({
-    composerHoldToRecord: true,
-    realtimeTalkInputDeviceId: studio.deviceId,
-    onComposerHoldToRecordChange,
-  });
+  const { gatewayClient } = catalogClient(true, true);
+  const onToggleRealtimeTalk = vi.fn();
+  const v = await mountPicker({ gatewayClient, onToggleRealtimeTalk });
   await v.open();
-  const preference = () => v.part('preference[role="menuitemcheckbox"]');
-  expect(preference()?.getAttribute("aria-checked")).toBe("true");
-  preference()?.click();
-  await waitForSolid(() => expect(onComposerHoldToRecordChange).toHaveBeenCalledWith(false));
-  expect(loadSettings()).toMatchObject({
-    composerHoldToRecord: false,
-    realtimeTalkInputDeviceId: studio.deviceId,
-  });
-  expect(v.dropdown.hasAttribute("open")).toBe(true);
-  expect(preference()?.getAttribute("aria-checked")).toBe("false");
+  await waitForSolid(() => expect(v.root.querySelector("[data-chat-talk-capability]")).toBeNull());
+  expect(v.root.textContent).not.toContain("Hold to dictate");
+  const startTalk = [...v.root.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(
+    (item) => item.textContent?.includes(copy("startTalk")),
+  )!;
+  expect(startTalk).toBeDefined();
+  startTalk.click();
+  await waitForSolid(() => expect(onToggleRealtimeTalk).toHaveBeenCalledOnce());
+  expect(loadSettings().realtimeTalkInputDeviceId).toBe(studio.deviceId);
+  await v.expectOpen(false);
+});
+
+it.each(["active", "transcribing"] as const)(
+  "keeps Talk unavailable while dictation is %s",
+  async (phase) => {
+    discover.mockResolvedValue(emptyDevices);
+    const { gatewayClient } = catalogClient(true, true);
+    const onToggleRealtimeTalk = vi.fn();
+    const v = await mountPicker({ gatewayClient, onToggleRealtimeTalk });
+    const dictation = getChatComposerState(v.props.paneId).dictation!;
+    vi.spyOn(dictation, phase, "get").mockReturnValue(true);
+    dictation.dispatchEvent(new Event("change"));
+    await v.open();
+    const startTalk = [...v.root.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(
+      (item) => item.textContent?.includes(copy("startTalk")),
+    )!;
+    expect(startTalk.disabled).toBe(true);
+    startTalk.click();
+    expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
+    await v.expectOpen(true);
+  },
+);
+
+it("keeps Configure visible when Talk is unavailable", async () => {
+  discover.mockResolvedValue(emptyDevices);
+  const { gatewayClient } = catalogClient(false, true);
+  const onToggleRealtimeTalk = vi.fn();
+  const v = await mountPicker({ gatewayClient, onToggleRealtimeTalk, onOpenTalkSettings: vi.fn() });
+  await v.open();
+  await waitForSolid(() =>
+    expect(
+      v.root.querySelector('[data-chat-talk-capability="realtime"][data-status="unavailable"]'),
+    ).not.toBeNull(),
+  );
+  const startTalk = [...v.root.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(
+    (item) => item.textContent?.includes(copy("startTalk")),
+  )!;
+  startTalk.click();
+  await v.expectOpen(true);
+  expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
+  expect(v.root.textContent).toContain(copy("realtimeTalkProviderUnavailable"));
+  expect(v.root.textContent).toContain(copy("configureCapability"));
 });
 
 it.each([
