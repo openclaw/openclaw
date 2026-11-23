@@ -287,6 +287,7 @@ function createRuntimeSandbox(agent: PluginRuntime["agent"]): PluginRuntime["san
           agentId: params.agentId,
           sessionKey: params.sessionKey,
           workspaceDir: params.workspaceDir,
+          requireCurrentConfig: true,
           preparedRuntimeStatus,
           assertCurrent: prepared.source,
         });
