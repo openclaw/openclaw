@@ -774,12 +774,13 @@ describe("retained updater runtimes", () => {
     }
   });
 
-  it("leaves an earlier updater's runtime alone when the update fails", async () => {
+  it("keeps a failed update's outcome after reclaiming a runtime", async () => {
     const { checkout } = await repository(true, ">=1", true);
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     vi.stubEnv("GIT_COMMIT", "");
     const abandoned = project(checkout, "Gone01");
     vi.spyOn(processCensus, "inspectOtherOpenClawProcesses").mockReturnValue({ pids: [] });
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     try {
       openOpenClawStateDatabase({ env: process.env });
@@ -795,7 +796,8 @@ describe("retained updater runtimes", () => {
         status: "failed",
         reason: "build-failed",
       });
-      await expect(fs.access(abandoned)).resolves.toBeUndefined();
+      await expect(fs.access(abandoned)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(log).toHaveBeenCalledWith(`Removed abandoned updater runtime: ${abandoned}`);
     } finally {
       process.exitCode = undefined;
       await closeOpenClawStateDatabaseAsync();

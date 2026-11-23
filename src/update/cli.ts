@@ -120,6 +120,15 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
     opts.sha && upstreamRef
       ? { kind: "git" as const, upstreamRef, upstreamSha: opts.sha }
       : undefined;
+  // Like the releases prepareUpdate collects, an earlier updater's leftover is removed before
+  // this update starts; afterwards the release launcher would count as a possible holder.
+  for (const line of await reclaimRetainedUpdateRuntimes(opts.runningRoot)) {
+    if (opts.json) {
+      defaultRuntime.error(line);
+    } else {
+      defaultRuntime.log(line);
+    }
+  }
   // Explicit package targets stay local: update.run cannot carry them without a protocol change.
   // --no-restart prepares in this process; the release starts at the Gateway's next start.
   const request =
@@ -163,18 +172,6 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
       Math.max(0, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
     );
   }
-  const updated =
-    record?.status === "succeeded" || record?.status === "skipped" || isPendingActivation(record);
-  if (updated) {
-    // Only an admitted update that went through, never a refusal or failure, changes the disk.
-    for (const line of await reclaimRetainedUpdateRuntimes(opts.runningRoot)) {
-      if (opts.json) {
-        defaultRuntime.error(line);
-      } else {
-        defaultRuntime.log(line);
-      }
-    }
-  }
   report(record, opts.json);
   process.exitCode =
     record?.status === "succeeded" || record?.status === "skipped" || isPendingActivation(record)
@@ -186,7 +183,7 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
  * Removes the runtime an earlier in-place updater retained (shipped updaters promise that the
  * next update does). Doctor's owner decides custody from the runtime's owner record and the
  * process census. It runs in this command, not the Gateway: the census is synchronous, and
- * without an owner record it cannot tell a waiting `openclaw update` from an old updater.
+ * without an owner record it cannot tell the requesting `openclaw update` from an old updater.
  */
 async function reclaimRetainedUpdateRuntimes(runningRoot: string): Promise<string[]> {
   const deadline = Date.now() + RETAINED_RUNTIME_BUDGET_MS;

@@ -210,13 +210,12 @@ it("keeps following the run while the restarting Gateway refuses connections", a
 });
 
 it.each([false, true])(
-  "reclaims earlier updaters' runtimes after the Gateway updates (json=%s)",
+  "reclaims earlier updaters' runtimes itself before the Gateway updates (json=%s)",
   async (json) => {
     const removed = "Removed abandoned updater runtime: /tmp/openclaw-update-runtime-Gone01";
     maintainRuntimes.mockImplementation(async () => {
-      // The Gateway has finished: this command is the only update-like process left.
-      expect(sent).toEqual([{}]);
-      expect(runsGet).toEqual([]);
+      // The Gateway's census would count this requesting command as a possible holder.
+      expect(sent).toEqual([]);
       return [removed];
     });
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
@@ -240,19 +239,12 @@ it.each([false, true])(
       expect(log).not.toHaveBeenCalled();
       expect(writeJson).toHaveBeenCalledOnce();
     } else {
-      expect(lines(log)).toEqual(["finished: finished", removed, "Updated to 2026.11.7."]);
+      expect(lines(log)).toEqual([removed, "finished: finished", "Updated to 2026.11.7."]);
       expect(error).not.toHaveBeenCalled();
     }
     expect(process.exitCode).toBe(0);
   },
 );
-
-it("leaves earlier updaters' runtimes alone when the Gateway refuses the update", async () => {
-  await expect(
-    runReleaseUpdateCli({ json: true, restart: true, runningRoot: root }),
-  ).rejects.toThrow("refused for the test");
-  expect(maintainRuntimes).not.toHaveBeenCalled();
-});
 
 it("says the update is still running when the --timeout budget ends first", async () => {
   const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
@@ -383,6 +375,7 @@ it("refuses --no-restart from another checkout before preparation or creating a 
   );
   await expect(fs.stat(path.join(resolvePrefix(), "releases", ".trial"))).rejects.toThrow();
   expect(prepared).toEqual([]);
+  expect(maintainRuntimes).not.toHaveBeenCalled();
 });
 
 it("restarts the local Gateway after preparing an explicit package tag and follows its outcome", async () => {

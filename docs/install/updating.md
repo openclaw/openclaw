@@ -181,9 +181,12 @@ A live preparation owner in another process is left untouched.
 
 Shipped in-place updaters leave their running code in an `openclaw-update-runtime-*`
 directory and promise that the next update removes it. On the release path,
-`openclaw update` now does: after the update succeeds or finds nothing to do, the command
-runs Doctor's retained-runtime maintenance in its own process. A runtime still in use stays,
-and the command prints why; the cleanup never changes the update's outcome. The Gateway's
+`openclaw update` now does: before the update starts, the command runs Doctor's
+retained-runtime maintenance in its own process, as `prepareUpdate` collects old releases.
+A runtime still in use stays, and the command prints why; the cleanup never changes the
+update's outcome. After the first release update, the resident launcher counts as a
+possible holder of a runtime without `owner.json`, so the first release update is the one
+that removes it. The Gateway's
 `update.run` and automatic updates do not run it, because the process census would block
 the serving Gateway. Shipped updaters need no change.
 
