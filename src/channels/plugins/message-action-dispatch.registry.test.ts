@@ -24,7 +24,7 @@ import {
 import type { ChannelMessageActionContext, ChannelPlugin } from "./types.public.js";
 
 const receipt = { content: [{ type: "text" as const, text: "delivered" }], details: { ok: true } };
-const inactiveRead = "read authority is no longer active";
+const inactiveRead = "registration ended. Retry the action.";
 const exactConversation = "exact current conversation";
 const noCurrentContext = { requesterAccountId: undefined, toolContext: undefined };
 type Context = Parameters<typeof dispatchChannelMessageAction>[0];
@@ -301,7 +301,7 @@ describe("official plugin read-only authority", () => {
     });
     expect(await fixture.dispatch(noCurrentContext)).toBe(receipt);
     expect(retained).toBeTypeOf("function");
-    expect(retained).toThrow(inactiveRead);
+    expect(retained).toThrow("read authority is no longer active");
   });
 
   it.each(["artifact", "scope"] as const)("fences bundled %s fallbacks", async (fallback) => {
@@ -495,7 +495,7 @@ describe("scheduled message write declaration", () => {
       return receipt;
     });
     const request = dispatchChannelMessageAction(fixture.context);
-    const rejected = expect(request).rejects.toThrow(/authority|retired/);
+    const rejected = expect(request).rejects.toThrow(/registration ended|authority|retired/);
     try {
       await entered.promise;
       revokePluginRecord(fixture.owner.registry, fixture.record);
