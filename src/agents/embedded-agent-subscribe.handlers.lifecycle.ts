@@ -27,6 +27,7 @@ import {
 } from "./embedded-agent-runner/run/attempt-terminal-evidence.js";
 import { resolveFinalAssistantVisibleText } from "./embedded-agent-runner/run/helpers.js";
 import { isIncompleteTerminalAssistantTurn } from "./embedded-agent-runner/run/incomplete-turn-classification.js";
+import { isMidTurnMaintenanceAssistantSignal } from "./embedded-agent-runner/run/midturn-precheck.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import {
   hasAssistantVisibleReply,
@@ -377,7 +378,8 @@ export function handleAgentEnd(
   const livenessState =
     ctx.state.livenessState === "working" ? derivedWorkingTerminalState : ctx.state.livenessState;
 
-  if (isError && lastAssistant) {
+  // Scheduled maintenance ends the attempt locally; it is not a model failure.
+  if (isError && lastAssistant && !isMidTurnMaintenanceAssistantSignal(lastAssistant)) {
     const rawError = lastAssistant.errorMessage?.trim();
     const failoverReason = classifyAssistantFailoverReason(lastAssistant, {
       providerOwner: ctx.params.providerOwner ?? null,

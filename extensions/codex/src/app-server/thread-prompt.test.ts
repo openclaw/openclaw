@@ -6,8 +6,8 @@ import {
   type JsonObject,
 } from "./protocol.js";
 import {
-  buildCodexBaseInstructions,
   buildDeveloperInstructions,
+  resolveCodexOpenClawBaseInstructions,
   type CodexThreadPromptContext,
 } from "./thread-prompt.js";
 
@@ -75,7 +75,7 @@ describe("buildDeveloperInstructions deferred tool discovery", () => {
   });
 
   it("renders the provider's stable policy into the base instructions", () => {
-    const base = buildCodexBaseInstructions(
+    const base = resolveCodexOpenClawBaseInstructions(
       {
         agentId: "main",
         config: {},
@@ -100,14 +100,18 @@ describe("buildDeveloperInstructions deferred tool discovery", () => {
       config: { plugins: { entries: { openai: { config: { personality: "off" } } } } },
       modelId: "gpt-5.5",
     };
-    const openai = buildCodexBaseInstructions(supervised, { nativeModelProvider: "openai" });
+    const openai = resolveCodexOpenClawBaseInstructions(supervised, {
+      nativeModelProvider: "openai",
+    });
     expect(openai).toContain("<execution_policy>");
     expect(openai).not.toContain("## Interaction Style");
     // Only OpenAI-family threads read the OpenAI plugin's personality, as on the regular engine.
     expect(
-      buildCodexBaseInstructions(supervised, { nativeModelProvider: "custom-native" }),
+      resolveCodexOpenClawBaseInstructions(supervised, { nativeModelProvider: "custom-native" }),
     ).toContain("## Interaction Style");
-    expect(buildCodexBaseInstructions(supervised)).not.toContain("<execution_policy>");
+    expect(resolveCodexOpenClawBaseInstructions(supervised, {})).not.toContain(
+      "<execution_policy>",
+    );
   });
 
   it.each([

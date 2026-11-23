@@ -29,7 +29,6 @@ export function createResearchClient(
   signal: AbortSignal,
   selected: () => string | undefined,
   select: (id: string) => void,
-  retainStarts = true,
 ) {
   let snapshot: Snapshot = {
     jobs: [],
@@ -48,19 +47,17 @@ export function createResearchClient(
   let pending: PendingStart | undefined;
   let retainedPending: PendingStart | undefined;
   let recoveryStorage: ControlUiRecoveryStorageV1 | undefined;
-  let recoveryLoaded = !retainStarts;
+  let recoveryLoaded = false;
   // These pre-account keys have no provable owner. Delete them; never migrate their text.
-  if (retainStarts) {
-    try {
-      for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
-        const key = sessionStorage.key(index);
-        if (key?.startsWith("deep-research.pending:")) {
-          sessionStorage.removeItem(key);
-        }
+  try {
+    for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
+      const key = sessionStorage.key(index);
+      if (key?.startsWith("deep-research.pending:")) {
+        sessionStorage.removeItem(key);
       }
-    } catch {
-      /* Storage availability is checked before admitting a start. */
     }
+  } catch {
+    /* Storage availability is checked before admitting a start. */
   }
   const requireRecoveryStorage = () => {
     recoveryStorage ??= host.recoveryStorage ?? undefined;
@@ -94,13 +91,11 @@ export function createResearchClient(
     recoveryLoaded = true;
   };
   const savePending = (value?: PendingStart) => {
-    if (retainStarts) {
-      const storage = requireRecoveryStorage();
-      if (value) {
-        storage.setItem(storageKey, JSON.stringify(value));
-      } else {
-        storage.removeItem(storageKey);
-      }
+    const storage = requireRecoveryStorage();
+    if (value) {
+      storage.setItem(storageKey, JSON.stringify(value));
+    } else {
+      storage.removeItem(storageKey);
     }
     pending = value;
     retainedPending = undefined;
@@ -268,9 +263,6 @@ export function createResearchClient(
     const epoch = authorityEpoch;
     const incarnation = snapshot.incarnation;
     if (action === "start") {
-      if (!retainStarts) {
-        return;
-      }
       try {
         restorePending();
         requireRecoveryStorage();

@@ -1,11 +1,15 @@
 /* @vitest-environment jsdom */
+
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { wrapWebContent } from "../../../../../src/security/external-content.js";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { inlineCommandPresentation } from "../chat-inline-command-presentation.ts";
+import { openAIModel, openAIMessage } from "../chat-thread-fixtures.test-support.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { createChatThreadHarness } from "./chat-message-native.test-support.tsx";
 import * as textPreparation from "./chat-message-text-preparation.ts";
+import { createChatTranscript } from "./chat-transcript-controller.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -48,6 +52,167 @@ it("keeps settled message preparation out of minute-boundary scroll updates", as
 });
 
 it.each([false, true])(
+  "preserves the reader at completion while following readers fold work (follow end: %s)",
+  async (followEnd) => {
+    const inlineCommands = await inlineCommandPresentation();
+    const runId = "inline-trail-run";
+    const messages: unknown[] = [
+      { role: "user", content: "Check the workspace", timestamp: 1_000 },
+      {
+        role: "assistant",
+        ...openAIModel,
+        runId,
+        timestamp: 2_000,
+        content: [
+          { type: "toolCall", id: "first-check", name: "exec", arguments: { command: "npm test" } },
+        ],
+      },
+      {
+        role: "toolResult",
+        runId,
+        timestamp: 3_000,
+        toolCallId: "first-check",
+        toolName: "exec",
+        content: "All checks passed",
+      },
+      {
+        role: "assistant",
+        ...openAIModel,
+        runId,
+        timestamp: 4_000,
+        phase: "commentary",
+        content: "Checking the next step.",
+      },
+      {
+        role: "assistant",
+        ...openAIModel,
+        runId,
+        timestamp: 5_000,
+        content: [
+          {
+            type: "toolCall",
+            id: "second-check",
+            name: "exec",
+            arguments: { command: "npm run build" },
+          },
+        ],
+      },
+    ];
+    const props = threadProps("pane-inline-fold", "agent:main:dashboard:inline-fold", messages, {
+      runId,
+      runActive: true,
+      runWorking: true,
+      showToolCalls: true,
+      inlineCommands,
+      autoExpandToolCalls: true,
+    });
+    const transcript = createChatTranscript(() => props.paneId, { canFollowEnd: () => followEnd });
+    const container = document.body.appendChild(document.createElement("div"));
+    const thread = createChatThreadHarness(container, transcript);
+    const draw = () => {
+      thread.render(props);
+      transcript.update();
+    };
+    onTestFinished(() => {
+      thread.unmount();
+      transcript.dispose();
+      container.remove();
+    });
+    const peer = (paneId: string) => {
+      const view = document.body.appendChild(document.createElement("div"));
+      const controller = createChatTranscript(() => paneId, { canFollowEnd: () => true });
+      const harness = createChatThreadHarness(view, controller);
+      const render = () => {
+        harness.render({ ...props, paneId });
+        controller.update();
+      };
+      onTestFinished(() => {
+        harness.unmount();
+        controller.dispose();
+        view.remove();
+      });
+      render();
+      const toggle = () => view.querySelector<HTMLButtonElement>(".chat-work-group > button")!;
+      return { render, toggle };
+    };
+    const follower = !followEnd ? peer("following-same-session") : undefined;
+    draw();
+    await waitForSolid(() =>
+      expect(container.querySelectorAll(".chat-tool-row__cmd")).toHaveLength(2),
+    );
+    expect(container.textContent).toContain("All checks passed");
+    expect(container.querySelectorAll(".chat-tool-msg-collapse.is-open")).toHaveLength(0);
+    expect(container.textContent).toContain("Checking the next step.");
+    expect(container.querySelector(".chat-work-group")).toBeNull();
+    props.inlineCommands = undefined;
+    draw();
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-command-trail__preview")).toBeNull(),
+    );
+    props.inlineCommands = inlineCommands;
+    props.runActive = false;
+    props.runWorking = false;
+    props.messages = [
+      ...messages,
+      {
+        role: "toolResult",
+        runId,
+        timestamp: 6_000,
+        toolCallId: "second-check",
+        toolName: "exec",
+        content: "Build passed",
+      },
+      {
+        role: "assistant",
+        ...openAIModel,
+        runId,
+        timestamp: 7_000,
+        phase: "final_answer",
+        content: "Workspace verified.",
+      },
+    ];
+    draw();
+    const toggle = () => container.querySelector<HTMLButtonElement>(".chat-work-group > button");
+    await waitForSolid(() =>
+      expect(toggle()?.getAttribute("aria-expanded")).toBe(String(!followEnd)),
+    );
+    expect(container.textContent).toContain("Workspace verified.");
+    follower?.render();
+    const reopened = !followEnd ? peer("reopened-same-session") : undefined;
+    draw();
+    if (follower && reopened) {
+      await waitForSolid(() => {
+        expect(toggle()?.getAttribute("aria-expanded")).toBe("true");
+        expect(follower.toggle().getAttribute("aria-expanded")).toBe("false");
+        expect(reopened.toggle().getAttribute("aria-expanded")).toBe("false");
+      });
+    }
+    if (followEnd) {
+      expect(container.querySelector(".chat-tool-row__cmd")).toBeNull();
+      toggle()!.click();
+    }
+    await waitForSolid(() =>
+      expect(container.querySelectorAll(".chat-tool-row__cmd")).toHaveLength(2),
+    );
+    expect(container.textContent).toContain("All checks passed");
+    expect(container.textContent).toContain("Build passed");
+    toggle()!.click();
+    draw();
+    await waitForSolid(() => expect(toggle()?.getAttribute("aria-expanded")).toBe("false"));
+    if (follower && reopened) {
+      follower.toggle().click();
+      draw();
+      reopened.render();
+      // An explicit toggle in any pane is shared by every pane of the session.
+      await waitForSolid(() => {
+        expect(toggle()?.getAttribute("aria-expanded")).toBe("true");
+        expect(reopened.toggle().getAttribute("aria-expanded")).toBe("true");
+      });
+    }
+  },
+);
+
+it.each([false, true])(
   "keeps the focused work summary toggle through expansion updates (long frame: %s)",
   async (longFrame) => {
     const entry = (id: string, seq: number, message: Record<string, unknown>) => ({
@@ -60,6 +225,7 @@ it.each([false, true])(
       ...Array.from({ length: 300 }, (_, index) => [
         entry(`step-${index}`, index * 2 + 2, {
           role: "assistant",
+          ...openAIModel,
           phase: "commentary",
           stopReason: "toolUse",
           content: [
@@ -81,6 +247,7 @@ it.each([false, true])(
       ]).flat(),
       entry("long-answer", 602, {
         role: "assistant",
+        ...openAIModel,
         phase: "final_answer",
         stopReason: "stop",
         content: "Workspace checked",
@@ -101,7 +268,7 @@ it.each([false, true])(
                 content: "Read complete",
                 timestamp: 2_000,
               },
-              { role: "assistant", content: "Workspace checked", timestamp: 3_000 },
+              openAIMessage("Workspace checked", 3_000),
             ],
       ),
       showToolCalls: true,
@@ -188,7 +355,7 @@ const run = (runId: string) => ({ __openclaw: { runId } });
 it("shows every run's reply below completed work when completions arrive without user input", async () => {
   const container = await renderTallTranscript("work-runs", [
     { role: "user", content: "Start two subagents", timestamp: 1_000 },
-    { role: "assistant", content: "Spawning both.", timestamp: 1_500, ...run("run-user") },
+    openAIMessage("Spawning both.", 1_500, run("run-user")),
     {
       role: "toolResult",
       toolCallId: "work-runs-spawn",
@@ -197,10 +364,10 @@ it("shows every run's reply below completed work when completions arrive without
       timestamp: 2_000,
       ...run("run-user"),
     },
-    { role: "assistant", content: "Both started.", timestamp: 3_000, ...run("run-user") },
-    { role: "assistant", content: "Child A finished.", timestamp: 4_000, ...run("announce:a") },
-    { role: "assistant", content: "Child B finished.", timestamp: 5_000, ...run("announce:b") },
-    { role: "assistant", content: "All settled.", timestamp: 6_000, ...run("announce:settle") },
+    openAIMessage("Both started.", 3_000, run("run-user")),
+    openAIMessage("Child A finished.", 4_000, run("announce:a")),
+    openAIMessage("Child B finished.", 5_000, run("announce:b")),
+    openAIMessage("All settled.", 6_000, run("announce:settle")),
   ]);
   const text = container.textContent ?? "";
   for (const reply of ["Both started.", "Child A finished.", "Child B finished.", "All settled."]) {
@@ -218,9 +385,10 @@ it("keeps a later run's source cards when an earlier run's reply stays visible",
   };
   const container = await renderTallTranscript("work-sources", [
     { role: "user", content: "Start two subagents", timestamp: 1_000 },
-    { role: "assistant", content: "Child A finished.", timestamp: 2_000, ...run("announce:a") },
+    openAIMessage("Child A finished.", 2_000, run("announce:a")),
     {
       role: "assistant",
+      ...openAIModel,
       content: [{ type: "toolCall", id: "search", name: "web_search", arguments: {} }],
       timestamp: 3_000,
       ...run("announce:b"),
@@ -236,6 +404,7 @@ it("keeps a later run's source cards when an earlier run's reply stays visible",
     },
     {
       role: "assistant",
+      ...openAIModel,
       content: `Child B cited the [article](${url}).`,
       stopReason: "stop",
       timestamp: 4_000,

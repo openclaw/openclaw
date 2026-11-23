@@ -55,9 +55,6 @@ function resolveComputerCaller(
         throw new Error("Gateway computer requester grant is no longer current");
       }
       if (identity && purpose === "invoke") {
-        if (context.validateAgentRuntimeApprovalAuthority?.(identity) !== true) {
-          throw new Error("Gateway computer agent run authority is no longer current");
-        }
         client.internal?.agentToolCaller?.assertCurrent?.();
       } else if (
         !client.internal?.syntheticClient &&

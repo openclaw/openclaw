@@ -177,6 +177,7 @@ it.each([true, false])(
     const agentDir = tempDirs.make("openclaw-search-source-");
     const reader: SessionEntryCohortReader = {
       database: { agentId: "main", path: agentDir, env: {} },
+      identity: { key: "file:1:1", canonicalPath: agentDir },
       sessionKey: "agent:main:test",
       logicalAgentId: "main",
       storePaths: [agentDir],
@@ -205,12 +206,7 @@ it.each([true, false])(
     using sourceProbe = vi
       .spyOn(authSource, "hasAnyAuthProfileStoreSourceAsync")
       .mockResolvedValue(false);
-    await expectSearch(
-      prepared,
-      prepared,
-      { config: {}, agentDir, authProfileStoreSource: false },
-      { reader },
-    );
+    await expectSearch(prepared, prepared, { config: {}, agentDir }, { reader });
     expect(
       authStore.ensureAuthProfileStoreWithoutExternalProfilesAsync,
     ).toHaveBeenCalledExactlyOnceWith(agentDir, { allowKeychainPrompt: false });

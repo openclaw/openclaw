@@ -19,7 +19,8 @@ describe("delegated Doctor phase output", () => {
       "Doctor: state schema (12345678901s elapsed)\n",
       `${"x".repeat(32_768)}Doctor: state schema\n`,
       "Doctor: maintenance release\n",
-      "Retirement-only Doctor widened: config.preflight-config-changed\n",
+      "Retirement-only Doctor widened: config.preflight-config-changed\n".repeat(2),
+      "Retirement-only Doctor widened: config.model-retirement.warning-notes.codex-routes\n",
       "Retirement-only Doctor widened: private/plugin-label\n",
       trace,
       "Doctor: state schema",
@@ -45,6 +46,7 @@ describe("delegated Doctor phase output", () => {
       diagnostics: [
         "Doctor sections: state-schema 2.5 s",
         "Retirement-only Doctor widened: config.preflight-config-changed",
+        "Retirement-only Doctor widened: config.model-retirement.warning-notes.codex-routes",
       ],
     });
     expect(display.mock.calls.flat()).toEqual([

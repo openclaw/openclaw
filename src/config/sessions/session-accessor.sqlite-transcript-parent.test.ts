@@ -336,6 +336,7 @@ it.each(["missing-prepared", "missing-admitted", "overflow-prepared"] as const)(
           "UPDATE transcript_events SET seq = seq + ? WHERE session_id = ?",
           "UPDATE transcript_event_identities SET seq = seq + ? WHERE session_id = ?",
           "UPDATE session_transcript_active_events SET event_seq = event_seq + ? WHERE session_id = ?",
+          "UPDATE session_transcript_active_event_facts SET seq = seq + ? WHERE session_id = ?",
         ]) {
           database.db.prepare(query).run(offset, scope.sessionId);
         }

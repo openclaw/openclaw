@@ -1,6 +1,8 @@
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { registerSignalExitGate } from "../cli/signal-exit-barrier.js";
 import { createBackupArchive, type BackupCreateOptions } from "../infra/backup-create.js";
+import { createBackupProgressLogger } from "../infra/backup-progress.js";
 import { resolveBackupNamespace, type BackupRetentionOptions } from "../infra/backup-retention.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { beginLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
@@ -27,7 +29,9 @@ export async function backupCreateCommand(
       (value) => value !== undefined,
     )
   ) {
-    throw new Error("--namespace, --claim-namespace, and retention flags require --to <location>.");
+    throwExpectedCliError(
+      "--namespace, --claim-namespace, and retention flags require --to <location>.",
+    );
   }
   let archivePath = opts.output ?? (opts.to === undefined ? process.cwd() : `storage://${opts.to}`);
   const releaseCustody = opts.dryRun ? undefined : beginLifecycleWriteCustody("backup");
@@ -37,6 +41,10 @@ export async function backupCreateCommand(
   const releaseExitGate = registerSignalExitGate(finished.promise, () => stopArchive?.());
   let failure: unknown;
   let namespace = opts.namespace;
+  const progressLogger = createBackupProgressLogger((message) =>
+    opts.json ? runtime.error(message) : runtime.log(message),
+  );
+  const onProgress = opts.onProgress ?? progressLogger;
   try {
     if (opts.to !== undefined) {
       namespace = resolveBackupNamespace(opts.namespace);
@@ -45,6 +53,7 @@ export async function backupCreateCommand(
       stopArchive = stop;
       const options = {
         ...opts,
+        onProgress,
         log:
           opts.log ??
           (opts.json ? undefined : (message: string) => runtime.log(terminalText`${message}`)),
@@ -58,7 +67,7 @@ export async function backupCreateCommand(
     archivePath = result.archivePath;
     if (opts.verify && !opts.dryRun && !result.verified) {
       const { verifyBackupArchive } = await import("./backup-verify.js");
-      await verifyBackupArchive(result.archivePath);
+      await verifyBackupArchive(result.archivePath, [], onProgress);
       result.verified = true;
     }
     if (!opts.dryRun) {
@@ -146,6 +155,7 @@ export async function backupCreateCommand(
     }
     throw error;
   } finally {
+    progressLogger.finish();
     releaseCustody?.(failure);
     finished.resolve();
     releaseExitGate();

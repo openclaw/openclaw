@@ -656,6 +656,10 @@ describe("callGateway url resolution", () => {
         });
       }
       if (failure === "different origin") {
+        await expect(request).rejects.toThrow(
+          /on the gateway host.*`openclaw devices approve --latest`.*preview.*review.*`openclaw devices approve <requestId>`.*approve.*retry/isu,
+        );
+        await expect(request).rejects.toThrow("Control UI (Settings -> Devices)");
         expect(loadOriginDeviceTokenMock).toHaveBeenCalledWith({
           gatewayScope: "wss://second.example/rpc",
           deviceId: deviceIdentityState.value.deviceId,

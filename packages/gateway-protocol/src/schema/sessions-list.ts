@@ -13,6 +13,7 @@ export const SESSION_LIST_SOURCES = [
   "command-palette",
   "skill-workshop",
   "workboard-lifecycle",
+  "sessions-search",
 ] as const;
 
 export const SessionsListParamsSchema = closedObject({
@@ -101,6 +102,8 @@ export const SessionsListParamsSchema = closedObject({
   spawnedBy: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   search: Type.Optional(Type.String()),
+  /** Match session titles instead of model, provider, key, or other metadata. */
+  searchTitlesOnly: Type.Optional(Type.Boolean()),
   /**
    * True lists archived sessions; "all" lists archived and active;
    * false or omitted lists active sessions.

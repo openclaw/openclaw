@@ -1,17 +1,19 @@
 import { For, Show, createMemo } from "solid-js";
-import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
+import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import "./chat-details-subagents.css";
 import {
+  detailsSubagentCollection,
   isDetailsSubagentWorking as isWorking,
   projectDetailsSubagents,
   type DetailsSubagent as Subagent,
   type DetailsSubagents,
 } from "../chat-details-snapshot.ts";
+import "./chat-details-subagents.css";
+import { SubagentAvatarBadge } from "./chat-subagent-badge.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 registerEnglishCatalog(registerChatDetailsEnglish);
@@ -24,7 +26,7 @@ export type ChatDetailsSubagentsProps = {
   mobile: boolean;
   /** Render in the section header's trailing slot when its body is collapsed. */
   collapsed?: boolean;
-  /** Localized “Working”, without the ellipsis used by common.working. */
+  /** Localized “Working” label. */
   workingLabel: string;
   onOpenSubagent: (key: string) => void;
   /** Must request the collection explicitly, clearing any previously selected child. */
@@ -50,12 +52,7 @@ function isFinished(row: Subagent) {
 
 function SubagentAvatar(props: { row: Subagent; summary?: boolean }) {
   return (
-    <span
-      class="chat-details-subagents__avatar"
-      style={{ "--subagent-avatar-hue": fnv1aUtf16(props.row.key) % 360 }}
-      aria-hidden="true"
-    >
-      <Icon name="bot" />
+    <SubagentAvatarBadge class="chat-details-subagents__avatar" sessionKey={props.row.key}>
       <Show when={!props.summary && (isWorking(props.row) || props.row.status === "done")}>
         <span class="chat-details-subagents__badge">
           <Show
@@ -66,7 +63,7 @@ function SubagentAvatar(props: { row: Subagent; summary?: boolean }) {
           </Show>
         </span>
       </Show>
-    </span>
+    </SubagentAvatarBadge>
   );
 }
 
@@ -85,7 +82,10 @@ function SubagentRow(props: ChatDetailsSubagentsProps & { row: Subagent }) {
         onClick={() => props.onOpenSubagent(props.row.key)}
       >
         <SubagentAvatar row={props.row} />
-        <span class="chat-details-subagents__name" ref={nameOverflow}>
+        <span
+          class={["chat-details-subagents__name", { "text-shimmer": isWorking(props.row) }]}
+          ref={nameOverflow}
+        >
           {props.row.label}
         </span>
         <span
@@ -98,6 +98,13 @@ function SubagentRow(props: ChatDetailsSubagentsProps & { row: Subagent }) {
         >
           {statusLabel(props.row, props.workingLabel)}
         </span>
+        <span class="chat-subagent-activity__elapsed-compact" aria-hidden="true">
+          <Show when={props.row.status !== "queued" && props.row.session?.startedAt}>
+            {(startedAt) => (
+              <ElapsedTime startMs={startedAt()} endMs={props.row.session?.endedAt ?? null} />
+            )}
+          </Show>
+        </span>
         <Show when={props.mobile}>
           <Icon name="chevronRight" class="chat-details-subagents__chevron" />
         </Show>
@@ -109,13 +116,12 @@ function SubagentRow(props: ChatDetailsSubagentsProps & { row: Subagent }) {
 /** Controlled Details content. The parent owns section chrome and navigation. */
 export function ChatDetailsSubagents(props: ChatDetailsSubagentsProps) {
   const presentation = createMemo(() => {
-    const value = props.presentation ?? projectDetailsSubagents(props.rows, props.mobile);
+    const value = props.presentation
+      ? detailsSubagentCollection(props.presentation)
+      : projectDetailsSubagents(props.rows, props.mobile);
     return {
-      total:
-        value.total -
-        value.counts.reduce((sum, entry) => sum + (entry.listed === false ? entry.count : 0), 0),
-      rows: value.rows.filter((row) => row.listed !== false),
-      counts: value.counts.filter((entry) => entry.listed !== false).slice(0, 2),
+      ...value,
+      counts: value.counts.slice(0, 2),
     };
   });
   const workingCount = () =>

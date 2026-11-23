@@ -59,8 +59,6 @@ suite.define(() => {
       await waitForControlUiRoute(page, { pathname: "/debug", routeId: "debug" });
       expect(await gateway.getRequests("connect")).toHaveLength(1);
       await gateway.waitForRequest("models.list");
-      const modelsListCount = (await gateway.getRequests("models.list")).length;
-      const authStatusCount = (await gateway.getRequests("models.authStatus")).length;
       await evaluateControlUiContext(page, (context) => {
         context.navigate("model-providers", {
           pathname: "/settings/model-providers",
@@ -70,12 +68,14 @@ suite.define(() => {
         pathname: "/settings/model-providers",
         routeId: "model-providers",
       });
-      await expect
-        .poll(async () => (await gateway.getRequests("models.authStatus")).length)
-        .toBeGreaterThan(authStatusCount);
-      await expect
-        .poll(async () => (await gateway.getRequests("models.list")).length)
-        .toBeGreaterThan(modelsListCount);
+      // Connection-owned model reads may already be cached by the persistent shell.
+      await gateway.waitForRequest("models.authStatus");
+      const primaryModel = page
+        .locator(".model-providers__defaults .picker-select__trigger")
+        .first();
+      await primaryModel.click();
+      await page.locator('[role="option"][data-value="openai/writer-model"]').waitFor();
+      await page.keyboard.press("Escape");
 
       const modelRequests = [
         ...(await gateway.getRequests("models.list")),

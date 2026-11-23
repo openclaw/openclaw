@@ -2,7 +2,7 @@ import "../../src/test-utils/prepare-compiled-subprocesses.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
-import { Socket } from "node:net";
+import { createConnection, createServer as createIpcServer, Socket } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -125,6 +125,10 @@ it("fences late Discord STT through the model-selected plugin instance", async (
   ) {
     const normalized = Array.isArray(args[0]) ? args[0] : args;
     const options = asOptionalRecord(normalized[0]);
+    // Node normalizes net.connect(path) to { path }; local broker IPC is not network egress.
+    if (typeof options?.path === "string" && options.path.length > 0) {
+      return Reflect.apply(originalConnect, this, args);
+    }
     const host = options?.host ?? normalized[1];
     const port = Number(options?.port ?? normalized[0]);
     // startGatewayWithClient publishes its allocated port before opening its WS client.
@@ -143,6 +147,7 @@ it("fences late Discord STT through the model-selected plugin instance", async (
   });
   let currentCall: ScriptedCall | undefined;
   let awaitingOutput = false;
+  const ipcServer = createIpcServer((socket) => socket.end());
   const providerServer = createServer((request, response) => {
     void (async () => {
       const body = asOptionalRecord(JSON.parse(await readRequestText(request)));
@@ -207,6 +212,19 @@ it("fences late Discord STT through the model-selected plugin instance", async (
       fs.mkdir(workspace, { recursive: true }),
       fs.mkdir(stateDir, { recursive: true }),
     ]);
+    const ipcPath =
+      process.platform === "win32"
+        ? `\\\\.\\pipe\\openclaw-capture-${randomUUID()}`
+        : path.join(isolated.tempHome, "capture.sock");
+    await new Promise<void>((resolve, reject) => {
+      ipcServer.once("error", reject);
+      ipcServer.listen(ipcPath, resolve);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const socket = createConnection(ipcPath);
+      socket.once("error", reject);
+      socket.once("close", () => resolve());
+    });
     await new Promise<void>((resolve, reject) => {
       providerServer.once("error", reject);
       providerServer.listen(ports?.provider ?? 0, "127.0.0.1", resolve);
@@ -221,6 +239,17 @@ it("fences late Discord STT through the model-selected plugin instance", async (
       throw new Error("Unexpected transcript fixture provider address");
     }
     providerPort = address.port;
+    // Negative controls keep both the host and unexpected TCP port checks exercised.
+    const deniedPort = [1, 2, 3].find(
+      (port) => port !== providerPort && port !== selectedGatewayPort(),
+    )!;
+    for (const destination of [
+      { host: "192.0.2.1", port: providerPort },
+      { host: "127.0.0.1", port: deniedPort },
+    ]) {
+      expect(() => createConnection(destination)).toThrow("unexpected socket destination");
+    }
+    expect(deniedConnections.splice(0)).toHaveLength(2);
     const provider = buildMockOpenAiResponsesProvider(
       `http://127.0.0.1:${address.port}/v1`,
       "capture-proof",
@@ -524,6 +553,7 @@ it("fences late Discord STT through the model-selected plugin instance", async (
       () => gateway?.client.stopAndWait(),
       () => gateway?.server.close({ reason: "synthetic transcript capture cleanup" }),
       () => closeHttpServer(providerServer),
+      () => ipcServer[Symbol.asyncDispose](),
       () => cleanupRuntime?.(),
       () => releaseFixtureRegistry?.(),
       () => {

@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createPluginRecord } from "./loader-records.js";
-import type { MemoryProviderHandle } from "./memory-provider-types.js";
+import type { MemoryProviderHandle } from "./memory-provider-runtime-types.js";
 import { getActiveMemoryProviderCore } from "./memory-runtime.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRegistryOwner } from "./runtime.js";

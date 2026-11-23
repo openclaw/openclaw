@@ -27,6 +27,15 @@ type WebKitHostWindow = Window & {
   webkit?: {
     messageHandlers?: {
       [Name in keyof WebKitHostMessages]?: WebKitMessageHandler<WebKitHostMessages[Name]>;
+    } & {
+      /** Presents the Gateway-issued login and returns its callback to this app document. */
+      openclawIdSignIn?: {
+        postMessage(message: { authorizationUrl: string }): Promise<{
+          state: string;
+          code: string | null;
+          error: string | null;
+        }>;
+      };
     };
   };
 };

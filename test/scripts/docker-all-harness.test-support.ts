@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { copyFileSync, cpSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 
 export function copyDockerSchedulerHarness(root: string) {
   const scriptsDir = path.join(root, "scripts");
@@ -10,10 +10,6 @@ export function copyDockerSchedulerHarness(root: string) {
   const upgradeSurvivorDir = path.join(scriptsDir, "e2e/lib/upgrade-survivor");
   mkdirSync(libDir, { recursive: true });
   mkdirSync(upgradeSurvivorDir, { recursive: true });
-  copyFileSync(
-    "scripts/e2e/lib/upgrade-survivor/installed-recovery-cases.mjs",
-    path.join(upgradeSurvivorDir, "installed-recovery-cases.mjs"),
-  );
   copyFileSync("package.json", path.join(root, "package.json"));
   copyFileSync("scripts/test-docker-all.mjs", path.join(scriptsDir, "test-docker-all.mjs"));
   copyFileSync("scripts/test-docker-all.mts", path.join(scriptsDir, "test-docker-all.mts"));

@@ -2,8 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import { model as makeCatalogModel } from "../agents/model-catalog-fixtures.test-support.js";
-import { normalizeStaticProviderModelId } from "../agents/model-ref-shared.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
+import { normalizeStaticProviderModelId } from "../agents/model-selection-normalize.js";
 import { buildConfiguredModelCatalog } from "../agents/model-selection-shared.js";
 import {
   resolveProviderEndpoint,

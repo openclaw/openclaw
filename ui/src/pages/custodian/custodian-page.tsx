@@ -506,7 +506,15 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
                   <LazyViewError error={error()} onRetry={reset} inline />
                 )}
               >
-                <Loading>
+                <Loading
+                  fallback={
+                    <span
+                      class="sidebar-issues-button"
+                      aria-hidden="true"
+                      style={{ visibility: "hidden" }}
+                    />
+                  }
+                >
                   <SidebarAttention />
                 </Loading>
               </Errored>

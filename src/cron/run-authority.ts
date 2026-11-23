@@ -51,7 +51,7 @@ export function resolveCronSessionWorkspaceOwnershipError(params: {
       mainKey: params.cfg.session?.mainKey,
     }) !== params.sessionKey
   ) {
-    return "Requester-scoped automation can only use its owning conversation’s workspace.";
+    return "Requester-scoped automation can only use its owning conversation’s workspace. Create the automation from the target conversation to use its saved workspace or worktree.";
   }
   return undefined;
 }

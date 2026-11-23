@@ -18,7 +18,6 @@ registerChatMessageMetadataEnglish();
 export type ForwardedAttributionOptions = ForwardedAvatarOptions & {
   mainKey?: string;
   basePath?: string;
-  linkSource?: boolean;
   updateCount?: number;
   displayFacts?: ChatDisplayFacts;
 };
@@ -41,8 +40,7 @@ function forwardedSource(group: ForwardedGroup, opts: ForwardedAttributionOption
     Boolean(opts.agentId) &&
     sourceParsed.agentId !== opts.agentId;
   // Only agent-prefixed keys are navigable; legacy keys stay plain text.
-  const linkableSourceKey =
-    opts.linkSource !== false && sourceParsed ? sourceSessionKey : undefined;
+  const linkableSourceKey = sourceParsed ? sourceSessionKey : undefined;
   const sourceAgentDisplayName = sourceParsed
     ? opts.agents?.find((agent) => agent.id === sourceParsed.agentId)?.identity?.name?.trim() ||
       sourceParsed.agentId

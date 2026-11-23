@@ -1,11 +1,12 @@
 // Add deterministic large payloads to already initialized, disposable agent stores.
-// Usage: node scripts/perf/backup-verify-fixture.mjs <state-dir> <workspace-dir>
+// Usage: node scripts/perf/backup-verify-fixture.mjs <state-dir> <workspace-dir> [--workspace-only]
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-const [stateDir, workspace] = process.argv.slice(2);
+const workspaceOnly = process.argv.includes("--workspace-only");
+const [stateDir, workspace] = process.argv.slice(2).filter((arg) => arg !== "--workspace-only");
 if (!stateDir || !workspace || !fs.existsSync(path.join(stateDir, "openclaw.json"))) {
   throw new Error("Supply a disposable initialized state directory and workspace directory.");
 }
@@ -13,11 +14,13 @@ const block = Buffer.alloc(1024 * 1024, 32);
 for (let offset = 0; offset < 256 * 1024; offset += 32) {
   createHash("sha256").update(`backup-fixture-${offset}`).digest().copy(block, offset);
 }
-const stores = [
-  ["main", 4096],
-  ["worker", 1024],
-  ["research", 512],
-];
+const stores = workspaceOnly
+  ? []
+  : [
+      ["main", 4096],
+      ["worker", 1024],
+      ["research", 512],
+    ];
 for (const [agent, rows] of stores) {
   const file = path.join(stateDir, "agents", agent, "agent", "openclaw-agent.sqlite");
   if (!fs.existsSync(file)) {

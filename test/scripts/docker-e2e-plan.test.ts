@@ -456,9 +456,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ]) {
       copyFileSync(join("scripts/lib", fileName), join(dirname(nestedModule), fileName));
     }
-    const cases = "scripts/e2e/lib/upgrade-survivor/installed-recovery-cases.mjs";
-    mkdirSync(dirname(join(tempRoot, ".release-harness", cases)), { recursive: true });
-    copyFileSync(cases, join(tempRoot, ".release-harness", cases));
 
     const laneJson = execFileSync(
       testNodeExecPath,
@@ -696,8 +693,24 @@ describe("scripts/lib/docker-e2e-plan", () => {
     }
   });
 
+  it("plans the plugin publication cell as a bare npm service lane", () => {
+    const plan = planFor({ selectedLaneNames: ["published-driver-plugin-publication"] });
+    expect(plan.lanes).toHaveLength(1);
+    expect(plan.lanes[0]).toMatchObject({
+      name: "published-driver-plugin-publication",
+      command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:published-driver-plugin-publication",
+      imageKind: "bare",
+      live: false,
+      resources: ["docker", "npm", "service"],
+      stateScenario: "empty",
+      timeoutMs: 20 * 60 * 1000,
+    });
+    expect(plan.needs).toMatchObject({ bareImage: true, package: true });
+  });
+
   it("keeps packaged older-runtime recovery independent of survivor baseline expansion", () => {
-    const name = "package-installed-recovery-older-runtime";
+    const cut = "older-runtime";
+    const name = `package-installed-recovery-${cut}`;
     const plan = planFor({
       selectedLaneNames: [name],
       upgradeSurvivorBaselines: "2026.9.3 2026.9.4",
@@ -719,7 +732,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       prepublishPluginRegistry: false,
     });
     const lane = requireFirstLane(plan);
-    const fixture = tempDirs.make("older-runtime-lane-");
+    const fixture = tempDirs.make(`${cut}-lane-`);
     const script = join(fixture, "scripts/e2e/upgrade-survivor-docker.sh");
     mkdirSync(dirname(script), { recursive: true });
     writeFileSync(
@@ -735,7 +748,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
         OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@latest",
       },
     });
-    expect(result).toBe("package-installed-recovery\nolder-runtime\n0\n\n");
+    expect(result).toBe(`package-installed-recovery\n${cut}\n0\n\n`);
   });
 
   it.each([

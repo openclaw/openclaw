@@ -82,6 +82,47 @@ describe("Cloud environments", () => {
     },
   );
 
+  it("keeps snapshot absence unknown after a pending or failed first image read", async () => {
+    const first = createDeferred<unknown>();
+    const retry = createDeferred<unknown>();
+    let reads = 0;
+    const { page, harness, client } = mountTestPage([...methods, "environments.prepare"], {
+      config: {
+        cloudWorkers: {
+          profiles: { "linux-build": machineProfile() },
+          projectProfiles: { "github.com/acme/app": "linux-build" },
+        },
+      },
+      response: (method) =>
+        method === "crabbox.images.list"
+          ? ++reads === 1
+            ? first.promise
+            : retry.promise
+          : undefined,
+    });
+    try {
+      await waitText(() => sheet(page), "github.com/acme/app");
+      expect
+        .soft(page.querySelector(".cloud-environments__row")?.textContent)
+        .not.toContain("Cold only");
+      expect.soft(sheet(page).textContent).not.toContain("Cold only");
+      expect(button(sheet(page), "Rebuild").disabled).toBe(true);
+      expect.soft(button(sheet(page), "Rebuild").parentElement?.getAttribute("title")).toBeNull();
+      first.reject(new Error("Snapshot list unavailable"));
+      await waitText(() => page, "Snapshot list unavailable");
+      expect.soft(sheet(page).textContent).not.toContain("Cold only");
+      harness.publish(false, client, null);
+      harness.publish(true, client, gatewayHelloForMethods([...methods, "environments.prepare"]));
+      await waitForSolid(() => expect(reads).toBe(2));
+      expect.soft(sheet(page).textContent).not.toContain("Cold only");
+      retry.resolve({ ...snapshotListFixture(), images: [] });
+      await waitText(() => sheet(page), "Cold only");
+    } finally {
+      first.resolve(localSnapshot());
+      retry.resolve(localSnapshot());
+    }
+  });
+
   it("shows accepted inventory before images settle and retains details through a refresh", async () => {
     const inventory = createDeferred<unknown>();
     const images = createDeferred<unknown>();
@@ -98,8 +139,14 @@ describe("Cloud environments", () => {
     });
     try {
       await waitText(() => page, "Loading");
+      expect(page.textContent).not.toContain("Advanced");
       inventory.resolve({ environments: [buildEnvironmentFixture("failed")], profiles: [] });
       await waitText(() => sheet(page), "github.com/acme/app");
+      expect(page.textContent).toContain("Advanced");
+      expect(page.querySelector(".cloud-environments__row")?.textContent).toContain(
+        "Needs attention",
+      );
+      expect.soft(sheet(page).textContent).not.toContain("Cold only");
       expect(button(sheet(page), "Rebuild").disabled).toBe(true);
       images.resolve(result);
       await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(false));
@@ -121,6 +168,47 @@ describe("Cloud environments", () => {
       refresh.resolve({ environments: [], profiles: [] });
     }
   });
+
+  it.each(["empty", "failed"])(
+    "settles the initial %s inventory before showing Advanced",
+    async (outcome) => {
+      const inventory = createDeferred<unknown>();
+      const images = createDeferred<unknown>();
+      const emptyImages = { ...snapshotListFixture(), images: [], profiles: [] };
+      const { page } = mountTestPage(methods, {
+        response: (method, params) => {
+          if (method === "environments.list" && params?.includePreparedDetails) {
+            return inventory.promise;
+          }
+          return method === "crabbox.images.list" ? images.promise : undefined;
+        },
+      });
+      try {
+        await waitText(() => page, "Loading");
+        expect(page.textContent).not.toContain("Advanced");
+        if (outcome === "failed") {
+          inventory.reject(new Error("Inventory unavailable"));
+          await waitText(() => page, "Inventory unavailable");
+          expect(page.textContent).not.toContain("No cloud devices yet");
+        } else {
+          inventory.resolve({ environments: [], profiles: [] });
+          await waitText(() => page, "No cloud devices yet");
+          expect(page.textContent).not.toContain("Loading");
+          expect(
+            page.querySelector('a[href="https://docs.openclaw.ai/gateway/cloud-workers"]'),
+          ).not.toBeNull();
+        }
+        expect(page.textContent).toContain("Advanced");
+        const advanced = page.querySelector("summary");
+        images.resolve(emptyImages);
+        await images.promise;
+        await waitForSolid(() => expect(page.querySelector("summary")).toBe(advanced));
+      } finally {
+        inventory.resolve({ environments: [], profiles: [] });
+        images.resolve(emptyImages);
+      }
+    },
+  );
 
   it("coalesces inventory refreshes and ignores retired reads while the replacement is pending", async () => {
     const pending = Array.from({ length: 3 }, () => createDeferred<unknown>());
@@ -173,7 +261,14 @@ describe("Cloud environments", () => {
   });
 
   it("retains loaded environments and pool/policy drafts through a blip, but retires them for another client", async () => {
-    const { page, request, harness, client } = mountTestPage(methods);
+    const replacement = createDeferred<unknown>();
+    let replacing = false;
+    const { page, request, harness, client } = mountTestPage(methods, {
+      response: (method, params) =>
+        replacing && method === "environments.list" && params?.includePreparedDetails
+          ? replacement.promise
+          : undefined,
+    });
     await waitForSolid(() => expect(input(page, "Refresh after").disabled).toBe(false));
     await waitText(() => page, "github.com/acme/app");
     change(input(page, "Pool limit"), "7");
@@ -190,9 +285,18 @@ describe("Cloud environments", () => {
     await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(false));
     expect(input(page, "Pool limit").value).toBe("7");
     expect(input(page, "Refresh after").value).toBe("6h");
+    const advanced = expectDefined(page.querySelector("details"), "Advanced disclosure");
+    advanced.open = true;
+    replacing = true;
     harness.publish(true, { request } as unknown as GatewayBrowserClient, hello);
-    flush();
-    expect(input(page, "Pool limit").value).not.toBe("7");
+    try {
+      await waitForSolid(() => expect(page.textContent).not.toContain("github.com/acme/app"));
+      expect(advanced.isConnected).toBe(true);
+      expect(advanced.open).toBe(true);
+    } finally {
+      replacement.resolve({ environments: [], profiles: [] });
+    }
+    await waitForSolid(() => expect(input(page, "Pool limit").value).not.toBe("7"));
     expect(input(page, "Refresh after").value).toBe("24h");
   });
 
@@ -592,7 +696,9 @@ it.each([
     });
     const surface = labeled
       ? await waitForSolid(() => sheet(page))
-      : expectDefined(page.querySelector(".settings-disclosure"), "Advanced");
+      : await waitForSolid(() =>
+          expectDefined(page.querySelector(".settings-disclosure"), "Advanced"),
+        );
     await waitForSolid(() => expect(button(surface, action).disabled).toBe(false));
     if (state !== "provisioning") {
       expect(surface.textContent).toContain("Worker cleanup failed");

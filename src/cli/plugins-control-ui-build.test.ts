@@ -138,7 +138,7 @@ describe("native plugin browser builds", () => {
             }
           : {}),
       };
-      const original = JSON.stringify(authored, null, 2);
+      const original = `// Authored native manifest\n${JSON.stringify(authored, null, 2)}\n`;
       await fs.writeFile(manifestPath, original);
       execFileSync(
         process.execPath,

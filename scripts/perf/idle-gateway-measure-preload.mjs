@@ -1,9 +1,12 @@
 // Benchmark-only instrumentation; never loaded by a normal Gateway.
 import { createHook } from "node:async_hooks";
-import { readFileSync } from "node:fs";
+import fs, { readFileSync } from "node:fs";
+import fsPromises from "node:fs/promises";
 import { createRequire, registerHooks, syncBuiltinESMExports } from "node:module";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
+import { getHeapStatistics } from "node:v8";
 import { BroadcastChannel, isMainThread, threadId } from "node:worker_threads";
 
 const channelName = process.env.OPENCLAW_IDLE_MEASURE_CHANNEL;
@@ -15,6 +18,105 @@ bus.unref();
 const workers = createRequire(import.meta.url)("node:worker_threads");
 const NativeWorker = workers.Worker;
 const watchWorkers = new Set();
+const censusDirectory = process.env.OPENCLAW_IDLE_MEASURE_FS_CENSUS;
+const census = { threadId, workerStarts: {}, files: {}, streams: {} };
+const nativeWriteFileSync = fs.writeFileSync;
+const nativeRenameSync = fs.renameSync;
+const saveCensus = () => {
+  if (censusDirectory) {
+    census.cpu = process.threadCpuUsage();
+    census.allocatedBytes = getHeapStatistics().total_allocated_bytes;
+    census.allocationCounterSupported = typeof census.allocatedBytes === "number";
+    const file = path.join(censusDirectory, `${process.pid}-${threadId}.json`);
+    nativeWriteFileSync(`${file}.pending`, JSON.stringify(census));
+    nativeRenameSync(`${file}.pending`, file);
+  }
+};
+if (censusDirectory) {
+  const category = (file) => {
+    const name = String(file);
+    if (name.includes("node-compile-cache")) {
+      return "compile-cache";
+    }
+    if (name.endsWith("gateway.state.lock")) {
+      return "gateway.state.lock";
+    }
+    if (/state\.[^/]+\.lock$/.test(name)) {
+      return "state.lock";
+    }
+    if (/services\.sqlite(?:-|$)/.test(name)) {
+      return "services.sqlite";
+    }
+    if (/credentials\.sqlite(?:-|$)/.test(name)) {
+      return "credentials.sqlite";
+    }
+    if (name.startsWith("/proc/")) {
+      return "procfs";
+    }
+    return path.extname(name) || "other";
+  };
+  for (const [owner, names] of [
+    [
+      fs,
+      [
+        "open",
+        "openSync",
+        "readFile",
+        "readFileSync",
+        "stat",
+        "statSync",
+        "lstat",
+        "lstatSync",
+        "fstat",
+        "fstatSync",
+      ],
+    ],
+    [fsPromises, ["open", "readFile", "stat", "lstat"]],
+  ]) {
+    for (const name of names) {
+      const original = owner[name];
+      owner[name] = function (...args) {
+        const key = `${owner === fsPromises ? "promises." : ""}${name}:${category(args[0])}`;
+        census.files[key] = (census.files[key] ?? 0) + 1;
+        const result = Reflect.apply(original, this, args);
+        if (owner === fsPromises && name === "open") {
+          return result.then((handle) => {
+            const createReadStream = handle.createReadStream;
+            handle.createReadStream = function (...streamArgs) {
+              return observeReadStream(Reflect.apply(createReadStream, this, streamArgs), args[0]);
+            };
+            return handle;
+          });
+        }
+        return result;
+      };
+    }
+  }
+  function observeReadStream(stream, file) {
+    const source = new Error().stack?.split("\n").slice(3, 9).join("\n") ?? "unknown";
+    const key = `${category(file)}:${stream.readableHighWaterMark}:${source}`;
+    const counts = (census.streams[key] ??= { created: 0, reads: 0, requestedBytes: 0 });
+    counts.created++;
+    // Observe Node's stream allocation boundary without changing the requested size.
+    // oxlint-disable-next-line no-underscore-dangle
+    const read = stream._read;
+    // oxlint-disable-next-line no-underscore-dangle
+    stream._read = function (size) {
+      counts.reads++;
+      counts.requestedBytes += size;
+      return Reflect.apply(read, this, [size]);
+    };
+    return stream;
+  }
+  const createReadStream = fs.createReadStream;
+  fs.createReadStream = function (...args) {
+    return observeReadStream(Reflect.apply(createReadStream, this, args), args[0]);
+  };
+  process.once("exit", () => {
+    census.exited = true;
+    saveCensus();
+  });
+}
 let watchNotifications = 0;
 if (isMainThread && process.env.OPENCLAW_IDLE_MEASURE_WATCHER_FAILURE === "1") {
   const owner = new URL("../../src/config/source-file.ts", import.meta.url).href;
@@ -63,6 +165,10 @@ workers.Worker = class extends NativeWorker {
               ...options.env,
               OPENCLAW_IDLE_MEASURE_CHANNEL: channelName,
               OPENCLAW_IDLE_MEASURE_TIMERS: process.env.OPENCLAW_IDLE_MEASURE_TIMERS,
+              ...(censusDirectory ? { OPENCLAW_IDLE_MEASURE_FS_CENSUS: censusDirectory } : {}),
+              ...(process.env.NODE_DEBUG_NATIVE
+                ? { NODE_DEBUG_NATIVE: process.env.NODE_DEBUG_NATIVE }
+                : {}),
             }
           : options.env,
       execArgv: [
@@ -72,6 +178,11 @@ workers.Worker = class extends NativeWorker {
         fileURLToPath(import.meta.url),
       ],
     });
+    if (censusDirectory) {
+      const script = options.eval ? "eval" : path.basename(String(filename));
+      census.workerStarts[script] = (census.workerStarts[script] ?? 0) + 1;
+      saveCensus();
+    }
     if (isMainThread && String(filename).endsWith("/watch-io-worker.js")) {
       watchWorkers.add(this);
       this.once("exit", () => watchWorkers.delete(this));
@@ -129,12 +240,16 @@ if (process.env.OPENCLAW_IDLE_MEASURE_TIMERS === "1") {
 }
 
 function snapshot() {
+  saveCensus();
+  const allocatedBytes = getHeapStatistics().total_allocated_bytes;
   return {
     threadId,
     at: performance.now(),
     cpu: process.threadCpuUsage(),
     totalCpu: isMainThread ? process.cpuUsage() : undefined,
     memory: process.memoryUsage(),
+    allocatedBytes,
+    allocationCounterSupported: typeof allocatedBytes === "number",
     // Loop iterations/events are a wakeup proxy, not a count of OS wakeup syscalls.
     uv: performance.nodeTiming.uvMetricsInfo,
     timers: Array.from(counts.values(), ({ source, callbacks, cpuUs }) => ({

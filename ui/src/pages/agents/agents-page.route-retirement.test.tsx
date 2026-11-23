@@ -259,7 +259,7 @@ it("leaves Agents through RouterOutlet while its admitted file write settles", a
   const client = createTestGatewayClient(request);
   const currentGateway = gateway({
     ...snapshot(client),
-    hello: gatewayHelloForMethods(["agents.files.set"]),
+    hello: gatewayHelloForMethods(["agents.files.list", "agents.files.get", "agents.files.set"]),
   });
   const agents = agentsCapability(async () => ({
     agentId: "main",
@@ -329,7 +329,7 @@ it("leaves the avatar route before its admitted generation settles", async () =>
   });
   const currentGateway = gateway({
     ...snapshot(createTestGatewayClient(request)),
-    hello: gatewayHelloForMethods(["agents.update", "agents.avatar.generate"]),
+    hello: gatewayHelloForMethods(["agents.list", "agents.update", "agents.avatar.generate"]),
   });
   const agents = agentsCapability(async () => ({ agentId: "main", workspace: "", files: [] }));
   const baseContext = pageContext(currentGateway, agents);

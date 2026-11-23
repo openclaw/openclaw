@@ -10,6 +10,11 @@ import {
 } from "./lib/actions-artifact-archive.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import {
+  classifyReleaseTrain,
+  parseReleaseVersion,
+  validateRetiredLineReason,
+} from "./lib/release-version.mjs";
+import {
   runReleaseToolingGh,
   validateReleasePublishParentRun,
 } from "./release-tooling-identity.mjs";
@@ -63,22 +68,60 @@ function npmApprovals(approvals) {
   );
 }
 
+// Keep the artifact transport name stable; the authenticated payload owns its schema version.
 function releaseApprovalArtifactName({ parentRunId, parentRunAttempt }) {
   pattern(parentRunId, ID, "Parent run id");
   pattern(parentRunAttempt, ID, "Parent run attempt");
   return `openclaw-release-approval-v1-${parentRunId}-${parentRunAttempt}`;
 }
 
+// These are operator-reviewed observations, not an HTTP-status classifier.
+// A registry 404 does not establish an OIDC exchange failure.
+export function validateCorePluginDeferrals(value, { targetSha, releaseTag, npmDistTag }) {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > 16 ||
+    npmDistTag !== "beta" ||
+    !/-beta\.[1-9][0-9]*$/u.test(releaseTag)
+  ) {
+    throw new Error("Core plugin deferrals require an explicit beta-prerelease package list.");
+  }
+  const names = new Set();
+  for (const entry of value) {
+    if (
+      !isRecord(entry) ||
+      Object.keys(entry).toSorted().join(",") !== "evidence,packageName,reason,sourceSha,version" ||
+      typeof entry.packageName !== "string" ||
+      !/^@openclaw\/[a-z0-9][a-z0-9._-]*$/u.test(entry.packageName) ||
+      names.has(entry.packageName) ||
+      entry.sourceSha !== targetSha ||
+      entry.version !== releaseTag.slice(1) ||
+      !["npm-eneedauth", "npm-trusted-publisher-exchange-http-404"].includes(entry.reason) ||
+      typeof entry.evidence !== "string" ||
+      !/^https:\/\/github\.com\/openclaw\/openclaw\/actions\/runs\/[1-9][0-9]*\/job\/[1-9][0-9]*$/u.test(
+        entry.evidence,
+      )
+    ) {
+      throw new Error(
+        "Core plugin deferral must name a unique exact-source package and original authentication failure job.",
+      );
+    }
+    names.add(entry.packageName);
+  }
+  return value;
+}
+
 export function validateReleaseApprovalReceipt(value) {
   if (
     !isRecord(value) ||
-    Object.keys(value).length !== RECEIPT_KEYS.length ||
+    Object.keys(value).length !== RECEIPT_KEYS.length + ([2, 3].includes(value.version) ? 1 : 0) ||
     RECEIPT_KEYS.some((key) => !Object.hasOwn(value, key))
   ) {
     throw new Error("Release approval receipt fields are invalid.");
   }
-  if (value.version !== 1) {
-    throw new Error("Release approval receipt version must be 1.");
+  if (![1, 2, 3].includes(value.version)) {
+    throw new Error("Release approval receipt version must be 1, 2 or 3.");
   }
   for (const key of RECEIPT_KEYS.slice(1)) {
     if (typeof value[key] !== "string") {
@@ -107,6 +150,20 @@ export function validateReleaseApprovalReceipt(value) {
   ) {
     throw new Error("Alpha releases are retired; use a beta prerelease instead.");
   }
+  if (value.version === 2) {
+    validateRetiredLineReason(value.retiredLineReason);
+    const version = parseReleaseVersion(value.releaseTag.slice(1));
+    if (
+      value.npmDistTag !== "extended-stable" ||
+      !version ||
+      classifyReleaseTrain(version) !== "extended-stable"
+    ) {
+      throw new Error("Retired-line approval is only valid for extended-stable.");
+    }
+  }
+  if (value.version === 3) {
+    validateCorePluginDeferrals(value.corePluginDeferrals, value);
+  }
   refIdentity(value.toolingRef, value.toolingFullRef, value.toolingSha);
   pattern(value.releaseTag, RELEASE_TAG, "Release tag");
   pattern(value.targetSha, SHA, "Target SHA");
@@ -127,6 +184,21 @@ export function validateReleaseApprovalReceipt(value) {
 }
 
 export function createReleaseApprovalReceipt(env, runGhJson = api) {
+  const preparedInput = env.PREPARED_PUBLICATION_INPUT
+    ? JSON.parse(env.PREPARED_PUBLICATION_INPUT)
+    : {};
+  const corePluginDeferrals = preparedInput.corePluginDeferrals;
+  if (
+    corePluginDeferrals !== undefined &&
+    (env.PUBLISH_OPENCLAW_NPM !== "true" ||
+      env.PLUGIN_PUBLISH_SCOPE !== "all-publishable" ||
+      !env.PREPARED_NPM_ARTIFACT ||
+      env.RETIRED_LINE_PUBLICATION_REASON)
+  ) {
+    throw new Error(
+      "Explicit plugin deferrals require the original qualified all-package core publication.",
+    );
+  }
   if (env.GITHUB_EVENT_NAME !== "workflow_dispatch") {
     throw new Error("Release approval requires workflow_dispatch.");
   }
@@ -139,7 +211,11 @@ export function createReleaseApprovalReceipt(env, runGhJson = api) {
     throw new Error("Release approval requires an approved npm-release environment entry.");
   }
   return validateReleaseApprovalReceipt({
-    version: 1,
+    version: corePluginDeferrals !== undefined ? 3 : env.RETIRED_LINE_PUBLICATION_REASON ? 2 : 1,
+    ...(corePluginDeferrals !== undefined ? { corePluginDeferrals } : {}),
+    ...(env.RETIRED_LINE_PUBLICATION_REASON
+      ? { retiredLineReason: env.RETIRED_LINE_PUBLICATION_REASON }
+      : {}),
     kind: "openclaw-release-approval",
     repository: env.GITHUB_REPOSITORY,
     parentWorkflow: PARENT_WORKFLOW,

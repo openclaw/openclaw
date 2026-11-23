@@ -194,7 +194,8 @@ export function buildDiscordComponentMessage(params: {
         const selectSpec = block.select;
         const type = selectSpec.type ?? "string";
         const componentId = createShortId("sel_");
-        const customId = buildDiscordComponentCustomIdImpl({ componentId });
+        const internalCustomId = selectSpec.internalCustomId?.trim() || undefined;
+        const customId = internalCustomId ?? buildDiscordComponentCustomIdImpl({ componentId });
         const options = selectSpec.options ?? [];
         if (type === "string" && options.length === 0) {
           throw new Error("String select menus require options");
@@ -240,7 +241,9 @@ export function buildDiscordComponentMessage(params: {
           allowedUsers: selectSpec.allowedUsers,
         });
         rowComponents.push(select);
-        addEntry(entry);
+        if (!internalCustomId) {
+          addEntry(entry);
+        }
       }
       containerChildren.push({ type: ComponentType.ActionRow, components: rowComponents });
     }

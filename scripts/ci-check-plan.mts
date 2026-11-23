@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // Materialize compiler and lint selections only after the check-planning job installs dependencies.
 import { appendFileSync, existsSync } from "node:fs";
-import { detectChangedLanes } from "./changed-lanes.mts";
+import { detectChangedLanes, detectChangedLanesForPaths } from "./changed-lanes.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import {
   resolveChangedCiTsgoInputs,
+  resolveCiTsgoGraphs,
   selectTsgoCoreTestStripe,
   TSGO_ROOT_TEST_SHARDS,
 } from "./lib/tsgo-core-test-shards.mts";
@@ -15,9 +16,11 @@ type CheckRow = {
   check_name: string;
   task: string;
   runner: string;
+  runner_label?: string;
   type_graph_names_json?: string;
   core_type_graph_names_json?: string;
   core_type_concurrency?: number;
+  requires_sdk_declarations?: boolean;
 };
 type StripeRow = {
   stripe: number;
@@ -33,7 +36,7 @@ export type CiCheckPlanInput = {
   changedBaseRef?: string;
   extensionLintMode?: "affected" | "full";
   preserveFullChecks?: boolean;
-  typeGraphBoundaryOwner: "" | "check-plan" | "additional-checks";
+  typeGraphBoundaryOwner: "" | "check-plan" | "additional-checks" | "changed-check";
   changedPaths: string[];
   changedCoreTestPaths: string[] | null;
   runnerProfile: string;
@@ -46,8 +49,9 @@ export type CiCheckPlanInput = {
 /** Narrow checks and pack complete extension fallback within the existing runner budget. */
 export async function createCiCheckPlan(input: CiCheckPlanInput) {
   const runs = (task: string) => input.checkMatrix.include.some((row) => row.task === task);
+  // PR lint consumers can be precise even when guards and types remain broad.
   const lintPlan =
-    runs("lint") && !input.preserveFullChecks
+    runs("lint") && (!input.preserveFullChecks || input.extensionLintMode === "affected")
       ? await (
           await import("./check-changed.mts")
         ).createChangedCiLintPlan(detectChangedLanes(input.changedPaths), {
@@ -55,8 +59,28 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
         })
       : null;
   const started = performance.now();
-  const typePlan =
-    !input.preserveFullChecks && (runs("prod-types") || runs("test-types"))
+  if (input.typeGraphBoundaryOwner === "changed-check" && input.preserveFullChecks) {
+    throw new Error("Changed-check compiler delegation cannot preserve unrelated full checks");
+  }
+  const changedCheck =
+    input.typeGraphBoundaryOwner === "changed-check"
+      ? (await import("./check-changed.mts")).createChangedCheckPlan(
+          detectChangedLanesForPaths({
+            paths: input.changedPaths,
+            base: input.changedBaseRef ?? "origin/main",
+            head: "HEAD",
+          }),
+          { delegateCompilers: true, base: input.changedBaseRef, head: "HEAD" },
+        )
+      : null;
+  const typePlan = changedCheck
+    ? {
+        mode: "changed-check",
+        graphs: changedCheck.delegatedTypeGraphs.length
+          ? resolveCiTsgoGraphs(changedCheck.delegatedTypeGraphs)
+          : [],
+      }
+    : !input.preserveFullChecks && (runs("prod-types") || runs("test-types"))
       ? await (
           await import("./run-tsgo-core-test-shards.mts")
         ).createChangedCiTypeCheckPlan(input.changedPaths, {
@@ -151,7 +175,21 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
       coreRows.splice(coreRows.indexOf(second), 1);
     }
   }
-  const checkRows = input.checkMatrix.include.flatMap((row) => {
+  // Full hosted stripes own the root partitions too, leaving the same serial tail.
+  const serialCentralTypes =
+    hosted &&
+    input.extensionLintMode !== undefined &&
+    (input.preserveFullChecks
+      ? coreRows.length === 5 &&
+        coreRows.every((row, index) => row.stripe === index + 1 && !row.type_graph_names_json)
+      : other.every(({ name }) => name === "extensions-test" || name === "scripts"));
+  const checkRows = input.checkMatrix.include.flatMap((template) => {
+    const row =
+      template.task === "test-types" &&
+      serialCentralTypes &&
+      template.runner_label === "blacksmith-4vcpu-ubuntu-2404"
+        ? { ...template, runner_label: "blacksmith-2vcpu-ubuntu-2404" }
+        : template;
     if (input.preserveFullChecks) {
       return [row];
     }
@@ -207,6 +245,7 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
     }
   }
   let centralLintSelection = lintPlan ? JSON.stringify(lintPlan.central) : "";
+  let centralRequiresSdkDeclarations: boolean | undefined;
   // Older targets omit this capability and retain their original full fallback.
   const extensionSelection =
     runs("lint") && input.extensionLintMode !== undefined
@@ -266,6 +305,7 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
               : { fullExtensionStripes: stripes }),
           };
     const central = payload(lintPlan ? JSON.stringify(lintPlan.central) : undefined, true);
+    centralRequiresSdkDeclarations = false;
     if (!lintPlan) {
       central.fullGroups = hosted ? ["scripts"] : ["core", "scripts"];
     }
@@ -287,9 +327,16 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
       });
       centralLintSelection = JSON.stringify(central);
     } else if (hosted) {
+      // Reuse an admitted SDK consumer for the tail instead of preparing it again centrally.
+      const tailOwner = input.lintCoreMatrix.include.findLast(
+        ({ stripe: stripeIndex }) => stripeIndex < 6 && selectedStripes.includes(stripeIndex),
+      )?.stripe;
       coreLint = input.lintCoreMatrix.include.flatMap((template) => {
         const current = coreLint.find((row) => row.stripe === template.stripe);
-        const extensionStripes = selectedStripes.includes(template.stripe) ? [template.stripe] : [];
+        const extensionStripes = selectedStripes.filter(
+          (stripeIndex) =>
+            stripeIndex === template.stripe || (stripeIndex === 6 && template.stripe === tailOwner),
+        );
         if (!current && extensionStripes.length === 0) {
           return [];
         }
@@ -313,14 +360,14 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
         ];
       });
       extensionLint = [];
-      centralLintSelection = JSON.stringify(
-        withExtensions(
-          central,
-          selectedStripes.filter((stripeIndex) => stripeIndex === 6),
-        ),
+      const centralExtensionStripes = selectedStripes.filter(
+        (stripeIndex) => stripeIndex === 6 && tailOwner === undefined,
       );
+      centralRequiresSdkDeclarations = centralExtensionStripes.length > 0;
+      centralLintSelection = JSON.stringify(withExtensions(central, centralExtensionStripes));
     } else {
       extensionLint = [];
+      centralRequiresSdkDeclarations = selectedStripes.length > 0;
       centralLintSelection = JSON.stringify(withExtensions(central, selectedStripes));
     }
   }
@@ -328,6 +375,13 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
   // owners separate, and retain a check row for the existing required gate.
   const firstCoreLint = coreLint.find((row) => row.stripe === 1);
   const centralLintIndex = checkRows.findIndex((row) => row.task === "lint");
+  const centralLintRow = checkRows[centralLintIndex];
+  if (centralLintRow && centralRequiresSdkDeclarations !== undefined) {
+    checkRows[centralLintIndex] = {
+      ...centralLintRow,
+      requires_sdk_declarations: centralRequiresSdkDeclarations,
+    };
+  }
   if (
     input.runnerProfile === "hybrid" &&
     input.preserveFullChecks &&
@@ -446,7 +500,8 @@ function parseInput(value: unknown): CiCheckPlanInput {
   if (
     boundaryOwner !== "" &&
     boundaryOwner !== "check-plan" &&
-    boundaryOwner !== "additional-checks"
+    boundaryOwner !== "additional-checks" &&
+    boundaryOwner !== "changed-check"
   ) {
     throw new Error("Check planning requires its compiler boundary owner");
   }
@@ -468,11 +523,17 @@ function parseInput(value: unknown): CiCheckPlanInput {
         !isRecord(row) ||
         typeof row.check_name !== "string" ||
         typeof row.task !== "string" ||
-        typeof row.runner !== "string"
+        typeof row.runner !== "string" ||
+        (row.runner_label !== undefined && typeof row.runner_label !== "string")
       ) {
         throw new Error("Check planning requires canonical check templates");
       }
-      return { check_name: row.check_name, task: row.task, runner: row.runner };
+      return {
+        check_name: row.check_name,
+        task: row.task,
+        runner: row.runner,
+        ...(typeof row.runner_label === "string" ? { runner_label: row.runner_label } : {}),
+      };
     }),
     coreTypeMatrix: matrix(value.coreTypeMatrix, stripe),
     lintCoreMatrix: matrix(value.lintCoreMatrix, stripe),

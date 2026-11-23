@@ -10,6 +10,63 @@
   display: flex;
 }
 
+/* A cached pane can reserve the column before the lazy body arrives. */
+.chat-details[data-desktop]:has(> .chat-details-desktop-body):not(
+    :has(.chat-details-desktop-empty, .chat-details-desktop-loading, .lazy-view-error)
+  ) {
+  background-color: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+/* Real sections replace both placeholders; while facts load, show only the skeleton. */
+.chat-details-desktop-body__content:has(
+  [data-details-group],
+  [data-progress-card-placement="details"],
+  .chat-details__muted,
+  .chat-details__creator,
+  .lazy-view-error
+) {
+  & > .chat-details-desktop-loading,
+  & > .chat-details-desktop-empty {
+    display: none;
+  }
+}
+
+.chat-details-desktop-body__content:has(> .chat-details-desktop-loading)
+  > .chat-details-desktop-empty {
+  display: none;
+}
+
+.chat-details-desktop-empty {
+  display: flex;
+  align-items: center;
+  min-height: 38px;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--details-meta-font-size);
+}
+
+.chat-details-desktop-loading {
+  --skeleton-base: var(--skeleton-base-raised);
+
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 38px;
+}
+
+.chat-details-desktop-loading > .skeleton {
+  width: 96px;
+  height: 10px;
+  border-radius: var(--radius-sm);
+}
+
+.chat-details-desktop-loading > .skeleton:first-child {
+  width: 14px;
+  height: 14px;
+}
+
 .chat-details-desktop-body {
   --details-row-font-size: calc(13px * var(--control-ui-text-scale));
   --details-row-line-height: 24px;
@@ -26,23 +83,16 @@
   --details-section-padding: 10px;
   /* Follows the surface it sits on, so docked and floating panels read the same. */
   --details-separator: color-mix(in srgb, var(--text) 8%, var(--details-surface));
-  --scrollbar-size: 8px;
-  --scrollbar-thumb-inset: 2px;
-  --details-scrollbar-thumb: transparent;
   --details-fade-top: 0px;
   --details-fade-bottom: 0px;
   font-variant-numeric: tabular-nums;
   flex: 0 1 auto;
-  min-height: 0;
+  /* Keep the compact row's floor when first facts replace it with a growing section. */
+  min-height: 46px;
   min-width: 0;
-  overflow: auto;
+  overflow: hidden auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable both-edges;
-  scrollbar-color: var(--details-scrollbar-thumb) transparent;
-
-  &:hover {
-    --details-scrollbar-thumb: color-mix(in srgb, var(--muted) 32%, transparent);
-  }
 
   &[data-fade-top] {
     --details-fade-top: 24px;
@@ -72,23 +122,7 @@
 }
 
 @supports selector(::-webkit-scrollbar) {
-  .chat-details-desktop-body {
-    scrollbar-width: auto;
-    scrollbar-color: auto;
-  }
-
-  .chat-details-desktop-body::-webkit-scrollbar {
-    width: var(--scrollbar-size);
-  }
-
   .chat-details-desktop-body::-webkit-scrollbar-track {
     margin-block: 16px;
-  }
-
-  .chat-details-desktop-body::-webkit-scrollbar-thumb {
-    border: var(--scrollbar-thumb-inset) solid transparent;
-    border-radius: 4px;
-    background: var(--details-scrollbar-thumb);
-    background-clip: content-box;
   }
 }

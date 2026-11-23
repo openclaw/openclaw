@@ -36,7 +36,8 @@ function memoryStore() {
 
 // A linked claw: root R pinned, owner device D1 (with tunnel key W1) admitted.
 async function linkedClaw() {
-  const authority = createOpenClawIdAuthority(memoryStore());
+  const store = memoryStore();
+  const authority = createOpenClawIdAuthority(store);
   const kGw = formatEd25519PublicKey((await generateEd25519Signer()).publicKey);
   const prep = await authority.prepareLink({
     kSrv: K_SRV,
@@ -81,7 +82,16 @@ async function linkedClaw() {
       { claw_id: prep.claw_id, seq, target, issued_at: now() },
       signer,
     );
-  return { authority, cert, device, root, w1, sign, clawId: prep.claw_id };
+  return {
+    authority,
+    cert,
+    device,
+    root,
+    w1,
+    sign,
+    clawId: prep.claw_id,
+    profiles: store.profiles,
+  };
 }
 
 function serviceFor(authority: Awaited<ReturnType<typeof linkedClaw>>["authority"]) {
@@ -132,6 +142,37 @@ describe("Gateway membership authority and enforcement", () => {
     expect((await claw.authority.admittedPeerKeys()).admitted).toContain(bob);
   });
 
+  it("owner membership binds each comparison name and email to the canonical account profile", async () => {
+    const claw = await linkedClaw();
+    const bob = formatIrohEndpointKey(randomBytes(32));
+    await claw.authority.submit(
+      await claw.sign(2, {
+        op: "add",
+        account_id: "acct-bob",
+        role: "operator",
+        peer_keys: [bob],
+        invite_id: null,
+      }),
+      "tunnel",
+    );
+    expect(await claw.authority.resolvePeer(claw.w1)).toMatchObject({ kind: "owner" });
+    await claw.profiles.save({
+      accountId: "acct-bob",
+      name: "Canonical Bob",
+      email: "bob@example.test",
+    });
+    expect((await claw.authority.ownerView(claw.w1))?.members).toEqual([
+      expect.objectContaining({
+        account_id: "acct-bob",
+        display_name: "Canonical Bob",
+        email: "bob@example.test",
+        role: "operator",
+      }),
+    ]);
+    expect(await claw.authority.ownerView(bob)).toBeUndefined();
+    expect(await claw.authority.memberView(bob)).not.toHaveProperty("members");
+  });
+
   // Spec section 11 #12 and #4: removal takes effect at the claw without Discovery.
   it("removes a member: cuts tunnel access, cancels its runs, closes sessions and revokes tokens", async () => {
     const claw = await linkedClaw();
@@ -156,6 +197,10 @@ describe("Gateway membership authority and enforcement", () => {
         devices: [
           {
             peerKey: bob,
+            deviceFp: null,
+            label: `Device (${(await fingerprint(bob)).slice(3, 11)})`,
+            approvedBy: null,
+            lastSeen: expect.any(Number),
             connections: 1,
             lastSeenAt: 1_700_000_000_000,
             runs: [{ runId: "r1", sessionKey: "s1" }],
@@ -268,6 +313,7 @@ describe("Gateway membership authority and enforcement", () => {
       {
         submit: (statement) => claw.authority.submit(statement, "mailbox"),
         redeem: (redemption, identity) => claw.authority.redeem(redemption, identity),
+        redeemNode: (redemption) => claw.authority.redeemNode(redemption),
       },
     );
     expect(result).toMatchObject({ ok: false, code: "not_direct" });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { getContextWindowCaches } from "../../agents/context-cache.js";
 import { loadProviderScopedThinkingCatalog } from "../../agents/model-catalog.runtime.js";
@@ -121,6 +121,32 @@ const userPin = (
   modelOverride: string,
   overrides: Partial<SessionEntry> = {},
 ) => makeEntry({ providerOverride, modelOverride, modelOverrideSource: "user", ...overrides });
+
+it.each([undefined, ["synthetic/chat", "synthetic/voice"]])(
+  "preserves a non-chat pin under policy %j and rejects before execution",
+  async (allow) => {
+    const entry = userPin("synthetic", "voice");
+    const before = { ...entry };
+    const cfg = selectionConfig({
+      model: "synthetic/chat",
+      ...(allow ? { modelPolicy: { allow } } : {}),
+    });
+    await expect(
+      selectSession(cfg, "synthetic", "chat", entry, {
+        preparedModelCatalog: preparedCatalog([
+          { provider: "synthetic", id: "chat", name: "Chat" },
+          { provider: "synthetic", id: "voice", name: "Voice", inference: { chat: false } },
+        ]),
+      }),
+    ).rejects.toMatchObject({
+      reason: "format",
+      code: "model_chat_unsupported",
+      message: "This model doesn't support chat; pick another model.",
+    });
+    expect(entry).toEqual(before);
+    expect(persist).not.toHaveBeenCalled();
+  },
+);
 
 function selectSession(
   cfg: OpenClawConfig,
@@ -434,7 +460,7 @@ it.each(["pin", "source", "provider", "session", "authority"] as const)(
     });
     const sessionStore = { [sessionKey]: entry };
     let current = true;
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "operator",
       scopes: ["operator.write"],
       modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { sourceAgent: "main" } }),

@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
@@ -166,7 +167,7 @@ function createPatchIdExec({
         return "";
       }
       case "fetch":
-        if (unfetchableShas.has(args[2] ?? "")) {
+        if (unfetchableShas.has(args.at(-1) ?? "")) {
           throw new Error("unfetchable object");
         }
         return "";
@@ -235,6 +236,55 @@ function withGitRepository(prefix: string, check: (git: GitExec, root: string) =
 }
 
 describe("verify-pr-hosted-gates", () => {
+  it("fetches a missing CI reuse commit without downloading shared history again", () => {
+    withGitRepository("openclaw-ci-reuse-partial-", (git, root) => {
+      writeFileSync(join(root, "subject.txt"), "base\n");
+      git(["add", "."]);
+      git(["commit", "-qm", "base"]);
+      const base = git(["rev-parse", "HEAD"]).trim();
+      writeFileSync(join(root, "subject.txt"), "reviewed\n");
+      git(["commit", "-qam", "reviewed"]);
+      const target = git(["rev-parse", "HEAD"]).trim();
+      git(["config", "uploadpack.allowFilter", "true"]);
+      const clone = join(root, "partial");
+      git(["clone", "--filter=blob:none", "--no-checkout", pathToFileURL(root).href, clone]);
+      const packs = join(clone, ".git", "objects", "pack");
+      const before = new Set(readdirSync(packs));
+      const candidate = git([
+        "commit-tree",
+        "HEAD^{tree}",
+        "-p",
+        base,
+        "-m",
+        "prior review",
+      ]).trim();
+      git(["update-ref", "refs/pull/1/head", candidate]);
+      const owner = pathToFileURL(join(process.cwd(), "scripts/verify-pr-hosted-gates.mts")).href;
+      const result = spawnSync(
+        testNodeExecPath,
+        [
+          "--input-type=module",
+          "-e",
+          `
+          import { collectHostedGateEvidence } from ${JSON.stringify(owner)};
+          console.log(JSON.stringify(collectHostedGateEvidence({
+            sha: ${JSON.stringify(target)}, mainSha: ${JSON.stringify(base)}, nowMs: ${nowMs},
+            workflowRuns: [],
+            loadCiReuseCandidates: () => [${JSON.stringify(priorSuccessfulCiRun({ head_sha: candidate }))}],
+          })));
+        `,
+        ],
+        { cwd: clone, encoding: "utf8", env: { ...process.env, GIT_NO_LAZY_FETCH: "0" } },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout).reusedFromSha).toBe(candidate);
+      const added = readdirSync(packs).filter((name) => name.endsWith(".idx") && !before.has(name));
+      const objects = added.map((name) => git(["verify-pack", "-v", join(packs, name)])).join("\n");
+      expect(objects).toContain(`${candidate} commit`);
+      expect(objects).not.toContain(`${base} commit`);
+    });
+  });
+
   it("compares patch IDs against one main snapshot while the shared ref advances", () => {
     withGitRepository("openclaw-patch-snapshot-", (git, root) => {
       writeFileSync(join(root, "subject.txt"), "base\n");
@@ -396,7 +446,7 @@ describe("verify-pr-hosted-gates", () => {
         collectHostedGateEvidence([], { ...patchReuseOptions(priorSuccessfulCiRun(), execGit) }),
       ).toThrow(`Missing successful recent CI workflow for ${sha}`);
       if (fetch) {
-        expect(calls).toContain(`fetch origin ${previousSha}`);
+        expect(calls).toContain(`fetch --no-tags --no-write-fetch-head origin ${previousSha}`);
       }
     },
   );

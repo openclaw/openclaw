@@ -219,7 +219,7 @@ an autonomous ingestion engine.
 | ------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `knowledge-automation`          | Create and verify scheduled ingestion through the host scheduler with a retained authorized worker. |
 | `knowledge-capture`             | Save decisions, preferences, facts, and short notes with attribution and readback.                  |
-| `knowledge-claim-consolidation` | Review and consolidate claims: unlinked, on one page, or about one subject; supersede snapshots.    |
+| `knowledge-claim-consolidation` | Consolidate claims (unlinked, on one page, or about one subject) and review pages for currency.     |
 | `knowledge-correct`             | Correct or withdraw exact records and inspect affected knowledge.                                   |
 | `knowledge-entities`            | Resolve and enrich people, companies, projects, and concepts with sourced profiles.                 |
 | `knowledge-ingest`              | Ingest documents, articles, and conversations; learn lessons from sets of sources (`/learn`).       |
@@ -257,6 +257,28 @@ It never calls a model or creates pages. It runs only while `writesEnabled` is
 `true`. It uses the plugin service scheduler, not OpenClaw automations.
 
 See [Maintenance](/plugins/knowledge/maintenance).
+
+## Lean resource policy
+
+With the Gateway's `lean` resource profile, Knowledge starts its registry,
+storage and maintenance initialization on first use rather than service startup.
+Use includes a tool call, a provider/readiness request, or a prompt hook that
+needs store facts; it is not limited to explicit human tool calls. Provisioning
+and access rules are unchanged.
+
+Watched storage stays resident so external edits keep notifying viewers across
+idle periods. Unwatched storage retires after 60 seconds with its whole operation
+lane settled, not between chunks of an upload. The registry retires after 60
+seconds with no pending RPCs. Later demand waits for retirement to finish and
+reopens the worker; the first call is slower than a warm call.
+
+Stop/restart joins maintenance initialization, active passes and schedule
+persistence. On the next first use, maintenance loads its saved schedule and
+catches up a missed pass. After activation, maintenance may visit every ready
+configured store, including stores not otherwise used during that lifetime.
+An unused lean service therefore does not run maintenance until first use.
+`standard` retains eager maintenance initialization and resident worker lifetimes.
+Knowledge does not share the core worker host.
 
 ## Scribes
 
