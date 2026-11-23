@@ -19,7 +19,8 @@ import { useApplication, useOptionalApplication } from "../../../lib/reactive/co
 import { t } from "../../../lib/reactive/i18n.ts";
 import { sharedRuntimeConfigProjection } from "../../../lib/reactive/shared-application-projections.ts";
 import { GatewaySpeechPlayback, resolveSpeechTextLimit } from "../../../lib/speech-playback.ts";
-import { useVoiceApiKey, VoiceApiKeyNotice } from "../voice-api-key.tsx";
+import { VoiceApiKeyNotice } from "../voice-api-key-notice.tsx";
+import { useVoiceApiKey } from "../voice-api-key.tsx";
 
 type ReadAloudProps = { text: string; buttonRef?: (element: HTMLButtonElement) => void };
 

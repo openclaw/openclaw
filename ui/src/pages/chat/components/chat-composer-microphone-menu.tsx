@@ -18,7 +18,6 @@ export function MicrophoneMenu(props: {
 }) {
   const items = createMemo(
     () => {
-      const openProvider = props.picker.onOpenModelProvider;
       const keyed = props.picker.apiKeyProviders ?? {};
       const capabilityRow = (
         key: "realtime" | "dictation",
@@ -27,17 +26,17 @@ export function MicrophoneMenu(props: {
         fallback: {
           label: string;
           unavailableReason: string;
-          onOpenSettings?: () => void;
+          canConfigure: boolean;
         },
       ) =>
         // A sign-in without voice names its fix: that provider's API key.
-        provider && openProvider && status === "unavailable"
+        provider && props.picker.onOpenModelProvider && status === "unavailable"
           ? {
               key,
               status,
               label: voiceApiKeyTitle(key === "realtime" ? "talk" : "dictation", provider),
               unavailableReason: voiceApiKeyDetail(),
-              onOpenSettings: () => openProvider(provider),
+              canConfigure: true,
               provider,
             }
           : { key, status, ...fallback, provider: undefined };
@@ -45,12 +44,12 @@ export function MicrophoneMenu(props: {
         capabilityRow("realtime", props.picker.realtimeStatus, keyed.talk, {
           label: t("chat.composer.realtimeTalkCapability"),
           unavailableReason: t("chat.composer.realtimeTalkProviderUnavailable"),
-          onOpenSettings: props.picker.onOpenTalkSettings,
+          canConfigure: Boolean(props.picker.onOpenTalkSettings),
         }),
         capabilityRow("dictation", props.picker.dictationStatus, keyed.dictation, {
           label: t("chat.composer.dictationCapability"),
           unavailableReason: t("chat.composer.dictationProviderUnavailableShort"),
-          onOpenSettings: props.picker.onOpenDictationSettings,
+          canConfigure: Boolean(props.picker.onOpenDictationSettings),
         }),
       ].filter(
         (capability) =>
@@ -181,11 +180,11 @@ export function MicrophoneMenu(props: {
           label: [
             capability.label,
             detail,
-            capability.onOpenSettings ? t("chat.composer.configureCapability") : null,
+            capability.canConfigure ? t("chat.composer.configureCapability") : null,
           ]
             .filter(Boolean)
             .join(" "),
-          disabled: !capability.onOpenSettings,
+          disabled: !capability.canConfigure,
           class: "chat-talk-input-picker__capability",
           attributes: {
             "data-chat-talk-capability": capability.key,
@@ -205,7 +204,7 @@ export function MicrophoneMenu(props: {
               <span>{detail}</span>
             </span>
           ),
-          details: capability.onOpenSettings ? (
+          details: capability.canConfigure ? (
             <span class="chat-talk-input-picker__settings">
               <span aria-hidden="true">
                 <Icon name="settings" />

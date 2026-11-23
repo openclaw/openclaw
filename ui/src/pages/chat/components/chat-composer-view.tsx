@@ -19,7 +19,7 @@ import type {
 } from "../../../plugins/control-ui-actions.ts";
 import type { ChatComposerPlusMenuView } from "../composer-capability-types.ts";
 import "../../../styles/chat/composer-context-strip.css";
-import { VoiceApiKeyNotice } from "../voice-api-key.tsx";
+import { VoiceApiKeyNotice } from "../voice-api-key-notice.tsx";
 import { hasVisibleChatActivityPills } from "./chat-activity-pills-visibility.ts";
 import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";

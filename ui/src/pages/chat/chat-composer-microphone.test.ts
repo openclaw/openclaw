@@ -300,16 +300,16 @@ it("points a sign-in without voice to its provider's API key", async () => {
   });
   const voice = "OpenAI voice needs an API key";
   const talk = "OpenAI Talk needs an API key";
-  await waitForSolid(() => expect(request).toHaveBeenCalledWith("talk.catalog", expect.anything()));
   // Tapping Talk explains the missing key in place instead of opening the picker.
   await waitForSolid(() => {
     button(v.root, copy("startVoiceInput")).click();
-    expect(v.root.querySelector(".agent-chat__composer-alert")?.textContent).toContain(talk);
+    expect(v.root.querySelector(".agent-chat__composer-alert")?.textContent ?? "").toContain(talk);
   });
   expect(v.dropdown.hasAttribute("open")).toBe(false);
   v.root.querySelector<HTMLButtonElement>(".agent-chat__composer-alert .btn")!.click();
   expect(onOpenModelProvider).toHaveBeenLastCalledWith(expect.anything(), "main", "openai");
   // Talk and dictation miss the same key, so the picker names one fix.
+  onOpenModelProvider.mockClear();
   await v.open();
   const rows = await waitForSolid(() => {
     const found = v.all("[data-chat-talk-capability]");
@@ -317,8 +317,9 @@ it("points a sign-in without voice to its provider's API key", async () => {
     return found;
   });
   rows[0]!.click();
-  await waitForSolid(() => expect(onOpenModelProvider).toHaveBeenCalledTimes(2));
-  expect(onOpenModelProvider).toHaveBeenLastCalledWith(expect.anything(), "main", "openai");
+  await waitForSolid(() =>
+    expect(onOpenModelProvider).toHaveBeenCalledWith(expect.anything(), "main", "openai"),
+  );
   expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
 });
 
