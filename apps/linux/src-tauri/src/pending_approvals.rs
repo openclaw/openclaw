@@ -1,6 +1,9 @@
 use crate::cli::OpenClawCli;
+use crate::gateway_ws::{GatewayClient, GatewayGeneration};
+use crate::{main_window, notify, DesktopState};
 use serde::Deserialize;
 use std::collections::HashSet;
+use tauri::{AppHandle, Manager};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum ApprovalKind {
@@ -63,6 +66,12 @@ struct NodePendingRequest {
     display_name: Option<String>,
 }
 
+#[cfg(target_os = "linux")]
+#[derive(Deserialize)]
+struct NodePairingList {
+    pending: Vec<NodePendingRequest>,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DevicePendingRequest {
@@ -78,7 +87,7 @@ struct DevicePairingList {
     pending: Vec<DevicePendingRequest>,
 }
 
-pub fn fetch(cli: &OpenClawCli) -> Result<Vec<PendingApproval>, String> {
+fn fetch(cli: &OpenClawCli) -> Result<Vec<PendingApproval>, String> {
     let nodes = cli
         .json::<Vec<NodePendingRequest>, _, _>(["nodes", "pending", "--json"])
         .map_err(|error| error.to_string())?;
@@ -86,6 +95,10 @@ pub fn fetch(cli: &OpenClawCli) -> Result<Vec<PendingApproval>, String> {
         .json::<DevicePairingList, _, _>(["devices", "list", "--json"])
         .map_err(|error| error.to_string())?;
 
+    Ok(approvals(nodes, devices))
+}
+
+fn approvals(nodes: Vec<NodePendingRequest>, devices: DevicePairingList) -> Vec<PendingApproval> {
     let nodes = nodes.into_iter().map(|request| PendingApproval {
         kind: ApprovalKind::Node,
         request_id: request.request_id,
@@ -100,7 +113,83 @@ pub fn fetch(cli: &OpenClawCli) -> Result<Vec<PendingApproval>, String> {
             Some(&request.device_id),
         ]),
     });
-    Ok(nodes.chain(devices).collect())
+    nodes.chain(devices).collect()
+}
+
+pub(crate) fn poll_cli(state: &DesktopState, app: &AppHandle, cli: &OpenClawCli, generation: u64) {
+    match fetch(cli) {
+        Ok(pending) => publish(state, app, generation, None, pending),
+        Err(error) => eprintln!("Could not poll pending approvals: {error}"),
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn poll_native(state: &DesktopState, app: &AppHandle, generation: u64) -> bool {
+    let gateway = app.state::<GatewayClient>();
+    let Some(route) = gateway.local_watchdog_generation() else {
+        return false;
+    };
+    // Owned recovery pages may still need CLI service facts and a dashboard URL.
+    let dashboard = main_window(app)
+        .ok()
+        .and_then(|view| view.url().ok())
+        .is_some_and(|url| !state.main_window_has_local_url(&url));
+    if !dashboard {
+        return false;
+    }
+    let Ok((nodes, devices)) = tauri::async_runtime::block_on(gateway.pairing_lists(route)) else {
+        return false;
+    };
+    let (Ok(nodes), Ok(devices)) = (
+        serde_json::from_value::<NodePairingList>(nodes),
+        serde_json::from_value::<DevicePairingList>(devices),
+    ) else {
+        return false;
+    };
+    publish(
+        state,
+        app,
+        generation,
+        Some(route),
+        approvals(nodes.pending, devices),
+    );
+    true
+}
+
+fn publish(
+    state: &DesktopState,
+    app: &AppHandle,
+    generation: u64,
+    route: Option<GatewayGeneration>,
+    pending: Vec<PendingApproval>,
+) {
+    let diff = {
+        let navigation = state.inner.navigation.lock().expect("navigation");
+        if !navigation.watchdog_is_current(generation) {
+            return;
+        }
+        let update = || {
+            Ok(state
+                .inner
+                .pending_approvals
+                .lock()
+                .expect("pending approval mutex poisoned")
+                .update(pending))
+        };
+        match route {
+            Some(route) => app.state::<GatewayClient>().with_generation(route, update),
+            None => update(),
+        }
+    };
+    let Ok(diff) = diff else {
+        return;
+    };
+    state.with_tray(|tray| tray.update_pending_count(diff.count));
+    if main_window(app).is_ok_and(|view| matches!(view.window().is_focused(), Ok(false))) {
+        for request in diff.new {
+            notify::notify(app, "OpenClaw", &request.notification_body());
+        }
+    }
 }
 
 fn preferred_label<'a>(candidates: impl IntoIterator<Item = Option<&'a str>>) -> String {

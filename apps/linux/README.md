@@ -29,9 +29,11 @@ authentication types clears that draft and masks the new field. Press Enter or
 **Connect to Gateway** to connect. Leave credentials blank in Connection Settings
 to reuse saved credentials for the same endpoint.
 
-The tray's **Stop Gateway** and **Restart Gateway** actions request graceful shutdown. Running work can delay completion; **Start Gateway** brings a stopped local Gateway back online.
-
-After a connection drops, the companion keeps reconnecting while the service state is unknown. **Start Gateway** remains available only for a confirmed stopped service.
+**Stop Gateway** and **Restart Gateway** request graceful shutdown. Running
+work can delay completion. **Start Gateway** requires a confirmed stopped
+service. On Linux, health and pairing checks use the native connection when
+available. After a disconnect, the companion keeps reconnecting and uses the
+CLI to inspect the service.
 
 The companion uses a unified title bar that blends into the dashboard. Drag the
 empty header space, a session title, or the thin strip below the top resize edge
