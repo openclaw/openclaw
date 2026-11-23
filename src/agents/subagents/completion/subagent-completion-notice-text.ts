@@ -22,7 +22,7 @@ export function buildSubagentCompletionFailureNotice(
     kind === "delayed"
       ? "Automatic delivery of a child result timed out. The result is still saved and may still arrive automatically."
       : only
-        ? `${only.label?.trim() || "A child agent"} finished${
+        ? `${truncateUtf16WithEllipsis(only.label?.trim() || "A child agent", 200)} finished${
             typeof endedAt === "number"
               ? ` on ${new Date(endedAt).toISOString().slice(0, 16).replace("T", " ")} UTC`
               : ""
