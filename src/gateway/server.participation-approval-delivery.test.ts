@@ -234,7 +234,7 @@ for (const sourceSessionKey of ["agent:main:participation", "global"]) {
         synthetic.release();
         const participantReplay = await runtime.replay(streamSessionKey, participant);
         participant.authenticatedUserProfile = dispatchProfile("unrelated");
-        expect(() => participantReplay.isCurrent()).toThrow("authority");
+        expect(participantReplay.isCurrent()).toBe(false);
         participantReplay.release();
         participant.authenticatedUserProfile = dispatchProfile("participant");
         const creator = entries[0]!.client;
@@ -277,7 +277,7 @@ for (const sourceSessionKey of ["agent:main:participation", "global"]) {
         );
         const replay = await runtime.replay(streamSessionKey, creator);
         creator.authenticatedUserProfile = dispatchProfile("unrelated");
-        expect(() => replay.isCurrent()).toThrow("authority");
+        expect(replay.isCurrent()).toBe(false);
         replay.release();
         creator.authenticatedUserProfile = dispatchProfile("creator");
         available = false;
