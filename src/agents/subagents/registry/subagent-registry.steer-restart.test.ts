@@ -498,7 +498,7 @@ describe("subagent registry steer restarts", () => {
     }
   });
 
-  it("clears terminal lifecycle state when replacing after steer restart", async () => {
+  it("clears terminal state and preserves cumulative timing after steer restart", async () => {
     await registerRun({
       runId: "run-terminal-state-old",
       childSessionKey: "agent:main:subagent:terminal-state",
@@ -506,10 +506,13 @@ describe("subagent registry steer restarts", () => {
     });
     const previous = expectDefined(listMainRuns()[0], "registered run");
     const endedAt = Date.now();
+    const startedAt = endedAt - 120_000;
     await updateRun(previous.runId, (draft) => {
       draft.endedHookEmittedAt = endedAt;
       draft.endedReason = "subagent-error";
-      draft.execution = { status: "terminal", endedAt, outcome: { status: "error" } };
+      draft.execution = { status: "terminal", startedAt, endedAt, outcome: { status: "error" } };
+      draft.sessionStartedAt = startedAt;
+      draft.accumulatedRuntimeMs = 0;
       draft.completion = { required: true, resultText: "stale completion", capturedAt: endedAt };
       draft.cleanupCompletedAt = endedAt;
       draft.cleanupHandled = true;
@@ -540,6 +543,14 @@ describe("subagent registry steer restarts", () => {
       lifecycleGeneration: "test-generation",
     });
     expect(run.task).toBe(previous.task);
+    expect(mod.getSubagentSessionStartedAt(run)).toBe(startedAt);
+    expect(run.accumulatedRuntimeMs).toBe(120_000);
+    expect(
+      mod.getSubagentSessionRuntimeMs(
+        run,
+        expectDefined(run.execution.startedAt, "replacement start") + 30_000,
+      ),
+    ).toBe(150_000);
     expect(run.execution).toMatchObject({
       status: "running",
       lifecycleGeneration: "test-generation",
