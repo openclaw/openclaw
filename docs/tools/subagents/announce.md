@@ -65,8 +65,8 @@ chat row; the user sees the parent's own reply and the child card.
 The entry names the child label, session and run, and its status:
 
 - `completed`, with the child's result (at most 8,000 characters per child and
-  32,000 per entry; a truncated result says to ask the child for the rest with
-  `sessions_send`);
+  32,000 per entry; a truncated result from a kept child says to ask the child for
+  the rest with `sessions_send`);
 - `failed: <error>`, `timed out` or `interrupted by Gateway restart`, followed by
   "If you still need this work, resume it with sessions_send or start a new child
   with sessions_spawn.";

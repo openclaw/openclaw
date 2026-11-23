@@ -96,8 +96,12 @@ async function formatChildStatus(child: SubagentRunRecord, budget: number): Prom
         () => resolveSubagentCompletionResultText(child),
       )) ?? "");
   const shownText = result.trim();
-  // sessions_history caps each text block, so the child itself is the reader for the rest.
-  const note = `\n[Result truncated. Ask the child for the rest with sessions_send to ${child.childSessionKey}.]`;
+  // sessions_history caps each text block, so a kept child itself is the reader for the rest;
+  // delete cleanup removes the child session, leaving no reader to name.
+  const note =
+    child.cleanup === "delete"
+      ? "\n[Result truncated.]"
+      : `\n[Result truncated. Ask the child for the rest with sessions_send to ${child.childSessionKey}.]`;
   const shownResult =
     shownText.length <= resultBudget
       ? shownText
