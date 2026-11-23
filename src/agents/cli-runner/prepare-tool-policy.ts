@@ -222,44 +222,11 @@ export async function resolveCliRuntimeToolPolicy(input: {
   return { params, runtimeToolsAllowPolicy, managedNativeTools };
 }
 
-export function resolveCliBackendRuntimeToolPolicy(input: {
-  params: RunCliAgentParams;
-  backend: Pick<
-    ResolvedCliBackend,
-    | "id"
-    | "bundleMcp"
-    | "hostOwnedTools"
-    | "projectNativeToolAuthority"
-    | "resolveManagedNativeTools"
-    | "sideQuestionToolMode"
-  >;
-  policySessionKey: string | undefined;
-  policyAgentId: string;
-  canEnforceExactToolAvailability: boolean;
-  isSideQuestion: boolean;
-  skipsTurnPreparation: boolean;
-}) {
-  return resolveCliRuntimeToolPolicy({
-    params: input.params,
-    policySessionKey: input.policySessionKey,
-    policyAgentId: input.policyAgentId,
-    backendId: input.backend.id,
-    hostOwnedTools: input.backend.hostOwnedTools,
-    bundleMcp: input.backend.bundleMcp,
-    canEnforceExactToolAvailability: input.canEnforceExactToolAvailability,
-    projectNativeToolAuthority: input.backend.projectNativeToolAuthority,
-    resolveManagedNativeTools: input.backend.resolveManagedNativeTools,
-    sideQuestionToolMode: input.backend.sideQuestionToolMode,
-    isSideQuestion: input.isSideQuestion,
-    skipsTurnPreparation: input.skipsTurnPreparation,
-  });
-}
-
 /**
  * Fail closed when a `prepare-execution` backend omits the required positive
  * acknowledgement for either exact `toolAvailability` or partial `hostOwnedTools`.
- * Keeping these acknowledgements distinct prevents an existing backend that only
- * acknowledges `toolAvailability` from vacuously passing partial `hostOwnedTools`.
+ * Final exact availability supersedes partial ownership. Without an exact selection,
+ * its acknowledgement must not vacuously acknowledge partial `hostOwnedTools`.
  */
 export function assertCliPreparedToolEnforcement(input: {
   backend: Pick<ResolvedCliBackend, "id" | "toolAvailabilityEnforcement">;
@@ -278,7 +245,11 @@ export function assertCliPreparedToolEnforcement(input: {
       `CLI backend ${input.backend.id} did not enforce exact per-run tool availability during execution preparation`,
     );
   }
-  if (input.hostOwnedTools && input.preparedExecution?.hostOwnedToolsEnforced !== true) {
+  if (
+    !input.toolAvailability &&
+    input.hostOwnedTools &&
+    input.preparedExecution?.hostOwnedToolsEnforced !== true
+  ) {
     throw new Error(
       `CLI backend ${input.backend.id} did not enforce host-owned tools during execution preparation`,
     );

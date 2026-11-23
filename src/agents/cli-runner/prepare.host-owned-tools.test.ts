@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
+import * as globalHooks from "../../plugins/hook-runner-global.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import { createCliRunnerPrepareFixture } from "../cli-runner.test-helpers.js";
 import { mockCliMcpPreparation } from "./prepare-mcp.test-support.js";
@@ -14,6 +19,11 @@ vi.mock("../agent-tools.async.js", () => ({
   createOpenClawCodingToolsInternalAsync: async () => [],
 }));
 
+vi.mock("../../plugins/hook-runner-global.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/hook-runner-global.js")>()),
+  getGlobalHookRunner: vi.fn(() => null),
+}));
+
 let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
 
 function registerBackend(backend: CliBackendPlugin & { pluginId: string }) {
@@ -24,12 +34,15 @@ function registerBackend(backend: CliBackendPlugin & { pluginId: string }) {
 }
 
 beforeEach(() => {
-  fixture = createCliRunnerPrepareFixture((params) =>
-    prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params }),
-  );
+  fixture = createCliRunnerPrepareFixture((params) => {
+    setRuntimeConfigSnapshot(params.config ?? {});
+    return prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params });
+  });
 });
 
 afterEach(async () => {
+  clearRuntimeConfigSnapshot();
+  vi.mocked(globalHooks.getGlobalHookRunner).mockReset();
   resetCliRunnerPrepareTestDeps();
   cliBackendsTesting.resetDepsForTest();
   await fixture.cleanup();
@@ -177,3 +190,76 @@ it("fails closed when a prepare-execution backend returns only toolAvailabilityE
     expect.objectContaining({ hostOwnedTools: ["exec", "process"] }),
   );
 });
+
+it.each([false, true])(
+  "enforces a final prompt-hook exact selection without a partial ownership acknowledgment (ack=%s)",
+  async (acknowledgeExact) => {
+    const projectTools = (scope: Parameters<typeof resolveMcpLoopbackScopedTools>[0]) => ({
+      agentId: "main",
+      tools: ["exec", "process", "message"]
+        .filter((name) => !scope.context.toolsAllow || scope.context.toolsAllow.includes(name))
+        .map((name) => ({ name })),
+    });
+    const { mint } = mockCliMcpPreparation({
+      resolveMcpLoopbackScopedTools: projectTools,
+      resolveMcpLoopbackPolicyTools: projectTools,
+    });
+    const prepareExecution = vi.fn(async () =>
+      acknowledgeExact ? { toolAvailabilityEnforced: true as const } : {},
+    );
+    registerBackend({
+      id: "hook-capped-shell-cli",
+      pluginId: "hook-capped-shell-plugin",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      nativeToolMode: "selectable",
+      hostOwnedTools: ["exec", "process"],
+      toolAvailabilityEnforcement: "prepare-execution",
+      prepareExecution,
+      config: {
+        command: "hook-capped-shell-cli",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+    const runBeforePromptBuild = vi.fn(async () => ({ toolsAllow: ["message"] }));
+    vi.mocked(globalHooks.getGlobalHookRunner).mockReturnValue({
+      hasHooks: (name: string) => name === "before_prompt_build",
+      runBeforePromptBuild,
+    } as never);
+    const prepared = fixture.prepare({
+      provider: "hook-capped-shell-cli",
+      agentId: "main",
+      config: {},
+    });
+    const outcome = await prepared.then(
+      (value) => ({ value, error: undefined }),
+      (error: unknown) => ({ value: undefined, error }),
+    );
+    expect(runBeforePromptBuild).toHaveBeenCalledOnce();
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hostOwnedTools: ["exec", "process"],
+        toolAvailability: { native: [], openClaw: ["message"] },
+      }),
+    );
+    if (!acknowledgeExact) {
+      expect(outcome.error).toBeInstanceOf(Error);
+      expect((outcome.error as Error).message).toContain(
+        "did not enforce exact per-run tool availability",
+      );
+    } else {
+      if (!outcome.value) {
+        throw new Error("Expected an exact-selection run to prepare successfully", {
+          cause: outcome.error,
+        });
+      }
+      const context = outcome.value;
+      expect(context.params.cliToolAvailability).toEqual({ native: [], openClaw: ["message"] });
+      expect(mint.mock.calls[0]?.[0]?.context.toolsAllow).toEqual(["message"]);
+      await context.preparedBackend.cleanup?.();
+    }
+  },
+);

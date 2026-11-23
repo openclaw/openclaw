@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
 import {
   backendSupportsOrdinaryHostToolMediation,
-  normalizeHostOwnedTools,
   resolveCliBootstrapFileAccess,
   resolveCliRuntimeToolPolicy,
 } from "./prepare-tool-policy.js";
@@ -232,17 +231,6 @@ it.each<[string, Parameters<typeof backendSupportsOrdinaryHostToolMediation>[0],
   ],
 ])("evaluates ordinary host-tool mediation support for %s", (_label, input, expected) => {
   expect(backendSupportsOrdinaryHostToolMediation(input)).toBe(expected);
-});
-
-it("normalizes hostOwnedTools by trimming, deduplicating aliases, and collapsing empty lists to undefined", () => {
-  expect(normalizeHostOwnedTools(undefined)).toBeUndefined();
-  expect(normalizeHostOwnedTools([])).toBeUndefined();
-  expect(normalizeHostOwnedTools(["", "   "])).toBeUndefined();
-  expect(normalizeHostOwnedTools([" Read ", "apply-patch", "apply_patch", "EXEC", "   "])).toEqual([
-    "read",
-    "apply_patch",
-    "exec",
-  ]);
 });
 
 it("mediates ordinary turns for non-Claude backends declaring file hostOwnedTools", async () => {
