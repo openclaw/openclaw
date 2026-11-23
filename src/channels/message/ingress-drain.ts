@@ -418,7 +418,10 @@ export function createChannelIngressDrainOwner<
         // prior retry fact while reopening the canonical row for replacement.
         await releaseUnadopted(state, { recordAttempt: false });
       },
-      onAbandoned: () => releaseUnadopted(state, { lastError: "turn-abandoned" }),
+      // Abandonment is retryable, but it must still pass through the shared
+      // retry policy. Releasing directly here bypasses the attempt/age
+      // dead-letter gate and can replay the same accepted input forever.
+      onAbandoned: () => applyFailureDisposition(state, new Error("turn-abandoned")),
       onDropped: (reason) => onFailed(new IngressQueueCapDropError(reason)),
     };
   };
