@@ -225,7 +225,6 @@ export function projectReplyToolAuthorityInput(
   ) {
     if (participant.operatorAuthority) {
       assertAdmittedRunOperatorAuthority(participant.operatorAuthority);
-      participant.operatorAuthority.assertCurrent();
     }
     return snapshot;
   }

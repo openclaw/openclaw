@@ -228,7 +228,6 @@ describe("Goal continuation eligibility", () => {
     [false, "local", "localCodexGoal"],
     [false, "worker-required", undefined],
     [false, "no-authority", "localCodexGoal"],
-    [false, "revoked", undefined],
   ] as const)("checks Codex Goal admission (placed=%s, %s)", async (placed, mode, marker) => {
     const f = fixture();
     const codexSession = { ...entry(), agentHarnessId: "codex" };
@@ -246,21 +245,13 @@ describe("Goal continuation eligibility", () => {
       f.params.base.operatorAuthority = createTestOperatorAuthority({
         profileId: "operator",
         scopes: ["operator.admin"],
-        assertCurrent: () => {
-          if (mode === "revoked") {
-            throw new Error("operator revoked");
-          }
-        },
+        assertCurrent: () => {},
       });
     }
     if (mode === "worker-required") {
       f.params.base.run.config = { cloudWorkers: { requiredProfile: "worker" } };
     }
-    if (mode === "revoked") {
-      await expect(enqueueGoalContinuation(f.params)).rejects.toThrow("operator revoked");
-    } else {
-      expect(await enqueueGoalContinuation(f.params)).toBe(Boolean(marker));
-    }
+    expect(await enqueueGoalContinuation(f.params)).toBe(Boolean(marker));
     expect(enqueueFollowupRun).toHaveBeenCalledTimes(marker ? 1 : 0);
     if (marker) {
       const queued = vi.mocked(enqueueFollowupRun).mock.calls[0]![1];

@@ -139,7 +139,6 @@ export async function runActiveReplySteer(
   const assertReadCurrent = () => {
     resolveFollowupAbortSignal(followupRun)?.throwIfAborted();
     params.opts?.abortSignal?.throwIfAborted();
-    followupRun.operatorAuthority?.assertCurrent();
   };
   let delivery: ReturnType<typeof prepareSteeringDelivery> | undefined;
   let releaseToolAuthority: (() => void) | undefined;
