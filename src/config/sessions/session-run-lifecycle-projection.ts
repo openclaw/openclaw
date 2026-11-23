@@ -58,7 +58,6 @@ export type SessionLifecyclePatchEffects = {
 export type LifecyclePhase = "start" | "end" | "error";
 
 export type LifecycleEventLike = { ts: number; sessionId?: string } & {
-  controlUiVisible?: boolean;
   contextClaimId?: string;
   runId?: string;
   clientRunId?: string;
@@ -95,7 +94,6 @@ type LifecycleSessionShape = Pick<
   | "startedAt"
   | "endedAt"
   | "runtimeMs"
-  | "lastActivityAt"
   | "abortedLastRun"
 >;
 
@@ -253,12 +251,6 @@ export function deriveSessionLifecycleSnapshot(params: {
     startedAt,
     endedAt,
     runtimeMs: resolveRuntimeMs({ startedAt, endedAt, existingRuntimeMs: existing?.runtimeMs }),
-    ...(terminal &&
-    !stoppedForRestart &&
-    params.event.controlUiVisible === true &&
-    endedAt !== undefined
-      ? { lastActivityAt: Math.max(existing?.lastActivityAt ?? 0, endedAt) }
-      : {}),
     abortedLastRun: status === "killed",
   };
 }

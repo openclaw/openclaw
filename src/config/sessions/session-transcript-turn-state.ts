@@ -6,6 +6,7 @@ import type {
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
 import type { SqliteSessionTurnOptions } from "./session-turn.types.js";
+import { projectVisibleSessionActivity } from "./session-visible-activity.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** Capture ordinary transcript admission state; execution authority remains live. */
@@ -90,6 +91,17 @@ export function buildExpectedTranscriptTurnSessionPatch(params: {
   const touchUpdatedAt = params.touchSessionEntry === true && hasAppendedMessage ? Date.now() : 0;
   return {
     ...(acceptedMessage ? params.sessionLifecyclePatch : undefined),
+    ...params.appendedMessages
+      .map(({ appended, message }) =>
+        appended
+          ? projectVisibleSessionActivity(
+              params.currentEntry,
+              message,
+              asOptionalRecord(message)?.timestamp,
+            )
+          : undefined,
+      )
+      .findLast(Boolean),
     ...(lastSubmittedModel &&
     (lastSubmittedModel.provider !== params.currentEntry.lastSubmittedModel?.provider ||
       lastSubmittedModel.model !== params.currentEntry.lastSubmittedModel?.model)

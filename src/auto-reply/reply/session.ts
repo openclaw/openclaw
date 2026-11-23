@@ -618,10 +618,9 @@ async function initSessionStateAttemptLocked(
     sessionStartedAt: isNewSession
       ? now
       : (baseEntry?.sessionStartedAt ?? lifecycleTimestamps.sessionStartedAt),
-    // An inbound message is visible chat content; internal turns keep both stored values.
+    // An inbound message moves the idle clock; internal turns keep the stored value.
     ...(!isSystemEvent && {
       lastInteractionAt: Math.max(baseEntry?.lastInteractionAt ?? 0, recordedActivity?.at ?? now),
-      lastActivityAt: Math.max(baseEntry?.lastActivityAt ?? 0, recordedActivity?.at ?? now),
     }),
     agentStatus: isSystemEvent ? baseEntry?.agentStatus : undefined,
     pinnedAt: entry?.pinnedAt,

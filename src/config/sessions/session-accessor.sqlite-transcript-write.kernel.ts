@@ -45,6 +45,7 @@ import {
   readTranscriptAppendPostimage,
   retainTranscriptAppendPostimage,
 } from "./session-transcript-append-postimage.js";
+import { projectVisibleSessionActivity } from "./session-visible-activity.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import { withOwnedSessionTranscriptWriterFence } from "./transcript-write-context.js";
@@ -185,6 +186,21 @@ export function appendTranscriptMessageSnapshotSync<TMessage>(
         workerOptions,
       );
       const result = committed?.result;
+      // A visible row outside a session turn advances unread activity in the same transaction.
+      const entry = result?.appended
+        ? readSessionEntryRow(database, resolved.sessionKey)?.entry
+        : undefined;
+      const active =
+        entry?.sessionId === resolved.sessionId &&
+        projectVisibleSessionActivity(entry, options.message, options.now);
+      if (entry && active) {
+        writeSessionEntry(
+          database,
+          resolved.sessionKey,
+          { ...entry, ...active },
+          { previousEntry: entry },
+        );
+      }
       return retainTranscriptAppendPostimage(
         {
           result,

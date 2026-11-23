@@ -182,11 +182,7 @@ export async function commitBackgroundResultToSession(params: {
               },
             ],
             touchSessionEntry: true,
-            // A committed background result is visible chat content.
-            sessionLifecyclePatch: {
-              lastInteractionAt: message.timestamp,
-              lastActivityAt: message.timestamp,
-            },
+            sessionLifecyclePatch: { lastInteractionAt: message.timestamp },
             updateMode: "inline",
             // A retry can finish media ownership after a committed append failed to publish.
             publishWhen: params.prepareDisplayContent ? "always" : undefined,

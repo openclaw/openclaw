@@ -165,7 +165,6 @@ async function persistPreparedGatewaySessionLifecycleEvent(
           runId: params.event.runId,
           clientRunId: params.clientRunId ?? params.event.clientRunId,
           lifecycleGeneration: params.event.lifecycleGeneration,
-          controlUiVisible: params.event.controlUiVisible,
           contextClaimId: params.event.contextClaimId,
           data: params.event.data,
         },

@@ -16,6 +16,7 @@ import {
   shouldProjectActiveEvent,
 } from "./session-transcript-projection-append.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
+import { projectVisibleSessionActivity } from "./session-visible-activity.js";
 import {
   PREPARED_ASSISTANT_MAX_ANCESTORS,
   PREPARED_ASSISTANT_MAX_NEWER_BYTES,
@@ -141,6 +142,13 @@ export function createSessionActorMemoryEvents(options: {
       !requireEntry().compactionQualityDegraded
     ) {
       state.hot.entry = { ...requireEntry(), compactionQualityDegraded: true };
+    }
+    const active =
+      isRecord(event) && event.type === "message"
+        ? projectVisibleSessionActivity(requireEntry(), event.message, event.timestamp)
+        : undefined;
+    if (active) {
+      state.hot.entry = { ...requireEntry(), ...active };
     }
     refresh();
     return true;
