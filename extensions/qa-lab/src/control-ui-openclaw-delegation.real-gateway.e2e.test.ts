@@ -106,10 +106,14 @@ function observeEvents(page: Page, gatewayUrl: string, sessionKey: string, activ
 }
 
 async function expandResult(page: Page, onlyCollapsed: boolean) {
-  const work = page.locator(".chat-work-group > .chat-activity-group__summary").first();
-  await work.waitFor();
-  if ((await work.getAttribute("aria-expanded")) !== "true") {
-    await work.click();
+  const activities = page.locator(".chat-activity-group:not(.chat-work-group)");
+  await activities.first().waitFor();
+  for (const disclosure of await activities
+    .locator(":scope > .chat-activity-group__summary")
+    .all()) {
+    if ((await disclosure.getAttribute("aria-expanded")) !== "true") {
+      await disclosure.click();
+    }
   }
   const summaries = page.locator(".chat-tool-msg-summary");
   await summaries.first().waitFor();
