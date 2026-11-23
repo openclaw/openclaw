@@ -27,7 +27,7 @@ import {
   invalidateGatewayDeviceRevocation,
 } from "../device-revocation.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { disconnectStaleSharedGatewayAuthClients } from "../server-shared-auth-generation.js";
 import { gatewayProfile } from "../server/client-fixtures.test-support.js";
@@ -183,7 +183,7 @@ describe("gateway agent caller authority custody", () => {
                         visible: true,
                       });
                       await expect(
-                        captureGatewayOperatorRunAuthority({
+                        prepareGatewayOperatorRunAuthority({
                           client,
                           context,
                           hasCurrentClientAuthority: caller.isCurrent,
@@ -231,7 +231,7 @@ describe("gateway agent caller authority custody", () => {
     },
   );
 
-  it("revokes only the accepted guest run after both callers disconnect from the same session", async () => {
+  it("finishes admitted guest and staff runs after both callers disconnect and guest access ends", async () => {
     prime();
     const context = makeContext();
     context.resolveGatewayContext = () => context;
@@ -340,8 +340,8 @@ describe("gateway agent caller authority custody", () => {
 
       source.abort(new Error("Guest invitation ended"));
 
-      expect(guest.input.abortSignal.aborted).toBe(true);
-      expect(() => guestAuthority.assertCurrent()).toThrow();
+      expect(guest.input.abortSignal.aborted).toBe(false);
+      expect(() => guestAuthority.assertCurrent()).not.toThrow();
       expect(staff.input.abortSignal.aborted).toBe(false);
       expect(rpcSourceTesting.get(staffRunId)).toBe(staff);
       finishCommands.resolve();
@@ -356,7 +356,7 @@ describe("gateway agent caller authority custody", () => {
         expect(rpcSourceTesting.size).toBe(0);
         expect(context.dedupe.get(`agent:${guestRunId}`)).toMatchObject({
           ok: true,
-          payload: { runId: guestRunId, status: "timeout", summary: "aborted", stopReason: "rpc" },
+          payload: { runId: guestRunId, status: "ok" },
         });
         expect(context.dedupe.get(`agent:${staffRunId}`)).toMatchObject({
           ok: true,

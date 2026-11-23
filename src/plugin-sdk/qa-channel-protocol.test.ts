@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import {
   buildQaTarget,
   parseQaTarget,
@@ -24,7 +25,6 @@ const targets: Array<[string, QaTargetParts["chatType"], string, string?]> = [
 ];
 
 it("loads natively when the private QA SDK alias selects its source", async () => {
-  // Only the SDK resolver uses tsx; the source facade must load natively.
   const root = fs.realpathSync(temp.make("qa-channel-protocol-native-"));
   fs.writeFileSync(path.join(root, "package.json"), '{"name":"qa-probe","type":"module"}\n');
   const entry = path.join(root, "index.mjs");
@@ -33,21 +33,41 @@ it("loads natively when the private QA SDK alias selects its source", async () =
     'export { parseQaTarget } from "openclaw/plugin-sdk/qa-channel-protocol";\n',
   );
   const resolverUrl = new URL("../plugins/plugin-sdk-native-resolver.ts", import.meta.url).href;
+  const config = JSON.parse(fs.readFileSync(path.resolve("tsconfig.json"), "utf8")) as {
+    compilerOptions: { paths: Record<string, string[]> };
+  };
+  const tsconfig = path.join(root, "tsconfig.json");
+  // Only the native resolver may supply SDK aliases; keep tsx's workspace imports.
+  fs.writeFileSync(
+    tsconfig,
+    JSON.stringify({
+      extends: path.resolve("tsconfig.json"),
+      compilerOptions: {
+        paths: Object.fromEntries(
+          Object.entries(config.compilerOptions.paths)
+            .filter(
+              ([name]) => !name.startsWith("openclaw/") && !name.startsWith("@openclaw/plugin-sdk"),
+            )
+            .map(([name, paths]) => [name, paths.map((target) => path.resolve(target))]),
+        ),
+      },
+    }),
+  );
+  const bootstrap = path.join(root, "bootstrap.ts");
+  fs.writeFileSync(
+    bootstrap,
+    `import { installOpenClawPluginSdkNativeResolver } from ${JSON.stringify(resolverUrl)};
+     installOpenClawPluginSdkNativeResolver({ pluginModulePath: ${JSON.stringify(entry)}, pluginSdkResolution: "src" });
+     const { parseQaTarget } = await import(${JSON.stringify(pathToFileURL(entry).href)});
+     console.log(JSON.stringify(parseQaTarget("thread:/v1/dm/Case%2FID/Thread")));`,
+  );
   const { stdout } = await execute(
     process.execPath,
-    [
-      "--input-type=module",
-      "--eval",
-      `import { tsImport } from ${JSON.stringify(import.meta.resolve("tsx/esm/api"))};
-         const { installOpenClawPluginSdkNativeResolver } = await tsImport(${JSON.stringify(resolverUrl)}, {
-           parentURL: import.meta.url,
-           tsconfig: ${JSON.stringify(path.resolve("tsconfig.json"))},
-         });
-         installOpenClawPluginSdkNativeResolver({ pluginModulePath: ${JSON.stringify(entry)}, pluginSdkResolution: "src" });
-         const { parseQaTarget } = await import(${JSON.stringify(pathToFileURL(entry).href)});
-         console.log(JSON.stringify(parseQaTarget("thread:/v1/dm/Case%2FID/Thread")));`,
-    ],
-    { env: { ...process.env, OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1" } },
+    resolveRuntimeWorkerArgv(pathToFileURL(bootstrap)),
+    {
+      cwd: root,
+      env: { ...process.env, OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1", TSX_TSCONFIG_PATH: tsconfig },
+    },
   );
   expect(JSON.parse(stdout)).toEqual({
     chatType: "direct",

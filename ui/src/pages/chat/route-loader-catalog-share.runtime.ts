@@ -2,20 +2,36 @@ import {
   buildControlUiCatalogSharePath,
   isControlUiCatalogShareId,
 } from "@openclaw/session-url-contract/share-build";
+import type { RouteLocation } from "@openclaw/uirouter";
 import type {
   SessionsCatalogContinueResult,
   SessionsCatalogListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { pathForSession } from "../../app-session-path-builder.ts";
 import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSessionNavigationEnglish } from "../../i18n/locales/en-session-navigation.ts";
+import type { BoardFace } from "../../lib/board/settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { catalogMethod } from "../../lib/sessions/catalog-read-method.ts";
-import { parseAgentSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
+import {
+  consumeSessionNavigationHandoff,
+  prepareSessionNavigationHandoff,
+} from "../../lib/sessions/navigation-handoff.ts";
+import { resolveSessionPreferredFace } from "../../lib/sessions/route-navigation.ts";
+import {
+  buildAgentMainSessionKey,
+  parseAgentSessionKey,
+  resolveUiDefaultAgentId,
+} from "../../lib/sessions/session-key.ts";
+import { sessionRouteHints } from "./route-draft.ts";
 import type { ResolvedCatalogShareRoute } from "./route-loader-catalog-share.ts";
 import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
-import { missingSessionRouteData } from "./route-loader-session-reference.ts";
+import {
+  missingSessionRouteData,
+  querySessionReference,
+} from "./route-loader-session-reference.ts";
 import type { ChatRouteData } from "./session-route-data.ts";
 
 registerSessionNavigationEnglish();
@@ -72,6 +88,11 @@ export async function loadResolvedCatalogShareRoute(
       (candidate) => candidate.shareRoute?.routeSegment === target.routeSegment,
     );
     const catalog = matchingCatalogs.length === 1 ? matchingCatalogs[0] : undefined;
+    if (catalog?.pending) {
+      return routeError(
+        "Shared catalog is still loading. Retry this route when the source refresh completes.",
+      );
+    }
     if (!catalog?.shareRoute) {
       return routeError(t("chat.sessionRoute.catalogShareUnavailable"));
     }
@@ -195,7 +216,7 @@ async function resolveBoundCatalogConversation(
   };
 }
 
-export async function resolveCatalogContinuation(
+async function resolveCatalogContinuation(
   context: ApplicationContext,
   key: CatalogSessionKey,
   agentId: string,
@@ -206,4 +227,82 @@ export async function resolveCatalogContinuation(
   // Resolve owns source visibility and destination authorization; a preliminary
   // listing adds a round-trip and can lose a retained binding outside its page.
   return resolveBoundCatalogConversation(client, key, agentId, signal, connection);
+}
+
+/** Catalog-specific routing stays behind the existing catalog runtime import. */
+export async function loadCatalogSessionRoute(
+  params: {
+    context: ApplicationContext;
+    key: CatalogSessionKey;
+    agentId: string;
+    signal: AbortSignal;
+    location: RouteLocation;
+    face: BoardFace;
+    preferenceDerived: boolean;
+    isResolutionSourceCurrent: () => boolean;
+    revalidation?: {
+      sessionKey?: string;
+      catalogProfileRelation?: Extract<
+        ChatRouteData,
+        { kind: "session" }
+      >["catalogProfileRelation"];
+    };
+  },
+  getMainKey: (context: ApplicationContext) => string,
+  normalizeLocation: (location: RouteLocation) => RouteLocation,
+): Promise<ChatRouteData> {
+  const { context, key, agentId, signal, location, revalidation } = params;
+  const continued = await resolveCatalogContinuation(context, key, agentId, signal);
+  if (continued) {
+    return { kind: "session", ...continued, ...sessionRouteHints(location), face: params.face };
+  }
+  const routedSessionKey = buildCatalogSessionKey(key, agentId);
+  const handoff = consumeSessionNavigationHandoff(
+    context.gateway,
+    location.pathname,
+    routedSessionKey,
+  );
+  const catalogProfileRelation = (
+    handoff ?? (revalidation?.sessionKey === routedSessionKey ? revalidation : undefined)
+  )?.catalogProfileRelation;
+  let canonicalLocation = params.preferenceDerived ? normalizeLocation(location) : null;
+  let face = params.face;
+  if (params.preferenceDerived) {
+    const resolution = await querySessionReference(
+      context,
+      { key: buildCatalogSessionKey(key), agentId },
+      signal,
+    );
+    if (resolution?.kind === "unique") {
+      face = resolveSessionPreferredFace(resolution.session);
+      const mainKey = getMainKey(context);
+      const pathname = pathForSession(
+        face,
+        agentId,
+        buildAgentMainSessionKey({ agentId, mainKey }),
+        context.basePath,
+        { mainKey },
+      );
+      if (pathname && canonicalLocation) {
+        canonicalLocation = { ...canonicalLocation, pathname };
+      }
+    }
+  }
+  if (canonicalLocation && catalogProfileRelation && params.isResolutionSourceCurrent()) {
+    prepareSessionNavigationHandoff(
+      context.gateway,
+      canonicalLocation.pathname,
+      routedSessionKey,
+      catalogProfileRelation,
+    );
+  }
+  return {
+    kind: "session",
+    sessionKey: routedSessionKey,
+    ...(catalogProfileRelation ? { catalogProfileRelation } : {}),
+    agentId,
+    ...sessionRouteHints(location),
+    face,
+    ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: location } : {}),
+  };
 }

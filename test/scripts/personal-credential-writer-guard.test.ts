@@ -313,6 +313,21 @@ it("limits offline raw machine-state migration exceptions to their reviewed stat
   }
 });
 
+it.each(["DEL\\u0045TE", "D\\ELETE", "\\nDELETE", "\\tDELETE"])(
+  "inspects a raw write whose verb is spelled next to an escape: %s",
+  (verb) => {
+    // Only the escape locates this nested statement; its raw text holds no DELETE token.
+    expectDenied(
+      {
+        "src/escaped-writer.ts": `export function run(ready: boolean) {
+          if (ready) { db.exec('${verb} FROM auth_profile_store'); }
+        }`,
+      },
+      "raw authority-table write",
+    );
+  },
+);
+
 it.each([
   ["scripts/generate-postgres-schema.mts", "function generatePostgresSchemas() {", "}"],
   ["src/state/postgres-schema.generated/runtime.ts", "export const runtime = { sql:", "};"],

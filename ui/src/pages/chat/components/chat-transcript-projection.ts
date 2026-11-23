@@ -27,7 +27,6 @@ import {
 } from "../chat-thread.ts";
 import { readAsyncQuestions } from "./chat-async-question-content.ts";
 import { buildChatArchiveNotice } from "./chat-divider.ts";
-import { projectInlineSwarms } from "./chat-inline-swarm-projection.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-options.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import type { StreamGroupOptions } from "./chat-message-stream-view.tsx";
@@ -398,13 +397,6 @@ export function projectChatTranscript(
       searchResult: searchFiltering,
     } satisfies NativeMessageGroupOptions;
   };
-  const swarmsByFrame = projectInlineSwarms(
-    props,
-    rows,
-    liveItem,
-    searchFiltering,
-    actions.onOpenSubagent,
-  );
   // Only working indicators depend on live usage and subagent wait status.
   const workingUsageKey = JSON.stringify([
     runOutputTokens,
@@ -418,7 +410,6 @@ export function projectChatTranscript(
     latestAssistantItemKey,
     continuations,
     searchFiltering,
-    (key) => swarmsByFrame.get(key)?.signature,
   );
   // Deferred palettes apply leaf branding after the preference snapshot.
   const appliedBranding = currentThemeBranding();
@@ -583,7 +574,6 @@ export function projectChatTranscript(
         options: {
           basePath: props.basePath,
           sessionPublicOrigin: props.sessionPublicOrigin,
-          swarms: swarmsByFrame.get(item.key)?.views,
           streamOptions: streamGroupOptions,
           renderGroupOptions,
           partDependencies: renderDependencies,

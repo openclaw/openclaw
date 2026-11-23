@@ -66,7 +66,6 @@ import {
   assertCurrentOperatorAuthority,
   captureReplyToolAuthorityContinuation,
   projectReplyToolAuthorityInput,
-  reauthorizeReplyToolAuthorityInput,
 } from "./reply-tool-authority-inbound.js";
 import {
   captureMemoryReplyToolAuthoritySession,
@@ -603,7 +602,7 @@ export function prepareReplyToolAuthority(
             assertCurrentOperatorAuthority(participant.operatorAuthority);
           }
         };
-        reauthorizeReplyToolAuthorityInput(snapshot, caller);
+        assertCallerCurrent();
         if (readMemoryEntry) {
           const policy = await prepareSessionCapabilityRead(() => {
             assertCallerCurrent();

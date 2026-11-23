@@ -1,4 +1,5 @@
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
@@ -17,6 +18,7 @@ async function readPendingInputSource<T>(
   scope: PendingInputScope,
   idempotencyKey: string,
   pendingOnly: boolean,
+  includeCompletion: boolean,
   consume: (snapshot: PendingInputSourceSnapshot) => T,
 ) {
   const sessionId = scope.sessionId;
@@ -39,6 +41,7 @@ async function readPendingInputSource<T>(
               sessionId,
               idempotencyKey,
               pendingOnly,
+              includeCompletion,
             },
           },
           binding.authority,
@@ -76,6 +79,7 @@ async function readPendingInputSource<T>(
           sessionId,
           idempotencyKey,
           pendingOnly,
+          includeCompletion,
         },
         env: captured.env,
         source: {
@@ -97,7 +101,7 @@ async function readPendingInputSource<T>(
 export function readSessionSubmittedInput(
   scope: PendingInputScope,
   idempotencyKey: string,
-  options: { includeSource: true },
+  options: { includeSource: true; includeCompletion?: boolean },
 ): Promise<
   | {
       message: PersistedUserTurnMessage;
@@ -105,6 +109,7 @@ export function readSessionSubmittedInput(
       messageSeq?: number;
       state?: string;
       endCause?: SessionPendingInputEndCause;
+      completion?: AgentRunTerminalOutcome;
     }
   | undefined
 >;
@@ -115,27 +120,34 @@ export function readSessionSubmittedInput(
 export async function readSessionSubmittedInput(
   scope: PendingInputScope,
   idempotencyKey: string,
-  options?: { includeSource: true },
+  options?: { includeSource: true; includeCompletion?: boolean },
 ) {
-  return readPendingInputSource(scope, idempotencyKey, false, (snapshot) => {
-    if (!snapshot.current) {
-      return undefined;
-    }
-    const { pending, committed, committedMessageSeq } = snapshot;
-    const message = pending ? parseSessionPendingInputMessage(pending.message_json) : committed;
-    if (!message || readMessageIdempotencyKey(message) !== idempotencyKey) {
-      return undefined;
-    }
-    return options?.includeSource
-      ? {
-          message,
-          // A consumed receipt still supplies the original request, not its aggregate transcript.
-          source: pending ? ("pending" as const) : ("transcript" as const),
-          ...(pending && pending.consumed_event_id == null
-            ? { state: pending.state, endCause: readSessionPendingInputEndCause(pending) }
-            : {}),
-          ...(committedMessageSeq !== undefined ? { messageSeq: committedMessageSeq } : {}),
-        }
-      : message;
-  });
+  return readPendingInputSource(
+    scope,
+    idempotencyKey,
+    false,
+    options?.includeCompletion === true,
+    (snapshot) => {
+      if (!snapshot.current) {
+        return undefined;
+      }
+      const { pending, committed, committedMessageSeq } = snapshot;
+      const message = pending ? parseSessionPendingInputMessage(pending.message_json) : committed;
+      if (!message || readMessageIdempotencyKey(message) !== idempotencyKey) {
+        return undefined;
+      }
+      return options?.includeSource
+        ? {
+            message,
+            ...(snapshot.completion ? { completion: snapshot.completion } : {}),
+            // A consumed receipt still supplies the original request, not its aggregate transcript.
+            source: pending ? ("pending" as const) : ("transcript" as const),
+            ...(pending && pending.consumed_event_id == null
+              ? { state: pending.state, endCause: readSessionPendingInputEndCause(pending) }
+              : {}),
+            ...(committedMessageSeq !== undefined ? { messageSeq: committedMessageSeq } : {}),
+          }
+        : message;
+    },
+  );
 }

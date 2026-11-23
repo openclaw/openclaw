@@ -40,7 +40,7 @@ async function expectCollapsed(work: Locator) {
   const summary = work.locator(":scope > .chat-activity-group__summary");
   expect(await summary.getAttribute("aria-expanded")).toBe("false");
   expect(await summary.locator(".chat-activity-group__label").textContent()).toBe(
-    "Commands, read files",
+    "Read files, commands",
   );
   // The wrapper returned, but the failed child keeps its own outcome inside the group.
   expect(await summary.textContent()).not.toContain("Some actions failed");

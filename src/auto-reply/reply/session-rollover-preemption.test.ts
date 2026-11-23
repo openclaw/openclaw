@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { disposeAllSessionMcpRuntimes } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
@@ -169,7 +169,7 @@ it("rejects /new before interrupting a session whose saved Access is forbidden",
   bindSessionControllerTarget(operation, target);
   const abort = vi.spyOn(operation, "abort");
   const cfg = { session: { store: storePath }, agents: { defaults: { model: "openai/fixture" } } };
-  const operatorAuthority = createAdmittedRunOperatorAuthority({
+  const operatorAuthority = createTestOperatorAuthority({
     profileId: "limited-operator",
     scopes: ["operator.write"],
     assertCurrent() {},

@@ -153,6 +153,80 @@ it.each([
   },
 );
 
+const toolRound = (id: string) => [
+  createAssistant(
+    model,
+    [{ type: "toolCall", id: `call_${id}|fc_${id}`, name: "lookup", arguments: {} }],
+    { stopReason: "toolUse" },
+  ),
+  makeTextToolResult(`call_${id}|fc_${id}`, "lookup", "found", false, 0),
+];
+const carrierMessage = (text: string) => ({
+  role: "user" as const,
+  content: `OpenClaw runtime context:\n${text}`,
+  timestamp: 0,
+  runtimeContext: {},
+});
+
+it.each(
+  [
+    ["provider", convertProviderResponsesMessages] as const,
+    ["transport", convertResponsesMessages] as const,
+  ].flatMap(([name, convert]) =>
+    [false, true].map((promptUpdate) => ({ name, convert, promptUpdate })),
+  ),
+)(
+  "$name keeps a retained steering carrier after the tool round it followed (prompt update: $promptUpdate)",
+  ({ convert, promptUpdate }) => {
+    const sent = [
+      user("look up"),
+      { ...carrierMessage("turn facts"), runtimeContext: { retained: true } },
+      ...(promptUpdate ? [user("Tools changed")] : []),
+      ...toolRound("a"),
+    ];
+    const first = convert(model, { messages: sent }, new Set(["openai"]));
+    const next = convert(
+      model,
+      {
+        messages: [
+          ...sent,
+          { ...carrierMessage("steering facts"), runtimeContext: { retained: true } },
+          user("steering"),
+          ...toolRound("b"),
+        ],
+      },
+      new Set(["openai"]),
+    );
+    expect(next.slice(0, first.length)).toEqual(first);
+    expectTypes(next, [
+      "message",
+      "message",
+      ...(promptUpdate ? ["message"] : []),
+      "function_call",
+      "function_call_output",
+      "message",
+      "message",
+      "function_call",
+      "function_call_output",
+    ]);
+  },
+);
+
+it.each([
+  ["provider", convertProviderResponsesMessages],
+  ["transport", convertResponsesMessages],
+] as const)(
+  "%s keeps a tail turn carrier with its user when steering follows",
+  (_name, convert) => {
+    // Routes without retained carriers move the current turn's carrier to the tail.
+    const turn = [user("look up"), ...toolRound("a"), carrierMessage("turn facts")];
+    const first = convert(model, { messages: turn }, new Set(["openai"]));
+    const next = convert(model, { messages: [...turn, user("steering")] }, new Set(["openai"]));
+    expect(next.slice(0, first.length)).toEqual(first);
+    expectTypes(first, ["message", "message", "function_call", "function_call_output"]);
+  },
+);
+
 it.each([
   ["provider", convertProviderResponsesMessages],
   ["transport", convertResponsesMessages],

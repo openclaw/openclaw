@@ -516,6 +516,9 @@ export async function resolveLocalWorkspaceOwner(params: {
   assertCurrent?: () => void;
   stateOwnerPath?: SandboxStateOwnerPath;
 }): Promise<(LocalWorkspaceOwner & Disposable) | undefined> {
+  using phases = observeDiagnosticsTimelinePhases(
+    "attempt.setup.sandbox.workspace_selection.owner.session",
+  );
   const context = captureWorktreeRunEndContext(params.env ?? process.env);
   const env = { ...(params.env ?? process.env), ...context.environment };
   const scope = {
@@ -540,7 +543,7 @@ export async function resolveLocalWorkspaceOwner(params: {
   const assertActive = () => {
     params.assertCurrent?.();
     if (lifetime.disposed) {
-      throw new Error("Local sandbox workspace authority changed");
+      throw new Error("Local sandbox workspace was released. Start a new turn.");
     }
   };
   const metadata = captureSessionEntryMetadataRead(scope, assertActive);
@@ -585,6 +588,7 @@ export async function resolveLocalWorkspaceOwner(params: {
       release();
       return undefined;
     }
+    phases.mark("attempt.setup.sandbox.workspace_selection.owner.registry");
     const selection = { id: entry.worktree.id, ownerKind: "session" } as const;
     const accept = captureWorktreeRegistryReadGuard(context, "lifecycle", selection);
     const worktree = await readRegistryWorktree(context, entry.worktree.id);
@@ -604,7 +608,7 @@ export async function resolveLocalWorkspaceOwner(params: {
       if (!metadata) {
         assertActive();
         if (!retained?.isCurrent()) {
-          throw new Error("Local sandbox workspace authority changed");
+          throw new Error("Local sandbox workspace changed. Start a new turn.");
         }
         return;
       }
@@ -615,7 +619,7 @@ export async function resolveLocalWorkspaceOwner(params: {
         now?.archivedAt !== undefined ||
         now?.worktree?.id !== worktree.id
       ) {
-        throw new Error("Local sandbox workspace authority changed");
+        throw new Error("Local sandbox workspace changed. Start a new turn.");
       }
     };
     const assertCurrent = () => {
@@ -639,6 +643,7 @@ export async function resolveLocalWorkspaceOwner(params: {
       [Symbol.dispose]: release,
     };
     if (entry.localWorkspaceHandoff) {
+      phases.mark("attempt.setup.sandbox.workspace_selection.owner.handoff");
       const handoff = entry.localWorkspaceHandoff;
       await finishLocalWorkspaceHandoff(owner, handoff);
       await patchSessionEntryCore(scope, (current) => {

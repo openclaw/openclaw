@@ -192,7 +192,7 @@ Controls inline attachment support for `sessions_spawn`.
     defaults: {
       subagents: {
         allowAgents: ["research"],
-        model: "minimax/MiniMax-M2.7",
+        model: "minimax/MiniMax-M3",
         maxConcurrent: 8,
         runTimeoutSeconds: 900,
         announceTimeoutMs: 120000,

@@ -435,7 +435,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
       ["upgrade-survivor", "e2e/upgrade-survivor-docker.sh"],
       ["published-upgrade-survivor", "e2e/upgrade-survivor-docker.sh"],
       ["package-installed-recovery-older-runtime", "e2e/upgrade-survivor-docker.sh"],
-      ["package-installed-recovery-live-gateway", "e2e/upgrade-survivor-docker.sh"],
       ["dreaming-cron-doctor", "e2e/upgrade-survivor-docker.sh"],
       ["root-managed-vps-upgrade", "e2e/upgrade-survivor-docker.sh"],
       ["update-migration", "e2e/upgrade-survivor-docker.sh"],
@@ -457,9 +456,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ]) {
       copyFileSync(join("scripts/lib", fileName), join(dirname(nestedModule), fileName));
     }
-    const cases = "scripts/e2e/lib/upgrade-survivor/installed-recovery-cases.mjs";
-    mkdirSync(dirname(join(tempRoot, ".release-harness", cases)), { recursive: true });
-    copyFileSync(cases, join(tempRoot, ".release-harness", cases));
 
     const laneJson = execFileSync(
       testNodeExecPath,
@@ -581,13 +577,24 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(partitions.map((partition) => partition.lanes.length)).toEqual([
       5,
       2,
-      1 + firstHopLaneNames.length,
+      2 + firstHopLaneNames.length,
     ]);
-    expect(new Set(lanes.map((lane) => lane.name)).size).toBe(8 + firstHopLaneNames.length);
+    expect(new Set(lanes.map((lane) => lane.name)).size).toBe(9 + firstHopLaneNames.length);
     expect(lanes.map(summarizeLane)).toEqual(aggregate.lanes.map(summarizeLane));
     const complete = planFor({ ...options, planReleaseAll: true });
     const packageNames = new Set(lanes.map((lane) => lane.name));
     expect(complete.lanes.filter((lane) => packageNames.has(lane.name))).toEqual(lanes);
+  });
+
+  it("schedules the current-checkout release update without companion packages", () => {
+    const release = planFor({
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "package-update-self-upgrade",
+    });
+    expect(release.lanes.some((lane) => lane.name === "release-update-survivor")).toBe(true);
+    const selected = planFor({ selectedLaneNames: ["release-update-survivor"] });
+    expect(selected.lanes).toHaveLength(1);
+    expect(selected.needs.prepublishPluginRegistry).toBe(false);
   });
 
   it("keeps restart auth exactly once in the legacy package/update aggregate", () => {
@@ -712,50 +719,48 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.needs).toMatchObject({ bareImage: true, package: true });
   });
 
-  it.each(["older-runtime", "live-gateway", "owed-plugin-retry"])(
-    "keeps packaged %s recovery independent of survivor baseline expansion",
-    (cut) => {
-      const name = `package-installed-recovery-${cut}`;
-      const plan = planFor({
-        selectedLaneNames: [name],
-        upgradeSurvivorBaselines: "2026.9.3 2026.9.4",
-        upgradeSurvivorScenarios: "base",
-      });
-      expect(plan.lanes).toHaveLength(1);
-      expect(plan.lanes[0]).toMatchObject({
-        name,
-        imageKind: "bare",
-        live: false,
-        resources: ["docker", "npm", "service"],
-        stateScenario: "empty",
-      });
-      expect(plan.requiredPrepublishPluginPackages).toEqual([]);
-      expect(plan.credentials).toEqual([]);
-      expect(plan.needs).toMatchObject({
-        bareImage: true,
-        package: true,
-        prepublishPluginRegistry: false,
-      });
-      const lane = requireFirstLane(plan);
-      const fixture = tempDirs.make(`${cut}-lane-`);
-      const script = join(fixture, "scripts/e2e/upgrade-survivor-docker.sh");
-      mkdirSync(dirname(script), { recursive: true });
-      writeFileSync(
-        script,
-        'printf "%s\\n" "$OPENCLAW_UPGRADE_SURVIVOR_SCENARIO" "$OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT" "$OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE" "$OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC"\n',
-      );
-      const result = execFileSync("/bin/bash", ["-c", lane.command], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR: fixture,
-          OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE: "1",
-          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@latest",
-        },
-      });
-      expect(result).toBe(`package-installed-recovery\n${cut}\n0\n\n`);
-    },
-  );
+  it("keeps packaged older-runtime recovery independent of survivor baseline expansion", () => {
+    const cut = "older-runtime";
+    const name = `package-installed-recovery-${cut}`;
+    const plan = planFor({
+      selectedLaneNames: [name],
+      upgradeSurvivorBaselines: "2026.9.3 2026.9.4",
+      upgradeSurvivorScenarios: "base",
+    });
+    expect(plan.lanes).toHaveLength(1);
+    expect(plan.lanes[0]).toMatchObject({
+      name,
+      imageKind: "bare",
+      live: false,
+      resources: ["docker", "npm", "service"],
+      stateScenario: "empty",
+    });
+    expect(plan.requiredPrepublishPluginPackages).toEqual([]);
+    expect(plan.credentials).toEqual([]);
+    expect(plan.needs).toMatchObject({
+      bareImage: true,
+      package: true,
+      prepublishPluginRegistry: false,
+    });
+    const lane = requireFirstLane(plan);
+    const fixture = tempDirs.make(`${cut}-lane-`);
+    const script = join(fixture, "scripts/e2e/upgrade-survivor-docker.sh");
+    mkdirSync(dirname(script), { recursive: true });
+    writeFileSync(
+      script,
+      'printf "%s\\n" "$OPENCLAW_UPGRADE_SURVIVOR_SCENARIO" "$OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT" "$OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE" "$OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC"\n',
+    );
+    const result = execFileSync("/bin/bash", ["-c", lane.command], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR: fixture,
+        OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE: "1",
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@latest",
+      },
+    });
+    expect(result).toBe(`package-installed-recovery\n${cut}\n0\n\n`);
+  });
 
   it.each([
     ["workshop-doctor-recovery", "2026.9.4", "2026.9.3 2026.9.4 2026.9.5"],

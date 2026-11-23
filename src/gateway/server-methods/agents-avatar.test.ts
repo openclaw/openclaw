@@ -11,7 +11,7 @@ const { generation, capture } = vi.hoisted(() => ({ generation: vi.fn(), capture
 // mock-isolation: test Gateway admission and responses without model inference.
 vi.mock("../../agents/blobster-generation.js", () => ({ generateBlobsterForAgent: generation }));
 // mock-isolation: control admitted authority and its cleanup explicitly.
-vi.mock("../operator-run-authority.js", () => ({ captureGatewayOperatorRunAuthority: capture }));
+vi.mock("../operator-run-authority.js", () => ({ prepareGatewayOperatorRunAuthority: capture }));
 
 const preview = {
   name: "Garden keeper",

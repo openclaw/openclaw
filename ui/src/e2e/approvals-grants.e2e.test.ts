@@ -89,6 +89,7 @@ suite.define(() => {
       { viewport: { width, height: 900 }, locale: "en-US", reducedMotion: "reduce" },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
+          deferredMethods: ["exec.approval.grants.revoke"],
           methodResponses: {
             "approval.history": { items: [] },
             "exec.approval.grants.list": {
@@ -116,6 +117,11 @@ suite.define(() => {
         expect(button!.x + button!.width).toBeGreaterThan(row!.x + row!.width - 24);
         await revoke.click();
         await expect.poll(() => gateway.getRequests("exec.approval.grants.revoke")).toHaveLength(1);
+        const pending = grants.getByRole("button", { name: /^Revoking…:/ });
+        await pending.waitFor();
+        expect(await pending.isDisabled()).toBe(true);
+        expect(await pending.boundingBox()).toEqual(button);
+        await gateway.resolveDeferred("exec.approval.grants.revoke");
         await expect.poll(() => grants.getByRole("button").count()).toBe(0);
       },
     );

@@ -36,7 +36,7 @@ import {
   captureCronCreatorSession,
   requiresExplicitAgentRuntimeToolsAllow,
   normalizeCronAddRequest,
-  assertCronDoesNotTargetAgentHarness,
+  assertValidCronSessionTarget,
 } from "./cron-input-validation.js";
 import { respondInvalidCronParams, respondRefusedCronAgent } from "./cron-job-access.js";
 import { withCronStreamExecApproval } from "./cron-stream-approval.js";
@@ -56,9 +56,6 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   hasCurrentClientAuthority,
 }) => {
   sessionMutationCommitGuard?.();
-  if (hasCurrentClientAuthority?.() === false) {
-    throw new Error("Automation caller authority is no longer active");
-  }
   const commandCreation = readPluginCommandCreation(rawParams);
   const params = commandCreation.params;
   // Normalization fills a missing name from the prompt's first line; a model name replaces it below.
@@ -84,7 +81,6 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     client,
     callerScope,
     sessionMutationCommitGuard,
-    hasCurrentClientAuthority,
     retainExecutionPolicy: cronCreateRequiresStreamExecAuthority(candidate),
   });
   if (commandCreation.creation) {
@@ -186,7 +182,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
       cfg,
       runtimeAuthority !== undefined,
     );
-    await assertCronDoesNotTargetAgentHarness(jobCreate, cfg);
+    await assertValidCronSessionTarget(jobCreate, cfg);
     await assertValidCronCreateDelivery(
       cfg,
       { ...jobCreate, createdActor: creatorOptions.createdActor },

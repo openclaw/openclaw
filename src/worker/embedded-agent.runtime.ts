@@ -11,6 +11,7 @@ import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-too
 import { projectMemoryFlushTools } from "../agents/agent-tools.memory-flush.js";
 import { listRunningSessions } from "../agents/bash-process-registry.js";
 import type { ExecToolDefaults } from "../agents/bash-tools.exec-types.js";
+import { readCodeModeSkill } from "../agents/code-mode-skills.js";
 import { disposeAllCodeModeRuns } from "../agents/code-mode-state.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/defaults.js";
 import { classifyAssistantTurn } from "../agents/embedded-agent-runner/run/incomplete-turn-classification.js";
@@ -115,7 +116,17 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     if (params.operationalRunInstance.runId !== params.runId) {
       throw new Error("worker operational run instance disagrees with the admitted turn");
     }
-    const toolSurface = params.toolSurface;
+    const toolSurface = resources
+      ? {
+          ...params.toolSurface,
+          presentation: {
+            ...params.toolSurface.presentation,
+            skills: params.toolSurface.presentation.skills?.map((skill) =>
+              Object.assign({}, skill, { location: resources.rewriteReferences(skill.location) }),
+            ),
+          },
+        }
+      : params.toolSurface;
     const model =
       params.nativeInference?.model ??
       createNativeModelOwnedRuntimeModel({
@@ -273,10 +284,38 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           ].map((tool) => [tool.name, tool]),
         );
         const gatewayTools = new Map(
-          createWorkerGatewayToolProxies(toolSurface, params.gatewayTools).map((tool) => [
-            tool.name,
-            tool,
-          ]),
+          createWorkerGatewayToolProxies(
+            toolSurface,
+            params.gatewayTools,
+            resources
+              ? {
+                  rewriteReferences: resources.rewriteReferences,
+                  readInstructions: async (name, location, signal) => {
+                    const workerLocation = resources.rewriteReferences(location);
+                    const skill = resources.snapshot.resolvedSkills.find(
+                      (candidate) =>
+                        candidate.name === name && candidate.filePath === workerLocation,
+                    );
+                    if (!skill) {
+                      return undefined;
+                    }
+                    return {
+                      name,
+                      location: workerLocation,
+                      content: await readCodeModeSkill(
+                        {
+                          name,
+                          description: skill.description,
+                          location: workerLocation,
+                          source: skill,
+                        },
+                        signal,
+                      ),
+                    };
+                  },
+                }
+              : undefined,
+          ).map((tool) => [tool.name, tool]),
         );
         const tools = toolSurface.tools.map((entry) => {
           if (entry.execution === "gateway") {

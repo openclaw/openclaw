@@ -121,6 +121,35 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   padding: clamp(44px, 5vh, 52px) clamp(6px, 1vw, 12px) 6px;
 }
 
+/* Fit the draft's commands inside the scroll pane, below the native titlebar.
+   Short landscape retains the shared composer's in-flow sticky list. */
+@media not ((max-width: 932px) and (max-height: 500px) and (orientation: landscape)) {
+  .new-session-page__scroll {
+    contain: layout;
+    anchor-scope: --draft-input;
+
+    .agent-chat__input {
+      anchor-name: --draft-input;
+    }
+
+    .slash-menu--commands {
+      --oc-overlay-max-height: var(--slash-menu-max-height);
+      position: fixed;
+      position-anchor: --draft-input;
+      position-area: top;
+      position-try-fallbacks:
+        --chat-picker-fit,
+        --chat-picker-fit flip-block,
+        --chat-picker-fill;
+      inset: auto;
+      width: anchor-size(width);
+      display: flex;
+      flex-direction: column;
+      margin-block: 8px;
+    }
+  }
+}
+
 /* Content-size the shared welcome and top-anchor it inside the page scroll.
    Auto vertical margins would re-center the identity as the textarea grows. */
 .new-session-page .agent-chat__welcome {
@@ -631,16 +660,21 @@ span.new-session-page__select {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 
-.new-session-page__device-folder {
-  flex-basis: 100%;
-  min-width: 0;
-  flex-wrap: wrap;
+.new-session-page__device-path-entry {
+  display: grid;
+  gap: 6px;
+  padding: var(--picker-inset);
+  font-size: 12px;
+  color: var(--muted);
 }
 
-.new-session-page__device-folder > span:last-child {
-  flex: 1 1 100%;
+.new-session-page__device-path-entry > span {
+  padding-inline-start: var(--picker-row-inset);
+}
+
+.new-session-page__device-path-entry input {
+  width: 100%;
   min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 .new-session-page__branch-field {
@@ -755,27 +789,6 @@ span.new-session-page__select {
   --oc-overlay-max-width: min(320px, calc(100dvw - 24px));
 }
 
-.new-session-page__environment-layout {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.new-session-page__environment-picker {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  max-height: min(360px, calc(var(--oc-overlay-available-height, 70vh) - 2px));
-  overflow: hidden;
-}
-
-.new-session-page__environment-list {
-  flex: 1 1 auto;
-  min-height: 0;
-  overscroll-behavior: contain;
-  overflow-y: auto;
-}
-
 .new-session-page__environment-option {
   min-height: 28px;
   gap: 8px;
@@ -792,13 +805,6 @@ span.new-session-page__select {
 .new-session-page__submenu-chevron svg {
   width: 14px;
   height: 14px;
-}
-
-.new-session-page__environment-empty {
-  padding: 24px 12px;
-  color: var(--muted);
-  text-align: center;
-  font-size: var(--control-ui-text-sm);
 }
 
 .new-session-page__menu-chevron {
@@ -1046,6 +1052,9 @@ span.new-session-page__select {
      page and the identity centers in the space above the draft. Auto margins
      yield to content when a short viewport or a long draft needs the space. */
   .new-session-page .agent-chat__welcome {
+    /* The member step replaces the composer and needs the same space below it. */
+    --member-welcome-gap: 10px;
+
     flex: 1 0 auto;
     min-height: auto;
     margin-block: 0;
@@ -1715,13 +1724,6 @@ span.new-session-page__select {
   padding-inline: calc(var(--new-session-tray-edge) - 10px);
 }
 
-/* The device path and its explanation need their own content-sized row. */
-.new-session-page__context-tray
-  .new-session-page__triggers:has(> .new-session-page__device-folder) {
-  flex-wrap: wrap;
-  height: auto;
-}
-
 .new-session-page__context-tray .new-session-page__workspace {
   gap: 2px;
   border: 0;
@@ -1757,6 +1759,11 @@ span.new-session-page__select {
 .new-session-page__context-tray .new-session-page__trigger-label {
   min-inline-size: 8ch;
   max-width: 300px;
+
+  /* Checkout has no desktop loading placeholder to reserve label space for. */
+  &:where(#new-session-checkout-trigger > *) {
+    min-inline-size: 0;
+  }
 }
 
 .new-session-page__picker-chevron {
@@ -1832,8 +1839,11 @@ span.new-session-page__select {
   margin-inline-end: calc(var(--picker-row-inset) - 5px);
 }
 
-.new-session-page__context-tray .new-session-page__picker-popover input,
-.new-session-page__context-tray .new-session-page__picker-popover input:is(:hover, :focus) {
+/* The picker panel owns field geometry in every input state, including touch focus. */
+.new-session-page__context-tray
+  .new-session-page__picker-popover
+  .new-session-page__picker-panel
+  input {
   /* A field stands a touch taller than the rows it sits with. */
   height: calc(var(--picker-row-height) + 2px);
   padding-inline: var(--picker-row-inset);
@@ -1976,11 +1986,6 @@ span.new-session-page__select {
   height: 1px;
   margin: 0 var(--picker-row-inset) 6px;
   background: var(--border);
-}
-
-.new-session-page__picker-foot .new-session-page__menu-chevron svg {
-  width: 13px;
-  height: 13px;
 }
 
 .new-session-page__checkout-popover .new-session-page__picker-root {
@@ -2299,7 +2304,10 @@ span.new-session-page__select {
     min-height: 52px;
   }
 
-  .new-session-page__context-tray .new-session-page__picker-popover input {
+  .new-session-page__context-tray
+    .new-session-page__picker-popover
+    .new-session-page__picker-panel
+    input {
     min-height: 40px;
   }
 }

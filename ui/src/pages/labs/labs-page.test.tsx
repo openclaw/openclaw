@@ -112,7 +112,7 @@ function labRow(page: HTMLElement, title: string) {
   return row;
 }
 
-function labToggle(page: HTMLElement, title = "Code Mode") {
+function labToggle(page: HTMLElement, title = "Speech bubbles") {
   const toggle = labRow(page, title).querySelector<HTMLInputElement>('input[role="switch"]');
   if (!toggle) {
     throw new Error(`${title} toggle not rendered`);
@@ -137,14 +137,13 @@ async function expectPatch(
 const experimental = (values: Record<string, unknown>) => ({
   gateway: { controlUi: { experimental: values } },
 });
-const codeMode = (value: unknown) => ({ tools: { codeMode: value } });
 const hostDesktop = (value: Record<string, unknown>) => ({ desktop: { host: value } });
 const workerDesktop = (desktop: boolean) => ({ cloudWorkers: { desktop } });
 const hostEnabled = (enabled: boolean) => hostDesktop({ enabled });
 const openclawId = (value: Record<string, unknown>) => ({ gateway: { openclawId: value } });
 
-async function startSave(title = "Code Mode", config?: Record<string, unknown>) {
-  const mounted = await mountPage(config ?? codeMode({ enabled: false }));
+async function startSave(title = "Speech bubbles", config?: Record<string, unknown>) {
+  const mounted = await mountPage(config ?? {});
   const pendingPatch = deferred<boolean>();
   mounted.runtimeConfig.patch.mockImplementationOnce(() => pendingPatch.promise);
   const toggle = labToggle(mounted.page, title);
@@ -192,34 +191,6 @@ describe("LabsPage", () => {
   });
 
   it.each([
-    ["false shorthand", false, "quickjs", { enabled: false, executor: "quickjs" }],
-    ["inherited auto", undefined, "quickjs", { enabled: "auto", executor: "quickjs" }],
-    [
-      "explicit auto and limits when restoring Node",
-      { enabled: "auto", executor: "quickjs", timeoutMs: 5000 },
-      "node",
-      { executor: null },
-    ],
-  ])("preserves %s when choosing an executor", async (_name, config, executor, expectedPatch) => {
-    const { page, runtimeConfig } = await mountPage(codeMode(config));
-    const select = page.querySelector<HTMLSelectElement>('select[aria-label="Code Mode executor"]');
-    expect(select).not.toBeNull();
-    expect(select?.closest(".settings-row--nested")).not.toBeNull();
-    select!.value = executor;
-    select!.dispatchEvent(new Event("change", { bubbles: true }));
-
-    await expectPatch(runtimeConfig, codeMode(expectedPatch), "codeModeExecutor");
-  });
-
-  it.each([
-    ["Code Mode", "codeMode", false, codeMode({ enabled: true }), codeMode({ enabled: null })],
-    [
-      "Templates",
-      "templates",
-      false,
-      experimental({ templates: true }),
-      experimental({ templates: null }),
-    ],
     [
       "Desktop on the computer running OpenClaw",
       "hostDesktop",
@@ -227,11 +198,7 @@ describe("LabsPage", () => {
       hostDesktop({ enabled: true, managed: false, port: 5908, passwordFile: "/tmp/vnc-password" }),
       hostEnabled(false),
     ],
-    // Labs offers Auto/Off; force-on stays a config-only power-user state.
-    ["Code Mode", "codeMode", true, codeMode({ enabled: false }), codeMode({ enabled: "auto" })],
-    ["Code Mode", "codeMode", true, codeMode(false), codeMode(null)],
     ["Speech bubbles", "chatBubbles", true, {}, experimental({ chatBubbles: true })],
-    ["Templates", "templates", true, {}, experimental({ templates: true })],
     [
       "Desktop on the computer running OpenClaw",
       "hostDesktop",
@@ -247,14 +214,6 @@ describe("LabsPage", () => {
       false,
       openclawId({ enabled: true, relayUrl: "https://relay.example.test/" }),
       openclawId({ enabled: false }),
-    ],
-    ["Code Mode", "codeMode", false, {}, codeMode({ enabled: false })],
-    [
-      "Code Mode",
-      "codeMode",
-      true,
-      codeMode({ enabled: false, timeoutMs: 5000 }),
-      codeMode({ enabled: "auto" }),
     ],
   ])(
     "patches %s (%s) to %s through the canonical config flow: %j",
@@ -355,44 +314,6 @@ describe("LabsPage", () => {
     await waitForSolid(() => expect(toggle.checked).toBe(false));
     pendingPatch.reject(new Error("Retired save failed"));
     await waitForSolid(() => expect(page.querySelector('[role="alert"]')).toBeNull());
-  });
-
-  it("does not narrate the default in the row", async () => {
-    const overridden = await mountPage({
-      tools: { codeMode: { enabled: "auto" }, swarm: { enabled: false } },
-    });
-    expect(labRow(overridden.page, "Code Mode").textContent).not.toContain("Default:");
-  });
-});
-
-describe("LabsPage code mode enablement", () => {
-  // An absent global node inherits auto; authored objects remain opt-in.
-  it.each([
-    ["unset", true, {}],
-    ["empty object", false, { tools: { codeMode: {} } }],
-    ["object with options", false, { tools: { codeMode: { timeoutMs: 5000 } } }],
-    ["explicit true", true, { tools: { codeMode: { enabled: true } } }],
-    ["explicit disabled", false, { tools: { codeMode: { enabled: false } } }],
-    ["boolean shorthand false", false, { tools: { codeMode: false } }],
-    ["auto shorthand", true, { tools: { codeMode: "auto" } }],
-  ])("reads %s as %s", async (_label, expected, config) => {
-    const { page, unmount } = await mountPage(config);
-    expect(labToggle(page).checked).toBe(expected);
-    unmount();
-  });
-});
-
-describe("LabsPage tool search enablement", () => {
-  it.each([
-    ["mode-only override", { tools: { toolSearch: { mode: "directory" } } }],
-    ["option-bearing override", { tools: { toolSearch: { enabled: true, maxSearchLimit: 3 } } }],
-  ])("disables %s without replacing authored modes or options", async (_label, config) => {
-    const { page, runtimeConfig } = await mountPage(config);
-    const toggle = labToggle(page, "Tool search for all models");
-
-    expect(toggle.checked).toBe(true);
-    changeToggle(toggle, false);
-    await expectPatch(runtimeConfig, { tools: { toolSearch: { enabled: false } } }, "toolSearch");
   });
 });
 

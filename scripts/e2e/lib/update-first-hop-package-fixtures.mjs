@@ -392,31 +392,6 @@ export function packFailingDoctorUpdateFixture(
   };
 }
 
-/**
- * A same-schema future fixture whose first post-activation Doctor against `stateDir`
- * SIGKILLs the updater that started it: the candidate is installed and that update
- * is not confirmed. Creating `marker` arms it once, so every later Doctor is real.
- */
-export function packKilledUpdaterDoctorFixture(
-  candidateTarball,
-  outputTarball,
-  stateDir,
-  marker,
-  sequence = 0,
-) {
-  return {
-    method: "candidate-updater-killed-in-post-activation-doctor-fixture",
-    ...packTransformedFixture(candidateTarball, outputTarball, (root, sourceVersion) => {
-      stampFixtureVersion(root, futureFixtureVersion(sourceVersion, sequence));
-      prependPostActivationDoctor(
-        root,
-        stateDir,
-        `const fs = process.getBuiltinModule("node:fs"); let armed = true; try { fs.writeFileSync(${JSON.stringify(marker)}, fs.readFileSync(\`/proc/\${process.ppid}/cmdline\`, "utf8").split("\\0").join(" "), { flag: "wx" }); } catch (error) { if (error?.code !== "EEXIST") { throw error; } armed = false; } if (armed) { process.kill(process.ppid, "SIGKILL"); process.exit(1); }`,
-      );
-    }),
-  };
-}
-
 /** Rehearsal runs `doctor` on copied state, so only the post-activation Doctor runs `body`. */
 function prependPostActivationDoctor(root, stateDir, body) {
   const relative = "dist/infra/update-migrated-finalize.worker.js";

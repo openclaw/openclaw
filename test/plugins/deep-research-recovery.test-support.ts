@@ -36,9 +36,9 @@ export function interruptPendingResearchCapture(
   pending: () => Promise<boolean>,
 ) {
   let interrupted = false;
-  const capture = operatorAuthority.captureGatewayOperatorRunAuthority;
+  const capture = operatorAuthority.prepareGatewayOperatorRunAuthority;
   const spy = vi
-    .spyOn(operatorAuthority, "captureGatewayOperatorRunAuthority")
+    .spyOn(operatorAuthority, "prepareGatewayOperatorRunAuthority")
     .mockImplementation(async (params) => {
       const captured = await capture(params);
       try {

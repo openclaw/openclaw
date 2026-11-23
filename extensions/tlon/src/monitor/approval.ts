@@ -13,6 +13,7 @@ export function createPendingApproval(
     type: params.type,
     requestingShip: params.requestingShip,
     ...(params.clubId !== undefined ? { clubId: params.clubId } : {}),
+    ...(params.clubMode !== undefined ? { clubMode: params.clubMode } : {}),
     ...(params.verifiedDirect === true ? { verifiedDirect: true } : {}),
     channelNest: params.channelNest,
     groupFlag: params.groupFlag,
@@ -41,16 +42,23 @@ export function formatApprovalRequest(approval: PendingApproval): string {
   const preview = approval.messagePreview ? `\n"${truncate(approval.messagePreview, 100)}"` : "";
 
   switch (approval.type) {
+    case "club":
     case "dm":
       if (approval.clubId !== undefined) {
-        // A club message claiming the owner is queued without originalMessage, so approval only
-        // updates the allowlist and never processes that message; the notice must not promise a reply.
+        const permission =
+          approval.type === "club" && approval.clubMode === "once"
+            ? "Approving enables this club for automatic replies, including future messages."
+            : "Approving permits this saved message only; it does not enable future messages.";
         const replayLine = approval.originalMessage
-          ? `The message is answered as an unverified group DM sender, never as ${approval.requestingShip}.`
-          : `The message is not kept, so it will not be answered; have ${approval.requestingShip} send it again in a normal direct message to get a reply.`;
+          ? "The reply goes to the club, using its own conversation."
+          : "No message was saved; approval only dismisses this request.";
         return (
-          `New group DM message claiming to be from ${approval.requestingShip} (unverified; group DM ${approval.clubId}):${preview}\n\n` +
-          `Approving adds ${approval.requestingShip} to the DM allowlist. ${replayLine}\n` +
+          `Group DM ${approval.clubId}: claimed author ${approval.requestingShip} (unverified).${preview}\n\n` +
+          `${permission} Tlon does not authenticate club authors or participants. Input delivered under this club ID can use the agent's normal permitted tools.\n` +
+          `${replayLine} No direct-DM access or owner authority is granted. ` +
+          (approval.type === "club"
+            ? "Deny or block disables this club; no ship is blocked.\n"
+            : "Blocking only dismisses this legacy request; no ship is blocked.\n") +
           formatApprovalInstructions(approval.id)
         );
       }
@@ -128,6 +136,17 @@ export function formatApprovalConfirmation(
   approval: PendingApproval,
   action: "approve" | "deny" | "block",
 ): string {
+  if (approval.clubId !== undefined) {
+    if (approval.type !== "club") {
+      return `Resolved legacy group DM request ${approval.id}. No standing club or direct-DM access was granted; no ship was blocked.`;
+    }
+    if (action !== "approve") {
+      return `Disabled group DM ${approval.clubId}. No ship was blocked. Set its clubRules entry to "allow" to enable it again.`;
+    }
+    return approval.clubMode === "once"
+      ? `Enabled group DM ${approval.clubId} for automatic replies from unverified input. No direct-DM access or owner authority was granted.`
+      : `Approved this group DM message only. No standing club or direct-DM access was granted.`;
+  }
   if (action === "block") {
     return `Blocked ${approval.requestingShip}. They will no longer be able to contact the bot.`;
   }
@@ -135,6 +154,7 @@ export function formatApprovalConfirmation(
   const actionText = action === "approve" ? "Approved" : "Denied";
 
   switch (approval.type) {
+    case "club":
     case "dm":
       if (action === "approve") {
         if (requiresResendAfterApproval(approval)) {
@@ -196,6 +216,10 @@ export function formatPendingList(approvals: PendingApproval[]): string {
     return "No pending approval requests.";
   }
   return `Pending approvals (${approvals.length}):\n${approvals
-    .map((a) => `• ${a.id}: ${a.type} from ${a.requestingShip}`)
+    .map((a) =>
+      a.clubId !== undefined
+        ? `• ${a.id}: group DM ${a.clubId} (unverified)`
+        : `• ${a.id}: ${a.type} from ${a.requestingShip}`,
+    )
     .join("\n")}`;
 }

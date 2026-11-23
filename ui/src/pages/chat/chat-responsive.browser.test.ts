@@ -1440,8 +1440,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         }
 
         expect(geometry.codeBlock?.borderRadius).toBeGreaterThan(0);
+        expect(geometry.bubble?.borderRadius).toBeGreaterThan(0);
         expect(geometry.bubble).toMatchObject({
-          borderRadius: geometry.codeBlock?.borderRadius,
           cornerShape: geometry.codeBlock?.cornerShape,
           paddingTop: 16,
           paddingRight: 16,

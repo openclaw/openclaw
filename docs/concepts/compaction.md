@@ -387,32 +387,29 @@ checkpoint artifacts are not the active compaction target.
 
 ### History hydration byte limit
 
-The embedded runtime also bounds the history it loads for model replay, independently
-of token-based compaction and `maxActiveTranscriptBytes`. Its byte cap is eight times
-the effective context token budget, with a 1 KiB minimum and 64 MiB maximum. This is
-a resource bound on serialized model-context events, not a token count. Private
-transcript metadata and tool-result details are excluded, but event envelopes and
-other content can still reach the byte cap before the model's token budget is full.
+The embedded runtime loads all history since the latest compaction for each model
+request, so the history the model sees only grows between compactions and the
+provider's prompt cache keeps matching. Token-based compaction is the only step
+that shortens it. The loader also has a guard of 16 MiB of serialized model-context
+events (private transcript metadata and tool-result details excluded) or 10,000
+events. It bounds memory and keeps requests below provider body limits, and it does
+not depend on the model's token budget.
 
-When this cap is exceeded, the history loader advances the omitted prefix in
-quarter-cap steps. It prefers complete turns, keeps tool calls with their results,
-and reserves the latest compaction summary. The retained history starts near 75%
-of the available byte capacity, subject to event and turn sizes, then grows toward
-the cap. Its existing prefix stays unchanged between steps, including across
-worker or process restarts. An independent event-count limit can still shorten
-unusually dense histories.
-If the previous turn exceeds the cap, the loader keeps its newest affordable
-atomic frames rather than starting the next turn with only the new prompt.
-When a retry reloads history in the middle of a turn whose tool results exceed
-the cap, the loader keeps the request that opened the turn in front of those
-frames, so the retry still sees its task.
+Only a session that passes this guard before it compacts (for example, a long run of
+screenshots, which count about 2,000 tokens each) loads a shorter view. The loader then
+advances the omitted prefix in quarter-cap steps. It prefers complete turns, keeps
+tool calls with their results, and reserves the latest compaction summary. Its
+existing prefix stays unchanged between steps, including across worker or process
+restarts. If the previous turn exceeds the guard, the loader keeps its newest
+affordable atomic frames rather than starting the next turn with only the new
+prompt. When a retry reloads history in the middle of a turn whose tool results
+exceed the guard, the loader keeps the request that opened the turn in front of
+those frames, so the retry still sees its task.
 
 This selection does not delete saved history, create a summary, run a memory
-flush, or trigger compaction notifications. Older context can therefore remain
-outside the model's view while the token budget has room. Chunking trades some
-immediate history for prefix-cache reuse; it does not solve that byte/token
-mismatch. Use `/compact` when you want semantic summarization. The normal
-compaction triggers and the opt-in active-transcript byte guard are unchanged.
+flush, or trigger compaction notifications. Use `/compact` when you want semantic
+summarization. The normal compaction triggers and the opt-in active-transcript byte
+guard are unchanged.
 
 ### Compaction notices
 

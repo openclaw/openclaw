@@ -5,6 +5,8 @@ import type {
   ApprovalChannelReviewer,
   PluginApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { assertAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
 import { isPluginApprovalRequest, type ChannelApprovalKind } from "../../infra/approval-types.js";
@@ -75,7 +77,24 @@ function isApprovalDecision(value: string): value is ExecApprovalDecision {
 export function bindApprovalRequesterMetadata<TPayload>(params: {
   record: ExecApprovalRecord<TPayload>;
   client?: GatewayClient | null;
+  caller?: ReturnType<typeof getGatewayToolCallerIdentity>;
 }): void {
+  const caller = params.caller ?? (!params.client ? getGatewayToolCallerIdentity() : undefined);
+  const authority = params.client?.internal?.operatorRunAuthority ?? caller?.operatorAuthority;
+  if (authority) {
+    assertAdmittedRunOperatorAuthority(authority);
+    authority.assertCurrent();
+  }
+  const runtime = params.client?.internal?.agentRuntimeIdentity;
+  // Runtime routing and spawn identities are host-captured and authenticated, never wire params.
+  params.record.requestedByProfileId =
+    authority?.profileId ??
+    runtime?.approvalRequesterProfileId ??
+    runtime?.gatewayUiCommandTarget?.profileId ??
+    runtime?.sessionSpawnContext?.requesterProfileId ??
+    caller?.gatewayUiCommandTarget?.profileId ??
+    (!runtime ? params.client?.authenticatedUserProfile?.profileId : undefined) ??
+    null;
   params.record.requestedByConnId = params.client?.connId ?? null;
   params.record.requestedByDeviceId = params.client?.connect?.device?.id ?? null;
   params.record.requestedByClientId = params.client?.connect?.client?.id ?? null;
@@ -160,11 +179,7 @@ function resolveApprovalRequestRecipientConnIds<TPayload>(params: {
       approvalKind: params.approvalKind,
       excludeConnId: params.excludeConnId,
       record: params.record,
-      filter: (client) =>
-        isApprovalRecordVisibleToClient({
-          record: params.record,
-          client,
-        }),
+      filter: (client) => isApprovalRecordVisibleToClient({ record: params.record, client }),
     }) ?? null
   );
 }
@@ -623,6 +638,7 @@ export async function handleApprovalResolve<
             ? { cfg: params.context.getRuntimeConfig(), sessionAccess: retainedSessionAccess }
             : {}),
         }) ||
+        !retainedSessionAccess.canAccessInvited(readApprovalRequestSource(resolved.snapshot)) ||
         (params.reviewer && !custody?.isCurrent(resolved.snapshot))
       ) {
         throw new Error("approval resolver authority is no longer active");

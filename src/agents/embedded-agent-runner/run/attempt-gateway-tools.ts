@@ -27,7 +27,6 @@ export function withPreparedEmbeddedGatewayTools<T>(
 ): Promise<T> {
   const callerIdentity = createAdmittedGatewayToolCallerIdentity({
     admittedRunContext: attempt.admittedRunContext,
-    cronAuthorityCheck: attempt.cronCreatorAuthorityCapability?.isCurrent,
     agentId: attempt.agentId,
     sessionKey: attempt.sessionKey,
     turnSourceChannel: attempt.messageChannel ?? attempt.messageProvider,

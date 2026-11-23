@@ -4,13 +4,34 @@
 
 enum BrowserFaviconScript {
     static let source = #"""
-    async function openclawReadBrowserFavicon(maxBytes, timeoutMs) {
+    async function openclawReadBrowserFavicon(maxBytes, timeoutMs, colorScheme) {
       let timeout;
       try {
         const controller = new AbortController();
         timeout = setTimeout(() => controller.abort(), timeoutMs);
+        if (colorScheme) {
+          const preference = matchMedia("(prefers-color-scheme: " + colorScheme + ")");
+          const ready = await new Promise((resolve) => {
+            const finish = (value) => {
+              preference.removeEventListener("change", changed);
+              controller.signal.removeEventListener("abort", abort);
+              resolve(value);
+            };
+            // WebKit applies the appearance asynchronously. Let the page's own
+            // media-query listeners update its icon link before reading it.
+            const changed = () => { if (preference.matches) setTimeout(() => finish(true), 0); };
+            const abort = () => finish(false);
+            preference.addEventListener("change", changed);
+            controller.signal.addEventListener("abort", abort, { once: true });
+            changed();
+          });
+          if (!ready) return null;
+        }
         const icons = Array.from(document.querySelectorAll('link[rel~="icon"]'))
-          .filter((link) => link.getAttribute("href")?.trim());
+          .filter((link) => {
+            const media = link.getAttribute("media")?.trim();
+            return link.getAttribute("href")?.trim() && (!media || matchMedia(media).matches);
+          });
         const preferred = icons.find((link) => /(?:^|\s)32x32(?:\s|$)/i.test(link.getAttribute("sizes") || ""));
         const candidates = [
           ...(preferred ? [preferred.href] : []),

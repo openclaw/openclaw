@@ -5,7 +5,6 @@ import * as agentEn from "./en-agents.ts";
 
 type EnglishCatalog = TranslationMap & {
   languages: TranslationMap;
-  onboarding: TranslationMap & { memoryImport: TranslationMap };
   execApproval: TranslationMap & { labels: TranslationMap; scope: TranslationMap };
   sessionProgressCard: TranslationMap & {
     refresh: TranslationMap;
@@ -567,6 +566,12 @@ const startupEnglish = {
     description: "The agent is getting ready. This view will load automatically.",
     short: "Starting up…",
   },
+  routeNotFound: {
+    title: "Page not found",
+    description:
+      "This link is invalid or no longer available. Check the address or return to chat.",
+    goToChat: "Go to chat",
+  },
   lazyView: {
     errorTitle: "Couldn’t load this panel.",
     genericSubtitle: "Try again.",
@@ -924,6 +929,7 @@ const startupEnglish = {
     settings: "Settings",
     askOpenClaw: "Ask OpenClaw",
     askBrand: "Ask {brand}",
+    settingsGroupPreferences: "Preferences",
     settingsGroupDevice: "This Mac",
     settingsGroupThisComputer: "This computer",
     settingsGroupThisIPhone: "This iPhone",
@@ -934,7 +940,7 @@ const startupEnglish = {
     settingsGroupSecurity: "Privacy & security",
     settingsGroupSystem: "System",
     settingsSearchLabel: "Search settings",
-    settingsSearchPlaceholder: "Search settings…",
+    settingsSearchPlaceholder: "Search",
     settingsSearchNoResults: "No settings match your search.",
     settingsSearchClear: "Clear settings search",
     settingsLoadFailed: "Settings navigation could not load.",
@@ -1112,11 +1118,6 @@ const startupEnglish = {
     providerConnected: {},
   },
   memoryImport: {},
-  onboarding: {
-    memoryImport: {
-      title: "Bring your agent memory with you",
-    },
-  },
   assistantPanel: {
     title: "Assistant sidebar",
     home: "Home",
@@ -1163,17 +1164,14 @@ const startupEnglish = {
     install: "Install",
   },
   labsPage: {
-    sectionDescription:
-      "Changes save without restarting the Gateway. Code Mode and Tool Search apply to future replies.",
+    sectionDescription: "Changes save without restarting the Gateway.",
     restartRequired: "Gateway restart required.",
     saveErrorTitle: "Couldn’t save this setting. Try again.",
     saveFailed: "The feature setting could not be saved.",
     decisionAssistance: {},
     usageRankedToolIndex: {},
-    codeMode: {},
 
     swarm: {},
-    toolSearch: {},
 
     hostDesktop: {},
     openclawId: {},
@@ -1238,6 +1236,7 @@ const startupEnglish = {
       viewingNow: "Viewing now",
       recentSessions: "Recent sessions",
       noRecentSessions: "No recent visible sessions.",
+      recentSessionsUnavailable: "Recent sessions unavailable.",
       viewActivity: "View activity",
       web: "Web app",
       cli: "Command line",
@@ -1506,25 +1505,6 @@ const startupEnglish = {
   // Login copy lives in the lazy en-login catalog; the anchor keeps its merge target.
   login: {},
   chat: {
-    inlineSwarm: {
-      title: "Swarm",
-      progress: "{done} of {total} settled",
-      childStatus: "{name}: {status}",
-      overflow: "+{count}",
-      moreWorkers: "{count} more workers",
-      status: {
-        queued: "Queued",
-        running: "Running",
-        done: "Completed",
-        failed: "Failed or stopped",
-      },
-      count: {
-        queued: "{count} queued",
-        running: "{count} running",
-        done: "{count} completed",
-        failed: "{count} failed or stopped",
-      },
-    },
     sessionAutomation: {},
     activityPills: {},
     mobileDetails: {
@@ -1632,7 +1612,6 @@ const startupEnglish = {
       preparingContext: "Preparing reply",
       memoryFlushing: "Saving conversation memory",
       startingModel: "Waiting for a response",
-      preparingTool: "Preparing a tool call",
       waitingForLocalModel: "Waiting for the local model to respond",
       waitingForModelSlot: "Waiting for a free model slot",
       waitingForState: "Temporarily busy—retrying",
