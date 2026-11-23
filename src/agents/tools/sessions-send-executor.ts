@@ -60,6 +60,7 @@ import {
   createConfiguredAgentMainSession,
   isConfiguredAgentMainSessionKey,
   notifySessionsSendSession,
+  recordSessionsSendForRequester,
   resolveConfiguredAgentMainSessionKey,
 } from "./sessions-send-tool.delivery.js";
 import {
@@ -545,6 +546,30 @@ export async function executeSessionsSend(
           targetSessionEntry,
           targetAcpMeta,
         );
+        const sendParams = buildSessionsSendAgentParams({
+          message: dispatchMessage,
+          agentId: targetAgentId,
+          sessionKey: resolvedKey,
+          idempotencyKey: runId,
+          nativeChild: targetIsSubagent && !targetAcpMeta,
+          inputProvenance,
+        });
+        const parent = requesterSessionEntry?.spawnedBy ?? requesterSessionEntry?.parentSessionKey;
+        if (requesterIsSubagent && parent === targetSession.canonicalKey) {
+          return await recordSessionsSendForRequester({
+            cfg,
+            admissionConfig: communication.admissionConfig,
+            callGateway: communication.callGateway,
+            runId,
+            sendParams,
+            sessionKey: resolvedKey,
+            sessionStoreTarget: targetSession,
+            expectedSessionId,
+            preparedTargetSessionId: targetSessionEntry?.sessionId,
+            assertSendCurrent: communication.assertCurrent,
+            displayKey,
+          });
+        }
         if (mode === "notify") {
           return await notifySessionsSendSession({
             message,
@@ -556,14 +581,6 @@ export async function executeSessionsSend(
             assertCurrent: communication.assertCurrent,
           });
         }
-        const sendParams = buildSessionsSendAgentParams({
-          message: dispatchMessage,
-          agentId: targetAgentId,
-          sessionKey: resolvedKey,
-          idempotencyKey: runId,
-          nativeChild: targetIsSubagent && !targetAcpMeta,
-          inputProvenance,
-        });
         if (
           mode === "resume" ||
           (mode === undefined &&
