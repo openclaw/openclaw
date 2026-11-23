@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { appendSessionTranscriptReport } from "../../../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
@@ -14,7 +15,10 @@ import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import { readSubagentRunAnnounceResult } from "../announce/subagent-announce-output.js";
 import { retireSubagentCompletionControllerInput } from "../registry/subagent-controller-inputs.js";
-import { ensureDeliveryState } from "../registry/subagent-delivery-state.js";
+import {
+  ensureDeliveryState,
+  hasConsumedRequesterInput,
+} from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import { subagentRegistryLog } from "../registry/subagent-registry-lifecycle-log.js";
 import {
@@ -30,9 +34,8 @@ import {
 import { isCanonicalSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
-  buildRequesterSettleWakeIdentity,
-  sameRequesterSettleRunIdentity,
   captureRequesterSettleWakeProgress,
+  sameRequesterSettleRunIdentity,
 } from "../registry/subagent-requester-settle-identity.js";
 import {
   compareSubagentRunGeneration,
@@ -40,14 +43,12 @@ import {
 } from "../registry/subagent-run-generation.js";
 import { retiredCancellationEndedAt } from "./subagent-completion-mutation.kernel.js";
 import type {
-  BlockSubagentCompletionRequest,
   RequesterWakeCommittedWrite,
   RequesterWakeMutation,
   SubagentCompletionMutation,
   SubagentCompletionMutationResult,
   SubagentCompletionRecord,
 } from "./subagent-completion-mutation.types.js";
-import { buildSubagentCompletionFailureNotice } from "./subagent-completion-notice-text.js";
 import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
 
 export class SubagentCompletionSourceChangedError extends SubagentRegistryMutationRejectedError {}
@@ -57,103 +58,77 @@ type AdmissionReceipt =
   SessionDeliveryWorkerOperations["sessionDelivery.admitSubagentCompletion"]["output"];
 type MutationReceipt = SubagentCompletionMutationResult & { writeId: string };
 
-export async function recordRequiredCompletionNotice(
-  entry: SubagentRunRecord,
-  reason: string,
-  batch: readonly SubagentRunRecord[] = [entry],
-  kind: "failed" | "delayed" | "result" = "failed",
+const CHILD_STATUS_CUSTOM_TYPE = "subagent-completion";
+const MAX_CHILD_RESULT_CHARS = 8_000;
+const NEXT_ACTION =
+  "If you still need this work, resume it with sessions_send or start a new child with sessions_spawn.";
+
+async function formatChildStatus(child: SubagentRunRecord): Promise<string> {
+  const outcome = child.execution.outcome;
+  const killed = child.endedReason === SUBAGENT_ENDED_REASON_KILLED;
+  const status = killed
+    ? "killed"
+    : outcome?.status === "ok"
+      ? "completed"
+      : outcome?.status === "timeout"
+        ? `timed out${outcome.error ? `: ${outcome.error}` : ""}`
+        : outcome?.status === "error"
+          ? outcome.error === "Gateway stopped"
+            ? "interrupted by Gateway restart"
+            : `failed: ${outcome.error || "unknown error"}`
+          : "ended with unknown status";
+  const label = child.label?.trim() || child.task?.trim() || "child task";
+  const header = `Child "${truncateUtf16Safe(label, 200)}" (session ${child.childSessionKey}, run ${child.runId}): ${status}`;
+  // A retired or replaced row keeps its frozen captured result.
+  const result = killed
+    ? ""
+    : ((await readSubagentRunAnnounceResult(child).then(
+        (prepared) => prepared.text,
+        () => resolveSubagentCompletionResultText(child),
+      )) ?? "");
+  const shownText = result.trim();
+  const shownResult =
+    shownText.length > MAX_CHILD_RESULT_CHARS
+      ? `${truncateUtf16Safe(shownText, MAX_CHILD_RESULT_CHARS)}\n[Result truncated. Read the rest with sessions_history on ${child.childSessionKey}.]`
+      : shownText;
+  return [header, shownResult, killed || outcome?.status === "ok" ? "" : NEXT_ACTION]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/**
+ * Appends the children's end state to the requester transcript as model-visible history.
+ * This is the delivery; a wake turn is best-effort. Consumed input is already in history.
+ */
+export async function appendChildStatusToRequester(
+  batch: readonly SubagentRunRecord[],
 ): Promise<void> {
-  const wake = entry.requesterSettleWake;
-  if (
-    kind !== "result" &&
-    subagentRuns.get(entry.runId)?.delivery?.status === "delivered" &&
-    (kind === "delayed" || !wake?.requesterYieldBatch)
-  ) {
+  const shown = batch.filter(
+    (child) =>
+      child.expectsCompletionMessage === true &&
+      child.execution.status === "terminal" &&
+      child.pauseReason !== "sessions_yield" &&
+      !hasConsumedRequesterInput(child),
+  );
+  const first = shown[0];
+  if (!first) {
     return;
   }
-  subagentRegistryLog.warn(`Subagent completion delivery ${kind}`, {
-    runId: entry.runId,
-    requesterSessionKey: entry.requesterSessionKey,
-    reason,
-  });
-  if (
-    entry.expectsCompletionMessage !== true ||
-    entry.execution.status !== "terminal" ||
-    entry.pauseReason === "sessions_yield"
-  ) {
-    return;
-  }
-  // An intentional stop with nothing captured has nothing to show; live siblings still do.
-  const shown =
-    kind === "result"
-      ? batch
-      : batch.filter(
-          (child) =>
-            child.endedReason !== SUBAGENT_ENDED_REASON_KILLED ||
-            child.suppressAnnounceReason === "steer-restart" ||
-            resolveSubagentCompletionResultText(child) !== undefined,
-        );
-  if (shown.length === 0) {
-    return;
-  }
-  // Share the yielded requester's failure identity with its lifecycle settlement.
-  const noticeId =
-    wake?.requesterYieldBatch || batch.length > 1
-      ? (wake?.requesterRunId ??
-        buildAnnounceIdempotencyKey(
-          `${
-            buildRequesterSettleWakeIdentity({
-              requesterSessionKey: entry.requesterSessionKey,
-              requesterAgentId: entry.requesterAgentId,
-              batchRunIds: wake?.batchRunIds ?? batch.map((member) => member.runId),
-              rearmGeneration: wake?.rearmGeneration,
-            }).batchKey
-          }:delivery-failure`,
-        ))
-      : `subagent-delivery-failure:${entry.taskRunId ?? entry.runId}:${entry.delivery?.generation ?? 1}`;
-  // Independently admitted partitions contain different saved results, even within one wake.
-  const runId =
-    kind === "result"
-      ? buildAnnounceIdempotencyKey(
-          `${noticeId}:result:${batch
-            .map((child) => child.runId)
-            .toSorted()
-            .join(",")}`,
-        )
-      : noticeId;
-  // Report delivery state without borrowing its retired execution authority.
-  // Address the current chat, including a compaction successor; deletion and Stop get no notice.
+  // Address the current chat, including a compaction successor; deletion and Stop get nothing.
   const requester = {
-    agentId: entry.requesterAgentId,
-    sessionKey: entry.requesterSessionKey,
-    storePath: entry.requesterStorePath,
+    agentId: first.requesterAgentId,
+    sessionKey: first.requesterSessionKey,
+    storePath: first.requesterStorePath,
   };
   const current = await readSessionEntryReadOnlyInWorker(requester);
   if (!current?.sessionId || current.status === "killed") {
     return;
   }
-  const customType = kind === "delayed" ? "subagent-delivery-delayed" : "subagent-completion";
-  const findings =
-    kind === "result"
-      ? (
-          await Promise.all(
-            batch.map(async (child) => {
-              const outcome = child.execution.outcome;
-              return [
-                `Child ${child.childSessionKey} (run ${child.runId})`,
-                outcome?.status === "error"
-                  ? outcome.error === "Gateway stopped"
-                    ? "Interrupted by Gateway restart; not resumed."
-                    : outcome.error
-                  : outcome?.status,
-                (await readSubagentRunAnnounceResult(child)).text,
-              ]
-                .filter(Boolean)
-                .join("\n\n");
-            }),
-          )
-        ).join("\n\n")
-      : buildSubagentCompletionFailureNotice(shown, kind);
+  const runIds = shown
+    .map((child) => `${child.runId}:${child.delivery?.generation ?? 1}`)
+    .toSorted();
+  const runId = buildAnnounceIdempotencyKey(`subagent-status:${runIds.join(",")}`);
+  const content = (await Promise.all(shown.map(formatChildStatus))).join("\n\n");
   const result = await runWithoutOwnedSessionTranscriptWrites(() =>
     appendSessionTranscriptReport(
       {
@@ -163,25 +138,28 @@ export async function recordRequiredCompletionNotice(
       },
       {
         kind: "custom",
-        customTypes: [customType],
+        customTypes: [CHILD_STATUS_CUSTOM_TYPE],
         selectReport: (latest) =>
           isRecord(latest?.details) && latest.details.runId === runId
             ? undefined
             : {
-                customType,
-                display: true,
-                excludeFromContext:
-                  kind !== "failed" ||
-                  batch.every((child) => child.delivery?.requesterDelivery?.state === "consumed"),
-                content: findings,
-                details: { runId, childRunId: entry.runId, error: reason },
+                customType: CHILD_STATUS_CUSTOM_TYPE,
+                display: false,
+                content,
+                details: { runId, childRunIds: shown.map((child) => child.runId) },
               },
       },
     ),
   );
   if (!result.ok) {
-    throw new Error(`Child result failure notice could not be appended: ${result.error.code}`);
+    throw new Error(
+      `Child status could not be appended to requester history: ${result.error.code}`,
+    );
   }
+  subagentRegistryLog.info("Subagent status appended to requester history", {
+    requesterSessionKey: first.requesterSessionKey,
+    runIds: shown.map((child) => child.runId),
+  });
 }
 
 function parseAcknowledgedRecord(value: unknown): SubagentCompletionRecord {
@@ -520,17 +498,12 @@ export async function settleSubagentCompletionDelivery(
   );
 }
 
-export async function blockSubagentCompletionDelivery(
-  params: BlockSubagentCompletionRequest &
-    CompletionMutationOptions & { requesterBatch?: readonly SubagentRunRecord[] },
+/** A delivery that never reached the requester's turn settles by appending its status. */
+export async function settleSubagentCompletionInHistory(
+  params: { subagent: SubagentRunRecord } & CompletionMutationOptions,
 ): Promise<boolean> {
-  const {
-    context: _context,
-    databaseOptions: _databaseOptions,
-    assertCurrent: _assertCurrent,
-    requesterBatch: _requesterBatch,
-    ...request
-  } = params;
+  // The history entry must commit before the row can retire its result.
+  await appendChildStatusToRequester([params.subagent]);
   const result = await mutateCompletion(
     [params.subagent],
     (rows) => {
@@ -540,31 +513,17 @@ export async function blockSubagentCompletionDelivery(
           "Subagent completion delivery generation changed",
         );
       }
-      return { kind: "block", params: { ...request, subagent: current }, now: Date.now() };
+      return { kind: "settleInHistory", subagent: current, now: Date.now() };
     },
     {
       ...params,
       onPublished(applied) {
-        if (
-          applied === true &&
-          (params.suspendedReason ||
-            params.operatorAuthorityUnavailable ||
-            params.disposition === "permanent_failure")
-        ) {
-          // The durable outcome precedes releasing the completion input.
+        if (applied === true) {
           retireSubagentCompletionControllerInput(params.subagent);
         }
       },
     },
   );
-  if (result.applied && (params.suspendedReason || params.disposition === "permanent_failure")) {
-    await recordRequiredCompletionNotice(
-      params.subagent,
-      params.reason,
-      params.requesterBatch,
-      params.suspendedReason === "expiry" ? "delayed" : "failed",
-    );
-  }
   return result.applied === true;
 }
 
@@ -673,16 +632,16 @@ export async function mutateRequesterCompletionBatch(
     operation: RequesterWakeMutation | { kind: "settle"; outcome: SubagentAnnounceDeliveryResult };
   },
 ): Promise<CompletionMutationPublication> {
-  if (params.operation.kind === "settle" && !params.operation.outcome.delivered) {
+  if (
+    params.operation.kind === "settle" &&
+    !params.operation.outcome.delivered &&
+    !params.committed
+  ) {
     params.assertCurrent();
-    // Delete cleanup may retire the last result row. Its visible outcome must commit first.
-    for (const entry of params.entries) {
-      await recordRequiredCompletionNotice(
-        entry,
-        params.operation.outcome.error ?? params.operation.outcome.disposition ?? "not delivered",
-        params.entries,
-      );
-    }
+    // Delete cleanup may retire the last result row. Its history entry must commit first.
+    await appendChildStatusToRequester(
+      params.entries.map((entry) => subagentRuns.get(entry.runId) ?? entry),
+    );
   }
   const publication = await mutateCompletion(
     params.entries,

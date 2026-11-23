@@ -99,7 +99,6 @@ export function createSubagentSweeperHarness(
       },
     ),
     completeSubagentRunWithRecovery: vi.fn(),
-    discardTerminalDelivery: vi.fn<SweeperOptions["discardTerminalDelivery"]>(),
     emitSubagentEndedHookForRun: vi.fn(),
     notifyContextEngineSubagentEnded: vi.fn(),
     runContextEngineSubagentEnded: vi.fn(),

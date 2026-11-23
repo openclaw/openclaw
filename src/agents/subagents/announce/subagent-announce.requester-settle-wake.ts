@@ -308,9 +308,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   if (!pauseNotice && settledBatch.every(hasConsumedRequesterInput)) {
     // The input is already in the requester transcript. Restart continuation belongs
     // to the Gateway; resubmitting it can conflict with the committed payload.
-    if (settledBatch.some((entry) => entry.delivery?.disposition === "ambiguous")) {
-      return false;
-    }
     await completeBatch(settledBatch, selectedState, {
       delivered: settledBatch.every((entry) => entry.delivery?.status === "delivered"),
       path: "direct",
@@ -395,7 +392,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       retainedWake: state,
       hasPrivateCompletion: privateRows.length > 0,
     });
-    const knownNondelivery = state.status === "pending" && state.nextAttemptAt !== undefined;
     const { batchKey } = identity;
     const directIdempotencyKey = identity.runId;
     const sourceReceiptAdmission = createRequesterSettleReceiptAdmission({
@@ -468,7 +464,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       requesterOrigin: directOrigin,
       retainedMessage:
         state.privateInput?.runId === directIdempotencyKey ? state.privateInput.message : undefined,
-      retryMissingResult: !parentOnly && knownNondelivery && state.attemptCount > 0,
     });
     const dispatchState = {
       ...state,
@@ -676,23 +671,8 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     if ((await settleRevokedBatch()) || delivery.disposition === "session_queued") {
       return false;
     }
-    // A permanent refusal withholds the result visibly; it stays readable in the child session.
-    if (delivery.disposition === "permanent_failure") {
-      await completeBatch(settledBatch, state, delivery, requesterEntry.sessionId);
-      return false;
-    }
-    // Any other uncommitted result stays owed; the sweeper wakes it again. Nothing expires it.
-    await params.transitionBatch(
-      settledBatch,
-      {
-        ...dispatchState,
-        status: "pending",
-        attemptCount,
-        nextAttemptAt: Date.now(),
-        lastError: delivery.error ?? delivery.reason ?? "undelivered",
-      },
-      refreshBatch,
-    );
+    // A wake that missed its turn settles the batch into requester history; nothing retries it.
+    await completeBatch(settledBatch, state, delivery, requesterEntry.sessionId);
     return false;
   } finally {
     if (controllerInput) {
