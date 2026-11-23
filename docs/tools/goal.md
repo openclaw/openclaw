@@ -141,7 +141,7 @@ clear that goal explicitly; completion allows the next goal to start.
 - `budget_limited`: the configured token budget was reached. `/goal resume`
   restarts pursuit from the same objective with a fresh budget window.
 - `usage_limited`: settled token usage is unavailable for the Goal, for example
-  after a CLI fallback. Choose a built-in model that reports usage before
+  after a CLI turn that reports no usage. Choose a built-in model that reports usage before
   explicitly resuming it.
 - `complete`: the goal was achieved. It stays complete until you explicitly use
   `/goal resume` or **Resume** in the Control UI to pursue the same objective again.
@@ -166,7 +166,8 @@ start fresh session context.
 
 Goals can have an optional positive token budget, set through the
 `create_goal` tool's `token_budget` parameter. Built-in chat Goals count
-settled model tokens for turns that start with the Goal active. The turn that
+settled model tokens for turns that start with the Goal active, including the
+usage a CLI backend reports for its turns. The turn that
 calls `create_goal` is not included: its usage also covers work before the Goal
 existed. Repeated or shrinking context still uses tokens. If a turn may have used
 tokens but no settled count is available, automatic pursuit stops with

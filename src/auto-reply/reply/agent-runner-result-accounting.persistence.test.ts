@@ -182,7 +182,7 @@ it("records why a budgeted Goal stops after an unmetered CLI fallback", async ()
     tokenBudget: 100_000,
   });
   context.admittedGoalBudget = captureSessionGoalBudget(goal);
-  fixture.setMeta({ usage: { input: 40_000, output: 5_000 } });
+  fixture.setMeta({ usage: undefined, lastCallUsage: { input: 40_000 } });
   context.execution.result.meta.executionTrace = { runner: "cli", fallbackUsed: true };
   context.execution.result.meta.stopReason = "end_turn";
   setRuntimeConfigSnapshot(context.cfg);
@@ -193,7 +193,6 @@ it("records why a budgeted Goal stops after an unmetered CLI fallback", async ()
   }
   const row = fixture.read();
   expect(row).toMatchObject({
-    inputTokens: 40_000,
     goal: {
       id: goal.id,
       status: "usage_limited",
@@ -204,6 +203,47 @@ it("records why a budgeted Goal stops after an unmetered CLI fallback", async ()
   expect(isGoalContinuationCurrent({ goalId: goal.id, sessionId: fixture.sessionId }, row)).toBe(
     false,
   );
+});
+
+it("meters a budgeted Goal from usage a CLI backend reports", async () => {
+  const fixture = await createFixture();
+  const { context } = fixture;
+  const sessionKey = context.sessionKey!;
+  const goal = await createSessionGoal({
+    storePath,
+    sessionKey,
+    objective: "Index poems",
+    tokenBudget: 100_000,
+  });
+  fixture.setMeta({ usage: { input: 40_000, output: 5_000 } });
+  context.execution.result.meta.executionTrace = { runner: "cli", fallbackUsed: false };
+  setRuntimeConfigSnapshot(context.cfg);
+  try {
+    for (const [index, spent] of [45_000, 90_000, 135_000].entries()) {
+      if (index > 0) {
+        context.replyOperation.complete();
+        context.replyOperation = createReplyOperation({
+          sessionId: fixture.sessionId,
+          sessionKey,
+          resetTriggered: false,
+        });
+        operations.push(context.replyOperation);
+        context.replyOperation.setPhase("running");
+      }
+      context.runId = "cli-poems-" + index;
+      context.activeSessionEntry = await fixture.patch({ activeWriterRunId: context.runId });
+      context.admittedGoalBudget = captureSessionGoalBudget(context.activeSessionEntry.goal);
+      await withAccountingProvider(() => finalizeReplyAgentRun(context));
+      const row = fixture.read();
+      expect(row?.goal).toMatchObject({ id: goal.id, tokensUsed: spent });
+      expect(
+        isGoalContinuationCurrent({ goalId: goal.id, sessionId: fixture.sessionId }, row),
+      ).toBe(spent < 100_000);
+    }
+  } finally {
+    clearRuntimeConfigSnapshot();
+  }
+  expect(fixture.read()?.goal?.status).toBe("budget_limited");
 });
 
 async function finalizeWithMedia(fixture: Fixture, prepare: () => Promise<unknown>) {

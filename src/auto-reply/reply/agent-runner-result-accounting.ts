@@ -440,18 +440,18 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   } satisfies Parameters<typeof prepareSessionUsageUpdate>[0];
   if (completion) {
     const { admittedGoalBudget } = context;
-    const unmeteredCliRun = runResult.meta.executionTrace?.runner === "cli";
+    const cliRun = runResult.meta.executionTrace?.runner === "cli";
     if (
       admittedGoalBudget &&
-      (usageParams.agentHarnessId === "openclaw" || unmeteredCliRun) &&
+      (usageParams.agentHarnessId === "openclaw" || cliRun) &&
       !preserveUserFacingSessionState &&
       !followupRun.run.scheduledAutomation
     ) {
-      // CLI counters may still describe session usage, but do not meter the Goal.
-      const tokens = unmeteredCliRun ? undefined : resolveSettledSessionGoalTokens(usage);
+      // A CLI turn that reports usage is metered; one that reports none stops the Goal.
+      const tokens = resolveSettledSessionGoalTokens(usage);
       if (
         tokens !== undefined ||
-        (execution.status === "ok" && (unmeteredCliRun || runResult.meta.providerStarted !== false))
+        (execution.status === "ok" && (cliRun || runResult.meta.providerStarted !== false))
       ) {
         completion.patch({
           kind: "goal-usage",

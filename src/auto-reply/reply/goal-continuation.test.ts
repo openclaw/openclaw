@@ -333,6 +333,28 @@ describe("Goal continuation eligibility", () => {
     expect(await enqueueGoalContinuation(f.params)).toBe(false);
     expect(enqueueFollowupRun).not.toHaveBeenCalled();
   });
+  it("continues a budgeted Goal after a CLI turn that reports usage", async () => {
+    const f = fixture();
+    const current = entry();
+    current.goal!.tokenBudget = 50_000;
+    current.goal!.tokensUsed = 12_000;
+    vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue(current);
+    f.params.result = {
+      ...normal,
+      meta: {
+        ...normal.meta,
+        executionTrace: { runner: "cli", fallbackUsed: false },
+        agentMeta: {
+          sessionId: "cli-session",
+          provider: "anthropic",
+          model: "claude",
+          usage: { input: 9_000, output: 3_000 },
+        },
+      },
+    };
+    expect(await enqueueGoalContinuation(f.params)).toBe(true);
+    expect(enqueueFollowupRun).toHaveBeenCalledTimes(1);
+  });
   it.each([
     { meta: { aborted: true } },
     { meta: { yielded: true } },
