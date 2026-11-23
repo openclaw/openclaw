@@ -56,6 +56,35 @@ const device = {
   pollAfterMs: 1_000,
 };
 suite.define(() => {
+  it("opens the GitHub accounts section from Settings search without manual scrolling", async () => {
+    await suite.withPage(
+      { locale: "en-US", viewport: { width: 1280, height: 700 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodDelays: { "users.listModelAccounts": 300 },
+        });
+        await page.goto(suite.server.baseUrl + "settings/appearance");
+        await page.locator(".settings-sidebar__search-input").fill("GitHub accounts");
+        await page.locator('a[href$="#settings-profile-github-connections"]').click();
+        const section = page.locator("#settings-profile-github-connections");
+        await section.waitFor();
+        const heading = section.getByRole("heading").first();
+        await expect(heading).toBeInViewport({ ratio: 1 });
+        await expect.poll(async () => (await heading.boundingBox())?.y).toBeGreaterThan(0);
+        const hero = page.locator(".profile-hero");
+        await hero.scrollIntoViewIfNeeded();
+        const identityReads = (await gateway.getRequests("users.self")).length;
+        await gateway.setOnline(false);
+        await gateway.setOnline(true);
+        await expect
+          .poll(async () => (await gateway.getRequests("users.self")).length)
+          .toBeGreaterThan(identityReads);
+        await heading.waitFor();
+        await expect(hero).toBeInViewport();
+      },
+    );
+  });
+
   it("copies the personal device code and connects only the signed-in reader's GitHub", async () => {
     await suite.withPage(
       {

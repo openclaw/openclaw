@@ -2,6 +2,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   action,
   affects,
+  createEffect,
   createMemo,
   createOptimistic,
   createSignal,
@@ -87,7 +88,8 @@ function accessSummary(scopes: readonly string[] | null) {
   );
 }
 
-export function ProfilePage() {
+export function ProfilePage(route: { routeData?: string | null }) {
+  let host!: HTMLElement;
   const context = useApplication();
   const upgrade = projectOwner(context.scopeUpgrade, (source) =>
     source.state.phase === "hidden" ? null : source.state,
@@ -209,6 +211,24 @@ export function ProfilePage() {
   const initialIdentityPending = () =>
     view().ownProfile === null &&
     (view().identityLoading || (view().connected && !view().identityReady));
+  let pendingTarget: string | null | undefined;
+  createEffect(
+    () => ({ id: route.routeData, ready: hasPresentation() && !initialIdentityPending() }),
+    ({ id, ready }, previous) => {
+      if (id !== previous?.id) {
+        pendingTarget = id;
+      }
+      if (!ready || !pendingTarget) {
+        return;
+      }
+      const target = host.ownerDocument.getElementById(pendingTarget);
+      if (target && host.contains(target)) {
+        target.scrollIntoView?.({ block: "start" });
+        // A refresh or reconnect must not undo the reader's subsequent scrolling.
+        pendingTarget = null;
+      }
+    },
+  );
   const agent = () => {
     const list = agents.read();
     const id = list?.defaultId ?? "main";
@@ -463,7 +483,7 @@ export function ProfilePage() {
   );
 
   return (
-    <openclaw-profile-page>
+    <openclaw-profile-page ref={(element) => (host = element)}>
       <SettingsPageHeader
         title={titleForRoute("profile")}
         subtitle={
@@ -564,7 +584,8 @@ export function ProfilePage() {
               onSave={saveIdentity}
             />
           </Show>
-          <Show when={hasPresentation()}>
+          {/* Unidentified readers need Access even when no identity read can finish. */}
+          <Show when={hasPresentation() && (!view().selfUser || !initialIdentityPending())}>
             <div id="settings-profile-access">
               <SettingsSection title={t("profilePage.access.title")}>
                 <SettingsRow
