@@ -116,7 +116,7 @@ async function getLayoutPage(viewport: (typeof viewports)[number], colorScheme: 
 suite.define(() => {
   for (const destination of [
     { from: "memory", route: "memory-import", title: "Import memory", tab: "Settings" },
-    { from: "skills", route: "plugins", title: "Plugins", tab: "Plugins" },
+    { from: "skills", route: "plugins", title: "Customize", tab: "Plugins" },
     { from: "skills", route: "skill-workshop", title: "Skill workshop", tab: "Skill workshop" },
   ] as const) {
     it(`returns from embedded ${destination.route} through its page link and direct entry`, async () => {
@@ -198,7 +198,7 @@ suite.define(() => {
         await waitForControlUiRoute(page, { routeId: "settings", pathname: "/settings" });
         await page
           .locator(".native-embed-header")
-          .getByText("Reconnecting…", { exact: true })
+          .getByText("Reconnecting", { exact: true })
           .waitFor();
         await page.locator('.settings-embed-list a[href="/settings/appearance"]').click();
         await waitForControlUiRoute(page, { routeId: "appearance" });

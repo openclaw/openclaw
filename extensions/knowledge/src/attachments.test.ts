@@ -104,12 +104,12 @@ it("large Unicode source survives chunking, bounded preview, restart, search and
   expect(stored.equals(bytes), "stored original bytes").toBe(true);
   const receipt = await f.service.save_page(draft([evidence]), f.owner);
   const service = createKnowledgeService(f.api),
-    read = await service.record({ includeEvidence: true, id: receipt.id }, f.owner);
+    read = await service.record_detail({ includeEvidence: true, id: receipt.id }, f.owner);
   expect(read.record!.valid).toBeTruthy();
   expect(read.evidence![0]!.verified).toBe(true);
   expect(read.evidence![0]!.excerpt).toBe("x".repeat(3999));
   expect(read.evidence![0]!.excerptTruncated).toBe(true);
-  expect(Check(contract.operations.record.output, read)).toBeTruthy();
+  expect(Check(contract.operations.record_detail.output, read)).toBeTruthy();
   const chunks = [];
   let offset: number | null = 0;
   do {
@@ -138,7 +138,7 @@ it("binary/PDF originals are never coerced into UTF-8; media remains outside aut
   const pdf = await upload(f, bytes, { filename: "scan.pdf", mediaType: "application/pdf" });
   const media = await upload(f, bytes, { filename: "photo.png", mediaType: "image/png" });
   const saved = await f.service.save_page(draft([pdf, media]), f.owner);
-  const read = await f.service.record({ includeEvidence: true, id: saved.id }, f.owner);
+  const read = await f.service.record_detail({ includeEvidence: true, id: saved.id }, f.owner);
   expect(read.evidence!.every((e) => e.verified && !e.excerpt)).toBeTruthy();
   expect(execFileSync("git", ["show", `HEAD:private/${pdf.path}`], { cwd: f.root })).toStrictEqual(
     bytes,
@@ -158,11 +158,11 @@ it("more than twenty sources save and enumerate without truncating stored eviden
     sources.push(await upload(f, Buffer.from(`Source ${i}`), { filename: `${i}.txt` }));
   }
   const saved = await f.service.save_page(draft(sources), f.owner);
-  const first = await f.service.record({ includeEvidence: true, id: saved.id }, f.owner);
+  const first = await f.service.record_detail({ includeEvidence: true, id: saved.id }, f.owner);
   expect(first.evidenceTotal).toBe(27);
   expect(first.evidence!.length).toBe(20);
   expect(first.nextEvidenceOffset).toBe(20);
-  const second = await f.service.record(
+  const second = await f.service.record_detail(
     { includeEvidence: true, id: saved.id, evidenceOffset: first.nextEvidenceOffset! },
     f.owner,
   );
@@ -193,7 +193,7 @@ it("upload resumes across reload, exact chunks replay, divergent chunks and meta
     Buffer.from("firstsecond"),
   );
   expect(
-    (await service.records({}, f.owner)).total,
+    (await service.records_detail({}, f.owner)).total,
     "Uploading is independent of page publication",
   ).toBe(0);
 });
@@ -224,7 +224,7 @@ it("attachment authority, record-scoped reads, tampering, paths and links are en
       f.service.attachment({ id: saved.id, path: evidence.path, sha256: evidence.sha256 }, f.owner);
   await writeFile(file, "tampered");
   expect(
-    (await f.service.record({ includeEvidence: true, id: saved.id }, f.owner)).evidence![0]!
+    (await f.service.record_detail({ includeEvidence: true, id: saved.id }, f.owner)).evidence![0]!
       .verified,
   ).toBe(false);
   await expect(download()).rejects.toThrow(/hash/);
@@ -243,12 +243,12 @@ it("source files are independent of the catalog scan byte budget; legacy large t
   const evidence = await upload(f, bytes);
   const saved = await f.service.save_page(draft([evidence]), f.owner);
   expect(
-    (await f.service.record({ includeEvidence: true, id: saved.id }, f.owner)).record!.valid,
+    (await f.service.record_detail({ includeEvidence: true, id: saved.id }, f.owner)).record!.valid,
   ).toBe(true);
   const source = { text: "Legacy source\n".repeat(8000), attribution: "Older client" };
   expect(Check(contract.operations.save_page.input, { ...draft([]), source })).toBeTruthy();
   const legacy = await f.service.save_page({ ...draft([]), source }, f.owner);
-  const record = await f.service.record({ includeEvidence: true, id: legacy.id }, f.owner);
+  const record = await f.service.record_detail({ includeEvidence: true, id: legacy.id }, f.owner);
   expect(record.evidence![0]!.sha256).toBe(createHash("sha256").update(source.text).digest("hex"));
   const original = await readFile(path.join(f.root, "private", record.evidence![0]!.path));
   expect(original.equals(Buffer.from(source.text)), "legacy original bytes").toBe(true);
@@ -356,11 +356,11 @@ it("conversation uploads and downloads cannot reach private originals or receipt
   expect(sharedFile.evidence!.sha256).not.toBe(privateFile.evidence!.sha256);
   const sharedPage = await f.service.save_page(draft([sharedFile.evidence]), group);
   expect(
-    (await f.service.record({ includeEvidence: true, id: sharedPage.id }, f.owner)).record,
+    (await f.service.record_detail({ includeEvidence: true, id: sharedPage.id }, f.owner)).record,
   ).toBe(null);
   expect(
-    (await f.service.record({ includeEvidence: true, id: sharedPage.id }, group)).evidence![0]!
-      .excerpt,
+    (await f.service.record_detail({ includeEvidence: true, id: sharedPage.id }, group))
+      .evidence![0]!.excerpt,
   ).toBe("SHARED");
   expect(await readFile(path.join(f.root, "private", privateFile.evidence!.path))).toStrictEqual(
     Buffer.from("PRIVATE"),

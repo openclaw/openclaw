@@ -120,6 +120,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
+    assistantState.silent ||
     (toolFailurePayload && hasTerminalOutput) ||
     (params.attempt.lastToolError && !toolFailurePayload) ||
     params.hasIntentionalTerminalCompletion ||
@@ -134,14 +135,13 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  // Failed or incomplete model steps still need a warning when their lifecycle
-  // snapshot contains unfinished work; only a normal stop can leave that work pending.
+  // Started async work is historical evidence, not a continuation or a reply.
+  // Only unfinished lifecycle work can still own this normal stop.
   if (
-    hasAsyncActivity(params.attempt.toolMetas) ||
-    (!params.aborted &&
-      assistant?.stopReason === "stop" &&
-      (params.attempt.itemLifecycle.activeCount > 0 ||
-        params.attempt.itemLifecycle.completedCount < params.attempt.itemLifecycle.startedCount))
+    !params.aborted &&
+    assistant?.stopReason === "stop" &&
+    (params.attempt.itemLifecycle.activeCount > 0 ||
+      params.attempt.itemLifecycle.completedCount < params.attempt.itemLifecycle.startedCount)
   ) {
     return null;
   }
@@ -178,7 +178,11 @@ export function resolveIncompleteTurnPayloadText(params: {
   const preflightFailureText = renderAgentHarnessPreflightUserMessage(promptError);
   const failureFacts =
     promptError && preflightFailureText === undefined
-      ? resolveReplyFailoverFacts(promptError, formatErrorMessage(promptError))
+      ? resolveReplyFailoverFacts(
+          promptError,
+          formatErrorMessage(promptError),
+          params.terminalFailure?.runParams.config,
+        )
       : undefined;
   // A non-replayable harness failure may have no assistant message to carry its error.
   // Share classified copy with thrown failures; never display raw prompt diagnostics.
@@ -186,8 +190,8 @@ export function resolveIncompleteTurnPayloadText(params: {
     textToolCallFailureText ??
     preflightFailureText ??
     (failureFacts
-      ? (failureFacts.providerRequestError?.userMessage ??
-        failureFacts.requestFailureText ??
+      ? (failureFacts.requestFailureText ??
+        failureFacts.providerRequestError?.userMessage ??
         renderAssistantRequestFailureCopy({
           reason: failureFacts.reason,
           status: failureFacts.status,
@@ -206,7 +210,9 @@ export function resolveIncompleteTurnPayloadText(params: {
     return preflightFailureText;
   }
   if (assistant && isProviderRefusalAssistantError(assistant)) {
-    return formatUserFacingAssistantErrorText(assistant);
+    return formatUserFacingAssistantErrorText(assistant, {
+      cfg: params.terminalFailure?.runParams.config,
+    });
   }
   const authFailure = params.terminalFailure;
   const reason = authFailure?.assistantProfileFailureReason;
@@ -271,10 +277,12 @@ interface YieldContinuationAttempt {
   acceptedSessionSpawns?: readonly AcceptedSessionSpawn[];
   runtimeContinuationStarted?: boolean;
   yieldMessageWaitRegistered?: boolean;
+  yieldExecWakeArmed?: boolean;
   messagingToolSentTexts?: readonly string[];
   messagingToolSentMediaUrls?: readonly string[];
   messagingToolSentTargets?: readonly MessagingToolSend[];
   toolMetas?: readonly { asyncStarted?: boolean }[];
+  yieldAcknowledgment?: string;
 }
 
 /** Same-attempt work that can resume execution or deliver its completion. */
@@ -287,13 +295,19 @@ export function hasRunContinuationEvidence(attempt: YieldContinuationAttempt): b
     hasCompletionMessageSessionSpawn(attempt.acceptedSessionSpawns) ||
     attempt.runtimeContinuationStarted === true ||
     attempt.yieldMessageWaitRegistered === true ||
+    // Set only when the yield claim armed a command; a "running" exec result alone is not a wake.
+    attempt.yieldExecWakeArmed === true ||
     hasAsyncActivity(attempt.toolMetas)
   );
 }
 
-/** A deliberate yield can also leave accepted work or already-sent output. */
+/**
+ * A deliberate yield can also leave accepted work or already-sent output. A waiting
+ * acknowledgment is kept only for an armed completion, so that wake is its continuation.
+ */
 export function hasYieldContinuationEvidence(attempt: YieldContinuationAttempt): boolean {
   return (
+    Boolean(attempt.yieldAcknowledgment?.trim()) ||
     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
     hasCommittedMessagingToolDeliveryEvidence(attempt) ||
     (attempt.successfulCronAdds ?? 0) > 0 ||

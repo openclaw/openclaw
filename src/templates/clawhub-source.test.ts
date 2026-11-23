@@ -52,6 +52,7 @@ vi.mock("./reader.js", () => ({
 
 import {
   listClawHubTemplates,
+  prefetchClawHubSource,
   readClawHubTemplateDetail,
   readClawHubTemplatePreview,
   readClawHubTemplatesOverview,
@@ -160,7 +161,8 @@ const emptyManifest: TemplateManifest = {
   schemaVersion: 1,
   agent: { id: "research-briefing", name: "Research Briefing" },
   workspace: { bootstrapFiles: {}, files: [] },
-  packages: [],
+  skills: [],
+  plugins: [],
   mcpServers: {},
   automations: [],
 };
@@ -206,10 +208,17 @@ async function useRealTrust(security = matchingSecurity) {
   mocks.security.mockResolvedValue(security);
 }
 
-async function prepareResolverFixture(packages: TemplateManifest["packages"] = []) {
+async function prepareResolverFixture(
+  packages: Array<{
+    kind: "skill" | "plugin";
+    source: "clawhub";
+    ref: string;
+    version: string;
+  }> = [],
+) {
   await fs.writeFile(
     path.join(fixtureRoot, "CLAW.md"),
-    `---\n${JSON.stringify({ ...emptyManifest, packages })}\n---\n`,
+    `---\n${JSON.stringify({ ...emptyManifest, skills: packages.filter((pkg) => pkg.kind === "skill").map((entry) => ({ ref: entry.ref, version: entry.version })), plugins: packages.filter((pkg) => pkg.kind === "plugin").map((entry) => ({ ref: entry.ref, version: entry.version })) })}\n---\n`,
   );
   return { stateDir: fixtureStateDir };
 }
@@ -232,15 +241,14 @@ beforeEach(async () => {
       bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } },
       files: [{ source: "USER.md", path: "USER.md" }],
     },
-    packages: [
-      { kind: "skill", source: "clawhub", ref: "@openclaw/citation-check", version: "1.1.0" },
-      { kind: "plugin", source: "clawhub", ref: "@openclaw/source-plugin", version: "2.0.0" },
-    ],
+    skills: [{ ref: "@openclaw/citation-check", version: "1.1.0" }],
+    plugins: [{ ref: "@openclaw/source-plugin", version: "2.0.0" }],
     mcpServers: { sources: { command: "source-tool" } },
     automations: [
       {
         id: "daily-briefing",
         name: "Daily briefing",
+        enabled: false,
         schedule: { cron: "0 9 * * *", timezone: "UTC" },
         session: "isolated",
         message: "Prepare the briefing",
@@ -278,41 +286,104 @@ afterEach(async () => {
 });
 
 describe("public ClawHub Template catalog", () => {
-  it("projects an overview in one HTTP read, retaining featured order and category ranking", async () => {
-    const official = { ...officialPackage(), stats: { installs: 20 } };
-    const community = { ...communityPackage(), stats: { installs: 1 } };
-    const impostor = officialPackage("@other/impostor");
+  it.each([
+    { optIn: undefined, marker: true }, // A plain overview ignores an unsolicited certificate.
+    { optIn: false, marker: true },
+    { optIn: true, marker: undefined }, // Legacy or over-budget registry: only shelves are known.
+    { optIn: true, marker: "true" },
+  ])(
+    "keeps the bounded overview when optIn=$optIn and marker=$marker",
+    async ({ optIn, marker }) => {
+      const official = { ...officialPackage(), stats: { installs: 20 } };
+      const community = { ...communityPackage(), stats: { installs: 1 } };
+      const impostor = officialPackage("@other/impostor");
+      const extra = officialPackage("@openclaw/extra");
+      const items = [community, impostor, official, extra];
+      const fetch = vi.fn(async (_input: unknown) =>
+        Response.json({
+          complete: true,
+          completeCategoryEntries: marker,
+          featured: items,
+          sections: [{ category: "research", items }],
+        }),
+      );
+      vi.stubGlobal("fetch", fetch);
+      const overview = await readClawHubTemplatesOverview({
+        baseUrl: "https://registry.example",
+        limit: 2,
+        timeoutMs: 1234,
+        ...(optIn === undefined ? {} : { includeCategoryEntries: optIn }),
+      });
+      expect(overview?.featured.map((entry) => entry.packageName)).toEqual([
+        personalPackageName,
+        packageName,
+      ]);
+      expect(overview?.sections[0]?.entries.map((entry) => entry.packageName)).toEqual([
+        packageName,
+        personalPackageName,
+      ]);
+      expect(overview?.sections[0]).not.toHaveProperty("additionalEntries");
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(String(fetch.mock.calls[0]?.[0])).toBe(
+        "https://registry.example/api/v1/templates/overview?limit=2" +
+          (optIn ? "&include=categoryEntries" : ""),
+      );
+      expect(mocks.list).not.toHaveBeenCalled();
+    },
+  );
+
+  it("splits each certified category after filtering, last-valid de-duplication and ranking", async () => {
+    const older = { ...officialPackage(), stats: { installs: 100 } };
+    const current = { ...older, displayName: "Current release", stats: { installs: 7 } };
+    const community = { ...communityPackage(), stats: { installs: 20 } };
+    const tie = { ...officialPackage("@openclaw/zebra"), stats: { installs: 7 } };
+    const items = [older, tie, community, current, { ...older, ownerHandle: "impostor" }];
     const fetch = vi.fn(async (_input: unknown) =>
       Response.json({
         complete: true,
-        featured: [community, impostor, official],
-        sections: [{ category: "research", items: [community, impostor, official] }],
+        completeCategoryEntries: true,
+        featured: [current, community],
+        sections: [
+          { category: "research", items },
+          { category: "coding", items: [current] },
+        ],
       }),
     );
     vi.stubGlobal("fetch", fetch);
     const overview = await readClawHubTemplatesOverview({
       baseUrl: "https://registry.example",
-      limit: 8,
-      timeoutMs: 1234,
+      limit: 1,
+      includeCategoryEntries: true,
     });
-    expect(overview?.featured.map((entry) => entry.packageName)).toEqual([
-      personalPackageName,
-      packageName,
-    ]);
-    expect(overview?.sections[0]?.entries.map((entry) => entry.packageName)).toEqual([
-      packageName,
-      personalPackageName,
-    ]);
+    expect(overview).toMatchObject({
+      featured: [{ packageName }],
+      sections: [
+        {
+          category: "research",
+          entries: [{ packageName: personalPackageName }],
+          additionalEntries: [
+            { packageName, displayName: "Current release", installs: 7 },
+            { packageName: "@openclaw/zebra", installs: 7 },
+          ],
+        },
+        { category: "coding", entries: [{ packageName }], additionalEntries: [] },
+      ],
+    });
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(String(fetch.mock.calls[0]?.[0])).toBe(
-      "https://registry.example/api/v1/templates/overview?limit=8",
+      "https://registry.example/api/v1/templates/overview?limit=1&include=categoryEntries",
     );
-    expect(mocks.list).not.toHaveBeenCalled();
+    mocks.list.mockResolvedValueOnce(listPage(items));
+    const category = await listClawHubTemplates({ category: "research" });
+    const research = overview?.sections[0];
+    expect([...(research?.entries ?? []), ...(research?.additionalEntries ?? [])]).toEqual(
+      category,
+    );
   });
 
   it.each([
     { status: 404, body: {}, fallback: true },
-    { status: 200, body: { complete: false }, fallback: true },
+    { status: 200, body: { complete: false, completeCategoryEntries: true }, fallback: true },
     { status: 200, body: { complete: true, featured: [] }, fallback: false },
     ...[401, 403, 429, 500].map((status) => ({ status, body: {}, fallback: false })),
   ])(
@@ -322,7 +393,10 @@ describe("public ClawHub Template catalog", () => {
         Response.json(body, { status, headers: { "retry-after": "61" } }),
       );
       vi.stubGlobal("fetch", fetch);
-      const result = readClawHubTemplatesOverview({ baseUrl: "https://registry.example" });
+      const result = readClawHubTemplatesOverview({
+        baseUrl: "https://registry.example",
+        includeCategoryEntries: true,
+      });
       if (fallback) {
         await expect(result).resolves.toBeUndefined();
       } else {
@@ -417,6 +491,7 @@ describe("public ClawHub Template catalog", () => {
     expect(detail).toMatchObject({
       packageName: personalPackageName,
       version,
+      agentId: "research-briefing",
       agentName: "Research Briefing",
       channel: "community",
       official: false,
@@ -426,8 +501,76 @@ describe("public ClawHub Template catalog", () => {
       plugins: 1,
       mcpServers: 1,
       scheduledJobs: 1,
-      contents: { skills: [{ excerpt: "Citation check" }] },
+      contents: {
+        skills: [{ excerpt: "Citation check" }],
+        automations: [{ name: "Daily briefing", enabled: false, message: "Prepare the briefing" }],
+      },
     });
+  });
+
+  it("reports the exact release's audit, publication date and categories for the detail rail", async () => {
+    mocks.detail.mockResolvedValue({
+      package: { ...officialPackage(), createdAt: 1, categories: ["research", ""] },
+      owner: { handle: "openclaw", official: true },
+    });
+    mocks.security.mockResolvedValue(matchingSecurity);
+    const detail = await readClawHubTemplateDetail({ packageName });
+    expect(validateTemplatesCatalogDetailResult({ detail })).toBe(true);
+    expect(mocks.security).toHaveBeenCalledWith(
+      expect.objectContaining({ name: packageName, version }),
+    );
+    expect(detail).toMatchObject({
+      createdAtMs: 1,
+      categories: ["research"],
+      security: { verdict: "benign", auditUrl: matchingSecurity.securityAuditUrl },
+    });
+  });
+
+  it.each([
+    ["another release", { ...matchingSecurity, release: { version: "0.9.0" } }],
+    ["a failed audit read", new Error("audit unavailable")],
+  ])("keeps the detail and shows no audit for %s", async (_name, security) => {
+    if (security instanceof Error) {
+      mocks.security.mockRejectedValue(security);
+    } else {
+      mocks.security.mockResolvedValue(security);
+    }
+    const detail = await readClawHubTemplateDetail({ packageName });
+    expect(validateTemplatesCatalogDetailResult({ detail })).toBe(true);
+    expect(detail.version).toBe(version);
+    expect(detail).not.toHaveProperty("security");
+  });
+
+  it("discloses and previews bundled skills only from the verified artifact", async () => {
+    const skill = path.join(fixtureRoot, "skills", "local-checklist");
+    await fs.mkdir(skill, { recursive: true });
+    const content =
+      "---\nname: local-checklist\ndescription: Follow the local checklist.\n---\n# Local checklist\nRead references/checklist.bin.\n";
+    await fs.writeFile(path.join(skill, "SKILL.md"), content);
+    await fs.mkdir(path.join(skill, "references"));
+    await fs.writeFile(path.join(skill, "references", "checklist.bin"), Buffer.from([0, 255, 128]));
+    await fs.mkdir(path.join(fixtureRoot, "undeclared"));
+    await fs.writeFile(
+      path.join(fixtureRoot, "undeclared", "SKILL.md"),
+      "---\nname: undeclared\ndescription: Not a dependency.\n---\n",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "CLAW.md"),
+      `---\n${JSON.stringify({ ...emptyManifest, skills: [{ path: "skills/local-checklist" }] })}\n---\n`,
+    );
+    const detail = await readClawHubTemplateDetail({ packageName });
+    expect(validateTemplatesCatalogDetailResult({ detail })).toBe(true);
+    expect(detail.skills).toBe(1);
+    expect(detail.contents.skills).toEqual([
+      {
+        name: "local-checklist",
+        source: "bundled",
+        path: "skills/local-checklist",
+        excerpt: "Local checklist Read references/checklist.bin.",
+      },
+    ]);
+    await expectPreview("skill", "local-checklist", content);
+    expect(mocks.skillCard).not.toHaveBeenCalled();
   });
 
   it("keeps the detail available when a skill card cannot be fetched", async () => {
@@ -483,6 +626,28 @@ describe("public ClawHub Template catalog", () => {
       },
     });
     await expectPreview("instruction", "SOUL.md", "# Travel planner\n");
+  });
+
+  it("lists a binary workspace file without an excerpt and declines its preview", async () => {
+    await fs.rm(path.join(fixtureRoot, "BOOTSTRAP.md"));
+    await fs.writeFile(
+      path.join(fixtureRoot, "package.json"),
+      packageJson(packageName, version, "CLAW.md"),
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "icon.png"),
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]),
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "CLAW.md"),
+      "---\nschemaVersion: 1\nagent: { id: travel }\nworkspace:\n  files:\n    - { source: icon.png, path: assets/icon.png }\n---\n# Travel planner\n",
+    );
+    const detail = await readClawHubTemplateDetail({ packageName });
+    expect(detail.contents.instructions).toContainEqual({
+      name: "assets/icon.png",
+      source: "icon.png",
+    });
+    await expectCode(previewContent("instruction", "assets/icon.png"), "clawhub_preview_not_text");
   });
 
   it("starts exact-release reads together and reuses their artifact metadata", async () => {
@@ -655,6 +820,73 @@ describe("verified ClawHub Template source", () => {
     });
   });
 
+  it("overlaps package and exact-artifact reads while keeping trust before download", async () => {
+    await prepareResolverFixture();
+    const detailRead = Promise.withResolvers<unknown>();
+    const artifactRead = Promise.withResolvers<unknown>();
+    mocks.detail.mockImplementationOnce(() => detailRead.promise);
+    mocks.artifact.mockImplementationOnce(() => artifactRead.promise);
+    const attempt = probeSource();
+    try {
+      expect(mocks.detail).toHaveBeenCalledTimes(1);
+      expect(mocks.artifact).toHaveBeenCalledTimes(1);
+      expect(mocks.trust).not.toHaveBeenCalled();
+      expect(mocks.download).not.toHaveBeenCalled();
+    } finally {
+      detailRead.resolve({ package: officialPackage(), owner: { handle: "openclaw" } });
+      artifactRead.resolve(artifact());
+      await attempt;
+    }
+    expect(mocks.trust).toHaveBeenCalledTimes(1);
+    expect(mocks.download).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves from registry reads an Add started earlier, without reading them again", async () => {
+    const { stateDir } = await prepareResolverFixture();
+    const prefetched = prefetchClawHubSource({
+      coordinate: { packageName, version },
+      mode: "apply",
+    });
+    await prefetched.claim();
+    const reads = [mocks.detail, mocks.artifact, mocks.trust, mocks.download].map(
+      (read) => read.mock.calls.length,
+    );
+    expect(reads).toEqual([1, 1, 1, 1]);
+    expect(mocks.extract).not.toHaveBeenCalled();
+
+    await expect(
+      resolveSource({
+        mode: "apply",
+        stateDir,
+        prefetched,
+        run: async (source) => source.source.name,
+      }),
+    ).resolves.toMatchObject({ value: packageName });
+    expect(
+      [mocks.detail, mocks.artifact, mocks.trust, mocks.download].map(
+        (read) => read.mock.calls.length,
+      ),
+    ).toEqual(reads);
+    expect(mocks.extract).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes the archive of registry reads that no Add went on to use", async () => {
+    await prepareResolverFixture();
+    const cleanup = vi.fn(async () => undefined);
+    const archive = await mocks.download();
+    mocks.download.mockClear();
+    mocks.download.mockResolvedValue({ ...archive, cleanup });
+    const prefetched = prefetchClawHubSource({
+      coordinate: { packageName, version },
+      mode: "apply",
+    });
+
+    await prefetched.discard();
+
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(mocks.extract).not.toHaveBeenCalled();
+  });
+
   it("keeps preview ephemeral and persists only after an approved apply asks for it", async () => {
     const { stateDir } = await prepareResolverFixture();
     const preview = await resolveSource({
@@ -736,6 +968,53 @@ describe("verified ClawHub Template source", () => {
     expect(mocks.download).not.toHaveBeenCalled();
     expect(mocks.extract).not.toHaveBeenCalled();
     await expectMissing(stateDir);
+  });
+
+  it("resolves a publisher-qualified reference to a Template stored under an unscoped name", async () => {
+    await prepareResolverFixture();
+    await selectPackage({ ...communityPackage(), name: "research-briefing" });
+    const resolveRef = (ref: string) =>
+      withResolvedClawHubSource({
+        coordinate: { packageName: ref },
+        mode: "preview",
+        run: async (source) => source.source.name,
+      });
+
+    await expect(resolveRef(personalPackageName)).resolves.toMatchObject({
+      value: "research-briefing",
+    });
+    expect(mocks.detail).toHaveBeenCalledWith(
+      expect.objectContaining({ name: personalPackageName }),
+    );
+    // Exact-release identity, trust and archive bytes bind to the stored name.
+    for (const read of [mocks.artifact, mocks.download]) {
+      expect(read).toHaveBeenCalledWith(expect.objectContaining({ name: "research-briefing" }));
+    }
+    expect(mocks.trust).toHaveBeenCalledWith(
+      expect.objectContaining({ subject: { kind: "template", packageName: "research-briefing" } }),
+    );
+
+    mocks.download.mockClear();
+    await expectCode(resolveRef("@mallory/research-briefing"), "clawhub_identity_mismatch");
+    expect(mocks.download).not.toHaveBeenCalled();
+  });
+
+  it("previews a publisher-qualified reference to a Template stored under an unscoped name", async () => {
+    await selectPackage({ ...communityPackage(), name: "research-briefing" });
+    const preview = (ref: string) =>
+      readClawHubTemplatePreview({
+        packageName: ref,
+        version,
+        kind: "instruction",
+        name: "USER.md",
+      });
+
+    await expect(preview(personalPackageName)).resolves.toEqual({
+      kind: "instruction",
+      name: "USER.md",
+      content: "# Reader preferences\n",
+    });
+    await expectCode(preview("@mallory/research-briefing"), "clawhub_identity_mismatch");
   });
 
   it("requires personal-release risk acknowledgement and never persists denied content", async () => {

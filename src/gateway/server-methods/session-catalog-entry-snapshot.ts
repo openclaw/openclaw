@@ -62,12 +62,25 @@ type PlanningEntries = {
   catalogEntries: ReturnType<NonNullable<SessionCatalogEntrySnapshot["entriesForCatalog"]>>;
 };
 
-// Selection revisions retire metadata on row, generation, and topology changes.
-// Delivery keeps its own actor/profile cache and rechecks current adoption identities.
-const planningEntriesByRevision = new WeakMap<
-  object,
-  WeakMap<OpenClawConfig, Map<string, PlanningEntries>>
+// Retire on accepted entry/roster changes, not unrelated runtime invalidations.
+const planningEntriesByProjection = new WeakMap<
+  SessionRowProjection,
+  { configs: WeakMap<OpenClawConfig, Map<string, PlanningEntries>> }
 >();
+
+// Keep the projection-lifetime listener outside the request's snapshot closure.
+function planningEntriesOwner(projection: SessionRowProjection) {
+  let owner = planningEntriesByProjection.get(projection);
+  if (!owner) {
+    owner = { configs: new WeakMap() };
+    planningEntriesByProjection.set(projection, owner);
+    const captured = owner;
+    projection.onSelectionChange(() => {
+      captured.configs = new WeakMap();
+    });
+  }
+  return owner;
+}
 
 // Retain neutral displays within the row owner's lifetime; visibility is applied afterward.
 const projectedHosts = new WeakMap<
@@ -99,12 +112,10 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
     throw new Error("Prepare current session metadata before capturing catalog entries");
   }
   const deletions = getPreparedAgentDeletionDiscovery(resolveOpenClawStateSqlitePath());
+  const planningOwner = planningEntriesOwner(params.projection);
   const cachedPlanning =
     params.sessionKeys === undefined
-      ? planningEntriesByRevision
-          .get(params.projection.state.revision)
-          ?.get(params.cfg)
-          ?.get(params.fallbackAgentId)
+      ? planningOwner.configs.get(params.cfg)?.get(params.fallbackAgentId)
       : undefined;
   // Retained provider pages must not keep the weak key for the full planning roster alive.
   const planningRevision = cachedPlanning?.revision ?? {};
@@ -250,13 +261,7 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       // A key first resolved after deletion/recreation cannot prove the original adoption.
       const entries = entriesForCatalog();
       if (params.sessionKeys === undefined) {
-        // Selection retains current metadata independently of display materialization.
-        const revision = params.projection.state.revision;
-        let configs = planningEntriesByRevision.get(revision);
-        if (!configs) {
-          configs = new WeakMap();
-          planningEntriesByRevision.set(revision, configs);
-        }
+        const configs = planningOwner.configs;
         let agents = configs.get(params.cfg);
         if (!agents) {
           agents = new Map();

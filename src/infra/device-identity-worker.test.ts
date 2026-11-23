@@ -10,7 +10,7 @@ import {
   loadOrCreateDeviceIdentityAsync,
   loadOrCreateProcessDeviceIdentityAsync,
 } from "./device-identity-async.js";
-import type { DeviceIdentityStoreOptions } from "./device-identity-store.js";
+import type { DeviceIdentityStoreOptions } from "./device-identity-store-options.js";
 import { signDevicePayload, verifyDeviceSignature } from "./device-identity.js";
 import { StartupMaintenanceRequiredError } from "./startup-maintenance-required.js";
 

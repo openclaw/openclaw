@@ -1,0 +1,8 @@
+# Required #198193 review regressions: real completion/SQLite/filesystem custody,
+# rollback/source isolation, private vision, exact-task correction/admission,
+# automatic-versus-review identity, bounded candidate discovery/continuation,
+# real scheduled release after attempt disposal, exact private PNG inputs with
+# no visible send, native terminal settlement, and service facts retained without
+# restoring the approving attempt's transcript or request authority.
+# Net test growth above integrated main ea4f8e02 is 1143; excess above 400 only.
+743

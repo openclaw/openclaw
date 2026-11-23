@@ -1,6 +1,13 @@
-import type { AssistantMessage, Context, Model, ProviderReplayState } from "@openclaw/llm-core";
+import type {
+  AssistantHistoryMessage,
+  AssistantMessage,
+  Context,
+  Model,
+  ProviderReplayState,
+} from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AnthropicContextManagementOptions } from "../provider-options.js";
+import { resolveNewestCompactionReplaySource } from "./provider-compaction-checkpoint.js";
 import {
   buildProviderReplayContext,
   isProviderReplayContext,
@@ -168,50 +175,51 @@ export function suppressAnthropicCompaction(
   options?.onCompactionRejected?.({ data: rejected.content });
 }
 
-export function resolveNewestAnthropicCompaction(
-  messages: Context["messages"],
-  model: Model,
-  options?: ReplayOpts,
-):
-  | {
-      owner: AssistantMessage;
-      replayIndex: number;
-      summary: string;
-      encryptedContent?: string | null;
-    }
-  | undefined {
+/** Read one live replay envelope; null blocks older checkpoints, undefined skips it. */
+export function createAnthropicCompactionSourceReader(model: Model, options?: ReplayOpts) {
   const context = buildProviderReplayContext(model, options);
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role !== "assistant") {
-      continue;
-    }
-    const replayState = readAnthropicCompactionState(message.providerReplay);
+  return (value: ProviderReplayState | undefined) => {
+    const replayState = readAnthropicCompactionState(value);
     if (replayState?.type === ANTHROPIC_COMPACTION_SUPPRESSION_TYPE) {
-      if (providerReplayContextMatches(replayState, context)) {
-        return undefined;
-      }
-      continue;
+      return providerReplayContextMatches(replayState, context) ? null : undefined;
     }
-    if (message.providerReplay?.type !== ANTHROPIC_COMPACTION_REPLAY_TYPE) {
-      continue;
-    }
-    if (!replayState) {
+    if (value?.type !== ANTHROPIC_COMPACTION_REPLAY_TYPE) {
       return undefined;
     }
-    if (!providerReplayContextMatches(replayState, context)) {
-      return undefined;
+    if (!replayState || !providerReplayContextMatches(replayState, context)) {
+      return null;
     }
     return {
-      owner: message,
       replayIndex: replayState.replayIndex ?? 0,
       summary: replayState.data,
       ...(replayState.encryptedContent !== undefined
         ? { encryptedContent: replayState.encryptedContent }
         : {}),
     };
+  };
+}
+
+export function resolveNewestAnthropicCompaction(
+  messages: Context["messages"],
+  model: Model,
+  options?: ReplayOpts,
+):
+  | {
+      owner: AssistantHistoryMessage;
+      replayIndex: number;
+      summary: string;
+      encryptedContent?: string | null;
+    }
+  | undefined {
+  const read = createAnthropicCompactionSourceReader(model, options);
+  const selected = resolveNewestCompactionReplaySource(messages, (message) =>
+    message?.role === "assistant" ? read(message.providerReplay) : undefined,
+  );
+  if (!selected) {
+    return undefined;
   }
-  return undefined;
+  const owner = messages[selected.ownerIndex];
+  return owner?.role === "assistant" ? { ...selected.source, owner } : undefined;
 }
 
 export function buildAnthropicReplayPlan(

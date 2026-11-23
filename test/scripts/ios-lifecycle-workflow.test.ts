@@ -90,6 +90,7 @@ appendFileSync(path.join(root, "commands.jsonl"), JSON.stringify({
   settings: process.env.XCODE_XCCONFIG_FILE ? readFileSync(process.env.XCODE_XCCONFIG_FILE, "utf8") : undefined,
 }) + "\n");
 if (tool === "installer") {
+  if (mode.endsWith("install-failed")) process.exit(28);
   mkdirSync(args[0], { recursive: true });
   copyFileSync(path.join(root, "bin", "simslim"), path.join(args[0], "simslim"));
 } else if (tool === "uname") {
@@ -111,6 +112,8 @@ if (tool === "installer") {
   } else if (args[1] === "install" && !existsSync(args[3])) {
     process.exit(24);
   }
+} else if (args.includes("build-for-testing") && mode === "voice-build-failed-" + args[args.indexOf("-scheme") + 1]) {
+  process.exit(26);
 } else if (args.includes("-showBuildSettings")) {
   const product = {
     target: "OpenClawWatchApp",
@@ -210,6 +213,7 @@ exec '${pythonExecutable}' "$@"
     commands,
     product,
     summary: readFileSync(summaryFile, "utf8"),
+    environment: readFileSync(environmentFile, "utf8"),
   };
 }
 
@@ -302,6 +306,7 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       "CloudflareAccessBrowserPresenterTests",
       "CloudflareAccessTransferTests",
       "CloudflareAccessSessionStoreTests",
+      "ChatSessionsCodingTests",
       "SettingsHubTests",
       "SettingsHubVisualProofTests/testIngressAuthorizedDashboardEntryPointsLoadTheSelectedGatewayPage",
       "GatewayAccessDeviceAuthBindingTests",
@@ -327,6 +332,7 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
     ]);
     expect(selectedTests(tests[1]!.args)).toEqual([
       "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings",
+      "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/testNestedCustomToolsExposeResultsQuietDetailsAndPendingAuthority",
       "-only-testing:OpenClawUITests/BootstrapSetupFailureUITests",
     ]);
     const restart = commands.findIndex((command) => command.tool === "python3");
@@ -334,6 +340,73 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
     expect(restart).toBeLessThan(commands.indexOf(tests[1]!));
   });
 });
+
+it.skipIf(process.platform === "win32")(
+  "reuses universal full-validation test products across focused suites",
+  () => {
+    const { result, commands } = runSimulatorStep(
+      "voice",
+      [...configuredSteps, voiceStep, iosStep],
+      {
+        IOS_CI_PHASE: "tests",
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const builds = argsFor(commands, "xcodebuild").filter((args) =>
+      args.includes("build-for-testing"),
+    );
+    expect(builds.map((args) => args[args.indexOf("-scheme") + 1])).toEqual([
+      "OpenClaw",
+      "OpenClawUITests",
+    ]);
+    for (const args of builds) {
+      expect(args).toContain("generic/platform=iOS Simulator");
+    }
+    expect(commands.every((command) => command.settings === undefined)).toBe(true);
+    const tests = commands.filter(isTestCommand);
+    expect(tests).toHaveLength(3);
+    for (const test of tests) {
+      expect(test.args).toContain("test-without-building");
+      expect(test.args).not.toContain("test");
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "does not compile when the simulator preparation tool cannot be installed",
+  () => {
+    const { result, commands, environment } = runSimulatorStep(
+      "voice-slim-install-failed",
+      configuredSteps,
+    );
+    expect(result.status).toBe(28);
+    expect(argsFor(commands, "installer")).toHaveLength(1);
+    expect(argsFor(commands, "xcodebuild")).toHaveLength(0);
+    expect(environment).not.toContain("IOS_TEST_BUILD_PREPARED=true");
+  },
+);
+
+it.skipIf(process.platform === "win32").each([
+  { scheme: "OpenClaw", attempted: ["OpenClaw"] },
+  { scheme: "OpenClawUITests", attempted: ["OpenClaw", "OpenClawUITests"] },
+])(
+  "does not publish prepared products after $scheme preparation fails",
+  ({ scheme, attempted }) => {
+    const { result, commands, environment } = runSimulatorStep(
+      `voice-build-failed-${scheme}`,
+      [...configuredSteps, voiceStep, iosStep],
+      { IOS_CI_PHASE: "tests" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(
+      argsFor(commands, "xcodebuild")
+        .filter((args) => args.includes("build-for-testing"))
+        .map((args) => args[args.indexOf("-scheme") + 1]),
+    ).toEqual(attempted);
+    expect(environment).not.toContain("IOS_TEST_BUILD_PREPARED=true");
+    expect(commands.filter(isTestCommand)).toHaveLength(0);
+  },
+);
 
 describe("iOS simulator owner selection", () => {
   it.each(["apps/swabble/Sources/SwabbleKit/Speech.swift", "scripts/lib/swift-toolchain.sh"])(
@@ -400,6 +473,15 @@ it.skipIf(process.platform === "win32").each([
   { owner: "apps/ios/Tests/TalkModeConfigParsingTests.swift", groups: ["voice"] },
   { owner: "apps/ios/Tests/TalkTranscriptCompletionTests.swift", groups: ["voice"] },
   { owner: "apps/ios/Tests/ChatSendHydrationTests.swift", groups: ["lifecycle"] },
+  {
+    owner: "apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatSessionsCodingTests.swift",
+    groups: ["lifecycle"],
+  },
+  {
+    owner: "apps/shared/OpenClawKit/Tests/OpenClawKitTests/ToolResultIngestionTransport.swift",
+    groups: ["lifecycle"],
+  },
+  { owner: "apps/ios/UITests/OpenClawSnapshotUITests+Chat.swift", groups: ["lifecycle"] },
   { owner: "apps/ios/ThirdParty/ESPProvision/ESPProvision/ESPDevice.swift", groups: [] },
   { owner: "apps/ios/Tests/ESPSetupWireTests.swift", groups: [] },
   { owner: "apps/ios/Tests/ESPSetupSessionTests.swift", groups: [] },
@@ -440,6 +522,13 @@ it.skipIf(process.platform === "win32").each([
     );
     if (owner.endsWith("/ChatComposerTextViewIOSTests.swift")) {
       expect(test.args).toContain("-only-testing:OpenClawTests/ChatComposerTextViewIOSTests");
+    }
+    if (
+      owner.endsWith("/ChatSessionsCodingTests.swift") ||
+      owner.endsWith("/ToolResultIngestionTransport.swift") ||
+      owner.endsWith("/OpenClawSnapshotUITests+Chat.swift")
+    ) {
+      expect(test.args).toContain("-only-testing:OpenClawTests/ChatSessionsCodingTests");
     }
   }
   if (!groups.length) {

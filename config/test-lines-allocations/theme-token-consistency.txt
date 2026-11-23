@@ -1,2 +1,0 @@
-# Computed-style regressions: avatar dimensions, disabled reply cursor, and running-status color.
-52

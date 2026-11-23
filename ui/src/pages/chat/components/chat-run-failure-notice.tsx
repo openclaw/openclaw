@@ -1,7 +1,12 @@
 import { createMemo, createSignal, lazy, Loading, onSettled, Show } from "solid-js";
-import type { RunFailureCause } from "../../../../../src/shared/run-failure-notice.js";
+import type { ControlUiSurfaceProps } from "../../../../../src/plugin-sdk/control-ui.js";
+import {
+  HARNESS_UPDATE_REQUIRED_CODE,
+  type RunFailureCause,
+} from "../../../../../src/shared/run-failure-notice.js";
 import { formatWebUiIconErrorText } from "../../../components/error-presentation.ts";
 import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
+import { ReportIssueLink } from "../../../components/report-issue-link.tsx";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../../components/solid/popover.tsx";
@@ -9,6 +14,7 @@ import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
+import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
 import type { FailedMessageEditSource } from "../failed-message-edit.ts";
 import { openChatRewindConfirmation } from "./chat-message-confirmation-view.tsx";
 
@@ -35,10 +41,12 @@ function panelPlacement(line: HTMLElement, panel: HTMLElement): "bottom" | "top"
 
 /** One terminal notice, separate from assistant prose and preserved partial output. */
 export function ChatRunFailureNotice(props: {
+  feedback?: ControlUiSurfaceProps["run-failure-feedback"];
   summary: string;
   cause?: RunFailureCause;
   repeatCount?: number;
   onRetry?: () => void;
+  onStartNewSession?: () => void;
   editSource?: FailedMessageEditSource;
   onFocusComposer?: () => void;
 }) {
@@ -54,6 +62,8 @@ export function ChatRunFailureNotice(props: {
     });
   const app = useOptionalApplication();
   const openModels = () => (app && fixTitle() ? props.cause?.provider : undefined);
+  const startNewSession = () =>
+    props.cause?.code === HARNESS_UPDATE_REQUIRED_CODE && props.onStartNewSession;
   const detail = createMemo(() => formatWebUiIconErrorText(props.summary).trim());
   const concise = createMemo(() => {
     const firstLine = detail().split(/\r?\n/u)[0] ?? "";
@@ -178,15 +188,36 @@ export function ChatRunFailureNotice(props: {
             </button>
           )}
         </Show>
+        <Show when={startNewSession()}>
+          <button
+            type="button"
+            class="btn primary btn--sm chat-run-failure__retry"
+            onClick={() => props.onStartNewSession?.()}
+          >
+            {t("chat.recovery.startNewSession")}
+          </button>
+        </Show>
         <Show when={props.onRetry}>
           <button
             type="button"
-            class={`btn ${openModels() ? "" : "primary "}btn--sm chat-run-failure__retry`}
+            class={[
+              "btn btn--sm chat-run-failure__retry",
+              { primary: !openModels() && !startNewSession() },
+            ]}
             onClick={() => props.onRetry?.()}
           >
             <Icon name="refresh" />
             {t("chat.recovery.tryAgain")}
           </button>
+        </Show>
+        <Show when={props.feedback} fallback={<ReportIssueLink />}>
+          {(feedback) => (
+            <PluginSurface
+              surface="run-failure-feedback"
+              props={feedback()}
+              renderDefault={ReportIssueLink}
+            />
+          )}
         </Show>
       </div>
     </openclaw-chat-run-failure-notice>

@@ -221,6 +221,11 @@ async function loadRestartSentinelStartupTask(params: {
       return { status: "skipped" as const, reason: "update-restart-pending" };
     }
 
+    if (updateRun?.origin.noticeSurface === "app") {
+      await clearRestartSentinelIfRevision(sentinelRevision, env);
+      return { status: "ran" as const };
+    }
+
     if (!routedSessionKey) {
       if (
         updateRun?.trigger === "control-ui" &&

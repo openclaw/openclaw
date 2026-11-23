@@ -59,7 +59,6 @@ function canPrepareSkillAuthoring(options: SkillLibraryRequestOwner, isHumanTurn
     !client.internal?.senderAttribution &&
     !client.internal?.pluginRuntimeOwnerId &&
     !client.internal?.approvalRuntime &&
-    !client.internal?.cronRunContinuation &&
     !client.internal?.delegatedToolPolicyHandoffId,
   );
 }
@@ -136,14 +135,14 @@ export async function prepareGatewaySkillAuthoring(
       !owner ||
       getAdmittedRunDelegatedAuthority(bound) !== owner ||
       caller?.operationalRunInstance !== bound.operationalRunInstance ||
-      !caller.receiptAuthority ||
-      caller.receiptAuthority() === false
+      !caller.receiptAuthority
     ) {
       throw new SkillLibraryError(
         "AUTHORITY_EXPIRED",
         "Personal authoring authority expired or this turn has mixed requesters. Send a fresh attributed message requesting the change.",
       );
     }
+    caller.receiptAuthority();
   };
   const currentAuthority = { ...authority, assertCurrent, namespace: "personal" as const };
   return {

@@ -76,14 +76,20 @@ export function McpAppResourcesView(
   });
 
   type SearchRequest = {
+    scope: ReturnType<typeof requestScope>;
+    serverName: string;
     generation: number;
     current: () => boolean;
     promise: Promise<McpAppMentionResult | undefined>;
   };
-  // Changing identity releases the old admitted promise and its plain result snapshots.
-  const [request, setRequest] = createSignal<SearchRequest | undefined>(() => {
-    requestScope();
-    return undefined;
+  // Scope changes and removed servers retire the search, without clearing drafts or reordered results.
+  const [request, setRequest] = createSignal<SearchRequest | undefined>((previous) => {
+    const scope = requestScope();
+    const available = servers();
+    return previous?.scope === scope &&
+      available.some((server) => server.serverName === previous.serverName)
+      ? previous
+      : undefined;
   });
   // The controls observe the same admitted promise without owning the answer's error boundary.
   const completion = createMemo(() => request()?.promise);
@@ -110,6 +116,7 @@ export function McpAppResourcesView(
     const current = () =>
       props.host().isConnected &&
       generation === searchGeneration &&
+      latest(request)?.generation === searchGeneration &&
       context.gateway.snapshot.client === client &&
       requestScope() === searchScope;
     // Admit from native inputs now; the memo only observes this request's answer.
@@ -129,7 +136,13 @@ export function McpAppResourcesView(
           return undefined;
         },
       );
-    setRequest({ generation: searchGeneration, current, promise });
+    setRequest({
+      scope: searchScope,
+      serverName: selectedServer,
+      generation: searchGeneration,
+      current,
+      promise,
+    });
     setVisibleGeneration(searchGeneration);
     setAttachmentError(null);
   }
@@ -146,7 +159,7 @@ export function McpAppResourcesView(
         detail: {
           sessionKey: props.sessionKey,
           agentId: props.agentId,
-          serverName: serverName(),
+          serverName: admitted.serverName,
           resource,
         },
       }),

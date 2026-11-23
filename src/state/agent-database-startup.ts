@@ -15,6 +15,7 @@ import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.j
 import { schemaAdmission } from "../infra/sqlite-schema-admission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { assertionSucceeds } from "../shared/assertion.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createPermitPool } from "../shared/permit-pool.js";
@@ -36,9 +37,13 @@ import {
   type AgentDatabaseAdmissionRefusal,
 } from "./agent-database-admission.js";
 import { withAgentDatabasePreparationContext } from "./agent-database-preparation-context.js";
-import { prepareAgentDatabaseStartupVerification } from "./agent-database-startup-integrity.js";
+import {
+  prepareAgentDatabaseStartupVerification,
+  createAgentDatabaseRuntimeIntegrityObserver,
+} from "./agent-database-startup-integrity.js";
 import {
   createAgentDatabaseStartupObservation,
+  startAgentDatabasePreparationProgress,
   recoveryTiming,
 } from "./agent-database-startup-observation.js";
 import type {
@@ -63,8 +68,6 @@ import {
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
-const PREPARATION_PROGRESS_INTERVAL_MS = 60_000;
-
 const log = createSubsystemLogger("state/agent-admission");
 const startupAdmission = new AsyncLocalStorage<AgentDatabaseStartupAdmission>();
 
@@ -84,7 +87,17 @@ class AgentDatabaseStartupAdmission {
   private readonly activation = createDeferredCore<Activation | undefined>();
   private readonly work = new Set<Promise<unknown>>();
   private readonly pending = new Map<string, PendingRecovery>();
-  readonly observation = createAgentDatabaseStartupObservation(this.pending, this.signal);
+  private readonly verifying = createPermitPool(2);
+  readonly observation = createAgentDatabaseStartupObservation(
+    this.pending,
+    this.signal,
+    createAgentDatabaseRuntimeIntegrityObserver(
+      this.signal,
+      this.activation.promise,
+      this.verifying,
+      (work) => this.track(work),
+    ),
+  );
   private adopted = false;
   private activated = false;
   private stopped = false;
@@ -94,7 +107,6 @@ class AgentDatabaseStartupAdmission {
   private progressTimer?: ReturnType<typeof setInterval>;
   private readonly opening = createPermitPool(AGENT_DATABASE_PREFLIGHT_CONCURRENCY);
   private readonly migrating = createPermitPool(AGENT_DATABASE_PREPARATION_CONCURRENCY);
-  private readonly verifying = createPermitPool(2);
   // Readiness releases the whole fleet; leave room for other shared-state readers.
   private readonly journalReads = createPermitPool(8);
   private preparedSchemaHeaders?: PreparedSchemaHeaders;
@@ -104,21 +116,10 @@ class AgentDatabaseStartupAdmission {
   }
 
   private startProgress(): void {
-    this.progressTimer ??= setInterval(() => {
-      const now = performance.now();
-      for (const [agentId, recovery] of this.pending) {
-        log.warn("agent database startup preparation still running", {
-          agentId,
-          phase: recovery.phase,
-          elapsedMs: Math.round(now - recovery.startedAt),
-          phaseElapsedMs: Math.round(now - recovery.phaseStartedAt),
-          ...(recovery.phase === "publication-wait"
-            ? { publishingAgentId: this.publishingAgentId }
-            : {}),
-        });
-      }
-    }, PREPARATION_PROGRESS_INTERVAL_MS);
-    this.progressTimer.unref();
+    this.progressTimer ??= startAgentDatabasePreparationProgress(
+      this.pending,
+      () => this.publishingAgentId,
+    );
   }
 
   /** Bootstrap reuses this startup's compatibility headers; writable opens retain admission. */
@@ -189,12 +190,7 @@ class AgentDatabaseStartupAdmission {
         throw new Error("Prepared startup state schema changed before source inspection");
       }
     };
-    try {
-      assertCurrent();
-      return assertCurrent;
-    } catch {
-      return undefined;
-    }
+    return assertionSucceeds(assertCurrent) ? assertCurrent : undefined;
   }
 
   /** Joins startup work already scheduled before a background consumer begins. */
@@ -588,6 +584,7 @@ class AgentDatabaseStartupAdmission {
                     if (preparation.recoverInputs) {
                       this.observation.registerInputRecovery(agentId, {
                         sessions: preparation.recoverInputs.sessions,
+                        deferred: preparation.recoverInputs.deferred,
                         completion: inputReady.promise,
                       });
                     }
@@ -662,6 +659,8 @@ class AgentDatabaseStartupAdmission {
             });
           }
         } finally {
+          // Published admission callbacks can retain this scope after recovery completes.
+          preparation.recoverInputs = undefined;
           finishInputs();
         }
         // End the admission borrow and publication turn before advisory repair.

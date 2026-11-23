@@ -1,3 +1,4 @@
+import { generateKeyPairSync, sign } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +14,7 @@ import { createLimiterSpy } from "./auth-rate-limit.test-support.js";
 import {
   assertGatewayAuthConfigured,
   gatewayPersonPrincipalAuthError,
+  gatewayIngressPrincipalAuthError,
   authorizeHttpGatewayConnect,
   authorizeControlUiReadHttpGatewayConnect,
   authorizeWsControlUiGatewayConnect,
@@ -661,6 +663,99 @@ describe("trusted-proxy auth", () => {
     ).resolves.toEqual(expected);
   });
 
+  describe("with cloudflareAccessJwt", () => {
+    const issuer = "https://team.cloudflareaccess.com";
+    const audience = "app-aud-tag";
+    const teamKey = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const attackerKey = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const kid = "team-kid";
+    const now = Math.floor(Date.now() / 1000);
+    const userClaims = { iss: issuer, aud: [audience], exp: now + 600, email: "nick@example.com" };
+    const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
+    const jwt = (claims: object, key = teamKey.privateKey) => {
+      const signed = `${encode({ alg: "RS256", kid, typ: "JWT" })}.${encode(claims)}`;
+      return `${signed}.${sign("RSA-SHA256", Buffer.from(signed), key).toString("base64url")}`;
+    };
+    // Shape of a live https://<team>.cloudflareaccess.com/cdn-cgi/access/certs answer
+    // (recorded 2026-11-16) with a test key, since Access's private keys sign real ones.
+    const certs = {
+      keys: [{ kid, alg: "RS256", use: "sig", ...teamKey.publicKey.export({ format: "jwk" }) }],
+    };
+
+    const withAccessJwt = (accessIssuer = issuer) => ({
+      ...auth,
+      trustedProxy: { ...trustedProxy, cloudflareAccessJwt: { issuer: accessIssuer, audience } },
+    });
+    beforeEach(() => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) =>
+          url === `${issuer}/cdn-cgi/access/certs`
+            ? Response.json(certs)
+            : new Response(null, { status: 503 }),
+        ),
+      );
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
+    it.each([
+      ["a forged unsigned assertion", "attacker@evil.test", "a.b.invalid", "invalid"],
+      [
+        "another key's signature",
+        "nick@example.com",
+        jwt(userClaims, attackerKey.privateKey),
+        "invalid",
+      ],
+      ["another application", "nick@example.com", jwt({ ...userClaims, aud: "other" }), "invalid"],
+      [
+        "an expired assertion",
+        "nick@example.com",
+        jwt({ ...userClaims, exp: now - 120 }),
+        "invalid",
+      ],
+      ["a forged user header", "attacker@evil.test", jwt(userClaims), "user_mismatch"],
+    ])("rejects %s", async (_case, user, assertion, reason) => {
+      await expect(
+        authorizeTrustedProxy({
+          auth: withAccessJwt(),
+          headers: {
+            ...identityHeaders,
+            "x-forwarded-user": user,
+            "cf-access-jwt-assertion": assertion,
+          },
+        }),
+      ).resolves.toEqual({ ok: false, reason: `trusted_proxy_access_${reason}` });
+    });
+
+    it("admits a verified user and keeps service tokens and outages distinct", async () => {
+      const headers = { ...identityHeaders, "cf-access-jwt-assertion": jwt(userClaims) };
+      await expect(authorizeTrustedProxy({ auth: withAccessJwt(), headers })).resolves.toEqual({
+        ok: true,
+        method: "trusted-proxy",
+        user: "nick@example.com",
+      });
+      // Access sends no email header for a service token; the node then uses its own credentials.
+      const serviceToken = jwt({
+        iss: issuer,
+        aud: [audience],
+        exp: now + 600,
+        common_name: "id.access",
+      });
+      await expect(
+        authorizeTrustedProxy({
+          auth: withAccessJwt(),
+          headers: { "x-forwarded-proto": "https", "cf-access-jwt-assertion": serviceToken },
+        }),
+      ).resolves.toEqual({ ok: false, reason: "trusted_proxy_user_missing" });
+      await expect(
+        authorizeTrustedProxy({
+          auth: withAccessJwt("https://down.cloudflareaccess.com"),
+          headers,
+        }),
+      ).resolves.toEqual({ ok: false, reason: "trusted_proxy_access_keys_unavailable" });
+    });
+  });
+
   it("rejects request with missing user header", async () => {
     await expect(
       authorizeTrustedProxy({ headers: { "x-forwarded-proto": "https" } }),
@@ -873,3 +968,20 @@ it.each([undefined, "https://linked-claw.example.test"])(
     }
   },
 );
+
+it("allows owner ingress with definitions alone but refuses it with a named-role default", () => {
+  const cfg: OpenClawConfig = {
+    gateway: {
+      roles: {
+        definitions: {
+          guest: { sessions: { others: "none" }, agents: [], scopes: [] },
+        },
+      },
+    },
+  };
+  const auth = resolveGatewayAuth({ authConfig: { mode: "token", token: "test-secret" }, env: {} });
+  const principal = { kind: "owner" as const };
+  expect(gatewayIngressPrincipalAuthError(auth, cfg, principal)).toBeUndefined();
+  cfg.gateway!.roles!.default = "guest";
+  expect(gatewayIngressPrincipalAuthError(auth, cfg, principal)).toContain("gateway.roles");
+});

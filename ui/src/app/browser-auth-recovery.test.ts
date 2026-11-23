@@ -7,6 +7,7 @@ import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/m
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { startBrowserAuthRecovery } from "./browser-auth-recovery.tsx";
 import { fetchControlUiResource, subscribeBrowserAuthRestored } from "./browser-http.ts";
+import { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 
 function redirectResponse() {
   return Object.defineProperty(new Response(null, { status: 302 }), "type", {
@@ -147,6 +148,63 @@ describe("browser sign-in recovery", () => {
       expect(window.location.href).toBe(initialLocation);
     },
   );
+
+  it("preserves auth recovery across document reloads and releases healthy or disposed owners", async () => {
+    let probe = createDeferred<Response>();
+    let authenticated = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/index.html")) {
+          return new Response(null, { status: 200 });
+        }
+        if (init?.method === "HEAD") {
+          return authenticated
+            ? new Response(null, { headers: { "content-type": "application/json" } })
+            : probe.promise;
+        }
+        throw new TypeError("Failed to fetch");
+      }),
+    );
+    const reload = vi.fn();
+    const attemptReload = () =>
+      scheduleStaleChunkReload({
+        storage: { getItem: () => null, setItem: vi.fn() },
+        reload,
+      });
+
+    // An installed, healthy auth owner must not block a legitimate stale-build reload.
+    await expect(attemptReload()).resolves.toBe(true);
+    expect(reload).toHaveBeenCalledOnce();
+    reload.mockClear();
+    await failedRead();
+    await expect(attemptReload()).resolves.toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+
+    probe.resolve(redirectResponse());
+    await finishRenewal();
+    await getRenderedModalDialog(document.body);
+    await expect(attemptReload()).resolves.toBe(false);
+    button("Not now").click();
+    await waitForSolid(() => expect(document.querySelector("openclaw-modal-dialog")).toBeNull());
+    await expect(attemptReload()).resolves.toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+
+    authenticated = true;
+    window.dispatchEvent(new Event("focus"));
+    await expect.poll(() => restored.mock.calls.length).toBe(1);
+    await expect(attemptReload()).resolves.toBe(true);
+    expect(reload).toHaveBeenCalledOnce();
+
+    authenticated = false;
+    probe = createDeferred<Response>();
+    now += 30_001;
+    await failedRead();
+    stop();
+    await expect(attemptReload()).resolves.toBe(true);
+    expect(reload).toHaveBeenCalledTimes(2);
+    probe.resolve(redirectResponse());
+  });
 
   it("keeps sign-in controls mounted while a follow-up probe is pending", async () => {
     const probe = createDeferred<Response>();

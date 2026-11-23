@@ -14,7 +14,6 @@ import { repairMergedGatewayOwnerProfile } from "../state/user-profiles-owner-mi
 import { UserProfileNotFoundError } from "../state/user-profiles-schema.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import { handleUserProfileAvatarHttpRequest } from "./user-profiles-http.js";
 
 const authorizeControlUiReadRequestOrReply = vi.hoisted(() => vi.fn());
@@ -170,9 +169,7 @@ describe("profile avatar HTTP endpoint", () => {
     profileFixture.mockReset();
     getRuntimeConfig.mockReset();
     resolveHostAccountAvatar.mockReset().mockResolvedValue(null);
-    authorizeControlUiReadRequestOrReply.mockImplementation(({ res }: { res: ServerResponse }) =>
-      bindHttpResponseAuthority({ operatorScopes: ["operator.read"] }, res, () => true),
-    );
+    authorizeControlUiReadRequestOrReply.mockReturnValue({ operatorScopes: ["operator.read"] });
     getRuntimeConfig.mockReturnValue({
       gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },
     });

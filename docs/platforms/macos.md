@@ -119,6 +119,9 @@ cookie sync, and permissions. Device voice controls appear under
 **Settings → Updates → This Mac**. These device controls appear only in the
 macOS app's embedded Dashboard, not in an ordinary browser.
 
+Choose **Navigate → Systems** to open the embedded Dashboard's machine inventory,
+including desktops and active workers.
+
 **This Mac → Capabilities → Desktop sharing** is enabled by default. It exposes
 this Mac's existing Screen Sharing service in **Systems**, independently of
 **Computer Control** and **Keep computer awake**. Enable Screen Sharing in
@@ -231,6 +234,10 @@ owns the displayed identity and chat attribution. The native device connection
 keeps its configured transport, including SSH, and its credentials are not sent
 to the public dashboard or sign-in provider. Shared-secret Gateways without a
 personal sign-in route continue to use the shared owner profile.
+While managed Serve is starting or recovering, for example after Tailscale
+restarts, the dashboard falls back to the shared owner profile. When the Serve
+route returns, the Gateway asks connected clients to reconnect, and the
+dashboard goes back to the Serve sign-in address and your own profile.
 
 Open windows for saved Gateway profiles follow sign-in route changes after a
 reconnect. An unchanged route keeps the current dashboard and its navigation.
@@ -258,7 +265,7 @@ The titlebar controls follow the app sidebar: while it is expanded, back/forward
 
 Drag the empty space beside the side-panel tabs to move the window. The full height of the header is available, and the draggable space follows tabs as they are added, removed, or resized. Tabs and header buttons keep their normal click and tab-reordering behavior.
 
-Mac tabs stay visible when a menu or hover card opens elsewhere in the dashboard. A tab's page temporarily hides only when the menu overlaps its Browser pane, or while a modal dialog or the command palette is open, and returns when the obstruction clears.
+Mac tabs stay visible when a menu or hover card opens elsewhere in the dashboard. If a menu overlaps the Browser pane or a modal dialog opens, the live page temporarily hides. The command palette leaves a dimmed, non-interactive image of the page behind it. Dismiss the palette to return to the same live page without reloading it.
 
 Drag the empty header space or title in the docked OpenClaw chat panel to move the app window. Its dock-position and close buttons remain clickable.
 

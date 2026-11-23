@@ -457,14 +457,16 @@ describe("ChatGPT token-sharing authorization", () => {
       clientId,
       issuer: TOKEN_SHARING_ISSUER,
       authFlow: TOKEN_SHARING_AUTH_FLOW,
-      displayName: "Sign in with ChatGPT (Beta)",
+      displayName: "Sign in with ChatGPT",
       email: "owner@example.test",
       grantedScope: grantScope,
       authorizationScope: TOKEN_SHARING_LEGACY_SCOPE,
     });
     expect(result.profiles[0]?.credential).toHaveProperty("accountId", accountId(identity.sub));
     expect(await (await callbackResponse!).text()).toContain("token sharing is connected");
-    expect(result.notes?.[0]).toContain("Eligible Responses requests use your Codex allowance.");
+    expect(result.notes?.[0]).toContain(
+      "Account connected. Eligible Responses API requests with this account use your ChatGPT plan.",
+    );
   });
 
   it("retains identity when sharing is declined without choosing a model or another funding source", async () => {
@@ -472,7 +474,7 @@ describe("ChatGPT token-sharing authorization", () => {
     const result = await loginTokenSharing(context());
     expect(result.profiles[0]?.credential).toMatchObject({
       authFlow: IDENTITY_AUTH_FLOW,
-      displayName: "Sign in with ChatGPT (Beta, identity only)",
+      displayName: "Sign in with ChatGPT (identity only)",
       grantedScope: "openid offline_access",
       authorizationScope: TOKEN_SHARING_LEGACY_SCOPE,
     });

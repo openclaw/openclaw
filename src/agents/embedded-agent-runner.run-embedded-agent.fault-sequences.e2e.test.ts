@@ -303,7 +303,9 @@ async function runScenario(params: {
             authProfileIdSource: "auto",
             allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
             isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
-            timeoutMs: 250,
+            // Fault ordering must not race the host CPU. Auth deadline enforcement
+            // has fake-clock coverage in run/auth-controller.test.ts; 0 is unlimited.
+            timeoutMs: 0,
             runId: params.runId,
             enqueue: async (task) => await task(),
           }),
@@ -392,14 +394,18 @@ async function expectPreparationInvalidationToDropRoutingWork(
     let replacementAdmission: ReturnType<typeof createModelRoutingTestAdmission> | undefined;
     const reachedPreparation = createDeferredCore();
     const releasePreparation = createDeferredCore();
-    const realMkdir = fs.mkdir.bind(fs);
-    const mkdirSpy = vi.spyOn(fs, "mkdir").mockImplementation(async (target, options) => {
-      if (String(target) === workspaceDir) {
+    const transcriptPreparation =
+      await import("./embedded-agent-runner/run/attempt-transcript-helpers.js");
+    const resolveTarget = transcriptPreparation.resolveAttemptDispatchSessionTarget;
+    // Hold real preparation before routing publication and backend dispatch.
+    const preparationSpy = vi
+      .spyOn(transcriptPreparation, "resolveAttemptDispatchSessionTarget")
+      .mockImplementationOnce(async (params) => {
+        const target = await resolveTarget(params);
         reachedPreparation.resolve();
         await releasePreparation.promise;
-      }
-      return await realMkdir(target, options);
-    });
+        return target;
+      });
     let run: ReturnType<ProductionRunEmbeddedAgent> | undefined;
     try {
       const { decisionWork } = await captureRoutingDecisionWork(async () => {
@@ -413,7 +419,8 @@ async function expectPreparationInvalidationToDropRoutingWork(
           prompt: "hello",
           provider: "openai",
           model: "mock-1",
-          timeoutMs: 250,
+          // The preparation barrier, not elapsed time, drives admission invalidation.
+          timeoutMs: 0,
           runId,
           enqueue: async (task) => await task(),
         });
@@ -447,7 +454,7 @@ async function expectPreparationInvalidationToDropRoutingWork(
       preparedAdmission.close();
       // The rejection is observed above; join all run work before restoring its checkpoint.
       await Promise.allSettled(run ? [run] : []);
-      mkdirSpy.mockRestore();
+      preparationSpy.mockRestore();
     }
   });
 }
@@ -575,7 +582,9 @@ it.each(["model fallback", "auth profile", "exhausted profiles"] as const)(
         if (exhausted) {
           const error = expectError(outcome);
           expect(error).toMatchObject({ reason: "rate_limit" });
-          expect(error.message).toMatch(/try again/i);
+          expect(error.message).toContain("openai/mock-1 is rate-limited.");
+          expect(error.message).toContain("retry in 3 hours");
+          expect(error.message).toContain("model picker");
         } else {
           expect(expectResult(outcome).result.payloads?.[0]?.text).toBe("backup recovered");
         }
@@ -605,7 +614,10 @@ it.each([
       { openai: 2 },
       [],
       ({ outcome, observations, usageStats, startedAt }) => {
-        expect(attemptRoutes(observations)).toEqual([
+        expect(
+          attemptRoutes(observations),
+          outcome.kind === "error" ? outcome.error.message : JSON.stringify(outcome),
+        ).toEqual([
           ["openai", "mock-1", "openai:p1"],
           ["openai", "mock-1", "openai:p2"],
         ]);

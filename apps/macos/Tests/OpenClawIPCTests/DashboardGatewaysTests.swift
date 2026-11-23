@@ -283,7 +283,8 @@ struct DashboardManagerGatewayTargetTests {
         }
 
         #expect(catalogReads == 0)
-        #expect(manager._testGatewayRefreshObserverCount() == 0)
+        // Local window focus/close observers stay active without observing the profile registry.
+        #expect(manager._testGatewayRefreshObserverCount() == 2)
     }
 
     @Test func `interactive configuration retains the gateway profile refresh`() async {

@@ -8,9 +8,8 @@ import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import {
   hasMissingSkillRequirements,
   resolveSkillStatusEntry,
-  type SkillStatusEntry,
-  type SkillStatusReport,
-} from "../skills/discovery/status.js";
+} from "../skills/discovery/skill-index.js";
+import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/status.types.js";
 import { displayPath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";

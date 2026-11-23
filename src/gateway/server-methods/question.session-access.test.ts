@@ -4,7 +4,7 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as sessionEntryReads from "../../config/sessions/session-entry-read-runtime.js";
-import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { releaseAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -18,7 +18,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
@@ -132,7 +132,7 @@ async function fixture(state: OpenClawTestState) {
       assertCurrent: () => sourceController.signal.throwIfAborted(),
     },
   };
-  const source = await captureGatewayOperatorRunAuthority({
+  const source = await prepareGatewayOperatorRunAuthority({
     client: owner,
     context: { getRuntimeConfig: () => cfg },
   });
@@ -397,6 +397,24 @@ it.each(["closed claim", "absent", "incognito", "disallowed agent"] as const)(
         f.cfg.gateway!.roles!.definitions.view!.agents = ["guest"];
         await state.writeConfig(f.cfg);
         setRuntimeConfigSnapshot(f.cfg);
+        expect(await f.request("admitted-before-policy-change")).toMatchObject([
+          false,
+          undefined,
+          { code: "FORBIDDEN" },
+        ]);
+        expect(manager.observe("admitted-before-policy-change")).toBeNull();
+        const fresh = await prepareGatewayOperatorRunAuthority({
+          client: f.owner,
+          context: { getRuntimeConfig: () => f.cfg },
+        });
+        if (!fresh) {
+          throw new Error("Expected fresh question source");
+        }
+        sourceReleases.add(fresh.release);
+        client = {
+          ...client,
+          internal: { ...client.internal, operatorRunAuthority: fresh.authority },
+        };
       }
       if (kind === "absent") {
         client = {
@@ -493,10 +511,10 @@ it.each([
       const entered = createDeferredCore();
       const release = createDeferredCore();
       invalidateQuestionReadFacts();
-      const run = projectionLane.pool.run.bind(projectionLane.pool);
+      const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
       let held = false;
       const spy = vi
-        .spyOn(projectionLane.pool, "run")
+        .spyOn(sessionStoreLane.pool, "run")
         .mockImplementation(async (input, options) => {
           let exact = false;
           const result = await run(async () => {

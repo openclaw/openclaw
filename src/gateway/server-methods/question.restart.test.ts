@@ -2,7 +2,9 @@ import { expect, it, vi } from "vitest";
 import { formatRestartedQuestionResult } from "../../agents/tools/ask-user-tool-normalization.js";
 import * as sessionEvents from "../../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { loadExactSessionEntry } from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { readSessionTranscriptContextMessages } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -117,4 +119,38 @@ it("never carries host-authorized or secret questions across a restart", () =>
       expect(ok).toBe(false);
       expect(error).toMatchObject({ details: { reason: "QUESTION_NOT_FOUND" } });
     }
+  }));
+
+it("does not replace an unavailable recorded requester with the session principal", () =>
+  withAskingSession(async () => {
+    vi.mocked(systemTurnAuthority.prepareSessionSystemTurnAuthority).mockRestore();
+    const record = support.manager.request({ ...support.requestParams, timeoutMs: 60_000 });
+    replaceSessionEntrySync(
+      { agentId, sessionKey },
+      {
+        sessionId: "asking",
+        updatedAt: 1,
+        resumeAfterRestart: { operatorSource: { kind: "unavailable", reason: "no-auth-method" } },
+      },
+    );
+    await restartGateway();
+    await restartGateway();
+    expect(
+      (
+        await support.callQuestionRpc("question.resolve", {
+          id: record.id,
+          answers: { answers: { destination: ["Paris"] } },
+        })
+      )[0],
+    ).toBe(true);
+    const { storePath } = loadExactSessionEntry({ agentId, sessionKey })!;
+    await vi.waitFor(() => {
+      const history = readSessionTranscriptContextMessages(
+        { agentId, sessionKey, sessionId: "asking", storePath },
+        (messages) => JSON.stringify([...messages]),
+      );
+      expect(history).toContain("Queued operator authority cannot be recovered");
+      expect(history).toContain("Send a message to continue from it");
+    });
+    expect(sessionEvents.enqueueSessionEventForHost).not.toHaveBeenCalled();
   }));

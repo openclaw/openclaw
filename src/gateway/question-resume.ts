@@ -18,16 +18,29 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
 const log = createSubsystemLogger("gateway/questions");
-type AskingSession = { agentId: string; sessionKey: string; sessionId: string };
+type AskingSession = {
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  operatorSource?: ResumableQuestion["operatorSource"];
+};
 
 /**
  * Sessions whose restart marker carries a pending question, added after live owners so
  * their resume and parked facts win. Graceful shutdown writes them; a crash loses them.
  */
 export function questionSessions(questions: readonly ResumableQuestion[] = []) {
-  return questions.flatMap(({ record, sessionId }) =>
+  return questions.flatMap(({ record, sessionId, operatorSource }) =>
     record.sessionKey
-      ? [{ sessionKey: record.sessionKey, agentId: record.agentId, sessionId, needsResume: false }]
+      ? [
+          {
+            sessionKey: record.sessionKey,
+            agentId: record.agentId,
+            sessionId,
+            operatorSource,
+            needsResume: false,
+          },
+        ]
       : [],
   );
 }
@@ -54,7 +67,7 @@ export function markerQuestions(
 export function restoreMarkerQuestions(
   context: GatewayRequestContext,
   session: AskingSession,
-  marker: { questions?: QuestionRecord[] },
+  marker: { questions?: QuestionRecord[]; operatorSource?: ResumableQuestion["operatorSource"] },
 ): boolean {
   const manager = context.questionManager;
   const publish = (event: string, payload: unknown, observation: QuestionObservation | null) => {
@@ -74,13 +87,19 @@ export function restoreMarkerQuestions(
     });
     publishing = false;
   };
+  const resumedSession = { ...session, operatorSource: marker.operatorSource };
   let restored = false;
   for (const record of marker.questions ?? []) {
     const onResolved = (event: QuestionResolvedEvent, observation: QuestionObservation) => {
       publish("question.resolved", event, observation);
-      void resumeRestoredQuestion(context, session, observation.record);
+      void resumeRestoredQuestion(context, resumedSession, observation.record);
     };
-    if (manager?.restore({ record, sessionId: session.sessionId }, onResolved)) {
+    if (
+      manager?.restore(
+        { record, sessionId: session.sessionId, operatorSource: marker.operatorSource },
+        onResolved,
+      )
+    ) {
       restored = true;
       publish("question.requested", record, manager.observe(record.id, record));
     }
@@ -109,6 +128,7 @@ async function resumeRestoredQuestion(
         sessionKey,
         sessionId,
         preserveRecordedSource: true,
+        operatorSource: target.operatorSource,
       });
       const captured = await captureSessionEventTargetForHost(agentId, sessionKey, {
         operatorAuthority: authority?.authority,

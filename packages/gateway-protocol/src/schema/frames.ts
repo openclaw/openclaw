@@ -116,6 +116,9 @@ export const HelloOkSchema = closedObject({
   snapshot: SnapshotSchema,
   // Public Control UI origin and mount path, independent of local SSH tunnels.
   controlUiUrl: Type.Optional(NonEmptyString),
+  // Additive: the linked claw's Control UI address, only on OpenClaw ID tunnel connections.
+  // Reaches claw members only, so anonymous share links keep using controlUiUrl.
+  controlUiClawUrl: Type.Optional(NonEmptyString),
   // Additive: Control UI mount path on this listener, for clients that reach it by host and port.
   controlUiBasePath: Type.Optional(NonEmptyString),
   // Additive: plugin-declared Control UI tabs (surface "tab" descriptors).

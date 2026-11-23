@@ -9,6 +9,7 @@ extension DashboardWindowController {
         // toggles plus back/forward gestures and the Cmd-[/] menu items.
         let capabilityScript = """
         window.__OPENCLAW_NATIVE_WEB_CHROME__ = true;
+        window.__OPENCLAW_NATIVE_BROWSER_CUTOUTS__ = true;
         window.addEventListener('openclaw:native-commands-state', () => {
           window.webkit.messageHandlers.openclawCommands.postMessage({type: 'commands-state'});
         });
@@ -24,6 +25,9 @@ extension DashboardWindowController {
         // !important selectors also outrank the rules older app builds inject.
         let css = """
         \(DashboardDeviceSymbolStyle.css())
+        html.openclaw-native-macos.openclaw-native-web-chrome {
+          --openclaw-native-titlebar-height: \(DashboardWindowLayout.titlebarHeight)px;
+        }
         @media (min-width: 700px) {
           /* Both desktop navigation surfaces must clear AppKit's window controls
              and drag regions or their first interactive row becomes unreachable. */
@@ -42,6 +46,17 @@ extension DashboardWindowController {
             style.textContent = \(WebViewJavaScriptSupport.jsValue(css));
             document.documentElement.classList.add("openclaw-native-macos", "openclaw-native-web-chrome");
             document.head.appendChild(style);
+            const root = document.documentElement;
+            const publishBrowserColorScheme = () => {
+              const colorScheme = root.dataset.themeMode;
+              if (colorScheme === 'light' || colorScheme === 'dark') {
+                window.webkit.messageHandlers.openclawBrowser
+                  .postMessage({type: 'set-color-scheme', colorScheme}).catch(() => {});
+              }
+            };
+            new MutationObserver(publishBrowserColorScheme)
+              .observe(root, {attributes: true, attributeFilter: ['data-theme-mode']});
+            publishBrowserColorScheme();
           } catch {}
         })();
         """

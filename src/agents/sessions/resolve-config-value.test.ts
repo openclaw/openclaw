@@ -43,6 +43,15 @@ process.stdout.write(${JSON.stringify(value)});`,
       }),
     ).rejects.toThrow("retired credential");
     expect(fs.existsSync(counter)).toBe(false);
+    await expect(
+      resolveConfigValue(command, undefined, async () => {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        throw new Error("retired during preparation");
+      }),
+    ).rejects.toThrow("retired during preparation");
+    expect(fs.existsSync(counter)).toBe(false);
     expect(await Promise.all([resolveConfigValue(command), resolveConfigValue(command)])).toEqual([
       value || undefined,
       value || undefined,

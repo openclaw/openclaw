@@ -17,7 +17,7 @@ import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveAmbientOwnerAgentId } from "./agent-scope-config.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
-import {
+import type {
   acquireSimpleCompletionModelForAgent as prepareModel,
   completeWithPreparedSimpleCompletionModel as complete,
 } from "./simple-completion-runtime.js";
@@ -413,7 +413,10 @@ export function createModelExecAutoReviewer(params: {
       const signal = params.signal
         ? AbortSignal.any([completionController.signal, params.signal])
         : completionController.signal;
-      const preparedResult = createDeferredCore<Awaited<ReturnType<typeof prepareModel>>>();
+      const preparedResult = createDeferredCore<{
+        prepared: Awaited<ReturnType<typeof prepareModel>>;
+        complete: typeof complete;
+      }>();
       const finished = createDeferredCore();
       callerFinished = finished;
       const work = new AsyncWorkScope();
@@ -422,8 +425,10 @@ export function createModelExecAutoReviewer(params: {
       void trackOwner(async () => {
         let acquired: Awaited<ReturnType<typeof prepareModel>> | undefined;
         try {
+          const runtime = await import("./simple-completion-runtime.js");
+          signal.throwIfAborted();
           acquired = await work.track(() =>
-            prepareModel({
+            runtime.acquireSimpleCompletionModelForAgent({
               cfg,
               agentId,
               modelRef,
@@ -431,7 +436,10 @@ export function createModelExecAutoReviewer(params: {
               signal,
             }),
           );
-          preparedResult.resolve(acquired);
+          preparedResult.resolve({
+            prepared: acquired,
+            complete: runtime.completeWithPreparedSimpleCompletionModel,
+          });
           await finished.promise;
         } catch (error) {
           preparedResult.reject(error);
@@ -442,14 +450,15 @@ export function createModelExecAutoReviewer(params: {
           }
         }
       }).catch((error: unknown) => preparedResult.reject(error));
-      const prepared = await raceWithReviewerTimeout(preparedResult.promise, {
+      const preparation = await raceWithReviewerTimeout(preparedResult.promise, {
         timeoutMs,
         signal: params.signal,
         onTimeout: () => completionController?.abort(),
       });
-      if (prepared === EXEC_REVIEWER_TIMEOUT) {
+      if (preparation === EXEC_REVIEWER_TIMEOUT) {
         return deferReview(`exec reviewer timed out after ${timeoutMs}ms`);
       }
+      const { prepared, complete: runCompletion } = preparation;
       if ("error" in prepared) {
         return buildExecAutoReviewFailureDecision(
           "exec reviewer model unavailable",
@@ -459,7 +468,7 @@ export function createModelExecAutoReviewer(params: {
 
       const result = await raceWithReviewerTimeout(
         work.track(() =>
-          complete({
+          runCompletion({
             model: prepared.model,
             auth: prepared.auth,
             cfg,

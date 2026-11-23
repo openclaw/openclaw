@@ -297,6 +297,19 @@ private func detectedSetupResponse(
     )
 }
 
+private func knownSetupOptionsResponse(id: String) -> Data {
+    Data(
+        """
+        {"type":"res","id":"\(id)","ok":true,"payload":{
+          "candidates":[],"unavailableCandidates":[],"recommendedInstalls":[],
+          "manualProviders":[{"id":"openai-api-key","brandId":"openai","label":"OpenAI API key","hint":null}],
+          "authOptions":[{"id":"provider-login","brandId":"openai","label":"Provider sign-in",
+            "kind":"oauth","featured":true}],
+          "workspace":"/tmp/openclaw-workspace","configuredModel":null,"setupComplete":false}}
+        """.utf8
+    )
+}
+
 private func successfulEmptyResponse(id: String) -> Data {
     Data(#"{"type":"res","id":"\#(id)","ok":true,"payload":{}}"#.utf8)
 }
@@ -2128,6 +2141,72 @@ struct OnboardingAISetupTests {
         }
     }
 
+    @Test func `known choices stay usable during discovery and keep a started sign-in`() async throws {
+        let recorder = AISetupRequestRecorder()
+        let discovery = AISetupRequestGate()
+        let session = makeAISetupRequestSession(
+            recorder: recorder,
+            handler: { task, request in
+                switch request.method {
+                case "openclaw.setup.options":
+                    task.emitReceiveSuccess(.data(knownSetupOptionsResponse(id: request.id)))
+                case "openclaw.setup.detect":
+                    // Slow local discovery answers only after the person has chosen.
+                    await discovery.wait()
+                    task.emitReceiveSuccess(.data(detectedSetupResponse(id: request.id, credentials: true)))
+                case "openclaw.setup.auth.start":
+                    let sessionID = request.params["sessionId"] as? String ?? "auth-session"
+                    task.emitReceiveSuccess(.data(wizardStartResponse(id: request.id, sessionID: sessionID)))
+                default:
+                    break
+                }
+            },
+            receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                let id = task.snapshotConnectRequestID() ?? "connect"
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: id,
+                    methods: ["openclaw.setup.options", "openclaw.setup.auth.start"]
+                ))
+            }
+        )
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = makeAISetupGateway(url: url, session: session)
+        let model = makeAISetupModel(gateway: gateway)
+
+        let detection = Task { await model.detectConnections() }
+        do {
+            try await TestWait.observed("known setup choices") { model.discovering }
+            #expect(model.phase == .ready)
+            #expect(!model.isBusy)
+            #expect(model.candidates.isEmpty)
+            #expect(model.manualProviderID == "openai-api-key")
+            let option = try #require(model.authOptions.first)
+            model.startProviderWizard(option, kind: .auth)
+            try await TestWait.observed("started sign-in") { model.activeAuthOption != nil }
+
+            await discovery.release()
+            await detection.value
+            #expect(!model.discovering)
+            #expect(model.candidates.map(\.kind) == ["claude-cli"])
+            #expect(model.activeAuthOption?.id == option.id)
+            #expect(model.phase == .ready)
+            #expect(model.manualProviderID == "openai-api-key")
+            let methods = await recorder.snapshot().methods
+            #expect(methods.filter { $0 == "openclaw.setup.auth.start" }.count == 1)
+            #expect(!methods.contains("wizard.cancel"))
+        } catch {
+            await discovery.release()
+            model.resetForGatewayChange()
+            await gateway.shutdown()
+            throw error
+        }
+        model.resetForGatewayChange()
+        await gateway.shutdown()
+    }
+
     @Test func `prepare without a model handoff falls back to detection`() async throws {
         let recorder = AISetupRequestRecorder()
         let detections = AISetupSocketGeneration()
@@ -2223,7 +2302,7 @@ struct OnboardingAISetupTests {
 
     @Test(arguments: [
         (choiceID: "test-provider-login", label: "Test provider", stepType: "text"),
-        (choiceID: "openai-token-sharing", label: "Sign in with ChatGPT (Beta)", stepType: "note"),
+        (choiceID: "openai-token-sharing", label: "Sign in with ChatGPT", stepType: "note"),
     ])
     func `advertised browser auth preserves its choice and session after a pre-dispatch disconnect`(
         choice: (choiceID: String, label: String, stepType: String)
@@ -3467,14 +3546,14 @@ struct OnboardingAISetupTests {
                     try await harness.recorder.waitForMethod("openclaw.setup.detect")
                     try await TestWait.state("manual AI setup controls") {
                         let ax = try await inspectAISetupAccessibility(hosting)
-                        return ax.actions["Finish"] == false &&
+                        return ax.actions["Next"] == false &&
                             ax.actions.contains { $0.key.contains("API Keys") && $0.value }
                     }
                     try await pressOnboardingEntryButton("API Keys", in: hosting)
                     try await TestWait.state("API key provider form") {
                         let ax = try await inspectAISetupAccessibility(hosting)
                         return model.showManualEntry && ax.labels.contains("OpenAI API key") &&
-                            ax.actions["Finish"] == false
+                            ax.actions["Next"] == false
                     }
                     #expect(events.persistenceCalls == 4)
                 }
@@ -3623,6 +3702,8 @@ struct OnboardingAISetupTests {
             "agents.list", "openclaw.setup.detect", "agents.list", "openclaw.setup.activate",
         ])
         #expect(view.aiSetup.verifiedExistingInference)
+        #expect(handoffs.isEmpty)
+        #expect(view.finish())
         #expect(handoffs == [.dashboard])
     }
 

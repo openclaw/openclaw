@@ -42,6 +42,9 @@ enum PairingPromptSupport {
             apply: @escaping @MainActor (Data) throws -> Void) async throws
         {
             guard !Task.isCancelled, self.isCurrent else { return }
+            // A connection without pairing scope (such as an OpenClaw ID member key) cannot
+            // manage pairing; polling it would only collect FORBIDDEN replies.
+            guard await self.gateway.grantsScope("operator.pairing") else { return }
             // Each prompter owns its Source and one list task. Queue mutations
             // invalidate snapshots; overlapping readers join without invalidating
             // one another, and an invalidated initial read still converges.

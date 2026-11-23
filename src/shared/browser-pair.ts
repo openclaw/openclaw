@@ -3,7 +3,7 @@
 const BROWSER_PAIR_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const BROWSER_PAIR_CODE_RE = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$/u;
 
-export const BROWSER_PAIR_CODE_LENGTH = 8;
+const BROWSER_PAIR_CODE_LENGTH = 8;
 export const BROWSER_PAIR_ROUTE_PREFIX = "/__openclaw__/browser-pair";
 export const BROWSER_PAIR_IDENTITY_REQUIRED_MESSAGE =
   "Browser-code pairing is unavailable when gateway.roles is configured because this sign-in does not verify a user identity. Use your Gateway's identity-aware sign-in instead, or ask an administrator for the supported sign-in method.";
@@ -25,8 +25,24 @@ export function normalizeBrowserPairCode(input: string): string | null {
   return BROWSER_PAIR_CODE_RE.test(code) ? code : null;
 }
 
-export function formatBrowserPairCode(code: string): string {
-  return `${code.slice(0, 4)}-${code.slice(4)}`;
+/**
+ * `work:ABCD-EFGH` names the issuing Gateway's profile so a bare `openclaw pair` reaches it.
+ * The prefix only routes the CLI; the eight random characters stay the whole secret-free code.
+ */
+export function formatBrowserPairCode(code: string, profile?: string | null): string {
+  const formatted = `${code.slice(0, 4)}-${code.slice(4)}`;
+  return profile ? `${profile}:${formatted}` : formatted;
+}
+
+/** Split typed input into its profile prefix (unvalidated) and the code text. */
+export function splitBrowserPairCodeProfile(input: string): {
+  profile: string | null;
+  code: string;
+} {
+  const separator = input.indexOf(":");
+  return separator < 0
+    ? { profile: null, code: input }
+    : { profile: input.slice(0, separator).trim(), code: input.slice(separator + 1) };
 }
 
 /** Short, display-only name for a browser's signing key. */

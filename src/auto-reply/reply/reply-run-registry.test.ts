@@ -931,27 +931,6 @@ it("refuses stale injectable owners for admission and delivery until activity re
   }
 });
 
-it.each([
-  { probe: "isStopped", throws: false },
-  { probe: "isStopped", throws: true },
-  { probe: "isCompacting", throws: true },
-])("fails closed for backend $probe (throws: $throws)", async ({ probe, throws }) => {
-  const queueMessage = vi.fn(async () => {});
-  createInjectableOperation("session-running", queueMessage, {
-    [probe]: () => {
-      if (throws) {
-        throw new Error("bad stopped state");
-      }
-      return true;
-    },
-  });
-  await expect(queueCurrentMessage("session-running", "hello")).resolves.toMatchObject({
-    status: "rejected",
-    reason: "injection_unavailable",
-  });
-  expect(queueMessage).not.toHaveBeenCalled();
-});
-
 it("requires a real injection capability", () => {
   const operation = injectionOperation({ kind: "cli", runId: "run-a" });
   expect(captureInjectionTarget(operation.key)).toBeUndefined();

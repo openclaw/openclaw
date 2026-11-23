@@ -61,6 +61,7 @@ export function restoreDraft(
       mentions: ownedMessage ? ownedMentions : draft.mentions,
       attachments: draft.attachments,
       visibility: draft.newSessionDraft?.incognito ? "incognito" : submission.visibility,
+      permissionMode: draft.newSessionDraft?.permissionMode,
     });
     if (!ownedMessage && draft.newSessionDraft) {
       submission.draftPersistence.adoptHandoff(draft.newSessionDraft);

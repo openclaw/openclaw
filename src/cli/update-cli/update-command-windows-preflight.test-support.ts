@@ -5,6 +5,7 @@ import * as assertions from "../update-cli-assertions.test-support.js";
 import type { createUpdateCliFixture } from "../update-cli-fixture.test-support.js";
 import * as service from "../update-cli-mocks.test-support.js";
 import * as api from "../update-cli-modules.test-support.js";
+import { prepareUpdateCommand } from "./update-command-run.js";
 
 await vi.hoisted(() => import("../update-cli-mocks.test-support.js"));
 
@@ -62,15 +63,19 @@ export function registerWindowsTaskAdmissionTests(
         };
       });
 
-      const update = () => api.invokeUpdateCli({ tag, timeout: "2400", json: true });
       if (proceeds) {
-        await update();
+        expect(await prepareUpdateCommand({ tag, timeout: "2400", json: true })).toMatchObject({
+          installKind: "package",
+          timeoutMs: 2_400_000,
+        });
         // Native HRESULTs must come from the adapter, not be invented from token type.
         expect(queriedScript).not.toMatch(/Write-Output\s+['"]-2147024891['"]/);
         expect(queriedScript).toContain(".RunLevel");
         expect(queriedScript).toContain(".UserId");
       } else {
-        await expect(update()).rejects.toEqual(new api.ExitError(1));
+        await expect(api.invokeUpdateCli({ tag, timeout: "2400", json: true })).rejects.toEqual(
+          new api.ExitError(1),
+        );
         const output = assertions.getErrorOutput();
         expect(output).toContain("elevated terminal");
         if (tag === "main" || tag === "openclaw@MAIN") {
@@ -90,11 +95,12 @@ export function registerWindowsTaskAdmissionTests(
           service.suspendScheduledTaskAutoStartForUpdate,
           api.fetchNpmPackageTargetStatus,
         );
+        expect(assertions.lastWriteJsonCall(), assertions.getErrorOutput()).toMatchObject({
+          status: "error",
+          reason: "managed-service-preflight",
+        });
       }
-      expect(assertions.lastWriteJsonCall(), assertions.getErrorOutput()).toMatchObject(
-        proceeds ? { status: "ok" } : { status: "error", reason: "managed-service-preflight" },
-      );
-      expect(assertions.packageInstallCommandCall() !== undefined).toBe(proceeds === true);
+      expect(assertions.packageInstallCommandCall()).toBeUndefined();
     },
   );
 }

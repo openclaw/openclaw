@@ -118,6 +118,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         },
         "models.authStatus": {
           ts: NOW,
+          providerCapabilities: keyCapabilities("openai"),
           providers: [
             {
               provider: "openai",
@@ -141,10 +142,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       const response = await page.goto(`${server.baseUrl}settings/model-providers`);
       expect(response?.status()).toBe(200);
       const openaiCard = page.locator('[data-provider-id="openai"]');
-      const readiness = page.locator('[data-model-readiness="model-required"]');
-      await readiness.waitFor();
-      await expect.poll(async () => readiness.textContent()).toContain("Add account");
-      await expect.poll(async () => readiness.textContent()).toContain("Model required");
+      await openaiCard.waitFor();
       const providerReadiness = openaiCard.locator(".model-providers__head");
       const profileStatus = openaiCard.locator(".model-providers__profile-status");
       await expect.poll(async () => providerReadiness.textContent()).not.toContain("Signed in");
@@ -161,6 +159,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         }),
       ]);
       expect(await page.getByRole("heading", { name: "Add provider" }).count()).toBe(0);
+      // A signed-in provider can list models, so the defaults (and any listing error) show.
       expect(await page.locator(".model-providers__defaults").count()).toBe(1);
 
       if (recordVisuals) {
@@ -202,8 +201,8 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       ).toHaveLength(0);
       expect(await gateway.getRequests("models.list")).toHaveLength(2);
 
-      await readiness.getByRole("button", { name: "Add account", exact: true }).click();
-      await page.locator("[data-models-login-search]").waitFor();
+      await page.locator('[data-models-catalog-provider="openai"] button').click();
+      await page.locator(".model-provider-login").waitFor();
       expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
     } finally {
       await context.close();
@@ -263,6 +262,11 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         catalogModel("ß-provider", "test-model", "Test Model"),
       ],
       methodResponses: {
+        // The agent's chosen model keeps setup out of the way of provider access.
+        "config.get": sourceConfigSnapshot(
+          { agents: { defaults: { model: "openai/gpt-5.5" } } },
+          "configured-providers",
+        ),
         "models.authStatus": {
           ts: NOW,
           providerCapabilities: keyCapabilities("openai", "anthropic", "google"),
@@ -381,26 +385,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       const providerSection = page
         .locator(".settings-section")
         .filter({ has: page.locator(".model-providers__provider-list") });
-      // The refresh icon sits centered beside Add account; the update time is its tooltip.
-      const headerMetrics = await providerSection.evaluate((section) => {
-        const connect = section.querySelector<HTMLElement>("[data-models-connect]");
-        const refresh = section.querySelector<HTMLButtonElement>(
-          ".model-providers__refresh-button",
-        );
-        if (!connect || !refresh) {
-          throw new Error("expected configured-provider header controls");
-        }
-        const connectBounds = connect.getBoundingClientRect();
-        const refreshBounds = refresh.getBoundingClientRect();
-        return {
-          centerOffset: Math.abs(
-            connectBounds.top +
-              connectBounds.height / 2 -
-              (refreshBounds.top + refreshBounds.height / 2),
-          ),
-        };
-      });
-      expect(headerMetrics.centerOffset).toBeLessThanOrEqual(1);
+      await providerSection.locator(".model-providers__refresh-button").waitFor();
 
       await page.setViewportSize({ width: 390, height: 844 });
       const mobileMetrics = await providerSection.evaluate((section) => {
@@ -420,6 +405,44 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         flexDirection: "column",
         overflowsViewport: false,
       });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("preserves ready setup after a no-model access probe", async () => {
+    const context = await browser.newContext(providerPageOptions(1280, 1000));
+    const page = await context.newPage();
+    const config = { models: { providers: { openai: providerConfig(redactedConfigValue) } } };
+    const models = [catalogModel("openai", "example-model", "Example model")];
+    const gateway = await installMockGateway(page, {
+      featureMethods: [...defaultControlUiFeatureMethods, "models.probe"],
+      models,
+      methodResponses: {
+        "config.get": sourceConfigSnapshot(config, "no-model-probe"),
+        "models.list": { models, providerOutcomes: [{ provider: "openai", status: "ready" }] },
+        "models.authStatus": {
+          ts: NOW,
+          providerCapabilities: keyCapabilities("openai"),
+          providers: [configAuth("openai", { displayName: "OpenAI", status: "static" })],
+        },
+        "models.probe": { provider: "openai", status: "no_model", results: [] },
+        ...emptyUsage(NOW),
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}settings/model-providers`);
+      const row = await expandProvider(page, "openai");
+      await row.getByRole("button", { name: "Test access: OpenAI", exact: true }).click();
+      await gateway.waitForRequest("models.probe");
+      await expect
+        .poll(() => row.locator(".model-providers__probe-summary").textContent())
+        .toBe("No models available");
+      if (recordVisuals) {
+        await captureProviderProof("no-model-status.png", row);
+        console.info(`No-model status proof: ${path.join(artifactDir, "no-model-status.png")}`);
+      }
+      expect(await row.locator(".provider-row__status").textContent()).toBe("Ready");
     } finally {
       await context.close();
     }
@@ -527,8 +550,13 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       }
 
       await expandProvider(page, "openai");
-      for (const action of ["Remove provider", "Add account", "Test access"]) {
-        const control = page.getByRole("button", { name: `${action}: OpenAI`, exact: true });
+      for (const action of [
+        "Remove provider",
+        "Remove saved access",
+        "Add account",
+        "Test access",
+      ]) {
+        const control = openaiCard.getByRole("button", { name: `${action}: OpenAI`, exact: true });
         expect(await control.count()).toBe(1);
         expect((await control.textContent())?.trim()).toBe(action);
       }
@@ -545,7 +573,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await openaiCard.getByLabel("API key", { exact: true }).fill(openaiInputValue);
       const keyWriteCount = (await gateway.getRequests("models.authSetApiKey")).length;
       await gateway.deferNext("models.authSetApiKey");
-      await openaiCard.getByRole("button", { name: "Save" }).click();
+      await openaiCard.getByRole("button", { name: "Save", exact: true }).click();
       const keyWrite = await gateway.waitForRequest("models.authSetApiKey", {
         after: keyWriteCount,
       });
@@ -617,8 +645,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       expect(await modelPickerValue(primary)).toBe("anthropic/claude-sonnet-4-5");
       expect(await page.locator(".model-providers__defaults .callout.success").count()).toBe(0);
 
-      await page.locator("[data-models-connect]").click();
-      await page.locator('[data-models-login-provider="google"]').click();
+      await page.locator('[data-models-catalog-provider="google"] button').click();
       const addSection = page.locator("[data-models-key-dialog]");
       await addSection.getByLabel("API key").fill(googleInputValue);
       const savedConfig = {
@@ -697,6 +724,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}settings/model-providers`);
       const defaults = page.locator(".model-providers__defaults");
+      await defaults.locator("[data-models-more-settings]").click();
       const utility = page.locator("openclaw-select-picker:has(#model-providers-utility-model)");
       await expect.poll(() => modelPickerValue(utility)).toBe("__openclaw_automatic_utility__");
       if (recordVisuals) {
@@ -737,6 +765,11 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         });
         await expect.poll(() => modelPickerValue(utility)).toBe(choice.value);
         await page.reload();
+        const moreSettings = defaults.locator("[data-models-more-settings]");
+        await moreSettings.waitFor();
+        if ((await moreSettings.getAttribute("aria-expanded")) !== "true") {
+          await moreSettings.click();
+        }
         await expect.poll(() => modelPickerValue(utility)).toBe(choice.value);
         await expect
           .poll(() => modelPickerValue(defaults.locator("openclaw-select-picker").first()))
@@ -852,11 +885,14 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await gateway.setMethodResponse("models.list", {
         models: [catalogModel("openai", "reconnected-model", "Reconnected Model")],
       });
-      const authRequestCount = (await gateway.getRequests("models.authStatus")).length;
+      // The rail retains its main-agent scope while Settings follows Writer.
+      const authScope = { agentId: "writer" };
+      const authRequestCount = (await gateway.getRequests("models.authStatus", authScope)).length;
       await gateway.closeLatest(1012, "model provider reconnect proof");
-      await expect
-        .poll(async () => (await gateway.getRequests("models.authStatus")).length)
-        .toBeGreaterThan(authRequestCount);
+      await gateway.waitForRequest("models.authStatus", {
+        after: authRequestCount,
+        match: authScope,
+      });
       await expect
         .poll(() =>
           modelPickerValue(
@@ -871,21 +907,17 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await expect
         .poll(async () => (await agentPicker.locator(".agent-select__label").textContent())?.trim())
         .toBe("Writer");
-      for (const request of (await gateway.getRequests("models.authStatus")).slice(
-        authRequestCount,
-      )) {
-        expect(request.params).toEqual(expect.objectContaining({ agentId: "writer" }));
-      }
       if (recordVisuals) {
         await captureProviderProof("06-reconnected-model.png", primary);
       }
 
-      const accessChangeAuthCount = (await gateway.getRequests("models.authStatus")).length;
+      const accessAuthCount = (await gateway.getRequests("models.authStatus", authScope)).length;
       await gateway.setOperatorScopes(["operator.read"]);
       await gateway.closeLatest(1012, "model provider access-change proof");
-      await expect
-        .poll(async () => (await gateway.getRequests("models.authStatus")).length)
-        .toBeGreaterThan(accessChangeAuthCount);
+      await gateway.waitForRequest("models.authStatus", {
+        after: accessAuthCount,
+        match: authScope,
+      });
       await expect.poll(() => page.getByRole("alert").count()).toBe(0);
       await primary.locator(".picker-select__trigger").click();
       const readOnlyModel = primary.locator(

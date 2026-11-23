@@ -10,6 +10,7 @@ import { shellEscapeBackslash as shellQuote } from "../../../../src/shared/shell
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
+import { ReportIssueLink } from "../../components/report-issue-link.tsx";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
@@ -336,11 +337,18 @@ function ChatErrorNotice(props: {
         previous.severity === next.severity,
     },
   );
+  // The toast reads its action for presence and rendering; retain one DOM slot.
+  const actions = (
+    <div class="stack chat-error__actions">
+      {props.action}
+      <ReportIssueLink />
+    </div>
+  );
   return (
     <ToastNotice
       class="chat-error"
       toast={toast()}
-      action={props.action}
+      action={actions}
       onDismiss={props.onDismiss}
       dismissLabel={t("chat.actions.dismissError")}
       detailAction={

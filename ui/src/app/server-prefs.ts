@@ -30,10 +30,10 @@ import {
   PENDING_KEY,
   parseStoredPrefs,
   serializeStoredPrefs,
-  readRetainedLocalKeys,
+  readRetainedLocalPrefs,
   readStorage,
   readStoredPrefs,
-  writeRetainedLocalKeys,
+  writeRetainedLocalPrefs,
   writeStorage,
 } from "./server-prefs-storage.ts";
 import type {
@@ -42,7 +42,7 @@ import type {
   ConfirmedPrefsFallback,
 } from "./server-prefs-sync-contract.ts";
 import type { UiSettings } from "./settings-contract.ts";
-import { patchSettings } from "./settings.ts";
+import { loadSettings, patchSettings } from "./settings.ts";
 
 type ServerUiPrefsPushHooks = {
   afterCommit?: (commit: ServerUiPrefsCommit) => void;
@@ -81,6 +81,7 @@ class ServerUiPrefsOutbox {
   confirmedPrefsFallback: ConfirmedPrefsFallback | null = null;
   lastReconciledScope: string | null = null;
   lastReconciledConfigObject: unknown = null;
+  restoredProfileAppearance: { scope: string; keys: Set<SyncedPrefKey> } | null = null;
   preferenceWriteFailures: Map<
     string,
     Map<SyncedPrefKey, { value: unknown; error: string; retained: boolean }>
@@ -121,18 +122,28 @@ function recordPreferenceWriteFailures(
 function updateRetainedLocalKeys(
   scope: string,
   keys: readonly SyncedPrefKey[],
-  retained: boolean,
+  retained: boolean | "confirmed",
 ): void {
-  const stored = readRetainedLocalKeys(scope);
+  const stored = readRetainedLocalPrefs(scope);
+  const settings = retained ? loadSettings() : null;
   for (const key of keys) {
-    if (retained) {
-      stored.add(key);
+    if (retained === true && settings) {
+      stored.set(key, { state: "pending", value: SYNCED_PREFS[key].local(settings) ?? null });
+    } else if (retained === "confirmed") {
+      const preference = stored.get(key);
+      if (preference) {
+        preference.state = "confirmed";
+        // Upgrade key-only markers while their local mirror is still selected.
+        if (!Object.hasOwn(preference, "value") && settings) {
+          preference.value = SYNCED_PREFS[key].local(settings) ?? null;
+        }
+      }
     } else {
       stored.delete(key);
     }
   }
-  writeRetainedLocalKeys(scope, stored);
-  if (retained && scope === sync.lastReconciledScope) {
+  writeRetainedLocalPrefs(scope, stored);
+  if (retained === true && scope === sync.lastReconciledScope) {
     sync.lastReconciledConfigObject = null;
   }
 }
@@ -267,6 +278,7 @@ export function resetServerUiPrefsSync() {
   sync.confirmedPrefsFallback = null;
   sync.lastReconciledScope = null;
   sync.lastReconciledConfigObject = null;
+  sync.restoredProfileAppearance = null;
   resetProfileAppearancePrefs();
   resetServerUiPrefIntent();
   sync.preferenceWriteFailures.clear();

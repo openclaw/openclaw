@@ -5,6 +5,7 @@ import type {
   ControlUiSessionPullRequestSnapshot,
 } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
+import type { SessionDisplayPullRequest } from "../../../lib/session-pull-request-presentation.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
 import type { DetailsSnapshotPatch } from "../chat-details-snapshot.ts";
 import type { ChatDetailsSnapshot } from "../session-details-snapshot-schema.ts";
@@ -59,7 +60,7 @@ type ChatDetailsDesktopPresentation = {
   /** Localized section labels supplied by the host's copy owner. */
   peopleLabel: string;
   outputsLabel: string;
-  /** Localized Working, without the ellipsis in common.working. */
+  /** Localized Working label. */
   subagentsWorkingLabel: string;
 };
 
@@ -112,6 +113,8 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     onCollapseTaskProgressChange?: (collapsed: boolean) => void;
     onOpenTaskProgressSettings?: () => void;
     pullRequests?: ControlUiSessionPullRequest[];
+    /** Includes recorded task PRs without treating them as current-checkout facts. */
+    displayPullRequests?: SessionDisplayPullRequest[];
     pullRequestsGateway?: ApplicationGateway;
     pullRequestsSessionId?: string;
     pullRequestsBranch?: ControlUiSessionBranch;
@@ -122,7 +125,7 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     /** Opens this pane's Processes panel; absent where the pane has none. */
     onOpenProcesses?: (instanceId?: string) => void;
     onCompact?: () => void | Promise<unknown>;
-    onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
+    onDismissPullRequest?: ChatPullRequestsProps["onDismiss"];
     onDismissPullRequestsBranch?: (branch: ControlUiSessionBranch) => void;
     githubPublication?: GitHubPublicationView;
   };

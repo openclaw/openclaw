@@ -29,7 +29,6 @@ import {
   readToolStringParam,
 } from "./common.js";
 import {
-  captureGatewayToolCallerAssertion,
   resolveGatewayToolOperatorSelection,
   wrapGatewayPersonalToolExecution,
 } from "./gateway-caller-context.js";
@@ -73,6 +72,7 @@ const SessionsListToolSchema = Type.Object({
   workspaceDir: SessionsListParamsSchema.properties.workspaceDir,
   group: SessionsListParamsSchema.properties.group,
   pinned: SessionsListParamsSchema.properties.pinned,
+  hasBoard: SessionsListParamsSchema.properties.hasBoard,
   messageLimit: Type.Optional(Type.Integer({ minimum: 0 })),
   label: Type.Optional(Type.String({ minLength: 1 })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
@@ -93,7 +93,7 @@ const SessionsListOutputSchema = Type.Object(
     enrichmentOmitted: Type.Optional(
       Type.Boolean({
         description:
-          "Inline messages and transcript previews were omitted to fit the byte budget; read session history separately.",
+          "Inline messages and chat previews were omitted to fit the byte budget; read session history separately.",
       }),
     ),
     sessionLinkRule: Type.Optional(Type.String({ description: SESSION_LINK_RULE_DESCRIPTION })),
@@ -143,7 +143,6 @@ export function createSessionsListTool(opts?: {
     outputSchema: SessionsListOutputSchema,
     execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
-      const assertCallerCurrent = captureGatewayToolCallerAssertion();
       const gatewayContext = getInProcessGatewayToolContext();
       if (params.activeOnly === true && opts?.supportsActiveOnly === false) {
         throw new Error("activeOnly requires a Gateway-backed inventory with live run state");
@@ -271,6 +270,7 @@ export function createSessionsListTool(opts?: {
             workspaceDir,
             group: typeof params.group === "string" ? params.group : undefined,
             pinned: typeof params.pinned === "boolean" ? params.pinned : undefined,
+            hasBoard: typeof params.hasBoard === "boolean" ? params.hasBoard : undefined,
             includeDerivedTitles: false,
             includeLastMessage: false,
             includeGlobal: !restrictToSpawned,
@@ -446,6 +446,7 @@ export function createSessionsListTool(opts?: {
           archived: entry.archived === true,
           pinned: entry.pinned === true,
           sidebarRoot: entry.sidebarRoot === true,
+          ...(typeof entry.hasBoard === "boolean" ? { hasBoard: entry.hasBoard } : {}),
           ...(rowLabel ? { label: rowLabel } : {}),
           ...(entry.createdActor
             ? { createdActor: projectInventoryActor(entry.createdActor) }
@@ -602,7 +603,6 @@ export function createSessionsListTool(opts?: {
 
       const finalize = (visible: readonly boolean[]) => {
         signal?.throwIfAborted();
-        assertCallerCurrent?.("sessions.list");
         if (gatewayContext && getInProcessGatewayToolContext() !== gatewayContext) {
           throw new Error("Gateway instance unavailable for sessions.list");
         }
@@ -635,7 +635,7 @@ export function createSessionsListTool(opts?: {
           ...(visibilityMetadata ? { visibility: visibilityMetadata } : {}),
         });
         const fits = (count: number) =>
-          Buffer.byteLength(JSON.stringify(resultFor(count), null, 2), "utf8") <=
+          Buffer.byteLength(JSON.stringify(resultFor(count)), "utf8") <=
           SESSIONS_LIST_MAX_RESULT_BYTES;
         // A large optional preview must not make an otherwise usable inventory fail.
         // Keep identity/metadata intact and report the enrichment downgrade explicitly.

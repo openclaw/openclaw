@@ -1,5 +1,5 @@
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
-import type { AssistantMessage } from "../types.js";
+import type { AssistantHistoryMessage } from "../types.js";
 
 const CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE =
   /prompt has [\d,]+ tokens?, but the configured context size is [\d,]+ tokens?/i;
@@ -115,7 +115,7 @@ const NON_OVERFLOW_PATTERNS = [
   /too many requests/i, // Generic HTTP 429 style
 ];
 
-function resolveContextInputTokens(message: AssistantMessage): number | undefined {
+function resolveContextInputTokens(message: AssistantHistoryMessage): number | undefined {
   if (message.usage.contextUsage?.state === "available") {
     return message.usage.contextUsage.promptTokens;
   }
@@ -131,7 +131,10 @@ function resolveContextInputTokens(message: AssistantMessage): number | undefine
  * A context window enables silent-overflow detection; silent truncation without
  * a length stop remains undetectable because the original token count is unknown.
  */
-export function isContextOverflow(message: AssistantMessage, contextWindow?: number): boolean {
+export function isContextOverflow(
+  message: AssistantHistoryMessage,
+  contextWindow?: number,
+): boolean {
   // A refusal explanation can mention overflow without authorizing compact-and-retry.
   if (isProviderRefusalAssistantError(message)) {
     return false;

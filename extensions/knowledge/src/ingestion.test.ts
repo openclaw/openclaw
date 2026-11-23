@@ -117,11 +117,11 @@ it("one batch resolves forward references, self-links, claims/edges; one bounded
   expect(receipt.state).toBe("published");
   expect(receipt.items!.length).toBe(4);
   const ids: Record<string, any> = Object.fromEntries(receipt.items!.map((r) => [r.key, r.id]));
-  const action = (await f.service.record({ id: ids.action, includeMetadata: true }, f.owner))
+  const action = (await f.service.record_detail({ id: ids.action, includeMetadata: true }, f.owner))
     .record;
   expect(action!.metadata!.owner).toBe(ids.morgan);
   expect(action!.metadata!.source_page).toBe(ids.meeting);
-  const meeting = await f.service.record({ id: ids.meeting }, f.owner);
+  const meeting = await f.service.record_detail({ id: ids.meeting }, f.owner);
   expect(meeting.record!.body).toMatch(new RegExp(ids.morgan));
   expect(meeting.links!.every((l) => l.status === "resolved")).toBeTruthy();
   expect((await f.service.history({}, f.owner)).mutations.length).toBe(1);
@@ -175,13 +175,13 @@ for (const stage of [
     await expect(storage.batch(f.input, f.access(), "agent")).rejects.toThrow(
       /simulated interruption/,
     );
-    await expect(f.service.records({}, f.owner)).rejects.toThrow(/publication|identity/);
+    await expect(f.service.records_detail({}, f.owner)).rejects.toThrow(/publication|identity/);
     const status = await f.service.source_check(f.input.source, f.owner);
     expect(status.state).toBe("unchanged");
     expect(status.receipt!.state).toBe("accepted");
     const receipt = await createKnowledgeService(f.api).publish_batch(f.input, f.owner);
     expect(receipt.state).toBe("published");
-    expect((await f.service.records({}, f.owner)).total).toBe(4);
+    expect((await f.service.records_detail({}, f.owner)).total).toBe(4);
     expect(await f.service.resume({ requestId: f.input.requestId }, f.owner)).toStrictEqual(
       receipt,
     );
@@ -193,7 +193,7 @@ it("prevalidation rejects a late invalid item without accepting any records", as
   const bad = structuredClone(f.input);
   bad.items[3]!.input.label = "not_declared";
   await expect(f.service.publish_batch(bad, f.owner)).rejects.toThrow(/valid type/);
-  expect((await f.service.records({}, f.owner)).total).toBe(0);
+  expect((await f.service.records_detail({}, f.owner)).total).toBe(0);
   expect(
     (await f.service.mutation({ requestId: bad.requestId, includeFiles: false }, f.owner)).receipt,
   ).toBe(null);
@@ -206,7 +206,7 @@ it("prevalidation rejects a late invalid item without accepting any records", as
   bad.items[3]!.input.from = "@morgan";
   bad.source.sha256 = "a".repeat(64);
   await expect(f.service.publish_batch(bad, f.owner)).rejects.toThrow(/hash must match/);
-  expect((await f.service.records({}, f.owner)).total).toBe(0);
+  expect((await f.service.records_detail({}, f.owner)).total).toBe(0);
 });
 
 it("source ID/hash receipts survive replacement; changed bytes require reconciliation, unchanged never republish", async () => {
@@ -259,7 +259,7 @@ it("source ID/hash receipts survive replacement; changed bytes require reconcili
   );
   expect(second.items![0]!.id).toBe(meeting!.id);
   expect(second.items![0]!.revision).toBe(2);
-  expect((await service.records({}, f.owner)).total).toBe(4);
+  expect((await service.records_detail({}, f.owner)).total).toBe(4);
   // An earlier export returning does not silently return a receipt from the wrong version.
   expect((await service.source_check(f.input.source, f.owner)).state).toBe("changed");
   await service.withdraw(
@@ -382,7 +382,7 @@ it("expected graph checks authored links in both directions, subset associations
     ).passed,
     "Subset expectations permit extra associations",
   ).toBe(1);
-  const person = (await f.service.record({ id: ids.morgan }, f.owner)).record;
+  const person = (await f.service.record_detail({ id: ids.morgan }, f.owner)).record;
   await f.service.save_page(
     edit(person, { body: "Morgan profile without authored meeting link." }),
     f.owner,
@@ -412,7 +412,7 @@ it("expected link identities stay bound to stable IDs across renames and fail cl
     /snapshot changed/,
   );
   expect((await f.service.verify(input, f.owner)).passed).toBe(1);
-  const meeting = (await f.service.record({ id: ids.meeting }, f.owner)).record;
+  const meeting = (await f.service.record_detail({ id: ids.meeting }, f.owner)).record;
   await f.service.save_page(edit(meeting, { body: "Review with [[Morgan]]." }), f.owner);
   await f.service.save_page({ ...draft(), title: "Morgan", type: "person" }, f.owner);
   expect((await f.service.verify(input, f.owner)).failed).toBe(1);
@@ -477,7 +477,7 @@ it("batch edits retain external changes on conflict and cannot publish partially
   const receipt = await storage.batch(editBatch, f.access(), "agent");
   expect(receipt.state).toBe("conflict");
   expect(await readFile(filename, "utf8")).toMatch(/External authored change/);
-  await expect(f.service.records({}, f.owner)).rejects.toThrow(/publication/);
+  await expect(f.service.records_detail({}, f.owner)).rejects.toThrow(/publication/);
   expect((await f.service.resume({ requestId: editBatch.requestId }, f.owner)).state).toBe(
     "conflict",
   );
@@ -492,7 +492,7 @@ it("evidence changed before acceptance rejects the entire batch", async () => {
   });
   await expect(storage.batch(f.input, f.access(), "agent")).rejects.toThrow();
   expect((await f.service.history({}, f.owner)).mutations.length).toBe(0);
-  expect((await f.service.records({}, f.owner)).total).toBe(0);
+  expect((await f.service.records_detail({}, f.owner)).total).toBe(0);
 });
 
 it("verification reports unavailable index instead of a false pass", async () => {

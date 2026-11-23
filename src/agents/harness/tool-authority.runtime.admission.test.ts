@@ -15,7 +15,7 @@ import {
 } from "../../sessions/session-controller.message-injection.js";
 import { captureReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
 import { testing as replyTesting } from "../../sessions/session-controller.test-support.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { createEmbeddedRunHandle, testing } from "../embedded-agent-runner/runs.test-support.js";
 import * as requesterOrigin from "../requester-origin.js";
 import {
@@ -165,10 +165,9 @@ describe("host-prepared embedded tool authority", () => {
   ] as const)(
     "allows direct harness execution only under current prepared authority (%s, %s)",
     async (authority, source) => {
-      const revocation = new AbortController();
-      const check = vi.fn(() => revocation.signal.throwIfAborted());
+      const check = vi.fn();
       const profile = { profileId: "watchdog-person", emails: [], assignedRole: null };
-      const operator = createAdmittedRunOperatorAuthority({
+      const operator = createTestOperatorAuthority({
         profileId: "watchdog-person",
         scopes: ["operator.write"],
         ...bindPluginGatewayAccessPolicy(
@@ -217,14 +216,7 @@ describe("host-prepared embedded tool authority", () => {
             expect(() => withoutGatewayToolCallerIdentity(() => publish(handle))).toThrow(
               "host-admitted",
             );
-            const cleanup = publish(handle);
-            try {
-              revocation.abort(new Error("Plugin grant revoked")); // The exposed signal stays live.
-              expect(() => publish(handle)).toThrow("no longer active");
-              expect(watchdog.isCurrent()).toBe(false);
-            } finally {
-              cleanup?.();
-            }
+            publish(handle)?.();
             return "entered";
           },
         );
