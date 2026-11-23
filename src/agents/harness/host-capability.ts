@@ -156,7 +156,6 @@ export function createAgentHarnessHostCapabilities(params: {
   const boundGatewayContext = getGatewayContextResolver(attempt.admittedRunContext);
   const assertActive = bindHarnessHostSourceAuthority({
     attempt,
-    delegatedAuthority,
     sourceCaller,
     isActive: () => !capabilityAbortController.signal.aborted,
     isGatewayCurrent: () =>
