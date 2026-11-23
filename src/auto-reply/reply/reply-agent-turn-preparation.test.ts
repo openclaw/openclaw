@@ -334,7 +334,7 @@ it.each([
         setRuntimeConfigSnapshot({ commands: { ownerAllowFrom: [] } });
         expect(assertOwner).not.toThrow();
       } else {
-        expect(assertOwner).toThrow("Channel operator authority changed");
+        expect(assertOwner).toThrow("The request source is no longer available");
       }
       expect(queued.run).toMatchObject({
         requesterOrigin: { senderId, senderE164 },

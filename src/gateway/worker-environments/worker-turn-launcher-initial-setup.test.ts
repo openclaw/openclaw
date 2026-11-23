@@ -323,7 +323,7 @@ describe("initial worker setup admission", () => {
       authority.revoke();
       fixture.finish.resolve();
       await fixture.operation;
-      await expect(run).rejects.toThrow(/authority/);
+      await expect(run).rejects.toThrow(/authority revoked|no longer active/);
       expectUncalled(resolveWorkspace, environments.startTunnel, runLocal);
       expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
     },

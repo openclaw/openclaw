@@ -274,7 +274,7 @@ export async function handleApproveCommandFromContext(
         try {
           params.command.assertOwnerCurrent?.();
         } catch {
-          throw new Error("your owner authority changed; send /approve again");
+          throw new Error("this request has ended; send /approve again");
         }
       }
     }

@@ -60,7 +60,7 @@ it.each(["install ./candidate", "enable authority-plugin", "disable authority-pl
       };
 
       expect((await handlePluginsCommand(params, true))?.reply?.text).toBe(
-        "Your owner authority changed; send a new request.",
+        "This request has ended; send a new request.",
       );
     }),
 );

@@ -124,7 +124,7 @@ export function rejectNonOwnerCommand(
     try {
       params.command.assertOwnerCurrent?.();
     } catch {
-      return commandReply("Your owner authority changed; send a new request.");
+      return commandReply("This request has ended; send a new request.");
     }
     return null;
   }

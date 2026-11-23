@@ -264,7 +264,7 @@ it.each(["same", "mixed"] as const)("preserves deferred %s-participant facts", a
         channelPrincipal: undefined,
         recoveryReference: undefined,
       });
-      expect(assertOwner).toThrow("Channel operator authority changed");
+      expect(assertOwner).toThrow("The request source is no longer available");
     } else {
       expect(getCommandOwnerAuthority(run.run)).toMatchObject({
         channelPrincipal: owner.channelPrincipal,

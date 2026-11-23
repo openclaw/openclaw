@@ -514,9 +514,9 @@ export async function proveStoppedSandboxAuthority(
               await expect(
                 sandbox.fsBridge.writeFile({ filePath: "revoked.txt", data: "must not write" }),
               ).rejects.toMatchObject({
-                message: "admitted run authority is no longer active",
+                message: "This agent run is no longer active. Start a new turn to retry.",
                 cause: expect.objectContaining({
-                  message: expect.stringMatching(/operator|source execution authority/),
+                  message: expect.stringMatching(/operator|This agent run is no longer active/),
                 }),
               });
               expect(shell).not.toHaveBeenCalled();
