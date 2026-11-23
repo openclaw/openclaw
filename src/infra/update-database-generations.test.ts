@@ -294,51 +294,71 @@ it.each([
   expect(fs.readdirSync(staging)).toEqual([]);
 });
 
-// Readers that outlive the last writer keep its frames and live index, as a status reader can.
-function retainedWalFixture() {
+// Readers that outlive the last writer retain its index, even after a checkpoint.
+function retainedWalFixture(checkpointed = false) {
   const fixture = generationFixture("wal");
   const writer = new DatabaseSync(fixture.file);
   writer.exec("INSERT INTO receipt VALUES ('retained');");
   const reader = openReader(fixture.file);
+  if (checkpointed) {
+    writer.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  }
   writer.close();
   reader.close();
-  expect(fs.statSync(`${fixture.file}-wal`).size).toBeGreaterThan(32);
+  expect(fs.statSync(`${fixture.file}-wal`).size > 32).toBe(!checkpointed);
   expect(fs.readFileSync(`${fixture.file}-shm`).readUInt32LE(8)).not.toBe(0);
   return fixture;
 }
 
-it("binds a WAL index an outside reader rebuilds over retained frames during the read", () => {
-  const { file, staging } = retainedWalFixture();
-  const live = readUpdateDatabaseGenerationPair([file]);
-  let rebuilt: DatabaseSync | undefined;
-  duringGenerationRead(() => {
-    rebuilt = openReader(file);
-  });
-  try {
-    const pair = readUpdateDatabaseGenerationPair([file]);
-    expect(fs.readFileSync(`${file}-shm`).readUInt32LE(8)).toBe(0);
-    expect(pair.committed[file]).not.toBe(live.committed[file]);
-    expect(pair.committed[file]).toBe(live.rebuiltIndexAlternates[file]);
-    expect(readUpdateDatabaseGenerationPair([file]).committed).toEqual(pair.committed);
-  } finally {
-    rebuilt?.close();
-  }
-  expect(fs.readdirSync(staging)).toEqual([]);
-});
+it.each([false, true])(
+  "binds a rebuilt WAL index during the read (checkpointed=%s)",
+  (checkpointed) => {
+    const { file, staging } = retainedWalFixture(checkpointed);
+    const live = readUpdateDatabaseGenerationPair([file]);
+    let rebuilt: DatabaseSync | undefined;
+    duringGenerationRead(() => {
+      rebuilt = openReader(file);
+    });
+    try {
+      const pair = readUpdateDatabaseGenerationPair([file]);
+      expect(fs.readFileSync(`${file}-shm`).readUInt32LE(8)).toBe(0);
+      expect(pair.committed[file]).not.toBe(live.committed[file]);
+      expect(pair.committed[file]).toBe(live.rebuiltIndexAlternates[file]);
+      expect(readUpdateDatabaseGenerationPair([file]).committed).toEqual(pair.committed);
+    } finally {
+      rebuilt?.close();
+    }
+    expect(fs.readdirSync(staging)).toEqual([]);
+  },
+);
 
-it("refuses a generation when a writer commits during the read", () => {
-  const { file, staging } = generationFixture("wal-absent");
-  const writer = new DatabaseSync(file);
-  try {
-    duringGenerationRead(() => writer.exec("INSERT INTO receipt VALUES ('during')"));
-    expect(() => readUpdateDatabaseGenerationPair([file])).toThrow(
-      /SQLite file generation changed while reading/,
-    );
-  } finally {
-    writer.close();
-  }
-  expect(fs.readdirSync(staging)).toEqual([]);
-});
+it.each([false, true])(
+  "refuses a writer committing during the read (checkpointed=%s)",
+  (checkpointed) => {
+    const { file, staging } = generationFixture("wal-absent");
+    const writer = new DatabaseSync(file);
+    let reader: DatabaseSync | undefined;
+    try {
+      duringGenerationRead(() => {
+        writer.exec("INSERT INTO receipt VALUES ('during')");
+        if (checkpointed) {
+          writer.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+          writer.close();
+          reader = openReader(file);
+        }
+      });
+      expect(() => readUpdateDatabaseGenerationPair([file])).toThrow(
+        /SQLite file generation changed while reading/,
+      );
+    } finally {
+      reader?.close();
+      if (writer.isOpen) {
+        writer.close();
+      }
+    }
+    expect(fs.readdirSync(staging)).toEqual([]);
+  },
+);
 
 it("reuses a receipt when a reader opens without committing during verification", () => {
   const { file, staging } = generationFixture("wal-absent");

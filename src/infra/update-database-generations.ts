@@ -163,10 +163,7 @@ function sameWalCommitPublication(
   }
   // The last close removes the index, even one with commit evidence; bind the closed state.
   // A non-writing open builds one whose iChange and commit checksum stay zero.
-  return (
-    after === null ||
-    (before === null && after.readUInt32LE(8) === 0 && after.readBigUInt64LE(24) === 0n)
-  );
+  return after === null || (after.readUInt32LE(8) === 0 && after.readBigUInt64LE(24) === 0n);
 }
 
 type DatabaseGenerationObservation = {
