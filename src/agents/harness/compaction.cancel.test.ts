@@ -227,7 +227,7 @@ describe("harness compaction cancellation", () => {
       const source = new AbortController();
       const sourceReleased = createDeferredCore();
       const operatorAuthority = operatorSource({
-        assertCurrent: () => source.signal.throwIfAborted(),
+        signal: source.signal,
         retain: () => {
           sourceHolds += 1;
           return () => {
