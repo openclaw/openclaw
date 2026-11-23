@@ -167,10 +167,10 @@ Sign in with `clawhub login` on the Gateway host. Select **Publish** on the card
 or in the preview dialog to upload the exact reviewed artifact using that
 account. Opening the preview is optional. An agent turn cannot authorize publication.
 The card stays in the conversation and shows **Pending** while ClawHub checks
-the submission; **View submission** opens its ClawHub page. While pending,
-the open card checks again 30 seconds after each response. Checks stop after
+the submission. Select **View submission** to follow its progress on ClawHub.
+While pending, the open card checks again 30 seconds after each response. Checks stop after
 ClawHub confirms publication or failure. On success, the card shows
-**Published** and offers **Copy link**.
+**Published** and offers **Copy link** for the public listing.
 Others can then discover the Template and Add it as an ordinary agent.
 
 ## Add through the setup helper
