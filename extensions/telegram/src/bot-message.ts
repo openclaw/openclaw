@@ -375,18 +375,19 @@ export const createTelegramMessageProcessor = (
           onDeferredHeartbeat: () => participant.heartbeat(),
           deferredHeartbeatIntervalMs: participant.heartbeatIntervalMs,
           onAbandoned: (cause) => {
-            if (cause === "cancelled") {
+            if (cause !== "cancelled") {
               if (!adopted) {
-                return settle({ kind: "cancelled" }, "terminal").then(() => {});
+                void settle({ kind: "failed-retryable", error: "turn-abandoned" }, "terminal");
               }
+              // Generic reply abandonment is synchronous; Telegram has no
+              // owner-local resource teardown gated on core claim release.
+              void drainLifecycle?.onAbandoned();
               return;
             }
-            if (!adopted) {
-              void settle({ kind: "failed-retryable", error: "turn-abandoned" }, "terminal");
+            if (adopted) {
+              return;
             }
-            // Generic reply abandonment is synchronous; Telegram has no
-            // owner-local resource teardown gated on core claim release.
-            void drainLifecycle?.onAbandoned();
+            return settle({ kind: "cancelled" }, "terminal").then(() => {});
           },
           onDropped: async (reason) => {
             if (adopted) {

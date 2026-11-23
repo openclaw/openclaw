@@ -367,6 +367,9 @@ export function createSlackDurableIngress(
           monitor.requestDrain();
         },
         onAbandoned: () => settleRoutedTurn(() => lifecycle.onAbandoned()),
+        onCancelled: lifecycle.onCancelled
+          ? () => settleRoutedTurn(() => lifecycle.onCancelled?.())
+          : undefined,
         onDropped: (reason) =>
           settleRoutedTurn(() =>
             lifecycle.onDropped ? lifecycle.onDropped(reason) : lifecycle.onAbandoned(),

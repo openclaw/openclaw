@@ -3,6 +3,58 @@ import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe"
 import { expect, it, vi } from "vitest";
 import { createFeishuBroadcastIngressSettlement } from "./bot-broadcast.js";
 
+it.each([
+  ["cancelled", "abandoned"],
+  ["abandoned", "cancelled"],
+  ["cancelled", "dispatch-failed"],
+  ["cancelled", "cancelled"],
+  ["cancelled", "adopted"],
+] as const)("settles broadcast custody when deferred lanes are %s then %s", async (first, last) => {
+  const onAbandoned = vi.fn();
+  const onCancelled = vi.fn();
+  const broadcast = createFeishuBroadcastIngressSettlement({
+    lifecycle: {
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned,
+      onCancelled,
+    },
+  });
+  const release = vi.fn();
+  const firstLane = broadcast.createLane({ keys: ["first-lane"], commit: vi.fn(), release });
+  const peer = broadcast.createLane();
+  firstLane.lifecycle.onDeferred();
+  peer.lifecycle.onDeferred();
+  await broadcast.onDispatchComplete();
+  if (first === "cancelled") {
+    await firstLane.lifecycle.onCancelled?.();
+    expect(onCancelled).not.toHaveBeenCalled();
+  } else {
+    await firstLane.lifecycle.onAbandoned();
+  }
+  expect(release).toHaveBeenCalledOnce();
+  switch (last) {
+    case "cancelled":
+      await peer.lifecycle.onCancelled?.();
+      break;
+    case "abandoned":
+      await peer.lifecycle.onAbandoned();
+      break;
+    case "dispatch-failed":
+      await peer.onDispatchFailed(new Error("dispatch failed"));
+      break;
+    case "adopted":
+      await peer.lifecycle.onAdopted();
+      break;
+  }
+  const genuineFailure =
+    first === "abandoned" || last === "abandoned" || last === "dispatch-failed";
+  expect(onAbandoned).toHaveBeenCalledTimes(genuineFailure ? 1 : 0);
+  expect(onCancelled).toHaveBeenCalledTimes(genuineFailure ? 0 : 1);
+});
+
 it("releases dropped lanes independently while retaining admitted broadcast custody", async () => {
   const started = createDeferred<void>();
   const commitGate = createDeferred<void>();

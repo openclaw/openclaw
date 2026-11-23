@@ -205,6 +205,7 @@ describe("dispatchSmsInboundEvent", () => {
 
   it.each([
     "abandoned",
+    "cancelled",
     "adopted",
     "before adoption",
     "after deferral",
@@ -257,7 +258,7 @@ describe("dispatchSmsInboundEvent", () => {
       }
       if (phase === "queue-cap-new") {
         await wrapped?.onDropped?.(phase);
-      } else if (phase !== "abandoned" && phase !== "queue-cap-old") {
+      } else if (phase !== "abandoned" && phase !== "cancelled" && phase !== "queue-cap-old") {
         await wrapped?.onAdopted();
       }
     });
@@ -286,8 +287,11 @@ describe("dispatchSmsInboundEvent", () => {
       expect(original.onAdopted).toHaveBeenCalledOnce();
     } else {
       expect(original.onDeferred).toHaveBeenCalledOnce();
-      await wrapped?.onAbandoned?.();
+      await wrapped?.onAbandoned?.(phase === "cancelled" ? "cancelled" : undefined);
       await vi.waitFor(() => expect(original.onAbandoned).toHaveBeenCalledOnce());
+      if (phase === "cancelled") {
+        expect(original.onAbandoned).toHaveBeenCalledWith("cancelled");
+      }
       expectCleanedMedia();
       expect(events).toEqual(["cleanup", "abandon"]);
     }

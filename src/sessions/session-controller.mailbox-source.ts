@@ -396,6 +396,7 @@ export function abortSessionControllerInput(
       committed ||= operation?.abortSignal.aborted === true;
       if (committed) {
         const cause = reason ?? operation?.abortSignal.reason;
+        input.custody.abandonmentCause = "cancelled";
         input[inputCancellation].abort(cause);
         input.claim?.abortController.abort(cause);
         input.sourceAdapter?.cancel?.(cause);
@@ -406,12 +407,7 @@ export function abortSessionControllerInput(
           !input.custody.adopted &&
           !input.custody.completed
         ) {
-          void notifySessionControllerSourceAbandonment(
-            input.source,
-            input.custody,
-            undefined,
-            "cancelled",
-          );
+          void notifySessionControllerSourceAbandonment(input.source, input.custody);
         }
       }
     }
@@ -537,7 +533,6 @@ function notifySessionControllerSourceAbandonment(
   run: Pick<FollowupRun, "turnAdoptionLifecycle">,
   state: SessionControllerSourceCustody,
   dropReason?: FollowupQueueDisposition,
-  cause?: "cancelled",
 ): void | Promise<void> {
   const prior = state.abandonment;
   if (prior) {
@@ -552,7 +547,7 @@ function notifySessionControllerSourceAbandonment(
     const completion =
       dropReason && run.turnAdoptionLifecycle?.onDropped
         ? run.turnAdoptionLifecycle.onDropped(dropReason)
-        : run.turnAdoptionLifecycle?.onAbandoned?.(cause);
+        : run.turnAdoptionLifecycle?.onAbandoned?.(state.abandonmentCause);
     if (completion) {
       notification.completion = Promise.resolve(completion);
       void notification.completion.catch(() => {});

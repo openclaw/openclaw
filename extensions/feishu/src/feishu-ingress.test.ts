@@ -154,6 +154,19 @@ afterEach(async () => {
 });
 
 describe("Feishu durable ingress", () => {
+  it("releases logical claims and preserves explicit cancellation across a merged flush", async () => {
+    const replay = createReplayClaim("cancelled");
+    const onCancelled = vi.fn();
+    const { lifecycle, calls, settle } = createLifecycle({ onCancelled }, replay);
+    lifecycle?.onDeferred();
+    await lifecycle?.onCancelled?.();
+    await settle();
+    expect(onCancelled).toHaveBeenCalledOnce();
+    expect(replay.release).toHaveBeenCalledOnce();
+    expect(calls.onAbandoned).not.toHaveBeenCalled();
+    expect(calls.onAdopted).not.toHaveBeenCalled();
+  });
+
   it("waits for durable append before acknowledging the webhook", async () => {
     await withQueue(async (queue, startIngress) => {
       const appendGate = createDeferred<void>();

@@ -438,11 +438,11 @@ export async function handleQaInbound(params: {
     turnAdoptionLifecycle: turnAdoptionLifecycle
       ? {
           ...turnAdoptionLifecycle,
-          onAbandoned: () => {
+          onAbandoned: (cause) => {
             // Queue policy publishes its terminal disposition before abandonment.
             // Preserve genuine admission failures for retry, not intentional drops.
             if (!queueDisposition) {
-              return turnAdoptionLifecycle.onAbandoned?.();
+              return turnAdoptionLifecycle.onAbandoned?.(cause);
             }
             return undefined;
           },

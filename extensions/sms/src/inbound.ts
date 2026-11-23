@@ -140,10 +140,10 @@ export async function dispatchSmsInboundEvent(params: {
               }
               return deferred;
             },
-            onAbandoned: () => {
+            onAbandoned: (cause) => {
               // Queue abandonment can be fire-and-forget. Start cleanup before
               // releasing the durable claim and contain asynchronous failures.
-              void releaseMedia(() => params.turnAdoptionLifecycle?.onAbandoned?.()).catch(
+              return releaseMedia(() => params.turnAdoptionLifecycle?.onAbandoned?.(cause)).catch(
                 (error: unknown) => {
                   params.log?.warn?.(
                     `Failed to abandon Twilio MMS ingress ${params.msg.messageSid}: ${String(error)}`,
