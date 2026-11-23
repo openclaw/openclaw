@@ -2,13 +2,12 @@
 import { expect, it } from "vitest";
 import {
   appendTerminalAssistantMessage as appendTerminal,
-  historyReplacedVisibleStream as historyReplaced,
   materializeVisibleStreamState,
   visibleAssistantStreamParts as visibleParts,
   visibleCurrentAssistantStreamTail as currentTail,
 } from "./stream-reconciliation.ts";
 import {
-  pruneHistoryReplacedStreamSegments as pruneHistoryReplaced,
+  reconcileHistoryStreamParts,
   prunePersistedAssistantStreamSegments as prunePersistedAssistant,
   prunePersistedToolStreamMessages as prunePersistedTools,
 } from "./stream-segment-pruning.ts";
@@ -26,6 +25,14 @@ const visibleStreamOptions = {
   isHiddenStreamText: () => false,
   persistCommentary: true,
 };
+
+function reconcileHistory(
+  messages: unknown[],
+  state: StreamReconciliationState,
+  options = visibleStreamOptions,
+) {
+  return reconcileHistoryStreamParts(messages, state, visibleParts(state, options), options);
+}
 
 function user(content: string, timestamp?: number, key?: string, target?: string) {
   return {
@@ -226,11 +233,9 @@ it("retains the cumulative baseline after history replaces an earlier displayed 
       streamSegment("Before steer. After steer.", 2, { runId: "active-run" }),
     ],
   });
-  pruneHistoryReplaced(
-    [{ role: "assistant", content: "Before steer.", timestamp: 1 }],
-    state,
-    visibleStreamOptions,
-  );
+  expect(
+    reconcileHistory([{ role: "assistant", content: "Before steer.", timestamp: 1 }], state),
+  ).toBe(false);
   expect(visibleParts(state, visibleStreamOptions)).toMatchObject([{ text: "After steer." }]);
   expect(
     currentTail({ ...state, chatStream: "Before steer. After steer. Continued." }, () => false),
@@ -340,7 +345,7 @@ it("reconciles a stream segment only inside its persisted ordinary-user interval
     },
     user("Steer prompt", 1, "steer-run:user"),
   ];
-  expect(historyReplaced(messages, state, visibleStreamOptions)).toBe(false);
+  expect(reconcileHistory(messages, state)).toBe(false);
   expectTexts(
     materialize(messages, state, { includeCurrent: false }),
     "Original prompt",
@@ -355,7 +360,7 @@ it("does not treat matching terminal text as a keyed preamble replacement", () =
   });
   const terminalMessage = assistant("before tool\nfinal answer", 3);
   const messages = [user("latest ask", 1), terminalMessage];
-  expect(historyReplaced(messages, state, visibleStreamOptions)).toBe(false);
+  expect(reconcileHistory(messages, state)).toBe(false);
   const materialized = materialize(messages.slice(0, 1), state, {
     replacementMessages: [terminalMessage],
     includeCurrent: false,
@@ -375,7 +380,7 @@ it("does not require transient keyed commentary to be present in history", () =>
   });
   const messages = [user("latest ask", 1), assistant("final answer", 3)];
   expect(
-    historyReplaced(messages, state, {
+    reconcileHistory(messages, state, {
       ...visibleStreamOptions,
       persistCommentary: false,
     }),

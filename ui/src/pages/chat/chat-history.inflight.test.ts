@@ -1,5 +1,8 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { boundInFlightRunSnapshotForChatHistory } from "../../../../src/gateway/chat-history-budget.js";
+import { projectInFlightRunSnapshot } from "../../../../src/gateway/chat-inflight-snapshot.js";
+import { createChatRunState } from "../../../../src/gateway/server-chat-state.js";
 import {
   projectAgentHistoryActivity,
   projectAgentToolActivity,
@@ -160,6 +163,161 @@ it("restores cleared activity alongside an owned run's current text", async () =
     runId: "run-live",
     toolCallId: "call-reconnected",
   });
+});
+
+const importedClaude = (id: string, content: unknown[]) => ({
+  role: "assistant",
+  provider: "claude-cli",
+  content,
+  __openclaw: { id, importedFrom: "claude-cli", cliSessionId: "swatches", externalId: id },
+});
+
+it.each([
+  { when: "reopening during the tool", reply: "" },
+  { when: "reopening during the independent reply", reply: "Amber. This is the result." },
+])("renders each Claude occurrence once when $when", async ({ reply }) => {
+  const runId = "run-live";
+  const first = "Amber.";
+  const callId = "native-read";
+  const snapshot = activeSnapshot(runId, "", [
+    message("user", "Read the swatch.", { id: "input", seq: 1, idempotencyKey: runId + ":user" }),
+    importedClaude("first", [{ type: "text", text: first }]),
+    importedClaude("tool", [{ type: "toolcall", id: callId, name: "read", arguments: {} }]),
+  ]);
+  // In block mode the pre-tool sentence was an item, never part of the reply buffer.
+  const gateway = createChatRunState();
+  gateway.recordProgressEvent(
+    runId,
+    event(1, "item", {
+      kind: "preamble",
+      itemId: "commentary-1",
+      phase: "end",
+      progressText: first,
+    }),
+  );
+  gateway.recordProgressEvent(runId, toolEvent(callId));
+  if (reply) {
+    gateway.updateBuffer(runId, { itemId: "assistant", text: reply });
+  }
+  snapshot.inFlightRun = projectInFlightRunSnapshot({ chatRunState: gateway, runId });
+  const state = createState(snapshot);
+  await loadWithTools(state);
+  expect(renderedText(state).filter((text) => text?.startsWith(first))).toEqual(
+    reply ? [first, reply] : [first],
+  );
+  expect(tail(state)?.trim() ?? "").toBe(reply);
+});
+
+it.each([
+  { label: "only its opening matches", reply: "Amber. New answer.", evicted: false },
+  { label: "the progress receipts were evicted", reply: "Amber.\n\nCobalt.", evicted: true },
+])("keeps the full Claude reply when $label", async ({ reply, evicted }) => {
+  const runId = "run-live";
+  const snapshot = activeSnapshot(runId, reply, [
+    message("user", "Read the swatches.", { id: "input", seq: 1, idempotencyKey: runId + ":user" }),
+    ...["Amber.", "Cobalt."].flatMap((text, i) => [
+      importedClaude("text-" + i, [{ type: "text", text }]),
+      importedClaude("call-" + i, [
+        { type: "toolcall", id: "read-" + i, name: "read", arguments: {} },
+      ]),
+    ]),
+  ]);
+  if (evicted) {
+    snapshot.inFlightRun!.events = [];
+  }
+  const state = createState(snapshot);
+  await loadChatHistory(state);
+  expect(tail(state)).toBe(reply);
+});
+
+it.each([
+  [true, ""],
+  [false, ""],
+  [true, " The tool returned amber."],
+  [false, " The tool returned amber."],
+] as const)(
+  "recovers a single tool after progress eviction (cumulative: %s, suffix: %j)",
+  async (cumulative, suffix) => {
+    const runId = "run-live";
+    const text = "Amber marks the first swatch.";
+    const callId = "native-read";
+    const messages = [
+      message("user", "Read the swatch.", { id: "input", idempotencyKey: runId + ":user" }),
+      importedClaude("preamble", [{ type: "text", text }]),
+      importedClaude("call", [{ type: "toolcall", id: callId, name: "read" }]),
+    ];
+    const run = createChatRunState();
+    const start = toolEvent(callId);
+    if (cumulative) {
+      run.updateBuffer(runId, { itemId: "assistant", text });
+    }
+    run.recordProgressEvent(
+      runId,
+      cumulative ? { ...start, data: { ...start.data, textLengthBeforeTool: text.length } } : start,
+    );
+    const raw = text + suffix;
+    if (!cumulative || suffix) {
+      run.updateBuffer(runId, { itemId: "assistant", text: raw });
+    }
+    const snapshot = projectInFlightRunSnapshot({ chatRunState: run, runId, startedAtMs: 1000 });
+    const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
+    const maxBytes = bytes(messages) + bytes({ ...snapshot, events: [] });
+    const history = activeSnapshot(runId, "", messages);
+    history.inFlightRun = boundInFlightRunSnapshotForChatHistory({ snapshot, messages, maxBytes });
+    expect(history.inFlightRun?.events).toEqual([]);
+    expect(bytes(messages) + bytes(history.inFlightRun)).toBeLessThanOrEqual(maxBytes);
+    const state = createState(history);
+    await loadChatHistory(state);
+    const visible = cumulative ? suffix : raw;
+    expect(tail(state)?.trim() ?? "").toBe(visible.trim());
+    assistant(state, runId, raw + "\n\nResult.");
+    expect(tail(state)?.trim()).toBe((visible + "\n\nResult.").trim());
+  },
+);
+
+it("resolves a bounded prefix on its wire page before filling a held history gap", async () => {
+  const runId = "run-live";
+  const rows = [
+    message("user", "Read the swatch.", { idempotencyKey: runId + ":user" }),
+    importedClaude("text", [{ type: "text", text: "Amber." }]),
+    importedClaude("call", [{ type: "toolcall", id: "read", name: "read" }]),
+  ];
+  const history = activeSnapshot(runId, "", rows);
+  history.sessionInfo!.sessionId = "swatches";
+  const earlier = message("assistant", "Earlier turn.", { id: "earlier", seq: 1 });
+  const held = { messages: [earlier], sessionInfo: history.sessionInfo, totalMessages: 1 };
+  const state = createState(history);
+  vi.spyOn(state.client!, "request")
+    .mockResolvedValueOnce({ ...held, deltaCursor: "prior" })
+    .mockResolvedValueOnce({ kind: "reset" })
+    .mockResolvedValueOnce({
+      ...history,
+      inFlightRun: { runId, text: "", textFromMessage: 1, events: [] },
+      hasMore: true,
+      nextOffset: rows.length,
+      totalMessages: rows.length + 1,
+      olderCursor: "before-swatch",
+    })
+    .mockResolvedValueOnce(held);
+  await loadChatHistory(state);
+  await loadChatHistory(state);
+  expect(state.chatMessages).toEqual([earlier, ...rows]);
+  assistant(state, runId, "Amber.\n\nResult.");
+  expect(tail(state)?.trim()).toBe("Result.");
+});
+
+it("does not bind an earlier start to a later history buffer without an imported call", async () => {
+  const opening = "Amber.";
+  const reply = "Amber. New page.";
+  const snapshot = activeSnapshot("run-live", reply);
+  const start = toolEvent("native-read");
+  snapshot.inFlightRun!.events = [
+    { ...start, data: { ...start.data, textLengthBeforeTool: opening.length } },
+  ];
+  const state = createState(snapshot);
+  await loadWithTools(state);
+  expect(tail(state)).toBe(reply);
+  expect(renderedText(state).filter((text) => text?.includes(opening))).toEqual([reply]);
 });
 
 it("retains unchanged stream segments when history replaces the live text", async () => {

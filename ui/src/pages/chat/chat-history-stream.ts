@@ -1,11 +1,11 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { isHiddenAssistantStreamText } from "../../lib/chat/message-visibility.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
-import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import type { ChatHistoryResult, ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   isChatRunStartupPhase,
   isChatRunRecoveryStatus,
@@ -21,16 +21,16 @@ import {
 } from "./history-merge.ts";
 import {
   adoptStartedChatRun,
-  type ChatHistoryRunObservation,
   reconcileChatRunFromSessionRow,
   setChatRunError,
 } from "./run-lifecycle.ts";
 import {
   knownStreamCausalInterval,
   replaceChatStream,
-  resolveAssistantTextTail,
+  retainPersistedStreamPrefix,
 } from "./stream-causal-boundary.ts";
 import { materializeVisibleStreamState } from "./stream-reconciliation.ts";
+import { extractToolMessageRefs } from "./tool-stream-identity.ts";
 import type { handleAgentEvent } from "./tool-stream.ts";
 
 export function materializeVisibleAssistantStreamMessages(
@@ -63,39 +63,109 @@ function resolveInFlightAssistantText(bufferedText: unknown): string | null {
     : null;
 }
 
-// Claude's native transcript is read independently of Gateway transcript commits.
-// Only its imported rows in this turn can cover part of the still-cumulative reply.
-function reconcileImportedClaudePrefix(state: ChatState, runId: string, text: string): void {
-  if (!state.chatMessages.some((message) => asOptionalRecord(message)?.provider === "claude-cli")) {
+/** Replay the run's progress, then retire only text identified by its native tool boundary. */
+function replayHistoryProgress(
+  state: ChatState,
+  run: NonNullable<ChatHistoryResult["inFlightRun"]>,
+  snapshotText = "",
+  replay?: typeof handleAgentEvent,
+) {
+  const { runId, events } = run;
+  const toolStarts = events && new Map<string, number>();
+  for (const event of events ?? []) {
+    if (event.runId !== runId) {
+      continue;
+    }
+    // The pane owns both the adopted run and its live tool state.
+    replay?.(state as never, event, "history");
+    const { phase, toolCallId, textLengthBeforeTool } = event.data;
+    if (event.stream === "tool" && phase === "start" && typeof toolCallId === "string") {
+      toolStarts?.set(
+        toolCallId,
+        typeof textLengthBeforeTool === "number" ? textLengthBeforeTool : 0,
+      );
+    }
+  }
+  const messages = state.chatMessages;
+  if (toolStarts?.size === 0 || (!snapshotText && !state.chatStreamSegments.length)) {
     return;
   }
-  const interval = knownStreamCausalInterval(state.chatMessages, { runId });
+  const interval = knownStreamCausalInterval(messages, runId);
   if (!interval) {
     return;
   }
-  const texts = state.chatMessages.slice(interval.start, interval.end).map((message) => {
+  const imported = new Map<string, string>();
+  let covered = 0;
+  let preamble = "";
+  for (const message of messages.slice(interval.start, interval.end)) {
     const identity = readSessionMessageIdentity(message);
-    return identity?.isImported &&
-      identity.role === "assistant" &&
-      (!identity.runId || identity.runId === runId) &&
-      asOptionalRecord(message)?.provider === "claude-cli"
-      ? (extractText(message)?.trim() ?? null)
-      : null;
-  });
-  const tail = resolveAssistantTextTail(texts, text);
-  const prefix = text.slice(0, text.length - (tail?.length ?? 0));
-  if (
-    prefix &&
-    !state.chatStreamSegments.some(
-      (part) => part.persisted && part.runId === runId && part.text === prefix,
-    )
-  ) {
-    // Retain wire coordinates for the next delta, including genuinely repeated words.
-    state.chatStreamSegments = [
-      ...state.chatStreamSegments,
-      { runId, text: prefix, ts: state.chatStreamStartedAt ?? Date.now(), persisted: true },
-    ];
+    if (
+      asOptionalRecord(message)?.provider !== "claude-cli" ||
+      !identity?.isImported ||
+      identity.role !== "assistant" ||
+      (identity.runId && identity.runId !== runId)
+    ) {
+      preamble = "";
+      continue;
+    }
+    const text = extractText(message)?.trim();
+    if (text) {
+      preamble = preamble ? preamble + "\n\n" + text : text;
+    }
+    const [call] = extractToolMessageRefs(message);
+    if (!call) {
+      continue;
+    }
+    const end = toolStarts?.get(call.id);
+    if (preamble && (!toolStarts || end !== undefined)) {
+      imported.set(call.id, preamble);
+      // A later reply can start with exactly the same words. Only cover bytes already at this call.
+      if (
+        end &&
+        end > covered &&
+        end <= snapshotText.length &&
+        snapshotText.slice(covered, end).trim() === preamble
+      ) {
+        covered = end;
+      }
+    }
+    preamble = "";
   }
+  if (!imported.size) {
+    return;
+  }
+  // A checkpoint without progress may cover a complete, distinct tool-delimited sequence, never just a matching opening.
+  if (!events && !preamble) {
+    const texts = [...imported.values()];
+    if (new Set(texts).size > 1 && texts.join("\n\n") === snapshotText) {
+      covered = snapshotText.length;
+    }
+  }
+  const prefix = snapshotText.slice(0, covered);
+  const keepPrefix = prefix && state.chatStream?.startsWith(prefix);
+  const parts = state.chatStreamSegments.filter(({ runId: owner, toolCallId, itemId, text }) => {
+    const native = toolCallId && imported.get(toolCallId);
+    if (owner !== runId || !native) {
+      return true;
+    }
+    return itemId
+      ? native !== text.trim() || !imported.delete(toolCallId)
+      : !keepPrefix || !prefix.startsWith(text);
+  });
+  if (
+    keepPrefix &&
+    !parts.some((part) => part.persisted && part.runId === runId && part.text === prefix)
+  ) {
+    parts.push({
+      runId,
+      text: prefix,
+      ts: state.chatStreamStartedAt ?? Date.now(),
+      persisted: true,
+    });
+  } else if (parts.length === state.chatStreamSegments.length) {
+    return;
+  }
+  state.chatStreamSegments = parts;
 }
 
 function runProjectionsUnchanged(
@@ -103,9 +173,8 @@ function runProjectionsUnchanged(
   current: ReturnType<typeof getChatSessionProjection>["runs"],
   exceptRunId?: string,
 ): boolean {
-  return (
-    Object.entries(previous).every(([id, run]) => id === exceptRunId || current[id] === run) &&
-    Object.entries(current).every(([id, run]) => id === exceptRunId || previous[id] === run)
+  return [previous, current].every((runs) =>
+    Object.keys(runs).every((id) => id === exceptRunId || previous[id] === current[id]),
   );
 }
 
@@ -126,42 +195,37 @@ function hasExactHistoryTerminal(state: ChatState, runId: string): boolean {
 export function readRunProjections(state: ChatState, sessionKey: string, agentId?: string) {
   return getChatSessionProjection(
     state,
-    readChatSessionProjectionScope(state, {
-      sessionKey,
-      ...(agentId ? { agentId } : {}),
-    }),
+    readChatSessionProjectionScope(state, { sessionKey, agentId }),
   ).runs;
 }
 
-export function applyHistoryRun(params: {
-  state: ChatState;
-  run: ChatHistoryResult["inFlightRun"];
-  observedRunActivity?: boolean;
-  sessionInfo: GatewaySessionRow | undefined;
-  historyRun: ChatHistoryRunObservation | undefined;
-  previousRunProjections: ReturnType<typeof getChatSessionProjection>["runs"];
-  runProjectionsBeforeApply: ReturnType<typeof getChatSessionProjection>["runs"];
-  currentRunProjections: ReturnType<typeof getChatSessionProjection>["runs"];
-  resetStream: boolean;
-  replayAgentEvent: typeof handleAgentEvent | undefined;
-}): void {
-  const {
-    state,
-    run,
+export function applyHistoryRun(
+  state: ChatState,
+  {
+    inFlightRun: run,
+    messages,
     sessionInfo,
-    historyRun,
-    previousRunProjections,
-    runProjectionsBeforeApply,
-    currentRunProjections,
-    resetStream,
-  } = params;
+    observation: { run: historyRun },
+  }: Pick<ObservedChatHistoryResult, "inFlightRun" | "messages" | "sessionInfo" | "observation">,
+  [previousRunProjections, runProjectionsBeforeApply, currentRunProjections]: [
+    atRead: ReturnType<typeof readRunProjections>,
+    beforeApply: ReturnType<typeof readRunProjections>,
+    afterMerge: ReturnType<typeof readRunProjections>,
+  ],
+  resetStream: boolean,
+  replayAgentEvent?: typeof handleAgentEvent,
+  observedRunActivity?: boolean,
+): void {
   const hasOtherSendingRun = (runId: string) =>
     state.chatQueue.some(
       (item) => item.sendState === "sending" && item.sendRunId && item.sendRunId !== runId,
     );
   const inFlightRunId = run?.runId?.trim();
   if (!inFlightRunId || !run) {
-    if (!sessionInfo) {
+    if (
+      !sessionInfo ||
+      !runProjectionsUnchanged(previousRunProjections, runProjectionsBeforeApply)
+    ) {
       return;
     }
     const localRunId = state.chatRunId?.trim();
@@ -170,7 +234,6 @@ export function applyHistoryRun(params: {
       sessionInfo.lastRunId !== localRunId &&
       historyRun &&
       !hasOtherSendingRun(localRunId) &&
-      runProjectionsUnchanged(previousRunProjections, runProjectionsBeforeApply) &&
       reconcileChatRunFromSessionRow(state, sessionInfo, {
         publishRunStatus: false,
         historyRun,
@@ -195,8 +258,7 @@ export function applyHistoryRun(params: {
       !hasOtherSendingRun(terminalRunId) &&
       ((sessionInfo.status !== "killed" && !knownRun) ||
         state.chatRunId === terminalRunId ||
-        getChatRunOwner(state) === terminalRunId) &&
-      runProjectionsUnchanged(previousRunProjections, runProjectionsBeforeApply)
+        getChatRunOwner(state) === terminalRunId)
     ) {
       // A copied row cannot reclaim retired display ownership. The pane retains
       // its accepted owner past active cleanup; unseen runs recover through the
@@ -259,10 +321,12 @@ export function applyHistoryRun(params: {
     state.chatRunId === inFlightRunId &&
     projectedInFlightRun?.status === "streaming" &&
     runProjectionsUnchanged(previousRunProjections, currentRunProjections, inFlightRunId);
-  const activeRunIds = sessionInfo?.activeRunIds;
+  const activeRunIds = Array.isArray(sessionInfo?.activeRunIds)
+    ? sessionInfo.activeRunIds
+    : undefined;
   const inFlightRunIsActive =
     isSessionRunStateActive(sessionInfo ?? {}) &&
-    (!Array.isArray(activeRunIds) || activeRunIds.includes(inFlightRunId)) &&
+    (!activeRunIds || activeRunIds.includes(inFlightRunId)) &&
     (!projectedInFlightRun || projectedInFlightRun.status === "streaming");
   // Only a read issued while this pane still owned the old run can replace it.
   // The exact active set proves that custody ended, not how the old run finished.
@@ -270,7 +334,7 @@ export function applyHistoryRun(params: {
   const replacesOwnedRun = Boolean(
     state.chatRunId &&
     state.chatRunId !== inFlightRunId &&
-    Array.isArray(activeRunIds) &&
+    activeRunIds &&
     !activeRunIds.includes(state.chatRunId) &&
     historyRun?.runId === state.chatRunId &&
     historyRun.sessionId === sessionInfo?.sessionId &&
@@ -288,13 +352,14 @@ export function applyHistoryRun(params: {
     // Their identity fences ABA races where a run starts and finishes while
     // history is pending; the same live run retains its ordered text baseline.
     adoptStartedChatRun(state, inFlightRunId, Date.now());
-    state.chatRunSessionAbortable = run?.sessionAbortable === true;
+    state.chatRunSessionAbortable = run.sessionAbortable === true;
   }
   if (!inFlightRunIsActive || state.chatRunId !== inFlightRunId) {
     return;
   }
-  const snapshotStartedAt =
-    typeof run.startedAt === "number" && Number.isFinite(run.startedAt) ? run.startedAt : null;
+  const snapshotStartedAt = asFiniteNumber(run.startedAt);
+  const persisted = run.textFromMessage != null && extractText(messages?.[run.textFromMessage]);
+  const bufferedText = (persisted || "") + (run.text ?? "");
   const advancedDuringRead =
     previousRunProjections[inFlightRunId]?.message !==
     runProjectionsBeforeApply[inFlightRunId]?.message;
@@ -305,21 +370,21 @@ export function applyHistoryRun(params: {
       extractText(runProjectionsBeforeApply[inFlightRunId]?.message),
     );
   } else {
-    replaceChatStream(state, resolveInFlightAssistantText(run.text));
+    replaceChatStream(state, resolveInFlightAssistantText(bufferedText));
+    if (persisted) {
+      retainPersistedStreamPrefix(state, persisted);
+    }
   }
   state.chatStreamStartedAt = snapshotStartedAt ?? state.chatStreamStartedAt ?? Date.now();
-  if (state.chatStream) {
-    reconcileImportedClaudePrefix(state, inFlightRunId, state.chatStream);
-  }
   const startup = run.events?.findLast(
     (event) => event.runId === inFlightRunId && event.stream === "run_status",
   );
   const startupPhase = startup?.data.phase;
   if (
-    (run.text ||
+    (bufferedText ||
       (!startup &&
         state.chatRunStartup?.runId !== inFlightRunId &&
-        (params.observedRunActivity ?? state.knownAgentRunIds?.has(inFlightRunId)))) &&
+        (observedRunActivity ?? state.knownAgentRunIds?.has(inFlightRunId)))) &&
     startupPhase !== "waiting_for_model" &&
     !isChatRunRecoveryStatus(state.chatRunStartup)
   ) {
@@ -338,12 +403,7 @@ export function applyHistoryRun(params: {
   // Disconnect cleanup intentionally removes transient activity rows while
   // retaining the owned run. Replay fills that gap; per-identity sequence
   // fences keep a delayed snapshot from replacing newer live progress.
-  if (state.chatRunId === run.runId && Array.isArray(run.events)) {
-    for (const event of run.events) {
-      if (event?.runId === run.runId) {
-        // SAFETY: history replays the same agent events against the pane that owns live tool state.
-        params.replayAgentEvent?.(state as never, event as never, "history");
-      }
-    }
+  if (state.chatRunId === run.runId) {
+    replayHistoryProgress(state, run, bufferedText, replayAgentEvent);
   }
 }

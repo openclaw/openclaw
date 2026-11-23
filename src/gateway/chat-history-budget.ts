@@ -1,15 +1,19 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isToolCallContentType,
   isToolResultContentType,
   readToolErrorFlag,
+  resolveToolUseId,
 } from "../chat/tool-content.js";
 import { readTranscriptDisplayPosition } from "../chat/transcript-display-position.js";
 import type { AgentHistoryActivity } from "../infra/agent-activity-events.js";
 import { jsonUtf8Bytes, jsonUtf8BytesOrInfinity } from "../infra/json-utf8-bytes.js";
 import { logLargePayload } from "../logging/diagnostic-payload.js";
+import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
 import type { InFlightRunSnapshot } from "./chat-inflight-snapshot.js";
+import { SerializedJsonArray } from "./serialized-json.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
 
 const DEFAULT_MAX_CHAT_HISTORY_MESSAGES_BYTES = 6 * 1024 * 1024; // keep history responses comfortably under client WS limits
@@ -195,30 +199,117 @@ export function reportOmittedChatHistory(params: {
   return omittedCount;
 }
 
+/** Request-local proof for a smaller page whose current input may no longer be delivered. */
+export type ChatHistoryPreambleSource = { runId: string; toolCallId: string; messageId: string };
+
+function evictedPreamble(
+  snapshot: InFlightRunSnapshot,
+  retained: number,
+  page: unknown[] | SerializedJsonArray,
+  source?: ChatHistoryPreambleSource,
+) {
+  const dropped = (snapshot.events?.length ?? 0) - retained;
+  const start =
+    dropped &&
+    snapshot.events?.findLast(
+      ({ runId, stream, data }, index) =>
+        index < dropped &&
+        runId === snapshot.runId &&
+        stream === "tool" &&
+        data.phase === "start" &&
+        !data.parentToolCallId &&
+        typeof data.toolCallId === "string" &&
+        (!source || (source.runId === runId && source.toolCallId === data.toolCallId)) &&
+        typeof data.textLengthBeforeTool === "number" &&
+        Number.isSafeInteger(data.textLengthBeforeTool) &&
+        data.textLengthBeforeTool > 0 &&
+        data.textLengthBeforeTool <= snapshot.text.length,
+    );
+  const end = start && start.data.textLengthBeforeTool;
+  if (!start || typeof end !== "number" || typeof start.data.toolCallId !== "string") {
+    return undefined;
+  }
+  const prefix = snapshot.text.slice(0, end);
+  // Worker-encoded pages stay opaque on ordinary reads and on unmarked tool routes.
+  const messages = page instanceof SerializedJsonArray ? page.materialize() : page;
+  let anchored = Boolean(source);
+  let previous: number | undefined;
+  for (const [index, message] of messages.entries()) {
+    const row = asOptionalRecord(message);
+    const identity = readSessionMessageIdentity(message);
+    if (identity?.role === "user") {
+      anchored = identity.runId === snapshot.runId;
+    }
+    if (
+      !anchored ||
+      row?.provider !== "claude-cli" ||
+      identity?.role !== "assistant" ||
+      !identity.isImported ||
+      (identity.runId && identity.runId !== snapshot.runId)
+    ) {
+      previous = undefined;
+      continue;
+    }
+    if (
+      previous !== undefined &&
+      Array.isArray(row.content) &&
+      row.content.some((value) => {
+        const block = asOptionalRecord(value);
+        return (
+          block &&
+          isToolCallContentType(block.type) &&
+          resolveToolUseId(block) === start.data.toolCallId
+        );
+      })
+    ) {
+      const messageId = readChatHistoryMessageId(messages[previous]);
+      return {
+        wire: { textFromMessage: previous, text: snapshot.text.slice(end) },
+        source: messageId
+          ? { runId: snapshot.runId, toolCallId: start.data.toolCallId, messageId }
+          : undefined,
+      };
+    }
+    previous =
+      (!source || identity.id === source.messageId) && extractAssistantPhaseText(message) === prefix
+        ? index
+        : undefined;
+  }
+  return undefined;
+}
+
 export function boundInFlightRunSnapshotForChatHistory(params: {
   snapshot: InFlightRunSnapshot | undefined;
-  messages: unknown[];
+  messages: unknown[] | SerializedJsonArray;
   getMessagesBytes?: () => number;
   maxBytes: number;
+  preambleSource?: ChatHistoryPreambleSource;
+  onPreambleBudgetMiss?: (minimumSnapshotBytes: number, source: ChatHistoryPreambleSource) => void;
 }): InFlightRunSnapshot | undefined {
   if (!params.snapshot) {
     return undefined;
   }
   const messagesBytes = params.getMessagesBytes?.() ?? jsonUtf8Bytes(params.messages);
-  const snapshotBytes = jsonUtf8Bytes(params.snapshot);
-  if (messagesBytes + snapshotBytes <= params.maxBytes) {
-    return params.snapshot;
+  // A smaller page may lose its input anchor. Keep the first page's proof only if the
+  // fresh run still marks the same call beside the same delivered native row.
+  const retried = params.preambleSource
+    ? evictedPreamble(params.snapshot, 0, params.messages, params.preambleSource)
+    : undefined;
+  const full = retried ? { ...params.snapshot, ...retried.wire } : params.snapshot;
+  if (messagesBytes + jsonUtf8Bytes(full) <= params.maxBytes) {
+    return full;
   }
   // Recovery priority is run adoption, authoritative timing, active progress,
   // plan replay, and opportunistic text. Explicit empty projections
   // authoritatively clear stale client state when a richer snapshot cannot fit.
-  let bounded: InFlightRunSnapshot = {
+  const minimum: InFlightRunSnapshot = {
     runId: params.snapshot.runId,
     text: "",
     ...(params.snapshot.sessionAbortable ? { sessionAbortable: true } : {}),
     ...(params.snapshot.events ? { events: [] } : {}),
     ...(params.snapshot.plan ? { plan: { steps: [] } } : {}),
   };
+  let bounded = minimum;
   const retainIfWithinBudget = (candidate: InFlightRunSnapshot): boolean => {
     if (!(messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes)) {
       return false;
@@ -252,7 +343,23 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
   }
 
   if (params.snapshot.text) {
-    retainIfWithinBudget({ ...bounded, text: params.snapshot.text });
+    const preamble =
+      retried ?? evictedPreamble(params.snapshot, bounded.events?.length ?? 0, params.messages);
+    if (!preamble) {
+      retainIfWithinBudget({ ...bounded, text: params.snapshot.text });
+    } else if (!retainIfWithinBudget({ ...bounded, ...preamble.wire })) {
+      // The next raw delta needs this receipt even when the answer itself cannot fit.
+      const { text, textFromMessage } = preamble.wire;
+      const receipt = { ...minimum, textFromMessage };
+      if (
+        !retainIfWithinBudget({ ...receipt, text }) &&
+        !retainIfWithinBudget({ ...bounded, textFromMessage }) &&
+        !retainIfWithinBudget(receipt) &&
+        preamble.source
+      ) {
+        params.onPreambleBudgetMiss?.(jsonUtf8Bytes(receipt), preamble.source);
+      }
+    }
   }
   return bounded;
 }

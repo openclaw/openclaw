@@ -4,7 +4,7 @@ import {
   type ChatProjection,
   type TurnInsertionBounds,
 } from "./chat-thread-items.ts";
-import { optionalBoundaryIdentity, optionalRunIdentity } from "./chat-thread-run-identity.ts";
+import { optionalRunIdentity } from "./chat-thread-run-identity.ts";
 import { buildToolStreamIdentity, extractToolMessageRefs } from "./tool-stream-identity.ts";
 
 export function createStreamSegmentProjector(
@@ -38,7 +38,6 @@ export function createStreamSegmentProjector(
         startedAt: segment.ts,
         isStreaming: false,
         ...optionalRunIdentity(segment.runId),
-        ...optionalBoundaryIdentity(segment.runId),
       },
       bounds: anchorKey ? { ...bounds, beforeKey: anchorKey } : bounds,
     });
