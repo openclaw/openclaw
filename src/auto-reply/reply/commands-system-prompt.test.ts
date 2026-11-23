@@ -13,13 +13,22 @@ import type { SkillSnapshot } from "../../skills/types.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-const { createOpenClawCodingToolsAsyncMock, logWarnMock, makeBootstrapWarnMock } = vi.hoisted(
-  () => ({
-    createOpenClawCodingToolsAsyncMock: vi.fn(() => []),
-    logWarnMock: vi.fn(),
-    makeBootstrapWarnMock: vi.fn((params: { warn?: (message: string) => void }) => params.warn),
-  }),
-);
+const {
+  createOpenClawCodingToolsAsyncMock,
+  getPreparedModelCatalogOwnerSnapshotMock,
+  logWarnMock,
+  makeBootstrapWarnMock,
+} = vi.hoisted(() => ({
+  createOpenClawCodingToolsAsyncMock: vi.fn(() => []),
+  getPreparedModelCatalogOwnerSnapshotMock: vi.fn((): unknown => undefined),
+  logWarnMock: vi.fn(),
+  makeBootstrapWarnMock: vi.fn((params: { warn?: (message: string) => void }) => params.warn),
+}));
+
+// mock-isolation: Supply the published model catalog the Gateway would hold, without starting its owner.
+vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  getPreparedModelCatalogOwnerSnapshot: getPreparedModelCatalogOwnerSnapshotMock,
+}));
 
 // mock-isolation: Fix channel prompt facts without loading live channel plugin state.
 vi.mock("../../agents/runtime-capabilities.js", () => ({
@@ -377,6 +386,25 @@ describe("resolveCommandsSystemPromptBundle", () => {
     expect(vi.mocked(resolveReusableWorkspaceSkillSnapshot)).toHaveBeenCalledOnce();
     const promptParams = firstArg(vi.mocked(buildAgentSystemPrompt));
     expect(promptParams.skillsPrompt).toBe(result.skillsPrompt);
+  });
+
+  it("selects the profile from the catalog size metadata of the inspected model", async () => {
+    getPreparedModelCatalogOwnerSnapshotMock.mockReturnValueOnce({
+      modelCatalog: {
+        entries: [{ provider: "openai", id: "gpt-5.4", name: "gpt-5.4", modelSizeClass: "small" }],
+      },
+    });
+    const params = makeParams();
+    params.cfg = { agents: { defaults: { agentProfileId: "auto" } } };
+
+    await resolveCommandsSystemPromptBundle(params);
+
+    expect(firstArg(vi.mocked(resolveBootstrapContextForRun))).toMatchObject({
+      modelSizeClass: "small",
+    });
+    expect(firstArg(vi.mocked(createOpenClawCodingToolsAsync))).toMatchObject({
+      modelSizeClass: "small",
+    });
   });
 
   it("uses config-backed prompt settings for the target agent", async () => {

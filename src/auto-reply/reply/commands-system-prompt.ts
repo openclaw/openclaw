@@ -1,10 +1,12 @@
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
+import { resolveProfileModelSizeClass } from "../../agents/agent-profiles/model-size-class.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import { createOpenClawCodingToolsAsync } from "../../agents/agent-tools.async.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
 import { resolveRuntimeSkillsPrompt } from "../../agents/embedded-agent-runner/skills-prompt.js";
 import { resolveNodeExecEligibilityAsync } from "../../agents/exec-defaults.js";
+import { findModelCatalogEntry } from "../../agents/model-catalog-lookup.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../agents/prompt-surface.js";
 import { resolveAgentRuntimePrompt } from "../../agents/runtime-prompt.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
@@ -28,9 +30,24 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
   const workspaceDir = params.workspaceDir;
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
   const sessionAgentId = params.agentId;
+  const { getPreparedModelCatalogOwnerSnapshot } =
+    await import("../../agents/prepared-model-catalog.js");
+  const preparedModelRuntime = getPreparedModelCatalogOwnerSnapshot({
+    config: params.cfg,
+    agentId: sessionAgentId,
+    workspaceDir,
+  });
+  // The inspected turn runs this model, so its catalog size metadata selects the profile.
+  const modelSizeClass = resolveProfileModelSizeClass(
+    findModelCatalogEntry(preparedModelRuntime?.modelCatalog.entries ?? [], {
+      provider: params.provider,
+      modelId: params.model ?? "",
+    }),
+  );
   const { bootstrapFiles, contextFiles: injectedFiles } = await resolveBootstrapContextForRun({
     modelProvider: params.provider,
     modelId: params.model,
+    modelSizeClass,
     workspaceDir,
     config: params.cfg,
     sessionKey: params.sessionKey,
@@ -141,6 +158,7 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     senderE164: params.ctx.SenderE164,
     modelProvider: params.provider,
     modelId: params.model,
+    modelSizeClass,
   });
   const toolNames = tools.map((t) => t.name);
   const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
@@ -181,13 +199,6 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
         },
       }
     : { enabled: false };
-  const { getPreparedModelCatalogOwnerSnapshot } =
-    await import("../../agents/prepared-model-catalog.js");
-  const preparedModelRuntime = getPreparedModelCatalogOwnerSnapshot({
-    config: params.cfg,
-    agentId: sessionAgentId,
-    workspaceDir,
-  });
   const systemPrompt = await buildConfiguredAgentSystemPrompt({
     preparedTtsPreferences: params.opts?.preparedTtsPreferences ?? (await prepareTtsPreferences()),
     config: params.cfg,
