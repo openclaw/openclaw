@@ -102,14 +102,12 @@ suite.define(() => {
       await shellHas(page, "shell--nav-drawer-open");
 
       // #203440 hides the desktop-only rail control on every mobile page, so the drawer is
-      // no longer a search surface. Assert the control is still mounted (the drawer renders
-      // its rail) but laid out hidden, so this cannot pass on a page that failed to render.
+      // no longer a search surface. The count guard keeps this from passing on a page that
+      // failed to render; the hiding mechanism itself is covered by
+      // form-controls.browser.test.ts, so this only asserts the observable result.
       const drawerSearch = page.locator(".shell-nav .sidebar-brand__search");
       await expect.poll(() => drawerSearch.count()).toBe(1);
       expect(await drawerSearch.isVisible()).toBe(false);
-      expect(await drawerSearch.evaluate((element) => getComputedStyle(element).display)).toBe(
-        "none",
-      );
 
       // The open drawer traps focus and swallows the palette chord on purpose
       // (`handleNavDrawerKeydown`), so the search case no longer reaches the palette from
