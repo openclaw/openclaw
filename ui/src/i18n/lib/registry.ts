@@ -26,6 +26,7 @@ const LAZY_LOCALE_REGISTRY = {
   ru: () => import("../locales/ru.ts"),
   sv: () => import("../locales/sv.ts"),
   ca: () => import("../locales/ca.ts"),
+  hu: () => import("../locales/hu.ts"),
 } satisfies Record<Exclude<Locale, typeof DEFAULT_LOCALE>, () => Promise<LocaleModule>>;
 
 export async function loadLazyLocaleTranslation(locale: Locale): Promise<TranslationMap | null> {

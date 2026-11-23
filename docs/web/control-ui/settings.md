@@ -217,12 +217,12 @@ including Gateway request handling. It is not ICMP ping or model response time.
 
 The Control UI localizes itself on first load based on your browser locale. To override it later, open **Settings → Appearance → Language**.
 
-- Supported locales: `en`, `ar`, `ca`, `de`, `es`, `fa`, `fr`, `hi`, `id`, `it`, `ja-JP`, `ko`, `nl`, `pl`, `pt-BR`, `ru`, `sv`, `th`, `tr`, `uk`, `vi`, `zh-CN`, `zh-TW`
+- Supported locales: `en`, `ar`, `ca`, `de`, `es`, `fa`, `fr`, `hi`, `hu`, `id`, `it`, `ja-JP`, `ko`, `nl`, `pl`, `pt-BR`, `ru`, `sv`, `th`, `tr`, `uk`, `vi`, `zh-CN`, `zh-TW`
 - Non-English translations are lazy-loaded in the browser.
 - The selected locale is saved in browser storage and reused on future visits. When you create an agent, its saved greeting and first role question use the language selected at creation. Changing the language does not translate existing messages.
-- Missing translation keys fall back to English. Catalan (`ca`) uses English until its first post-merge locale refresh completes.
+- Missing translation keys fall back to English. Catalan (`ca`) and Hungarian (`hu`) use English until their first post-merge locale refresh completes.
 
-Docs translations are generated for the same non-English locale set except Catalan, including Swedish (`sv`) once its first translation refresh completes. The custom docs website supports these locales, including Thai (`th`) and Persian (`fa`).
+Docs translations are generated for the same non-English locale set except Catalan and Hungarian, including Swedish (`sv`) once its first translation refresh completes. The custom docs website supports these locales, including Thai (`th`) and Persian (`fa`).
 
 ## Appearance themes
 
