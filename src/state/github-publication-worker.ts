@@ -154,9 +154,7 @@ export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerC
                       placement.sessionKey !== request.request.sessionKey ||
                       !isPublishedPlacementTurnClaimCurrent(context.admission.identity, claim)
                     ) {
-                      throw new Error(
-                        "GitHub publication turn authority changed before recording.",
-                      );
+                      throw new Error("GitHub publication turn ended. Retry the publication.");
                     }
                   }
                 : undefined,

@@ -240,7 +240,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
           !current.turnClaim
         : current === undefined;
       if (!unchanged) {
-        throw new Error("GitHub publication session authority changed during snapshot.");
+        throw new Error("GitHub publication session moved during snapshot. Retry the publication.");
       }
     };
     const claim = placement ? exactClaimForPlacement(placement) : undefined;

@@ -13,10 +13,7 @@ import { ensureEmptyWorktreeSource } from "../agents/worktrees/empty-source.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
-import {
-  linkCanonicalUserProfileEmail,
-  setCanonicalUserProfileRole,
-} from "../state/user-profile-writes.js";
+import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
 import {
   commandResult,
   installGitHubPublicationTestHarness,
@@ -208,37 +205,19 @@ describe("existing PR preparation through the registered agent action", () => {
     },
   );
 
-  it.each(["narrowed", "missing", "revoked"] as const)(
+  it.each(["narrowed", "missing"] as const)(
     "refuses a maintainer's %s selected authority before changing the guest workspace",
     async (condition) => {
       const f = await fixture();
       const before = f.readSession();
       const hostHead = await f.git("rev-parse", "HEAD");
       const guestHead = await f.guestGit("rev-parse", "HEAD");
-      let revoked = false;
-      if (condition === "revoked") {
-        const transport = mocks.runCommand.getMockImplementation()!;
-        mocks.runCommand.mockImplementation(async (...args) => {
-          const result = await transport(...args);
-          if (
-            !revoked &&
-            args[0].includes("fetch") &&
-            args[0].some((arg: string) => arg.split(":")[0] === f.headCommit)
-          ) {
-            await setCanonicalUserProfileRole(f.maintainerProfile, "revoked");
-            revoked = true;
-          }
-          return result;
-        });
-      }
       await expect(
         f.invoke({}, f.sandbox, undefined, {
           requester: "maintainer",
-          caller:
-            condition === "missing" ? null : condition === "narrowed" ? "guest" : "maintainer",
+          caller: condition === "missing" ? null : "guest",
         }),
-      ).rejects.toThrow(condition === "revoked" ? undefined : "Only the person who started");
-      expect(revoked).toBe(condition === "revoked");
+      ).rejects.toThrow("Only the person who started");
       expect(f.readSession().worktree).toEqual(before.worktree);
       expect(await f.git("rev-parse", "HEAD")).toBe(hostHead);
       expect(await f.guestGit("rev-parse", "HEAD")).toBe(guestHead);

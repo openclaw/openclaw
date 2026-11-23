@@ -430,7 +430,7 @@ it.each(["capture", "operator tool"])(
           retained.release();
           authority.assertCurrent();
           release();
-          expect(authority.assertCurrent).toThrow("no longer active");
+          expect(authority.assertCurrent).toThrow("Operator execution ended.");
         } else {
           await scoped({ profile, client, context }, () =>
             withOperatorToolGatewayAuthority({ scopes: ["operator.read"] }, async () => {

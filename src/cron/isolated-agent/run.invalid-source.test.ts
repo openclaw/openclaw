@@ -276,7 +276,7 @@ describe("undecodable scheduled authority", () => {
                     "changed listing",
                     "membership revoked while parked",
                   ].includes(name)
-                    ? "Restart recovery operator authority changed; start a new user turn."
+                    ? "Restart recovery could not admit this input. Start a new user turn."
                     : scenario.refusal,
                 ),
               ).message,
