@@ -57,7 +57,6 @@ it("keeps native cache identity independent of OpenClaw attribution and credenti
       Authorization: "Bearer fixture-secret",
       "Content-Type": "application/json",
       originator: "openclaw",
-      version,
       "User-Agent": `openclaw/${version}`,
     });
   const current = await forVersion("2026.7.2");

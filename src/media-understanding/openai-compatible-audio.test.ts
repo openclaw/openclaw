@@ -25,7 +25,7 @@ function transcribe(fetchFn: typeof fetch, overrides: Partial<AudioParams> = {})
 
 describe("transcribeOpenAiCompatibleAudio", () => {
   it.each([
-    { baseUrl: undefined, attribution: ["openclaw", VERSION, `openclaw/${VERSION}`] },
+    { baseUrl: undefined, attribution: ["openclaw", null, `openclaw/${VERSION}`] },
     { baseUrl: "https://proxy.example.com/v1", attribution: [null, null, null] },
   ])(
     "limits hidden attribution headers to the native host (baseUrl=$baseUrl)",

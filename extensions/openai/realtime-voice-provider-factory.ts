@@ -442,7 +442,7 @@ export function buildOpenAIRealtimeVoiceProvider(
       // Strip server-side-only attribution headers: browser direct fetches to
       // api.openai.com fail CORS preflight when these are present (only
       // authorization,content-type are allowed by the endpoint's CORS policy).
-      const SERVER_ONLY_HEADERS = new Set(["user-agent", "originator", "version"]);
+      const SERVER_ONLY_HEADERS = new Set(["user-agent", "originator"]);
       const browserHeaders = Object.fromEntries(
         Object.entries(headers).filter(([key]) => !SERVER_ONLY_HEADERS.has(key.toLowerCase())),
       );

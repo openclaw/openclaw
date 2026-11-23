@@ -405,7 +405,7 @@ describe("provider request config", () => {
         "X-Custom": "1",
       },
     });
-    expect(typeof resolved.headers?.version).toBe("string");
+    expect(resolved.headers).not.toHaveProperty("version");
   });
 
   it.each([

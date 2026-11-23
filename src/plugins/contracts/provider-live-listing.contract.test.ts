@@ -168,8 +168,8 @@ function compareReleaseVersions(left: string, right: string): number {
 
 // ChatGPT gates subscription models on the Codex client version: `/models?client_version=`
 // hides a model whose `minimal_client_version` is newer, and `/responses` rejects it for an
-// older `version` header. OpenClaw must list as a version that shows every launched model,
-// and its own turns must send a version that passes the gate of anything it lists.
+// older `version` header. OpenClaw lists as a version that shows every launched model, and
+// its own turns send no `version` header, so nothing it lists is gated on the turn.
 describe("OpenAI subscription models list and run without a release", () => {
   afterEach(() => {
     clearLiveCatalogCacheForTests();
@@ -177,7 +177,7 @@ describe("OpenAI subscription models list and run without a release", () => {
     vi.unstubAllEnvs();
   });
 
-  it("lists with the Responses version, and OpenClaw turns pass the model gate", async () => {
+  it("lists with the OpenClaw release, and OpenClaw turns carry no model gate", async () => {
     clearLiveCatalogCacheForTests();
     vi.stubEnv("OPENCLAW_VERSION", "2026.11.5");
     const minimumCodex = "0.999.0";
@@ -221,11 +221,12 @@ describe("OpenAI subscription models list and run without a release", () => {
 
     expect(published.map((model) => model.id)).toContain(PROBE_MODEL_ID);
     expect(listedAs).toEqual(["2026.11.5"]);
-    const turnVersion = resolveProviderRequestPolicy({
-      provider: "openai",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-    }).attributionHeaders?.version;
-    expect(turnVersion).toBe(listedAs[0]);
-    expect(compareReleaseVersions(turnVersion!, minimumCodex)).toBeGreaterThanOrEqual(0);
+    // Turns carry no `version` header, so ChatGPT applies no client-version gate to them.
+    expect(
+      resolveProviderRequestPolicy({
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      }).attributionHeaders,
+    ).toEqual({ originator: "openclaw", "User-Agent": "openclaw/2026.11.5" });
   });
 });

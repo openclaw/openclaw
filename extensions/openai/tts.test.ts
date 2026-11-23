@@ -84,7 +84,7 @@ describe("openai tts", () => {
       const headers = init?.headers as Record<string, string> | undefined;
       expect(url).toBe("https://api.openai.com/v1/audio/speech");
       expect(headers?.originator).toBe("openclaw");
-      expect(headers?.version).toBe("2026.3.22");
+      expect(headers).not.toHaveProperty("version");
       expect(headers?.["User-Agent"]).toBe("openclaw/2026.3.22");
     });
 

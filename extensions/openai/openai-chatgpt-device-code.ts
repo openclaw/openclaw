@@ -40,7 +40,6 @@ function resolveOpenAICodexDeviceCodeHeaders(contentType: string): Record<string
   return {
     "Content-Type": contentType,
     originator: "openclaw",
-    ...(version ? { version } : {}),
     "User-Agent": version ? `openclaw/${version}` : "openclaw",
   };
 }

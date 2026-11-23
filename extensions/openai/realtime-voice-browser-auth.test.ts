@@ -160,7 +160,6 @@ describe("OpenAI realtime voice browser authentication", () => {
       Authorization: "Bearer test-api-key-test",
       "Content-Type": "application/json",
       originator: "openclaw",
-      version: "2026.3.22",
       "User-Agent": "openclaw/2026.3.22",
     });
     const body = requireFetchJsonBody();

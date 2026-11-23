@@ -321,26 +321,22 @@ function resolveProviderAttributionPolicy(
         headers: { "X-Pplx-Integration": userAgent },
       };
     case "openai":
-    case "xai": {
-      // ChatGPT gates models on this header and on the /models `client_version` that reads it
-      // (extensions/openai/base-url.ts). Send the numeric release; prerelease or build suffixes are
-      // untested, and placeholders such as "unknown" fail the gate. User-Agent keeps the full build.
-      const release = /^(\d{4})\.\d+\.\d+/u.exec(version);
-      const gateVersion = release && Number(release[1]) >= 2026 ? release[0] : "99.0.0";
+    case "xai":
+      // Identify OpenClaw the way other ChatGPT/Codex clients do: a fixed originator plus the
+      // build in User-Agent. No `version` header: ChatGPT gates models on it, and the model list
+      // derives its `client_version` separately (extensions/openai/base-url.ts).
       return {
         ...policy,
         verification: "vendor-hidden-api-spec",
         reviewNote:
           normalized === "openai"
             ? "OpenAI native traffic supports hidden originator/User-Agent attribution. Verified against the Codex wire contract."
-            : "xAI api.x.ai accepts a standard openclaw User-Agent. Companion originator/version headers mirror the OpenAI attribution shape for consistency; they are not validated against an xAI-specific spec and are expected to be ignored by xAI's OpenAI-compatible surface.",
+            : "xAI api.x.ai accepts a standard openclaw User-Agent. The companion originator header mirrors the OpenAI attribution shape for consistency; it is not validated against an xAI-specific spec and is expected to be ignored by xAI's OpenAI-compatible surface.",
         headers: {
           originator: OPENCLAW_ATTRIBUTION_ORIGINATOR,
-          version: normalized === "openai" ? gateVersion : version,
           "User-Agent": userAgent,
         },
       };
-    }
     case "opencode":
       return {
         ...policy,

@@ -281,31 +281,22 @@ describe("provider attribution", () => {
     },
   );
 
-  it.each([
-    ["2026.11.5", "2026.11.5"],
-    ["2026.11.5-beta.1", "2026.11.5"],
-    ["2026.11.5-1+build.abc", "2026.11.5"],
-    ["unknown", "99.0.0"],
-    ["0.0.0-dev", "99.0.0"],
-  ])(
-    "sends ChatGPT the numeric OpenClaw release %s as %s and keeps the build in User-Agent",
-    (runtime, sent) => {
-      const policy = resolveProviderRequestPolicy(
-        {
-          provider: "openai",
-          api: "openai-chatgpt-responses",
-          baseUrl: "https://chatgpt.com/backend-api/codex",
-          transport: "stream",
-          capability: "llm",
-        },
-        { OPENCLAW_VERSION: runtime },
-      );
-      expect(policy.attributionHeaders).toMatchObject({
-        version: sent,
-        "User-Agent": `openclaw/${runtime}`,
-      });
-    },
-  );
+  it("identifies OpenClaw to ChatGPT by originator and User-Agent, without a version header", () => {
+    const policy = resolveProviderRequestPolicy(
+      {
+        provider: "openai",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        transport: "stream",
+        capability: "llm",
+      },
+      { OPENCLAW_VERSION: "2026.11.5-beta.1" },
+    );
+    expect(policy.attributionHeaders).toEqual({
+      originator: "openclaw",
+      "User-Agent": "openclaw/2026.11.5-beta.1",
+    });
+  });
 
   it("authorizes hidden xAI attribution on api.x.ai and the default xAI route", () => {
     const native = requestPolicy({ provider: "xai", baseUrl: "https://api.x.ai/v1" });
@@ -316,7 +307,6 @@ describe("provider attribution", () => {
     });
     expect(native.attributionHeaders).toEqual({
       originator: "openclaw",
-      version: "2026.3.22",
       "User-Agent": "openclaw/2026.3.22",
     });
 

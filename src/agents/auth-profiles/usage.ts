@@ -208,7 +208,6 @@ async function probeWhamForCooldown(
       Authorization: `Bearer ${profile.access}`,
       Accept: "application/json",
       originator: "openclaw",
-      ...(version ? { version } : {}),
       "User-Agent": `openclaw/${version || "dev"}`,
     };
     if (profile.accountId) {
