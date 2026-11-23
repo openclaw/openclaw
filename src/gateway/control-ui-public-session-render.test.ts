@@ -359,6 +359,7 @@ describe("public session document", () => {
     expect(html).toContain("Fixed the issue.");
     expect(html.match(/<details class="tools" data-public-item=/g)).toHaveLength(1);
     expect(html).toContain("Ran 2 tools");
+    expect(html).toContain('<code dir="rtl" title="read"><bdi dir="ltr">read</bdi></code>');
     expect(html).toContain("src/example.ts");
     expect(html).not.toMatch(/RESULT_BODY_MUST_STAY_PRIVATE|THOUGHT_MUST_STAY_PRIVATE|TAIL_MARKER/);
     expect(html).toContain(secret);
