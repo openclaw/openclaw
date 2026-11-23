@@ -596,7 +596,15 @@ describe("sessions_send dispatch admission", () => {
       expect(continuationSignal?.aborted).toBe(false);
       expect.soft(liveness.view.deadlineAtMs).toBe(deadline);
       await vi.advanceTimersByTimeAsync(30_000);
-      expect.soft(result).toMatchObject({ status: "timeout", runId, sessionKey: targetSessionKey });
+      // Queue acceptance is not a confirmed transcript commit; report uncertain admission.
+      expect.soft(result).toMatchObject({
+        status: "error",
+        runId,
+        sessionKey: targetSessionKey,
+        error:
+          "sessions_send timed out; the message may have been accepted. Inspect the target before retrying.",
+      });
+      expect.soft(Value.Check(createTool().outputSchema!, result)).toBe(true);
       expect.soft(continuationSignal?.aborted).toBe(false);
       detachActiveEmbeddedRun("target-session", sibling, targetSessionKey);
       await vi.advanceTimersByTimeAsync(0);

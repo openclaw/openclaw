@@ -949,7 +949,7 @@ describe("cron method validation", () => {
     expect(context.cron.wake).toHaveBeenCalledOnce();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "agent runtime authority is no longer active",
+      messageIncludes: "The message turn has ended. Start a new turn to retry.",
     });
   });
 
@@ -1195,7 +1195,7 @@ describe("cron method validation", () => {
       expect(context.cron[owner]).toHaveBeenCalledOnce();
       expectResponseError(respond, {
         code: "INVALID_REQUEST",
-        messageIncludes: "agent runtime authority is no longer active",
+        messageIncludes: "The message turn has ended. Start a new turn to retry.",
       });
     },
   );

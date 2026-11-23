@@ -597,7 +597,9 @@ it.each([
     }
   };
   await expect(fixture.dispatch("list-pins", { chatId: ALLOWED })).rejects.toThrow(
-    "no longer active",
+    owner === "plugin"
+      ? "Plugin feishu read authority is no longer active."
+      : "The message turn has ended. Start a new turn to retry.",
   );
   expect(contentRequests()).toEqual(phase === "metadata" ? [CHAT_PATH] : [CHAT_PATH, PINS_PATH]);
 });
@@ -625,7 +627,11 @@ it.each(["sticker-search", "channel-list", "member-info"] as const)(
         : action === "member-info"
           ? { chatId: DIRECT }
           : {};
-    await expect(fixture.dispatch(action, params)).rejects.toThrow("no longer active");
+    await expect(fixture.dispatch(action, params)).rejects.toThrow(
+      action === "channel-list"
+        ? "Plugin feishu read authority is no longer active."
+        : "The message turn has ended. Start a new turn to retry.",
+    );
     if (action === "sticker-search") {
       expectResult(observed ?? null, { stickers: [{ fileId: "file_allowed" }] });
     }
