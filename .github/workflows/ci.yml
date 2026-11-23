@@ -7192,11 +7192,19 @@ jobs:
           ref: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.sha || github.event.pull_request.base.ref }}
           persist-credentials: false
           sparse-checkout: |
+            .github/actions/setup-pnpm-store-cache/ensure-node.sh
             scripts/ci-pr-failure-report.mjs
             scripts/ci-known-main-red.mjs
             scripts/lib/ci-node-test-evidence.mjs
             scripts/lib/ci-static-check-evidence.mjs
           sparse-checkout-cone-mode: false
+      - name: Setup Node.js
+        env:
+          REQUESTED_NODE_VERSION: ${{ env.NODE_VERSION }}
+        run: |
+          set -euo pipefail
+          source .github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
       - name: Classify completed PR failures
         id: report
         env:
@@ -7266,13 +7274,16 @@ jobs:
           SUMMARY_JSON: ${{ needs.pr-failure-report.outputs.summary_json }}
           FAILURES_JSON: ${{ needs.pr-failure-report.outputs.failures_json }}
         run: |
-          node --input-type=module <<'EOF'
-          import { appendFileSync } from "node:fs";
-          const summary = JSON.parse(process.env.SUMMARY_JSON);
-          appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
-          console.log(summary);
-          console.log(`Failure classification JSON: ${process.env.FAILURES_JSON}`);
-          EOF
+          python3 - <<'PY'
+          import json
+          import os
+
+          summary = json.loads(os.environ["SUMMARY_JSON"])
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
+              output.write(summary)
+          print(summary)
+          print(f"Failure classification JSON: {os.environ['FAILURES_JSON']}")
+          PY
       - name: Record published-driver dispatch limitation
         if: always() && needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision != github.sha
         run: |

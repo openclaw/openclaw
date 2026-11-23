@@ -129,8 +129,8 @@ function commandFixture(groups: string[] = ["Team"]) {
     listWithLinks: async () =>
       JSON.parse(
         await commands
-          .find((command) => command.command === "openclaw.sessions.list-with-links.v1")!
-          .handle("{}"),
+          .find((command) => command.command === "openclaw.sessions.catalog.list.v1")!
+          .handle(JSON.stringify({ includeOriginalPath: true })),
       ) as { sessions: Array<SessionCatalogSession & { originalPath?: string }> },
     list: async (params: Record<string, unknown> = {}) =>
       JSON.parse(await list.handle(JSON.stringify(params))) as SessionPage,
