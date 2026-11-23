@@ -150,7 +150,6 @@ export async function spawnSubagentDirect(
       throw new Error("Operator subagent spawn requires its current Gateway binding");
     }
     if (params.collect && operatorAuthority) {
-      operatorAuthority.assertCurrent();
       preparationHold.retainAuthority(operatorAuthority.retain?.());
     }
     const childPlan = await resolveSubagentChildPlan({

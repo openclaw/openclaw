@@ -396,7 +396,7 @@ export function registerParticipantSpawnCases(
                 bobSource.revoke();
                 const existingKeys = await keys();
                 const modelCalls = runEmbeddedAgent.mock.calls.length;
-                await expect(invoke("bob")).rejects.toThrow(/Bob.s access changed/i);
+                await expect(invoke("bob")).rejects.toThrow(/operator source revoked/);
                 expect(await keys()).toEqual(existingKeys);
                 expect(runEmbeddedAgent).toHaveBeenCalledTimes(modelCalls);
                 expect(() => aliceChild?.authority.assertCurrent()).not.toThrow();
