@@ -9767,7 +9767,7 @@ describe("package artifact reuse", () => {
     ];
     const hostedDefault = reusable.on?.workflow_call?.inputs?.use_github_hosted_runners?.default;
     for (const [overrides, packagePresent, expected] of [
-      [{}, "true", 48],
+      [{}, "true", 64],
       [{ use_github_hosted_runners: false }, "true", 32],
       [{ runner_group: "release-runners" }, "true", 32],
       [{}, "false", 32],
