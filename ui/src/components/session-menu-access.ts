@@ -1,6 +1,7 @@
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
+import { registerSessionMenuPermissionsEnglish } from "../i18n/locales/en-session-menu-permissions.ts";
 import { registerSessionOrganizationSharedEnglish } from "../i18n/locales/en-session-organization-shared.ts";
 import {
   readSessionMethodAccess,
@@ -12,6 +13,7 @@ import type { SessionMenuActionKind } from "./session-menu-solid.tsx";
 import { sessionPlacementActionReason } from "./session-placement-action.ts";
 
 registerSessionOrganizationSharedEnglish();
+registerSessionMenuPermissionsEnglish();
 
 type SessionMenuAccessRow = Pick<
   GatewaySessionRow,
