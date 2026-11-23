@@ -316,6 +316,13 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
         indexIdentity.status === "mismatched" &&
         indexIdentity.owner === "openclaw" &&
         !hasTargetArchiveFiles;
+      // A scope mismatch cannot serve the previous corpus. Rebuild it through
+      // the same shadow publication owner used for runtime format upgrades.
+      const needsConfiguredScopeReindex =
+        indexIdentity.status === "mismatched" &&
+        indexIdentity.owner === "configuration" &&
+        indexIdentity.code === "scope" &&
+        !hasTargetArchiveFiles;
       const canRunRetryFullReindex =
         indexIdentity.status !== "missing" || needsInitialIndex || canRebuildMissingIdentity;
       const retryFullReindexRequested = this.memoryFullRetryDirty || this.sessionsFullRetryDirty;
@@ -337,7 +344,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
         (params?.force && !hasTargetArchiveFiles) ||
         needsExplicitIdentityReindex ||
         (!deferAutomaticFullReindex &&
-          (needsInitialIndex || needsMissingIdentityReindex || needsRuntimeVersionReindex)) ||
+          (needsInitialIndex ||
+            needsMissingIdentityReindex ||
+            needsRuntimeVersionReindex ||
+            needsConfiguredScopeReindex)) ||
         (!hasTargetArchiveFiles &&
           !deferAutomaticFullReindex &&
           ((this.memoryFullRetryDirty && canRunRetryFullReindex) ||
