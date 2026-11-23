@@ -3877,7 +3877,7 @@ jobs:
       - name: Run Node test shard
         env:
           BOAT_TEST_RUNNER: ${{ github.run_attempt == 1 && startsWith(matrix.runner_label || matrix.runner, 'boat') }}
-          CHECKOUT_BASE_SHA: ${{ needs.preflight.outputs.diff_base_revision }}
+          CHECKOUT_BASE_SHA: *ci_diff_base
           NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_CI_TEST_OBSERVATIONS_DIR: ${{ github.repository == 'openclaw/openclaw' && needs.preflight.outputs.frozen_target == 'false' && (github.event_name == 'schedule' || (github.event_name == 'pull_request' && endsWith(github.run_id, '0'))) && format('{0}/ci-test-observations', runner.temp) || '' }}
           OPENCLAW_CI_TEST_AUDIT_CLI_DIR: ${{ github.repository == 'openclaw/openclaw' && needs.preflight.outputs.frozen_target == 'false' && github.event_name == 'schedule' && github.run_attempt == 1 && matrix.audit_cli_observations == true && format('{0}/ci-test-observations-audit-cli', runner.temp) || '' }}
@@ -3988,7 +3988,7 @@ jobs:
         if: github.event_name == 'pull_request' && contains(fromJSON('["affected","full"]'), fromJSON(needs.preflight.outputs.check_plan_input_json).extensionLintMode)
         uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
-          base-sha: ${{ needs.preflight.outputs.diff_base_revision }}
+          base-sha: *ci_diff_base
           fetch-ref: ${{ github.event.pull_request.base.ref }}
       - name: Setup Node environment
         id: check_setup
@@ -4735,7 +4735,7 @@ jobs:
       - name: Run additional check shard
         if: matrix.group != 'guards' && matrix.group != 'guards-architecture' && matrix.group != 'dependencies'
         env:
-          SDK_DIFF_BASE: ${{ needs.preflight.outputs.diff_base_revision }}
+          SDK_DIFF_BASE: *ci_diff_base
           SDK_DIFF_HEAD: ${{ needs.preflight.outputs.diff_head_revision }}
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
           TYPE_GRAPH_BOUNDARY_OWNER: ${{ needs.preflight.outputs.type_graph_boundary_owner }}
@@ -4745,7 +4745,7 @@ jobs:
           OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ""
           OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
           OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 16
-          OPENCLAW_CI_EXTENSION_BOUNDARY_BASE: ${{ needs.preflight.outputs.diff_base_revision }}
+          OPENCLAW_CI_EXTENSION_BOUNDARY_BASE: *ci_diff_base
           OPENCLAW_CI_EXTENSION_BOUNDARY_FULL: ${{ vars.OPENCLAW_CI_EXTENSION_BOUNDARY_FULL }}
         shell: bash
         run: bash .ci-harness/scripts/ci-additional-checks.sh
@@ -4801,7 +4801,7 @@ jobs:
       - name: Ensure boundary comparison base
         uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
-          base-sha: ${{ needs.preflight.outputs.diff_base_revision }}
+          base-sha: *ci_diff_base
           fetch-ref: ${{ github.event.pull_request.base.ref }}
       - name: Setup Node environment
         uses: ./.ci-harness/.github/actions/setup-node-env
@@ -4814,7 +4814,7 @@ jobs:
         if: ${{ !cancelled() && steps.prepare_sdk.outcome == 'success' }}
         env:
           OPENCLAW_CI_SHARED_SDK: "1"
-          OPENCLAW_CI_EXTENSION_BOUNDARY_BASE: ${{ needs.preflight.outputs.diff_base_revision }}
+          OPENCLAW_CI_EXTENSION_BOUNDARY_BASE: *ci_diff_base
           OPENCLAW_CI_EXTENSION_BOUNDARY_FULL: ${{ vars.OPENCLAW_CI_EXTENSION_BOUNDARY_FULL }}
           OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 16
         run: pnpm run test:extensions:package-boundary:compile
