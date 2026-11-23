@@ -185,6 +185,18 @@ the last Doctor result and run those inspections after Gateway readiness; a
 narrow repair pass must not replace them with an empty list. The candidate must
 contain this fix.
 
+The serving Gateway records a completed release rollback as a failed update, with
+the launcher's reason and the previous version's running facts. Settings → Updates
+and `openclaw update status` offer Retry, then Report update failure if it fails
+again. Startup output remains in the saved diagnostic details, not a failed update
+step. Unperformed verification checks are not reported as warnings. Machine-only
+Doctor check receipts stay in saved JSON, not installation steps or report text.
+Failed supplemental steps count toward the success headline's warnings without
+changing the recorded successful outcome.
+The installed updater must contain preparation-step reporting changes; the
+restored release must contain rollback reporting changes. No schema or protocol
+change is needed.
+
 Candidate Doctor accepts a read-only reader that finishes rebuilding a checkpointed
 SQLite WAL index between update capture and source verification. Rebuilding that
 index can clear its commit counter and checksum without changing the database.

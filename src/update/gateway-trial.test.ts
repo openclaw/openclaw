@@ -113,16 +113,29 @@ it.each(["succeeded", "rolled-back"] as const)(
     if (status === "succeeded") {
       expect(finished).toMatchObject({
         after: { version: VERSION },
-        verification: { runningVersion: VERSION, booted: true },
+        verification: {
+          runningVersion: VERSION,
+          booted: true,
+          serviceRunning: true,
+          coreReady: true,
+          versionMatch: true,
+        },
       });
     } else {
       expect(finished?.reason).toBe(`new build failed to start; v${VERSION} is still running`);
-      expect(finished?.steps.find((step) => step.step === "outcome")?.detail).not.toContain(
-        "sk-abcdefghijklmnopqrstuvwxyz123456",
-      );
-      expect(finished?.steps.find((step) => step.step === "outcome")?.detail).toContain(
-        "failed with token",
-      );
+      expect(finished?.verification).toMatchObject({
+        runningVersion: VERSION,
+        booted: true,
+        serviceRunning: true,
+        coreReady: true,
+        rollbackOutcome: { status: "succeeded", reason: "new build failed to start" },
+      });
+      expect(finished?.steps.some((step) => step.step === "outcome")).toBe(false);
+      const startup = finished?.steps.find((step) => step.step === "diagnostic:startup");
+      expect(startup).toMatchObject({ status: "completed" });
+      expect(startup?.detail).not.toContain("sk-abcdefghijklmnopqrstuvwxyz123456");
+      expect(startup?.detail).toContain("failed with token");
+      expect(startup?.stderrTail).toContain("failed with token");
     }
     expect(await readTrial(resolvePrefix())).toMatchObject({ reported: true });
     await settleRunFromTrial((await readTrial())!);

@@ -70,7 +70,7 @@ const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
 
 const RUNTIME_COORDINATION_FAILURE_CODE_COPY: Readonly<Record<string, string>> = {
   child_completion_delivery_failed:
-    "The child result couldn't be delivered to this conversation. Your conversation is preserved. Check the child sessions for saved work, then retry or resend your request.",
+    "This reply was waiting for a child agent whose result couldn't be added to this conversation automatically. Check the child session for its outcome.",
   codex_node_disconnected: "Codex execution node disconnected. Start a fresh attempt.",
   node_runner_update_required:
     "The device worker requires an update before it can host sessions. Run `openclaw update`, reconnect it, then run `openclaw node restart` on a headless node before trying again.",

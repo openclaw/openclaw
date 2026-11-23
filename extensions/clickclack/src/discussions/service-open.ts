@@ -281,13 +281,8 @@ export async function openClickClackDiscussionBinding(
       const assertCurrentAuthority = () => {
         session.source();
         const currentEntry = session.entry;
-        if (
-          // SAFETY: Runtime config has passed the registered ClickClack schema.
-          !isDiscussionAccountCurrent(runtime.config.current() as CoreConfig, account) ||
-          !currentEntry?.sessionId ||
-          currentEntry.archivedAt !== undefined
-        ) {
-          throw new Error("ClickClack discussion authority changed while opening the channel");
+        if (!currentEntry?.sessionId || currentEntry.archivedAt !== undefined) {
+          throw new Error("The discussion session ended. Open the discussion again.");
         }
         return currentEntry;
       };

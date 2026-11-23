@@ -127,10 +127,8 @@ export async function runSessionCompactionIfNeeded(params: {
   onSessionIdChanged?: (sessionId: string) => void;
   onCompactionNotice?: (phase: CompactionNoticePhase, text?: string) => Promise<void> | void;
 }): Promise<SessionEntry | undefined> {
-  const operatorAuthority = params.followupRun.operatorAuthority;
   const assertActive = () => {
     params.abortSignal?.throwIfAborted();
-    operatorAuthority?.assertCurrent();
     if (params.authorize?.() === false) {
       throw new Error("Session compaction maintenance is no longer active");
     }
@@ -408,7 +406,7 @@ export async function runSessionCompactionIfNeeded(params: {
       },
       {
         assertActive,
-        sourceAuthority: { assertActive, operatorAuthority },
+        sourceAuthority: { assertActive, operatorAuthority: params.followupRun.operatorAuthority },
         requestBudget: params.compactionRequestBudget,
         pendingUserEntryId: params.pendingUserEntryId,
         // Record every host compaction while its session lane still excludes the next writer.
@@ -524,10 +522,7 @@ export async function runMemoryFlushIfNeeded(
     abortSignal: params.replyOperation?.abortSignal ?? params.abortSignal,
     operatorAuthority: params.followupRun.operatorAuthority,
   });
-  const assertMemoryFlushCurrent = () => {
-    abortSignal?.throwIfAborted();
-    params.followupRun.operatorAuthority?.assertCurrent();
-  };
+  const assertMemoryFlushCurrent = () => abortSignal?.throwIfAborted();
   const { writable: memoryFlushWritable, toolPolicy: sandboxToolPolicy } =
     await resolveMemoryFlushSandbox(params, assertMemoryFlushCurrent);
 

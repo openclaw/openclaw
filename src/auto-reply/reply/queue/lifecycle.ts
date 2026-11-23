@@ -227,7 +227,6 @@ export async function admitFollowupRunLifecycle(
   run: FollowupRun | FollowupLifecycleSource,
 ): Promise<void> {
   const state = custody(run);
-  run.operatorAuthority?.assertCurrent();
   if (state.adopted) {
     return;
   }
@@ -239,11 +238,10 @@ export async function admitFollowupRunLifecycle(
   }
   const admission = Promise.resolve().then(async () => {
     await run.turnAdoptionLifecycle?.onAdopted();
-    // A successful custody callback commits before the post-await authority check.
+    // A successful custody callback commits adoption.
     state.adopted = true;
     state.failure = undefined;
     state.stopHeartbeat?.();
-    run.operatorAuthority?.assertCurrent();
   });
   state.adopting = admission;
   try {

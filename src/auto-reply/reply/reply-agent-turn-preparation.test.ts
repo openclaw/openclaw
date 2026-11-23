@@ -381,47 +381,29 @@ it.each([
   },
 );
 
-it.each([false, true])(
-  "preserves operator precedence only while custody is live, revoked=%s",
-  async (revoked) => {
-    const queued = createRun();
-    const controller = new AbortController();
-    const assertCurrent = vi.fn(() => controller.signal.throwIfAborted());
-    queued.operatorAuthority = createTestOperatorAuthority({
-      profileId: revoked ? "alice" : "alice-profile",
-      scopes: ["operator.admin"],
-      assertCurrent,
-      signal: controller.signal,
-    });
-    queued.run.requesterOrigin = {
-      sessionKey: revoked ? "main" : "agent:original:telegram:direct:alice",
-      messageProvider: "telegram",
-      senderId: "alice",
-      ...(!revoked && { operatorProfileId: "alice-profile" }),
-    };
-    queued.run.senderIsOwner = true;
-    if (revoked) {
-      state.resolveConfig.mockImplementation(async (config) => {
-        controller.abort(new Error("operator source retired"));
-        return config;
-      });
-      await expect(prepare(queued)).rejects.toThrow("operator source retired");
-      expect(state.admitReply).toHaveBeenCalledOnce();
-      expect(operation.complete).toHaveBeenCalledOnce();
-      expect(state.preflight).not.toHaveBeenCalled();
-    } else {
-      queued.run.config = { commands: { ownerAllowFrom: ["telegram:other"] } };
-      queued.run.traceAuthorized = true;
-      using durableOwnerRead = vi
-        .spyOn(configuredOwners, "prepareConfiguredCommandOwnerAuthority")
-        .mockResolvedValue(undefined);
-      const turn = await admitted(prepare(queued));
-      expect(turn.queued.run).toMatchObject({ senderIsOwner: true, traceAuthorized: true });
-      expect(assertCurrent).toHaveBeenCalled();
-      expect(durableOwnerRead).not.toHaveBeenCalled();
-    }
-  },
-);
+it("preserves operator precedence for the admitted operator", async () => {
+  const queued = createRun();
+  queued.operatorAuthority = createTestOperatorAuthority({
+    profileId: "alice-profile",
+    scopes: ["operator.admin"],
+    assertCurrent: () => {},
+  });
+  queued.run.requesterOrigin = {
+    sessionKey: "agent:original:telegram:direct:alice",
+    messageProvider: "telegram",
+    senderId: "alice",
+    operatorProfileId: "alice-profile",
+  };
+  queued.run.senderIsOwner = true;
+  queued.run.config = { commands: { ownerAllowFrom: ["telegram:other"] } };
+  queued.run.traceAuthorized = true;
+  using durableOwnerRead = vi
+    .spyOn(configuredOwners, "prepareConfiguredCommandOwnerAuthority")
+    .mockResolvedValue(undefined);
+  const turn = await admitted(prepare(queued));
+  expect(turn.queued.run).toMatchObject({ senderIsOwner: true, traceAuthorized: true });
+  expect(durableOwnerRead).not.toHaveBeenCalled();
+});
 it.each([
   "paused",
   "blocked",

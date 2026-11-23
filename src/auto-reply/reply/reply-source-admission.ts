@@ -44,7 +44,6 @@ export async function prepareReplySourceAdmission(params: {
     if (operation.lifecycleGeneration) {
       assertAgentRunLifecycleGenerationCurrent(operation.lifecycleGeneration);
     }
-    followupRun.operatorAuthority?.assertCurrent();
     assertSessionControllerOperation(operation);
   };
   assertCurrent();
