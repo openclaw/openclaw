@@ -10838,7 +10838,7 @@ describe("package artifact reuse", () => {
       [RELEASE_CHECKS_WORKFLOW, "live_repo_e2e_release_checks"],
       [RELEASE_CHECKS_WORKFLOW, "package_acceptance_release_checks"],
       [PACKAGE_ACCEPTANCE_WORKFLOW, "docker_acceptance"],
-    ]) {
+    ] as const) {
       expect(workflowJob(file, job).secrets).toMatchObject({
         ZAI_CODING_API_KEY: "${{ secrets.ZAI_CODING_API_KEY }}",
       });
