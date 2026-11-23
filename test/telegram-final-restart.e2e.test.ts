@@ -167,9 +167,7 @@ it(
           expect(instance.logs()).toContain("retrying an unconfirmed final text reply");
           expect(delivered).toEqual([answer]);
           // Let the recovery owner commit its receipt before teardown stops it.
-          expect(instance.logs()).toMatch(
-            /(?:Recovered delivery|Outbound delivery retry: drained delivery) \S+ on telegram/,
-          );
+          expect(instance.logs()).toMatch(/(?:Recovered|drained) delivery \S+ on telegram/);
         },
         { timeout: 75_000 },
       );
