@@ -83,7 +83,8 @@ describe.runIf(browserMode)("Review layout", () => {
   );
 
   it("identifies a selected file in the compact tree and in the reading pane", async () => {
-    const { userEvent } = await import("vitest/browser");
+    const { page, userEvent } = await import("vitest/browser");
+    await page.viewport(1180, 820);
     const name =
       "coastal-observation-register.compatibilityverificationforportablemonitoringstationsacrossallregionaldeployments";
     const mounted = mountSolid(() =>
@@ -99,7 +100,18 @@ describe.runIf(browserMode)("Review layout", () => {
           sessionKey: "main",
           additions: 1,
           deletions: 0,
-          files: [{ path: "src/" + name, status: "added", additions: 1, deletions: 0 }],
+          files: [
+            {
+              path: "src/" + name,
+              oldPath: "archive/previous-observation-register.csv",
+              status: "renamed",
+              additions: 3,
+              deletions: 2,
+              patch: "@@ -1 +1 @@\n-old\n+new",
+            },
+            { path: "src/chat.ts", status: "modified", additions: 1, deletions: 1 },
+            { path: "src/map.png", status: "added", additions: 1, deletions: 0 },
+          ],
         }),
       }),
     );
@@ -113,11 +125,35 @@ describe.runIf(browserMode)("Review layout", () => {
       '.session-diff__tree-row[title="src/' + name + '"]',
     )!;
     await userEvent.click(leaf);
+
     await waitForSolid(() =>
       expect(host.querySelector(".session-diff__file-toggle")).toBe(document.activeElement),
     );
     expect(host.querySelector<HTMLElement>(".session-diff__filename")!.offsetWidth).toBeGreaterThan(
       0,
+    );
+    const selected = host.querySelector<HTMLElement>(".session-diff__filename")!;
+    expect(selected.title).toBe(name);
+    const stem = selected.querySelector("bdi")!.firstChild!;
+    const range = document.createRange();
+    range.selectNodeContents(stem);
+    expect(new Set(Array.from(range.getClientRects(), (r) => r.top)).size).toBe(1);
+    expect(host.querySelector('[title="src/chat.ts"]')?.textContent).toContain("chat.ts");
+    expect(host.querySelector('[title="src/map.png"]')?.textContent).toContain("map.png");
+    for (const name of ["chat.ts", "map.png"]) {
+      const ext = host.querySelector<HTMLElement>(
+        `.session-diff__filename[title="${name}"] .session-diff__extension`,
+      )!;
+      range.selectNodeContents(ext);
+      expect(range.getBoundingClientRect().right).toBeLessThanOrEqual(
+        ext.getBoundingClientRect().right + 1,
+      );
+    }
+    const selectedToggle = host.querySelector<HTMLButtonElement>(".session-diff__file-toggle")!;
+    const expanded = selectedToggle.getAttribute("aria-expanded");
+    await userEvent.keyboard("{Enter}");
+    await waitForSolid(() =>
+      expect(selectedToggle.getAttribute("aria-expanded")).not.toBe(expanded),
     );
     expect(leaf.querySelector<HTMLElement>(".session-diff__basename")!.offsetWidth).toBeGreaterThan(
       16,
