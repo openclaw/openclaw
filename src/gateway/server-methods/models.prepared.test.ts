@@ -22,6 +22,7 @@ import {
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
 import { gatewayProfile } from "../server/client-fixtures.test-support.js";
+import * as sessionReads from "../session-utils-store.js";
 import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import {
   createChatMetadataHarness,
@@ -381,6 +382,8 @@ it("isolates saved account and runtime choices between sessions", async () => {
       const params = { agentId: "main", sessionKey, view: "configured" as const };
       const read = modelsReader(context, params);
       try {
+        using sessionRead = vi.spyOn(sessionReads, "withGatewaySessionEntry");
+        using prepareProjection = vi.spyOn(modelsListResult, "prepareModelsListResult");
         await harness.runtime.refresh();
         const result = await read();
         expect({
@@ -398,11 +401,22 @@ it("isolates saved account and runtime choices between sessions", async () => {
           ),
           account: { kind: "shared", authProfileId: "openai:fixture", source: "user" },
         });
+        const readsPerRequest = sessionRead.mock.calls.length;
+        sessionRead.mockClear();
+        expect(await read()).toEqual(result);
+        const warmReadsPerRequest = sessionRead.mock.calls.length;
+        expect(await Promise.all([read(), read()])).toEqual([result, result]);
+        expect(loadNativeCatalog).not.toHaveBeenCalled();
+        // Model/runtime cardinality must not multiply live session authority acquisitions.
+        expect(readsPerRequest).toBeLessThanOrEqual(12);
+        expect(warmReadsPerRequest).toBeLessThanOrEqual(2);
+        expect(prepareProjection).toHaveBeenCalledOnce();
         params.sessionKey = siblingSessionKey;
         expect(await read()).toMatchObject({
           models: result?.models,
           accountSelection: result?.accountSelection,
         });
+        expect(prepareProjection).toHaveBeenCalledOnce();
         params.sessionKey = sessionKey;
 
         await upsertSessionEntryCore(
@@ -415,7 +429,8 @@ it("isolates saved account and runtime choices between sessions", async () => {
             authProfileOverride: "openai:alternate",
           },
         );
-        const changed = await read();
+        const [changed, concurrentChanged] = await Promise.all([read(), read()]);
+        expect(concurrentChanged).toEqual(changed);
         expect(changed?.models[0]).toMatchObject({
           id: "gpt-fixture-8",
           agentRuntime: { id: "codex" },
@@ -425,11 +440,15 @@ it("isolates saved account and runtime choices between sessions", async () => {
           authProfileId: "openai:alternate",
           source: "user",
         });
+        expect(prepareProjection).toHaveBeenCalledTimes(2);
+        expect(await read()).toEqual(changed);
+        expect(prepareProjection).toHaveBeenCalledTimes(2);
         params.sessionKey = siblingSessionKey;
         expect(await read()).toMatchObject({
           models: result?.models,
           accountSelection: result?.accountSelection,
         });
+        expect(prepareProjection).toHaveBeenCalledTimes(2);
       } finally {
         await harness.runtime.stop();
       }
@@ -490,6 +509,7 @@ it("keeps default snapshots distinct from user selections in the prepared sessio
         );
       }
       try {
+        using prepare = vi.spyOn(modelsListResult, "prepareModelsListResult");
         await harness.runtime.refresh();
         const client = authorizationClient(
           "default-catalog",
@@ -515,6 +535,7 @@ it("keeps default snapshots distinct from user selections in the prepared sessio
         expect(selected?.models.map(({ provider, id }) => `${provider}/${id}`)).toContain(
           "anthropic/previous",
         );
+        expect(prepare).toHaveBeenCalledTimes(2);
         expect(inherited?.models[0]?.agentRuntime).toMatchObject({
           id: "openclaw",
           source: "model",
@@ -522,6 +543,9 @@ it("keeps default snapshots distinct from user selections in the prepared sessio
         expect(
           selected?.models.find(({ provider }) => provider === "openai")?.agentRuntime,
         ).toMatchObject({ id: "codex", source: "implicit" });
+        expect(await read(sessionKey)).toEqual(inherited);
+        expect(await read(userSessionKey)).toEqual(selected);
+        expect(prepare).toHaveBeenCalledTimes(2);
       } finally {
         await harness.runtime.stop();
       }
