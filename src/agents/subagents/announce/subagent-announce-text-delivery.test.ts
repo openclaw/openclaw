@@ -48,7 +48,6 @@ function setup(outcome: "rejected" | "aborted" | "sent" = "sent") {
       directIdempotencyKey: `chunked-text-completion-${++nextDeliveryId}`,
       deliveryTarget: { deliver: true, channel: "discord", to: "dm:U123" },
       internalEvents: taskCompletionEvents({ result: content }),
-      contentKind: "completed_result",
       signal: controller.signal,
       onDeliveryResult,
     });

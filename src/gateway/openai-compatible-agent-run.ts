@@ -129,7 +129,9 @@ export async function runOpenAiCompatibleAgentCommand(params: {
       throw new ToolAuthorizationError(GATEWAY_UPLOADS_DISABLED_MESSAGE);
     }
     if (!admitted && params.hasCurrentClientAuthority?.() === false) {
-      throw new ToolAuthorizationError("Gateway requester authority changed");
+      throw new ToolAuthorizationError(
+        "Gateway requester changed during admission. Retry the request.",
+      );
     }
   };
   assertSourceCurrent();

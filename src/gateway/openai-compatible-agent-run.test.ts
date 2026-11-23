@@ -519,7 +519,7 @@ describe("OpenAI-compatible command admission", () => {
         await expect(pending).resolves.toMatchObject({ payloads: [{ text: "settled" }] });
         expect(executed).toHaveBeenCalledOnce();
       } else {
-        await expect(pending).rejects.toThrow("Gateway requester authority changed");
+        await expect(pending).rejects.toThrow("Gateway requester changed during admission");
         expect(executed).not.toHaveBeenCalled();
       }
     },

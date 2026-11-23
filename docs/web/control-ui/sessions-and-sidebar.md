@@ -968,7 +968,7 @@ permissions, including the admin requirement for an explicit **Full access** cho
 
 <a id="register-an-existing-repository" />
 
-**Projects.** The Place picker lists configured agent workspaces and repositories recorded with `projects.register`. Read-only connections receive project names and IDs; checkout paths and origin URLs are included only at `operator.write`. An admin can browse to a Git checkout and choose **Register as project**; write-only operators see a hint directing them to that flow. Choosing a project sends its ID through `sessions.create`, so it can run directly or supply the source for optional Worktree isolation without submitting a raw path. If an agent workspace was moved or removed, update that agent's configured workspace path. If a recorded checkout was moved or removed, re-register it before starting another session there.
+**Projects.** The Place picker lists configured agent workspaces and repositories recorded with `projects.register`. Read-only connections receive project names and IDs; checkout paths and origin URLs are included only at `operator.write`. An admin can browse to a Git checkout and choose **Register as project**; write-only operators see a hint directing them to that flow. Choosing a project sends its ID through `sessions.create`, so it can run directly or supply the source for optional Worktree isolation without submitting a raw path. Connections without `operator.write` see public GitHub projects plus projects their role grants; a project reached only through a [role grant](/gateway/operator-scopes#project-grants) always opens in a new Worktree. If an agent workspace was moved or removed, update that agent's configured workspace path. If a recorded checkout was moved or removed, re-register it before starting another session there.
 
 You can also register an existing checkout through the
 [Gateway CLI](/cli/gateway/query#gateway-call-%3Cmethod%3E). Registration requires
@@ -987,7 +987,13 @@ existing checkout without cloning it. `name` is optional and defaults to the
 checkout directory's name.
 
 Registering the same resolved repository root again returns its existing project ID and
-display name. Passing a different `name` does not rename an existing project.
+display name. Passing a different `name` does not rename an existing project; an
+administrator can rename it with `projects.rename`, which keeps its project ID:
+
+```bash
+openclaw gateway call projects.rename \
+  --params '{"projectId":"example","name":"Example"}' --json
+```
 
 `projects.list` reads committed registry rows through a read-only worker without
 checking Git or joining unrelated state writes. Registration initializes the
