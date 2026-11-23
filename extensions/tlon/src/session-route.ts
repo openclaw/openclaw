@@ -9,8 +9,13 @@ export function resolveTlonOutboundSessionRoute(params: ChannelOutboundSessionRo
   if (!parsed) {
     return null;
   }
-  const isGroup = parsed.kind === "group";
-  const peerId = isGroup ? parsed.nest : parsed.ship;
+  const isGroup = parsed.kind !== "dm";
+  const peerId =
+    parsed.kind === "dm"
+      ? parsed.ship
+      : parsed.kind === "club"
+        ? `club:${parsed.clubId}`
+        : parsed.nest;
 
   return buildChannelOutboundSessionRoute({
     cfg: params.cfg,
@@ -23,7 +28,7 @@ export function resolveTlonOutboundSessionRoute(params: ChannelOutboundSessionRo
       id: peerId,
     },
     chatType: isGroup ? "group" : "direct",
-    from: isGroup ? `tlon:group:${peerId}` : `tlon:${peerId}`,
+    from: parsed.kind === "group" ? `tlon:group:${peerId}` : `tlon:${peerId}`,
     to: `tlon:${peerId}`,
   });
 }

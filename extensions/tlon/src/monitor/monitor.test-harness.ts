@@ -1,5 +1,6 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, vi } from "vitest";
 
 const {
@@ -225,6 +226,36 @@ export function useTlonMonitorFixture() {
 
   return {
     monitorTlonProvider,
+    configureTlon: (overrides: Record<string, unknown>) => {
+      realUrbitFixture.config = {
+        channels: {
+          tlon: {
+            code: "code",
+            ship: "~zod",
+            url: realUrbitFixture.url,
+            ownerShip: "~nec",
+            ...overrides,
+          },
+        },
+      } as OpenClawConfig;
+    },
+    startMonitor: () => {
+      const controller = new AbortController();
+      const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
+      const monitor = monitorTlonProvider({
+        scheduler: createTestPluginServiceScheduler(),
+        abortSignal: controller.signal,
+        runtime,
+      });
+      void monitor.catch(() => {});
+      return {
+        runtime,
+        stop: async () => {
+          controller.abort();
+          await monitor;
+        },
+      };
+    },
     authenticateMock,
     buildChannelInboundEnvelopeMock,
     builtInboundContextPayload,
@@ -236,5 +267,13 @@ export function useTlonMonitorFixture() {
     inboundRuntimeMock,
     settingsManagerMock,
     realUrbitFixture,
+  };
+}
+
+export function messageEssay(author: string, content: unknown) {
+  return {
+    author,
+    content: typeof content === "string" ? [{ inline: [content] }] : content,
+    sent: 1700000000000,
   };
 }

@@ -1,4 +1,5 @@
 // Tlon tests cover channel.message adapter plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -153,4 +154,37 @@ describe("tlon channel message adapter", () => {
       { capability: "afterCommit", status: "not_declared" },
     ]);
   });
+});
+
+it.each([
+  ["tlon:dm/sampel-palnet", "direct", "~sampel-palnet", "agent:main:main"],
+  [
+    "tlon:group:sampel-palnet/operators",
+    "group",
+    "chat/~sampel-palnet/operators",
+    "agent:main:tlon:group:chat/~sampel-palnet/operators",
+  ],
+  ["tlon:club:0v1.abcde", "group", "club:0v1.abcde", "agent:main:tlon:group:club:0v1.abcde"],
+  ["club:0v1.xyz", null, "", ""],
+  ["not/a/target", null, "", ""],
+] as const)("tlon outbound session routing resolves %s", (target, kind, id, sessionKey) => {
+  const resolveOutboundSessionRoute = expectDefined(
+    tlonPlugin.messaging?.resolveOutboundSessionRoute,
+    "Tlon outbound session routing",
+  );
+  expect(
+    resolveOutboundSessionRoute({ cfg, agentId: "main", accountId: "default", target }),
+  ).toStrictEqual(
+    kind === null
+      ? null
+      : {
+          sessionKey,
+          baseSessionKey: sessionKey,
+          recipientSessionExact: true,
+          peer: { kind, id },
+          chatType: kind,
+          from: kind === "group" && !id.startsWith("club:") ? `tlon:group:${id}` : `tlon:${id}`,
+          to: `tlon:${id}`,
+        },
+  );
 });
