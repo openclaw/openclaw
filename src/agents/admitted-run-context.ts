@@ -84,7 +84,7 @@ export function createAdmittedRunOperatorAuthority(
     }),
     { synchronousCheck: true },
   );
-  const readRoleFacts = source.readCurrentRoleFacts;
+  const readCurrentRoleFacts = source.readCurrentRoleFacts;
   const authority = Object.freeze({
     profileId: source.profileId,
     canonicalIdentity:
@@ -131,12 +131,7 @@ export function createAdmittedRunOperatorAuthority(
       return source.modelPolicy;
     },
     assertCurrent,
-    readCurrentRoleFacts: readRoleFacts
-      ? () => {
-          assertCurrent();
-          return readRoleFacts();
-        }
-      : undefined,
+    readCurrentRoleFacts,
     rolePolicy: source.rolePolicy
       ? Object.freeze({
           ...source.rolePolicy,
@@ -176,17 +171,16 @@ export function assertOperatorModelAllowed(
   createOperatorModelSelectionAssertion(authority, model)();
 }
 
-/** Carry the operator's source checks into writes without rereading its store on the host. */
+/** Applies the admitted model policy to a selection as a write guard. */
 export function createOperatorModelSelectionAssertion(
   authority: AdmittedRunOperatorAuthority | undefined,
   model: OperatorModelSelection | undefined,
 ): SessionSourceAssertion {
-  return composeSessionSourceAssertion([authority?.assertCurrent], (assertSource) => {
+  return composeSessionSourceAssertion([], () => {
     if (!authority) {
       return;
     }
     assertAdmittedRunOperatorAuthority(authority);
-    assertSource();
     const policy = authority.modelPolicy;
     if (policy && (!model || !policy.allows(model))) {
       throw new Error(
@@ -206,7 +200,6 @@ export function assertOperatorAccessProgramAllowed(
     return;
   }
   assertAdmittedRunOperatorAuthority(authority);
-  authority.assertCurrent();
   if (!isOperatorAccessProgramAllowed(authority, program)) {
     throw new Error(
       "Your operator role cannot use this Access level. Choose Standard or ask a gateway administrator to grant this Access level to your role.",
@@ -414,9 +407,7 @@ export function getAdmittedRunOperatorProfileId(
   if (!context || getAdmittedRunDelegatedAuthority(context) !== authority) {
     return undefined;
   }
-  const operator = readAdmittedRunOperatorAuthority(context);
-  operator?.assertCurrent();
-  return operator?.profileId;
+  return readAdmittedRunOperatorAuthority(context)?.profileId;
 }
 
 /** Stop, run occurrence and the run's registry session source, for work that crosses an await. */
@@ -631,7 +622,6 @@ export function prepareAgentRunAdmission(params: {
       if (operatorAuthority && closed) {
         throw new Error("This agent run is no longer active. Start a new turn to retry.");
       }
-      operatorAuthority?.assertCurrent();
       return operatorAuthority;
     },
     close: () => {

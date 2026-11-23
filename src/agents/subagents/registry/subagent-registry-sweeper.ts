@@ -9,7 +9,11 @@ import {
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { runInDetachedAsyncContext } from "../../../shared/detached-async-context.js";
 import { mergeAcceptedSessionSpawnsForRun } from "../../accepted-session-spawn.js";
-import { reconcileRetiredSubagentCancellation } from "../completion/subagent-completion-admission.store.js";
+import {
+  reconcileRetiredSubagentCancellation,
+  settleSubagentCompletionInHistory,
+} from "../completion/subagent-completion-admission.store.js";
+import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import {
   PROVISIONAL_KILL_RECONCILIATION_MS,
@@ -19,19 +23,8 @@ import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle.js";
-import {
-  getRecordedSubagentChildAuthority,
-  getSubagentSweepRuns,
-  subagentRuns,
-} from "./subagent-registry-memory.js";
+import { getRecordedSubagentChildAuthority, subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
-import {
-  discardExpiredSubagentDelivery,
-  settleSubagentCompletionReservation,
-  isSuspendedPendingFinalDelivery,
-  SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS,
-  warnSuspendedDeliveryPressure,
-} from "./subagent-registry-suspended-delivery.js";
 import {
   createSubagentSweepReadScope,
   deleteSweptSession,
@@ -82,7 +75,6 @@ export function createSubagentRegistrySweeper(params: {
   isTerminalTailActive: SubagentLifecycleController["isTerminalTailActive"];
   sessionEffectsHostCurrent: SubagentLifecycleController["sessionEffectsHostCurrent"];
   shouldSuppressSessionEffects: SubagentLifecycleController["shouldSuppressSessionEffects"];
-  discardTerminalDelivery: typeof SubagentLifecycleController.discardTerminalDelivery;
   shouldEmitEndedHookForRun: SubagentLifecycleOptions["shouldEmitEndedHookForRun"];
   emitSubagentEndedHookForRun: SubagentLifecycleOptions["emitSubagentEndedHookForRun"];
   callGateway: typeof callGateway;
@@ -107,7 +99,6 @@ export function createSubagentRegistrySweeper(params: {
   let scheduled: { timer: NodeJS.Timeout; at: number } | undefined;
   let sweepInProgress = false;
   let rerunRequested = false;
-  let lastWarnedSuspendedCount: number | undefined;
   const pendingWork = new Set<Promise<unknown>>();
 
   /** A delivered row may still be the live producer's only complete-batch witness. */
@@ -242,7 +233,7 @@ export function createSubagentRegistrySweeper(params: {
           getRecordedSubagentChildAuthority(entry).status === "mismatch" ||
           typeof entry.execution.endedAt !== "number" ||
           (entry.requesterSettleWake && !subagentRuns.isCompletionAuthorityRetired(entry)) ||
-          isSuspendedPendingFinalDelivery(entry) ||
+          isDeliverySuspended(entry) ||
           ((entry.killIntent || entry.killReconciliation) &&
             !subagentRuns.isCompletionAuthorityRetired(entry)) ||
           !(entry.collect && entry.collectorCompletion
@@ -274,9 +265,6 @@ export function createSubagentRegistrySweeper(params: {
         if (!selected || !isSameSubagentRunOwner(selected, snapshot)) {
           continue;
         }
-        if (await settleSubagentCompletionReservation(selected, now, params)) {
-          continue;
-        }
         if (
           selected.killReconciliation &&
           (await reconcileRetiredSubagentCancellation(selected, now)) === false
@@ -301,6 +289,14 @@ export function createSubagentRegistrySweeper(params: {
         ) {
           continue;
         }
+        if (isDeliverySuspended(entry)) {
+          // Older builds parked this result. Settle it into requester history once, then
+          // finish cleanup as delivered.
+          if (await settleSubagentCompletionInHistory({ subagent: entry })) {
+            params.startSubagentAnnounceCleanupFlow(runs.get(runId) ?? entry);
+          }
+          continue;
+        }
         // Retry live receipts even when the last child has already settled.
         // The lifecycle and controller still own evaluation and turn admission.
         if (
@@ -310,20 +306,6 @@ export function createSubagentRegistrySweeper(params: {
           hasSubagentRunEnded(entry)
         ) {
           params.resumeRequesterSettleWake(runId, entry);
-          continue;
-        }
-        if (isSuspendedPendingFinalDelivery(entry)) {
-          const expired =
-            now - (entry.delivery?.suspendedAt ?? now) >= SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS;
-          if (expired) {
-            await discardExpiredSubagentDelivery({
-              ...params,
-              runId,
-              entry,
-              now,
-              isCurrent: () => params.isCleanupOwnerCurrent(entry),
-            });
-          }
           continue;
         }
         if (!executionRetired && entry.killIntent) {
@@ -637,12 +619,6 @@ export function createSubagentRegistrySweeper(params: {
       stopIfIdle();
     } finally {
       sweepInProgress = false;
-      // Count retained delivery after expiry, even when unrelated sweep work fails.
-      lastWarnedSuspendedCount = warnSuspendedDeliveryPressure(
-        getSubagentSweepRuns(runs, Date.now()),
-        lastWarnedSuspendedCount,
-        params.warn,
-      );
     }
   }
 
@@ -655,7 +631,6 @@ export function createSubagentRegistrySweeper(params: {
     runTick: () => trackWork(runTick),
     async reset() {
       stop();
-      lastWarnedSuspendedCount = undefined;
       // Accepted sweeps can start cleanup tails before they settle.
       while (pendingWork.size > 0) {
         await Promise.allSettled(pendingWork);
