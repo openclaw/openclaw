@@ -153,11 +153,41 @@ enum OpenClawChatTypography {
     #endif
 }
 
+extension View {
+    /// UIKit takes context action ink from the presenting view, not the item label.
+    func chatActionContextMenu(@ViewBuilder items: () -> some View) -> some View {
+        self.contextMenu(menuItems: items)
+            #if os(iOS)
+                .tint(.primary)
+            #endif
+    }
+}
+
+#if os(iOS)
+private struct ChatMenuSymbol: View {
+    @Environment(\.isEnabled) private var isEnabled
+    let name: String
+
+    var body: some View {
+        if !self.isEnabled, let image = UIImage(systemName: self.name) {
+            // A disabled UIAction dims its title but still tints template images as enabled.
+            Image(uiImage: image.withTintColor(.tertiaryLabel, renderingMode: .alwaysOriginal))
+        } else {
+            Image(systemName: self.name)
+        }
+    }
+}
+#endif
+
 func chatActionLabel(_ title: Text, systemImage: String) -> some View {
     Label {
         title.font(OpenClawChatTypography.body)
     } icon: {
+        #if os(iOS)
+        ChatMenuSymbol(name: systemImage)
+        #else
         Image(systemName: systemImage)
+        #endif
     }
 }
 

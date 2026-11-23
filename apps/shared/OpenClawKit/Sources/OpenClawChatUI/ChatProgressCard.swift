@@ -105,7 +105,7 @@ struct ChatProgressCard: View {
                     .contentShape(
                         .contextMenuPreview,
                         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                    .contextMenu { self.actionMenu }
+                    .chatActionContextMenu { self.actionMenu }
                     #endif
                     .modifier(ChatProgressCardMenuAnchor())
             }

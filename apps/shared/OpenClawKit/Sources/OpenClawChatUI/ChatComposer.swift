@@ -1267,7 +1267,7 @@ extension OpenClawChatComposer {
             .accessibilityLabel(Text(verbatim: "Send message"))
             .accessibilityIdentifier("chat-send-message")
             .disabled(!self.canSendMessage)
-            .contextMenu {
+            .chatActionContextMenu {
                 if self.canSendMessage {
                     ForEach(self.inputModel?.sendModeChoices ?? [], id: \.self) { mode in
                         Button {

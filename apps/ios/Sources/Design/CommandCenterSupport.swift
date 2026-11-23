@@ -240,6 +240,7 @@ struct CommandSessionActionsModifier: ViewModifier {
             .tint(.primary)
         } else {
             content.contextMenu { self.menuItems }
+                .tint(.primary)
         }
     }
 

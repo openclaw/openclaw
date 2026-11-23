@@ -6,6 +6,13 @@ import SwiftUI
 import UIKit
 @preconcurrency import UserNotifications
 
+/// Keep native menu actions neutral without changing link or button tints elsewhere.
+private struct PrimaryInkMenuStyle: MenuStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Menu(configuration).tint(.primary)
+    }
+}
+
 enum WatchPromptAction: Sendable {
     case delivery(OpenClawWatchChatDeliveryCommand)
     case upgradeRequired
@@ -632,6 +639,7 @@ struct OpenClawApp: App {
     var body: some Scene {
         WindowGroup {
             RootTabs()
+                .menuStyle(PrimaryInkMenuStyle())
                 .tint(OpenClawBrand.accent)
                 .font(OpenClawType.body)
                 .environment(self.appearanceModel)

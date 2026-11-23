@@ -285,21 +285,21 @@ struct ChatProTab: View {
                 .allowsHitTesting(false)
             if agents.count > 1 {
                 Menu {
-                    ForEach(agents, id: \.id) { agent in
-                        Button {
-                            guard agent.id != self.currentAgentID else { return }
-                            viewModel.startNewChatDraft(agentID: agent.id)
-                        } label: {
-                            Label {
+                    Picker(selection: Binding(
+                        get: { self.currentAgentID },
+                        set: { agentID in
+                            guard agentID != self.currentAgentID else { return }
+                            viewModel.startNewChatDraft(agentID: agentID)
+                        })) {
+                            ForEach(agents, id: \.id) { agent in
                                 Text(verbatim: RootSidebar.agentDisplayName(agent))
                                     .font(OpenClawType.body)
-                            } icon: {
-                                if agent.id == self.currentAgentID {
-                                    Image(systemName: "checkmark")
-                                }
+                                    .tag(agent.id)
                             }
+                        } label: {
+                            Text("Agent").font(OpenClawType.body)
                         }
-                    }
+                        .pickerStyle(.inline)
                 } label: {
                     HStack(spacing: 6) {
                         Text(verbatim: selectedAgent.map(RootSidebar.agentDisplayName) ?? self.agentDisplayName)

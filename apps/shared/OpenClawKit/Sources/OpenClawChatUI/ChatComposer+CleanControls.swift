@@ -40,7 +40,7 @@ extension OpenClawChatComposer {
             Button {
                 self.fileImporterPresentation.wrappedValue = true
             } label: {
-                chatActionLabel(Text("File"), systemImage: "folder")
+                chatActionLabel(Text("File"), systemImage: "paperclip")
             }
             .disabled(!self.isAttachmentInputEnabled)
 

@@ -409,7 +409,7 @@ struct ChatInlineWidgetView: View {
                     .stroke(OpenClawChatTheme.muted.opacity(0.24), lineWidth: 1)
             }
             .contentShape(Rectangle())
-            .contextMenu {
+            .chatActionContextMenu {
                 Button {
                     self.requestSnapshot(for: .copy)
                 } label: {

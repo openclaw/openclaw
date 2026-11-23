@@ -73,7 +73,7 @@ struct ChatTalkButton: View {
         .accessibilityValue(self.accessibilityValue)
         .accessibilityIdentifier("chat-realtime-control")
         .help(self.helpText)
-        .contextMenu {
+        .chatActionContextMenu {
             if let selectInputDevice = self.control.selectInputDevice {
                 Button {
                     selectInputDevice(nil)

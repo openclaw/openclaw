@@ -41,6 +41,7 @@ struct ManualGatewaySecurityRows: View {
                 .font(OpenClawType.body)
         }
         .pickerStyle(.menu)
+        .tint(.primary)
         .disabled(self.presentation.requiresTLS)
 
         if let helperText = self.presentation.helperText {
@@ -192,6 +193,7 @@ struct SettingsBuildMetadataStrip: View {
                 }
             }
         }
+        .tint(.primary)
     }
 
     private var metadataRow: some View {

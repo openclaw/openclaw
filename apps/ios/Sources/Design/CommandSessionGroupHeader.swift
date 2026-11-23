@@ -89,6 +89,7 @@ struct CommandSessionGroupHeader<Accessory: View>: View {
             .accessibilityIdentifier("SessionGroup.Header.\(self.name)")
             .onTapGesture { self.toggle() }
             .contextMenu { self.menu }
+            .tint(.primary)
             if self.trailingCount != nil {
                 self.caret
                 self.accessory()

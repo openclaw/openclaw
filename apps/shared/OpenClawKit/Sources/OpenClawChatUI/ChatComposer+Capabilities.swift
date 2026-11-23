@@ -19,7 +19,7 @@ extension OpenClawChatComposer {
                 Button {
                     self.viewModel.clearComposerToolOverrides()
                 } label: {
-                    chatActionLabel(Text("Clear tool overrides"), systemImage: "xmark.circle")
+                    chatActionLabel(Text("Clear tool overrides"), systemImage: "arrow.counterclockwise")
                 }
                 .disabled(self.viewModel.composerClearToolOverridesDisabled)
                 .accessibilityHint(
@@ -64,11 +64,26 @@ extension OpenClawChatComposer {
     var cleanInlinePermissionMenu: some View {
         if self.viewModel.composerCapabilityControlsAvailable {
             Menu {
-                self.permissionButton(nil, title: String(localized: "Default (inherited)"))
-                ForEach(OpenClawChatPermissionMode.allCases, id: \.rawValue) { mode in
-                    self.permissionButton(mode, title: mode.displayName)
-                        .disabled(mode == .full && !self.viewModel.composerCapabilityCatalog.canSelectFullPermission)
+                Picker(selection: Binding(
+                    get: { self.viewModel.composerPermissionMode },
+                    set: { self.viewModel.selectComposerPermissionMode($0) }))
+                {
+                    Text(String(localized: "Default (inherited)"))
+                        .font(OpenClawChatTypography.body)
+                        .tag(OpenClawChatPermissionMode?.none)
+                        .accessibilityHint(self.viewModel.composerPermissionDisabledReason(nil) ?? "")
+                    ForEach(OpenClawChatPermissionMode.allCases, id: \.rawValue) { mode in
+                        Text(mode.displayName)
+                            .font(OpenClawChatTypography.body)
+                            .tag(Optional(mode))
+                            .disabled(mode == .full && !self.viewModel.composerCapabilityCatalog
+                                .canSelectFullPermission)
+                            .accessibilityHint(self.viewModel.composerPermissionDisabledReason(mode) ?? "")
+                    }
+                } label: {
+                    Text("Session permissions").font(OpenClawChatTypography.body)
                 }
+                .pickerStyle(.inline)
                 if !self.viewModel.composerCapabilityCatalog.canSelectFullPermission {
                     Text("Full permission requires operator.admin access.")
                         .font(OpenClawChatTypography.caption)
@@ -138,35 +153,29 @@ extension OpenClawChatComposer {
         }
     }
 
-    private func permissionButton(
-        _ mode: OpenClawChatPermissionMode?,
-        title: String) -> some View
+    /// The Gateway owns the value. Do not replay a toggle if a refreshed menu already has the requested state.
+    private func capabilityToggle(
+        _ value: @autoclosure @escaping @MainActor @Sendable () -> Bool,
+        toggle: @escaping @MainActor @Sendable () -> Void) -> Binding<Bool>
     {
-        let isSelected = self.viewModel.composerPermissionMode == mode
-        return Button {
-            self.viewModel.selectComposerPermissionMode(mode)
-        } label: {
-            chatActionLabel(Text(title), systemImage: isSelected ? "checkmark.circle.fill" : "circle")
-        }
-        .accessibilityValue(isSelected ? String(localized: "Selected") : String(localized: "Not selected"))
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .accessibilityHint(self.viewModel.composerPermissionDisabledReason(mode) ?? "")
+        Binding(get: value, set: {
+            if $0 != value() {
+                toggle()
+            }
+        })
     }
 
     private var composerWebSearchButton: some View {
-        let isEnabled = self.viewModel.composerWebSearchEnabled
-        return Button {
+        Toggle(isOn: self.capabilityToggle(self.viewModel.composerWebSearchEnabled) {
             self.viewModel.toggleComposerWebSearch()
-        } label: {
-            chatActionLabel(Text("Web Search"), systemImage: isEnabled ? "checkmark.circle.fill" : "circle")
+        }) {
+            chatActionLabel(Text("Web Search"), systemImage: "globe")
         }
         .disabled(
             !self.viewModel.composerCapabilityCatalog.webSearchAvailable ||
                 !self.viewModel.composerCapabilityCatalog.webSearchBaseEnabled ||
                 !self.viewModel.composerCapabilityCatalog.toolOverrideMutationAvailable ||
                 self.viewModel.composerCapabilityMutationDisabled)
-        .accessibilityValue(isEnabled ? String(localized: "On") : String(localized: "Off"))
-        .accessibilityAddTraits(isEnabled ? .isSelected : [])
         .accessibilityHint(self.viewModel.composerWebSearchMutationDisabledReason ?? "")
         .accessibilityIdentifier("chat-composer-web-search")
     }
@@ -184,21 +193,17 @@ extension OpenClawChatComposer {
                     .font(OpenClawChatTypography.body)
             } else {
                 ForEach(self.viewModel.composerCapabilityCatalog.skills) { skill in
-                    let isEnabled = self.viewModel.composerSkillEnabled(skill)
                     let statusMessage = self.viewModel.composerSkillStatusMessage(skill)
-                    Button {
+                    Toggle(isOn: self.capabilityToggle(self.viewModel.composerSkillEnabled(skill)) {
                         self.viewModel.toggleComposerSkill(skill)
-                    } label: {
-                        chatActionLabel(
-                            Text(statusMessage.map { "\(skill.name) — \($0)" } ?? skill.name),
-                            systemImage: isEnabled ? "checkmark.circle.fill" : "circle")
+                    }) {
+                        Text(statusMessage.map { "\(skill.name) — \($0)" } ?? skill.name)
+                            .font(OpenClawChatTypography.body)
                     }
                     .disabled(
                         !skill.baseEnabled || skill.missingDependencies || skill.blocked ||
                             !self.viewModel.composerCapabilityCatalog.toolOverrideMutationAvailable ||
                             self.viewModel.composerCapabilityMutationDisabled)
-                    .accessibilityValue(isEnabled ? String(localized: "On") : String(localized: "Off"))
-                    .accessibilityAddTraits(isEnabled ? .isSelected : [])
                     .accessibilityHint(
                         statusMessage ?? self.viewModel.composerToolOverrideMutationDisabledReason ?? "")
                 }
@@ -226,7 +231,7 @@ extension OpenClawChatComposer {
                 }
             }
         } label: {
-            chatActionLabel(Text("Connectors"), systemImage: "puzzlepiece.extension")
+            chatActionLabel(Text("Connectors"), systemImage: "powerplug")
         }
         .accessibilityIdentifier("chat-composer-connectors")
     }
@@ -234,18 +239,14 @@ extension OpenClawChatComposer {
     private func composerConnectorMenu(_ connector: OpenClawChatComposerConnector) -> some View {
         let isEnabled = self.viewModel.composerConnectorEnabled(connector)
         return Menu {
-            Button {
+            Toggle(isOn: self.capabilityToggle(self.viewModel.composerConnectorEnabled(connector)) {
                 self.viewModel.toggleComposerConnector(connector)
-            } label: {
-                chatActionLabel(
-                    Text("Enabled for this session"),
-                    systemImage: isEnabled ? "checkmark.circle.fill" : "circle")
+            }) {
+                Text("Enabled for this session").font(OpenClawChatTypography.body)
             }
             .disabled(
                 !self.viewModel.composerCapabilityCatalog.toolOverrideMutationAvailable ||
                     self.viewModel.composerCapabilityMutationDisabled)
-            .accessibilityValue(isEnabled ? String(localized: "On") : String(localized: "Off"))
-            .accessibilityAddTraits(isEnabled ? .isSelected : [])
             .accessibilityHint(self.viewModel.composerToolOverrideMutationDisabledReason ?? "")
 
             if let notice = connector.notice {
@@ -256,22 +257,18 @@ extension OpenClawChatComposer {
                 Divider()
                 Menu {
                     ForEach(connector.tools) { tool in
-                        let toolIsEnabled = self.viewModel.composerToolEnabled(
+                        Toggle(isOn: self.capabilityToggle(self.viewModel.composerToolEnabled(
                             server: connector.name,
-                            tool: tool.name)
-                        Button {
+                            tool: tool.name))
+                        {
                             self.viewModel.toggleComposerTool(server: connector.name, tool: tool.name)
-                        } label: {
-                            chatActionLabel(
-                                Text(tool.label),
-                                systemImage: toolIsEnabled ? "checkmark.circle.fill" : "circle")
+                        }) {
+                            Text(tool.label).font(OpenClawChatTypography.body)
                         }
                         .disabled(
                             !self.viewModel.composerCapabilityCatalog.toolAccessAvailable ||
                                 !self.viewModel.composerCapabilityCatalog.toolOverrideMutationAvailable ||
                                 self.viewModel.composerCapabilityMutationDisabled)
-                        .accessibilityValue(toolIsEnabled ? String(localized: "On") : String(localized: "Off"))
-                        .accessibilityAddTraits(toolIsEnabled ? .isSelected : [])
                         .accessibilityHint(self.viewModel.composerToolOverrideMutationDisabledReason ?? "")
                     }
                 } label: {
@@ -279,7 +276,8 @@ extension OpenClawChatComposer {
                 }
             }
         } label: {
-            chatActionLabel(Text(connector.name), systemImage: isEnabled ? "checkmark.circle.fill" : "circle")
+            // This row opens a submenu rather than toggling; keep its state visible before opening it.
+            chatActionLabel(Text(connector.name), systemImage: isEnabled ? "checkmark.circle" : "circle")
         }
         .accessibilityValue(isEnabled ? String(localized: "On") : String(localized: "Off"))
         .accessibilityAddTraits(isEnabled ? .isSelected : [])

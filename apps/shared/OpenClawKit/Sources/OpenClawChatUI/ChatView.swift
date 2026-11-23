@@ -999,7 +999,7 @@ extension OpenClawChatView {
                 self.hoveredMessageID = nil
             }
         }
-        row.contextMenu { ChatDeferredContent { self.messageMenuActions(for: actionMessage) } }
+        row.chatActionContextMenu { ChatDeferredContent { self.messageMenuActions(for: actionMessage) } }
     }
 
     private func messageActionsMenu(for message: OpenClawChatMessage) -> some View {
