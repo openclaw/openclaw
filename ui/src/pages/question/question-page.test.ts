@@ -30,7 +30,7 @@ const reply = (id = "q1") => ({
 });
 
 async function mount(request: GatewayRequestHandler) {
-  const { gateway, publish } = createApplicationGateway();
+  const { gateway, publish, publishEvent } = createApplicationGateway();
   const update = (patch: Partial<ApplicationGatewaySnapshot>) =>
     publish({ ...gateway.snapshot, ...patch });
   update({ client: createTestGatewayClient(request), phase: "connected" });
@@ -40,7 +40,7 @@ async function mount(request: GatewayRequestHandler) {
   provider.append(page);
   document.body.append(provider);
   await settle(page);
-  return { page, update };
+  return { page, update, publishEvent };
 }
 
 async function settle(page: QuestionPage) {
@@ -164,4 +164,21 @@ it("keeps confirmed missing questions unavailable without a retry", async () => 
   const { page } = await mount(vi.fn().mockRejectedValue(error));
   await waitForSolid(() => expect(page.textContent).toContain("Unavailable"));
   expect(retry(page)).toBeNull();
+});
+
+it("recovers a missing standalone question when restart restoration announces it", async () => {
+  const request = vi.fn().mockRejectedValue(
+    new GatewayRequestError({
+      code: "INVALID_REQUEST",
+      message: "question not found",
+      details: { reason: "QUESTION_NOT_FOUND" },
+    }),
+  );
+  const { page, publishEvent } = await mount(request);
+  await waitForSolid(() => expect(page.textContent).toContain("Unavailable"));
+  publishEvent({ type: "event", event: "question.requested", payload: reply().question });
+  await waitForSolid(() => expect(page.querySelector("textarea")).not.toBeNull());
+  await questionPanelIn(page);
+  expect(page.querySelector("textarea")).not.toBeNull();
+  expect(request).toHaveBeenCalledTimes(1);
 });

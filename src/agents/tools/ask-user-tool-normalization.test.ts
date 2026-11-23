@@ -144,10 +144,11 @@ it.each([true, false])(
   "keeps a non-manual question named required_action optional (free text: %s)",
   (isOther) => {
     const { questions } = normalizeAskUserParams(withQuestion({ id: "required_action" }));
+    questions[0]!.isOther = isOther;
     expect(
       formatRestartedQuestionResult({
         id: "ordinary",
-        questions: questions.map((question) => ({ ...question, isOther })),
+        questions,
         createdAtMs: 1,
         expiresAtMs: 2,
         status: "expired",

@@ -144,7 +144,10 @@ async function persistRunningSessions(
               sessionId: entry.sessionId,
             });
             preserve.push({ session, preserve: queued.preserve });
-            const questions = markerQuestions(params.questions, sessionKey, entry.sessionId);
+            const questions = markerQuestions(params.questions, {
+              agentId: session.agentId,
+              sessionKey,
+            });
             if (!session.needsResume && !questions.length) {
               summary.record(
                 session.agentId,
@@ -496,7 +499,7 @@ async function resumeRestartStore(
           log.warn(
             `Parked restart resume (yield-waiting): ${truncateUtf16Safe(JSON.stringify({ agentId, sessionKey }), 1024)}`,
           );
-        } else if (restoreMarkerQuestions(context, { ...entry, agentId, sessionKey }, marker)) {
+        } else if (await restoreMarkerQuestions(context, { agentId, sessionKey }, marker)) {
           summary.record(agentId, sessionKey, "awaiting-question");
         } else {
           try {

@@ -14,7 +14,7 @@ export function terminalAnswer(prompt: QuestionPrompt, question: QuestionPanelQu
     // A Gateway restart dropped it (see markRecoveryUnavailable); name that cause.
     return t(
       prompt.resolvedBy === "gateway-restart"
-        ? "chat.questions.expiredGatewayRestart"
+        ? "chat.questions.expiredRestart"
         : "chat.questions.expired",
     );
   }

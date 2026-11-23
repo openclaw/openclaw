@@ -606,9 +606,12 @@ describe("refreshPendingQuestions", () => {
         throw questionNotFoundError();
       });
       const { state, client } = createConnectedState(request);
-      setQuestionPromptClient(state, client, "boot-a");
+      const hello = { server: { bootId: "boot-a" } };
+      Object.assign(client, { hello });
+      setQuestionPromptClient(state, client);
       setQuestionPromptClient(state, null);
-      setQuestionPromptClient(state, client, bootId);
+      hello.server.bootId = bootId;
+      setQuestionPromptClient(state, client);
 
       refreshPendingQuestionsWithRetry(state, client);
       await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe(status));

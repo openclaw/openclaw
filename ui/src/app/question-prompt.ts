@@ -61,8 +61,8 @@ type QuestionPromptState = QuestionClientResolutionOwner & {
   expiryTimer: ReturnType<typeof globalThis.setTimeout> | null;
   refreshRetryTimer: ReturnType<typeof globalThis.setTimeout> | null;
   /** Boot id from the connected Gateway's hello; a change proves it restarted. */
-  gatewayBootId?: string;
-  gatewayRestarted: boolean;
+  bootId?: string;
+  restarted?: boolean;
   onChange: () => void;
   subscribe: (listener: () => void) => () => void;
 };
@@ -90,13 +90,11 @@ function questionAnswersEqual(
   if (!left || !right) {
     return false;
   }
-  const leftIds = Object.keys(left.answers).toSorted();
-  const rightIds = Object.keys(right.answers).toSorted();
+  const leftIds = Object.keys(left.answers);
   return (
-    leftIds.length === rightIds.length &&
+    leftIds.length === Object.keys(right.answers).length &&
     leftIds.every(
-      (id, index) =>
-        id === rightIds[index] &&
+      (id) =>
         left.answers[id]?.length === right.answers[id]?.length &&
         left.answers[id]?.every((answer, answerIndex) =>
           Object.is(answer, right.answers[id]?.[answerIndex]),
@@ -135,7 +133,6 @@ export function createQuestionPromptState(onChange: () => void = () => {}): Ques
     revision: 0,
     expiryTimer: null,
     refreshRetryTimer: null,
-    gatewayRestarted: false,
     onChange: () => {
       snapshot = [...state.prompts.values()].toSorted(
         (left, right) => left.createdAtMs - right.createdAtMs || left.id.localeCompare(right.id),
@@ -325,9 +322,9 @@ function markRecoveryUnavailable(state: QuestionPromptState, prompt: QuestionPro
   // no longer actionable, but not whether it was answered, cancelled, or expired.
   // Only a Gateway restart drops a still-live pending prompt with no tombstone; after an
   // ordinary disconnect the tombstone simply aged out, so the outcome stays unknown.
-  const dropped = state.gatewayRestarted && prompt.status === "pending" && !prompt.locallyExpired;
-  prompt.status = dropped ? "expired" : "unavailable";
-  prompt.resolvedBy = dropped ? "gateway-restart" : undefined;
+  prompt.resolvedBy =
+    state.restarted && prompt.status === "pending" ? "gateway-restart" : undefined;
+  prompt.status = prompt.resolvedBy ? "expired" : "unavailable";
   clearSecretQuestionDrafts(prompt.questions, prompt.drafts);
   prompt.answers = undefined;
   prompt.answeredElsewhere = false;
@@ -470,12 +467,12 @@ export function refreshPendingQuestionsWithRetry(
 export function setQuestionPromptClient(
   state: QuestionPromptState,
   client: QuestionClient | null,
-  gatewayBootId?: string,
 ): void {
   clearQuestionPromptTimer(state, "refreshRetryTimer");
-  if (client && gatewayBootId) {
-    state.gatewayRestarted = Boolean(state.gatewayBootId && state.gatewayBootId !== gatewayBootId);
-    state.gatewayBootId = gatewayBootId;
+  const bootId = client?.hello?.server?.bootId;
+  if (bootId) {
+    state.restarted = Boolean(state.bootId && state.bootId !== bootId);
+    state.bootId = bootId;
   }
   if (state.client === client) {
     return;

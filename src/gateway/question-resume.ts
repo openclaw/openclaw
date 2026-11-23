@@ -8,12 +8,16 @@ import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
 } from "../auto-reply/reply/session-event-handoff.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayDetachedWorkAdmission } from "../process/gateway-work-admission.js";
 import type { QuestionObservation, ResumableQuestion } from "./question-manager.js";
-import { questionBroadcastOptions } from "./question-session-access.js";
+import {
+  questionBroadcastOptions,
+  withPreparedQuestionSessionFacts,
+} from "./question-session-access.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
@@ -21,7 +25,6 @@ const log = createSubsystemLogger("gateway/questions");
 type AskingSession = {
   agentId: string;
   sessionKey: string;
-  sessionId: string;
   operatorSource?: ResumableQuestion["operatorSource"];
 };
 
@@ -30,32 +33,24 @@ type AskingSession = {
  * their resume and parked facts win. Graceful shutdown writes them; a crash loses them.
  */
 export function questionSessions(questions: readonly ResumableQuestion[] = []) {
-  return questions.flatMap(({ record, sessionId, operatorSource }) =>
-    record.sessionKey
-      ? [
-          {
-            sessionKey: record.sessionKey,
-            agentId: record.agentId,
-            sessionId,
-            operatorSource,
-            needsResume: false,
-          },
-        ]
-      : [],
-  );
+  return questions.map(({ agentId, sessionKey, operatorSource }) => ({
+    agentId,
+    sessionKey,
+    operatorSource,
+    needsResume: false,
+  }));
 }
 
 /**
- * The pending questions a session generation's restart marker carries. Questions from
+ * The pending questions a chat's restart marker carries. Questions from
  * child sessions never match their root's key: children do not resume independently.
  */
 export function markerQuestions(
   questions: readonly ResumableQuestion[] | undefined,
-  sessionKey: string,
-  sessionId: string,
+  session: AskingSession,
 ): QuestionRecord[] {
-  return (questions ?? []).flatMap(({ record, sessionId: asked }) =>
-    record.sessionKey === sessionKey && asked === sessionId ? [record] : [],
+  return (questions ?? []).flatMap(({ record, agentId, sessionKey }) =>
+    agentId === session.agentId && sessionKey === session.sessionKey ? [record] : [],
   );
 }
 
@@ -64,44 +59,75 @@ export function markerQuestions(
  * Clients that reconnected before this ran saw the question as missing, so it is announced
  * again, and its outcome is published, to the recipients the original request would reach.
  */
-export function restoreMarkerQuestions(
+export async function restoreMarkerQuestions(
   context: GatewayRequestContext,
   session: AskingSession,
   marker: { questions?: QuestionRecord[]; operatorSource?: ResumableQuestion["operatorSource"] },
-): boolean {
+): Promise<boolean> {
   const manager = context.questionManager;
-  const publish = (event: string, payload: unknown, observation: QuestionObservation | null) => {
-    const cfg = context.getRuntimeConfig();
-    let publishing = true;
-    const recipients = questionBroadcastOptions({
-      observation,
-      ...(event === "question.requested" ? { expectedRecord: observation?.record } : {}),
-      cfg,
-      isPublishing: () => publishing,
-    });
-    context.broadcast(event, payload, {
-      ...(cfg.gateway?.roles
-        ? { sessionKeys: [session.sessionKey], agentId: session.agentId }
-        : {}),
-      ...recipients,
-    });
-    publishing = false;
+  const publish = async (
+    event: string,
+    payload: unknown,
+    observation: QuestionObservation | null,
+  ) => {
+    try {
+      await withPreparedQuestionSessionFacts(
+        context,
+        [session],
+        ([prepared]) => {
+          const cfg = context.getRuntimeConfig();
+          let publishing = true;
+          const recipients = questionBroadcastOptions({
+            observation,
+            prepared,
+            ...(event === "question.requested" ? { expectedRecord: observation?.record } : {}),
+            cfg,
+            isPublishing: () => publishing,
+          });
+          try {
+            context.broadcast(event, payload, {
+              ...(cfg.gateway?.roles
+                ? { sessionKeys: [session.sessionKey], agentId: session.agentId }
+                : {}),
+              ...recipients,
+            });
+          } finally {
+            publishing = false;
+          }
+        },
+        {
+          assertCurrent: () => {
+            if (!observation?.isCurrent()) {
+              throw new Error("Question publication owner retired");
+            }
+          },
+        },
+      );
+    } catch (error) {
+      // Events are projections; the list/get owner retains the outcome if publication fails.
+      log.warn(`Restored question event ${event} could not publish: ${formatErrorMessage(error)}`);
+    }
   };
   const resumedSession = { ...session, operatorSource: marker.operatorSource };
   let restored = false;
   for (const record of marker.questions ?? []) {
-    const onResolved = (event: QuestionResolvedEvent, observation: QuestionObservation) => {
-      publish("question.resolved", event, observation);
+    const onResolved = async (event: QuestionResolvedEvent, observation: QuestionObservation) => {
+      await publish("question.resolved", event, observation);
       void resumeRestoredQuestion(context, resumedSession, observation.record);
     };
     if (
       manager?.restore(
-        { record, sessionId: session.sessionId, operatorSource: marker.operatorSource },
+        {
+          record,
+          agentId: session.agentId,
+          sessionKey: session.sessionKey,
+          operatorSource: marker.operatorSource,
+        },
         onResolved,
       )
     ) {
       restored = true;
-      publish("question.requested", record, manager.observe(record.id, record));
+      await publish("question.requested", record, manager.observe(record.id, record));
     }
   }
   return restored;
@@ -116,26 +142,32 @@ async function resumeRestoredQuestion(
   target: AskingSession,
   record: QuestionRecord,
 ): Promise<void> {
-  const { agentId, sessionKey, sessionId } = target;
+  const { agentId, sessionKey } = target;
   const contextKey = `question:${record.id}`;
   const text = formatRestartedQuestionResult(record);
   let authority: Awaited<ReturnType<typeof prepareSessionSystemTurnAuthority>>;
   try {
     await runWithGatewayDetachedWorkAdmission(async () => {
+      // Select the chat's current transcript at admission; a reset does not change its key.
+      const entry = await readSessionEntryReadOnlyInWorker({
+        agentId,
+        sessionKey,
+        projection: "list",
+      });
+      if (!entry) {
+        throw new Error("The asking conversation is unavailable.");
+      }
       authority = await prepareSessionSystemTurnAuthority({
         context,
         agentId,
         sessionKey,
-        sessionId,
+        sessionId: entry.sessionId,
         preserveRecordedSource: true,
         operatorSource: target.operatorSource,
       });
       const captured = await captureSessionEventTargetForHost(agentId, sessionKey, {
         operatorAuthority: authority?.authority,
       });
-      if (captured.sessionId !== sessionId) {
-        throw new Error("the conversation was reset");
-      }
       const receipt = withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
         enqueueSessionEventForHost(text, {
           agentId,

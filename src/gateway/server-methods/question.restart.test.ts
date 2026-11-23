@@ -6,6 +6,8 @@ import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.
 import { readSessionTranscriptContextMessages } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import { preparePhysicalSessionStorePath } from "../../config/sessions/session-store-path.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { QuestionManager } from "../question-manager.js";
@@ -14,9 +16,9 @@ import {
   persistRunningSessionsForRestart,
   resumeMarkedSessions,
 } from "../session-restart-resume.js";
+import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import * as systemTurnAuthority from "../session-system-turn-authority.js";
 import * as support from "./question.test-support.js";
-import type { GatewayClient } from "./types.js";
 
 support.installQuestionTestHooks();
 const cfg = { agents: { entries: { main: {} } } };
@@ -32,12 +34,20 @@ async function restartGateway() {
   await resumeMarkedSessions({ context, signal: new AbortController().signal, log: { warn() {} } });
 }
 
-function withAskingSession(run: () => Promise<void>) {
+function withAskingSession(run: (readerId: string) => Promise<void>) {
   return withOpenClawTestState({ scenario: "minimal" }, async () => {
     // Session markers are written and read by real state workers.
     vi.useRealTimers();
     setRuntimeConfigSnapshot(cfg);
-    replaceSessionEntrySync({ agentId, sessionKey }, { sessionId: "asking", updatedAt: 1 });
+    const reader = ensureProfileForEmail("question-reader@example.test");
+    replaceSessionEntrySync(
+      { agentId, sessionKey },
+      {
+        sessionId: "asking",
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: reader.id },
+      },
+    );
     registerAgentRunContext(runId, { sessionKey, agentId, sessionId: "asking" });
     // mock-isolation: a session turn's recorded principal is outside this boundary.
     vi.spyOn(systemTurnAuthority, "prepareSessionSystemTurnAuthority").mockResolvedValue(undefined);
@@ -47,15 +57,23 @@ function withAskingSession(run: () => Promise<void>) {
       settled: new Promise(() => {}),
       cancel: () => false,
     });
-    await run();
+    const profiles = await prepareUserProfileCatalog();
+    try {
+      await run(reader.id);
+    } finally {
+      profiles.release();
+    }
   });
 }
 
 it("keeps an ordinary question answerable across restarts and continues the session once", () =>
-  withAskingSession(async () => {
+  withAskingSession(async (readerId) => {
     const enqueue = vi.mocked(sessionEvents.enqueueSessionEventForHost);
     // A second client that did not ask or answer: what restored-question events reach it.
-    const otherClient = { connect: { scopes: ["operator.admin"] } } as GatewayClient;
+    const otherClient = sharingPolicyClient({
+      user: readerId,
+      scopes: ["operator.questions", "operator.read"],
+    });
     const reached: unknown[][] = [];
     support.broadcast.mockImplementation((event, payload, options) => {
       if (options?.questionRecipient?.(otherClient)) {
@@ -68,6 +86,7 @@ it("keeps an ordinary question answerable across restarts and continues the sess
       { client: support.adminRequestClient },
     );
     const id = (requested[1] as { id: string }).id;
+    reached.length = 0;
     await restartGateway();
     // A second restart before the answer carries the restored question again.
     await restartGateway();
@@ -81,6 +100,15 @@ it("keeps an ordinary question answerable across restarts and continues the sess
     ]);
     // The generic restart resume turn is skipped while the question waits.
     expect(enqueue).not.toHaveBeenCalled();
+    // A new transcript in the same logical chat must not invalidate its pending question.
+    replaceSessionEntrySync(
+      { agentId, sessionKey },
+      {
+        sessionId: "current",
+        updatedAt: 2,
+        createdActor: { type: "human", source: "profile", id: readerId },
+      },
+    );
     const answer = { id, answers: { answers: { destination: ["Paris"] } } };
     expect((await support.callQuestionRpc("question.resolve", answer))[0]).toBe(true);
     // Other clients see the answer, as they would for a live question.

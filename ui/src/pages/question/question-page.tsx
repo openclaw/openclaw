@@ -34,14 +34,6 @@ registerEnglishCatalog(registerApprovalsEnglish);
 
 type QuestionPageRequestError = "connection" | "load" | "unavailable" | null;
 
-class QuestionReadError extends Error {
-  readonly kind: Exclude<QuestionPageRequestError, null>;
-  constructor(kind: Exclude<QuestionPageRequestError, null>) {
-    super(kind);
-    this.kind = kind;
-  }
-}
-
 type QuestionPageProps = { questionId: string };
 
 const questionIdHandlers = new WeakMap<HTMLElement, () => void>();
@@ -131,7 +123,13 @@ function QuestionPageContent(
     const stopGateway = context.gateway.subscribe(applyGatewaySnapshot);
     const stopGatewayEvents = context.gateway.subscribeEvents((event) => {
       if (isRecord(event.payload) && event.payload.id === questionId()) {
-        handleQuestionPromptEvent(questionState, event);
+        if (
+          handleQuestionPromptEvent(questionState, event) &&
+          event.event === "question.requested"
+        ) {
+          operationGeneration += 1;
+          beginRead()(null);
+        }
       }
     });
     applyGatewaySnapshot(context.gateway.snapshot);
@@ -163,11 +161,7 @@ function QuestionPageContent(
     }
     operationGeneration += 1;
     clientOwner = nextClient;
-    setQuestionPromptClient(
-      questionState,
-      canUseQuestionPrompts(snapshot) ? nextClient : null,
-      snapshot.hello?.server?.bootId,
-    );
+    setQuestionPromptClient(questionState, canUseQuestionPrompts(snapshot) ? nextClient : null);
     if (!nextClient) {
       if (listQuestionPrompts(questionState).some((candidate) => candidate.id === questionId())) {
         failRead("connection");
@@ -242,7 +236,7 @@ function QuestionPageContent(
         cancelled: "chat.questions.skipped",
         expired:
           value.resolvedBy === "gateway-restart"
-            ? "chat.questions.expiredGatewayRestart"
+            ? "chat.questions.expiredRestart"
             : "chat.questions.expired",
         pending: "chat.questions.unavailable",
         unavailable: "chat.questions.unavailable",
@@ -364,38 +358,22 @@ function QuestionPageContent(
     );
   }
   function ReadyFrame() {
-    const ready = createMemo(() =>
-      request().completion.then((error) => {
-        if (error) {
-          throw new QuestionReadError(error);
-        }
-        return true;
-      }),
-    );
-    return (
-      <Show when={ready()}>
-        <Frame state={null} />
-      </Show>
-    );
+    const ready = createMemo(() => request().completion);
+    return <Frame state={ready()} />;
   }
+
   return (
     <Loading on={request()} fallback={<Frame state="loading" />}>
       <Errored
-        fallback={(error, reset) => {
-          const state = () => {
-            const cause = error();
-            return cause instanceof QuestionReadError ? cause.kind : "load";
-          };
-          return (
-            <Frame
-              state={state()}
-              retry={() => {
-                retry();
-                reset();
-              }}
-            />
-          );
-        }}
+        fallback={(_error, reset) => (
+          <Frame
+            state="load"
+            retry={() => {
+              retry();
+              reset();
+            }}
+          />
+        )}
       >
         <ReadyFrame />
       </Errored>

@@ -100,7 +100,8 @@ type QuestionEntry = {
 /** A pending question the session restart marker carries to the next Gateway. */
 export type ResumableQuestion = {
   record: QuestionRecord;
-  sessionId: string;
+  agentId: string;
+  sessionKey: string;
   operatorSource?: import("./operator-run-recovery-source.codec.js").QueuedOperatorRecoverySource;
 };
 
@@ -228,9 +229,10 @@ export class QuestionManager {
       params.sessionKey &&
       !params.questions.some((question) => question.presentation)
     ) {
-      const sessionId = params.runId ? getAgentRunContext(params.runId)?.sessionId : undefined;
-      if (sessionId) {
-        entry.resume = { sessionId };
+      const run = params.runId ? getAgentRunContext(params.runId) : undefined;
+      const agentId = run?.agentId ?? params.agentId;
+      if (run?.sessionKey && agentId) {
+        entry.resume = { agentId, sessionKey: run.sessionKey };
       }
     }
     this.entries.set(record.id, entry);
@@ -269,7 +271,7 @@ export class QuestionManager {
    */
   restore(
     { record, ...resume }: ResumableQuestion,
-    onResolved: (event: QuestionResolvedEvent, observation: QuestionObservation) => void,
+    onResolved: NonNullable<QuestionManagerRequest["onResolved"]>,
   ): boolean {
     if (this.closed || this.entries.has(record.id)) {
       return false;
