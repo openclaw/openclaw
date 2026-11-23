@@ -121,7 +121,7 @@ export async function prepareRestartCompletionCustody(
       ) {
         return false;
       }
-      const runs = getSubagentRunsForRequesterSession(row.session_key);
+      const runs = [...getSubagentRunsForRequesterSession(row.session_key)];
       const runsById = new Map(runs.map((entry) => [entry.runId, entry]));
       // Only a freshly recovered exact cohort can retain its input; orphaned or
       // refused sources still go through normal queued-input failure handling.
