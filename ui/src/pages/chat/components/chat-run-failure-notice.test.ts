@@ -2,19 +2,7 @@
 import { createComponent } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
-import {
-  beginModelCatalogRead,
-  publishModelCatalogResult,
-} from "../../../lib/model-catalog-cache.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
-import {
-  createApplicationGateway,
-  createApplicationGatewaySnapshot,
-} from "../../../test-helpers/application-context-fixtures.ts";
-import {
-  createGatewayRequestMock,
-  createTestGatewayClient,
-} from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid as mountStatefulSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -185,19 +173,15 @@ it("shows a repeat count only for repeated failures", () => {
 it("names a provider's billing problem with its declared label and sends its fix to Models", () => {
   const navigate = vi.fn<ApplicationContext["navigate"]>();
   const onRetryRun = vi.fn<(runId: string) => void>();
-  const client = createTestGatewayClient(createGatewayRequestMock());
-  const { gateway } = createApplicationGateway(createApplicationGatewaySnapshot({ client }));
-  // The provider plugin's declared label arrives through the connection's model catalog.
-  publishModelCatalogResult(
-    beginModelCatalogRead(client, {}),
-    { refresh: false },
-    { models: [], providerPresentations: { acme: { providerName: "Acme Cloud Plan" } } },
-  );
+  // The provider plugin's declared label arrives on the chat's model catalog rows.
+  const modelCatalog = [
+    { id: "acme-large", name: "Acme Large", provider: "acme", providerName: "Acme Cloud Plan" },
+  ];
   const draw = (failoverReason: string) =>
     mountSolid(
       () =>
         createComponent(ApplicationProvider, {
-          value: { navigate, gateway } as unknown as ApplicationContext,
+          value: { navigate } as unknown as ApplicationContext,
           get children() {
             return createComponent(ChatNotice, {
               item: {
@@ -209,6 +193,7 @@ it("names a provider's billing problem with its declared label and sends its fix
                 },
               },
               recovery: { failureActionsRunId: "run-a", onRetryRun },
+              modelCatalog,
             });
           },
         }),

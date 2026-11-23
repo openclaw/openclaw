@@ -12,23 +12,31 @@ export function providerIconFingerprint(icon: NonNullable<ModelProviderConfig["i
 }
 
 /**
- * Gateway projection only: presentation never enters inference identities or model references.
- * The user's configured provider name wins; otherwise the provider plugin's declared label.
+ * Each provider plugin's declared label by provider id. Catalog rows carry it as `providerName`;
+ * `resolveProviderPresentation`'s configured name replaces it.
  */
+export function readDeclaredProviderNames(
+  pluginRegistry: Pick<PluginRegistry, "providers"> | undefined,
+): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const { provider } of pluginRegistry?.providers ?? []) {
+    const label = provider.label.trim();
+    if (label) {
+      names.set(normalizeProviderId(provider.id), label);
+    }
+  }
+  return names;
+}
+
+/** Gateway projection only: presentation never enters inference identities or model references. */
 export function resolveProviderPresentation(
   cfg: OpenClawConfig,
   providerId: string,
-  pluginRegistry?: Pick<PluginRegistry, "providers">,
 ): ProviderPresentation {
   const provider = resolveMergedModelProviderConfig(cfg, providerId);
   const icon = provider?.icon;
-  const providerName =
-    provider?.name ||
-    pluginRegistry?.providers
-      .find((entry) => normalizeProviderId(entry.provider.id) === providerId)
-      ?.provider.label.trim();
   return {
-    ...(providerName ? { providerName } : {}),
+    ...(provider?.name ? { providerName: provider.name } : {}),
     ...(icon
       ? {
           providerIcon:

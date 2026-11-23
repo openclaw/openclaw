@@ -5,6 +5,10 @@ import {
   type RunFailureCause,
 } from "../../../../../src/shared/run-failure-notice.js";
 import { formatWebUiIconErrorText } from "../../../components/error-presentation.ts";
+import {
+  providerDisplayLabel,
+  type ProviderPresentation,
+} from "../../../components/provider-icon-data.ts";
 import { ReportIssueLink } from "../../../components/report-issue-link.tsx";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -12,7 +16,6 @@ import { Popover, type PopoverHandle } from "../../../components/solid/popover.t
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
-import { useProviderDisplayLabel } from "../../../lib/reactive/provider-presentation.tsx";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
 import type { FailedMessageEditSource } from "../failed-message-edit.ts";
@@ -44,6 +47,8 @@ export function ChatRunFailureNotice(props: {
   feedback?: ControlUiSurfaceProps["run-failure-feedback"];
   summary: string;
   cause?: RunFailureCause;
+  /** The cause provider's presentation from the chat's model catalog. */
+  presentation?: Pick<ProviderPresentation, "providerName">;
   repeatCount?: number;
   onRetry?: () => void;
   onStartNewSession?: () => void;
@@ -55,11 +60,10 @@ export function ChatRunFailureNotice(props: {
   const [open, setOpen] = createSignal(false);
   const [placement, setPlacement] = createSignal<"bottom" | "top">("bottom");
   let panel: PopoverHandle | undefined;
-  const providerDisplayLabel = useProviderDisplayLabel();
   const fixTitle = () => props.cause && FIX_TITLES.get(props.cause.failoverReason!);
   const title = () =>
     t(`chat.recovery.${fixTitle() ?? "failedTitle"}`, {
-      provider: providerDisplayLabel(props.cause?.provider ?? ""),
+      provider: providerDisplayLabel(props.cause?.provider ?? "", props.presentation),
     });
   const app = useOptionalApplication();
   const openModels = () => (app && fixTitle() ? props.cause?.provider : undefined);

@@ -18,7 +18,6 @@ import { ModelAccountConnectAuthorityError } from "../model-account-connect-erro
 import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
 import { authorizeCurrentOperatorRoleScopes } from "../operator-role-policy.js";
 import { READ_SCOPE, SESSION_READ_SCOPE } from "../operator-scopes.js";
-import { readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { projectModelFastModeCatalog } from "../session-fast-mode-presentation.js";
 import { sessionModelRevision } from "../session-model-revision.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
@@ -155,9 +154,6 @@ export const modelsHandlers: GatewayRequestHandlers = {
                 ...listParams(),
                 publicationScope: preparedScope,
               }));
-            // Provider plugins name their providers from the registry this catalog was prepared with.
-            const pluginRegistry = (await readPreparedCatalog(context, resolved.agentId))
-              ?.pluginRegistry;
             const runtimeOwnership =
               scope && params.view !== "provider-config"
                 ? await readSessionRuntimeOwnershipAsync({
@@ -206,7 +202,6 @@ export const modelsHandlers: GatewayRequestHandlers = {
                   // Settings reads the configured catalog; only unrestricted whole-catalog
                   // reads may also disclose configured providers with no model rows.
                   params.view !== "all" && !params.provider && !scope && !policy,
-                  pluginRegistry,
                 ),
                 undefined,
               );
