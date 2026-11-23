@@ -138,21 +138,12 @@ export function resolveCronMutationCommitGuard(
       ?.capturesRuntimeAuthority === false
       ? creatorGrant
       : undefined;
-  if (
-    !jobScope &&
-    !manageAll &&
-    !requesterGrant &&
-    !callerAuthority?.sessionMutationCommitGuard &&
-    !callerAuthority?.hasCurrentClientAuthority
-  ) {
+  if (!jobScope && !manageAll && !requesterGrant && !callerAuthority?.sessionMutationCommitGuard) {
     return undefined;
   }
   let consumedRequester: ReturnType<typeof consumeCronCreatorAuthorityGrant> | undefined;
   return bindGatewayDeviceRevocation(() => {
     callerAuthority?.sessionMutationCommitGuard?.();
-    if (callerAuthority?.hasCurrentClientAuthority?.() === false) {
-      throw new TypeError("Gateway caller authority is no longer active.");
-    }
     manageAll?.();
     if (jobScope) {
       const job = context.cron.getJob(jobScope.jobId);
