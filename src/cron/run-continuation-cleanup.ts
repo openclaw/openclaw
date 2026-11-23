@@ -18,6 +18,7 @@ import {
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import { preparePersonalSessionPins } from "../state/user-preferences-session-pins.js";
 import { prepareCronDescendantDeletion } from "./isolated-agent/run-subagent-registry.runtime.js";
 
 function canRemoveCronRunContinuation(marker: SessionEntry["cronRunContinuation"]): boolean {
@@ -108,6 +109,13 @@ export async function removeCronRunContinuationSessionIfIdle(
       ) {
         return;
       }
+      const personalPins = await preparePersonalSessionPins({
+        path: context.admission.databasePath,
+        env: context.environment,
+      });
+      if (personalPins.sessionKeys.includes(sessionKey)) {
+        return;
+      }
       const descendants = await prepareCronDescendantDeletion([sessionKey], context);
       assertCurrent();
       if (descendants.hasUnsettled(sessionKey)) {
@@ -116,8 +124,14 @@ export async function removeCronRunContinuationSessionIfIdle(
       await deleteSessionEntryLifecycle({
         agentId,
         env: context.environment,
-        commitGuard: () => {
+        commitGuard: (operation) => {
           assertCurrent();
+          if (!personalPins.isCurrent()) {
+            throw new Error("Personal session pins changed before continuation cleanup");
+          }
+          if (operation) {
+            personalPins.retainOperation(operation);
+          }
           if (
             descendants.hasUnsettled(sessionKey) ||
             hasPendingGeneratedMediaTaskForSessionKey(sessionKey)

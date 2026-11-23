@@ -103,7 +103,7 @@ async function checkAliasConflict(batch: boolean, signal: AbortSignal, requestCa
             targets: [{ key: siblings[0]! }, { key: requestedKey }, { key: siblings[1]! }],
             patch: { unread: false },
           }
-        : { key: conflictingAlias, pinned: true },
+        : { key: conflictingAlias, color: "purple" },
       respond,
       context: patchContext({ getRuntimeConfig: () => cfg }),
     } as never);
@@ -131,7 +131,7 @@ async function checkAliasConflict(batch: boolean, signal: AbortSignal, requestCa
     } else {
       expect(respond).toHaveBeenCalledWith(false, undefined, unavailableError);
     }
-    const unchangedField = batch ? "lastReadAt" : "pinnedAt";
+    const unchangedField = batch ? "lastReadAt" : "color";
     expect(readEntry(canonicalKey)).toMatchObject({ sessionId: `${prefix}-canonical` });
     expect(readEntry(canonicalKey)).not.toHaveProperty(unchangedField);
     expect(readEntry(conflictingAlias)).toMatchObject({ sessionId: `${prefix}-conflict` });

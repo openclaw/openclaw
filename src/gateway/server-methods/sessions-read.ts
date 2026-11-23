@@ -55,6 +55,11 @@ import {
 import { withPreparedSessionResolve } from "../sessions-resolve.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { createPreparedReadHandler } from "./prepared-read.js";
+import {
+  PERSONAL_PIN_PROFILE_REQUIRED,
+  readRequesterSessionPins,
+  sessionPinRequester,
+} from "./session-pin-requester.js";
 import { startSessionListDiagnostics } from "./sessions-list-diagnostics.js";
 import { sessionMaintenanceHandlers } from "./sessions-maintenance.js";
 import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
@@ -362,8 +367,23 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         return undefined;
       }
       const projection = requireSessionRowProjection(context);
-      const assertCurrent = () => args.sessionMutationAuthorization?.assertCurrent();
+      const owner = sessionPinRequester(args);
+      if (!owner && params.pinned !== undefined) {
+        respondToCaller(
+          false,
+          undefined,
+          errorShape(ErrorCodes.FORBIDDEN, PERSONAL_PIN_PROFILE_REQUIRED),
+        );
+        diagnostics?.finish("returned");
+        return undefined;
+      }
+      let pins: Awaited<ReturnType<typeof readRequesterSessionPins>> | undefined;
+      const assertCurrent = () => {
+        args.sessionMutationAuthorization?.assertCurrent();
+        pins?.assertCurrent();
+      };
       return {
+        shareable: !owner,
         respond: respondToCaller,
         assertCurrent,
         beforeRespond: () => {
@@ -377,7 +397,9 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         },
         release: (outcome) => diagnostics?.finish(outcome),
         run: async (respond) => {
+          pins = owner && (await readRequesterSessionPins(owner));
           await listProjectedSessions({
+            personalPins: pins?.ranks ?? new Map(),
             projection,
             opts: params,
             context,

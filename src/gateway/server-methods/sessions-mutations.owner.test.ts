@@ -585,8 +585,8 @@ describe("sessions.patch", () => {
         gateway: { roles: { default: "member", definitions: { member } } },
       };
       const requestContext = context(cfg);
-      const patch = async (pinned: boolean) => {
-        const request = { key: sessionKey, pinned };
+      const patch = async (color: string | null) => {
+        const request = { key: sessionKey, color };
         const resolved = await resolveSessionMutationAuthorizationAsync({
           client: requestClient,
           method: "sessions.patch",
@@ -605,9 +605,10 @@ describe("sessions.patch", () => {
         expectSuccess(respond, expect.any(Object));
       };
 
-      await patch(true);
+      await patch("purple");
       const entry = readEntry(state.env, sessionKey);
       expect(entry).toMatchObject({
+        color: "purple",
         createdVia: "operator",
         createdActor: { type: "human", source: "profile", id: profileId },
         createdAt: expect.any(Number),
@@ -619,8 +620,8 @@ describe("sessions.patch", () => {
         createSessionListEntryFilter({ client: requestClient, cfg })?.(sessionKey, entry),
       ).toBe(true);
 
-      await patch(false);
-      expect(readEntry(state.env, sessionKey)?.pinnedAt).toBeUndefined();
+      await patch(null);
+      expect(readEntry(state.env, sessionKey)?.color).toBeUndefined();
     }));
 });
 

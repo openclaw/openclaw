@@ -1,0 +1,156 @@
+import { expect, it, vi } from "vitest";
+import { UI_RAIL_SHORTCUTS_PREFERENCE_KEY as PREF } from "../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntrySync,
+} from "../../config/sessions/session-accessor.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { serializeGatewayFrame } from "../serialized-json.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { handleGatewayRequest } from "../server-methods.js";
+import {
+  identifiedClient,
+  initializeSessionReadContext,
+} from "./sessions-read-cache.test-support.js";
+import type { GatewayClient, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
+
+it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, legacy flags or other people", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const alice = identifiedClient(ensureProfileForEmail("alice@pins.test").id);
+    const bob = identifiedClient(ensureProfileForEmail("bob@pins.test").id);
+    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+    const key = (label: string) => `agent:main:${label}`;
+    const [a, b, c, nested] = ["a", "b", "c", "nested"].map(key) as [
+      string,
+      string,
+      string,
+      string,
+    ];
+    for (const [i, k] of [a, b, c, nested].entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: k },
+        {
+          sessionId: k,
+          updatedAt: i + 1,
+          ...(k === a ? { pinnedAt: 100 } : {}),
+          ...(k === nested ? { parentSessionKey: a } : {}),
+        },
+      );
+    }
+    await initializeSessionReadContext(context);
+    async function rpc(client: GatewayClient, method: string, params: Record<string, unknown>) {
+      const respond = vi.fn<RespondFn>();
+      const options: GatewayRequestHandlerOptions = {
+        req: { type: "req", id: "pins", method, params },
+        acceptsSerializedJson: true,
+        client,
+        context,
+        params,
+        respond,
+        isWebchatConnect: () => false,
+      };
+      await handleGatewayRequest(options);
+      expect(respond).toHaveBeenCalledTimes(1);
+      const [ok, value, error] = respond.mock.calls[0]!;
+      if (!ok) {
+        throw new Error(error?.message ?? "RPC failed");
+      }
+      return JSON.parse(
+        serializeGatewayFrame({ type: "res", id: "pins", ok, payload: value }).toString(),
+      ).payload;
+    }
+    const shortcuts = [
+      `session-rail:${a}`,
+      `session:${b}`,
+      "route:usage",
+      `session:${c}`,
+      `session:${nested}`,
+    ];
+    await rpc(alice, "users.prefs.set", { entries: { [PREF]: shortcuts } });
+    await rpc(bob, "users.prefs.set", { entries: { [PREF]: [`session:${a}`] } });
+    const list = (client: GatewayClient, params: Record<string, unknown>) =>
+      rpc(client, "sessions.list", { agentId: "main", ...params });
+    await expect(list(alice, { pinned: true, limit: 1 })).resolves.toMatchObject({
+      totalCount: 2,
+      nextOffset: 1,
+      sessions: [{ key: b, pinned: true }],
+    });
+    await expect(
+      list(alice, { pinned: true, sortBy: "activity", offset: 1 }),
+    ).resolves.toMatchObject({ totalCount: 2, sessions: [{ key: c, pinned: true }] });
+    await expect(list(bob, { pinned: true })).resolves.toMatchObject({
+      sessions: [{ key: a, pinned: true }],
+    });
+    await expect(list(alice, { pinned: false })).resolves.toMatchObject({
+      sessions: [
+        { key: nested, pinned: false },
+        { key: a, pinned: false },
+      ],
+    });
+    await expect(list(alice, { limit: 2 })).resolves.toMatchObject({
+      sessions: [
+        { key: b, pinned: true },
+        { key: c, pinned: true },
+      ],
+    });
+    await rpc(alice, "users.prefs.set", { entries: { [PREF]: shortcuts.toReversed() } });
+    await expect(list(alice, { pinned: true, limit: 1 })).resolves.toMatchObject({
+      sessions: [{ key: c, pinned: true }],
+    });
+    await rpc(alice, "users.prefs.set", { entries: { [PREF]: shortcuts } });
+    await expect(
+      rpc(alice, "sessions.patch", { key: a, pinned: true, label: "not written" }),
+    ).rejects.toThrow(/separately/);
+    expect(loadSessionEntry({ agentId: "main", sessionKey: a })?.label).toBeUndefined();
+    await expect(
+      rpc(alice, "sessions.patch", { key: a, pinned: true, expectedSessionId: "replaced" }),
+    ).rejects.toThrow(/changed/);
+    await expect(rpc(alice, "sessions.patch", { key: a, pinned: true })).resolves.toMatchObject({
+      entry: { sessionId: a, pinned: true },
+    });
+    await rpc(alice, "sessions.patchMany", {
+      targets: [{ key: b }, { key: c }],
+      patch: { pinned: false },
+    });
+    await expect(rpc(alice, "users.prefs.get", { keys: [PREF] })).resolves.toEqual({
+      status: "ok",
+      entries: {
+        [PREF]: [`session-rail:${a}`, "route:usage", `session:${nested}`, `session:${a}`],
+      },
+    });
+    await expect(rpc(alice, "sessions.patch", { key: nested, pinned: true })).rejects.toThrow(
+      /child|nested/,
+    );
+    await expect(
+      rpc(alice, "sessions.patchMany", {
+        targets: [{ key: b }, { key: c, expectedSessionId: "replacement" }],
+        patch: { pinned: true },
+      }),
+    ).resolves.toMatchObject({
+      outcomes: [
+        { key: b, ok: true },
+        { key: c, ok: false },
+      ],
+    });
+    await expect(
+      rpc(alice, "sessions.patch", { key: "agent:main:missing-pin", pinned: true }),
+    ).rejects.toThrow(/not found|changed|visible/i);
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: "agent:main:missing-pin" }),
+    ).toBeUndefined();
+    await rpc(alice, "sessions.patch", { key: a, pinned: false });
+    await expect(list(bob, { pinned: true })).resolves.toMatchObject({
+      sessions: [{ key: a, pinned: true }],
+    });
+    expect(loadSessionEntry({ agentId: "main", sessionKey: a })?.pinnedAt).toBe(100);
+    const anonymous: GatewayClient = { connect: alice.connect };
+    await expect(list(anonymous, { pinned: false })).rejects.toThrow(/profile|requester/i);
+    await expect(rpc(anonymous, "sessions.patch", { key: b, pinned: true })).rejects.toThrow(
+      /profile|requester/i,
+    );
+  });
+});

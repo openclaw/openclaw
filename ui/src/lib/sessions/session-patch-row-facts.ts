@@ -59,7 +59,7 @@ export function projectSessionPatchRowFields(
     }
   }
   if (patch.pinned !== undefined || patch.unread === false) {
-    const pin = { pinned: entry.pinnedAt !== undefined, pinnedAt: entry.pinnedAt };
+    const pin = { pinned: entry.pinned ?? entry.pinnedAt !== undefined, pinnedAt: entry.pinnedAt };
     const read = {
       unread: deriveSessionUnread(entry),
       lastReadAt: entry.lastReadAt,

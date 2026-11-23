@@ -44,10 +44,14 @@ async function borrowSessionRowProjection() {
 }
 
 async function handleSessionsList(params: Record<string, unknown>) {
+  if (params.pinned !== undefined) {
+    throw new Error("Personal session pins require a signed-in Gateway requester.");
+  }
   const rt = await getRuntime();
   return rt.listProjectedSessions({
     projection: await borrowSessionRowProjection(),
     opts: params as SessionsListParams,
+    personalPins: new Map(),
   });
 }
 

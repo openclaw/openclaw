@@ -31,3 +31,19 @@ export function isPinnableSessionEntry(
     parsed !== null && parentSessionKey === buildAgentMainSessionKey({ agentId: parsed.agentId })
   );
 }
+
+/** The sidebar hides saved references while archived or snoozed, without removing them. */
+export function personalSessionPinRank(
+  ranks: ReadonlyMap<string, number>,
+  key: string,
+  entry: SessionEntry,
+  now: number,
+): number {
+  const rank = ranks.get(key);
+  return rank !== undefined &&
+    entry.archivedAt === undefined &&
+    (entry.snoozedUntil ?? 0) <= now &&
+    isPinnableSessionEntry(key, entry)
+    ? rank
+    : 0;
+}

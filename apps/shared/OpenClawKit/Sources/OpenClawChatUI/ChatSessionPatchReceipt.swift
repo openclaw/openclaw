@@ -4,6 +4,7 @@ public struct OpenClawChatSessionPatchReceipt: Decodable, Sendable {
         let label: String?
         let category: String?
         let color: String?
+        let pinned: Bool?
         let pinnedAt: Double?
         let snoozedUntil: Double?
         let snoozedAt: Double?
@@ -42,8 +43,8 @@ public struct OpenClawChatSessionPatchReceipt: Decodable, Sendable {
         case .category: row.category = self.entry.category
         case .color: row.color = self.entry.color
         case .pinned:
-            // ui/src/lib/sessions/session-patch-row-facts.ts:56 derives pin state from pinnedAt.
-            row.pinned = self.entry.pinnedAt != nil
+            // Older Gateways returned a timestamp instead of a personal pin flag.
+            row.pinned = self.entry.pinned ?? (self.entry.pinnedAt != nil)
             row.pinnedAt = self.entry.pinnedAt
         case .archived:
             row.archived = self.entry.archivedAt != nil

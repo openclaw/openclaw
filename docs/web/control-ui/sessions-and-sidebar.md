@@ -686,7 +686,7 @@ Root sessions and ordinary Home-linked dashboard sessions can be pinned. Spawned
 An ordinary conversation's **Actions** menu also offers **Move to group**.
 Existing ordinary chats that still link to Home remain top-level sessions.
 
-A pinned parent is a single rail shortcut. Its indented child tree and expand/collapse controls remain in the Sessions list, subject to the current filters.
+Pinning a session in **Pinned** is personal. The `sessions_list` tool reads that same list in sidebar order, and a `sessions` pin or unpin updates it for the requester only. Dragging a session to the rail creates a separate shortcut; removing either does not remove the other. A parent dragged to the rail is a single shortcut. Its indented child tree and expand/collapse controls remain in the Sessions list, subject to the current filters.
 
 The root menu keeps everyday actions together: **Pin/Unpin**, **Rename**, **Mark as unread/read**, **Copy link**, **Open in**, **Assign to…**, **Move to group**, and **Archive/Restore**. Assignment appears only when the eligible directory contains more than one person or agent, including yourself; online presence does not determine eligibility. The sidebar also offers **Snooze/Wake session** beside Archive. A session with children has one **Archive session** submenu with **Session only** and **Archive session and children…**; the latter still confirms the affected conversations.
 

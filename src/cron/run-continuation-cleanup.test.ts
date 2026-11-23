@@ -21,6 +21,8 @@ import * as lifecycle from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { setCanonicalUserPreferences } from "../state/user-preferences.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { removeCronRunContinuationSessionIfIdle as removeIdle } from "./run-continuation-cleanup.js";
 
@@ -46,6 +48,20 @@ async function seedContinuation() {
 
 const withContinuation = (run: (context: QueueContext) => Promise<void>) =>
   withOpenClawTestState({ scenario: "minimal" }, async () => run(await seedContinuation()));
+
+it("preserves an exact continuation while a profile pins it, without shared session metadata", () =>
+  withContinuation(async (context) => {
+    const profile = ensureProfileForEmail("continuation@pins.test");
+    const set = (entries: string[]) =>
+      setCanonicalUserPreferences(profile.id, { "ui.railShortcuts": entries });
+    expect((await set([`session:${exact.sessionKey}`]))?.ok).toBe(true);
+    await removeIdle(exact.sessionKey, undefined, context);
+    expect(loadSessionEntry(exact)?.sessionId).toBe("run-123");
+    expect((await set([]))?.ok).toBe(true);
+    await removeIdle(exact.sessionKey, undefined, context);
+    expect(loadSessionEntry(exact)).toBeUndefined();
+    expect(loadSessionEntry(base)?.sessionId).toBe("run-123");
+  }));
 
 function pauseAdmission() {
   const entered = createDeferredCore();

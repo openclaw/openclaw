@@ -1,6 +1,7 @@
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { SESSION_ROWS_DELTA_PREFIX } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { prepareRunningBackgroundProcessCount } from "../agents/bash-process-observation.js";
+import { personalSessionPinRank } from "../config/sessions/session-pin-policy.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
@@ -31,6 +32,7 @@ import {
   definedSessionRowFields,
   freezeSessionRow,
   sessionRowId,
+  sameSessionRowFacts,
   sessionRowsRevision,
   type SessionRowGeneration,
 } from "./session-row-identity.js";
@@ -73,6 +75,7 @@ type PresentationOptions = Readonly<
     "now" | "active" | "subagentRuns" | "preparedFacts" | "preparedRunState"
   > & {
     includeActivitySummary?: boolean;
+    personalPins?: ReadonlyMap<string, number>;
     rowMode?: SessionsListParams["rowMode"];
     omitSentinelChildren?: boolean;
     childArchiveFilter?: SessionsListParams["archived"];
@@ -82,18 +85,6 @@ type PresentationOptions = Readonly<
 const DEFAULT_PRESENTATION_OPTIONS: PresentationOptions = {};
 
 type ActiveRunStates = Map<records.Row["generation"], ReturnType<VisibleActiveSessionRunProjector>>;
-
-function sameFacts(previous: readonly unknown[] | undefined, current: readonly unknown[]) {
-  if (previous?.length !== current.length) {
-    return false;
-  }
-  for (let i = 0; i < current.length; i++) {
-    if (current[i] !== previous[i]) {
-      return false;
-    }
-  }
-  return true;
-}
 
 const sharedLists = new WeakMap<
   GatewaySessionRow[],
@@ -279,7 +270,11 @@ export function prepareProjectedSessionPresentation(
     sharing.entryFilter,
     sharing.sessionCap === "invited" ? sharing.identity?.id : undefined,
   );
-  const listView = (opts: SessionsListParams, selection = false): SessionListView => {
+  const listView = (
+    opts: SessionsListParams,
+    selection = false,
+    personalPins?: ReadonlyMap<string, number>,
+  ): SessionListView => {
     const { source: _source, ifRowsRevision: _ifRowsRevision, ...query } = opts;
     if (selection) {
       delete query.rowMode;
@@ -290,6 +285,7 @@ export function prepareProjectedSessionPresentation(
     const key = JSON.stringify([
       client === undefined,
       sharing.getCacheKey(),
+      personalPins && [...personalPins.keys()],
       presentFastMode("ultrafast"),
       // oxlint-disable-next-line unicorn/no-array-sort -- Object.entries creates a private array.
       Object.entries(query).sort(([left], [right]) => left.localeCompare(right)),
@@ -480,7 +476,7 @@ export function prepareProjectedSessionPresentation(
           facts.push(id);
         }
       }
-      if (!sameFacts(published?.facts, facts)) {
+      if (!sameSessionRowFacts(published?.facts, facts)) {
         // Prior views may supply immutable fields, but must not keep retired row graphs alive.
         // Reusing audience variants is best effort across garbage collection.
         const previousViews = publicationState.previousViews.get(
@@ -528,9 +524,13 @@ export function prepareProjectedSessionPresentation(
       ? visibility.swarmKey
       : excludedSwarmKeys && JSON.stringify([...excludedSwarmKeys]);
     recipientFacts[7] = recipientView?.workspaceReadDisabledReason;
-    recipientFacts.length = 8;
+    const personalPin =
+      options.personalPins &&
+      personalSessionPinRank(options.personalPins, record.key, record.entry, now) > 0;
+    recipientFacts[8] = personalPin;
+    recipientFacts.length = 9;
     const variants = signature === undefined ? undefined : views?.get(signature);
-    const current = variants?.find((cached) => sameFacts(cached.facts, recipientFacts));
+    const current = variants?.find((cached) => sameSessionRowFacts(cached.facts, recipientFacts));
     if (current) {
       return projectModels(current.row, current);
     }
@@ -540,7 +540,7 @@ export function prepareProjectedSessionPresentation(
         : published?.previousViews
             ?.deref()
             ?.get(signature)
-            ?.find((cached) => sameFacts(cached.facts, recipientFacts));
+            ?.find((cached) => sameSessionRowFacts(cached.facts, recipientFacts));
     const row = projection.present(record, {
       ...options,
       now,
@@ -552,6 +552,10 @@ export function prepareProjectedSessionPresentation(
       preparedRunState: temporal,
       backgroundProcessCount,
     });
+    if (personalPin !== undefined) {
+      row.pinned = personalPin;
+      delete row.pinnedAt;
+    }
     row.childOwnerSessionKeys = [...childOwnerSessionKeys];
     row.fastMode = presentFastMode(row.fastMode);
     row.effectiveFastMode = presentFastMode(row.effectiveFastMode);
@@ -629,16 +633,17 @@ export function prepareProjectedSessionPresentation(
     select(
       opts: SessionsListParams,
       select: (retained?: Map<object, SessionListFilteredEntries>) => SessionEntrySelection,
+      personalPins?: ReadonlyMap<string, number>,
     ) {
       // Membership, clocks, and transient runs are not owned by metadata partitions.
       const live = opts.activeOnly || opts.activityPulseBoundaries;
       if (sharing.sessionCap === "invited" || opts.search || opts.spawnedBy || live) {
         return select();
       }
-      const view = listView(opts, true);
+      const view = listView(opts, true, personalPins);
       if (
         view.selectedAt !== undefined &&
-        opts.activeMinutes !== undefined &&
+        (opts.activeMinutes !== undefined || view.activityExpiresAt !== undefined) &&
         (now < view.selectedAt || now > (view.activityExpiresAt ?? Infinity))
       ) {
         view.selection = undefined;
@@ -660,10 +665,14 @@ export function prepareProjectedSessionPresentation(
       }
       return view.selection;
     },
-    list(rows: GatewaySessionRow[], opts: SessionsListParams) {
+    list(
+      rows: GatewaySessionRow[],
+      opts: SessionsListParams,
+      personalPins?: ReadonlyMap<string, number>,
+    ) {
       // Current authorization and temporal presentation precede reuse. The retained vector
       // owns bytes only; it never retains a connection or grants permission to a later read.
-      const view = listView(opts);
+      const view = listView(opts, false, personalPins);
       const conditional =
         view.conditional === true ||
         opts.rowMode === "sidebar" ||

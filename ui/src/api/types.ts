@@ -150,6 +150,7 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   category?: GatewaySessionRow["category"];
   updatedAt?: number;
   createdAt?: number;
+  pinned?: boolean;
   pinnedAt?: number;
   lastReadAt?: number;
   lastActivityAt?: number;

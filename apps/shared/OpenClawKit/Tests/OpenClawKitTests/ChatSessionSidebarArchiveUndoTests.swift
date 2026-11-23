@@ -96,8 +96,6 @@ struct ChatSessionSidebarArchiveUndoTests {
         var entry: [String: Any] = ["sessionId": row.sessionId!, "updatedAt": archived ? 20 : 30]
         if archived {
             entry["archivedAt"] = 20
-        } else if row.pinned == true {
-            entry["pinnedAt"] = 30
         }
         return try JSONSerialization.data(withJSONObject: ["ok": true, "key": row.key, "entry": entry])
     }
@@ -221,7 +219,7 @@ struct ChatSessionSidebarArchiveUndoTests {
     }
 
     @Test(arguments: [false, true], [false, true])
-    func `undo survives navigation and restores the captured pin and incarnation`(
+    func `undo survives navigation and restores the captured incarnation without writing personal pins`(
         pinned: Bool,
         navigateDuringArchive: Bool) async throws
     {
@@ -249,9 +247,14 @@ struct ChatSessionSidebarArchiveUndoTests {
         await self.undo(batch, owner: owner)
         #expect(requests.count == 2)
         #expect(requests.last?.params["archived"]?.value as? Bool == false)
-        #expect(requests.last?.params["pinned"]?.value as? Bool == (pinned ? true : nil))
+        #expect(requests.last?.params["pinned"] == nil)
         #expect(owner.row(key: row.key, agentID: "research")?.isArchived == false)
-        #expect(owner.row(key: row.key, agentID: "research")?.pinned == pinned)
+        // Reconcile the current personal list, not the pin captured before archive.
+        var current = row
+        current.updatedAt = 30 // The Gateway restore acknowledged this shared row revision.
+        current.pinned = !pinned
+        owner.receive([current], read: owner.beginRead())
+        #expect(owner.row(key: row.key, agentID: "research")?.pinned == !pinned)
     }
 
     @Test func `replacement identity remains untouched and restore failure stays visible`() async throws {
@@ -303,7 +306,7 @@ struct ChatSessionSidebarArchiveUndoTests {
         #expect(batch.notices == ["The Gateway changed. Archive Undo is no longer available."])
     }
 
-    @Test func `batch undo restores successful captures with their pins atomically`() async throws {
+    @Test func `batch undo restores successful captures without writing personal pins`() async throws {
         let batch = ChatSessionSidebarBatch()
         let rows = try [self.row("one"), self.row("two"), self.row("three", pinned: false)]
         var restoredKeys: Set<String> = []
@@ -314,7 +317,7 @@ struct ChatSessionSidebarArchiveUndoTests {
                 #expect(request.params["agentId"]?.value as? String == "research")
                 #expect(request.params["expectedSessionId"]?.value as? String == row.sessionId)
                 #expect(request.params["archived"]?.value as? Bool == false)
-                #expect(request.params["pinned"]?.value as? Bool == (row.pinned == true ? true : nil))
+                #expect(request.params["pinned"] == nil)
                 if row.key == rows[2].key {
                     throw NSError(
                         domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "Changed \(row.key)"])

@@ -85,7 +85,6 @@ extension ChatSessionSidebarBatch {
     private func patchArchive(
         _ row: OpenClawChatSessionEntry,
         archived: Bool,
-        pinned: Bool? = nil,
         connection: OpenClawSessionMenuConnection,
         owner: OpenClawChatSessionSidebarData?) async -> Bool
     {
@@ -102,8 +101,7 @@ extension ChatSessionSidebarBatch {
         var receipt: OpenClawChatSessionPatchReceipt?
         defer { owner?.finishMutation(token, receipt: receipt) }
         do {
-            var fields: [String: AnyCodable] = ["archived": .init(archived)]
-            if let pinned { fields["pinned"] = .init(pinned) }
+            let fields: [String: AnyCodable] = ["archived": .init(archived)]
             let request = OpenClawChatGatewayRequests.sessionMenu("sessions.patch", session: row, fields: fields)
             let data = try await connection.request(.init(
                 method: request.method, params: request.params, timeoutMs: archived ? 600_000 : 15000))
@@ -111,7 +109,6 @@ extension ChatSessionSidebarBatch {
             confirmed.agentID = OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId
             guard confirmed.matches(row) else { throw CocoaError(.coderReadCorrupt) }
             receipt = confirmed
-            if pinned != nil { owner?.confirmFields(confirmed, target: row, fields: [.pinned]) }
             return true
         } catch {
             if connection.isCurrent() {
@@ -134,18 +131,15 @@ extension ChatSessionSidebarBatch {
             self.notices = [String(localized: "The Gateway changed. Archive Undo is no longer available.")]
             return
         }
-        // ui/src/components/session-organizer-operations.runtime.ts:202,238: captured
-        // identities outlive navigation; only successful restores regain their previous pins.
+        // Captured identities outlive navigation. Restore does not overwrite personal pin edits.
         _ = await ChatSessionBatchMutationRunner.run(
             keys: receipt.rows.map(OpenClawChatSessionSidebarData.identity))
         { @MainActor identity in
             guard let row = receipt.rows.first(where: { OpenClawChatSessionSidebarData.identity($0) == identity })
             else { return }
-            // Each ACK carries authoritative fields; restore and repin commit together even in a batch.
             _ = await self.patchArchive(
                 row,
                 archived: false,
-                pinned: row.pinned == true ? true : nil,
                 connection: connection,
                 owner: owner)
         }

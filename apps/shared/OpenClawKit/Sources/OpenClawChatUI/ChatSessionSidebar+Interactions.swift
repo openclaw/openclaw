@@ -318,7 +318,14 @@ extension ChatSessionSidebar {
         let owner = self.viewModel.sidebarData
         self.interact(refresh: patch != nil) { connection in
             self.batch.errors = [:]
-            if let patch {
+            // Shared category and personal pin edits have separate transaction owners.
+            let patches: [[String: AnyCodable]] = patch.map { fields in
+                if fields["category"] != nil, let pin = fields["pinned"] {
+                    return [fields.filter { $0.key != "pinned" }, ["pinned": pin]]
+                }
+                return [fields]
+            } ?? []
+            for patch in patches {
                 let data = try await connection.request(OpenClawChatGatewayRequests.sessionMenu(
                     "sessions.patch",
                     session: row,

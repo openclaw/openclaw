@@ -231,11 +231,11 @@ test.each([
     expected: { lastReadAt: expect.any(Number) },
   },
   {
-    name: "batch pin",
+    name: "batch color",
     method: "sessions.patchMany",
-    patch: { pinned: true },
+    patch: { color: "purple" },
     identity: {},
-    expected: { pinnedAt: expect.any(Number) },
+    expected: { color: "purple" },
   },
 ])("preserves $name and an interleaved lifecycle write", async (scenario) => {
   const { storePath } = await createSessionStoreDir();

@@ -53,6 +53,7 @@ import type { SessionPatchTargetIdentity } from "./session-unread-ack.js";
 import { startSessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
 import { executeSessionPatchMutations } from "./sessions-patch-engine.js";
 import { createCommitGuard } from "./sessions-patch-errors.js";
+import { patchPersonalSessionPins } from "./sessions-patch-personal-pins.js";
 import { requireSessionKey } from "./sessions-shared.js";
 import { sharingExpectedEntry } from "./sessions-sharing-authority.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -120,6 +121,9 @@ function createSessionPatchHandler(
         const singlePatch = structuredClone({ ...request.params, key });
         patch = singlePatch;
         targets = [singlePatch];
+      }
+      if (patch.pinned !== undefined) {
+        return await patchPersonalSessionPins(options, targets, patch, request.many);
       }
       const assertCurrent = () => {
         requestAuthority.assertCurrent();

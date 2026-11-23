@@ -184,7 +184,7 @@ test.each(["sessions.patch", "sessions.patchMany"] as const)(
       const { entered, catalog, load } = pausedCatalog();
       const context = patchContext(load);
       const respond = vi.fn();
-      const patch = { thinkingLevel: "low", pinned: true };
+      const patch = { thinkingLevel: "low", color: "purple" };
       const params =
         method === "sessions.patchMany" ? { targets, patch } : { ...targets[0], ...patch };
       const invoke = () => patchRequest(context, method)(params, respond);
@@ -221,7 +221,7 @@ test.each(["sessions.patch", "sessions.patchMany"] as const)(
       await invoke();
       expect(respond.mock.calls[0]?.[0]).toBe(true);
       for (const entry of entries()) {
-        expect(entry).toMatchObject({ thinkingLevel: "low", pinnedAt: expect.any(Number) });
+        expect(entry).toMatchObject({ thinkingLevel: "low", color: "purple" });
       }
     })(),
 );
@@ -275,15 +275,15 @@ test(
       await Promise.race([entered.promise, catalogPatch]);
       expect(catalogResponse).not.toHaveBeenCalled();
       successorPatch = runWithDiagnosticTraceContext(successorTrace, () =>
-        patch({ key: catalogKey, pinned: true }, successorResponse),
+        patch({ key: catalogKey, color: "purple" }, successorResponse),
       );
-      metadataPatch = patch({ key: metadataKey, pinned: true }, metadataResponse);
+      metadataPatch = patch({ key: metadataKey, color: "purple" }, metadataResponse);
       // Join independent work before advancing the diagnostic clock or releasing the catalog.
       await metadataPatch;
       expectSuccess(metadataResponse);
       expect(catalogResponse).not.toHaveBeenCalled();
       expect(successorResponse).not.toHaveBeenCalled();
-      expect(readEntry(catalogKey)?.pinnedAt).toBeUndefined();
+      expect(readEntry(catalogKey)?.color).toBeUndefined();
       expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
     } finally {
       diagnosticClock += 1_500;
@@ -298,14 +298,14 @@ test(
     expectFailure(catalogResponse, unexpectedFailure);
     expect(readEntry(catalogKey)?.contextWindow).toBeUndefined();
     expectSuccess(successorResponse);
-    expect(readEntry(catalogKey)?.pinnedAt).toEqual(expect.any(Number));
-    expect(readEntry(metadataKey)?.pinnedAt).toEqual(expect.any(Number));
+    expect(readEntry(catalogKey)?.color).toBe("purple");
+    expect(readEntry(metadataKey)?.color).toBe("purple");
     expect(records.find((record) => record.traceId === catalogTrace.traceId)?.message).toContain(
       "catalog=1500ms",
     );
     // The successor may wait in preflight or lifecycle admission before the catalog is released.
     expect(records.find((record) => record.traceId === successorTrace.traceId)?.message).toContain(
-      "slow session patch 1500ms method=sessions.patch targets=1 fields=pinned",
+      "slow session patch 1500ms method=sessions.patch targets=1 fields=color",
     );
   }),
 );
@@ -437,7 +437,10 @@ test(
     let metadataPatch: Promise<void> | void = undefined;
     try {
       await Promise.race([entered.promise, batch]);
-      metadataPatch = patchRequest(context)({ key: metadataKey, pinned: true }, metadataResponse);
+      metadataPatch = patchRequest(context)(
+        { key: metadataKey, color: "purple" },
+        metadataResponse,
+      );
       await metadataPatch;
       expectSuccess(metadataResponse);
       expect(respond).not.toHaveBeenCalled();
@@ -459,7 +462,7 @@ test(
     for (const [index, { key }] of targets.entries()) {
       expect(readEntry(key, index === 0 ? "main" : "secondary")?.contextWindow).toBe("extended");
     }
-    expect(readEntry(metadataKey)?.pinnedAt).toEqual(expect.any(Number));
+    expect(readEntry(metadataKey)?.color).toBe("purple");
   }),
 );
 
@@ -615,7 +618,7 @@ test(
     const currentResponse = vi.fn();
     const currentParams = {
       targets: instances,
-      patch: { model: "openai/gpt-5.6-sol", pinned: true },
+      patch: { model: "openai/gpt-5.6-sol", color: "purple" },
     };
     await batch(currentParams, currentResponse);
     expectBatch(currentResponse, outcomes);
@@ -624,7 +627,7 @@ test(
         sessionId: expectedSessionId,
         providerOverride: "openai",
         modelOverride: "gpt-5.6-sol",
-        pinnedAt: expect.any(Number),
+        color: "purple",
       });
     }
   }, false),
