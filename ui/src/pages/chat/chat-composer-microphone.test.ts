@@ -288,7 +288,7 @@ it("points a sign-in without voice to its provider's API key", async () => {
       return {
         speech: { providers: [] },
         realtime: { ready: false, activeProvider: "openai", providers: [openai] },
-        transcription: { ready: false, providers: [openai] },
+        transcription: { ready: false, activeProvider: "openai", providers: [openai] },
       };
     }
     throw new Error(`unexpected request: ${method}`);

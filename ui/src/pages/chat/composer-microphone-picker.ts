@@ -11,27 +11,17 @@ import {
 } from "./talk/input.ts";
 
 /** Per voice surface, the provider whose sign-in doesn't cover it and needs an API key. */
-export type VoiceApiKeyProviders = Partial<
-  Record<"talk" | "dictation" | "speech" | "voiceNotes", string>
->;
+export type VoiceApiKeyProviders = Partial<Record<"talk" | "dictation", string>>;
 
 type CatalogEntries = TalkCatalogResult["realtime"]["providers"] | undefined;
-const keyed = (entries: CatalogEntries, ready?: boolean) =>
-  ready ? undefined : entries?.find((entry) => entry.apiKeyRequired)?.id;
+const keyed = (entries: CatalogEntries, ready?: boolean, selected?: string) =>
+  ready ? undefined : entries?.find((entry) => entry.id === selected && entry.apiKeyRequired)?.id;
 
 /** The Gateway marks providers whose saved sign-in can't do voice; nothing else implies it. */
-function voiceApiKeyProviders({ realtime, transcription, speech }: TalkCatalogResult) {
-  // Voice notes use configured audio models when listed, else automatic selection over the
-  // credentials Talk transcription checks. A local model elsewhere could still succeed.
-  const notes = transcription?.mediaProviders ?? transcription?.providers;
+function voiceApiKeyProviders({ realtime, transcription }: TalkCatalogResult) {
   return {
-    talk: keyed(realtime?.providers, realtime?.ready),
-    dictation: keyed(transcription?.providers, transcription?.ready),
-    speech: keyed(speech?.providers),
-    voiceNotes: keyed(
-      notes,
-      notes?.some((entry) => entry.configured),
-    ),
+    talk: keyed(realtime?.providers, realtime?.ready, realtime?.activeProvider),
+    dictation: keyed(transcription?.providers, transcription?.ready, transcription?.activeProvider),
   };
 }
 

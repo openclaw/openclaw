@@ -1,16 +1,63 @@
-import { Show } from "solid-js";
+import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { createMemo, Show } from "solid-js";
+import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { useApplication, useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { voiceApiKeyDetail, voiceApiKeyTitle } from "../voice-api-key-notice.tsx";
-import { useVoiceApiKey } from "../voice-api-key.tsx";
+import { navigateToModelProvider } from "../../model-providers/navigation.ts";
+import {
+  voiceApiKeyDetail,
+  voiceApiKeyTitle,
+  VoiceApiKeyNotice,
+} from "../voice-api-key-notice.tsx";
 
-export default function ReadAloudStatus(props: { error: unknown }) {
-  const voiceApiKey = useVoiceApiKey();
+/** A recording the selected provider can't transcribe because its sign-in doesn't cover voice. */
+export function RecordingApiKeyNotice(props: { provider: string; agentId?: string }) {
+  const app = useOptionalApplication();
   return (
-    <Show
-      when={voiceApiKey.provider("speech")}
-      fallback={<span role="status">{formatUiError(props.error)}</span>}
-    >
+    <VoiceApiKeyNotice
+      kind="recording"
+      provider={props.provider}
+      onConfigure={
+        app
+          ? (provider) => navigateToModelProvider(app, props.agentId ?? null, provider)
+          : undefined
+      }
+    />
+  );
+}
+
+export default function ReadAloudStatus(props: {
+  error: unknown;
+  agentId?: string;
+  sessionKey?: string;
+}) {
+  const app = useApplication();
+  const keyProvider = createMemo(
+    async () => {
+      const error = props.error;
+      const provider =
+        error instanceof GatewayRequestError
+          ? asOptionalRecord(error.details)?.unconfiguredSpeechProvider
+          : undefined;
+      const sessionKey = props.sessionKey;
+      if (typeof provider !== "string" || !sessionKey) {
+        return undefined;
+      }
+      const catalog = await app.gateway.snapshot.client
+        ?.request<TalkCatalogResult>("talk.catalog", { sessionKey })
+        .catch(() => undefined);
+      return catalog?.speech.providers.some(
+        (entry) => entry.id === provider && entry.apiKeyRequired,
+      )
+        ? provider
+        : undefined;
+    },
+    { loadingValue: undefined },
+  );
+  return (
+    <Show when={keyProvider()} fallback={<span role="status">{formatUiError(props.error)}</span>}>
       {(provider) => (
         <span
           class="chat-send-status"
@@ -23,7 +70,7 @@ export default function ReadAloudStatus(props: { error: unknown }) {
           <button
             class="chat-send-status__action chat-send-status__retry"
             type="button"
-            onClick={() => voiceApiKey.configure(provider())}
+            onClick={() => navigateToModelProvider(app, props.agentId ?? null, provider())}
           >
             {t("chat.composer.configureCapability")}
           </button>

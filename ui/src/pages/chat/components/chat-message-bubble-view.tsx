@@ -32,8 +32,6 @@ import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import "../../../components/solid/person-reference.tsx";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
-import { VoiceApiKeyNotice } from "../voice-api-key-notice.tsx";
-import { useVoiceApiKey } from "../voice-api-key.tsx";
 import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
@@ -81,6 +79,9 @@ registerEnglishCatalog(registerChatSessionEnglish);
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
+const RecordingApiKeyNotice = lazy(() => import("./chat-read-aloud-status.tsx"), {
+  export: "RecordingApiKeyNotice",
+});
 const PluginInlineView = lazy(() => import("../../../plugins/control-ui-inline-view.tsx"), {
   export: "PluginInlineView",
 });
@@ -225,22 +226,6 @@ export function GroupedMessage(props: {
         }}
       </Show>
     </ChatRowDisplayContext>
-  );
-}
-
-/** A recording the selected provider can't transcribe because its sign-in doesn't cover voice. */
-function RecordingApiKeyNotice() {
-  const voiceApiKey = useVoiceApiKey();
-  return (
-    <Show when={voiceApiKey.provider("voiceNotes")}>
-      {(provider) => (
-        <VoiceApiKeyNotice
-          kind="recording"
-          provider={provider()}
-          onConfigure={voiceApiKey.configure}
-        />
-      )}
-    </Show>
   );
 }
 
@@ -397,6 +382,13 @@ function MessageReasoning(props: Pick<ContentProps, "state" | "options" | "messa
 }
 
 function BubbleContents(props: ContentProps) {
+  const audioKeyRequired = () => {
+    const message = asNullableRecord(props.state().message);
+    const provider = asNullableRecord(message?.["__openclaw"])?.audioApiKeyRequired;
+    return props.state().normalizedRole === "user" && typeof provider === "string"
+      ? provider
+      : undefined;
+  };
   const images = () =>
     props.state().renderInOrder ? props.state().supplementalImages : props.state().images;
   const previewCount = createMemo(() => props.state().videoPreviews.length);
@@ -439,17 +431,12 @@ function BubbleContents(props: ContentProps) {
         inlinePlayback={props.state().normalizedRole === "assistant"}
         inlineComments={props.state().inlineComments}
       />
-      <Show
-        when={
-          props.state().normalizedRole === "user" &&
-          props
-            .state()
-            .cardAttachments.some(
-              (item) => item.type === "attachment" && item.attachment.kind === "audio",
-            )
-        }
-      >
-        <RecordingApiKeyNotice />
+      <Show when={audioKeyRequired()}>
+        {(provider) => (
+          <ChatLazyBoundary>
+            <RecordingApiKeyNotice provider={provider()} agentId={props.options.agentId} />
+          </ChatLazyBoundary>
+        )}
       </Show>
       <Show
         when={props.state().isStandaloneToolMessage && props.state().assistantViewBlocks.length > 0}

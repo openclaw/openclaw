@@ -23,7 +23,12 @@ import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 const ReadAloudStatus = lazy(() => import("./chat-read-aloud-status.tsx"));
 
-type ReadAloudProps = { text: string; buttonRef?: (element: HTMLButtonElement) => void };
+type ReadAloudProps = {
+  text: string;
+  agentId?: string;
+  sessionKey?: string;
+  buttonRef?: (element: HTMLButtonElement) => void;
+};
 
 function speechAvailable(context: Pick<ApplicationContext, "gateway" | "runtimeConfig">) {
   return (
@@ -36,12 +41,12 @@ export function ReadAloud(props: ReadAloudProps) {
   const context = useOptionalApplication();
   return (
     <Show when={context}>
-      <ReadAloudControl text={props.text} buttonRef={(element) => props.buttonRef?.(element)} />
+      <ReadAloudControl input={props} />
     </Show>
   );
 }
 
-function ReadAloudControl(props: ReadAloudProps) {
+function ReadAloudControl(props: { input: ReadAloudProps }) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const config = sharedRuntimeConfigProjection(context.runtimeConfig);
@@ -55,7 +60,8 @@ function ReadAloudControl(props: ReadAloudProps) {
         snapshot.client?.recoveryScope,
         snapshot.client?.offlineRecoveryRetired,
         connectionRevision,
-        props.text,
+        props.input.text,
+        props.input.sessionKey,
         snapshot.phase === "connected" &&
           snapshot.hello !== null &&
           !canCallGatewayMethod(snapshot, "tts.speak", "operator.write"),
@@ -80,8 +86,7 @@ function ReadAloudControl(props: ReadAloudProps) {
     // Unconfigured rows need no playback lifecycle. Once used, retain Stop through reconnects.
     <Show when={available() || activated()}>
       <ReadAloudPlayback
-        text={props.text}
-        buttonRef={(element) => props.buttonRef?.(element)}
+        input={props.input}
         available={available()}
         onActivate={() => setActivated(true)}
         onReady={(stop) => (stopPlayback = stop)}
@@ -90,13 +95,12 @@ function ReadAloudControl(props: ReadAloudProps) {
   );
 }
 
-function ReadAloudPlayback(
-  props: ReadAloudProps & {
-    available: boolean;
-    onActivate: () => void;
-    onReady: (stop: (() => void) | undefined) => void;
-  },
-) {
+function ReadAloudPlayback(props: {
+  input: ReadAloudProps;
+  available: boolean;
+  onActivate: () => void;
+  onReady: (stop: (() => void) | undefined) => void;
+}) {
   const context = useApplication();
   const playback = new GatewaySpeechPlayback();
   const [playing, setPlaying] = createOptimistic(false);
@@ -146,7 +150,7 @@ function ReadAloudPlayback(
       try {
         await playback.speak(
           client,
-          props.text,
+          props.input.text,
           "tts.speak",
           () =>
             isCurrent() &&
@@ -176,7 +180,7 @@ function ReadAloudPlayback(
       <openclaw-tooltip>
         <span slot="content">{label()}</span>
         <button
-          ref={(element) => props.buttonRef?.(element)}
+          ref={(element) => props.input.buttonRef?.(element)}
           class="chat-read-aloud-btn"
           type="button"
           aria-label={label()}
@@ -190,7 +194,11 @@ function ReadAloudPlayback(
         <Errored
           fallback={(error) => (
             <ChatLazyBoundary>
-              <ReadAloudStatus error={error()} />
+              <ReadAloudStatus
+                error={error()}
+                agentId={props.input.agentId}
+                sessionKey={props.input.sessionKey}
+              />
             </ChatLazyBoundary>
           )}
         >

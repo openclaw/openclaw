@@ -469,9 +469,6 @@ async function buildTalkCatalog(
     transcription: {
       ...transcription,
       providers: markApiKeyRequired(transcription.providers),
-      ...(transcription.mediaProviders
-        ? { mediaProviders: markApiKeyRequired(transcription.mediaProviders) }
-        : {}),
     },
     realtime: {
       ready: realtimeSelection.ready,
