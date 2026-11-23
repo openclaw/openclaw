@@ -94,15 +94,15 @@ runs:
         cache-disabled: true
         add-job-summary: never
 
-    # One entry per lane and dependency inputs, so every lane restores what it resolves
-    # instead of fetching it from Maven Central.
+    # Network-fetched modules and wrapper distributions only, one entry per lane and dependency
+    # inputs, so every lane restores what it resolves instead of fetching it from Maven Central.
     - name: Restore and save Gradle dependency cache
       if: (inputs.gradle-cache-mode || inputs.cache-mode) == 'read-write'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
-          ~/.gradle/caches
-          ~/.gradle/wrapper
+          ~/.gradle/caches/modules-2
+          ~/.gradle/wrapper/dists
         key: ${{ runner.os }}-${{ runner.arch }}-gradle-deps-v1-${{ inputs.gradle-cache-key }}-${{ hashFiles('apps/android/gradle/wrapper/gradle-wrapper.properties', 'apps/android/gradle/libs.versions.toml', 'apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}
         # A dependency change starts from this lane's previous set, then any lane's.
         restore-keys: |
@@ -114,8 +114,8 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
-          ~/.gradle/caches
-          ~/.gradle/wrapper
+          ~/.gradle/caches/modules-2
+          ~/.gradle/wrapper/dists
         key: ${{ runner.os }}-${{ runner.arch }}-gradle-deps-v1-${{ inputs.gradle-cache-key }}-${{ hashFiles('apps/android/gradle/wrapper/gradle-wrapper.properties', 'apps/android/gradle/libs.versions.toml', 'apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}
         restore-keys: |
           ${{ runner.os }}-${{ runner.arch }}-gradle-deps-v1-${{ inputs.gradle-cache-key }}-
