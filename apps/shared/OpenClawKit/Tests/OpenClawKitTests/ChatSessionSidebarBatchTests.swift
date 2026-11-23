@@ -241,6 +241,34 @@ struct ChatSessionSidebarBatchTests {
         #expect(server == batch.sidebarEntries)
     }
 
+    @Test(arguments: [false, true])
+    func `a removed row target cannot turn a guarded drop into a move to the section end`(conflict: Bool) async throws {
+        let remaining = ["session:a", "route:usage", "session:c", "session:d"]
+        var server = conflict ? remaining + ["session:b"] : remaining
+        var attempts = 0
+        let connection = try self.connection { request in
+            if request.method == "users.prefs.get" { return try self.pinSnapshot(server) }
+            let next = try self.pinPatch(request)
+            attempts += 1
+            if conflict, attempts == 1 {
+                server = remaining // The other client removed B before this CAS reached the Gateway.
+                return Data(#"{"status":"conflict"}"#.utf8)
+            }
+            server = next
+            return Data(#"{"status":"ok"}"#.utf8)
+        }
+        let batch = ChatSessionSidebarBatch()
+        try await batch.movePin(key: "a", target: "b", after: false, connection: connection)
+        #expect(attempts == (conflict ? 1 : 0))
+        #expect(server == remaining)
+        #expect(batch.sidebarEntries == remaining)
+
+        // Dropping on the section, rather than on B, still means after the last pin.
+        try await batch.movePin(key: "a", target: nil, after: false, connection: connection)
+        #expect(server == ["session:c", "route:usage", "session:d", "session:a"])
+        #expect(batch.sidebarEntries == server)
+    }
+
     @Test func `post-commit reconciliation accepts another client's newer pin order`() async throws {
         let before = ["session:a", "route:home", "session:b"]
         let external = ["session:a", "route:home", "session:b", "future:added"]

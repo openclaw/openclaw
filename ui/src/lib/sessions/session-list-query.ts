@@ -1,6 +1,9 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { UI_RAIL_SHORTCUTS_PREFERENCE_KEY } from "../../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
+import { isConversationConfigChange } from "../../../../src/config/read-dependencies.js";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import { SESSIONS_LIST_OWNER_LIMIT } from "../../../../src/shared/session-list-limits.js";
+import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { compareSessionRowsByUpdatedAt, sessionMatchesArchivedFilter } from "./navigation.ts";
@@ -32,6 +35,16 @@ import type {
 } from "./session-types.ts";
 
 type SessionListRowLookup = (key: string, agentId?: string | null) => GatewaySessionRow | undefined;
+
+/** Config and profile-targeted pin writes can move a window boundary without a row event. */
+export function isSessionListInvalidation(event: GatewayEventFrame): boolean {
+  if (event.event !== "users.prefs.changed") {
+    return isConversationConfigChange(event);
+  }
+  // The Gateway targets the authenticated connection, including aliases of the canonical profile.
+  const keys = asOptionalRecord(event.payload)?.keys;
+  return Array.isArray(keys) && keys.includes(UI_RAIL_SHORTCUTS_PREFERENCE_KEY);
+}
 
 /** Held members and certified query exclusions can replace a list read. */
 export function canApplySessionListSnapshot(

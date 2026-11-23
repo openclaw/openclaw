@@ -107,3 +107,54 @@ it.each([
     expect(sessions.listSnapshot(query).result?.sessions).toEqual(expectedRows);
   }
 });
+
+it("replaces the retained filtered window when a remote personal pin enters or leaves it", async () => {
+  vi.useFakeTimers();
+  const query = { source: "sessions-page", agentId: "main", search: "review", limit: 2 } as const;
+  const recent = ["newest", "second", "third", "fourth", "oldest"].map((name, i) =>
+    row(name, { label: `Review ${name}`, updatedAt: 10 - i }),
+  );
+  const outside = recent[4]!;
+  let pinned = false;
+  const windowReads: number[] = [];
+  const { sessions, watch, listRows, emitEvent } = rosterReadFixture((params) => {
+    if (params.agentId !== query.agentId || params.search !== query.search) {
+      return sessionsResult([row("unfiltered-only")]);
+    }
+    const offset = params.offset ?? 0;
+    const limit = params.limit!;
+    windowReads.push(limit);
+    const ordered = pinned ? [{ ...outside, pinned: true }, ...recent.slice(0, 4)] : recent;
+    return {
+      ...sessionsResult(ordered.slice(offset, offset + limit)),
+      totalCount: 5,
+      hasMore: offset + limit < 5,
+      nextOffset: offset + limit < 5 ? offset + limit : null,
+    };
+  }, "viewer-alias");
+  const notify = (key: string) =>
+    emitEvent({
+      type: "event",
+      event: "users.prefs.changed",
+      payload: { profileId: "viewer", keys: [key] },
+    });
+  watch(query);
+  await sessions.refreshList(query);
+  await sessions.refreshList({ ...query, append: true, offset: 2 });
+  const initial = recent.slice(0, 4);
+  expect(listRows(query)).toEqual(initial);
+
+  notify("ui.theme");
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(windowReads).toEqual([2, 2]);
+  pinned = true;
+  notify("ui.railShortcuts");
+  notify("ui.railShortcuts");
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(listRows(query)).toEqual([{ ...outside, pinned: true }, ...initial.slice(0, 3)]);
+  pinned = false;
+  notify("ui.railShortcuts");
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(listRows(query)).toEqual(initial);
+  expect(windowReads).toEqual([2, 2, 4, 4]);
+});

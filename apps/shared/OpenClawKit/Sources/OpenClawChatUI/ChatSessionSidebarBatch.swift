@@ -152,6 +152,8 @@ final class ChatSessionSidebarBatch {
         guard let source = sessions.firstIndex(where: { pinKey($0) == key }) else { return entries }
         let entry = sessions.remove(at: source)
         let destination = target.flatMap { target in sessions.firstIndex(where: { pinKey($0) == target }) }
+        // Only a drop on the section itself means “at the end.” Do not reinterpret a stale row target.
+        guard target == nil || destination != nil else { return entries }
         sessions.insert(entry, at: destination.map { $0 + (after ? 1 : 0) } ?? sessions.count)
         var result = entries
         for (slot, value) in zip(slots, sessions) {
