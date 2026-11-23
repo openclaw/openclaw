@@ -895,6 +895,751 @@
         }
       ],
       "cancelledStep": "Swift test"
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-10 (node)",
+      "reason": "Operator accepted the observed test failures after focused local replays passed on this candidate.",
+      "evidence": {
+        "runId": 45269228243,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/session-message-events.test.ts",
+            "test": "session.message websocket events > enforces session-scoped chat delivery on real gateway connections :: Error: timeout\n❯ onceMessage test/helpers/gateway-websocket.ts:114:24\n112| ): Promise<T> {\n113|   // Keep the wait's caller in the stack when a timer eventually rejec…\n114|   const timeoutError = new Error(\"timeout\");\n|                        ^\n115|   return new Promise<T>((resolve, reject) => {\n116|     const signal = typeof timeout === \"number\" ? undefined : timeout;\n❯ src/gateway/session-message-events.test.ts:<redacted len=5>\n❯ src/gateway/session-message-events.test.ts:<redacted len=6>"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-22 (node)",
+      "reason": "Operator accepted the observed test failures after focused local replays passed on this candidate.",
+      "evidence": {
+        "runId": 45269228243,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-launcher-terminal-results.test.ts",
+            "test": "worker turn launcher terminal results > retains the ACKed finishing outcome after assistant stop (reconciliation fails: false; cleanup: undefined; provider fallback: undefined) :: AssertionError: expected Error: prepared model runtime publication… to match object { message: StringContaining{…} }\n\n- Expected\n+ Received\n\n- {\n-   \"message\": StringContaining \"turn failed | provider failed | computer cleanup failed | native close failed\",\n+ Error {\n+   \"message\": \"prepared model runtime publication (workspace plugins; agent main) timed out\",\n}\n\n❯ src/gateway/worker-environments/worker-turn-launcher-terminal-results.test.ts:422:26\n420|           return;\n421|         }\n422|         expect(observed).toMatchObject({ message: expect.stringContain…\n|                          ^\n423|         if (reconciliationFails) {\n424|           expect(observed).toMatchObject({ cause: { cause: reconciliat…"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-14 (node)",
+      "reason": "Operator accepted the observed test failures after focused local replays passed on this candidate.",
+      "evidence": {
+        "runId": 45269228243,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-launcher-build-recovery.test.ts",
+            "test": "waits for reconnect and settles the exact interrupted claim before the next turn :: AssertionError: promise rejected \"Error: prepared model runtime publication…\" instead of resolving\n❯ src/gateway/worker-environments/worker-turn-launcher-build-recovery.test.ts:387:28\n385|     await harness.reconnect();\n386|     expect(harness.reportFailure).toHaveBeenCalledTimes(1);\n387|     await expect(execution).resolves.toMatchObject({\n|                            ^\n388|       payloads: [{ text: replacementReply }],\n389|     });\n\nCaused by: Error: prepared model runtime publication (workspace plugins; agent main) timed out\n❯ Timeout.<anonymous> src/node-host/with-timeout.ts:36:25"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-23 (node)",
+      "reason": "Operator accepted the observed test failures after focused local replays passed on this candidate.",
+      "evidence": {
+        "runId": 45269228243,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-launcher.claim-recovery.test.ts",
+            "test": "worker pre-launch claim recovery > recovers a warm second turn blocked in workspace resolution with exact custody :: AssertionError: promise rejected \"Error: prepared model runtime publication…\" instead of resolving\n❯ src/gateway/worker-environments/worker-turn-launcher.claim-recovery.test.ts:502:37\n500|       const clock = vi.spyOn(Date, \"now\");\n501|       try {\n502|         await expect(execute(first)).resolves.toMatchObject({\n|                                     ^\n503|           payloads: [{ text: \"First turn complete\" }],\n504|         });\n\nCaused by: Error: prepared model runtime publication (workspace plugins; agent main) timed out\n❯ Timeout.<anonymous> src/node-host/with-timeout.ts:36:25"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-13 (node)",
+      "reason": "Operator accepted the observed test failures after focused local replays passed on this candidate.",
+      "evidence": {
+        "runId": 45269228243,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-execution.test.ts",
+            "test": "worker turn execution > redacts blocked input before launch ({\"throws\":false,\"revokeAtCommit\":false}) :: Error: Test timed out in 120000ms.\nIf this is a long-running test, pass a timeout value as the last argument or configure it globally with \"testTimeout\".\n❯ src/gateway/worker-environments/worker-turn-execution.test.ts:197:5\n195|     { throws: true, revokeAtCommit: false },\n196|     { throws: false, revokeAtCommit: true },\n197|   ])(\"redacts blocked input before launch (%j)\", async ({ throws, revo…\n|     ^\n198|     await seedActivePlacement();\n199|     const input = turn(\"blocked-input\");"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-34 (node)",
+      "reason": "Operator accepted the observed test failures after focused local replays passed on this candidate.",
+      "evidence": {
+        "runId": 45269228243,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/infra/worker-task-pool.retained.test.ts",
+            "test": "rejects owned task-channel loss during pending preparation (runTask) :: AssertionError: expected 'pending' to match object { code: 'unavailable', …(1) }\n\n- Expected:\n{\n\"code\": \"unavailable\",\n\"message\": StringContaining \"Native worker task channel closed\",\n}\n\n+ Received:\n\"pending\"\n\n❯ src/infra/worker-task-pool.retained.test.ts:169:23\n167|       warm.service();\n168|       await Promise.resolve();\n169|       expect(outcome).toMatchObject({\n|                       ^\n170|         code: \"unavailable\",\n171|         message: expect.stringContaining(\"Native worker task channel c…"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-6 (node)",
+      "reason": "Operator accepted the observed test failures after focused local replays passed on this candidate.",
+      "evidence": {
+        "runId": 45269228243,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-launcher-remote-handoff.test.ts",
+            "test": "worker turn launcher remote handoff > settles a delegated worker reply and conflict without borrowing its parent transcript :: Error: prepared model runtime publication (workspace plugins; agent worker-agent) timed out\n❯ Timeout.<anonymous> src/node-host/with-timeout.ts:36:25\n34|       () => {\n35|         const operation = typeof label === \"function\" ? label() : (lab…\n36|         abortCtrl.abort(new Error(`${operation} timed out`));\n|                         ^\n37|       },\n38|       Math.max(0, Math.min(resolved, remainingMs)),"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-39 (node)",
+      "reason": "Operator accepted the observed test failures after focused local replays passed on this candidate.",
+      "evidence": {
+        "runId": 45269228243,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-launcher-computer.test.ts",
+            "test": "worker launch capabilities > carries only a current GitHub identity in the launch envelope (available) :: Error: Test timed out in 120000ms.\nIf this is a long-running test, pass a timeout value as the last argument or configure it globally with \"testTimeout\".\n❯ src/gateway/worker-environments/worker-turn-launcher-computer.test.ts:92:5\n90|     { label: \"unavailable\", available: false, revoked: false },\n91|     { label: \"revoked before launch\", available: true, revoked: true },\n92|   ])(\n|     ^\n93|     \"carries only a current GitHub identity in the launch envelope ($l…\n94|     async ({ available, revoked }) => {"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-5 (node)",
+      "reason": "Operator accepted the observed test failures after focused local replays passed on this candidate.",
+      "evidence": {
+        "runId": 45269228243,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-launcher-initial-setup.test.ts",
+            "test": "initial worker setup admission > holds worker-turn input without agent IO until syncing becomes authoritative and active :: Error: Test timed out in 120000ms.\nIf this is a long-running test, pass a timeout value as the last argument or configure it globally with \"testTimeout\".\n❯ src/gateway/worker-environments/worker-turn-launcher-initial-setup.test.ts:159:50\n157|   afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: tr…\n158|\n159|   it.for([\"worker-turn\", \"remote-exec\"] as const)(\n|                                                  ^\n160|     \"holds %s input without agent IO until syncing becomes authoritati…\n161|     async (mode, { signal }) => {"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-2 (node)",
+      "reason": "Operator accepted the observed test failures after focused local replays passed on this candidate.",
+      "evidence": {
+        "runId": 45269228243,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/server.chat-cli-auth.test.ts",
+            "test": "Gateway keeps native account history when a sav… > preserves account selection and session history :: AssertionError: expected 'error' to be 'ok' // Object.is equality\n\nExpected: \"ok\"\nReceived: \"error\"\n\n❯ sendTurn src/gateway/server.chat-cli-auth.test.ts:475:30\n473|     );\n474|     signal.throwIfAborted();\n475|     expect(completed.status).toBe(\"ok\");\n|                              ^\n476|     const history = await client.request<{ messages: unknown[] }>(\"cha…\\n    477|       sessionKey: <redacted len=15>\"\n❯ executeCliAuthCase src/gateway/server.chat-cli-auth.test.ts:487:3"
+          },
+          {
+            "kind": "vitest",
+            "file": "test/plugins/codex-model-catalog.gateway.test.ts",
+            "test": "models.list selects a native user-home API-key catalog through the prepared Gateway owner :: Error: gateway connect timeout\n❯ Timeout.<anonymous> test/helpers/gateway-client.ts:77:29\n75|     });\n76|     const timer = setTimeout(\n77|       () => settle({ error: new Error(wait.timeoutMessage) }),\n|                             ^\n78|       wait.timeoutMs,\n79|     );"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-20 (node)",
+      "reason": "Operator accepted the observed test failures after focused local replays passed on this candidate.",
+      "evidence": {
+        "runId": 45269228243,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-launcher-failure-recovery.test.ts",
+            "test": "worker turn launcher failure recovery > keeps the typed node-loss cause through the supervisor result and failed workspace recovery :: Error: Test timed out in 120000ms.\nIf this is a long-running test, pass a timeout value as the last argument or configure it globally with \"testTimeout\".\n❯ src/gateway/worker-environments/worker-turn-launcher-failure-recovery.test.ts:120:46\n118|   afterEach(() => fx.cleanupWorkerTurnLauncherTest({ reuseReadWorkers:…\n119|\n120|   it.each([\"supervisor\", \"runtime\"] as const)(\n|                                              ^\n121|     \"keeps the typed node-loss cause through the %s result and failed …\n122|     async (source) => {"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-19 (node)",
+      "reason": "Operator accepted the observed test failures after focused local replays passed on this candidate.",
+      "evidence": {
+        "runId": 45269228243,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-run-owner.test.ts",
+            "test": "cloud worker run ownership > keeps a bounded remote tool alive until user cancellation with a shared session ID at cancellation :: Error: Test timed out in 120000ms.\nIf this is a long-running test, pass a timeout value as the last argument or configure it globally with \"testTimeout\".\n❯ src/gateway/worker-environments/worker-turn-run-owner.test.ts:337:14\n335|     { cancellation: \"user\", firstToolDelayMs: 0, collisionAt: \"cancell…\n336|     { cancellation: \"deadline\", firstToolDelayMs: 10 * 60_000, collisi…\n337|   ] as const)(\n|              ^\n338|     \"keeps a bounded remote tool alive until $cancellation cancellatio…\n339|     async (scenario, { signal }) => checkRemoteToolLifetime(scenario, …"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "releaseChecksCandidate",
+      "jobName": "Run package acceptance / Docker product acceptance (artifact-only) / Docker E2E targeted lanes (published-upgrade-survivor-2026.11.6-scenarios-2)",
+      "reason": "Operator accepted the legacy-state Doctor fixture failure caused by synthetic provider credentials producing discovery warnings.",
+      "evidence": {
+        "runId": 45273394623,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "Run package acceptance / Verify package acceptance",
+          "stepName": "Verify package acceptance results",
+          "causes": [
+            "docker_acceptance ended with failure"
+          ],
+          "exactCauses": true
+        },
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "package_acceptance_release_checks ended with failure"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "releaseChecksCandidate",
+      "jobName": "Run package acceptance / Docker product acceptance (artifact-only) / Docker E2E targeted lanes (published-upgrade-survivor-2026.10.33-scenarios-2)",
+      "reason": "Operator accepted the legacy-state Doctor fixture failure caused by synthetic provider credentials producing discovery warnings.",
+      "evidence": {
+        "runId": 45273394623,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "Run package acceptance / Verify package acceptance",
+          "stepName": "Verify package acceptance results",
+          "causes": [
+            "docker_acceptance ended with failure"
+          ],
+          "exactCauses": true
+        },
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "package_acceptance_release_checks ended with failure"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "releaseChecksCandidate",
+      "jobName": "Run package acceptance / Docker product acceptance (artifact-only) / Docker E2E targeted lanes (published-upgrade-survivor-2026.11.7-scenarios-2)",
+      "reason": "Operator accepted the legacy-state Doctor fixture failure caused by synthetic provider credentials producing discovery warnings.",
+      "evidence": {
+        "runId": 45273394623,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "Run package acceptance / Verify package acceptance",
+          "stepName": "Verify package acceptance results",
+          "causes": [
+            "docker_acceptance ended with failure"
+          ],
+          "exactCauses": true
+        },
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "package_acceptance_release_checks ended with failure"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "normalCi",
+      "jobName": "checks-ui-e2e-real-gateway (2/2)",
+      "reason": "Operator approved a waiver for this recorded beta.3 job failure on the original run attempt.",
+      "evidence": {
+        "runId": 45269228243,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-ui-e2e-real-gateway finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "normalCi",
+      "jobName": "checks-fast-baseline-ratchets",
+      "reason": "Operator approved a waiver for this recorded beta.3 job failure on the original run attempt.",
+      "evidence": {
+        "runId": 45269228243,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-baseline-ratchets finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "normalCi",
+      "jobName": "docker-seed-e2e",
+      "reason": "Operator approved a waiver for this recorded beta.3 job failure on the original run attempt.",
+      "evidence": {
+        "runId": 45269228243,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "docker-seed-e2e finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-small-14 (node)",
+      "reason": "Operator approved a waiver for this recorded beta.3 job failure on the original run attempt.",
+      "evidence": {
+        "runId": 45269228243,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-small-14 (bun)",
+      "reason": "Operator approved a waiver for this recorded beta.3 job failure on the original run attempt.",
+      "evidence": {
+        "runId": 45269228243,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-small-30 (bun)",
+      "reason": "Operator approved a waiver for this recorded beta.3 job failure on the original run attempt.",
+      "evidence": {
+        "runId": 45269228243,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-small-30 (node)",
+      "reason": "Operator approved a waiver for this recorded beta.3 job failure on the original run attempt.",
+      "evidence": {
+        "runId": 45269228243,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-small-33 (node)",
+      "reason": "Operator approved a waiver for this recorded beta.3 job failure on the original run attempt.",
+      "evidence": {
+        "runId": 45269228243,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-small-33 (bun)",
+      "reason": "Operator approved a waiver for this recorded beta.3 job failure on the original run attempt.",
+      "evidence": {
+        "runId": 45269228243,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-38 (node)",
+      "reason": "Operator approved a waiver for this recorded beta.3 job failure on the original run attempt.",
+      "evidence": {
+        "runId": 45269228243,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "pluginPrereleaseIndependent",
+      "jobName": "checks-node-extensions-shard-3 (node)",
+      "reason": "Operator approved a waiver for this recorded beta.3 job failure on the original run attempt.",
+      "evidence": {
+        "runId": 45269242365,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "plugin-prerelease-suite",
+          "stepName": "Verify plugin prerelease suite",
+          "causes": [
+            "plugin-prerelease-extensions ended with failure"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "releaseChecksCandidate",
+      "jobName": "cross_os_release_checks / Windows / installer fresh",
+      "reason": "Operator approved a waiver for this recorded beta.3 job failure on the original run attempt.",
+      "evidence": {
+        "runId": 45273394623,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "cross_os_release_checks ended with failure"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.3",
+      "targetSha": "3d2d379bf65eaf633306effbb079f9a4698ed828",
+      "childRole": "releaseChecksCandidate",
+      "jobName": "Run package acceptance / Docker product acceptance (artifact-only) / Docker E2E targeted lanes (update-restart-auth)",
+      "reason": "Operator approved a waiver for this recorded beta.3 job failure on the original run attempt.",
+      "evidence": {
+        "runId": 45273394623,
+        "runAttempt": 1
+      },
+      "aggregates": [
+        {
+          "jobName": "Run package acceptance / Verify package acceptance",
+          "stepName": "Verify package acceptance results",
+          "causes": [
+            "docker_acceptance ended with failure"
+          ],
+          "exactCauses": true
+        },
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "package_acceptance_release_checks ended with failure"
+          ],
+          "exactCauses": true
+        }
+      ]
     }
   ]
 }
