@@ -415,8 +415,8 @@ workflow honors its `runner_group` input. Release Decision, Diagnostic Drain,
 and the nightly watcher keep their 720-minute budgets. The current reusable
 release watcher uses `blacksmith-2vcpu-ubuntu-2404` independently of backend and
 runner-group settings; it retains the `runner_label` input for caller compatibility.
-Activate this routing by pinning callers to the merged watcher revision before
-removing their Boat provisioning dependency. Existing immutable watcher pins
+Both release callers pin the merged Blacksmith watcher definition and run
+without Boat provisioning or cleanup jobs. Historical immutable watcher pins
 retain their original routing. The nightly watcher is unchanged: when
 `OPENCLAW_CI_RUNNER_BACKEND=boat`, a short hosted job provisions its Boat VM
 and registers an ephemeral organization runner. Native Boat CI has a six-hour
@@ -429,12 +429,12 @@ GitHub App with organization self-hosted runner write access and a dedicated
 runner group. `OPENCLAW_RELEASE_RUNNER_GROUP` continues to select the existing
 hosted runners. App token creation must succeed before a VM is provisioned;
 a missing app ID or private key stops provisioning.
-The runner group must admit the nightly workflow on `main` and
-`full-release-state-watcher.yml` at `ad1621f7e9d896dfdcc202d007e766e6c30153df`.
-Full Release Validation pins that reviewed watcher definition from its immutable
-`release-ci/` refs; the watcher checks out the caller's pinned tooling and admitted
-verifier. When changing the watcher definition, update the caller pin and
-runner-group entry together. Install a Crabbox release supporting
+The Boat runner group must admit the nightly workflow on `main`; Release
+Decision and Diagnostic Drain no longer use that group. Full Release Validation
+pins the reviewed Blacksmith watcher definition from its immutable `release-ci/`
+refs; the watcher checks out the caller's pinned tooling and admitted verifier.
+When changing the watcher definition, update both caller pins together. Install
+a Crabbox release supporting
 `actions register --receipt` and `actions unregister --receipt` before enabling
 the backend. The provisioning preflight rejects older clients before creating
 a VM.
