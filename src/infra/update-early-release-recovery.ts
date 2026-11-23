@@ -218,6 +218,20 @@ async function planRecovery(
   if (deps.platform !== "linux") {
     return { reason: "it runs only with a Linux systemd user service" };
   }
+  // A running recovery answers first: the checks below can see its work in progress.
+  if (!ok(await run(["systemctl", "--user", "show", "--property=Version"]))) {
+    return { reason: "no systemd user manager is reachable" };
+  }
+  const unit = `openclaw-update-recovery${resolveGatewayProfileSuffix(env.OPENCLAW_PROFILE)}`;
+  const state = (await run(["systemctl", "--user", "is-active", unit])).output.trim();
+  if (["active", "activating", "deactivating", "reloading"].includes(state)) {
+    return { running: unit };
+  }
+  if (!change.pending) {
+    return {
+      reason: `an earlier automatic recovery stopped after migrating (journalctl --user -u ${unit})`,
+    };
+  }
   const common = await git(
     run,
     change.root,
@@ -254,14 +268,6 @@ async function planRecovery(
   }
   if (!ok(await run(["pnpm", "--version"], { cwd: checkout }))) {
     return { reason: "pnpm is not on PATH" };
-  }
-  if (!ok(await run(["systemctl", "--user", "show", "--property=Version"]))) {
-    return { reason: "no systemd user manager is reachable" };
-  }
-  const unit = `openclaw-update-recovery${resolveGatewayProfileSuffix(env.OPENCLAW_PROFILE)}`;
-  const state = (await run(["systemctl", "--user", "is-active", unit])).output.trim();
-  if (["active", "activating", "deactivating", "reloading"].includes(state)) {
-    return { running: unit };
   }
   const service = await deps.readService(env).catch(() => null);
   const userUnits = path.join(

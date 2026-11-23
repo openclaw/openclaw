@@ -103,13 +103,6 @@ it("says the new release finishes in the background, with a path-free progress c
   );
   expect(automatic).not.toContain("the Gateway was not touched");
   expect(automatic).not.toMatch(/[\s~]\//u);
-
-  const running = formatEarlyGitReleaseRefusal(change, {
-    started: false,
-    running: "openclaw-update-recovery",
-  });
-  expect(running).toContain("still running and finishes this update");
-  expect(running).not.toContain(REBUILD);
 });
 
 it("refuses when one agent store is older, registered or not", () => {
@@ -119,7 +112,7 @@ it("refuses when one agent store is older, registered or not", () => {
       agents: [OPENCLAW_AGENT_SCHEMA_VERSION, OPENCLAW_AGENT_SCHEMA_VERSION - 1],
       registered,
     });
-    expect(inspect(root, env)?.agent).toBe(OPENCLAW_AGENT_SCHEMA_VERSION - 1);
+    expect(inspect(root, env)?.pending?.agent).toBe(OPENCLAW_AGENT_SCHEMA_VERSION - 1);
   }
 });
 
@@ -140,6 +133,15 @@ it("lets the early release updater through when nothing migrates or state is unr
   const unreadable = install({});
   fs.writeFileSync(path.join(unreadable.stateDir, "state", "openclaw.sqlite"), "not a database");
   expect(inspect(unreadable.root, unreadable.env)).toBeNull();
+});
+
+it("stops a concurrent early updater while an automatic recovery's release exists", () => {
+  const { root, env, stateDir } = install({ state: OPENCLAW_STATE_SCHEMA_VERSION, agents: [] });
+  fs.mkdirSync(path.join(stateDir, "git-install", "recovery", "openclaw"), { recursive: true });
+  const change = inspect(root, env);
+  expect(change?.pending).toBeNull();
+  const running = { started: false, running: "openclaw-update-recovery" } as const;
+  expect(formatEarlyGitReleaseRefusal(change!, running)).toContain("is finishing that update");
 });
 
 it("never refuses another updater, which can finish a schema change", () => {

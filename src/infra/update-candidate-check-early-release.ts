@@ -21,9 +21,9 @@ export type EarlyGitReleaseSchemaChange = {
   stateDir: string;
   /** `<stateDir>/git-install`, resolved. */
   prefix: string;
-  state: number;
-  /** Oldest agent store, when any exists. */
-  agent: number | null;
+  /** What this release would migrate (`agent`: the oldest agent store, if any); null once an
+   * automatic recovery started by an earlier update migrated it. */
+  pending: { state: number; agent: number | null } | null;
 };
 
 /** On-disk schema versions when this build would migrate them; null when current or unreadable. */
@@ -87,8 +87,10 @@ export function readPendingSchemaChange(
  * half-switched (#203608).
  *
  * So when this release would migrate state, the check refuses before the release is switched
- * (`update-early-release-recovery.ts` then finishes the update where it can). Same-schema updates
- * pass through. Returns null for every other caller and when state is current or unreadable.
+ * (`update-early-release-recovery.ts` then finishes the update where it can). It also refuses
+ * while that recovery's release exists, because state it already migrated would let a concurrent
+ * early updater through. Other same-schema updates pass through. Returns null for every other
+ * caller and when state is current or unreadable.
  *
  * Remove once no install can still run an updater from that window.
  */
@@ -114,7 +116,9 @@ export function inspectEarlyGitReleaseSchemaChange(
     return null;
   }
   const pending = readPendingSchemaChange(env);
-  return pending ? { root, stateDir, prefix, ...pending } : null;
+  return pending || fs.existsSync(path.join(prefix, "recovery"))
+    ? { root, stateDir, prefix, pending }
+    : null;
 }
 
 export type EarlyGitReleaseRecoveryStart =
@@ -126,14 +130,19 @@ export function formatEarlyGitReleaseRefusal(
   change: EarlyGitReleaseSchemaChange,
   recovery: EarlyGitReleaseRecoveryStart,
 ): string {
-  const lines = [
-    `OpenClaw ${VERSION} migrates your databases (state schema ${change.state} to ${OPENCLAW_STATE_SCHEMA_VERSION}${
-      change.agent === null
-        ? ""
-        : `, agent schema ${change.agent} to ${OPENCLAW_AGENT_SCHEMA_VERSION}`
-    }).`,
-    "The updater in this checkout (a main build from 2026-11-17 to 2026-11-19) cannot finish that: after the migration, neither it nor the checkout's `openclaw` command can open the migrated data.",
-  ];
+  const { pending } = change;
+  const lines = pending
+    ? [
+        `OpenClaw ${VERSION} migrates your databases (state schema ${pending.state} to ${OPENCLAW_STATE_SCHEMA_VERSION}${
+          pending.agent === null
+            ? ""
+            : `, agent schema ${pending.agent} to ${OPENCLAW_AGENT_SCHEMA_VERSION}`
+        }).`,
+        "The updater in this checkout (a main build from 2026-11-17 to 2026-11-19) cannot finish that: after the migration, neither it nor the checkout's `openclaw` command can open the migrated data.",
+      ]
+    : [
+        "An automatic recovery that an earlier update started has migrated your databases and is finishing that update; the updater in this checkout cannot run another one meanwhile.",
+      ];
   const unit = recovery.started ? recovery.unit : recovery.running;
   if (unit) {
     return [
@@ -148,7 +157,9 @@ export function formatEarlyGitReleaseRefusal(
   return [
     ...lines,
     "The update stopped before switching releases; the Gateway was not touched.",
-    ...(recovery.reason ? [`Automatic recovery did not start: ${recovery.reason}.`] : []),
+    ...(!recovery.started && recovery.reason
+      ? [`Automatic recovery did not start: ${recovery.reason}.`]
+      : []),
     "Rebuild the checkout once from its directory; later updates then run normally:",
     EARLY_GIT_RELEASE_REBUILD,
   ].join("\n");

@@ -449,39 +449,61 @@ it.each(["json", "human", "check"] as const)(
   },
 );
 
-it("refuses an early Git release updater's schema change from --check before any change", async () => {
-  const stateDir = makeTempDir(tempRoots, "openclaw-worker-early-release-");
-  const prefix = path.join(stateDir, "git-install");
-  const root = path.join(prefix, "releases", "git-b", "build");
-  fs.mkdirSync(root, { recursive: true });
-  fs.mkdirSync(path.join(prefix, "lib", "node_modules"), { recursive: true });
-  fs.symlinkSync(
-    "../../releases/git-a/lib/node_modules/openclaw",
-    path.join(prefix, "lib", "node_modules", "openclaw"),
-  );
-  fs.mkdirSync(path.join(stateDir, "state"));
-  const db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
-  db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1};`);
-  db.close();
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  // mock-isolation: The worker resolves its own package root; place it in the early release layout.
-  vi.doMock("./openclaw-root.js", async (importOriginal) => ({
-    ...(await importOriginal<typeof import("./openclaw-root.js")>()),
-    resolveOpenClawPackageRootSync: () => root,
-  }));
-  try {
-    await runWorker({}, "--check");
-  } finally {
-    vi.doUnmock("./openclaw-root.js");
-    vi.unstubAllEnvs();
-  }
+it.each([
+  [
+    { started: false, reason: "synthetic reason" },
+    "Automatic recovery did not start: synthetic reason.",
+  ],
+  [{ started: true, unit: "openclaw-update-recovery", target: "a".repeat(40) }, "background"],
+])(
+  "refuses an early Git release updater's schema change from --check and reports its recovery",
+  async (recovery, message) => {
+    const stateDir = makeTempDir(tempRoots, "openclaw-worker-early-release-");
+    const prefix = path.join(stateDir, "git-install");
+    const root = path.join(prefix, "releases", "git-b", "build");
+    fs.mkdirSync(root, { recursive: true });
+    fs.mkdirSync(path.join(prefix, "lib", "node_modules"), { recursive: true });
+    fs.symlinkSync(
+      "../../releases/git-a/lib/node_modules/openclaw",
+      path.join(prefix, "lib", "node_modules", "openclaw"),
+    );
+    fs.mkdirSync(path.join(stateDir, "state"));
+    const db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
+    db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1};`);
+    db.close();
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    // mock-isolation: The worker resolves its own package root; place it in the early release layout.
+    vi.doMock("./openclaw-root.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./openclaw-root.js")>()),
+      resolveOpenClawPackageRootSync: () => root,
+    }));
+    // mock-isolation: Starting the recovery needs Git, systemd and a service; its tests own that.
+    const start = vi.fn(async () => recovery);
+    vi.doMock("./update-early-release-recovery.js", () => ({
+      startEarlyGitReleaseRecovery: start,
+    }));
+    // A started recovery moved this release away; the worker exits before loading more code.
+    const exited: unknown[] = [];
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation(((code: unknown) => void exited.push(code)) as never);
+    try {
+      await runWorker({}, "--check");
+    } finally {
+      exit.mockRestore();
+      vi.doUnmock("./openclaw-root.js");
+      vi.doUnmock("./update-early-release-recovery.js");
+      vi.unstubAllEnvs();
+    }
 
-  expect(stdout.join("")).toBe("");
-  expect(process.exitCode).toBe(1);
-  expect(stderr.join("")).toContain(
-    "The update stopped before switching releases; the Gateway was not touched.",
-  );
-});
+    expect(start).toHaveBeenCalledWith(
+      expect.objectContaining({ root, pending: expect.anything() }),
+    );
+    expect(stdout.join("")).toBe("");
+    expect(recovery.started ? exited : process.exitCode).toEqual(recovery.started ? [1] : 1);
+    expect(stderr.join("")).toContain(message);
+  },
+);
 
 it.each([false, true])(
   "binds migrated worker finalization to its local candidate runtime (restart pending=%s)",
