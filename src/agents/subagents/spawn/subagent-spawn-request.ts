@@ -288,7 +288,7 @@ export async function resolveSubagentSpawnRequest(
           requesterSandboxed: ctx.sandboxed,
           spawnedBy: {
             profileId: gateway.creatorProfileId,
-            operatorScopes: gateway.operatorAuthority?.scopes,
+            operatorAuthority: gateway.operatorAuthority,
           },
         })
       : undefined;
