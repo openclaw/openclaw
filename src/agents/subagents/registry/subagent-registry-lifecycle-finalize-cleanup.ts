@@ -413,7 +413,7 @@ export const finalizeResumedAnnounceGiveUp = async (
       if (entry.delivery?.status === "delivered") {
         return;
       }
-      throw new Error(`subagent completion owner changed before settlement: ${entry.runId}`);
+      throw new Error(`subagent completion settlement lost its owner: ${entry.runId}`);
     }
     await finishSubagentCleanup(context, {
       entry,
