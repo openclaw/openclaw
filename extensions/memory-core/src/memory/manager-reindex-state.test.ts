@@ -397,7 +397,7 @@ describe("memory reindex state", () => {
     ).toBe(true);
   });
 
-  it("keeps extra path scope hashes on the persisted en-US collation", () => {
+  it("keeps extra path scope hashes in persisted code-unit order", () => {
     const paths = [
       { path: "notes/备", pattern: "reference/**/*.md" },
       { path: "notes/阿", pattern: "reference/**/*.md" },
@@ -407,6 +407,14 @@ describe("memory reindex state", () => {
 
     expect(scope(paths)).toBe(persistedScopeHash);
     expect(scope(paths.toReversed())).toBe(persistedScopeHash);
+  });
+
+  it("orders distinct Unicode path spellings independently of input order", () => {
+    const composed = { path: "notes/é", pattern: "reference/**/*.md" };
+    const decomposed = { path: "notes/e\u0301", pattern: "reference/**/*.md" };
+
+    expect(scope([composed, decomposed])).toBe(scope([decomposed, composed]));
+    expect(scope([composed, decomposed])).not.toBe(scope([composed]));
   });
 
   it("keeps scope identity stable when only extra-path recency policy changes", () => {
