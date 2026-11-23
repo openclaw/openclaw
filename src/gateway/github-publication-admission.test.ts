@@ -48,6 +48,10 @@ import {
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 
+vi.mock("./server-methods/approval-request-delivery.js", () => ({
+  handlePendingApprovalRequestWithDelivery: vi.fn(async () => {}),
+}));
+
 const mocks = githubPublicationTestMocks();
 const publisher = { source: "system-configured" as const, accountId: 42, login: "roboclaw-bot" };
 const obsolete = { ...publisher, accountId: 41, login: "previous-publisher" };
@@ -372,7 +376,7 @@ describe("project issue creation through the guest tool and registered Gateway m
   };
   const url = "https://github.com/Example/Handbook/issues/7";
 
-  async function fixture(bindProject = true) {
+  async function fixture(bindProject = true, pluginApprovalManager?: unknown) {
     const f = await createRequesterPolicyFixture({
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
@@ -396,7 +400,10 @@ describe("project issue creation through the guest tool and registered Gateway m
       .mockResolvedValue(commandResult(JSON.stringify({ number: 7, url, authorId: 42 })));
     const registry = createRequestGatewayMethodRegistry();
     const context = createGatewayRequestContext(
-      makeContextParams({ getAttachedGatewayMethodRegistry: () => registry }),
+      makeContextParams({
+        getAttachedGatewayMethodRegistry: () => registry,
+        ...(pluginApprovalManager ? { pluginApprovalManager } : {}),
+      } as never),
     );
     const invoke = async (args: Record<string, unknown>, client = f.guestSource.client) => {
       const operator = await prepareGatewayOperatorRunAuthority({
@@ -487,5 +494,44 @@ describe("project issue creation through the guest tool and registered Gateway m
     mocks.runCommand.mockRejectedValue(new Error("connection closed"));
     await expect(invoke(input)).rejects.toThrow(/unconfirmed.*check.*issues before submitting/i);
     expect(mocks.runCommand).toHaveBeenCalledTimes(1);
+  });
+  describe("comments", () => {
+    const body = "Fixed in **main**.\n\n- checked";
+    const comment = { action: "create_comment", issueNumber: 7, body };
+    const commentUrl = "https://github.com/Example/Handbook/pull/7#issuecomment-900";
+    const approvals = (decision: string) => ({
+      create: vi.fn((request: { detail: string }, _timeout: number, id: string) => ({
+        id,
+        request,
+      })),
+      register: vi.fn(async () => ({ decision: Promise.resolve(decision) })),
+      projectDecisionIfActive: vi.fn((_id: string, value: string) => value),
+      consumeAllowOnce: vi.fn(async () => true),
+    });
+    it("posts only the approved text to the registered repository and returns its URL", async () => {
+      const manager = approvals("allow-once");
+      const { invoke } = await fixture(true, manager);
+      mocks.runCommand.mockResolvedValue(
+        commandResult(JSON.stringify({ id: 900, url: commentUrl, body, authorId: 42 })),
+      );
+      const result = await invoke(comment);
+      expect(result.details).toEqual({ status: "posted", url: commentUrl });
+      expect(manager.create.mock.calls[0]![0].detail).toBe(
+        "Repository: example/handbook\nIssue or PR: #7\nAccount: @roboclaw-bot\n\n" + body,
+      );
+      expect(mocks.runCommand).toHaveBeenCalledExactlyOnceWith(
+        expect.arrayContaining(["POST", "repos/example/handbook/issues/7/comments"]),
+        expect.objectContaining({ input: JSON.stringify({ body }) }),
+      );
+      await expect(invoke({ ...comment, repository: "other/repo" })).rejects.toThrow();
+      expect(mocks.runCommand).toHaveBeenCalledTimes(1);
+    });
+    it("posts nothing when the operator denies the text", async () => {
+      const manager = approvals("deny");
+      const { invoke } = await fixture(true, manager);
+      await expect(invoke(comment)).rejects.toThrow(/not approved.*Nothing was posted/);
+      expect(manager.consumeAllowOnce).not.toHaveBeenCalled();
+      expect(mocks.runCommand).not.toHaveBeenCalled();
+    });
   });
 });

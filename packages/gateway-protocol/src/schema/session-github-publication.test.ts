@@ -44,6 +44,18 @@ describe("session GitHub publication protocol", () => {
       profileId: "other",
     });
   });
+  it("accepts one bounded comment by number, never a caller-selected repository or account", () => {
+    const comment = { ...request("create_comment"), issueNumber: 7, body: "Follow-up" };
+    action.accepts(comment);
+    rejectsAction(comment, {
+      ...foreignTarget,
+      issueNumber: 0,
+      body: "x".repeat(8193),
+      pullRequestUrl: "https://github.com/other/repo/pull/1",
+      profileId: "other",
+    });
+    action.rejects({ ...request("create_comment"), issueNumber: 7 });
+  });
   it("accepts current or explicit PR review requests without freeform text", () => {
     const review = { ...request("request_review"), requestId, expectedHeadCommit: head };
     action.accepts(review, {

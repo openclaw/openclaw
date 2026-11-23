@@ -34,7 +34,10 @@ import {
 import { refreshManagedWorkspaceBase } from "../github-publication-base-refresh.js";
 import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
 import { performSessionGitHubInspection } from "../github-publication-inspect.js";
-import { createSessionGitHubIssue } from "../github-publication-issue.js";
+import {
+  createSessionGitHubComment,
+  createSessionGitHubIssue,
+} from "../github-publication-issue.js";
 import { readGitHubPublicationReadiness } from "../github-publication-readiness.js";
 import { isGitHubPublicationSuperseded } from "../github-publication-relevance.js";
 import {
@@ -194,6 +197,13 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         options.respond(
           true,
           await createSessionGitHubIssue({ ...options, params: options.params }),
+        );
+        return;
+      }
+      if (options.params.action === "create_comment") {
+        options.respond(
+          true,
+          await createSessionGitHubComment({ ...options, params: options.params }),
         );
         return;
       }

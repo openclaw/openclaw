@@ -39,6 +39,10 @@ export const GitHubPublicationTitleSchema = Type.String({
   pattern: "^[^\\r\\n]*\\S[^\\r\\n]*$",
 });
 export const GitHubPublicationBodySchema = Type.String({ minLength: 1, maxLength: 8 * 1024 });
+export const GitHubCommentIssueNumberSchema = Type.Integer({
+  minimum: 1,
+  maximum: Number.MAX_SAFE_INTEGER,
+});
 
 export const GitHubPullRequestInspectSchema = closedObject({
   action: Type.Literal("inspect_pr"),
@@ -174,6 +178,13 @@ export const SessionGitHubActionParamsSchema = Type.Union([
     agentId: Type.Optional(NonEmptyString),
     title: GitHubPublicationTitleSchema,
     body: Type.Optional(GitHubPublicationBodySchema),
+  }),
+  closedObject({
+    action: Type.Literal("create_comment"),
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+    issueNumber: GitHubCommentIssueNumberSchema,
+    body: GitHubPublicationBodySchema,
   }),
 ]);
 export const SessionGitHubBaseRefreshResultSchema = closedObject({
