@@ -390,7 +390,10 @@ outcome never changes the update's. The Gateway's `update.run` and automatic upd
 not run it: the process census would block the serving Gateway, and for a runtime without
 `owner.json` it cannot tell the requesting `openclaw update` from an older updater still
 using it. Inside a container, cleanup keeps runtimes and says so, because host processes
-are not visible. Run
+are not visible. A runtime without `owner.json` that the first release update did not remove
+(for example, because that update ran from the Gateway) is reported afterwards as
+`no recognized runtime marker`. Once no `openclaw update` is running, remove that directory
+by hand. Run
 `openclaw doctor --fix` before uninstalling; manual removal on Windows needs the
 extended-length path prefix ([Uninstall](/install/uninstall#remove-the-cli)). Incomplete preparation
 keeps immediate best-effort cleanup. Unsettled workers retain their runtime with

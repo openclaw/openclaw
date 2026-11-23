@@ -758,7 +758,7 @@ describe("retained updater runtimes", () => {
       await expect(fs.access(held)).resolves.toBeUndefined();
       await expect(fs.access(unseen)).resolves.toBeUndefined();
       const printed = log.mock.calls.map(([line]) => String(line));
-      // One line per runtime, in directory order, then the update's own result.
+      // One line per runtime, then the update's own result.
       expect(printed.slice(0, -1).toSorted()).toEqual([
         `Removed abandoned updater runtime: ${abandoned}`,
         `Runtime retained at ${unseen}: Could not inspect OpenClaw processes: census unavailable`,
