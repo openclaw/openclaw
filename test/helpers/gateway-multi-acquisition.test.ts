@@ -35,7 +35,13 @@ function gateway(
   stop = owner.close,
   hookToken = "synthetic-hook",
 ) {
-  return { port: owner.port, hookToken, stopGateway: stop, cleanup: stop };
+  return {
+    port: owner.port,
+    hookToken,
+    startGateway: async () => {},
+    stopGateway: stop,
+    cleanup: stop,
+  };
 }
 
 function captureSuite() {
@@ -50,14 +56,9 @@ function captureSuite() {
   return { bodies, cleanups };
 }
 
-function mockHarness(
-  spawn: () => unknown,
-  connect: () => unknown,
-  status: () => unknown = vi.fn(),
-) {
+function mockHarness(connect: () => unknown, status: () => unknown = vi.fn()) {
   // mock-isolation: Own acquisition and cleanup failures without spawning real Gateway processes.
   vi.doMock("./gateway-e2e-harness.js", () => ({
-    spawnGatewayInstance: spawn,
     stopGatewayInstance: (instance: { cleanup: () => Promise<void> }) => instance.cleanup(),
     postJson: async () => ({ status: 200, json: { ok: true } }),
     connectNode: connect,
@@ -114,7 +115,6 @@ it.each(["none", "gateway", "both"] as const)(
     const { bodies, cleanups } = captureSuite();
     let nextInstance = 0;
     mockHarness(
-      async () => instances[nextInstance++],
       async () => ({
         nodeId: "synthetic-node",
         client: { stopAndWait: stopClient },
@@ -126,8 +126,9 @@ it.each(["none", "gateway", "both"] as const)(
         stopAndWait: stopClient,
       }),
     );
+    // mock-isolation: Inject owned fixtures instead of creating real Gateway state or processes.
     vi.doMock("./openclaw-test-instance.js", () => ({
-      createOpenClawTestInstance: async () => instances[2],
+      createOpenClawTestInstance: async () => instances[nextInstance++],
     }));
     let passive: Promise<unknown> | undefined;
     let cleanup: Promise<unknown> | undefined;
@@ -172,6 +173,9 @@ it.each(["none", "gateway", "both"] as const)(
     } finally {
       heldClient.resolve();
       await passive;
+      if (!cleanup && cleanups[0]) {
+        cleanup = outcome(cleanups[0]());
+      }
       await cleanup;
       await Promise.all(owners.map((owner) => owner.close()));
     }
@@ -214,14 +218,11 @@ it.each(["server", "node"] as const)(
       return failure.promise;
     };
     let serverIndex = 0;
-    mockHarness(
-      boundary === "server" ? acquire : async () => servers[serverIndex++],
-      boundary === "node" ? acquire : vi.fn(),
-    );
+    mockHarness(boundary === "node" ? acquire : vi.fn());
+    // mock-isolation: Control late acquisition without creating real Gateway state or processes.
     vi.doMock("./openclaw-test-instance.js", () => ({
-      createOpenClawTestInstance: () => {
-        throw new Error("unselected suite must not start a Gateway");
-      },
+      createOpenClawTestInstance:
+        boundary === "server" ? acquire : async () => servers[serverIndex++],
     }));
     let bodyResult: Promise<unknown> | undefined;
     let cleanupResult: Promise<unknown> | undefined;
@@ -255,6 +256,9 @@ it.each(["server", "node"] as const)(
       failure.reject(acquisitionError);
       await acquisitions;
       await bodyResult;
+      if (!cleanupResult && cleanups[0]) {
+        cleanupResult = outcome(cleanups[0]());
+      }
       await cleanupResult;
       await owner.close();
     }
