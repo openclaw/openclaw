@@ -27,12 +27,8 @@ type KeysIn<T extends unknown[], K extends PropertyKey> = {
 }[number];
 const execute = async () => ({ content: [], details: {} });
 const factories = { sync: createSync, async: createAsync };
-async function surface(
-  mode: "sync" | "async",
-  config: SurfaceParams["config"],
-  extra: Partial<SurfaceParams> = {},
-) {
-  const params = { modelToolsEnabled: true, config, executeTool: execute, ...extra };
+async function surface(mode: "sync" | "async", config: SurfaceParams["config"]) {
+  const params = { modelToolsEnabled: true, config, executeTool: execute };
   const runtime = await factories[mode](params);
   onTestFinished(runtime.cleanup);
   return runtime;
@@ -60,21 +56,6 @@ it("keeps host-owned controls out of public attempt and tool inputs", () => {
 });
 
 it("preserves explicitly allowed tools in an asynchronously prepared compact surface", async () => {
-  const runtime = await surface("async", {
-    agents: { defaults: { agentProfileId: "openclaw/small" } },
-    tools: { allow: ["browser"], codeMode: false, toolSearch: false },
-  });
-  const tools = ["browser", "tts"].map((name) => ({
-    name,
-    label: name,
-    description: name,
-    parameters: Type.Object({}),
-    execute,
-  }));
-  expect(runtime.compactTools(tools).tools.map((tool) => tool.name)).toEqual(["browser"]);
-});
-
-it("preserves explicitly allowed tools on the small profile", async () => {
   const runtime = await surface("async", {
     agents: { defaults: { agentProfileId: "openclaw/small" } },
     tools: { allow: ["browser"], codeMode: false, toolSearch: false },
