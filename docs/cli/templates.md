@@ -514,6 +514,15 @@ personality/SOUL greeting, not a saved canned greeting or a message sent on your
 behalf. Later setup failure retains the exposed agent and conversation;
 completion does not replace an existing draft.
 
+Offline CLI Add checks model and sign-in availability before its optional greeting.
+If no usable model is available, it skips the greeting and prints a short note to
+stderr, including with `--json`. Dependency installation, automations, and
+first-run instruction files still finish normally; a successful Add exits `0`.
+Configure a model in **Settings → Models**, then open the new agent's chat.
+When a model is available, Add still runs the greeting. A failed model turn or
+failed setup step still reports `partial` and exits `1`; it is not treated as a
+skipped greeting.
+
 During a CLI Add, the installer shows a card for each newly installed plugin and
 an automation-created notice as each routine is added. Disabled routines remain
 disabled while their setup prerequisites are missing. Actual installation failures
