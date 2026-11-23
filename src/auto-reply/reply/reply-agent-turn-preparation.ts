@@ -140,8 +140,8 @@ export async function prepareReplyAgentTurn<TConfigured>(
   params: PrepareReplyAgentTurnParams<TConfigured>,
 ): Promise<PreparedReplyAgentTurn<TConfigured | undefined>> {
   let operatorAuthority = params.queued.operatorAuthority;
-  const assertOperatorCurrent = () => operatorAuthority?.assertCurrent();
-  assertOperatorCurrent();
+  // Queued start: the source's own fences (for example a retired cron delivery) refuse before claim.
+  operatorAuthority?.assertCurrent();
   const readAdmissionConfig = () =>
     params.queued.readAdmissionConfig?.() ?? selectLiveRuntimeConfig(params.queued.run.config);
   let config = captureRuntimeConfig(params.queued.run.config);
@@ -178,7 +178,6 @@ export async function prepareReplyAgentTurn<TConfigured>(
     }
     operatorAuthority = authoritySource?.operatorAuthority ?? params.queued.operatorAuthority;
     params.queued.operatorAuthority = operatorAuthority;
-    assertOperatorCurrent();
     const replySessionKey = params.queued.run.sessionKey ?? params.defaults.sessionKey;
     const initialStoredEntry = replySessionKey
       ? params.defaults.sessionStore?.[replySessionKey]
@@ -270,7 +269,6 @@ export async function prepareReplyAgentTurn<TConfigured>(
     }
     const operation = admission.operation;
     const assertAdmissionCurrent = () => {
-      assertOperatorCurrent();
       operation.abortSignal.throwIfAborted();
       if (operation.result) {
         throw new Error("Reply execution is no longer current");
@@ -352,7 +350,6 @@ export async function prepareReplyAgentTurn<TConfigured>(
                 sessionKey: replySessionKey,
               })
             : activeEntry;
-        assertOperatorCurrent();
         if (
           !isGoalContinuationCurrent(goalContinuation, goalEntry) ||
           getFollowupQueueDepth(replySessionKey ?? "") > 0
@@ -598,7 +595,6 @@ export async function prepareReplyAgentTurn<TConfigured>(
                 expectedSessionId: operation.sessionId,
                 beforeFreshMessageCommit: () => {
                   operation.abortSignal.throwIfAborted();
-                  preparation.followupRun.operatorAuthority?.assertCurrent();
                   if (operation.lifecycleGeneration) {
                     assertAgentRunLifecycleGenerationCurrent(operation.lifecycleGeneration);
                   }
@@ -669,7 +665,6 @@ export async function prepareReplyAgentTurn<TConfigured>(
           hasOperatorAuthority: Boolean(operatorAuthority),
           requiresWorker: Boolean(run.config?.cloudWorkers?.requiredProfile),
         });
-        assertOperatorCurrent();
         if (
           !placementCurrent ||
           operation.abortSignal.aborted ||

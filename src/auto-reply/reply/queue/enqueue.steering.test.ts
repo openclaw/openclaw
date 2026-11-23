@@ -1,7 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createTestOperatorAuthority } from "../../../agents/admitted-run-context.test-support.js";
-import { GatewayOperatorAccessUnavailableError } from "../../../infra/operator-authority-error.js";
 import {
   beginSessionControllerSourceInjection,
   bindSessionControllerSource,
@@ -127,52 +126,6 @@ it("joins asynchronous source cleanup after native settlement and cancellation",
   expect(settled).toHaveBeenCalledOnce();
   expect(input.mailbox.entries).not.toContain(input);
 });
-
-it("rechecks channel execution authority after waiting for native settlement", async () => {
-  const [first, second] = [queue.source("first"), queue.source("second")];
-  let current = true;
-  second.operatorAuthority = authority(() => current, "source authority revoked");
-  const firstReservation = await queue.admit(first);
-  const secondReservation = queue.reserve(second);
-  const secondAdmission = secondReservation.admit();
-  const rejected = expect(secondAdmission).resolves.toBe("cancelled");
-  current = false;
-  firstReservation.consume("consumed");
-  await rejected;
-  await settleSource(second.controllerInput!);
-  expect(second.controllerInput?.phase).toBe("consumed");
-});
-
-it.each([new GatewayOperatorAccessUnavailableError(), new Error("internal SDK assertion failure")])(
-  "queues an unaccepted steer after an unrecorded authority refusal (%s)",
-  async (error) => {
-    const [first, second] = [source("first"), source("second")];
-    let refusing = false;
-    // This source assertion fails without recording operator revocation.
-    second.operatorAuthority = {
-      canonicalIdentity: null,
-      profileId: "fixture",
-      scopes: ["operator.write"],
-      signal: new AbortController().signal,
-      assertCurrent() {
-        if (refusing) {
-          refusing = false;
-          throw error;
-        }
-      },
-    };
-    const { delivered, drained } = recordDelivery(1);
-    const firstReservation = await queue.admit(first);
-    const secondAdmission = queue.reserve(second).admit();
-    const rejected = expect(secondAdmission).rejects.toBe(error);
-    refusing = true;
-    firstReservation.consume("consumed");
-    await rejected;
-    expect(second.controllerInput?.abortSignal.aborted).toBe(false);
-    await drained;
-    expect(delivered).toEqual(["second"]);
-  },
-);
 
 it.each(["accepted", "rejected"] as const)(
   "tries newer input after an earlier steer rejects and drains %s fallback in order",
