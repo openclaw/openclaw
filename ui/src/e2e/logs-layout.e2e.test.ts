@@ -29,6 +29,65 @@ const logLines = Array.from({ length: 40 }, (_value, index) =>
 );
 
 suite.define(() => {
+  it("paints keyboard focus around the framed log stream without moving it", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        viewport: { width: 820, height: 1180 },
+        hasTouch: true,
+        serviceWorkers: "block",
+      },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "logs.tail": {
+              cursor: 1,
+              file: "/synthetic/gateway.log",
+              lines: logLines.slice(0, 1),
+              reset: true,
+            },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "logs");
+        const stream = page.getByRole("region", { name: "Logs", exact: true });
+        await stream.getByRole("listitem").waitFor();
+        await page.evaluate(() => document.fonts.ready);
+        const follow = page.getByRole("switch", { name: "Auto-follow", exact: true });
+        await follow.focus();
+        const bounds = (await stream.boundingBox())!;
+        // Sample outside each edge, away from controls, text and rounded corners.
+        const x = Math.round(bounds.x),
+          y = Math.round(bounds.y);
+        const right = Math.round(bounds.x + bounds.width),
+          bottom = Math.round(bounds.y + bounds.height);
+        const middleX = Math.round(bounds.x + bounds.width / 2),
+          middleY = Math.round(bounds.y + bounds.height / 2);
+        const clips = [
+          { x: middleX - 16, y: y - 5, width: 32, height: 5 },
+          { x: right, y: middleY - 16, width: 5, height: 32 },
+          { x: middleX - 16, y: bottom, width: 32, height: 5 },
+          { x: x - 5, y: middleY - 16, width: 5, height: 32 },
+        ];
+        const edges = () => Promise.all(clips.map((clip) => page.screenshot({ clip })));
+        const inactive = await edges();
+        await page.keyboard.press("Tab");
+        expect(
+          await stream.evaluate(
+            (el) => el === document.activeElement && el.matches(":focus-visible"),
+          ),
+        ).toBe(true);
+        expect(await stream.boundingBox()).toEqual(bounds);
+        const active = await edges();
+        expect(active.map((edge, i) => !edge.equals(inactive[i]!))).toEqual([
+          true,
+          true,
+          true,
+          true,
+        ]);
+      },
+    );
+  });
+
   it("keeps the toolbar and footer clear of the stream in the macOS dashboard viewport", async () => {
     const proofDir = artifactRoot
       ? path.join(createControlUiE2eArtifactDir("logs-layout", artifactRoot), proofLabel)

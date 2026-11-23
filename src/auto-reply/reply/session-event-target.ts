@@ -31,7 +31,7 @@ import { checkRequesterOwner } from "../../cron/execution-context-admission.js";
 import type { ScheduledRequesterRef } from "../../cron/execution-context.js";
 import type { RestartRecoveryOperatorSource } from "../../gateway/operator-run-recovery-source.codec.js";
 import {
-  restoreGatewayOperatorSource,
+  restoreScheduledAutomationOperator,
   type RestoredGatewayOperatorAuthority,
 } from "../../gateway/operator-run-recovery.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -397,10 +397,11 @@ export async function prepareSessionEventTargetForHost(
       if (!context) {
         throw new GatewayOperatorAccessUnavailableError();
       }
-      restored = await restoreGatewayOperatorSource({
+      // Only cron supplies a deferred operator source: the event is a scheduled automation start.
+      restored = await restoreScheduledAutomationOperator({
         agentId: target.agentId,
-        snapshot: scope.operatorSource.snapshot,
-        source: scope.operatorSource,
+        source: { kind: "gateway", snapshot: scope.operatorSource.snapshot },
+        operatorSource: scope.operatorSource,
         context,
         assertCurrent: assertAcceptance,
       });

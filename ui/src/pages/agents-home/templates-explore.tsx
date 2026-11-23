@@ -106,8 +106,10 @@ function TemplateCard(
           </span>
           <div class="plugin-catalog-row__text">
             <div class="plugin-card-title-row agents-home__template-identity">
-              <h3>{props.entry.displayName}</h3>
-              {props.entry.official ? renderPluginOfficialBadge() : undefined}
+              <div class="agents-home__template-name">
+                <h3>{props.entry.displayName}</h3>
+                {props.entry.official ? renderPluginOfficialBadge() : undefined}
+              </div>
               <span class="plugin-card-author">{`@${props.entry.ownerHandle}`}</span>
             </div>
             {/* Reserve the line even when a Template has no summary. */}

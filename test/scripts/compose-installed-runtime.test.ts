@@ -95,6 +95,7 @@ async function fixture(
     "node-host-launcher.mjs",
     "node-compile-cache.mjs",
     "openclaw.mjs",
+    "release-launcher-forward.mjs",
   ]) {
     await write(pack, name, "// portable fixture\n");
   }

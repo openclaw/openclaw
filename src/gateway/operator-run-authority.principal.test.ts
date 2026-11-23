@@ -482,14 +482,19 @@ describe("canonical membership role admission", () => {
         using _ = { [Symbol.dispose]: catalog.release };
         let member = initiallyMember;
         setOpenClawIdMemberAccountLookup((accountId) => member && accountId === "recovery-member");
-        const role = { ...reader, sandbox: "required" as const };
+        // A recovered start needs write; the subject under test is the role policy, not its scopes.
+        const role = {
+          ...reader,
+          scopes: ["operator.read", "operator.write"],
+          sandbox: "required" as const,
+        } satisfies GatewayOperatorRoleDefinition;
         const cfg: OpenClawConfig = {
           gateway: { openclawId: { enabled: true }, roles: { definitions: { reader: role } } },
         };
         setRuntimeConfigSnapshot(cfg);
         const recovery = await recoveryFixture(stateDir, profile.id, {
           config: cfg,
-          scopes: ["operator.read"],
+          scopes: ["operator.read", "operator.write"],
         });
         const recovered = await recovery.restore();
         try {

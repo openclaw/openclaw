@@ -2,7 +2,11 @@ import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
-import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
+import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
+import {
+  intersectOperatorScopes,
+  operatorScopeSatisfied,
+} from "../shared/operator-scope-compat.js";
 import {
   decideOperatorAdmission,
   prepareOperatorAdmission,
@@ -23,10 +27,20 @@ import type { GatewayAuthenticatedUserProfile } from "./server/client-identity-t
 
 export type RestoredGatewayOperatorAuthority = {
   authority: AdmittedRunOperatorAuthority;
-  authenticatedUserProfile: GatewayAuthenticatedUserProfile;
+  /** Only Gateway recovery reauthenticates a Control UI profile. */
+  authenticatedUserProfile?: GatewayAuthenticatedUserProfile;
   controlUiAdmin: boolean;
   automationAdmin: boolean;
   release: () => void;
+};
+
+type QueuedRecoveryParams = {
+  source: unknown;
+  liveAuthority?: AdmittedRunOperatorAuthority;
+  operatorSource?: RestartRecoveryOperatorSource;
+  agentId?: string;
+  context: OperatorAdmissionContext;
+  assertCurrent: () => void;
 };
 
 /** Restore owner-held saved facts at the next start, never during the admitted run. */
@@ -36,44 +50,49 @@ export async function restoreGatewayOperatorSource(params: {
   agentId?: string;
   context: OperatorAdmissionContext;
   assertCurrent: () => void;
-  prepareCurrent?: () => Promise<void>;
 }): Promise<RestoredGatewayOperatorAuthority> {
-  await params.prepareCurrent?.();
-  const facts = {
-    kind: "gateway",
-    snapshot: params.snapshot,
-    source: params.source,
+  return restoreGatewayQueuedOperatorRecovery({
+    source: { kind: "gateway", snapshot: params.snapshot },
+    operatorSource: params.source,
     agentId: params.agentId,
-  } as const;
-  const prepared = await prepareOperatorAdmission(facts, params.context);
-  try {
-    // This producer's custody fence checks the claim/occurrence, not requester policy.
-    params.assertCurrent();
-  } catch (error) {
-    prepared.ingress?.release();
-    prepared.identity?.release();
-    throw error;
-  }
-  return decideOperatorAdmission(facts, prepared);
+    context: params.context,
+    assertCurrent: params.assertCurrent,
+  });
 }
 
-/** A queued native launch reuses its original authenticated source, never profile attribution. */
-export async function restoreGatewayQueuedOperatorRecovery(params: {
-  source: unknown;
-  liveAuthority?: AdmittedRunOperatorAuthority;
-  operatorSource?: RestartRecoveryOperatorSource;
-  agentId?: string;
-  context: OperatorAdmissionContext;
-  assertCurrent: () => void;
-}): Promise<
-  Pick<
-    RestoredGatewayOperatorAuthority,
-    "authority" | "controlUiAdmin" | "automationAdmin" | "release"
-  > & {
-    /** Only Gateway recovery reauthenticates a Control UI profile. */
-    authenticatedUserProfile?: GatewayAuthenticatedUserProfile;
+/**
+ * A queued native launch reuses its original authenticated source, never profile attribution.
+ * Chat-like starts need the grant a live chat.send needs: operator.sessions.write.
+ */
+export async function restoreGatewayQueuedOperatorRecovery(params: QueuedRecoveryParams) {
+  return admitStart(params, "operator.sessions.write", "sending messages");
+}
+
+/** Scheduled automations start on the grant that creates them: operator.cron, or write. */
+export async function restoreScheduledAutomationOperator(params: QueuedRecoveryParams) {
+  return admitStart(params, "operator.cron", "running this automation");
+}
+
+/** Admission only narrows scopes; a start also needs its grant. Channel senders need none. */
+async function admitStart(
+  params: QueuedRecoveryParams,
+  grant: "operator.sessions.write" | "operator.cron",
+  action: string,
+): Promise<RestoredGatewayOperatorAuthority> {
+  const admitted = await admitQueuedSource(params);
+  const { channelRecoverySource, scopes } = admitted.authority;
+  if (!channelRecoverySource && !operatorScopeSatisfied(grant, scopes)) {
+    admitted.release();
+    throw new GatewayOperatorRecoveryAuthorizationError(
+      `Your operator role no longer allows ${action}; ask an administrator to restore access.`,
+    );
   }
-> {
+  return admitted;
+}
+
+async function admitQueuedSource(
+  params: QueuedRecoveryParams,
+): Promise<RestoredGatewayOperatorAuthority> {
   params.assertCurrent();
   const captured = decodeQueuedOperatorRecoverySource(params.source);
   const capturedFacts =
@@ -108,7 +127,8 @@ export async function captureGatewayOperatorContinuation(
   }
   const facts = captureQueuedOperatorRecoverySource(inherited) ?? { kind: "unavailable" };
   const context = input.context.resolveGatewayContext?.() ?? input.context;
-  const restored = await restoreGatewayQueuedOperatorRecovery({
+  // In-run continuations re-admit without a start grant: a started run finishes.
+  const restored = await admitQueuedSource({
     source: facts,
     liveAuthority: inherited,
     agentId: input.agentId,
