@@ -61,11 +61,11 @@ export async function applyMediaUnderstandingIfNeeded(params: {
       : params.processingMode;
     const result = await applyMediaUnderstanding({ ...params, processingMode });
     if (params.recordAudioApiKeyFailures) {
-      const audio = params.ctx.MediaUnderstandingDecisions?.findLast(
+      const audioDecision = params.ctx.MediaUnderstandingDecisions?.findLast(
         (decision) => decision.capability === "audio",
       );
       const failures = (params.ctx.media ?? []).flatMap((fact, index) => {
-        const disposition = audio?.attachmentDispositions?.[index];
+        const disposition = audioDecision?.attachmentDispositions?.[index];
         const reference = fact.url ?? fact.path;
         return fact.source !== "quote" &&
           reference &&
