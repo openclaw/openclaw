@@ -122,7 +122,7 @@ export function applyChatSharingNoticeEvent(
 }
 
 /** Translate at presentation time; unknown actors are never attributed to the current viewer. */
-export function projectChatSharingNotice(
+function projectChatSharingNotice(
   notice: ChatSharingNotice,
 ): Extract<ChatItem, { kind: "notice" }> {
   const action = notice.action === "member-added" ? "invited" : "accessChanged";

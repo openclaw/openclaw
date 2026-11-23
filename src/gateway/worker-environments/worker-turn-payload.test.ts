@@ -7,7 +7,6 @@ import {
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { buildRuntimeContextCustomMessage } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
-import { PARTICIPATION_WORKER_ERROR } from "../../agents/participation-ceiling.js";
 import { prepareParticipationTestRun } from "../../agents/participation-ceiling.test-support.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
@@ -42,7 +41,9 @@ it("refuses participating input at direct worker execution preflight", () => {
         sessionKey: "agent:main:session",
       }),
     }),
-  ).toThrow(PARTICIPATION_WORKER_ERROR);
+  ).toThrow(
+    "Participating inputs require Gateway-local OpenClaw execution. Worker placements cannot enforce their permission ceiling; use a Gateway-local OpenClaw session.",
+  );
 });
 
 const runtimeIdentityToken = vi.hoisted(() => ({

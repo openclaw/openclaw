@@ -259,10 +259,7 @@ export function applySessionApprovalEvent(
   return true;
 }
 
-export type SessionParticipantApprovalEvent = Extract<
-  SessionApprovalEvent,
-  { phase: "participant" }
->;
+type SessionParticipantApprovalEvent = Extract<SessionApprovalEvent, { phase: "participant" }>;
 
 export type ParticipantApprovalNotice = Pick<
   SessionParticipantApprovalEvent,

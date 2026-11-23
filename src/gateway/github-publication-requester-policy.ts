@@ -106,7 +106,7 @@ function readPublicationFacts(
   }
 }
 
-export function assertPublicationParticipation(
+function assertPublicationParticipation(
   snapshot: GitHubPublicationRequesterSnapshot,
   session: PublicationSession,
   config: OpenClawConfig,

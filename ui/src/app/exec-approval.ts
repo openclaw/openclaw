@@ -32,7 +32,7 @@ export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
 
 export type ApprovalTurnActor = { id: string; label: string };
 
-export function parseApprovalTurnActor(value: unknown): ApprovalTurnActor | undefined {
+function parseApprovalTurnActor(value: unknown): ApprovalTurnActor | undefined {
   if (!isRecord(value)) {
     return undefined;
   }

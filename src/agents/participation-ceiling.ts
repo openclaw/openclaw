@@ -195,7 +195,7 @@ export function assertParticipationRuntime(
   }
 }
 
-export const PARTICIPATION_WORKER_ERROR =
+const PARTICIPATION_WORKER_ERROR =
   "Participating inputs require Gateway-local OpenClaw execution. Worker placements cannot enforce their permission ceiling; use a Gateway-local OpenClaw session.";
 
 /** Worker launch protocols do not carry the per-input execution ceiling. */

@@ -8,7 +8,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { createModelRuntimeChoiceOwnerFixture } from "../../agents/model-runtime-choice.test-support.js";
-import { PARTICIPATION_WORKER_ERROR } from "../../agents/participation-ceiling.js";
+import { prepareParticipationTestRun } from "../../agents/participation-ceiling.test-support.js";
 import * as preparedModelRuntime from "../../agents/prepared-model-runtime.js";
 import {
   installSessionPlacementAdmissionProvider,
@@ -76,18 +76,19 @@ describe("worker turn launcher local placement", () => {
       await fx.seedActivePlacement(executionMode);
       const original = fx.placements.get(fx.SESSION_ID);
       const environments = fx.unusedEnvironments();
+      vi.mocked(environments.get).mockReturnValue(fx.attachedEnvironment());
       const provider = createLauncher({ environments });
       const runLocal = vi.fn(localResult);
       const input = {
         ...fx.turn("participant-worker"),
-        participationCeiling: {
-          kind: "send" as const,
+        ...prepareParticipationTestRun({
+          kind: "send",
           profileId: "guest",
           sessionKey: fx.SESSION_KEY,
-        },
+        }),
       };
       await expect(provider.executeTurn(runIdentity(input.runId), input, runLocal)).rejects.toThrow(
-        PARTICIPATION_WORKER_ERROR,
+        "Participating inputs require Gateway-local OpenClaw execution. Worker placements cannot enforce their permission ceiling; use a Gateway-local OpenClaw session.",
       );
       expect(fx.placements.get(fx.SESSION_ID)).toEqual(original);
       expectUncalled(
@@ -104,11 +105,11 @@ describe("worker turn launcher local placement", () => {
     const runLocal = vi.fn(localResult);
     const input = {
       ...fx.turn("participant-local"),
-      participationCeiling: {
-        kind: "send" as const,
+      ...prepareParticipationTestRun({
+        kind: "send",
         profileId: "guest",
         sessionKey: fx.SESSION_KEY,
-      },
+      }),
     };
     await expect(
       localProvider.executeTurn(runIdentity(input.runId), input, runLocal),

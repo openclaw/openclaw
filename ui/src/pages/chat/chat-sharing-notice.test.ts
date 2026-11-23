@@ -4,7 +4,7 @@ import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { disposeSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
-import { currentChatSharingNotices, projectChatSharingNotice } from "./chat-sharing-notice.ts";
+import { currentChatSharingNotices, insertChatSharingNotices } from "./chat-sharing-notice.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { createSessionEventState } from "./chat-state.test-support.ts";
 
@@ -42,7 +42,9 @@ describe("live sharing transcript notices", () => {
       sharingEvent({ action: "member-access-changed", access: "read", ts: 2_000 }, true),
     );
     const notices = currentChatSharingNotices(state);
-    expect(notices.map(projectChatSharingNotice)).toMatchObject([
+    const items: Parameters<typeof insertChatSharingNotices>[0] = [];
+    insertChatSharingNotices(items, notices);
+    expect(items).toMatchObject([
       {
         kind: "notice",
         label: "Taylor invited Alice Collaborator with Send access",
@@ -68,9 +70,9 @@ describe("live sharing transcript notices", () => {
         actor: { type: "human", id: "opaque-actor-id" },
       }),
     );
-    expect(currentChatSharingNotices(state).map(projectChatSharingNotice)).toMatchObject([
-      { label: "Unknown person’s access changed to Send" },
-    ]);
+    const items: Parameters<typeof insertChatSharingNotices>[0] = [];
+    insertChatSharingNotices(items, currentChatSharingNotices(state));
+    expect(items).toMatchObject([{ label: "Unknown person’s access changed to Send" }]);
   });
 
   it("leaves old/non-ceiling, unrelated and malformed sharing events unchanged", () => {

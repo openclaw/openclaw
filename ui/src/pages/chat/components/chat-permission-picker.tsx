@@ -65,7 +65,7 @@ export type ChatPermissionPickerContentProps = {
   onReady: (content: ChatPermissionPickerContent | undefined) => void;
 };
 
-export type ChatPermissionPickerContent = {
+type ChatPermissionPickerContent = {
   items: () => MenuItem[];
   select: (id: string) => void;
 };
