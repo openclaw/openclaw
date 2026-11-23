@@ -345,6 +345,52 @@ export function resolveOperatorRolePolicy(
   );
 }
 
+type ProjectGrantSubject =
+  | { client: GatewayClient | null | undefined }
+  | {
+      profileId: string | undefined;
+      openclawIdPrincipal?: import("./openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
+    };
+
+/**
+ * Project grants are never admission facts. Retained clients and run authorities pass the
+ * ordinary role boundary, then read their canonical profile's current role from live config.
+ * A profile merged away since admission resolves to another person's role, so it grants nothing.
+ */
+export function resolveCurrentProjectGrant(
+  cfg: OpenClawConfig,
+  subject: ProjectGrantSubject,
+): GatewayOperatorRoleDefinition["projects"] {
+  if ("profileId" in subject) {
+    const { profileId } = subject;
+    return openclawIdSubjectRolePolicy(subject.openclawIdPrincipal, () => {
+      const policy = resolveOperatorRolePolicyForProfile(profileId, cfg);
+      return policy &&
+        profileId &&
+        captureResidentUserProfileAccess(profileId).assertCurrent().id !== profileId
+        ? undefined
+        : policy;
+    })?.projects;
+  }
+  const { client } = subject;
+  if (!resolveOperatorRolePolicy(client ?? null, cfg)) {
+    return undefined;
+  }
+  const actor = resolveGatewayOperatorRoleActor(client);
+  const actorProfileId = actor?.kind === "operator" ? actor.profileId : undefined;
+  const authority = client?.internal?.operatorRunAuthority;
+  const prepared = client?.preparedSessionProfile;
+  const profileId =
+    (actorProfileId && authority?.profileId) ||
+    (actorProfileId && prepared?.aliases.has(actorProfileId) ? prepared.profileId : undefined) ||
+    actorProfileId ||
+    client?.authenticatedUserProfile?.profileId;
+  return resolveCurrentProjectGrant(cfg, {
+    profileId,
+    openclawIdPrincipal: client?.internal?.openclawIdPrincipal ?? authority?.openclawIdPrincipal,
+  });
+}
+
 /** Admit the request against its prepared role or the connection's current named role. */
 export function authorizeCurrentOperatorRoleScopes(
   client: GatewayClient | null,
