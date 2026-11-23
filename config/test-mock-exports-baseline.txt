@@ -1817,7 +1817,6 @@
 ["src/agents/subagents/registry/subagent-registry-lifecycle.test.ts","../../../context-engine/init.js","6728bc52e37344e809a90f1dcbc196937cd5189e23cf73b9b995be1540b177bb",1]
 ["src/agents/subagents/registry/subagent-registry-lifecycle.test.ts","../../../runtime.js","94bbc42782daf05a6230157cba9dbbd8430d988ca2fbe783ef94885d0cc3744b",1]
 ["src/agents/subagents/registry/subagent-registry-lifecycle.test.ts","../../internal-session-effects.js","b7cf40eb7030822287d9df0d0f7a85d971d66bc70b84b1b8c2aff47ad22224a3",1]
-["src/agents/subagents/registry/subagent-registry-lifecycle.test.ts","../announce/subagent-announce.js","e09435e3e260716d9088b8a7f45b68cf687516f6864023963e7d4bcf3dd986fb",1]
 ["src/agents/subagents/registry/subagent-registry-queued-registration.test.ts","./subagent-registry.js","5035b37223c42fd527077644b6ea6ea9af63f52246cf4d9752288670eaddf4f2",1]
 ["src/agents/subagents/registry/subagent-registry.announce-loop-guard.test.ts","../../../browser-lifecycle-cleanup.js","a15f6b686117caa464a53ef59fb9b0055b2c9f3ae40ed4c2bc6a0070c8fe360a",1]
 ["src/agents/subagents/registry/subagent-registry.announce-loop-guard.test.ts","../../../config/config.js","ed19fff3cbd2c8e013f6b67c9f46b66ae0bd40951c214fe8eb5e1887bf24da33",1]

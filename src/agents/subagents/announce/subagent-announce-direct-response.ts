@@ -1,8 +1,4 @@
 /** Interprets direct announcement responses and the existing text-fallback receipt. */
-import {
-  classifyAgentRunTerminalOutcome,
-  resolveAgentRunWaitTerminalFacts,
-} from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -24,7 +20,7 @@ import {
   isGatewayAgentRunPending,
   resolvePrivateCompletionDeliveryResult,
 } from "./subagent-announce-completion-delivery.js";
-import { classifyAnnounceDeliveryError } from "./subagent-announce-delivery-retry.js";
+import { summarizeDeliveryError } from "./subagent-announce-delivery-retry.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import type { DeliveryContext } from "./subagent-announce-origin.js";
 
@@ -73,13 +69,9 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
     directAnnounceResponse: unknown,
   ): SubagentAnnounceDeliveryResult | Promise<SubagentAnnounceDeliveryResult> => {
     if (isGatewayAgentRunPending(directAnnounceResponse)) {
+      // The requester mailbox owns a private or settle turn that has not run yet.
       return parentOnly || params.sourceTool === "subagent_settle"
-        ? {
-            delivered: false,
-            path: "direct",
-            reason: "requester_turn_pending",
-            disposition: "session_queued",
-          }
+        ? { delivered: false, path: "queued", reason: "requester_turn_pending" }
         : { delivered: true, path: "direct" };
     }
 
@@ -127,28 +119,17 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
       directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
     );
     // Consuming child findings settles delivery; the parent owns any later answer.
-    const missingVisibleReplyResult = (): SubagentAnnounceDeliveryResult => {
-      if (requesterCompletedSuccessfully) {
-        return buildRequesterCompletionDeliveryResult(
-          false,
-          directAnnounceResult?.meta?.finalAssistantVisibleText,
-        );
-      }
-      const terminal = resolveAgentRunWaitTerminalFacts(directAnnounceRecord ?? {});
-      const outcome = terminal && classifyAgentRunTerminalOutcome(terminal);
-      const interruption =
-        directAnnounceResult?.meta?.aborted === true || outcome === "cancellation"
-          ? "requester_aborted"
-          : outcome === "timeout"
-            ? "requester_timed_out"
-            : undefined;
-      const failure = classifyAnnounceDeliveryError(directAnnounceResult?.meta?.error, {
-        interruption,
-        restartInterrupted: terminal?.stopReason === "restart",
-        replaySafe: directAnnounceRecord?.replaySafe === true && !automaticEvidence.mayHaveSent,
-      });
-      return automaticEvidence.mayHaveSent ? { ...failure, disposition: "ambiguous" } : failure;
-    };
+    const missingVisibleReplyResult = (): SubagentAnnounceDeliveryResult =>
+      requesterCompletedSuccessfully
+        ? buildRequesterCompletionDeliveryResult(
+            false,
+            directAnnounceResult?.meta?.finalAssistantVisibleText,
+          )
+        : {
+            delivered: false,
+            path: "direct",
+            error: summarizeDeliveryError(directAnnounceResult?.meta?.error),
+          };
     const requiresSettleReply = params.sourceTool === "subagent_settle";
     const acceptsIntentionalSilentCompletion =
       effectiveReplyExpectation !== "result-required" &&
@@ -176,7 +157,6 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
         error: directDeliveryFailure,
         // A completed turn's answer did not reach the requester's channel.
         ...(requesterCompletedSuccessfully ? { finalAssistantVisibleText: "" } : {}),
-        ...(automaticEvidence.mayHaveSent ? { disposition: "ambiguous" as const } : {}),
       };
     }
     if (
@@ -224,8 +204,6 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
         error: automaticEvidence.mayHaveSent
           ? "automatic completion delivery could not be confirmed"
           : (automaticEvidence.suppressionReason ?? "automatic completion delivery suppressed"),
-        disposition: automaticEvidence.mayHaveSent ? "ambiguous" : "intentional_non_delivery",
-        terminal: automaticEvidence.mayHaveSent ? undefined : true,
       };
     }
     if (
@@ -249,12 +227,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
         !hasMessagingToolDelivery
       ) {
         // A yielded requester still owns pending work, not a tool-running fallback.
-        return {
-          delivered: false,
-          path: "direct",
-          reason: "completion_handoff_pending",
-          disposition: "session_queued",
-        };
+        return { delivered: false, path: "queued", reason: "completion_handoff_pending" };
       }
     }
     const finishClassification = ():
