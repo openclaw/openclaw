@@ -162,9 +162,16 @@ it("sends a pinned commit and the --timeout budget that the Gateway protocol acc
       timeoutMs: 5_000,
     }),
   ).rejects.toThrow("refused for the test");
+  // The Gateway gets what remains of the budget after this command's own work.
   expect(sent).toEqual([
-    { target: { kind: "git", upstreamRef: "origin/main", upstreamSha: sha }, timeoutMs: 5_000 },
+    {
+      target: { kind: "git", upstreamRef: "origin/main", upstreamSha: sha },
+      timeoutMs: expect.any(Number),
+    },
   ]);
+  const { timeoutMs } = sent[0] as { timeoutMs: number };
+  expect(timeoutMs).toBeGreaterThan(0);
+  expect(timeoutMs).toBeLessThanOrEqual(5_000);
   expect(validateUpdateRunParams(sent[0])).toBe(true);
 });
 
