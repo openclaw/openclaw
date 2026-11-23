@@ -400,7 +400,7 @@ describe("Gateway GitHub publication", () => {
     const token = `ghp_${"x".repeat(36)}`;
     const diagnostic = [
       "\u001b[31mfatal: Authentication failed\u001b[0m",
-      "https://user:fixture-password@example.test/repo?unknown=fixture-query#fixture-fragment",
+      "https://example.test/repo?unknown=fixture-query#fixture-fragment",
       "https://user:fi'xture@example.test/repo",
       `https://example.test/${"x".repeat(4_096)}?unknown=fixture-long-query#fixture-long-fragment`,
       "Authorization: Bearer fixture-bearer",
