@@ -99,6 +99,16 @@ invalid upgraded config still refuses publication. No live file is replaced or
 removed unless the upgrade copied it. If Doctor creates a template over an
 uncopied workspace file, startup leaves the original alone and reports a warning.
 
+Before replacing a SQLite database, the startup swap retires retained admission
+descriptors for both the live database and its prepared replacement. Closing
+SQLite alone does not release those descriptors, and Windows refuses to rename
+a database while either file remains open. The swap still preserves the previous
+files for rollback and admits the replacement as a new file.
+On Windows, the task supervisor starts without Gateway config or state bootstrap.
+Only its child opens state databases, so the supervisor does not hold them open
+while the child publishes a startup migration. No launcher format change is
+needed.
+
 During copy-and-swap upgrades, Doctor records carried-over scheduled jobs against
 credential databases at their eventual live paths. Reads and repairs remain on
 the private copy. The updater passes this destination directly to Doctor; no
