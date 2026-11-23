@@ -2,6 +2,7 @@ import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtim
 
 installDiscordIngressTestRuntime();
 import { ChannelType, MessageFlags } from "discord-api-types/v10";
+import { stampAgentControls } from "openclaw/plugin-sdk/agent-control-runtime";
 import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -11,7 +12,6 @@ import {
   type SessionBindingRecord,
   unregisterSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { stampAgentControls } from "openclaw/plugin-sdk/interactive-runtime";
 import { registerPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
 import { getActivePluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

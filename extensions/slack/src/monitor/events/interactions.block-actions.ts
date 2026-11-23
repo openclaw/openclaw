@@ -1,4 +1,5 @@
 import type { Block, KnownBlock } from "@slack/web-api";
+import { agentControlText } from "openclaw/plugin-sdk/agent-control-runtime";
 import {
   resolveApprovalOverGateway,
   type ApprovalResolveResult,
@@ -13,7 +14,6 @@ import {
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
-import { agentControlText } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   decodeSlackApprovalAction,

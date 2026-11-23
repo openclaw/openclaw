@@ -1,7 +1,5 @@
-import {
-  isReplySessionInitConflictError,
-  type SourceReplyDeliveryMode,
-} from "openclaw/plugin-sdk/reply-runtime";
+import type { SourceReplyDeliveryMode } from "openclaw/plugin-sdk/reply-runtime";
+import { isReplySessionInitConflictError } from "openclaw/plugin-sdk/reply-session-init-runtime";
 const DISCORD_SESSION_CONFLICT_FAILURE_TEXT =
   "⚠️ Couldn't process this message because the session stayed busy. Please try again in a moment.";
 

@@ -1,4 +1,4 @@
-import { agentControlText } from "openclaw/plugin-sdk/interactive-runtime";
+import { agentControlText } from "openclaw/plugin-sdk/agent-control-runtime";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { parseMattermostQuestionContext } from "../normalize.js";
 import {

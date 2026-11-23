@@ -1,6 +1,6 @@
+import { agentControlText } from "openclaw/plugin-sdk/agent-control-runtime";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import {
-  agentControlText,
   legacyInteractiveReplyToPresentation,
   normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,

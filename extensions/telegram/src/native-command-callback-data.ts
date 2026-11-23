@@ -1,4 +1,4 @@
-import { stampAgentControlValue } from "openclaw/plugin-sdk/interactive-runtime";
+import { stampAgentControlValue } from "openclaw/plugin-sdk/agent-control-runtime";
 
 const TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX = "tgcmd:";
 const TELEGRAM_OPAQUE_CALLBACK_PREFIX = "tgcb1:";

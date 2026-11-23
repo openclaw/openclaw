@@ -1,3 +1,4 @@
+import { stampAgentControls } from "openclaw/plugin-sdk/agent-control-runtime";
 import {
   adaptMessagePresentationForChannel,
   legacyInteractiveReplyToPresentation,
@@ -6,7 +7,6 @@ import {
   normalizeLegacyInteractiveReply,
   renderMessagePresentationFallbackText,
   resolveLegacyInteractiveTextFallback,
-  stampAgentControls,
   type MessagePresentation,
   type MessagePresentationInteractiveBlock,
   type MessagePresentationTableBlock,

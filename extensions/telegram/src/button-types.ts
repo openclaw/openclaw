@@ -1,6 +1,6 @@
+import { agentControlText } from "openclaw/plugin-sdk/agent-control-runtime";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
-  agentControlText,
   legacyInteractiveReplyToPresentation,
   isMessagePresentationInteractiveBlock,
   normalizeMessagePresentation,

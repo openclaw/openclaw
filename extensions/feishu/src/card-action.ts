@@ -1,5 +1,5 @@
+import { agentControlText } from "openclaw/plugin-sdk/agent-control-runtime";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import { agentControlText } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
