@@ -40,6 +40,8 @@ it("dispatches a QA Channel inbound turn through the embedded runner", async () 
       kind: "message-text",
       direction: "outbound",
       textIncludes: "qa-echo: ping",
+      // First ingress includes cold worker startup on loaded CI runners.
+      timeoutMs: 30_000,
     }),
   ).resolves.toMatchObject({ direction: "outbound", text: "qa-echo: ping" });
 });
