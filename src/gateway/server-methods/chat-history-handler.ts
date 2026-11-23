@@ -44,7 +44,7 @@ import { readPreparedGatewayModelMetadata } from "../server-model-catalog-view.j
 import { registerDeflatedSegment } from "../server/ws-compression.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
-import { usesLegacyNativePins } from "../session-pin-compatibility.js";
+import { usesLegacySessionPins } from "../session-pin-compatibility.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
@@ -519,7 +519,7 @@ export async function handleChatHistoryRequest({
           }
           const sessionSnapshot = buildGatewaySessionSnapshot({
             sessionRow: sessionInfo,
-            includeLegacyPins: usesLegacyNativePins(client),
+            includeLegacyPins: usesLegacySessionPins(client),
             agentId: sessionAgentId,
             activeRunState,
           });

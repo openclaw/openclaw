@@ -24,7 +24,7 @@ import {
   sessionRowFactEncodingBytes,
   type SessionListView,
 } from "./session-list-view-cache.js";
-import { presentSessionPin, usesLegacyNativePins } from "./session-pin-compatibility.js";
+import { presentSessionPin, usesLegacySessionPins } from "./session-pin-compatibility.js";
 import {
   resolveRequestedSessionAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
@@ -212,7 +212,7 @@ function prepareSessionRowRecipient(
     presentFastMode,
     publicationState,
     sharing,
-    omitSharedPins: client !== undefined && !usesLegacyNativePins(client),
+    omitSharedPins: client !== undefined && !usesLegacySessionPins(client),
   };
 }
 

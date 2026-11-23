@@ -83,10 +83,10 @@ struct ChatSessionSidebarBatchTests {
             "",
         ]
         let moved = ChatSessionSidebarBatch.movingPin(
-            entries,
+            entries.map(AnyCodable.init),
             key: "c",
             target: "a",
-            after: false)
+            after: false).compactMap { $0.value as? String }
         #expect(moved == [
             "route:usage",
             "session:c",
@@ -100,12 +100,48 @@ struct ChatSessionSidebarBatchTests {
         for index in [0, 2, 4, 6, 7] {
             #expect(Array(moved[index].utf8) == Array(entries[index].utf8))
         }
-        #expect(ChatSessionSidebarBatch.movingPin(entries, key: "a", target: "a", after: true) == entries)
+        #expect(ChatSessionSidebarBatch
+            .movingPin(entries.map(AnyCodable.init), key: "a", target: "a", after: true) == entries
+            .map(AnyCodable.init))
     }
 
     @Test func `reordering cannot restore a pin removed on another client`() {
         let entries = ["session:a", "route:usage", "future:reserved"]
-        #expect(ChatSessionSidebarBatch.movingPin(entries, key: "b", target: "a", after: false) == entries)
+        #expect(ChatSessionSidebarBatch
+            .movingPin(entries.map(AnyCodable.init), key: "b", target: "a", after: false) == entries
+            .map(AnyCodable.init))
+    }
+
+    @Test func `reorder preserves heterogeneous layout values and compares their exact JSON`() async throws {
+        let original: [Any] = ["session:a", 7, NSNull(), ["future": [true, false]], "session:b"]
+        var server = original
+        var writes = 0
+        let conn = try self.connection { request in
+            if request.method == "users.prefs.get" {
+                return try JSONSerialization.data(withJSONObject: [
+                    "status": "ok",
+                    "entries": ["ui.railShortcuts": server],
+                ])
+            }
+            let wire = try self.params(request)
+            let expected = try #require((wire["expectedEntries"] as? [String: [Any]])?["ui.railShortcuts"])
+            let next = try #require((wire["entries"] as? [String: [Any]])?["ui.railShortcuts"])
+            #expect(NSArray(array: expected).isEqual(to: original))
+            #expect(NSArray(array: next).isEqual(to: [
+                "session:b",
+                7,
+                NSNull(),
+                ["future": [true, false]],
+                "session:a",
+            ]))
+            server = next
+            writes += 1
+            return Data(#"{"status":"ok"}"#.utf8)
+        }
+        let batch = ChatSessionSidebarBatch()
+        try await batch.movePin(key: "b", target: "a", after: false, connection: conn)
+        #expect(writes == 1)
+        #expect(batch.sidebarEntries == ["session:b", "session:a"])
     }
 
     @Test func `failed preference write rolls optimistic pin ordering back to the server snapshot`() async throws {

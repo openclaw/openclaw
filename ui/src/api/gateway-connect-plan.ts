@@ -303,6 +303,7 @@ export async function buildBrowserGatewayConnectPlan({
           "health-summary",
           "hello-presence-self",
           "session-scoped-events",
+          "personal-session-pins",
           "presence-deltas",
           ...(!nativeAuth
             ? ["session-row-deltas", "session-event-field-refs", "roster-message-bodies-optional"]

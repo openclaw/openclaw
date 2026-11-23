@@ -34,7 +34,7 @@ import {
 } from "../session-identity-projection.js";
 import { loadSessionLifecycleRuntime } from "../session-lifecycle-runtime-loader.js";
 import { sessionMutationForbiddenError } from "../session-mutation-authorization-error.js";
-import { usesLegacyNativePins } from "../session-pin-compatibility.js";
+import { usesLegacySessionPins } from "../session-pin-compatibility.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
 import {
@@ -126,7 +126,7 @@ function createSessionPatchHandler(
       }
       if (
         patch.pinned !== undefined &&
-        !(usesLegacyNativePins(client) && sessionPinRequester(options))
+        !(usesLegacySessionPins(client) && sessionPinRequester(options))
       ) {
         return await patchPersonalSessionPins(options, targets, patch, request.many);
       }

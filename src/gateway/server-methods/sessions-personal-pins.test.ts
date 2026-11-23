@@ -24,6 +24,9 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
     setRuntimeConfigSnapshot(cfg);
     const alice = identifiedClient(ensureProfileForEmail("alice@pins.test").id);
     const bob = identifiedClient(ensureProfileForEmail("bob@pins.test").id);
+    for (const client of [alice, bob]) {
+      client.connect.caps = ["personal-session-pins"];
+    }
     const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
     const key = (label: string) => `agent:main:${label}`;
     const [a, b, c, nested] = ["a", "b", "c", "nested"].map(key) as [
@@ -108,6 +111,30 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
       totalCount: 1,
       sessions: [{ key: a, pinned: true }],
     });
+    const integration: GatewayClient = {
+      ...alice,
+      connect: {
+        ...alice.connect,
+        client: { ...alice.connect.client, id: "gateway-client", mode: "backend" },
+        caps: [],
+      },
+    };
+    await expect(list(integration, { pinned: true })).resolves.toMatchObject({
+      sessions: [{ key: a, pinned: true }],
+    });
+    await expect(
+      rpc(integration, "sessions.patch", { key: c, label: "Legacy", pinned: true }),
+    ).resolves.toMatchObject({ entry: { label: "Legacy", pinnedAt: expect.any(Number) } });
+    await expect(
+      rpc(integration, "sessions.patch", { key: c, pinned: false }),
+    ).resolves.toMatchObject({ key: c });
+    integration.connect.caps = ["personal-session-pins"];
+    await expect(list(integration, { pinned: true })).resolves.toMatchObject({
+      sessions: [{ key: b }, { key: c }],
+    });
+    await expect(
+      rpc(integration, "sessions.patch", { key: c, label: "Mixed", pinned: true }),
+    ).rejects.toThrow(/pinned separately/);
     const modernMac: GatewayClient = {
       ...oldMac,
       connect: { ...oldMac.connect, caps: ["personal-session-pins"] },
@@ -127,6 +154,15 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
     await expect(
       list(alice, { pinned: true, sortBy: "activity", offset: 1 }),
     ).resolves.toMatchObject({ totalCount: 2, sessions: [{ key: c, pinned: true }] });
+    for (const includeNativeSubagents of [false, true]) {
+      const params = { key: a, agentId: "main", includeNativeSubagents };
+      await expect(rpc(alice, "sessions.describe", params)).resolves.toMatchObject({
+        session: { key: a, pinned: false },
+      });
+      await expect(rpc(bob, "sessions.describe", params)).resolves.toMatchObject({
+        session: { key: a, pinned: true },
+      });
+    }
     // The actual preference writer must not evict someone else's warm menu on a theme change.
     await rpc(bob, "users.prefs.set", { entries: { "ui.theme": "dark" } });
     const preferenceReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");

@@ -11,6 +11,7 @@ import { captureAgentHarnessLifecycleHooks } from "../../agents/harness/registry
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
+import { usesLegacySessionPins } from "../session-pin-compatibility.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
 import { prepareSessionRowPublication } from "../session-row-presentation.js";
@@ -21,19 +22,14 @@ import {
 } from "../session-sharing.js";
 import { readRecentSessionMessagesWithStatsAsync } from "../session-transcript-readers.js";
 import { createVisibleActiveSessionRunProjector } from "./session-active-runs.js";
+import { readRequesterSessionPins, sessionPinRequester } from "./session-pin-requester.js";
 import { requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
-  "sessions.describe": async ({
-    params,
-    respond,
-    context,
-    client,
-    sessionMutationAuthorization,
-    signal,
-  }) => {
+  "sessions.describe": async (options) => {
+    const { params, respond, context, client, sessionMutationAuthorization, signal } = options;
     if (!assertValidParams(params, validateSessionsDescribeParams, "sessions.describe", respond)) {
       return;
     }
@@ -51,7 +47,15 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       });
       return agent.ok && !denied ? [{ key, agentId: agent.agentId }] : [];
     };
+    const pinOwner = sessionPinRequester(options);
+    const personalPins = pinOwner
+      ? usesLegacySessionPins(client)
+        ? undefined
+        : await readRequesterSessionPins(pinOwner)
+      : new Map<string, number>();
+    const presentationOptions = { ...params, personalPins };
     const selected = await withReadySessionRows(projection, queries, (read) => {
+      pinOwner?.assertCurrent();
       sessionMutationAuthorization?.assertCurrent();
       const requestedAgent = resolveRequestedSessionAgentId(
         read.state.cfg,
@@ -94,7 +98,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       if (params.includeNativeSubagents) {
         return record;
       }
-      respond(true, { session: presentation.present(record, params) });
+      respond(true, { session: presentation.present(record, presentationOptions) });
       return undefined;
     });
     if (!selected) {
@@ -113,6 +117,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       let active = true;
       const assertCurrent = () => {
         signal?.throwIfAborted();
+        pinOwner?.assertCurrent();
         sessionMutationAuthorization?.assertCurrent();
         if (!projection.isCurrent(selected)) {
           throw new Error("Session changed while reading native subagents");
@@ -191,7 +196,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
           }
           assertCurrent();
           respond(true, {
-            session: presentation.present(current, params),
+            session: presentation.present(current, presentationOptions),
             ...(nativeSubagents === undefined ? {} : { nativeSubagents }),
           });
         });

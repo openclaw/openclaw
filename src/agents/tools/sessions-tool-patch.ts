@@ -79,7 +79,11 @@ export function readSessionsToolPatch(params: Record<string, unknown>): Sessions
   if (params.thinkingLevel !== undefined) {
     patch.thinkingLevel = readToolStringParam(params, "thinkingLevel", { required: true });
   }
-  if (Object.keys(patch).length === 0) {
+  const fields = Object.keys(patch);
+  if (patch.pinned !== undefined && fields.length > 1) {
+    throw new ToolInputError("Send pinned separately from shared session settings.");
+  }
+  if (fields.length === 0) {
     throw new ToolInputError("Patch setting required");
   }
   return patch;

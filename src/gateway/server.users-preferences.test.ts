@@ -50,6 +50,7 @@ test("named preferences stay profile-scoped over authenticated multi-agent Gatew
       const connected = await connectReq(socket, {
         skipDefaultAuth: true,
         client: CONTROL_UI_CLIENT,
+        caps: ["personal-session-pins"],
         prePairDevice: true,
         scopes,
         browserOrigin: origin,

@@ -50,14 +50,14 @@ final class ChatSessionSidebarBatch {
     private static let pinKey = "ui.railShortcuts"
     private struct PinSnapshot: Decodable {
         let status: String
-        let entries: [String: [String]]?
+        let entries: [String: [AnyCodable]]?
     }
 
     private struct PinWrite: Decodable { let status: String }
-    private func pinEntries(_ connection: OpenClawSessionMenuConnection) async throws -> [String] {
+    private func pinEntries(_ connection: OpenClawSessionMenuConnection) async throws -> [AnyCodable] {
         let reply: PinSnapshot = try await connection.read("users.prefs.get", ["keys": .init([Self.pinKey])])
         guard reply.status == "ok", let entries = reply.entries else { throw CocoaError(.coderReadCorrupt) }
-        return entries[Self.pinKey] ?? ["route:cron", "route:plugins", "route:usage"]
+        return entries[Self.pinKey] ?? ["route:cron", "route:plugins", "route:usage"].map(AnyCodable.init)
     }
 
     var selection = ChatSidebarSelection()
@@ -99,24 +99,24 @@ final class ChatSessionSidebarBatch {
         let scope = self.scope
         let entries = try await self.pinEntries(connection)
         guard self.scope == scope, !self.writingPins else { return }
-        self.sidebarEntries = entries
+        self.sidebarEntries = entries.compactMap { $0.value as? String }
     }
 
-    static func movingPin(_ entries: [String], key: String, target: String?, after: Bool) -> [String] {
-        // app-navigation.ts persists session:<key>; Gateway ordinary keys already include their agent.
-        // Raw global/unknown sentinels share the web preference slot, not a native-only identity format.
+    static func movingPin(_ entries: [AnyCodable], key: String, target: String?, after: Bool) -> [AnyCodable] {
         guard key != target else { return entries }
-        // Reordering must not re-add a slot removed by a concurrent unpin.
-        var result = entries
-        let slots = result.indices.filter {
-            result[$0].hasPrefix("session:") && !result[$0].dropFirst(8).trimmingCharacters(in: .whitespacesAndNewlines)
-                .isEmpty
+        func pinKey(_ entry: AnyCodable) -> String? {
+            guard let text = entry.value as? String, text.hasPrefix("session:") else { return nil }
+            let suffix = text.dropFirst(8).trimmingCharacters(in: .whitespacesAndNewlines)
+            return suffix.isEmpty ? nil : suffix
         }
-        var sessions = slots.map { result[$0] }
-        guard let source = sessions.firstIndex(of: "session:\(key)") else { return entries }
+        // Move only existing pin slots. The original JSON, including unknown future values, is the CAS base.
+        let slots = entries.indices.filter { pinKey(entries[$0]) != nil }
+        var sessions = slots.map { entries[$0] }
+        guard let source = sessions.firstIndex(where: { pinKey($0) == key }) else { return entries }
         let entry = sessions.remove(at: source)
-        let destination = target.flatMap { sessions.firstIndex(of: "session:\($0)") }
+        let destination = target.flatMap { target in sessions.firstIndex(where: { pinKey($0) == target }) }
         sessions.insert(entry, at: destination.map { $0 + (after ? 1 : 0) } ?? sessions.count)
+        var result = entries
         for (slot, value) in zip(slots, sessions) {
             result[slot] = value
         }
@@ -141,7 +141,7 @@ final class ChatSessionSidebarBatch {
                 let previous = try await self.pinEntries(connection)
                 guard self.scope == scope else { return }
                 let next = Self.movingPin(previous, key: key, target: target, after: after)
-                self.sidebarEntries = next
+                self.sidebarEntries = next.compactMap { $0.value as? String }
                 guard next != previous else { return }
                 do {
                     let result: PinWrite = try await connection.read("users.prefs.set", [
@@ -152,11 +152,11 @@ final class ChatSessionSidebarBatch {
                     guard result.status == "ok" else { throw CocoaError(.fileWriteUnknown) }
                 } catch {
                     guard connection.isCurrent(), self.scope == scope else { throw CancellationError() }
-                    self.sidebarEntries = previous
+                    self.sidebarEntries = previous.compactMap { $0.value as? String }
                     throw error
                 }
                 let committed = try await self.pinEntries(connection)
-                if self.scope == scope { self.sidebarEntries = committed }
+                if self.scope == scope { self.sidebarEntries = committed.compactMap { $0.value as? String } }
                 return
             }
         } catch {

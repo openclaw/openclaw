@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isIncognitoSessionKey, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
-import { presentSessionPin, usesLegacyNativePins } from "../session-pin-compatibility.js";
+import { presentSessionPin, usesLegacySessionPins } from "../session-pin-compatibility.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
@@ -35,7 +35,7 @@ export function buildUnsavedHistoryRow({
   ...params
 }: Parameters<typeof buildGatewaySessionRow>[0] & Pick<GatewayRequestHandlerOptions, "client">) {
   const row = buildGatewaySessionRow(params);
-  if (!usesLegacyNativePins(client)) {
+  if (!usesLegacySessionPins(client)) {
     presentSessionPin(row, null);
   }
   const present = prepareSessionFastModePresentation(client);

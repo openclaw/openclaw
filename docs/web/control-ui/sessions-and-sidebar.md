@@ -186,14 +186,15 @@ import shared navigation or pinned sessions, and writes nothing until you edit
 your pins or the rail. Both use the existing `ui.railShortcuts` preference; older
 `ui.sidebarEntries` values remain stored but are ignored. Shortcuts saved under
 the new preference, including an empty list, remain unchanged.
-Concurrent saves use conflict checks and preserve unrelated pin edits. Older native
-clients that do not advertise `personal-session-pins` keep their shared pin list;
+Concurrent saves use conflict checks and preserve unrelated pin edits. Older apps and RPC
+integrations that do not advertise `personal-session-pins` keep their shared pin list;
 they never receive the profile's private pin list to write back to shared configuration.
 After upgrading, pin the chats you want on your own sidebar. Historical shared pins
 have no recorded pinner and are not copied into anyone's profile. Calls without a
 verified person can still list visible sessions without a pin filter; sign in to
-filter by pins or change them. The native compatibility path can be retired once
-supported clients no longer write pin order to shared configuration. Updated macOS
+filter by pins or change them. Admitted session tools always use their requester’s pins. Direct integrations
+opt in on their connection and verify Gateway support before writing a personal pin.
+The legacy path can be retired in a future protocol transition after supported clients migrate. Updated macOS
 and Android clients require the Gateway to advertise `personal-session-pins` before
 sending a personal edit; update the Gateway first. A Mac undoing an archive on an
 older Gateway can restore the legacy pin that the same archive just cleared.

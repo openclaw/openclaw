@@ -32,7 +32,7 @@ import {
 import { errorShapeFromError } from "../error-shape.js";
 import { hasOperatorBoundary, operatorSessionCap } from "../operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import { usesLegacyNativePins } from "../session-pin-compatibility.js";
+import { usesLegacySessionPins } from "../session-pin-compatibility.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import {
@@ -378,7 +378,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         diagnostics?.finish("returned");
         return undefined;
       }
-      const legacy = owner && usesLegacyNativePins(client);
+      const legacy = owner && usesLegacySessionPins(client);
       const assertCurrent = () => {
         args.sessionMutationAuthorization?.assertCurrent();
         owner?.assertCurrent();

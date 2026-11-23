@@ -93,6 +93,7 @@ test.each(["sessions.patch", "sessions.patchMany"] as const)(
       expectNoSessionQueueCleanup();
     }
 
+    member.connect.caps = ["personal-session-pins"];
     const pin = await request(method, member, context, [foreignKey], { pinned: true });
     expect(pin).toMatchObject(
       method === "sessions.patchMany"
