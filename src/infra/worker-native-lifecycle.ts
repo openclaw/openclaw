@@ -71,6 +71,8 @@ export type RetainedNativeWorkerSource = {
     input?: unknown,
   ): Promise<{
     port: MessagePort;
+    ref(this: void): void;
+    unref(this: void): void;
     retainBrokerUntilProcessExit(this: void): void;
     close(): Promise<void>;
   }>;
@@ -461,8 +463,21 @@ export function captureRetainedNativeWorkerSource(options?: {
         fail,
       );
       let closed = false;
+      let closing = false;
       const resource = {
         port: port2,
+        ref() {
+          lease.setReferenced(true);
+          port2.ref();
+        },
+        unref() {
+          // A late operation acknowledgment cannot release an in-progress close.
+          if (closing) {
+            return;
+          }
+          lease.setReferenced(false);
+          port2.unref();
+        },
         retainBrokerUntilProcessExit() {
           // Loaded native images retain physical tokens after domain ports close.
           // The broker already unrefs idle handles and joins on the host's real exit.
@@ -472,6 +487,8 @@ export function captureRetainedNativeWorkerSource(options?: {
           if (closed) {
             return;
           }
+          closing = true;
+          resource.ref();
           if (!attachment.dispatched) {
             lease.abandonUnattached();
           } else {

@@ -73,6 +73,24 @@ it("prepares an agent database while its original creation witness is retained",
   ).resolves.toMatchObject({ entries: [] });
 });
 
+it("keeps an async capture live when the preceding unused borrower releases", async ({
+  signal,
+}) => {
+  const options = fixture();
+  const preceding = capture(options);
+  const capturing = captureOpenClawAgentDatabaseExecutionAsync(options, {}, "inherit");
+  let joining: Execution | undefined;
+  try {
+    await preceding.release();
+    joining = await capturing;
+    await withinTest(joining.prepare(source(), signal), signal);
+    expect(joining.fileIdentity).toMatchObject({ kind: "file" });
+  } finally {
+    await preceding.release();
+    await joining?.release();
+  }
+});
+
 it.for(["cancelled", "revoked"] as const)(
   "does not create a database after queued preparation is %s",
   async (outcome, { signal }) => {
