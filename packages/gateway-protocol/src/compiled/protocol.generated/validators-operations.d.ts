@@ -80,6 +80,7 @@ export {
   isHooksStatusParams,
   isCronListParams,
   isCronStatusParams,
+  isCronAcknowledgeFailureParams,
   isCronGetParams,
   isCronAddParams,
   isCronUpdateParams,
