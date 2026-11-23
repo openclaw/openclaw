@@ -444,13 +444,15 @@ it.each([
     const evidencePath = join(binDir, "evidence.json");
     const jsonPath = join(binDir, "diff.json");
     const source = sdkSource(repo);
-    writeFileSync(source, "export type Fixture = string;\n");
+    // Both frozen revisions lack a declaration companion for this runtime-only import.
+    writeFileSync(join(repo, "src/plugin-sdk/runtime.mjs"), "globalThis.fixtureRuntime = 1;\n");
+    writeFileSync(source, 'import "./runtime.mjs";\nexport type Fixture = string;\n');
     const latestSha = commit(repo, "latest");
     git(repo, ["tag", "v2026.7.31"]);
-    writeFileSync(source, "export type Fixture = number;\n");
+    writeFileSync(source, 'import "./runtime.mjs";\nexport type Fixture = number;\n');
     const betaSha = commit(repo, "beta");
     git(repo, ["tag", "v2026.8.1-beta.1"]);
-    writeFileSync(source, "export type Fixture = boolean;\n");
+    writeFileSync(source, 'import "./runtime.mjs";\nexport type Fixture = boolean;\n');
     const headSha = commit(repo, "candidate");
     git(repo, ["tag", "candidate"]);
     writeFileSync(source, "export type Fixture = uncommitted;\n");

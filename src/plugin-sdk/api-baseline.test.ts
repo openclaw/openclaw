@@ -477,6 +477,96 @@ export {};`,
   expect(firstExport(changed)?.closureHash).not.toBe(firstExport(baseline)?.closureHash);
 });
 
+it.each(["js", "jsx", "mjs", "cjs"])(
+  "ignores resolved .%s side-effect implementations without declaration symbols",
+  async (extension) => {
+    const render = (value: number) =>
+      renderSourceFixture({
+        "fixture.ts": `import "./runtime.${extension}";\nexport type Fixture = { value: string };`,
+        [`runtime.${extension}`]: `globalThis.fixtureRuntime = ${value};\n`,
+      });
+    const baseline = await render(1);
+    expect(firstExport(baseline)?.closureHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(await render(2)).toEqual(baseline);
+  },
+);
+
+it("rejects a missing bare side-effect import", async () => {
+  await expect(
+    renderSourceFixture('import "./missing.mjs";\nexport type Fixture = string;'),
+  ).rejects.toThrow("missing.mjs");
+});
+
+it("retains ambient declarations resolved beside a runtime module", async () => {
+  const render = (optional: boolean) =>
+    renderSourceFixture({
+      "fixture.ts":
+        'import "./runtime.mjs";\nexport declare function createFixture(value: OpenClawBaselineRuntimeGlobal): void;',
+      "runtime.mjs": "globalThis.fixtureRuntime = 1;\n",
+      "runtime.d.mts": `declare global {
+  interface OpenClawBaselineRuntimeGlobal { value${optional ? "?" : ""}: string }
+}
+export {};`,
+    });
+  const baseline = await render(false);
+  const changed = await render(true);
+  expect(baseline.declarationSections.find(({ name }) => name === "global")?.text).toContain(
+    "OpenClawBaselineRuntimeGlobal",
+  );
+  expect(firstExport(changed)?.closureHash).not.toBe(firstExport(baseline)?.closureHash);
+});
+
+it.each([
+  'import type { Value } from "./runtime.mjs";\nexport type Fixture = Value;',
+  'export { Value as Fixture } from "./runtime.mjs";',
+  'export type Fixture = import("./runtime.mjs").Value;',
+])("keeps declaration-bearing JavaScript references strict: %s", (source) => {
+  const repoRoot = tempDirs.make("openclaw-plugin-sdk-named-runtime-");
+  const fileName = path.join(repoRoot, "fixture.d.ts");
+  writeFiles(repoRoot, {
+    "fixture.d.ts": source,
+    "runtime.mjs": "export const Value = 1;\n",
+  });
+  using native = nativeProject(repoRoot, [fileName], tsOptions);
+  const { program } = native.project;
+  const owner = program.getSourceFile(fileName);
+  expect(owner).toBeDefined();
+  const render = createDeclarationClosureRenderer({
+    project: native.project,
+    printer: native.api.printer,
+    sourceProgram: program,
+    emittedSources: new Set(),
+    repoRoot,
+  });
+  expect(() => render(owner!, "Fixture")).toThrow("runtime.mjs");
+});
+
+it("uses compiler resolution for runtime imports in whole-file fallback", () => {
+  const render = (runtime: string | undefined) => {
+    const repoRoot = tempDirs.make("openclaw-plugin-sdk-runtime-fallback-");
+    const fileName = path.join(repoRoot, "fixture.d.ts");
+    writeFiles(repoRoot, {
+      "fixture.d.ts": 'import "./runtime.mjs";\nexport type Fixture = { value: string };',
+      ...(runtime === undefined ? {} : { "runtime.mjs": runtime }),
+    });
+    using native = nativeProject(repoRoot, [fileName], tsOptions);
+    const { program } = native.project;
+    const owner = program.getSourceFile(fileName);
+    expect(owner).toBeDefined();
+    return createDeclarationClosureRenderer({
+      project: native.project,
+      printer: native.api.printer,
+      sourceProgram: program,
+      emittedSources: new Set(),
+      repoRoot,
+    })(owner!, "unindexed");
+  };
+  const baseline = render("globalThis.fixtureRuntime = 1;\n");
+  expect(baseline?.sections.map(({ name }) => name)).toEqual(["*"]);
+  expect(render("globalThis.fixtureRuntime = 2;\n")).toEqual(baseline);
+  expect(() => render(undefined)).toThrow("runtime.mjs");
+});
+
 it("ignores unreachable declarations beside a transitive export", async () => {
   const render = (extra = "") =>
     renderSourceFixture({

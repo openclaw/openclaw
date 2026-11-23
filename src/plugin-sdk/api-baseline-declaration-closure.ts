@@ -259,6 +259,15 @@ export function createDeclarationClosureRenderer(params: {
       .map((handle) => handle.resolve()?.getSourceFile())
       .find((file) => file !== undefined);
     if (!target) {
+      const statement = reference.parent;
+      if (statement && ts.isImportDeclaration(statement) && !statement.importClause) {
+        // Runtime-only imports have no declaration symbol. Use this emitted literal's
+        // compiler resolution; missing modules and declaration-bearing edges still fail.
+        const resolved = project.program.getResolvedModuleFromModuleSpecifier(reference);
+        if (resolved && [".js", ".jsx", ".mjs", ".cjs"].includes(resolved.extension)) {
+          return { kind: "external" };
+        }
+      }
       if (!reference.text.startsWith("node:")) {
         unresolvedDependencies.add(
           `${normalizePluginSdkApiSourcePath(repoRoot, sourceFile.fileName)} -> ${reference.text}`,
