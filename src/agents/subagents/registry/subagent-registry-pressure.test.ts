@@ -10,6 +10,8 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import * as completionNotices from "../completion/subagent-completion-admission.store.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import { createSubagentSweeperHarness as createHarness } from "./subagent-registry-sweeper.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -138,6 +140,60 @@ describe("subagent suspended delivery pressure", () => {
     );
     expect(runs.size).toBe(25);
   });
+
+  it.each(["retired", "revoked during notice", "replaced during notice"] as const)(
+    "defers an expired %s owner and still processes the next independent row",
+    async (scenario) => {
+      const {
+        entries,
+        runs,
+        discardTerminalDelivery,
+        completeCleanupBookkeeping,
+        sweeper,
+        warn,
+        callGateway,
+      } = createSuspendedBacklog(2);
+      const [first, second] = entries;
+      for (const entry of entries) {
+        entry.delivery = suspended(Date.now() - 7 * 24 * 60 * 60_000);
+        entry.expectsCompletionMessage = true;
+      }
+      first.delivery = suspended(Date.now() - 7 * 24 * 60 * 60_000, "retained failure");
+      const originalDelivery = structuredClone(first.delivery);
+      const originalOutcome = structuredClone(first.execution.outcome);
+      const visible: string[] = [];
+      const notice = vi
+        .spyOn(completionNotices, "recordRequiredCompletionNotice")
+        .mockImplementation(async (entry) => {
+          if (entry.runId === first.runId && scenario !== "retired") {
+            if (scenario === "revoked during notice") {
+              subagentRuns.retireCompletionAuthority(first);
+            } else {
+              runs.set(first.runId, { ...first, generation: (first.generation ?? 0) + 1 });
+            }
+            throw new Error("notice owner changed");
+          }
+          visible.push(entry.runId);
+        });
+      discardTerminalDelivery.mockImplementation((draft) => {
+        draft.delivery = { status: "discarded" };
+      });
+      if (scenario === "retired") subagentRuns.retireCompletionAuthority(first);
+      try {
+        await sweeper.sweepOnce();
+        expect(runs.get(first.runId)?.delivery).toEqual(originalDelivery);
+        expect(runs.get(first.runId)?.execution.outcome).toEqual(originalOutcome);
+        expect(runs.get(second.runId)?.delivery?.status).toBe("discarded");
+        expect(completeCleanupBookkeeping).toHaveBeenCalledOnce();
+        expect(completeCleanupBookkeeping.mock.calls[0]?.[0].runId).toBe(second.runId);
+        expect(visible).toEqual([second.runId]);
+        expect(callGateway).not.toHaveBeenCalled();
+        expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("sweep failed"));
+      } finally {
+        notice.mockRestore();
+      }
+    },
+  );
 
   it("still reports and deduplicates suspended backlog pressure when a sweep fails", async () => {
     const { entry, discardTerminalDelivery, sweeper, warn } = createSuspendedBacklog(25);

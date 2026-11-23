@@ -2,11 +2,13 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { appendSessionTranscriptReport } from "../../../config/sessions/session-accessor.js";
+import { captureSessionEntryCurrentCheckAsyncInternal } from "../../../config/sessions/session-entry-current-check.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
 import type { DeliveryQueueStoredStatus } from "../../../infra/delivery-queue-sqlite.kernel.js";
 import type { QueuedSessionDelivery } from "../../../infra/session-delivery-queue.records.js";
 import type { SessionDeliveryWorkerOperations } from "../../../infra/session-delivery-queue.worker.js";
+import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import type { OpenClawStateDatabaseOptions } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
@@ -61,6 +63,7 @@ export async function recordRequiredCompletionNotice(
   reason: string,
   batch: readonly SubagentRunRecord[] = [entry],
   kind: "failed" | "delayed" | "result" = "failed",
+  isSourceCurrent?: () => boolean,
 ): Promise<void> {
   const wake = entry.requesterSettleWake;
   if (
@@ -145,33 +148,54 @@ export async function recordRequiredCompletionNotice(
           )
         ).join("\n\n")
       : buildSubagentCompletionFailureNotice(batch, kind);
-  const result = await runWithoutOwnedSessionTranscriptWrites(() =>
-    appendSessionTranscriptReport(
-      {
+  const source = isSourceCurrent
+    ? await captureSessionEntryCurrentCheckAsyncInternal({
         ...requester,
-        sessionId: current.sessionId,
-        expectedLifecycleRevision: current.lifecycleRevision,
-      },
-      {
-        kind: "custom",
-        customTypes: [customType],
-        selectReport: (latest) =>
-          isRecord(latest?.details) && latest.details.runId === runId
-            ? undefined
-            : {
-                customType,
-                display: true,
-                excludeFromContext:
-                  kind !== "failed" ||
-                  batch.every((child) => child.delivery?.requesterDelivery?.state === "consumed"),
-                content: findings,
-                details: { runId, childRunId: entry.runId, error: reason },
-              },
-      },
-    ),
-  );
-  if (!result.ok) {
-    throw new Error(`Child result failure notice could not be appended: ${result.error.code}`);
+        agentId: requester.agentId ?? resolveAgentIdFromSessionKey(requester.sessionKey),
+        isActive: isSourceCurrent,
+        errorMessage: "Subagent expiry notice owner changed",
+      })
+    : undefined;
+  try {
+    if (
+      source &&
+      (!source.entryCurrent ||
+        source.entry?.sessionId !== current.sessionId ||
+        source.entry.lifecycleRevision !== current.lifecycleRevision)
+    ) {
+      throw new Error("Subagent expiry notice owner changed");
+    }
+    const result = await runWithoutOwnedSessionTranscriptWrites(() =>
+      appendSessionTranscriptReport(
+        {
+          ...requester,
+          sessionId: current.sessionId,
+          expectedLifecycleRevision: current.lifecycleRevision,
+        },
+        {
+          kind: "custom",
+          customTypes: [customType],
+          selectReport: (latest) =>
+            isRecord(latest?.details) && latest.details.runId === runId
+              ? undefined
+              : {
+                  customType,
+                  display: true,
+                  excludeFromContext:
+                    kind !== "failed" ||
+                    batch.every((child) => child.delivery?.requesterDelivery?.state === "consumed"),
+                  content: findings,
+                  details: { runId, childRunId: entry.runId, error: reason },
+                },
+        },
+        source ? { sessionEntryCurrent: source.entryCurrent } : undefined,
+      ),
+    );
+    if (!result.ok) {
+      throw new Error(`Child result failure notice could not be appended: ${result.error.code}`);
+    }
+  } finally {
+    source?.release();
   }
 }
 
@@ -664,7 +688,11 @@ export async function mutateRequesterCompletionBatch(
     operation: RequesterWakeMutation | { kind: "settle"; outcome: SubagentAnnounceDeliveryResult };
   },
 ): Promise<CompletionMutationPublication> {
-  if (params.operation.kind === "settle" && !params.operation.outcome.delivered) {
+  if (
+    params.operation.kind === "settle" &&
+    !params.operation.outcome.delivered &&
+    !params.committed
+  ) {
     params.assertCurrent();
     // Delete cleanup may retire the last result row. Its visible outcome must commit first.
     for (const entry of params.entries) {
