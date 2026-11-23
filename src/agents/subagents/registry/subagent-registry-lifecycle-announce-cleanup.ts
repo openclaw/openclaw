@@ -7,7 +7,6 @@ import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { reserveSubagentCompletionControllerSource } from "../announce/subagent-announce-controller-source.js";
 import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
-import { settleConsumedRequesterDelivery } from "../completion/subagent-completion-settlement.js";
 import {
   matchesSubagentChildSessionOwner,
   resolveRecordedRequester,
@@ -17,17 +16,15 @@ import {
 import {
   ensureDeliveryState,
   getDeliveryLastError,
-  hasConsumedPrivateRequesterInput,
+  hasConsumedRequesterInput,
   isDeliverySuspended,
   clearSubagentPendingDelivery,
   loadPendingFinalDeliveryPayload,
   recordRequesterDelivery,
   recordRequesterHandoff,
+  resolveRequesterDeliveryOutcome,
 } from "./subagent-delivery-state.js";
-import {
-  resolveAnnounceDeliveryDeadline,
-  shouldSuspendPendingFinalDelivery,
-} from "./subagent-registry-cleanup.js";
+import { resolveAnnounceDeliveryDeadline } from "./subagent-registry-cleanup.js";
 import {
   ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
   ANNOUNCE_EXPIRY_MS,
@@ -38,7 +35,6 @@ import {
   runDetachedCleanupAttempt,
   runWithSubagentCleanupWorkAdmission,
   isSubagentCompletionDeliveryAllowed,
-  suspendPendingFinalDelivery,
 } from "./subagent-registry-lifecycle-cleanup.js";
 import type { SubagentLifecycleAnnounceCleanupContext } from "./subagent-registry-lifecycle-context.js";
 import {
@@ -213,7 +209,7 @@ export const startSubagentAnnounceCleanupFlow = (
   const alreadyDelivered = () =>
     typeof entry.delivery?.announcedAt === "number" ||
     entry.delivery?.status === "delivered" ||
-    hasConsumedPrivateRequesterInput(entry);
+    hasConsumedRequesterInput(entry);
   const finalizeDelivered = (options?: { skipRequesterDelivery: boolean }) =>
     finalizeSubagentCleanup(context, entry, cleanup, "delivered", cleanupGeneration, stateContext, {
       skipAnnounce: true,
@@ -486,28 +482,10 @@ export const startSubagentAnnounceCleanupFlow = (
       if (entry.delivery?.status === "delivered") {
         return;
       }
-      const delivery = await settleConsumedRequesterDelivery([entry], observedDelivery);
+      const delivery = resolveRequesterDeliveryOutcome([entry], observedDelivery);
       // A late failure cannot rearm an announcement transferred to the batch.
       // Committed sends still retain their delivery evidence.
       if (!delivery.delivered && requesterTookCompletion(entry)) {
-        return;
-      }
-      if (
-        !delivery.delivered &&
-        (delivery.reason === "message_tool_delivery_missing" ||
-          delivery.reason === "visible_reply_missing") &&
-        delivery.disposition === "permanent_failure" &&
-        shouldSuspendPendingFinalDelivery(entry)
-      ) {
-        latestDeliveryError = formatAnnounceDeliveryError(delivery);
-        await suspendPendingFinalDelivery(context, {
-          runId,
-          entry,
-          reason: "permanent_failure",
-          error: latestDeliveryError,
-          lastDropReason: delivery.reason,
-          enqueuedAt: delivery.enqueuedAt,
-        });
         return;
       }
       await commit(

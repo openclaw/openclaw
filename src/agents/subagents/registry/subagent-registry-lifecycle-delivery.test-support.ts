@@ -5,17 +5,10 @@ import {
   loadTranscriptEvents,
 } from "../../../config/sessions/session-accessor.js";
 import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
-import {
-  beginSessionEffect,
-  captureSessionTarget,
-  closeSessionControllerAdmission,
-} from "../../../sessions/session-controller.lifecycle.js";
 import { retireSessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { reserveSubagentControllerSource } from "../announce/subagent-announce-controller-source.js";
-import * as sessionEntryRuntime from "../announce/subagent-announce-delivery.runtime.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
-import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import * as cleanupPolicy from "./subagent-registry-cleanup.js";
 import {
   mutateLifecycleRun,
@@ -114,7 +107,7 @@ export function registerLifecycleDeliveryReceiptCases({
     expect(await readVisibleChildResults(entry)).toEqual(visibleResultsBefore);
   });
 
-  it("keeps an undelivered completion retryable when process custody retires", async () => {
+  it("settles an undelivered completion when process custody retires", async () => {
     const actualPolicy = await vi.importActual<typeof cleanupPolicy>(
       "./subagent-registry-cleanup.js",
     );
@@ -141,8 +134,12 @@ export function registerLifecycleDeliveryReceiptCases({
     expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
     await join();
     expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
-    expect(readLifecycleRun(entry).delivery).toMatchObject({ status: "pending" });
-    expect(readLifecycleRun(entry).delivery?.suspendedReason).toBeUndefined();
+    expect(readLifecycleRun(entry).delivery).toMatchObject({
+      status: "delivered",
+      disposition: "delivered",
+      payload: undefined,
+    });
+    expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
   });
 
   it.each([false, true])(
@@ -350,41 +347,6 @@ export function registerLifecycleDeliveryReceiptCases({
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it.each<[string, Partial<SubagentAnnounceDeliveryResult>, string, string]>([
-    [
-      "phase-only failure and steer-drop diagnostics",
-      {
-        phases: [
-          { phase: "direct-primary", delivered: false, path: "direct", error: "primary refused" },
-          {
-            phase: "steer-fallback",
-            delivered: false,
-            path: "none",
-            reason: "steer_dropped",
-            error: "steer refused",
-          },
-        ],
-      },
-      "steer_dropped",
-      "direct-primary: primary refused; steer-fallback: steer refused",
-    ],
-    ["direct steer-drop reason", { reason: "steer_dropped" }, "steer_dropped", "steer_dropped"],
-    ["no viable requester", {}, "sink_unavailable", "delivery path none did not complete"],
-  ])("persists %s", async (_name, details, lastDropReason, lastError) => {
-    const { entry, controller } = createReceiptFixture(
-      { delivered: false, path: "none", ...details },
-      "retryable",
-      { endedAt: 4_000, retainAttachmentsOnKeep: true },
-    );
-
-    await completeAndJoinCleanup(controller, entry, visibleCompletion);
-
-    await waitForLifecycleState(() =>
-      expect(readLifecycleRun(entry).delivery?.lastDropReason).toBe(lastDropReason),
-    );
-    expect(readLifecycleRun(entry).delivery).toMatchObject({ lastError, status: "suspended" });
-  });
-
   it.each([
     ["new failure", false, undefined, 1],
     ["changed disposition", true, undefined, 1],
@@ -392,7 +354,7 @@ export function registerLifecycleDeliveryReceiptCases({
   ] as const)(
     "persists %s before stalled announce bookkeeping settles",
     async (_name, reusePreviousError, previousDisposition, persistCalls) => {
-      const lastError = "failed; visible_reply_missing";
+      const lastError = "failed; requester_aborted";
       const persist = vi.fn();
       const entry = createRunEntry({
         endedAt: 4_000,
@@ -410,7 +372,7 @@ export function registerLifecycleDeliveryReceiptCases({
           delivered: false,
           path: "direct",
           error: "failed",
-          reason: "visible_reply_missing",
+          reason: "requester_aborted",
         });
       });
       const controller = createLifecycleController({
@@ -434,7 +396,7 @@ export function registerLifecycleDeliveryReceiptCases({
         announce.pending.resolve();
         await join();
       }
-      expect(readLifecycleRun(entry).delivery?.status).toBe("suspended");
+      expect(readLifecycleRun(entry).delivery?.status).toBe("delivered");
     },
   );
 
@@ -578,140 +540,4 @@ export function registerLifecycleDeliveryReceiptCases({
       "suspendedReason",
     ]);
   });
-}
-
-export function registerRequesterAdmissionRetryTests({
-  createRunEntry,
-  createLifecycleController,
-  useRetryTimers,
-}: Omit<LifecycleTestDrivers, "waitForLifecycleState"> & {
-  useRetryTimers: () => Promise<void>;
-}) {
-  it.each(["after cleanup", "during finalization"] as const)(
-    "delivers the retained result without descendants when requester admission releases %s",
-    async (releaseAt) => {
-      await useRetryTimers();
-      vi.setSystemTime(10_000);
-      const actualPolicy = await vi.importActual<typeof cleanupPolicy>(
-        "./subagent-registry-cleanup.js",
-      );
-      const decision = vi
-        .spyOn(cleanupPolicy, "resolveDeferredCleanupDecision")
-        .mockImplementation(actualPolicy.resolveDeferredCleanupDecision);
-      const terminalReply = { disposition: "visible", text: "Retained child result" } as const;
-      const entry = createRunEntry({
-        endedAt: Date.now(),
-        outcome: { status: "ok" },
-        endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-        expectsCompletionMessage: true,
-        retainAttachmentsOnKeep: true,
-        completion: { required: true, terminalReply },
-      });
-      const delivered = vi.fn();
-      const admissionFailures: unknown[] = [];
-      const runSubagentAnnounceFlow = vi.fn<AnnounceFlow>(async (params) => {
-        const input = params.controllerInput;
-        if (!input?.target) {
-          throw new Error("Completion has no requester controller input");
-        }
-        // Exercise the real requester gate; only the final transport is synthetic.
-        const effect = await beginSessionEffect({
-          target: input.target,
-          sourceInput: input,
-        }).catch((error: unknown) => {
-          admissionFailures.push(error);
-          throw error;
-        });
-        try {
-          return await effect.run(() =>
-            withSessionTurn(
-              {
-                sessionKey: input.mailbox.key,
-                sessionId: input.target?.incarnation,
-                target: input.target,
-                controllerInput: input,
-              },
-              async () => {
-                delivered(params.terminalReply);
-                await params.onDeliveryResult?.({
-                  delivered: true,
-                  path: "direct",
-                  disposition: "delivered",
-                });
-                return "delivered" as const;
-              },
-            ),
-          );
-        } finally {
-          effect.release();
-        }
-      });
-      let releaseAdmission = () => {};
-      const countPendingDescendantRuns = vi.fn(async () => {
-        if (releaseAt === "during finalization") {
-          releaseAdmission();
-        }
-        return 0;
-      });
-      const resumeSubagentRun = vi.fn(() =>
-        controller.startSubagentAnnounceCleanupFlow(readLifecycleRun(entry)),
-      );
-      const controller = createLifecycleController({
-        entry,
-        runSubagentAnnounceFlow,
-        countPendingDescendantRuns,
-        resumeSubagentRun,
-      });
-      const requester = await sessionEntryRuntime.loadRequesterSessionEntry(
-        entry.requesterSessionKey,
-        entry.requesterAgentId,
-      );
-      if (!requester.entry?.sessionId || !requester.storePath) {
-        throw new Error("Requester fixture has no stored session");
-      }
-      const unavailable = new Error("Requester session admission is temporarily closed");
-      releaseAdmission = closeSessionControllerAdmission({
-        target: captureSessionTarget({
-          storeScope: requester.storePath,
-          sessionKey: requester.canonicalKey,
-          agentId: requester.agentId,
-          incarnation: requester.entry.sessionId,
-        }),
-        reason: unavailable,
-      });
-      const join = observeRootWork();
-      try {
-        expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
-        await join(true);
-
-        expect(admissionFailures).toEqual([unavailable]);
-        expect(delivered).not.toHaveBeenCalled();
-        const waiting = readLifecycleRun(entry);
-        expect(waiting.completion?.terminalReply).toEqual(terminalReply);
-        expect(waiting.delivery).toMatchObject({
-          status: "pending",
-          payload: { childRunId: entry.runId, terminalReply },
-          nextAttemptAt: 11_000,
-        });
-        expect(waiting.cleanupCompletedAt).toBeUndefined();
-        expect(waiting.wakeOnDescendantSettle).not.toBe(true);
-        expect(controller.scheduledResumeTimers.size).toBe(1);
-
-        releaseAdmission();
-        await vi.advanceTimersByTimeAsync(1_000);
-        await join(true);
-
-        expect(delivered).toHaveBeenCalledExactlyOnceWith(terminalReply);
-        expect(readLifecycleRun(entry).delivery?.status).toBe("delivered");
-        expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
-        expect(controller.scheduledResumeTimers.size).toBe(0);
-      } finally {
-        releaseAdmission();
-        await join();
-        controller.clearRuntimeState();
-        decision.mockRestore();
-        vi.useRealTimers();
-      }
-    },
-  );
 }

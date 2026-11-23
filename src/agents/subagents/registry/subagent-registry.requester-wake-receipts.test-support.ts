@@ -517,7 +517,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
             ? { status: "killed" }
             : stableBatch
               ? { lifecycleRunId: requesterTurnRunId, activeWriterRunId: requesterTurnRunId }
-              : { status: "failed", lastRunId: requesterTurnRunId },
+              : { status: "done", lastRunId: requesterTurnRunId },
       );
       if (
         scenario === "rejected wake" ||
@@ -533,19 +533,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
           events
             .map((event) => JSON.parse(event.eventJson))
             .filter((event) => event.customType === "subagent-completion"),
-        ).toEqual([
-          expect.objectContaining({
-            content: expect.stringContaining(
-              "couldn't be added to this conversation automatically.",
-            ),
-            display: true,
-            details: expect.objectContaining({
-              runId: stableBatch
-                ? `announce:requester-settle:main:${requesterSessionKey}:run-alpha,run-beta:yield-1:delivery-failure`
-                : requesterTurnRunId,
-            }),
-          }),
-        ]);
+        ).toEqual([]);
       }
     }
 

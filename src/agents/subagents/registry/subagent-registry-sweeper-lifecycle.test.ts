@@ -5,7 +5,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import * as expiredDelivery from "./subagent-registry-suspended-delivery.js";
+import * as completionStore from "../completion/subagent-completion-admission.store.js";
 import {
   createArchivedSubagentSweeperRun,
   createSubagentSweeperHarness,
@@ -21,7 +21,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each(["failed", "suspended", "retryable"] as const)(
+it.each(["failed", "retryable"] as const)(
   "applies session-run retention after six minutes (%s)",
   async (deliveryStatus) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -31,14 +31,11 @@ it.each(["failed", "suspended", "retryable"] as const)(
         cleanup: "keep",
         archiveAtMs: undefined,
         cleanupCompletedAt: settledAt,
-        delivery:
-          deliveryStatus === "suspended"
-            ? { status: "suspended", suspendedAt: settledAt, suspendedReason: "permanent_failure" }
-            : {
-                status: "failed",
-                ...(deliveryStatus === "retryable" ? { disposition: "retryable" as const } : {}),
-                lastError: "completion agent did not produce a visible reply",
-              },
+        delivery: {
+          status: "failed",
+          ...(deliveryStatus === "retryable" ? { disposition: "retryable" as const } : {}),
+          lastError: "completion agent failed",
+        },
       });
       const { sweeper, runs, callGateway } = createSubagentSweeperHarness(entry);
       await sweeper.sweepOnce();
@@ -55,7 +52,7 @@ it("lets I/O run during a retained backlog and skips owners replaced between bat
       cleanup: "keep",
       archiveAtMs: Number.MAX_SAFE_INTEGER,
       cleanupCompletedAt: 1,
-      delivery: { status: "delivered" },
+      delivery: { status: "suspended", suspendedAt: Date.now(), suspendedReason: "expiry" },
       requesterTurnRunId: "retained-requester",
       expectsCompletionMessage: true,
     });
@@ -68,7 +65,9 @@ it("lets I/O run during a retained backlog and skips owners replaced between bat
     // Expire the processing budget independently of host speed; keep real event-loop turns.
     let clockNow = performance.now();
     const clock = vi.spyOn(performance, "now").mockImplementation(() => (clockNow += 5));
-    const settle = vi.spyOn(expiredDelivery, "settleSubagentCompletionReservation");
+    const settle = vi
+      .spyOn(completionStore, "settleSubagentCompletionInHistory")
+      .mockResolvedValue(false);
     const sweep = sweeper.runTick();
     const io = new Promise<void>((resolve) => {
       setImmediate(() => {
@@ -81,7 +80,7 @@ it("lets I/O run during a retained backlog and skips owners replaced between bat
       await Promise.all([sweep, io]);
       expect(visitedBeforeIo).toBeGreaterThan(0);
       expect(visitedBeforeIo).toBeLessThan(1024);
-      expect(settle.mock.calls.map(([run]) => run.runId)).toEqual(
+      expect(settle.mock.calls.map(([{ subagent }]) => subagent.runId)).toEqual(
         Array.from({ length: 1023 }, (_, index) => `run-${index}`),
       );
       expect(warn).not.toHaveBeenCalled();
