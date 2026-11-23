@@ -497,7 +497,7 @@ function booleanValue(value) {
 
 // Qualification and receipt recovery must derive the same scope from the
 // original version/context, not confuse a validation profile with a track.
-function resolveReleaseQualificationScope(input) {
+export function resolveReleaseQualificationScope(input) {
   const version = parseReleaseVersion(input.targetVersion);
   if (!version) {
     throw new Error("Invalid release package version.");

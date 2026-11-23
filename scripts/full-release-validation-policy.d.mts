@@ -28,7 +28,7 @@ export function assertReleasePublicationKnownBudget(
 export function normalizeReleaseCoveragePolicy(
   input: ReleaseRecord,
 ): "npm-beta-v1" | "npm-stable-v1" | undefined;
-declare function resolveReleaseQualificationScope(input: ReleaseRecord): {
+export function resolveReleaseQualificationScope(input: ReleaseRecord): {
   coveragePolicy: "npm-beta-v1" | "npm-stable-v1" | undefined;
   ciReleaseScope: string;
   skipPackageTelegramE2e: boolean;

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
+import { resolveReleaseQualificationScope } from "../../scripts/full-release-validation-policy.mjs";
 import {
   buildQualificationAdmissionRequest,
   resolveQualificationAdmissionDescriptor,
@@ -14,6 +15,22 @@ import {
   request,
   fixture,
 } from "./release-qualification-admission.test-support.js";
+
+it("exports the scope resolver consumed by FRV source resolution", () => {
+  expect(
+    resolveReleaseQualificationScope({
+      targetVersion: "2026.11.8",
+      targetContextRef: "release/2026.11.8",
+      releaseProfile: "stable",
+      runReleaseSoak: "true",
+      rerunGroup: "all",
+    }),
+  ).toMatchObject({
+    coveragePolicy: "npm-stable-v1",
+    ciReleaseScope: "npm-stable",
+    skipPackageTelegramE2e: false,
+  });
+});
 
 it("rejects a Q revision without its ledger", () => {
   expect(() => fixture(false, { missingLedger: true })).toThrow("HTTP 404");

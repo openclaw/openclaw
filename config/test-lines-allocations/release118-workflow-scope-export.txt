@@ -1,0 +1,2 @@
+# Direct named-import regression protects the scope resolver consumed by FRV source resolution.
+17
