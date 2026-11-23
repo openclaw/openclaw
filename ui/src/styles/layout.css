@@ -373,6 +373,18 @@ html.openclaw-native-macos.openclaw-native-web-chrome
     border-radius: 0;
   }
 
+  /* Chat loading shares the native band and its window-control clearance. */
+  .content--workbench .lazy-view-state--route[data-chat] .loading-skeleton__header {
+    height: var(--rail-header-height);
+    padding-left: var(--shell-titlebar-inset);
+    border-bottom: 0;
+    background: var(--sidebar-rail-surface);
+
+    > .loading-skeleton__avatar {
+      display: none;
+    }
+  }
+
   .macos-titlebar-controls__button svg {
     width: var(--macos-titlebar-glyph-size, 16px);
     height: var(--macos-titlebar-glyph-size, 16px);
