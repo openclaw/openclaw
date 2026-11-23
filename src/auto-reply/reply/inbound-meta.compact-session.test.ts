@@ -47,4 +47,29 @@ describe("compact inbound history and session transcript rows", () => {
     expect(projection.text).toContain("#native-1 Alice: same text");
     expect(projection.removedSessionMessages).toBe(1);
   });
+
+  it("keeps a transcript-only session row of InboundHistory and drops one a native entry repeats", () => {
+    const projection = buildCompactInboundUserContextPrefix({
+      ChatType: "direct",
+      MessageSid: "current",
+      SenderName: "Onur",
+      SenderId: "user-1",
+      Timestamp: 2_000,
+      InboundHistory: [
+        {
+          messageId: "session:cron-1",
+          sender: "Assistant (cron)",
+          body: "Weekly report: total 42",
+          timestamp: 1,
+        },
+        { messageId: "session:u1", sender: "User", body: "same text", timestamp: 2 },
+        { messageId: "native-1", sender: "Alice", body: "same text", timestamp: 3 },
+      ],
+    } as TemplateContext);
+
+    expect(projection.text).toContain("Weekly report: total 42");
+    expect(projection.text).not.toContain("session:u1");
+    expect(projection.text).toContain("#native-1 Alice: same text");
+    expect(projection.removedSessionMessages).toBe(1);
+  });
 });

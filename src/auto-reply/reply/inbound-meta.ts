@@ -493,17 +493,33 @@ export function buildCompactInboundUserContextPrefix(
     );
   }
 
-  for (const entry of selectInboundHistoryContext(ctx).boundedHistory) {
-    addHistoryMessage({
-      message_id: entry.messageId,
-      sender: entry.sender,
-      body: entry.body,
-      media_type:
-        buildInboundHistoryMediaPromptPayload(entry.media)
-          .map((media) => media["content_type"])
-          .filter((value): value is string => typeof value === "string")
-          .join(", ") || undefined,
-    });
+  const boundedHistory = selectInboundHistoryContext(ctx).boundedHistory;
+  // A session row of this history is removed only when a native row of the same history repeats
+  // its body. A transcript-only row (a close-out, a message-tool reply) is not replayed.
+  const nativeHistoryBodies = new Set<string>();
+  for (const entry of boundedHistory) {
+    if (entry.messageId?.startsWith("session:")) {
+      continue;
+    }
+    const body = sanitizeTranscriptText(entry.body, "body");
+    if (body) {
+      nativeHistoryBodies.add(body);
+    }
+  }
+  for (const entry of boundedHistory) {
+    addHistoryMessage(
+      {
+        message_id: entry.messageId,
+        sender: entry.sender,
+        body: entry.body,
+        media_type:
+          buildInboundHistoryMediaPromptPayload(entry.media)
+            .map((media) => media["content_type"])
+            .filter((value): value is string => typeof value === "string")
+            .join(", ") || undefined,
+      },
+      nativeHistoryBodies,
+    );
   }
   const historyBlockIndex = historyLines.length > 0 ? blocks.length : -1;
   if (historyLines.length > 0) {
