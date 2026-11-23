@@ -95,8 +95,7 @@ runs:
         add-job-summary: never
 
     # One entry per lane and dependency inputs, so every lane restores what it resolves
-    # instead of fetching it from Maven Central. The paths match setup-java's Gradle entry,
-    # so lanes without an entry of their own start from it rather than from an empty cache.
+    # instead of fetching it from Maven Central.
     - name: Restore and save Gradle dependency cache
       if: (inputs.gradle-cache-mode || inputs.cache-mode) == 'read-write'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -109,7 +108,6 @@ runs:
         restore-keys: |
           ${{ runner.os }}-${{ runner.arch }}-gradle-deps-v1-${{ inputs.gradle-cache-key }}-
           ${{ runner.os }}-${{ runner.arch }}-gradle-deps-v1-
-          ${{ format('setup-java-{0}-{1}-gradle-', runner.os, runner.arch == 'ARM64' && 'arm64' || 'x64') }}
 
     - name: Restore Gradle dependency cache
       if: (inputs.gradle-cache-mode || inputs.cache-mode) == 'restore'
@@ -122,7 +120,6 @@ runs:
         restore-keys: |
           ${{ runner.os }}-${{ runner.arch }}-gradle-deps-v1-${{ inputs.gradle-cache-key }}-
           ${{ runner.os }}-${{ runner.arch }}-gradle-deps-v1-
-          ${{ format('setup-java-{0}-{1}-gradle-', runner.os, runner.arch == 'ARM64' && 'arm64' || 'x64') }}
 
     - name: Restore Android SDK cache
       id: android-sdk-cache
