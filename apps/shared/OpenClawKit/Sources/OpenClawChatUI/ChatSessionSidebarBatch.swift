@@ -53,6 +53,19 @@ final class ChatSessionSidebarBatch {
         let entries: [String: [AnyCodable]]?
     }
 
+    /// Display only: an old Gateway's pin order belongs to its shared config. Never write it here.
+    private struct LegacyPinOrder: Decodable {
+        let valid: Bool
+        let config: Config
+        struct Config: Decodable {
+            let ui: UI?
+            struct UI: Decodable {
+                let prefs: Prefs?
+                struct Prefs: Decodable { let sidebarEntries: [String]? }
+            }
+        }
+    }
+
     private struct PinWrite: Decodable { let status: String }
     private func pinEntries(_ connection: OpenClawSessionMenuConnection) async throws -> [AnyCodable] {
         let reply: PinSnapshot = try await connection.read("users.prefs.get", ["keys": .init([Self.pinKey])])
@@ -93,13 +106,20 @@ final class ChatSessionSidebarBatch {
 
     func refreshPins(_ connection: OpenClawSessionMenuConnection) async throws {
         try Task.checkCancellation()
-        guard connection.supportsPersonalPins,
-              connection.allows("users.prefs.get", scope: "operator.read") else { return }
         guard !self.writingPins else { return }
         let scope = self.scope
-        let entries = try await self.pinEntries(connection)
+        let entries: [String]
+        if connection.supportsPersonalPins {
+            guard connection.allows("users.prefs.get", scope: "operator.read") else { return }
+            entries = try await self.pinEntries(connection).compactMap { $0.value as? String }
+        } else {
+            guard connection.allows("config.get", scope: "operator.read") else { return }
+            let snapshot: LegacyPinOrder = try await connection.read("config.get")
+            guard snapshot.valid else { throw CocoaError(.coderReadCorrupt) }
+            entries = snapshot.config.ui?.prefs?.sidebarEntries ?? []
+        }
         guard self.scope == scope, !self.writingPins else { return }
-        self.sidebarEntries = entries.compactMap { $0.value as? String }
+        self.sidebarEntries = entries
     }
 
     static func movingPin(_ entries: [AnyCodable], key: String, target: String?, after: Bool) -> [AnyCodable] {

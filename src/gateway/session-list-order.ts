@@ -155,7 +155,9 @@ export function selectSessionEntries(
   const limit = resolveOptionalIntegerOption(params.opts.limit, { min: 1 }) ?? params.defaultLimit;
   const offset = resolveNonNegativeIntegerOption(params.opts.offset, 0);
   const ownerLimit =
-    params.opts.pinned !== true && params.ownerFirstActorId && offset === 0
+    !(params.opts.pinned === true && params.personalPinRank) &&
+    params.ownerFirstActorId &&
+    offset === 0
       ? Math.min(limit ?? SESSIONS_LIST_OWNER_LIMIT, SESSIONS_LIST_OWNER_LIMIT)
       : 0;
   const pageEnd =

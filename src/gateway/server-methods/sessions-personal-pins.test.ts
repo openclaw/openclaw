@@ -41,7 +41,16 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
         {
           sessionId: k,
           updatedAt: i + 1,
-          ...(k === a ? { pinnedAt: 100 } : {}),
+          ...(k === a
+            ? {
+                pinnedAt: 100,
+                createdActor: {
+                  type: "human",
+                  source: "profile",
+                  id: alice.authenticatedUserProfile!.profileId,
+                },
+              }
+            : {}),
           ...(k === nested ? { parentSessionKey: a } : {}),
         },
       );
@@ -125,6 +134,13 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
     await expect(
       rpc(integration, "sessions.patch", { key: c, label: "Legacy", pinned: true }),
     ).resolves.toMatchObject({ entry: { label: "Legacy", pinnedAt: expect.any(Number) } });
+    // C has the newer shared pin, but the shipped owner-first prefix still puts Alice's A first.
+    const prefixed = await list(integration, { pinned: true, ownerFirst: true, limit: 1 });
+    expect(prefixed).toMatchObject({ totalCount: 2, nextOffset: 1 });
+    await expect(list(integration, { pinned: true, limit: 1 })).resolves.toMatchObject({
+      sessions: [{ key: c }],
+    });
+    expect(prefixed.sessions.map((row: { key: string }) => row.key)).toEqual([a, c]);
     await expect(
       rpc(integration, "sessions.patch", { key: c, pinned: false }),
     ).resolves.toMatchObject({ key: c });

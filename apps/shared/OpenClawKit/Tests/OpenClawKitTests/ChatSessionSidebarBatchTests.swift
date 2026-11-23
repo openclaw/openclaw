@@ -15,6 +15,7 @@ struct ChatSessionSidebarBatchTests {
         let hello = try JSONDecoder().decode(HelloOk.self, from: JSONSerialization.data(withJSONObject: [
             "type": "hello-ok", "protocol": 3, "server": [:],
             "features": ["capabilities": personal ? ["personal-session-pins"] : [], "methods": [
+                "config.get",
                 "sessions.patchMany",
                 "sessions.delete",
                 "sessions.groups.list",
@@ -59,16 +60,19 @@ struct ChatSessionSidebarBatchTests {
         return try #require(prefs["ui.railShortcuts"])
     }
 
-    @Test func `old Gateway cannot save private order even when its preferences methods exist`() async throws {
-        let connection = try self.connection(personal: false) { _ in
-            Issue.record("Old Gateway must not receive a private order read or write")
-            return Data()
+    @Test func `old Gateway displays its saved B then A order without a private read or shared write`() async throws {
+        var methods: [String] = []
+        let connection = try self.connection(personal: false) { request in
+            methods.append(request.method)
+            return Data(#"{"valid":true,"config":{"ui":{"prefs":{"sidebarEntries":["session:b","session:a"]}}}}"#.utf8)
         }
         let batch = ChatSessionSidebarBatch()
         try await batch.refreshPins(connection)
+        #expect(batch.sidebarEntries == ["session:b", "session:a"])
         await #expect(throws: OpenClawPersonalPinError.self) {
-            try await batch.movePin(key: "one", target: "two", after: true, connection: connection)
+            try await batch.movePin(key: "a", target: "b", after: false, connection: connection)
         }
+        #expect(methods == ["config.get"])
     }
 
     @Test func `pin reordering permutes session slots without changing foreign bytes or positions`() {
