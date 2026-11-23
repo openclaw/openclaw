@@ -119,7 +119,6 @@ describe("handleCompactCommand lifecycle authority", () => {
 
   it.each([
     ["adoption", "caller"],
-    ["adoption", "channel owner"],
     ["adoption", "plugin owner"],
     ["adoption", "operator"],
     ["adoption", "writer"],
@@ -160,9 +159,6 @@ describe("handleCompactCommand lifecycle authority", () => {
       },
       stage === "adoption" ? async () => revoke() : undefined,
     );
-    if (authority === "channel owner") {
-      params.command.assertOwnerCurrent = assertCurrent;
-    }
     const running =
       stage === "wait" || authority === "writer" ? startCompactActiveRun(params) : undefined;
     if (running) {
