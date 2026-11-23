@@ -18,9 +18,9 @@ export type NativeTypeScriptObserver = (
   facts?: Readonly<Record<string, string | number>>,
 ) => void;
 
-// Escapes whose cooked character can be part of a token: identity, octal, \u, \x and line
-// continuations. \n, \t, \\ and quote escapes cook to characters no token contains.
-const tokenEscapes = /\\(?:[^ntrbfv\\'"`/\s]|\r?\n|\u2028|\u2029)/g;
+// Every escape selects its span: it can spell a token (\u0041, identity escapes) or split
+// one in the raw text (`\nDELETE` reads as the token `nDELETE`).
+const escapes = /\\/g;
 
 /**
  * Native nodes stay cached for their snapshot's lifetime, so a whole-tree walk keeps every
@@ -40,7 +40,7 @@ export function containsTrigger(
       positions.push(match.index);
     }
   }
-  for (const match of text.matchAll(tokenEscapes)) {
+  for (const match of text.matchAll(escapes)) {
     positions.push(match.index);
   }
   positions.sort((left, right) => left - right);

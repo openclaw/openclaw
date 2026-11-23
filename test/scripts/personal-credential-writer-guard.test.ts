@@ -313,8 +313,8 @@ it("limits offline raw machine-state migration exceptions to their reviewed stat
   }
 });
 
-it.each(["DEL\\u0045TE", "D\\ELETE"])(
-  "inspects a raw write whose verb is spelled with an escape: %s",
+it.each(["DEL\\u0045TE", "D\\ELETE", "\\nDELETE", "\\tDELETE"])(
+  "inspects a raw write whose verb is spelled next to an escape: %s",
   (verb) => {
     // Only the escape locates this nested statement; its raw text holds no DELETE token.
     expectDenied(
