@@ -1,86 +1,52 @@
 // Covers explicit card rendering for completed blocks when preview streaming is off.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
+import { installReplyRuntime } from "./reply-dispatcher.test-support.js";
 
-const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
-const getFeishuRuntimeMock = vi.hoisted(() => vi.fn());
-const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
-const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
-
-vi.mock("./accounts.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./accounts.js")>()),
-  resolveFeishuAccount: resolveFeishuAccountMock,
-  resolveFeishuRuntimeAccount: resolveFeishuAccountMock,
-}));
-vi.mock("./runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./runtime.js")>()),
-  getFeishuRuntime: getFeishuRuntimeMock,
-}));
+const createMessage = vi.hoisted(() =>
+  vi.fn(async (_request: { data: { msg_type: string } }) => ({
+    code: 0,
+    data: { message_id: "om_reply" },
+  })),
+);
 vi.mock("./client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./client.js")>()),
-  createFeishuClient: vi.fn(() => ({})),
-}));
-vi.mock("./send.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./send.js")>()),
-  sendMessageFeishu: sendMessageFeishuMock,
-  sendStructuredCardFeishu: sendStructuredCardFeishuMock,
+  createFeishuClient: () => ({ im: { message: { create: createMessage } } }),
 }));
 
-import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
+let restoreRuntime: () => void;
+beforeAll(() => {
+  restoreRuntime = installReplyRuntime();
+});
+afterAll(() => restoreRuntime());
 
-function makeTableText(count: number): string {
-  return Array.from({ length: count }, (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`).join(
-    "\n\n",
-  );
-}
-
-function createCardBlockDispatcher() {
-  resolveFeishuAccountMock.mockReturnValue({
-    accountId: "main",
-    appId: "app_id",
-    appSecret: "app_secret",
-    domain: "feishu",
-    config: { renderMode: "card", streaming: { mode: "off", block: { enabled: true } } },
-  });
-  const result = createFeishuReplyDispatcher({
-    cfg: {} as never,
+it("sends explicit-card blocks as static cards and keeps the table-limit post fallback", async () => {
+  const plan = createFeishuReplyDispatcher({
+    cfg: {
+      channels: {
+        feishu: {
+          appId: "test-app",
+          appSecret: "test-secret",
+          renderMode: "card",
+          streaming: { mode: "off", block: { enabled: true } },
+        },
+      },
+    },
     agentId: "agent",
-    runtime: { log: vi.fn(), error: vi.fn() } as never,
     chatId: "oc_chat",
     sendTarget: "oc_chat",
+    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
   });
-  return { ...result.dispatcherOptions, ...result.delivery };
-}
+  const dispatcher = createReplyDispatcher({ ...plan.dispatcherOptions, ...plan.delivery });
+  const tables = Array.from({ length: 6 }, (_, i) => `| a${i} |\n| - |\n| ${i} |`).join("\n\n");
+  dispatcher.sendBlockReply({ text: "First paragraph." });
+  dispatcher.sendBlockReply({ text: tables });
+  dispatcher.markComplete();
+  await dispatcher.waitForIdle();
 
-describe("Feishu non-streaming block card rendering", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    sendMessageFeishuMock.mockResolvedValue({ messageId: "om_post", chatId: "oc_chat" });
-    sendStructuredCardFeishuMock.mockResolvedValue({ messageId: "om_card", chatId: "oc_chat" });
-    getFeishuRuntimeMock.mockReturnValue({
-      channel: {
-        text: {
-          resolveTextChunkLimit: vi.fn(() => 4000),
-          resolveChunkMode: vi.fn(() => "line"),
-          resolveMarkdownTableMode: vi.fn(() => "preserve"),
-          convertMarkdownTables: vi.fn((text: string) => text),
-          chunkTextWithMode: vi.fn((text: string) => [text]),
-          chunkMarkdownTextWithMode: vi.fn((text: string) => [text]),
-        },
-        reply: { resolveHumanDelayConfig: vi.fn(() => undefined) },
-      },
-    });
-  });
-
-  it("sends explicit-card blocks as static cards and keeps the table-limit post fallback", async () => {
-    const options = createCardBlockDispatcher();
-    await options.deliver({ text: "First paragraph." }, { kind: "block" });
-    await options.deliver({ text: makeTableText(6) }, { kind: "block" });
-    await options.onIdle?.();
-
-    expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
-    expect(sendStructuredCardFeishuMock.mock.calls[0]?.[0]).toMatchObject({
-      text: "First paragraph.",
-    });
-    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
-  });
+  expect(createMessage.mock.calls.map(([request]) => request.data.msg_type)).toEqual([
+    "interactive",
+    "post",
+  ]);
 });
