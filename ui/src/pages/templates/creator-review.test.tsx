@@ -363,7 +363,7 @@ it("keeps the original card through a single explicit publication and pending re
   );
   expect(status()).toBe("Pending");
   expect(page.getByRole("link", { name: "View submission" }).getAttribute("href")).toBe(
-    pendingPublication.url,
+    `${pendingPublication.url}?view=submission`,
   );
 });
 

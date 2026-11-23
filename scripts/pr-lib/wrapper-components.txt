@@ -2641,6 +2641,7 @@ packages/ai/src/transports/openai-responses-service-tier.ts
 packages/ai/src/transports/openai-responses-stream-errors.ts
 packages/ai/src/transports/transport-stream-shared.ts
 packages/ai/src/types.ts
+packages/ai/src/utils/compaction-threshold.ts
 packages/ai/src/utils/credential-redaction.ts
 packages/ai/src/utils/deferred-event-buffer.ts
 packages/ai/src/utils/diagnostics.ts

@@ -55,7 +55,7 @@ const GEMINI_CLI_API_KEY_AUTH_ENV = [
 const GEMINI_CLI_PROFILE_AUTH_ENV = [...GEMINI_CLI_API_KEY_AUTH_ENV, "GEMINI_API_KEY"];
 const GEMINI_CLI_PROFILE_SETTINGS_ENV = ["GEMINI_CLI_SYSTEM_SETTINGS_PATH"];
 const GEMINI_CLI_SUPPORTED_AUTH_GUIDANCE =
-  "Open Models settings and connect Google with an AI Studio API key, then select that profile for this model.";
+  "Open Models settings and connect Google with a Gemini API key, then select that profile for this model.";
 
 type GeminiAuthProfileCredential = {
   type: "api_key" | "oauth" | "token";
@@ -125,7 +125,7 @@ function throwUnstageableSelectedGeminiProfile(
   // A materialized token can be healthy even though Gemini CLI cannot use its
   // type. Only missing or malformed credential material gets the typed signal.
   throw new Error(
-    `Gemini CLI execution requires a Google AI Studio API-key profile or a previously configured valid Gemini CLI OAuth profile. ${GEMINI_CLI_SUPPORTED_AUTH_GUIDANCE}`,
+    `Gemini CLI execution requires a Gemini API key profile or a previously configured valid Gemini CLI OAuth profile. ${GEMINI_CLI_SUPPORTED_AUTH_GUIDANCE}`,
   );
 }
 

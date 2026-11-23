@@ -25,7 +25,6 @@ import {
 } from "../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { onUserProfilesChanged, readUserProfileVersion } from "../state/user-profile-events.js";
-import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import { createHumanMentionPolicy, humanMentionDisplayLabel } from "./human-mention-policy.js";
 import {
   deprecatedMentionInboxError,
@@ -164,19 +163,11 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
           state = prepared.publish(expectedHead);
           return result;
         }
-        const profiles = readUserProfileVersion();
-        const access = readGatewayAccessRevision();
         const sessions = sessionRevision;
-        const config = params.getRuntimeConfig();
         const assertCurrent = () => {
           context.admission.assertCurrent();
-          if (
-            profiles !== readUserProfileVersion() ||
-            access !== readGatewayAccessRevision() ||
-            sessions !== sessionRevision ||
-            config !== params.getRuntimeConfig()
-          ) {
-            throw new Error("Mention authority changed before commit");
+          if (sessions !== sessionRevision) {
+            throw new Error("Mention session changed before commit. Retry the request.");
           }
           for (const guard of guards) {
             guard();

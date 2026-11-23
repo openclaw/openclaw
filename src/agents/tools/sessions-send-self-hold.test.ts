@@ -361,6 +361,7 @@ it.each([
               replacement,
               completion,
               createOperationalRunInstanceRef("source-run"),
+              { runId: "source-run" },
             );
             subagentRuns.recordRequesterCompletion(sourceKey, "main", "source-run");
             child = replacement;

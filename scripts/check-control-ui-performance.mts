@@ -81,7 +81,9 @@ const controlUiPerformanceBudgets = {
   // First-frame composer banner (#203246): #202800 lazy-loaded the banner that the
   // #202534 measurement included; restoring it measured 1,334,416 B (+777 B over paired
   // base 1,333,639 B at a3357794) plus 64 B headroom.
-  chatBootJsGzipBytes: 1_334_480,
+  // Provider plugin labels on chat failure headings (#204230, standing merge authority):
+  // measured 1,334,559 B (+89 B over paired base 1,334,470 B at d16017ca) plus 64 B headroom.
+  chatBootJsGzipBytes: 1_334_623,
   // The same shared lazy signer adds the coordinator-accepted +235 B here.
   // Same #198491 approval: measured 815,742 B (+1,122 B over main) plus 64 B headroom.
   // Continuation wakes (#200056): measured 816,096 B (+390 B over main) plus 64 B.
