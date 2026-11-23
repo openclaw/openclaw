@@ -144,6 +144,141 @@ suite.define(() => {
     await capture("automation-after-save.png");
   });
 
+  it.each([
+    {
+      scenario: "explicit",
+      prompt: "Remind me tomorrow to water the plants.",
+      reply: "I'll remind you tomorrow.",
+      entries: [{ name: "Water the plants", showCard: true }],
+    },
+    {
+      scenario: "internal",
+      prompt: "Publish the onboarding Template.",
+      reply: "The Template was submitted for review.",
+      entries: [{ name: "Check Template review status", showCard: false }],
+    },
+    {
+      scenario: "mixed",
+      prompt: "Publish the onboarding Template and remind me tomorrow to write release notes.",
+      reply: "The Template was submitted, and I'll remind you tomorrow.",
+      entries: [
+        { name: "Check Template review status", showCard: false },
+        { name: "Write release notes", showCard: true },
+      ],
+    },
+  ])(
+    "shows only user-requested creation cards ($scenario)",
+    async ({ scenario, prompt: userPrompt, reply, entries }) => {
+      const runId = "run-" + scenario;
+      const planId = "plan-" + scenario;
+      const jobs = entries.map(({ name }, i) =>
+        createCronJob(scenario + "-" + i, name, {
+          enabled: true,
+          schedule: { kind: "at", at: "2099-11-21T17:00:00.000Z" },
+        }),
+      );
+      const time = Date.now();
+      const receipt = (
+        action: string,
+        callId: string,
+        args: object,
+        details: object,
+        seq: number,
+      ) => ({
+        role: "custom",
+        customType: "openclaw.nested-tool.v1",
+        display: true,
+        timestamp: time + seq,
+        __openclaw: { id: callId, seq, runId },
+        content: [
+          { type: "toolCall", id: callId, name: "automations", arguments: { action, ...args } },
+          {
+            type: "toolResult",
+            toolName: "automations",
+            toolCallId: callId,
+            isError: false,
+            details,
+          },
+        ],
+      });
+      const { page, gateway } = await chatFixture(
+        suite,
+        {
+          subscriptionInitialHistory: false,
+          deferredMethods: ["chat.startup"],
+          historyMessages: [
+            timedText("user", userPrompt, {
+              timestamp: time,
+              __openclaw: { id: "prompt", seq: 1, runId },
+            }),
+            receipt(
+              "plan",
+              "declare",
+              { names: entries.map(({ name }) => name) },
+              {
+                type: "automation_creation_plan",
+                planId,
+                slots: entries.map(({ name }, i) => ({ slotId: String(i + 1), name })),
+              },
+              2,
+            ),
+            ...entries.map(({ showCard }, i) =>
+              receipt(
+                "add",
+                "add-" + i,
+                { position: i + 1, ...(showCard ? { showCard } : {}) },
+                {
+                  automationCreation: {
+                    type: "automation_creation_result",
+                    planId,
+                    slotId: String(i + 1),
+                    status: "created",
+                    jobId: jobs[i]!.id,
+                    showCard,
+                  },
+                },
+                i + 3,
+              ),
+            ),
+            timedText("assistant", reply, {
+              stopReason: "stop",
+              timestamp: time + 10,
+              __openclaw: { id: "answer", seq: jobs.length + 3, runId },
+            }),
+          ],
+          methodResponses: {
+            "cron.get": { cases: jobs.map((job) => ({ match: { id: job.id }, response: job })) },
+          },
+        },
+        { viewport: { width: 1100, height: 800 }, colorScheme: "light" },
+      );
+      await page.goto(suite.server.baseUrl + "chat/main");
+      // Install the transcript owner before delivering the mocked authoritative history.
+      await gateway.waitForRequest("chat.startup");
+      await page.locator(".chat-thread-viewport").waitFor();
+      await gateway.resolveDeferred("chat.startup");
+      const thread = transcript(page);
+      const answer = thread.getByText(reply, { exact: true });
+      await answer.waitFor();
+      const card = thread.getByRole("group", { name: "Automations", exact: true });
+      const shown = jobs.filter((_, i) => entries[i]?.showCard);
+      for (const job of shown) {
+        await card.getByRole("switch", { name: "Pause: " + job.name }).waitFor();
+      }
+      if (captureUiProofEnabled) {
+        const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [answer], {
+          animations: "disabled",
+        });
+        await writeFile(path.join(suite.artifactDir, "automation-" + scenario + ".png"), frame.png);
+      }
+      expect(await card.count()).toBe(shown.length ? 1 : 0);
+      expect(await card.locator("[data-job-id]").count()).toBe(shown.length);
+      expect(await card.getByRole("heading").count()).toBe(0);
+      const requests = await gateway.getRequests("cron.get");
+      expect(requests.map(({ params }) => params)).toEqual(shown.map(({ id }) => ({ id })));
+    },
+  );
+
   it("collapses recorded automation prompts without hiding results or lookalike user text", async () => {
     const { page } = await chatFixture(
       suite,

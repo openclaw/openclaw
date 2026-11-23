@@ -10,6 +10,7 @@ import { AutomationCreationCardBlock } from "../../../lib/chat/automation-creati
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
+import { projectAutomationCreationCards } from "../chat-automation-creation-projection.ts";
 import * as schedulerProjection from "../chat-automation-projection-loader.ts";
 import { createState } from "../chat-gateway.test-support.ts";
 import { buildItems, makeMessage } from "../chat-thread.test-support.ts";
@@ -108,6 +109,45 @@ function liveTool(id: string, action: string, args: object, details: unknown, is
     ],
   };
 }
+it("does not render or group internal follow-ups, even when they share a plan with visible jobs", () => {
+  const slots = [...plan.slots, { slotId: "c", name: "Internal review check" }];
+  const declaration = liveTool("declare", "plan", { slots }, { ...plan, slots });
+  const add = (slotId: string, showCard: boolean) =>
+    liveTool(
+      "add-" + slotId,
+      "add",
+      { planId: plan.planId, slotId },
+      { automationCreation: { ...created, slotId, jobId: "saved-" + slotId, showCard } },
+    );
+  const project = (...messages: unknown[]) => {
+    const projection = projectAutomationCreationCards([], [declaration, ...messages]);
+    return [...projection.cards.values()].flatMap((items) =>
+      items.flatMap(({ message }) =>
+        normalizeMessage(message).content.flatMap((block) =>
+          block instanceof AutomationCreationCardBlock ? [block.plan] : [],
+        ),
+      ),
+    );
+  };
+  const hidden = add("c", false);
+  const first = add("a", true);
+  const second = add("b", true);
+  expect(project(hidden)).toEqual([]);
+  const single = [{ grouped: false, rows: [{ ...slots[0], jobId: "saved-a" }] }];
+  expect(project(first)).toEqual(single);
+  expect(project(hidden, first)).toEqual(single);
+  expect(project(first, hidden)).toEqual(single);
+  expect(project(second, hidden, first)).toEqual([
+    {
+      grouped: true,
+      rows: [
+        { ...slots[0], jobId: "saved-a" },
+        { ...slots[1], jobId: "saved-b" },
+      ],
+    },
+  ]);
+});
+
 it("uses the saved ID, not the receipt definition, for both live and reloaded cards", () => {
   const result = {
     ...created,

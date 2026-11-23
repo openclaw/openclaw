@@ -4,6 +4,7 @@ import {
   callGatewayMock,
   createTestCronTool,
   installCronToolTestFixture,
+  readGatewayCall,
 } from "./cron-tool.test-support.js";
 
 installCronToolTestFixture();
@@ -12,6 +13,35 @@ const brief = {
   schedule: { kind: "every", everyMs: 60_000 },
   payload: { kind: "systemEvent", text: "Read" },
 };
+
+it.each([undefined, false, true])(
+  "records showCard=%s without changing the saved job",
+  async (showCard) => {
+    const tool = createTestCronTool({ requireCreationPlan: true });
+    const job = { ...brief, enabled: true, id: "persisted" };
+    await tool.execute("plan", { action: "plan", names: [job.name] });
+    callGatewayMock.mockResolvedValueOnce(job);
+    const { details } = await tool.execute("add", {
+      action: "add",
+      job: brief,
+      ...(showCard === undefined ? {} : { showCard }),
+    });
+    expect(details).toEqual({
+      ...job,
+      automationCreation: {
+        type: "automation_creation_result",
+        planId: expect.any(String),
+        slotId: "1",
+        status: "created",
+        jobId: job.id,
+        showCard: showCard === true,
+      },
+    });
+    expect(callGatewayMock).toHaveBeenCalledOnce();
+    expect(readGatewayCall()).toMatchObject({ method: "cron.add" });
+    expect(readGatewayCall().params).not.toHaveProperty("showCard");
+  },
+);
 
 it("recovers a natural add using only the ordered names, never operator-supplied internal IDs", async () => {
   const tool = createTestCronTool({ requireCreationPlan: true });

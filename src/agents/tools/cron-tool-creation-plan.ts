@@ -142,7 +142,9 @@ export function createCronCreationPlans(onePlanPerTurn = false) {
             type: "automation_creation_result",
             planId,
             slotId,
-            ...(jobId ? { status: "created", jobId } : { status: "failed" }),
+            ...(jobId
+              ? { status: "created", jobId, showCard: params.showCard === true }
+              : { status: "failed" }),
           };
         },
       };
