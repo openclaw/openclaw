@@ -404,13 +404,6 @@
   position: relative;
 }
 
-/* Home toggles a dock beside the page, so the filled house marks it open; the
-   selected surface stays with the page you are on. */
-.sidebar-rail .sidebar-rail__home[aria-pressed="true"]:not(:hover, :active) {
-  --rail-control-surface: var(--rail-background);
-  background: transparent;
-}
-
 /* Home keeps its centered activity glyph; compact badges never move the rail. */
 .sidebar-rail__home .session-row-badges {
   position: absolute;
