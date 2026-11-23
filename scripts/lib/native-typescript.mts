@@ -18,6 +18,59 @@ export type NativeTypeScriptObserver = (
   facts?: Readonly<Record<string, string | number>>,
 ) => void;
 
+// Escapes whose cooked character can be part of a token: identity, octal, \u, \x and line
+// continuations. \n, \t, \\ and quote escapes cook to characters no token contains.
+const tokenEscapes = /\\(?:[^ntrbfv\\'"`/\s]|\r?\n|\u2028|\u2029)/g;
+
+/**
+ * Native nodes stay cached for their snapshot's lifetime, so a whole-tree walk keeps every
+ * node of every file resident. Return a predicate that selects only nodes whose source span
+ * contains a trigger token; a walk that descends only into those never materializes the
+ * rest. Escape sequences also select their span, because an escaped literal or identifier
+ * can spell a token that the raw text does not. `pattern` must be global.
+ */
+export function containsTrigger(
+  text: string,
+  pattern: RegExp,
+  accept: (token: string) => boolean = () => true,
+): (node: { pos: number; end: number }) => boolean {
+  const positions: number[] = [];
+  for (const match of text.matchAll(pattern)) {
+    if (accept(match[0])) {
+      positions.push(match.index);
+    }
+  }
+  for (const match of text.matchAll(tokenEscapes)) {
+    positions.push(match.index);
+  }
+  positions.sort((left, right) => left - right);
+  return ({ pos, end }) => {
+    let low = 0;
+    let high = positions.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (positions[middle]! < pos) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    return low < positions.length && positions[low]! < end;
+  };
+}
+
+/** Identifier tokens, after any listed non-identifier names (module export names may be strings). */
+export function identifierTokens(names: Iterable<string>): RegExp {
+  const identifier = /^[\p{ID_Start}$_][\p{ID_Continue}$\u200C\u200D]*$/u;
+  const other = [...names]
+    .filter((name) => !identifier.test(name))
+    .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(
+    [...other, String.raw`[\p{ID_Start}$_][\p{ID_Continue}$\u200C\u200D]*`].join("|"),
+    "gu",
+  );
+}
+
 /** Diagnostics must never replace an analysis or disposal outcome. */
 export function reportNativeTypeScriptPhase(
   observer: NativeTypeScriptObserver | undefined,
