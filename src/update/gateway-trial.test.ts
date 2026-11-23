@@ -312,6 +312,13 @@ it.each(["warning", "error"] as const)(
         counts: { error: 0, warning: 1, info: 0 },
       });
     }
+    if (finding === "error") {
+      const { lines } = renderUpdateRunReport(inspected!);
+      expect(lines).toContainEqual(
+        expect.stringContaining("Doctor inspections did not run after the update"),
+      );
+      expect(lines).toContainEqual(expect.stringContaining("openclaw doctor --lint --all"));
+    }
     expect(renderUpdateRunReport(inspected!).headline).toContain("updated");
     expect(renderUpdateRunReport(inspected!).headline).not.toContain("attention");
   },

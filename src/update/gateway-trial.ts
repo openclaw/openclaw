@@ -90,13 +90,16 @@ export async function settleRunFromTrial(
           await recordUpdateRunStepAsync(trial.runId, { step, status: "completed" });
         }
       } catch (error) {
-        // Keep incomplete advice visible without changing the committed outcome.
+        // The update stays successful; the skipped inspections are reported with a next step.
+        const detail = redactSensitiveText(
+          `Doctor inspections did not run after the update (${String(error)}). Run \`openclaw doctor --lint --all\` to check this install.`,
+          { mode: "tools" },
+        ).slice(0, 2000);
+        await recordUpdateRunStepAsync(trial.runId, { step, status: "completed", detail });
         await recordUpdateRunStepAsync(trial.runId, {
-          step,
+          step: `warning:${step}`,
           status: "completed",
-          detail: redactSensitiveText(`Doctor inspections did not complete: ${String(error)}`, {
-            mode: "tools",
-          }).slice(0, 2000),
+          detail,
         });
       }
     }).catch((error: unknown) => {
