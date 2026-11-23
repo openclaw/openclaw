@@ -152,37 +152,12 @@ function resolveHostPackageRoot(argv1: string | undefined): string | null {
   }
 }
 
-function hostSupportsPluginToolsMcpBridgeFilter(openClawRoot: string): boolean {
-  try {
-    const manifest: unknown = JSON.parse(
-      fs.readFileSync(path.join(openClawRoot, "package.json"), "utf8"),
-    );
-    return (
-      isRecord(manifest) &&
-      manifest.name === "openclaw" &&
-      isRecord(manifest.openclaw) &&
-      manifest.openclaw.pluginToolsMcpBridgeFilter === 1
-    );
-  } catch {
-    return false;
-  }
-}
-
 function resolveManagedToolsMcpServerConfig(
   entryPoint: "pluginToolsServe" | "openclawToolsServe",
   moduleUrl: string = import.meta.url,
-  options: { requirePluginToolsFilterSupport?: boolean } = {},
 ): McpServerConfig {
   const pluginRoot = resolveAcpxPluginRoot(moduleUrl);
   const openClawRoot = resolveOpenClawRoot(pluginRoot);
-  if (
-    options.requirePluginToolsFilterSupport &&
-    !hostSupportsPluginToolsMcpBridgeFilter(openClawRoot)
-  ) {
-    throw new Error(
-      "pluginToolsMcpBridgeAllow and pluginToolsMcpBridgeDeny require an OpenClaw host with plugin-tools MCP bridge filter support",
-    );
-  }
   const entry = resolvePackageRuntimeProcessEntrypointUrl(entryPoint, openClawRoot);
   return {
     command: process.execPath,
@@ -222,9 +197,7 @@ function resolveConfiguredMcpServers(params: {
     if (params[flag]) {
       const env =
         name === "openclaw-plugin-tools" ? resolvePluginToolsMcpBridgeEnv(params) : undefined;
-      const server = resolveManagedToolsMcpServerConfig(entryPoint, params.moduleUrl, {
-        requirePluginToolsFilterSupport: env !== undefined,
-      });
+      const server = resolveManagedToolsMcpServerConfig(entryPoint, params.moduleUrl);
       if (env) {
         server.env = { ...server.env, ...env };
       }

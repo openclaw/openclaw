@@ -188,19 +188,7 @@ it("launches managed bridges from the host package when acpx is an external pack
       },
     });
 
-    // Older external hosts without filter capability fail closed when filters are configured.
-    expect(() =>
-      resolve(
-        { pluginToolsMcpBridge: true, pluginToolsMcpBridgeDeny: ["diffs"] },
-        { moduleUrl: pathToFileURL(path.join(pluginRoot, "dist", "config.js")).href },
-      ),
-    ).toThrow("require an OpenClaw host with plugin-tools MCP bridge filter support");
-
-    // Once the host advertises filter support, external ACPX propagates filter env cleanly.
-    fs.writeFileSync(
-      path.join(hostRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", openclaw: { pluginToolsMcpBridgeFilter: 1 } }),
-    );
+    // External-package launch resolution does not depend on a host capability marker.
     const filtered = resolve(
       { pluginToolsMcpBridge: true, pluginToolsMcpBridgeDeny: ["diffs"] },
       { moduleUrl: pathToFileURL(path.join(pluginRoot, "dist", "config.js")).href },

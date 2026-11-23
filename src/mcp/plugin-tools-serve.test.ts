@@ -232,8 +232,7 @@ describe("plugin tools MCP server", () => {
     try {
       const acquireArgs = acquireStandalonePluginToolRegistryMock.mock.calls[0]?.[0];
       expect(acquireArgs?.toolAllowlist).toBeUndefined();
-      expect(acquireArgs?.toolDenylist).toEqual(expect.arrayContaining(["diffs", "browser"]));
-      expect(acquireArgs?.toolDenylist).not.toContain("github");
+      expect(acquireArgs?.toolDenylist).toBeUndefined();
       expect(acquisition.resolveTools().map((tool) => tool.name)).toEqual(["github_read"]);
     } finally {
       await acquisition.release();
@@ -347,7 +346,7 @@ describe("plugin tools MCP server", () => {
     await servePluginToolsMcp();
     const acquireArgs = acquireStandalonePluginToolRegistryMock.mock.calls[0]?.[0];
     expect(acquireArgs?.toolAllowlist).toBeUndefined();
-    expect(acquireArgs?.toolDenylist).toEqual(expect.arrayContaining(["diffs", "codex"]));
+    expect(acquireArgs?.toolDenylist).toEqual(["diffs"]);
     expect(acquireArgs?.toolDenylist).not.toContain("browser");
     expect(acquireArgs?.toolDenylist).not.toContain("github");
   });

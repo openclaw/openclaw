@@ -32,7 +32,6 @@ import {
   type PluginToolRegistryAcquisition,
 } from "../plugins/tools.js";
 import { resolveToolsMcpAgentId, resolveToolsMcpSessionContext } from "./agent-session-env.js";
-import { resolveBridgeExcludedPluginIds } from "./plugin-tools-bridge-filter.js";
 import { createToolsMcpServer, serveRegisteredToolsMcpServer } from "./tools-stdio-server.js";
 
 export const OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW_ENV = "OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW";
@@ -193,25 +192,23 @@ export async function acquirePluginToolsForMcp(params: {
   const basePolicies = baseSteps?.map((step) => step.policy) ?? [profilePolicy, globalPolicy];
   const baseAllowlist = collectExplicitAllowlist(basePolicies);
   const baseDenylist = collectExplicitDenylist(basePolicies);
-  const excludedPluginIds =
-    bridgePolicy && steps
-      ? resolveBridgeExcludedPluginIds({
-          config,
-          baseAllowlist,
-          baseDenylist,
-          steps,
-        })
-      : [];
   // Keep `toolAllowlist` strictly owned by the base policy so bridge allowlists
   // can never opt in / grant optional plugin tools during standalone loading.
   const toolAllowlist = baseAllowlist;
-  const toolDenylist = dedupeTrimmedEntries([
-    ...baseDenylist,
-    ...(bridgePolicy?.deny ?? []),
-    ...excludedPluginIds,
-  ]);
+  const toolDenylist = dedupeTrimmedEntries([...baseDenylist, ...(bridgePolicy?.deny ?? [])]);
   const acquisition = await acquireStandalonePluginToolRegistry({
     context,
+    ...(bridgePolicy && steps
+      ? {
+          filterToolNames: (pluginId: string, names: string[]) =>
+            applyToolPolicyPipeline({
+              tools: names.map((name) => ({ name })),
+              toolMeta: () => ({ pluginId }),
+              warn: () => {},
+              steps,
+            }).map((tool) => tool.name),
+        }
+      : {}),
     ...(toolAllowlist.length > 0 ? { toolAllowlist } : {}),
     ...(toolDenylist.length > 0 ? { toolDenylist } : {}),
     suppressNameConflicts: true,

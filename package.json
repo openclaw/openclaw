@@ -5,7 +5,6 @@
     "updateAdmissionProtocol": 1,
     "updatePreflightProtocol": 1,
     "nodeLauncherTransport": "byte-pipe-v1",
-    "pluginToolsMcpBridgeFilter": 1,
     "databaseEngines": [
       "sqlite",
       "postgres"

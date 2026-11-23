@@ -158,6 +158,18 @@ describe("plugin-tools-serve bridge filter real-registry invariants", () => {
       },
     };
 
+    // With no base narrowing, the bridge alone must exclude the marker plugin before import.
+    const bridgeOnly = await acquirePluginToolsForMcp({
+      config: { plugins: basePlugins },
+      bridgePolicy: { allow: ["fixture_alpha_tool"] },
+    });
+    try {
+      expect(bridgeOnly.resolveTools().map((tool) => tool.name)).toEqual(["fixture_alpha_tool"]);
+      expect(fs.existsSync(poisonMarker)).toBe(false);
+    } finally {
+      await bridgeOnly.release();
+    }
+
     // Base allowlist permits only fixture-alpha (by plugin ID), bridge narrows to tool name + fixture-poison.
     // fixture-poison must NEVER be imported, while cross-representation matching still exposes fixture_alpha_tool.
     const narrowed = await acquirePluginToolsForMcp({

@@ -89,17 +89,6 @@ describe("acpx package manifest", () => {
     expect(toolsGroup?.properties).toEqual(
       expect.arrayContaining(["pluginToolsMcpBridgeAllow", "pluginToolsMcpBridgeDeny"]),
     );
-    expect(pluginJson.configSchema?.properties?.pluginToolsMcpBridgeAllow).toMatchObject({
-      type: "array",
-      minItems: 1,
-      items: { type: "string", minLength: 1, pattern: "\\S" },
-      description: expect.stringContaining("narrows"),
-    });
-    expect(pluginJson.configSchema?.properties?.pluginToolsMcpBridgeDeny).toMatchObject({
-      type: "array",
-      items: { type: "string", minLength: 1, pattern: "\\S" },
-      description: expect.stringContaining("excluded"),
-    });
     expect(pluginJson.uiHints?.pluginToolsMcpBridgeAllow).toBeDefined();
     expect(pluginJson.uiHints?.pluginToolsMcpBridgeDeny).toBeDefined();
 

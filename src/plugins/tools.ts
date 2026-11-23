@@ -87,6 +87,7 @@ function resolvePluginToolLoadState(params: {
   context: OpenClawPluginToolContext;
   toolAllowlist?: string[];
   toolDenylist?: string[];
+  filterToolNames?: (pluginId: string, names: string[]) => string[];
   allowGatewaySubagentBinding?: boolean;
   hasAuthForProvider?: OpenClawPluginToolContext["hasAuthForProvider"];
   env?: NodeJS.ProcessEnv;
@@ -122,7 +123,6 @@ function resolvePluginToolLoadState(params: {
           env,
         });
   const allowlist = createPluginToolAllowlist(params.toolAllowlist);
-  const availabilityConfig = params.context.runtimeConfig ?? context.config;
   const selected: string[] = [];
   const denylist = normalizeDenylist(params.toolDenylist);
   const normalizedPlugins = normalizePluginsConfig(context.config.plugins);
@@ -146,7 +146,7 @@ function resolvePluginToolLoadState(params: {
       continue;
     }
     const allowsPlugin = allowlist.allowsPlugin(plugin.id);
-    const toolNames = (plugin.contracts?.tools ?? []).filter(
+    const baseToolNames = (plugin.contracts?.tools ?? []).filter(
       (name) =>
         (allowsPlugin ||
           (allowlist.includesDefaults && plugin.toolMetadata?.[name]?.optional !== true) ||
@@ -156,8 +156,8 @@ function resolvePluginToolLoadState(params: {
     if (
       hasManifestToolAvailability({
         plugin,
-        toolNames,
-        config: availabilityConfig,
+        toolNames: params.filterToolNames?.(plugin.id, baseToolNames) ?? baseToolNames,
+        config: params.context.runtimeConfig ?? context.config,
         env,
         hasAuthForProvider: params.hasAuthForProvider,
       })
@@ -206,6 +206,8 @@ type PluginToolResolutionParams = {
   clientCaps?: string[];
   toolAllowlist?: string[];
   toolDenylist?: string[];
+  /** Additional selection-only narrowing; never grants optional tools. */
+  filterToolNames?: (pluginId: string, names: string[]) => string[];
   suppressNameConflicts?: boolean;
   allowGatewaySubagentBinding?: boolean;
   hasAuthForProvider?: OpenClawPluginToolContext["hasAuthForProvider"];
