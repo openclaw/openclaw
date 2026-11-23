@@ -2,9 +2,9 @@ import { expect, it, vi } from "vitest";
 import { formatRestartedQuestionResult } from "../../agents/tools/ask-user-tool-normalization.js";
 import * as sessionEvents from "../../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { loadExactSessionEntry } from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionTranscriptContextMessages } from "../../config/sessions/session-accessor.sqlite-model-context.js";
+import { preparePhysicalSessionStorePath } from "../../config/sessions/session-store-path.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -143,7 +143,7 @@ it("does not replace an unavailable recorded requester with the session principa
         })
       )[0],
     ).toBe(true);
-    const { storePath } = loadExactSessionEntry({ agentId, sessionKey })!;
+    const storePath = await preparePhysicalSessionStorePath({ agentId, sessionKey }, cfg);
     await vi.waitFor(() => {
       const history = readSessionTranscriptContextMessages(
         { agentId, sessionKey, sessionId: "asking", storePath },
