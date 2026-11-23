@@ -1,3 +1,3 @@
 # Authority fixture repairs preserve admitted requests, explicit cancellation, and stale-target refusal.
-# Exact net growth keeps those assertions instead of dropping the hosted regressions.
-19
+# Includes queued deletion after a no-op, retry, and force escalation without losing accepted cleanup.
+98
