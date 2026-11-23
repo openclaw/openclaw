@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as flushImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetPromptCacheKeepWarmForTest } from "../agents/prompt-cache-keep-warm-candidates.js";
 import * as gatewayWork from "../process/gateway-work-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -93,7 +92,6 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ nextSweepAtMs: null, pruned: 0, skippedStores: 0 });
   clock = createGatewaySchedulerClock();
-  resetPromptCacheKeepWarmForTest();
   gatewayWork.resetGatewayWorkAdmission();
   recordAgentDatabaseAdmissions([]);
   scheduler = createTestGatewayScheduler(clock.clock);

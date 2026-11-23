@@ -16,7 +16,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 /** Longer lifetimes already cover ordinary breaks; a read does not restart a 12h clock. */
 export const MAX_WARM_TTL_MS = 60 * 60_000;
-export const MIN_WARM_TTL_MS = 5 * 60_000;
+const MIN_WARM_TTL_MS = 5 * 60_000;
 
 export type PromptCacheRoute = { provider: string; model: string };
 
@@ -106,10 +106,4 @@ export function nextPromptCacheKeepWarmDueAtMs(): number {
     next = Math.min(next, candidate.dueAtMs);
   }
   return next;
-}
-
-export function resetPromptCacheKeepWarmForTest(): void {
-  promptCacheKeepWarmState.candidates.clear();
-  promptCacheKeepWarmState.providerBackoffUntil.clear();
-  promptCacheKeepWarmState.recovered = false;
 }

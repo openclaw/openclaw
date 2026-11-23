@@ -29,7 +29,7 @@ export function resolveOpenAIPromptCacheParams(
   cachePrewarm?: StreamOptions["cachePrewarm"],
 ): {
   prompt_cache_retention?: "24h";
-  prompt_cache_options?: { ttl?: "30m" | "12h"; prewarm?: true };
+  prompt_cache_options?: { ttl?: "30m" | "12h"; prewarm?: boolean };
 } {
   const lifetime = resolveOpenAIPromptCacheLifetimeParams(
     model,
