@@ -91,7 +91,8 @@ vi.mock("../infra/node-sqlite.js", () => ({
   openNodeSqliteDatabase: edge.forbidden,
   captureSqliteNativeRuntimeAdmission: () => undefined,
 }));
-vi.mock("../logging/console.js", () => ({
+vi.mock("../logging/console.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logging/console.js")>()),
   routeLogsToStderr() {},
   setConsoleTimestampPrefix() {},
 }));

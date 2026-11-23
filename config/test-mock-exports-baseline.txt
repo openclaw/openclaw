@@ -5758,7 +5758,6 @@
 ["src/state/openclaw-agent-db-write.env-capture.test.ts","./agent-deletion-cleanup.js","44955a3f808479cd0b27694c5b7e3ea89f3454e736188902a3fbf256f80c3c31",1]
 ["src/state/openclaw-agent-execution.registration.test.ts","../infra/sqlite-worker-broker-admission.js","32bb2d3c87abe0c0631ecd0e44638065a93fdfdd5dc3267c29381baa39e84f5a",1]
 ["src/state/openclaw-agent-execution.registration.test.ts","../infra/sqlite-worker-operation-admission.js","ef2c8146de6065082c511e9dd339afafbf7afcc5c7ad890de9276150d21f5858",1]
-["src/state/openclaw-agent-execution.registration.test.ts","../logging/console.js","e062ebe213881c6a69135464a65edb730c61673293a50307fd32f89304944c81",1]
 ["src/state/openclaw-agent-execution.registration.test.ts","../process/output-drain.js","80ab4eb4822c11689123696f24fa9024c600ba10419092b075302ef0f4e2c707",1]
 ["src/state/openclaw-agent-execution.registration.test.ts","./openclaw-agent-db-identity.js","c50cd6b830ed02e0c4c5e748f53318399b82dc56f6babedec18686f3e7940352",1]
 ["src/state/openclaw-agent-execution.registration.test.ts","./openclaw-agent-db-lease.js","360109ec4f331fe50af5bb03123e80cf0810319fd44682ffcc710bbd1f3fc670",1]
