@@ -20,6 +20,11 @@ import {
 
 const log = createSubsystemLogger("gateway/update-run");
 
+function unrefLauncherIpcChannel(): void {
+  // Keep receiving stop requests while running without preventing natural exit once settled.
+  (process as NodeJS.Process & { channel?: { unref?: () => void } }).channel?.unref?.();
+}
+
 // IPC also reaches Windows, where POSIX signals cannot request a graceful child stop.
 if (process.env.OPENCLAW_LAUNCHER_IPC === "1") {
   process.on("message", (message: unknown) => {
@@ -32,6 +37,7 @@ if (process.env.OPENCLAW_LAUNCHER_IPC === "1") {
       process.kill(process.pid, "SIGTERM");
     }
   });
+  unrefLauncherIpcChannel();
 }
 
 export async function settleRunFromTrial(
@@ -173,5 +179,6 @@ export async function announceReady(buildId: string | null): Promise<void> {
   } finally {
     clearTimeout(timer);
     process.off("message", onMessage);
+    unrefLauncherIpcChannel();
   }
 }
