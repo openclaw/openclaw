@@ -15,6 +15,19 @@ type MessageReceiptInputResult = MessageReceiptSourceResult & {
   receipt?: MessageReceipt;
 };
 
+/** Values some adapters emit when they have no provider message identity. */
+const RESERVED_PLATFORM_IDS = new Set(["unknown", "suppressed"]);
+
+/**
+ * Normalizes a platform message id, treating reserved adapter placeholders as
+ * "no identity". A placeholder is not a confirmed provider send, even when the
+ * adapter attached an otherwise successful result.
+ */
+export function normalizeValidPlatformId(value: unknown): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  return normalized && !RESERVED_PLATFORM_IDS.has(normalized) ? normalized : undefined;
+}
+
 /** Reads reported recipients, including every physical part of an aggregate receipt. */
 export function listMessageReceiptSourceTargets(value: unknown): string[] {
   const targets = new Set<string>();
@@ -58,9 +71,9 @@ export function resolveReceiptSourceId(result: MessageReceiptInputResult): strin
     return undefined;
   }
   return (
-    normalizeOptionalString(result.messageId) ??
+    normalizeValidPlatformId(result.messageId) ??
     (result.receipt ? resolveMessageReceiptPrimaryId(result.receipt) : undefined) ??
-    normalizeOptionalString(result.pollId)
+    normalizeValidPlatformId(result.pollId)
   );
 }
 
@@ -120,15 +133,17 @@ export function createMessageReceiptFromOutboundResults(params: {
     );
   });
   const platformMessageIds = normalizeUniqueTrimmedStringList(
-    sentResults.flatMap((result) =>
-      result.receipt
-        ? [
-            result.receipt.primaryPlatformMessageId,
-            ...result.receipt.platformMessageIds,
-            ...result.receipt.parts.map((part) => part.platformMessageId),
-          ]
-        : [resolveReceiptSourceId(result)],
-    ),
+    sentResults
+      .flatMap((result) =>
+        result.receipt
+          ? [
+              result.receipt.primaryPlatformMessageId,
+              ...result.receipt.platformMessageIds,
+              ...result.receipt.parts.map((part) => part.platformMessageId),
+            ]
+          : [resolveReceiptSourceId(result)],
+      )
+      .filter((id): id is string => normalizeValidPlatformId(id) !== undefined),
   );
   const firstNestedReceipt = sentResults.find((result) => result.receipt)?.receipt;
   return {
@@ -161,15 +176,17 @@ export function createMessageReceiptFromOutboundResults(params: {
 
 /** Lists unique platform message ids in receipt order. */
 export function listMessageReceiptPlatformIds(receipt: MessageReceipt): string[] {
-  return normalizeUniqueStringEntries(receipt.platformMessageIds);
+  return normalizeUniqueStringEntries(receipt.platformMessageIds).filter(
+    (id) => normalizeValidPlatformId(id) !== undefined,
+  );
 }
 
 /** Resolves the explicit primary platform id, falling back to the first unique receipt id. */
 export function resolveMessageReceiptPrimaryId(receipt: MessageReceipt): string | undefined {
   return (
-    normalizeOptionalString(receipt.primaryPlatformMessageId) ??
+    normalizeValidPlatformId(receipt.primaryPlatformMessageId) ??
     listMessageReceiptPlatformIds(receipt)[0] ??
-    receipt.parts.map((part) => normalizeOptionalString(part.platformMessageId)).find(Boolean)
+    receipt.parts.map((part) => normalizeValidPlatformId(part.platformMessageId)).find(Boolean)
   );
 }
 
