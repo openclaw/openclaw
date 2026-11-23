@@ -186,6 +186,18 @@ At Gateway start, a preparation lock whose owner is dead or has the new Gateway'
 PID is released after its run is recorded as failed with reason `interrupted`.
 A live preparation owner in another process is left untouched.
 
+Shipped in-place updaters leave their running code in an `openclaw-update-runtime-*`
+directory and promise that the next update removes it. On the release path, `openclaw update`
+runs Doctor's retained-runtime maintenance in its own process before the update starts, the
+same way release preparation removes old releases first. A runtime still in use stays, and
+the cleanup never changes the update's outcome. A `--timeout` under 20 minutes skips it,
+because the process census cannot be interrupted. The Gateway's
+`update.run` and automatic updates do not run it, because the process census would block the
+serving Gateway. After the switch to releases, the resident launcher counts as a possible
+holder of a runtime without `owner.json`, and later commands no longer recognize its marker.
+Only an `openclaw update` run as the first release update removes such a runtime; otherwise
+it stays until removed by hand. Shipped updaters need no change.
+
 Candidate Doctor removes empty snapshot directories left by cancellation between
 private directory creation and native-token acquisition, after its inspection
 workers have settled. Unconfirmed worker cleanup and unowned snapshot payloads
