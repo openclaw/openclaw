@@ -378,7 +378,7 @@ export function buildChatItems(
     afterUserSendId?: string,
   ) =>
     (typeof runId === "string" && afterUserSendId ? lookup(runId, afterUserSendId) : null) ??
-    resolveRunInsertionBounds(lookup, runId, currentRunId, currentTurnBounds) ??
+    resolveRunInsertionBounds(lookup, runId, currentRunId, currentTurnBounds, historyItems[0]) ??
     (!runId && activeInputKey ? currentTurnBounds : undefined);
   const boundToPendingInputs = (
     bounds: TurnInsertionBounds | null | undefined,

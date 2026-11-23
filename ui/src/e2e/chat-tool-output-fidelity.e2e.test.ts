@@ -69,6 +69,50 @@ async function expandGroups(page: Page, reply: string) {
 }
 
 suite.define(() => {
+  it("keeps resumed tool activity below the opening request before history catches up", async () => {
+    await suite.withPage(
+      { viewport: { width: 1200, height: 820 }, locale: "en-US" },
+      async ({ page }) => {
+        const sessionKey = "agent:main:main";
+        const gateway = await installMockGateway(page, { sessionKey, historyMessages: [] });
+        await page.goto(suite.server.baseUrl + "chat");
+        const prompt = "Inspect the project layout.";
+        await page.locator(".agent-chat__input textarea").fill(prompt);
+        await page.getByRole("button", { name: "Send message", exact: true }).click();
+        const request = await gateway.waitForRequest("chat.send");
+        const runId = String(asOptionalRecord(request.params)?.idempotencyKey);
+        const message = {
+          role: "user",
+          content: prompt,
+          timestamp: Date.now(),
+          __openclaw: { id: "opening", seq: 1, idempotencyKey: runId + ":user" },
+        };
+        await gateway.emitGatewayEvent("session.message", {
+          sessionKey,
+          messageId: "opening",
+          messageSeq: 1,
+          message,
+        });
+        const user = page.locator(".chat-group.user", { hasText: prompt });
+        await user.waitFor();
+        // The same conversation continues under a new run ID before its history arrives.
+        await gateway.emitGatewayEvent("session.tool", {
+          sessionKey,
+          runId: "resumed",
+          seq: 2,
+          ts: message.timestamp + 100,
+          stream: "tool",
+          data: { phase: "result", toolCallId: "layout", name: "exec", result: "" },
+        });
+        const row = page.locator(".chat-tool-msg-summary", { hasText: "Ran a script" });
+        await row.waitFor();
+        if (captureUiProof) {
+          await capture(page, createControlUiE2eArtifactDir("resumed-tool-order"), "transcript");
+        }
+        expect((await user.boundingBox())!.y).toBeLessThan((await row.boundingBox())!.y);
+      },
+    );
+  });
   it("does not call a complete image-only result unavailable", async () => {
     const imageResult = {
       ...result,
