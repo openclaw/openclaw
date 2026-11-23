@@ -57,8 +57,12 @@ describe.each(["raw", "prepared"] as const)("durable reply runtime replacement (
     const error = await deliver().catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
     expect(isRetryableDeliveryNotSentError(error)).toBe(true);
-    expect(onReplacement).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ reason: expect.stringContaining("gateway.installation_replaced") }),
+    await vi.waitFor(() =>
+      expect(onReplacement).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          reason: expect.stringContaining("gateway.installation_replaced"),
+        }),
+      ),
     );
   });
 

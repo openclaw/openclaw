@@ -34,8 +34,9 @@ function deferredCall<T = void>() {
 const nativeReply = systemdReply("90s");
 
 async function loadInstallationReplacement() {
-  const { classifyGatewayStaleInstall } = await import("../../gateway/stale-install.js");
-  return (message: string, code: "ENOENT" | "ERR_MODULE_NOT_FOUND" = "ENOENT") => {
+  const { checkGatewayInstallationReplacement, classifyGatewayStaleInstall } =
+    await import("../../gateway/stale-install.js");
+  return async (message: string, code: "ENOENT" | "ERR_MODULE_NOT_FOUND" = "ENOENT") => {
     const missingChunk = new URL("../../gateway/missing-runtime.js", import.meta.url);
     classifyGatewayStaleInstall(
       Object.assign(new Error(message), {
@@ -43,6 +44,8 @@ async function loadInstallationReplacement() {
         ...(code === "ENOENT" ? { path: fileURLToPath(missingChunk) } : { url: missingChunk.href }),
       }),
     );
+    // The installation owner records the replacement after its lifecycle check.
+    await checkGatewayInstallationReplacement();
   };
 }
 
@@ -302,7 +305,7 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
           () => settle.mock.calls.length === 1,
           "Stop did not join update owner",
         );
-        replace("replaced runtime while updater is held");
+        await replace("replaced runtime while updater is held");
         expect(admissionClosed()).toBe(true);
         expectCallCount(1, captureStop, settle);
         expectCallCount(0, close, runtime.exit);
@@ -335,7 +338,7 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
           nextHelper.release();
         },
         async ({ signal, close, runtime, exited, replace }) => {
-          replace("package replaced while updater is finalizing");
+          await replace("package replaced while updater is finalizing");
           expect(
             await Promise.race([helper.entered.then(() => "helper"), closing.promise]),
             "Gateway closed before helper joined",
@@ -409,7 +412,7 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
               "Stop did not capture update",
             );
             const replaceInstallation = await loadInstallationReplacement();
-            replaceInstallation("replaced runtime");
+            await replaceInstallation("replaced runtime");
             expect(start).toHaveBeenCalledTimes(phase === "beginBoot" ? 0 : 1);
             expect(runtime.exit).not.toHaveBeenCalled();
             startup.release();
@@ -460,7 +463,7 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
           () => {},
           async ({ signal, start, exited, replace, close }) => {
             if (replaced) {
-              replace("Cannot find module", "ERR_MODULE_NOT_FOUND");
+              await replace("Cannot find module", "ERR_MODULE_NOT_FOUND");
             } else {
               signal("SIGUSR2")();
             }
@@ -513,7 +516,7 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
             signal("SIGUSR2")();
             await closing.entered;
           }
-          replace("Cannot find module", "ERR_MODULE_NOT_FOUND");
+          await replace("Cannot find module", "ERR_MODULE_NOT_FOUND");
           expect(admissionClosed()).toBe(true);
           await closing.entered;
           expect(close).toHaveBeenCalledOnce();

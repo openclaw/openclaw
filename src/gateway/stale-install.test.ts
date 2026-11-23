@@ -220,17 +220,34 @@ describe("running installation replacement", () => {
   it("waits for the package lifecycle before restarting into a package manager's write", async () => {
     const handoff = registerReplacement();
     const marker = path.join(fixture.root, ".openclaw-lifecycle-pending");
-    // npm extracts the pending marker first and build metadata long before the remaining tree.
+    // npm retires the old tree, then extracts the pending marker long before the remaining files.
     await fs.writeFile(marker, "");
-    await writeIdentity();
+    // A request hits a retired chunk before any maintenance check saw the marker.
+    expect(owner.classifyGatewayStaleInstall(missingChunk("dist/cron-old.js"))).not.toBeNull();
     await owner.checkGatewayInstallationReplacement();
     expectPending(handoff);
-    expect(owner.classifyGatewayStaleInstall(missingChunk("dist/cron-old.js"))).not.toBeNull();
+    await writeIdentity();
+    await owner.checkGatewayInstallationReplacement();
     expectPending(handoff);
     await fs.unlink(marker);
     await owner.checkGatewayInstallationReplacement();
     expect(handoff).toHaveBeenCalledOnce();
     expect(owner.getGatewayInstallationReplacement()?.onDisk?.buildId).toBe("build-after");
+  });
+
+  it("reads the lifecycle marker after the identity it qualifies", async () => {
+    await writeIdentity("2026.9.4", "build-before");
+    const metadata = await fs.lstat(path.join(fixture.root, "dist", "build-info.json"));
+    const pending = createDeferredCore<typeof metadata>();
+    vi.spyOn(fs, "lstat").mockImplementationOnce(() => pending.promise);
+    const handoff = registerReplacement();
+    const checking = owner.checkGatewayInstallationReplacement();
+    // npm starts while the identity read is in flight.
+    await fs.writeFile(path.join(fixture.root, ".openclaw-lifecycle-pending"), "");
+    await writeIdentity();
+    pending.resolve(metadata);
+    await checking;
+    expectPending(handoff);
   });
 
   it("stops waiting for a lifecycle that blocked package scripts never complete", async () => {
@@ -331,7 +348,7 @@ describe("running installation replacement", () => {
     }
   });
 
-  it("reports missing runtime chunks without taking over a held suspension", () => {
+  it("reports missing runtime chunks without taking over a held suspension", async () => {
     const restart = registerReplacement();
     const suspension = tryBeginGatewaySuspendAdmission(vi.fn());
     expect(suspension?.drain()).toBe(true);
@@ -342,12 +359,12 @@ describe("running installation replacement", () => {
     expectPending(restart);
     expect(suspension?.release()).toBe(true);
     expect(owner.classifyGatewayStaleInstall(missing)).not.toBeNull();
-    expect(restart).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(restart).toHaveBeenCalledOnce());
   });
 
   it.each(["ENOENT", "ERR_MODULE_NOT_FOUND"])(
     "uses the same handoff for a missing own chunk (%s), excluding dependencies and data",
-    (code) => {
+    async (code) => {
       const handoff = registerReplacement();
       const missing = (relative: string) => missingChunk(relative, code);
       expect(owner.classifyGatewayStaleInstall(missing("dist/data.json"))).toBeNull();
@@ -359,6 +376,8 @@ describe("running installation replacement", () => {
         ),
       ).not.toBeNull();
       owner.classifyGatewayStaleInstall(missing("dist/cron-old.js"));
+      await vi.waitFor(() => expect(handoff).toHaveBeenCalledOnce());
+      await owner.checkGatewayInstallationReplacement();
       expect(handoff).toHaveBeenCalledOnce();
     },
   );

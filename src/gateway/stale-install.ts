@@ -79,21 +79,16 @@ type InstallationObserver = {
   replacement?: GatewayInstallationReplacement;
   check?: Promise<void>;
   trialSettled?: boolean;
-  /** When a tick first saw the installation's package lifecycle pending. */
+  /** When a check first saw the installation's package lifecycle pending. */
   lifecyclePendingSince?: number;
+  /** A request failed to load an own runtime chunk; the next check decides the restart. */
+  runtimeMissing?: boolean;
 };
 
 // Package managers write the tree before lifecycle scripts remove the pending marker; a
 // restart before then lands on a half-written tree (#203897). Installs with blocked scripts
 // keep the marker until the launcher completes it, so stop waiting after this bound.
 const INSTALLATION_LIFECYCLE_SETTLE_MS = 10 * 60_000;
-
-function isInstallationSettling(observer: InstallationObserver): boolean {
-  return (
-    observer.lifecyclePendingSince !== undefined &&
-    Date.now() - observer.lifecyclePendingSince < INSTALLATION_LIFECYCLE_SETTLE_MS
-  );
-}
 
 // SDK chunks and the Gateway share one process owner without loading restart machinery.
 const installationState = resolveGlobalSingleton<{ observer?: InstallationObserver }>(
@@ -128,6 +123,7 @@ export function registerGatewayInstallationReplacementHandler(
     if (phase !== "accepting") {
       // A host operation may restore the running installation before reopening.
       observer.replacement = undefined;
+      observer.runtimeMissing = undefined;
     }
   });
   return () => {
@@ -210,29 +206,37 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
   const root = observer?.installationRoot;
   if (
     !observer ||
-    !root ||
-    !observer.running.buildId ||
     observer.replacement ||
-    getGatewaySuspendAdmissionPhase() !== "accepting"
+    getGatewaySuspendAdmissionPhase() !== "accepting" ||
+    (!observer.running.buildId && !observer.runtimeMissing)
   ) {
+    return Promise.resolve();
+  }
+  if (!root) {
+    // Without an installation root there is no package lifecycle to wait for.
+    if (observer.runtimeMissing) {
+      recordReplacement(observer);
+    }
     return Promise.resolve();
   }
   if (observer.check) {
     return observer.check;
   }
-  observer.check = Promise.all([
-    readInstallationMetadata(path.join(root, "dist", "build-info.json")),
-    fs.access(path.join(root, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH)).then(
-      () => true,
-      () => false,
-    ),
-  ])
-    .then(async ([value, lifecyclePending]) => {
+  observer.check = readInstallationMetadata(path.join(root, "dist", "build-info.json"))
+    .then(async (value) => {
+      // Package managers extract the pending marker before build metadata, so reading it
+      // after the identity cannot pair a new identity with the previous settled tree.
+      const lifecyclePending = await fs
+        .access(path.join(root, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH))
+        .then(
+          () => true,
+          () => false,
+        );
       if (!lifecyclePending) {
         observer.lifecyclePendingSince = undefined;
       } else {
         observer.lifecyclePendingSince ??= Date.now();
-        if (isInstallationSettling(observer)) {
+        if (Date.now() - observer.lifecyclePendingSince < INSTALLATION_LIFECYCLE_SETTLE_MS) {
           return;
         }
       }
@@ -240,14 +244,16 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
       const version = normalizeNullableString(metadata?.version);
       const buildId = normalizeNullableString(metadata?.buildId);
       // npm can temporarily remove or partially replace metadata. Wait for a complete identity.
-      if (!version || version.length > 96 || !buildId || buildId.length > 96) {
-        return;
-      }
+      const complete = version && version.length <= 96 && buildId && buildId.length <= 96;
       if (
+        complete &&
+        observer.running.buildId &&
         (version !== observer.running.version || buildId !== observer.running.buildId) &&
         !(observer.updateKey && (await isInstallationHeldByUpdateRun(observer.updateKey)))
       ) {
         recordReplacement(observer, { version, buildId });
+      } else if (observer.runtimeMissing) {
+        recordReplacement(observer);
       }
     })
     .finally(() => {
@@ -305,9 +311,16 @@ export function classifyGatewayStaleInstall(error: unknown): {
   if (!missingRuntime) {
     return null;
   }
-  // While a package manager is still writing, the maintenance tick restarts once it settles.
-  if (observer && !isInstallationSettling(observer)) {
-    recordReplacement(observer);
+  // A live suspension owns installation changes and may restore the running installation.
+  if (observer && !observer.replacement && getGatewaySuspendAdmissionPhase() === "accepting") {
+    // The installation may still be mid-write; the owner check restarts once it settles.
+    observer.runtimeMissing = true;
+    // A check already in flight may have read the flag before it was set.
+    void (observer.check ?? Promise.resolve())
+      .then(() => checkGatewayInstallationReplacement())
+      .catch(() => {
+        // The maintenance tick retries the same check.
+      });
   }
   const restartCommand = formatCliCommand("openclaw gateway restart");
   return {
