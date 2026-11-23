@@ -620,6 +620,26 @@ export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams):
   // Stop the early proxy before selection can choose another config/state target. Its lifecycle
   // restores the underlying env snapshot so the selected target's trusted dotenv can replace it.
   await getGatewayRunRuntimeHooks().releaseManagedProxy?.();
+  if (!params.opts.reset) {
+    // Outdated state is upgraded by copy and swap before anything reads it. A start
+    // the config guard would refuse stays read-only: the previous package must still
+    // read its state.
+    const { upgradeStateOnGatewayStart } = await import("../../state/state-upgrade-startup.js");
+    await measureGatewayBootstrapStep("cli.bootstrap.state-upgrade", () =>
+      upgradeStateOnGatewayStart(
+        process.env,
+        (start) =>
+          getGatewayStartGuardErrors({
+            ...start,
+            allowUnconfigured: params.opts.allowUnconfigured === true,
+          }).length === 0,
+      ),
+    );
+  }
+  // State preparation can take minutes. Only its completion shortens the launcher's trial.
+  if (process.env.OPENCLAW_LAUNCHER_IPC === "1" && process.connected && process.send) {
+    process.send({ type: "openclaw.trial", phase: "trial" }, () => {});
+  }
   const environmentSelection = selectedGatewayRunEnvironment;
   selectedGatewayRunEnvironment = undefined;
   if (!environmentSelection) {

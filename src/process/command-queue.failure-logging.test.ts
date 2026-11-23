@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { FailoverError } from "../agents/failover/error.js";
 import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence-error.js";
+import { SessionWorkStartChangedError } from "../config/sessions/work-start-error.js";
 import { enqueueCommandInLane, GatewayDrainingError } from "./command-queue.js";
 import { resetCommandQueueStateForTest } from "./command-queue.test-support.js";
 
@@ -18,6 +19,33 @@ beforeEach(() => {
 });
 afterEach(resetCommandQueueStateForTest);
 
+it("does not report a session authority refusal as a model fallback candidate", async () => {
+  const error = new Error("Session target preparation outlived its attempt", {
+    cause: new Error("This agent run is no longer active. Start a new turn to retry.", {
+      cause: new SessionWorkStartChangedError("Session event configuration changed"),
+    }),
+  });
+  await expect(
+    enqueueCommandInLane(
+      "cron-nested",
+      async () => {
+        throw error;
+      },
+      {
+        taskIdentity: {
+          taskKind: "cron",
+          runId: "synthetic-refused-run",
+          modelFallbackCandidate: true,
+        },
+      },
+    ),
+  ).rejects.toBe(error);
+  expect(diag.error).toHaveBeenCalledWith(
+    expect.stringContaining("lane task error: lane=cron-nested"),
+    expect.objectContaining({ runId: "synthetic-refused-run", modelFallbackCandidate: false }),
+  );
+});
+
 it.each([
   ["Gateway shutdown", () => new GatewayDrainingError()],
   [
@@ -34,7 +62,7 @@ it.each([
   [
     "wrapped source authority revocation",
     () =>
-      new Error("admitted run authority is no longer active", {
+      new Error("This agent run is no longer active. Start a new turn to retry.", {
         cause: new SessionTranscriptReadFenceError(
           "Session transcript changed during context read",
         ),

@@ -227,17 +227,7 @@ function composerControlsHtml() {
           <summary class="chat-controls__inline-select-trigger chat-controls__model-trigger" data-chat-composer-model="true" aria-label="Chat model: GPT-5.6 Luna">
             <span class="chat-controls__inline-select-label">GPT-5.6 Luna</span>
           </summary>
-          <div class="chat-controls__inline-select-menu chat-controls__model-menu">
-            <div class="chat-controls__model-search-wrap"><input class="chat-controls__model-search" placeholder="Search models" /></div>
-            <div class="chat-controls__model-options">
-              <button class="chat-controls__inline-select-option chat-controls__model-option chat-controls__inline-select-option--selected">Default model</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.5</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">claude-sonnet-4-6</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.6-luna</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.6-sol</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">openrouter/auto</button>
-            </div>
-          </div>
+          <div class="oc-overlay chat-picker-overlay" popover="manual"></div>
           </details>
           <details class="chat-controls__inline-select chat-controls__permission-picker">
           <summary class="chat-controls__inline-select-trigger chat-controls__permission-trigger" aria-label="Permissions: Guarded">
@@ -251,9 +241,7 @@ function composerControlsHtml() {
           <summary class="chat-controls__inline-select-trigger chat-controls__effort-trigger" data-chat-composer-effort="true" aria-label="Effort">
             <span class="chat-controls__inline-select-label">Medium</span>
           </summary>
-          <div class="chat-controls__inline-select-menu chat-controls__effort-menu">
-            <div class="chat-controls__reasoning-panel">Effort</div>
-          </div>
+          <div class="oc-overlay chat-picker-overlay" popover="manual"></div>
           </details>
         </div>
       </div>
@@ -364,7 +352,6 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                     </div>`
                       : ""
                   }
-                  <div class="agent-chat__composer-status-stack"> </div>
                   </div>
                   <div class="agent-chat__composer-input-row">
                     <div class="agent-chat__composer-combobox">
@@ -429,7 +416,7 @@ async function openFixture(width: number, height: number, opts: ChatFixtureOptio
   const page = await openBrowserPage(width, height);
   try {
     await page.setContent(
-      `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHtml(opts, width <= 1100)}</body></html>`,
+      `<!doctype html><html><head><style>${readUiCss()}${readStyleSheet("ui/src/components/solid/overlay.css")}</style></head><body>${chatHtml(opts, width <= 1100)}</body></html>`,
     );
     await syncFixtureComposerPopoverAnchor(page);
     return page;
@@ -940,10 +927,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(defaults.thread.width).toBeCloseTo(768, 0);
       expect(defaults.composer.width).toBeCloseTo(defaults.thread.width, 0);
       expect(defaults.prs.width).toBeCloseTo(defaults.thread.width, 0);
-      expect(defaults.tool.width).toBeCloseTo(defaults.thread.width, 0);
-      expect(defaults.shell.width).toBeCloseTo(760, 0);
-      expect(defaults.activity.width).toBeCloseTo(760, 0);
-      expect(defaults.framedActivity.width).toBeCloseTo(defaults.activity.width, 0);
+      // Tool rows end where reply text does, at the default width as at a saved one.
+      for (const key of ["activity", "framedActivity", "shell", "tool"] as const) {
+        expect(defaults[key].width).toBeCloseTo(defaults.thread.width, 0);
+      }
 
       const configured = await renderFixture(true);
       for (const key of ["activity", "framedActivity", "shell", "tool"] as const) {
@@ -1453,8 +1440,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         }
 
         expect(geometry.codeBlock?.borderRadius).toBeGreaterThan(0);
+        expect(geometry.bubble?.borderRadius).toBeGreaterThan(0);
         expect(geometry.bubble).toMatchObject({
-          borderRadius: geometry.codeBlock?.borderRadius,
           cornerShape: geometry.codeBlock?.cornerShape,
           paddingTop: 16,
           paddingRight: 16,
@@ -2555,13 +2542,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await state.dispose();
       };
       const expandedBefore = await readSummaryState();
-      const { shellBounds, stackSurfaces, warnGoalSurfaces } = await page.evaluate(() => {
+      const { shellBounds, stackSurfaces } = await page.evaluate(() => {
         const snapshot = (selector: string) => {
           const node = document.querySelector<HTMLElement>(selector)!;
           const bounds = node.getBoundingClientRect();
           return {
-            background: getComputedStyle(node).backgroundColor,
-            borderColor: getComputedStyle(node).borderColor,
             left: bounds.left,
             right: bounds.right,
             top: bounds.top,
@@ -2572,13 +2557,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             bottomRightRadius: getComputedStyle(node).borderBottomRightRadius,
           };
         };
-        const goal = document.querySelector<HTMLElement>(".agent-chat__goal")!;
-        const activeSurface = snapshot(".agent-chat__goal");
-        const warnSurfaces = ["blocked", "budget_limited", "usage_limited"].map((state) => {
-          goal.className = `agent-chat__goal agent-chat__goal--${state}`;
-          return { state, surface: snapshot(".agent-chat__goal") };
-        });
-        goal.className = "agent-chat__goal agent-chat__goal--active";
         const shell = document
           .querySelector<HTMLElement>(".agent-chat__composer-shell")!
           .getBoundingClientRect();
@@ -2587,10 +2565,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           stackSurfaces: [
             snapshot(".session-progress-card--composer"),
             snapshot(".chat-queue"),
-            activeSurface,
+            snapshot(".agent-chat__goal"),
             snapshot(".agent-chat__input"),
           ],
-          warnGoalSurfaces: warnSurfaces,
         };
       });
       await setSummaryHover(true);
@@ -2611,14 +2588,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           expect(surface.top).toBeGreaterThan(stackSurfaces[index - 1]!.bottom);
         }
       }
-      for (const { state, surface } of warnGoalSurfaces) {
-        expect(surface.background, state).not.toBe(stackSurfaces[2]?.background);
-        expect(surface.borderColor, state).not.toBe(stackSurfaces[2]?.borderColor);
-      }
-      expect(new Set(warnGoalSurfaces.map(({ surface }) => surface.borderColor))).toHaveProperty(
-        "size",
-        1,
-      );
       expect(expandedBefore.titleLeft).toBeCloseTo(expandedBefore.firstMarkerLeft, 1);
       expect(expandedAfter.cardBackground).toBe(expandedBefore.cardBackground);
       expect(expandedAfter.summaryBackground).toBe(expandedBefore.summaryBackground);

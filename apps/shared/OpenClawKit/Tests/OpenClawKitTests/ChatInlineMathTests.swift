@@ -1,6 +1,10 @@
 import CoreGraphics
 import Foundation
+import SwiftUI
 import Testing
+#if os(macOS)
+import AppKit
+#endif
 @testable import OpenClawChatUI
 
 struct ChatInlineMathTests {
@@ -167,6 +171,76 @@ struct ChatInlineMathTests {
         #expect(prose.inlineAccessibilityText == "value x")
     }
 
+    @Test @MainActor func `parse overflow retains other results and bounded cached failures`() throws {
+        let failure = #"\openclawCacheRetentionFailure"#
+        #expect(ChatMathParseCache.mathList(latex: failure) == nil)
+        let first = try #require(ChatMathParseCache.mathList(latex: "x_{910000}"))
+        var previous = first
+        var previousLatex = "x_{910000}"
+        for index in 1..<80 {
+            let latex = "x_{\(910000 + index)}"
+            let next = try #require(ChatMathParseCache.mathList(latex: latex))
+            // At least one overflow occurs regardless of other tests warming the cache.
+            try #require(ChatMathParseCache.mathList(latex: previousLatex) === previous)
+            previous = next
+            previousLatex = latex
+        }
+        #expect(ChatMathParseCache.mathList(latex: "x_{910000}") === first)
+
+        // The failure was the oldest of 81 entries. Caching it again evicts only
+        // the oldest success; repeated nil hits must not consume additional slots.
+        for _ in 0..<80 {
+            #expect(ChatMathParseCache.mathList(latex: failure) == nil)
+        }
+        #expect(ChatMathParseCache.mathList(latex: previousLatex) === previous)
+        #expect(ChatMathParseCache.mathList(latex: "x_{910000}") !== first)
+
+        // Swift String equates the Kelvin sign with ASCII K; a cached success
+        // must never let the non-ASCII spelling bypass the raw-source fallback.
+        _ = try #require(ChatMathParseCache.mathList(latex: "K"))
+        #expect(ChatMathParseCache.mathList(latex: "\u{212A}") == nil)
+    }
+
+    @Test @MainActor func `image overflow retains other renders without mixing font or theme`() throws {
+        #if os(macOS)
+        _ = NSApplication.shared
+        #endif
+        func render(
+            _ latex: String,
+            fontSize: CGFloat = 12,
+            colorScheme: ColorScheme = .light) throws -> ChatInlineMathImageCache.RenderedImage
+        {
+            try #require(ChatInlineMathImageCache.image(
+                latex: latex,
+                fontSize: fontSize,
+                textColor: .primary,
+                colorScheme: colorScheme))
+        }
+
+        let first = try render("x_{920000}")
+        var previous = first
+        var previousLatex = "x_{920000}"
+        for index in 1...80 {
+            let latex = "x_{\(920000 + index)}"
+            let next = try render(latex)
+            let retained = try render(previousLatex)
+            try #require(retained.image === previous.image)
+            #expect(retained.baselineOffset == previous.baselineOffset)
+            previous = next
+            previousLatex = latex
+        }
+        #expect(try render("x_{920000}").image !== first.image)
+
+        let larger = try render(previousLatex, fontSize: 18)
+        let dark = try render(previousLatex, colorScheme: .dark)
+        #expect(larger.image !== previous.image)
+        #expect(larger.image.size.height > previous.image.size.height)
+        #expect(dark.image !== previous.image)
+        #expect(try render(previousLatex).image === previous.image)
+        #expect(try render(previousLatex, fontSize: 18).image === larger.image)
+        #expect(try render(previousLatex, colorScheme: .dark).image === dark.image)
+    }
+
     @Test @MainActor func `image sizing rejects unsafe bitmap bounds`() {
         #expect(!ChatInlineMathImageCache.isSafeImageSize(.zero, scale: 2))
         #expect(!ChatInlineMathImageCache.isSafeImageSize(
@@ -178,6 +252,9 @@ struct ChatInlineMathTests {
         #expect(ChatInlineMathImageCache.isSafeImageSize(
             CGSize(width: 256, height: 256),
             scale: 2))
+        #expect(!ChatInlineMathImageCache.isSafeImageSize(
+            CGSize(width: 256, height: 256),
+            scale: 3))
     }
 
     @MainActor

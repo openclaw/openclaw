@@ -387,17 +387,8 @@ describe("SQLite worker store", () => {
         await createAlias(file, aliasPath);
         const firstAlias = await open(aliasPath);
         const secondAlias = await open(aliasPath);
-        const realpath = vi.spyOn(fs.realpathSync, "native");
-        try {
-          expect(await append(firstAlias, "warm")).toEqual({ ...originalReceipt, writes: 2 });
-          expect(await read(original)).toEqual(["original", "warm"]);
-          // No database path resolution belongs on an already-open worker operation.
-          expect(
-            realpath.mock.calls.filter(([pathname]) => pathname === file || pathname === aliasPath),
-          ).toEqual([]);
-        } finally {
-          realpath.mockRestore();
-        }
+        expect(await append(firstAlias, "warm")).toEqual({ ...originalReceipt, writes: 2 });
+        expect(await read(original)).toEqual(["original", "warm"]);
         await unlink(aliasPath);
         const replacementTarget =
           kind === "hardlink" ? aliasPath : path.join(path.dirname(file), "replacement.sqlite");

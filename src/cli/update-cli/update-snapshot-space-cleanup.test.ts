@@ -63,16 +63,22 @@ function terminal(interactive: boolean) {
 }
 
 /** Space is short until the superseded copy is gone, as on a full disk. */
-function spaceCheck() {
-  const step = (exitCode: number): UpdateStepResult => ({
+function spaceCheck(shortfall: "refusal" | "skipped-image" = "refusal") {
+  const step = (short: boolean): UpdateStepResult => ({
     name: "snapshot-space-preflight",
     command: "snapshot-space-preflight",
     cwd: "",
     durationMs: 0,
-    exitCode,
-    ...(exitCode ? { stderrTail: "snapshot-capacity-insufficient: no space" } : {}),
+    exitCode: short && shortfall === "refusal" ? 1 : 0,
+    ...(short && shortfall === "refusal"
+      ? { stderrTail: "snapshot-capacity-insufficient: no space" }
+      : {}),
+    ...(short && shortfall === "skipped-image" ? { warnings: ["No pre-migration image."] } : {}),
   });
-  return vi.fn(async () => step(fs.existsSync(superseded) ? 1 : 0));
+  return vi.fn(async () => {
+    const short = fs.existsSync(superseded);
+    return { step: step(short), shortfall: short };
+  });
 }
 
 it("removes retirable copies after an interactive yes and checks space again", async () => {
@@ -127,14 +133,35 @@ it.each([
   expect([superseded, latest].map(fs.existsSync)).toEqual([true, true]);
   expect(result.exitCode).toBe(1);
   expect(result.stderrTail).toMatch(
-    /^snapshot-capacity-insufficient: no space\n1 recovery copy from earlier updates use .+ and can be removed\. Run openclaw update in a terminal/u,
+    /^snapshot-capacity-insufficient: no space\n1 recovery copy from earlier updates use .+ and can be removed\. Run openclaw update in a terminal to be offered their removal, or stop the Gateway and run openclaw update cleanup, then retry\.$/u,
   );
+});
+
+it("adds removal advice as a warning when only the image would be skipped", async () => {
+  terminal(false);
+  const assess = spaceCheck("skipped-image");
+
+  const result = await assessSnapshotCapacityOfferingCleanup(assess, { print: () => {} });
+
+  expect(answer.asked).toEqual([]);
+  expect([superseded, latest].map(fs.existsSync)).toEqual([true, true]);
+  expect(result.exitCode).toBe(0);
+  expect(result.stderrTail).toBeUndefined();
+  expect(result.warnings).toEqual([
+    "No pre-migration image.",
+    expect.stringMatching(
+      /^1 recovery copy from earlier updates use .+ and can be removed\. Run openclaw update in a terminal to be offered their removal, or stop the Gateway and run openclaw update cleanup to keep a pre-migration image on the next update\.$/u,
+    ),
+  ]);
 });
 
 it("leaves a refusal unchanged when nothing is retirable", async () => {
   terminal(true);
   fs.rmSync(superseded, { recursive: true });
-  const assess = vi.fn(async () => ({ ...(await spaceCheck()()), exitCode: 1 }));
+  const assess = vi.fn(async () => {
+    const { step } = await spaceCheck()();
+    return { step: { ...step, exitCode: 1 }, shortfall: true };
+  });
 
   const result = await assessSnapshotCapacityOfferingCleanup(assess, { print: () => {} });
 

@@ -1,10 +1,13 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { API, EmitOutputFile } from "typescript/async";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.ts";
 import { createDeclarationInputBoundary, resolveRepoToolBinPath } from "./local-check-runtime.mts";
 import { createDeclarationFileSystem } from "./native-declaration-filesystem.mts";
+import { readNativeTypeScriptConfig } from "./native-typescript-config.mts";
 import {
   collectNativeTypeScriptDiagnosticsAsync,
   formatNativeTypeScriptDiagnostics,
@@ -12,6 +15,10 @@ import {
 import { nativeTypeScriptToolchainFiles } from "./native-typescript-toolchain.mts";
 import { resolveInstalledNativeTypeScriptCompiler } from "./native-typescript.mts";
 import { isRecord } from "./record-shared.mjs";
+import {
+  TSDOWN_MAX_OLD_SPACE_MB_ENV,
+  tsdownBudgetAdmitsParallelNativeWork,
+} from "./tsdown-heap-budget.mts";
 
 export type NativeDeclaration = {
   code: string;
@@ -140,7 +147,7 @@ export async function compileNativeProject({
     const virtualFiles = new Map([
       [config, JSON.stringify({ extends: admittedConfig, compilerOptions })],
     ]);
-    view = createDeclarationFileSystem(root, assertInput ? admit : undefined, virtualFiles);
+    view = createDeclarationFileSystem(root, assertInput, virtualFiles);
     const manifestFile = admit(path.join(root, "package.json"));
     const manifestText = view.filesystem.readFile(manifestFile);
     view.assertValid();
@@ -279,7 +286,157 @@ export async function compileNativeProject({
   }
 }
 
-/** Adapt the shared compiler's in-memory declarations to tsdown source ownership. */
+/**
+ * The parallel pass's Go memory is outside --max-old-space-size: its cgroup peaked at 8.4 GiB
+ * against 6.1 GiB for the single-threaded pass, and it was OOM-killed in an 8 GiB container
+ * that the single-threaded pass completes in. The build's memory owner (tsdown-build, frozen
+ * by build-all) hands every build child its admitted heap in OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB
+ * and grants its uncapped default only when memory is ample, the same fact it uses to run two
+ * runtime builds at once. Its Windows default and a run without that budget (a bare tsdown)
+ * emit single-threaded; an operator's explicit budget at or above it asserts ample memory.
+ */
+function hostAdmitsParallelEmit() {
+  const budgetMb = Number(process.env[TSDOWN_MAX_OLD_SPACE_MB_ENV]);
+  return Number.isSafeInteger(budgetMb) && tsdownBudgetAdmitsParallelNativeWork(budgetMb);
+}
+
+/**
+ * Emit declarations in one compiler command-line pass. The compiler reads the checkout
+ * directly, which is several times faster than routing each read through the API
+ * filesystem callbacks, and it may check and emit in parallel: repeated parallel emits
+ * are byte-identical. Inputs come from --listFiles and must stay inside the checkout;
+ * returns undefined when the compiler read a path outside it.
+ * Failed resolution probes are not reported; callers key caches on the namespace
+ * topology and every manifest and tsconfig instead.
+ */
+async function compileDeclarationsWithCompilerCli({
+  cwd,
+  configFile,
+  roots,
+  compilerOptions,
+  compilerRoot,
+  assertInput,
+}: Omit<NativeCompilationOptions, "roots" | "emit" | "diagnostics"> & { roots: string[] }) {
+  const boundary = createDeclarationInputBoundary(cwd);
+  const root = boundary.root;
+  const admit = (file: string) => {
+    const accepted = boundary.assert(file);
+    return assertInput ? assertInput(accepted) : accepted;
+  };
+  const config = admit(configFile);
+  // Inherited configs can change emit; admit the whole extends chain, as the API path did.
+  readNativeTypeScriptConfig({ cwd: root, configFileName: config, assertInput: admit });
+  const artifacts = admit(path.join(root, ".artifacts"));
+  fs.mkdirSync(artifacts, { recursive: true });
+  const stage = fs.mkdtempSync(path.join(artifacts, "native-declarations-"));
+  let leaf: string | undefined;
+  try {
+    const compiler = await resolveNativeCompiler(compilerRoot);
+    nativeTypeScriptToolchainFiles(admit(compiler.packageJson), admit);
+    const run = (args: string[]) =>
+      new Promise<{ failure?: Error; output: string }>((resolve) => {
+        execFile(
+          compiler.executable,
+          [...args, "--pretty", "false"],
+          { cwd: root, maxBuffer: 256 * 1024 * 1024 },
+          (error, stdout, stderr) =>
+            resolve({ failure: error ?? undefined, output: `${stdout}${stderr}` }),
+        );
+      });
+    // Ambient declarations the config includes stay in the program, as with the API path.
+    const configured = await run(["--showConfig", "-p", config]);
+    if (configured.failure) {
+      throw new Error(configured.output.trim() || configured.failure.message);
+    }
+    const shown: { files?: string[]; compilerOptions?: { typeRoots?: string[] } } = JSON.parse(
+      configured.output,
+    );
+    // Default type roots climb past the checkout; keep only the ones inside it.
+    const typeRoots = [];
+    for (let directory = path.dirname(config); ; directory = path.dirname(directory)) {
+      typeRoots.push(path.join(directory, "node_modules/@types"));
+      if (directory === root || path.dirname(directory) === directory) {
+        break;
+      }
+    }
+    const ambient = (shown.files ?? [])
+      .filter((file) => /\.d\.[cm]?ts$/u.test(file))
+      .map((file) => admit(path.resolve(path.dirname(config), file)));
+    const output = path.join(stage, "out");
+    // Beside its base so default type roots, relative overrides and ${configDir} keep the
+    // compiler's own interpretation. It exists only for this compile.
+    leaf = path.join(path.dirname(config), `${path.basename(stage)}.tsconfig.json`);
+    fs.writeFileSync(
+      leaf,
+      JSON.stringify({
+        extends: config,
+        files: [...new Set([...roots.map(admit), ...ambient])],
+        include: [],
+        exclude: [],
+        compilerOptions: {
+          ...(shown.compilerOptions?.typeRoots ? {} : { typeRoots }),
+          ...compilerOptions,
+          rootDir: root,
+          outDir: output,
+          declarationDir: output,
+          declaration: true,
+          declarationMap: true,
+          emitDeclarationOnly: true,
+          noEmit: false,
+          noEmitOnError: false,
+          noCheck: false,
+          incremental: false,
+          composite: false,
+          // Parallel emit can give shared inferred properties different readonly modifiers.
+          // Stable type ordering removes that race: parallel emits are byte-identical.
+          ...(compilerOptions?.stableTypeOrdering === true && hostAdmitsParallelEmit()
+            ? {}
+            : { singleThreaded: true }),
+        },
+      }),
+    );
+    const compiled = await run(["-p", leaf, "--listFiles"]);
+    // --listFiles prints one absolute path per line after any diagnostics. Admit read files
+    // before reporting errors so an escaped input fails as an escape, not as the type error
+    // it causes.
+    const lines = compiled.output.replace(/\r?\n$/u, "").split(/\r?\n/u);
+    const read = lines.filter((line) => path.isAbsolute(line) && fs.existsSync(line));
+    // Published SDK declarations probe `../`-relative node_modules paths several levels up.
+    // In a checkout nested inside another install (an updater's preflight worktree) they
+    // reach the outer install, which an isolated checkout would not see. Discard the pass;
+    // the bounded compile treats outside paths as absent. In-checkout links that escape
+    // still fail at admission there and below.
+    const outside = read.some((file) => {
+      const relative = path.relative(root, boundary.resolve(file));
+      return relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+    });
+    if (outside) {
+      return undefined;
+    }
+    const inputs = [...new Set(read.map((file) => admit(file)))].toSorted();
+    if (compiled.failure) {
+      const diagnostics = lines.filter((line) => !read.includes(line)).join("\n");
+      throw new Error(diagnostics.trim() || compiled.failure.message);
+    }
+    const outputFiles = new Map<string, { text: string }>();
+    // The compiler creates the output directory only when it emits a declaration.
+    const emitted = fs.existsSync(output) ? listDirectoryTreeStrictSync(output) : [];
+    for (const { relativePath, dirent } of emitted) {
+      if (dirent.isFile() && /\.d\.[cm]?ts(?:\.map)?$/u.test(dirent.name)) {
+        const file = path.join(output, relativePath);
+        outputFiles.set(file, { text: fs.readFileSync(file, "utf8") });
+      }
+    }
+    return { inputs, outputFiles };
+  } finally {
+    if (leaf) {
+      fs.rmSync(leaf, { force: true });
+    }
+    fs.rmSync(stage, { recursive: true, force: true });
+  }
+}
+
+/** Adapt the compiler's declarations to tsdown source ownership. */
 export async function emitNativeDeclarations(
   options: Omit<NativeCompilationOptions, "roots" | "emit"> & { roots: string[] },
 ) {
@@ -287,14 +444,25 @@ export async function emitNativeDeclarations(
   if (!options.roots.length) {
     return { inputs: [], declarations };
   }
-  const compilation = await compileNativeProject({
-    ...options,
-    compilerOptions: {
-      ...options.compilerOptions,
-      rootDir: fs.realpathSync.native(options.cwd),
-      declarationMap: true,
-    },
-  });
+  const root = fs.realpathSync.native(options.cwd);
+  const api = (assertInput = options.assertInput) =>
+    compileNativeProject({
+      ...options,
+      assertInput,
+      compilerOptions: { ...options.compilerOptions, rootDir: root, declarationMap: true },
+    });
+  // The command line always applies the checkout boundary; its API replacement must too.
+  const bounded = () => api(options.assertInput ?? ((file) => file));
+  // API baselines check only declaration diagnostics, sometimes with a historical
+  // compiler; the command line reports every diagnostic, so they keep the API path.
+  // A checkout path with a line break cannot be framed in --listFiles output. A pass that
+  // read outside the checkout is redone behind the bounded API filesystem.
+  const compilation =
+    options.diagnostics === "declarations"
+      ? await api()
+      : root.includes("\n")
+        ? await bounded()
+        : ((await compileDeclarationsWithCompilerCli(options)) ?? (await bounded()));
   const inputs = new Set(compilation.inputs);
   for (const [file, output] of compilation.outputFiles) {
     if (!/\.d\.[cm]?ts$/u.test(file)) {

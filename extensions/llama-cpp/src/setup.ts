@@ -102,7 +102,7 @@ async function configuredCandidates(
     allowManifestNormalization: false,
     allowPluginNormalization: false,
   });
-  const primaryId = primary.provider === LLAMA_CPP_PROVIDER_ID ? primary.model : undefined;
+  const primaryId = primary?.provider === LLAMA_CPP_PROVIDER_ID ? primary.model : undefined;
   return candidates.toSorted(
     (a, b) => Number(b.model.id === primaryId) - Number(a.model.id === primaryId),
   );

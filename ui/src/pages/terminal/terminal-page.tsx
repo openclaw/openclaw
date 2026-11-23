@@ -1,8 +1,11 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import { For, createMemo } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
+import { isMobileNavLayout, mobileNavLayoutMediaQuery } from "../../app/mobile-nav-layout.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
+import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import { TerminalPanelHost } from "../../components/terminal/terminal-panel-registration.tsx";
+import { isGatewayConnectionAttemptPending } from "../../lib/gateway-status.ts";
 import {
   projectAgentSelection,
   projectApplicationConfig,
@@ -10,6 +13,7 @@ import {
 } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { projectTheme } from "../../lib/reactive/theme.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
@@ -19,6 +23,7 @@ import "./terminal-page.css";
 
 export function TerminalPage(props: { location: RouteLocation | null }) {
   const context = useApplication();
+  const mobile = createMediaQuery(mobileNavLayoutMediaQuery(), isMobileNavLayout());
   const gateway = projectGateway(context.gateway);
   const config = projectApplicationConfig(context.config);
   const selection = projectAgentSelection(context.agentSelection);
@@ -51,6 +56,7 @@ export function TerminalPage(props: { location: RouteLocation | null }) {
               hidden={!available()}
               embedded
               fullscreen
+              mobile={mobile()}
               page={true}
               routeTarget={entry().target}
               client={snapshot().client}
@@ -61,16 +67,23 @@ export function TerminalPage(props: { location: RouteLocation | null }) {
               themeMode={themeMode()}
             />
             {!available() && (
-              <PanelEmptyState
-                heading={t("terminal.title")}
-                description={t("terminal.unavailable")}
-                icon={<Icon name="terminal" />}
-                action={
-                  <button class="btn" onClick={() => context.navigate("new-session")}>
-                    {t("newSession.title")}
-                  </button>
+              <Show
+                when={
+                  !isGatewayConnectionAttemptPending(snapshot()) || snapshot().lastError !== null
                 }
-              />
+                fallback={<PanelLoadingSkeleton variant="terminal" label={t("common.loading")} />}
+              >
+                <PanelEmptyState
+                  heading={t("terminal.title")}
+                  description={t("terminal.unavailable")}
+                  icon={<Icon name="terminal" />}
+                  action={
+                    <button class="btn" onClick={() => context.navigate("new-session")}>
+                      {t("newSession.title")}
+                    </button>
+                  }
+                />
+              </Show>
             )}
           </>
         )}

@@ -82,7 +82,7 @@ export function IdentityCrumbs(props: ChatPaneHeaderProps) {
               <button
                 class="chat-pane__parent-session"
                 type="button"
-                title={t("chat.sessionHeader.openParent", { title: parent().title })}
+                title={parent().title}
                 aria-label={t("chat.sessionHeader.openParent", { title: parent().title })}
                 onClick={() => props.onOpenParentSession(parent().key)}
               >

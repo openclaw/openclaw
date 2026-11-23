@@ -12,6 +12,7 @@ import type { SessionLabelOwnerIndex } from "../../config/sessions/session-entry
 import { adoptPersistedSessionSnapshot } from "../../config/sessions/session-snapshot-merge.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { parseSessionLabel } from "../../sessions/session-label.js";
+import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
 import { isSessionStatusModelPatchOrigin } from "../session-model-patch-origin.js";
 import { hasSessionReadAccessChanged } from "../session-sharing-policy.js";
 import type { SessionPatchCatalogResult } from "./sessions-patch-catalog-preparation.js";
@@ -22,6 +23,7 @@ import type {
   GroupMutationOperation,
   PreparedPatchTarget,
 } from "./sessions-patch-types.js";
+import type { SessionMutationAuthorization } from "./types.js";
 
 /** Select the canonical replacement and report no-op status selections without touching activity. */
 export function prepareSessionPatchReplacement(params: {
@@ -146,8 +148,9 @@ function sessionPatchFields(targets: readonly PreparedPatchTarget[]) {
 export function createSessionPatchGroupWriter(params: {
   store: Omit<
     Parameters<typeof applySessionEntryCanonicalReplacements<GroupAdmissionResult>>[0],
-    "update"
+    "update" | "agentId" | "storePath" | "followRegistration"
   > & { sessionKeys: string[] };
+  followSharingRegistration?: SessionMutationAuthorization["followRegistration"];
   targets: readonly PreparedPatchTarget[];
   project: (
     entries: SqliteLifecycleTargetSnapshot,
@@ -156,10 +159,18 @@ export function createSessionPatchGroupWriter(params: {
   ) => Promise<GroupMutationOperation>;
   timing: ReturnType<SessionPatchDiagnostics["scope"]>;
 }) {
-  const patch = params.targets[0]!.fullPatch;
+  const first = params.targets[0]!;
+  const patch = first.fullPatch;
   const requestedLabel = parseSessionLabel(patch.label);
   const store = {
     ...params.store,
+    agentId: first.targetAgentId,
+    storePath: first.storePath,
+    followRegistration: (change: AgentDatabaseRegistryChange) =>
+      params.followSharingRegistration?.(
+        { agentId: first.targetAgentId, sessionKey: first.canonicalKey },
+        change,
+      ),
     fieldPatch: sessionPatchFields(params.targets),
     ...(requestedLabel.ok ? { includeLabelOwners: requestedLabel.label } : {}),
   };

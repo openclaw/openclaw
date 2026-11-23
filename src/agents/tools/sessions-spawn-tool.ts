@@ -16,7 +16,6 @@ import {
   mergeAcceptedSessionSpawnsForRun,
   normalizeAcceptedSessionSpawnResult,
 } from "../accepted-session-spawn.js";
-import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
   findAcpUnsupportedInheritedToolDeny,
@@ -192,11 +191,25 @@ export function createSessionsSpawnTool(
           signal && opts?.signal
             ? AbortSignal.any([signal, opts.signal])
             : (signal ?? opts?.signal);
-        const assertSourceExecution = captureAgentToolSourceExecutionGuard(executionSignal);
-        const assertSourceActive = composeSessionSourceAssertion([
-          assertSourceExecution,
-          operatorSelection.assertCurrent,
-        ]);
+        // A retained owner bit is rechecked per call: a requester who stopped being an
+        // owner spawns as a non-owner, and one revoked mid-call refuses the commit.
+        let senderIsOwner = opts?.senderIsOwner;
+        let assertSenderOwner: (() => void) | undefined;
+        if (senderIsOwner === true && opts?.assertSenderOwnerCurrent) {
+          try {
+            opts.assertSenderOwnerCurrent();
+            assertSenderOwner = opts.assertSenderOwnerCurrent;
+          } catch {
+            senderIsOwner = false;
+          }
+        }
+        const assertSourceActive = composeSessionSourceAssertion(
+          [operatorSelection.assertCurrent, assertSenderOwner],
+          (assertSource) => {
+            executionSignal?.throwIfAborted();
+            assertSource();
+          },
+        );
         const params = args as Record<PropertyKey, unknown>;
         if (opts?.swarmCollector && params.collect !== true) {
           throw new ToolInputError(
@@ -332,6 +345,7 @@ export function createSessionsSpawnTool(
             options: withExecRequestOwners(
               {
                 ...opts,
+                senderIsOwner,
                 onSpawnEffectsStart,
                 assertActive,
                 signal: executionSignal,
@@ -413,7 +427,7 @@ export function createSessionsSpawnTool(
           assertActive,
           onSpawnEffectsStart,
           agentSessionKey: opts?.agentSessionKey,
-          senderIsOwner: opts?.senderIsOwner,
+          senderIsOwner,
           gitContributorProfileId: opts?.gitContributorProfileId,
           expectedParentSessionId: opts?.expectedParentSessionId,
           requesterTurnRunId: opts?.requesterTurnRunId,

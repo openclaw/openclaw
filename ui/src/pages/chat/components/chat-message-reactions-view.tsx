@@ -1,4 +1,6 @@
+import type { JSX } from "@solidjs/web";
 import { createSignal, Errored, For, lazy, Loading, Show, onSettled } from "solid-js";
+import type { MessageReactionSummary } from "../../../../../packages/gateway-protocol/src/index.js";
 import { isReactionEmoji } from "../../../../../packages/gateway-protocol/src/reaction-emoji.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
@@ -46,8 +48,15 @@ export function MessageReactionPicker(props: {
   onSelect?: (emoji: string, remove: boolean) => void;
   activeEmoji: ReadonlySet<string>;
   placement: MessageReactionPlacement;
-  compact?: boolean;
   class?: string;
+  /** A message's reaction summary: it replaces the add icon as this picker's trigger. */
+  summary?: JSX.Element;
+  /** The summary's accessible name, and the hover content naming who reacted. */
+  summaryLabel?: string;
+  summaryDetails?: JSX.Element;
+  /** Existing reactions lead the palette, so any of them toggles in place. */
+  reactions?: readonly MessageReactionSummary[];
+  disabled?: boolean;
 }) {
   let host!: HTMLElement;
   const [activated, setActivated] = createSignal(false);
@@ -65,6 +74,10 @@ export function MessageReactionPicker(props: {
     if (!popover?.overlay.open) {
       return;
     }
+    if (props.disabled) {
+      popover.overlay.surface.focus();
+      return;
+    }
     (custom()
       ? searchInput?.isConnected
         ? searchInput
@@ -76,6 +89,9 @@ export function MessageReactionPicker(props: {
   onSettled(() => () => stop.forEach((dispose) => dispose()));
   const close = () => popover?.overlay.request(false, "return");
   const select = (emoji: string) => {
+    if (props.disabled) {
+      return;
+    }
     props.onSelect?.(emoji, props.activeEmoji.has(emoji));
     close();
   };
@@ -131,20 +147,17 @@ export function MessageReactionPicker(props: {
     }
   };
   return (
-    <openclaw-message-reaction-picker
-      ref={(element) => (host = element)}
-      class={props.class}
-      compact={props.compact}
-    >
-      <openclaw-tooltip prop:content={t("chat.reactions.add")}>
+    <openclaw-message-reaction-picker ref={(element) => (host = element)} class={props.class}>
+      <openclaw-tooltip prop:content={props.summary ? "" : t("chat.reactions.add")}>
         <button
           ref={(element) => {
             trigger = element;
           }}
           id={triggerId}
-          class="trigger"
+          class={["trigger", { "chat-reaction-tab": Boolean(props.summary) }]}
           type="button"
-          aria-label={t("chat.reactions.add")}
+          disabled={props.disabled && !props.summary}
+          aria-label={props.summaryLabel ?? t("chat.reactions.add")}
           aria-haspopup="dialog"
           aria-expanded="false"
           onClick={() => {
@@ -155,12 +168,22 @@ export function MessageReactionPicker(props: {
             }
           }}
         >
-          <StrokeIcon aria-hidden="true">
-            <path d="M21 11.5a9 9 0 1 1-8.5-8.5" />
-            <path d="M8 14s1.5 2 4 2 4-2 4-2M16 5h6M19 2v6" />
-            <path d="M9 9h.01M15 9h.01" />
-          </StrokeIcon>
+          <Show
+            when={props.summary}
+            fallback={
+              <StrokeIcon aria-hidden="true">
+                <path d="M21 11.5a9 9 0 1 1-8.5-8.5" />
+                <path d="M8 14s1.5 2 4 2 4-2 4-2M16 5h6M19 2v6" />
+                <path d="M9 9h.01M15 9h.01" />
+              </StrokeIcon>
+            }
+          >
+            {props.summary}
+          </Show>
         </button>
+        <Show when={props.summaryDetails}>
+          <div slot="content">{props.summaryDetails}</div>
+        </Show>
       </openclaw-tooltip>
       <Show when={activated()}>
         <Popover
@@ -178,91 +201,112 @@ export function MessageReactionPicker(props: {
           anchor={trigger}
           class={["chat-reaction-picker", { custom: custom() }]}
           placement={props.placement}
-          label={t("chat.reactions.add")}
+          label={t(props.disabled ? "chat.reactions.current" : "chat.reactions.add")}
         >
-          <Show
-            when={custom()}
-            fallback={
-              <div
-                class="palette"
-                role="group"
-                aria-label={t("chat.reactions.quick")}
-                onKeyDown={movePaletteFocus}
-              >
-                <For each={QUICK_REACTIONS}>
-                  {(emoji) => (
+          <Show when={(props.disabled || !custom()) && props.reactions?.length}>
+            <div class="current" role="group" aria-label={t("chat.reactions.current")}>
+              <For each={props.reactions} keyed={(reaction) => reaction.emoji}>
+                {(reaction) => (
+                  <button
+                    class="chat-reaction-chip"
+                    disabled={props.disabled}
+                    type="button"
+                    aria-label={`${reaction().emoji} ${reaction().count}`}
+                    aria-pressed={props.activeEmoji.has(reaction().emoji) ? "true" : "false"}
+                    onClick={() => select(reaction().emoji)}
+                  >
+                    <span class="chat-reaction-chip__emoji">{reaction().emoji}</span>
+                    {reaction().count}
+                  </button>
+                )}
+              </For>
+            </div>
+          </Show>
+          <Show when={!props.disabled}>
+            <Show
+              when={custom()}
+              fallback={
+                <div
+                  class="palette"
+                  role="group"
+                  aria-label={t("chat.reactions.quick")}
+                  onKeyDown={movePaletteFocus}
+                >
+                  <For each={QUICK_REACTIONS}>
+                    {(emoji) => (
+                      <button
+                        ref={(button) => {
+                          paletteButtons[QUICK_REACTIONS.indexOf(emoji)] = button;
+                        }}
+                        class="emoji"
+                        type="button"
+                        aria-label={emoji}
+                        aria-pressed={props.activeEmoji.has(emoji) ? "true" : "false"}
+                        onClick={() => select(emoji)}
+                      >
+                        {emoji}
+                      </button>
+                    )}
+                  </For>
+                  <span class="divider" aria-hidden="true" />
+                  <openclaw-tooltip prop:content={t("chat.reactions.more")}>
                     <button
                       ref={(button) => {
-                        paletteButtons[QUICK_REACTIONS.indexOf(emoji)] = button;
+                        paletteButtons[QUICK_REACTIONS.length] = button;
                       }}
-                      class="emoji"
+                      class="more"
                       type="button"
-                      aria-label={emoji}
-                      aria-pressed={props.activeEmoji.has(emoji) ? "true" : "false"}
-                      onClick={() => select(emoji)}
+                      aria-label={t("chat.reactions.more")}
+                      onClick={showCustom}
                     >
-                      {emoji}
+                      <Icon name="moreHorizontal" />
                     </button>
-                  )}
-                </For>
-                <span class="divider" aria-hidden="true" />
-                <openclaw-tooltip prop:content={t("chat.reactions.more")}>
-                  <button
-                    ref={(button) => {
-                      paletteButtons[QUICK_REACTIONS.length] = button;
-                    }}
-                    class="more"
-                    type="button"
-                    aria-label={t("chat.reactions.more")}
-                    onClick={showCustom}
-                  >
-                    <Icon name="moreHorizontal" />
-                  </button>
-                </openclaw-tooltip>
-              </div>
-            }
-          >
-            <div class="custom">
-              <Errored
-                fallback={(error, resetError) => (
-                  <>
-                    {back()}
-                    <LazyViewError error={error()} onRetry={resetError} />
-                  </>
-                )}
-              >
-                <Loading
-                  fallback={
+                  </openclaw-tooltip>
+                </div>
+              }
+            >
+              <div class="custom">
+                <Errored
+                  fallback={(error, resetError) => (
                     <>
                       {back()}
-                      <LoadingState />
+                      <LazyViewError error={error()} onRetry={resetError} />
                     </>
-                  }
+                  )}
                 >
-                  <EmojiSearchPanel
-                    inputRef={(input) => {
-                      searchInput = input;
-                      onSettled(focusPicker);
-                    }}
-                    query={query()}
-                    onQueryChange={search}
-                    onSelect={select}
-                    isSelected={(emoji) => props.activeEmoji.has(emoji)}
-                    defaults={SEARCH_DEFAULTS}
-                    searchLabel={t("chat.reactions.search")}
-                    gridLabel={t("chat.reactions.emoji")}
-                    emptyLabel={t("chat.reactions.noMatches")}
-                    onInputKeyDown={(event) => {
-                      if (event.key === "Backspace" && !event.currentTarget.value) {
-                        event.preventDefault();
-                        showPalette();
-                      }
-                    }}
-                    leading={back()}
-                  />
-                </Loading>
-              </Errored>
-            </div>
+                  <Loading
+                    fallback={
+                      <>
+                        {back()}
+                        <LoadingState />
+                      </>
+                    }
+                  >
+                    <EmojiSearchPanel
+                      inputRef={(input) => {
+                        searchInput = input;
+                        onSettled(focusPicker);
+                      }}
+                      query={query()}
+                      onQueryChange={search}
+                      onSelect={select}
+                      isSelected={(emoji) => props.activeEmoji.has(emoji)}
+                      defaults={SEARCH_DEFAULTS}
+                      searchLabel={t("chat.reactions.search")}
+                      gridLabel={t("chat.reactions.emoji")}
+                      emptyLabel={t("chat.reactions.noMatches")}
+                      onInputKeyDown={(event) => {
+                        if (event.key === "Backspace" && !event.currentTarget.value) {
+                          event.preventDefault();
+                          showPalette();
+                        }
+                      }}
+                      leading={back()}
+                    />
+                  </Loading>
+                </Errored>
+              </div>
+            </Show>
           </Show>
         </Popover>
       </Show>

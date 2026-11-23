@@ -9,11 +9,11 @@ struct ConnectionSettingsView: View {
     let isActive: Bool
     private let healthStore = HealthStore.shared
     private let gatewayManager = GatewayProcessManager.shared
-    @State private var gatewayDiscovery = GatewayDiscoveryModel(
-        localDisplayName: InstanceIdentity.displayName)
+    @State private var gatewayDiscovery: GatewayDiscoveryModel
     @State private var localHostingError: String?
     @State private var remoteStatus: RemoteStatus = .idle
     @State private var showConnectionEditor = false
+    @State private var openClawID: OpenClawIDSettingsModel
     private let isPreview = ProcessInfo.processInfo.isPreview
     private var isNixMode: Bool {
         ProcessInfo.processInfo.isNixMode
@@ -23,14 +23,24 @@ struct ConnectionSettingsView: View {
         self.gatewayManager.environmentStatus
     }
 
-    init(state: AppState, isActive: Bool = true) {
+    init(
+        state: AppState,
+        isActive: Bool = true,
+        openClawID: OpenClawIDSettingsModel = OpenClawIDSettingsModel(),
+        gatewayDiscovery: GatewayDiscoveryModel = GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
+    {
         self.state = state
         self.isActive = isActive
+        _openClawID = State(initialValue: openClawID)
+        _gatewayDiscovery = State(initialValue: gatewayDiscovery)
     }
 
     var body: some View {
         Form {
             self.statusSection
+            if MacOpenClawIDFeature.isEnabled, let presentation = self.openClawID.presentation(state: self.state) {
+                OpenClawIDSettingsSection(presentation: presentation, model: self.openClawID)
+            }
             self.gatewayModeSection
 
             // The Remote section owns this banner in remote mode; Local and Not configured
@@ -65,6 +75,10 @@ struct ConnectionSettingsView: View {
         .onChange(of: self.isActive) { _, active in
             self.updateActiveWork(active: active)
         }
+        .onChange(of: self.state.connectionMode) { _, _ in
+            guard !self.isPreview else { return }
+            self.updateNearbyDiscovery(active: self.isActive)
+        }
         .onDisappear { self.gatewayDiscovery.stop() }
         .sheet(isPresented: self.$showConnectionEditor) {
             PrimaryGatewayConnectionEditor(state: self.state) {
@@ -75,8 +89,13 @@ struct ConnectionSettingsView: View {
 
     private func updateActiveWork(active: Bool) {
         guard !self.isPreview else { return }
-        if active {
-            self.refreshGatewayStatus()
+        if active { self.refreshGatewayStatus() }
+        self.updateNearbyDiscovery(active: active)
+    }
+
+    private func updateNearbyDiscovery(active: Bool) {
+        // Only Remote shows Nearby Gateways; browsing makes macOS ask for Local Network access.
+        if active, self.state.connectionMode == .remote {
             self.gatewayDiscovery.start()
         } else {
             self.gatewayDiscovery.stop()
@@ -385,11 +404,11 @@ struct ConnectionSettingsView: View {
     private var dashboardSettingsSection: some View {
         Section {
             LabeledContent {
-                Button("Open Dashboard Settings…") { AppNavigationActions.openSettings() }
+                Button("Open OpenClaw Settings…") { AppNavigationActions.openSettings() }
             } label: {
                 Text("App settings")
                 Text("""
-                Permissions, Quick Chat, voice, and updates live in Dashboard → Settings → This Mac \
+                Permissions, Quick Chat, voice, and updates live in Settings → This Mac in the main window \
                 and need a Gateway release that includes those pages.
                 """)
             }

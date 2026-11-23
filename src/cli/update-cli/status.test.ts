@@ -169,6 +169,7 @@ it.each([
   );
   if (remote) {
     vi.spyOn(configModule, "readSourceConfigBestEffort").mockResolvedValue({
+      agents: { defaults: { model: { primary: "openai/gpt-5" } } },
       gateway: { mode: "remote" },
     });
   }
@@ -177,6 +178,7 @@ it.each([
 
   if (remote) {
     expect(jsonResult()).not.toHaveProperty("lastGatewayInstallationReplacement");
+    expect(jsonResult()).not.toHaveProperty("configWarnings");
   } else if (json) {
     expect(jsonResult()).toMatchObject({
       lastGatewayInstallationReplacement: { reason, completedAtMs },
@@ -521,6 +523,31 @@ it.each([false, true])(
 );
 
 it.each([true, false])("unreadable migration preserves availability (JSON: %s)", async (json) => {
+  const storePath = path.join(
+    process.env.OPENCLAW_STATE_DIR!,
+    "agents",
+    "main",
+    "sessions",
+    "sessions.json",
+  );
+  const migration = createMigration(process.env, [
+    {
+      agentId: "main",
+      storePath,
+      sqlitePath: path.join(
+        process.env.OPENCLAW_STATE_DIR!,
+        "agents",
+        "main",
+        "agent",
+        "openclaw-agent.sqlite",
+      ),
+    },
+  ]);
+  migration.manifest.completedAt = migration.manifest.startedAt;
+  migration.manifest.targets[0]!.issues = [
+    { code: "entry_invalid", message: "Missing sessionId." },
+  ];
+  writeMigration(migration);
   await recordMigrations({
     pending: [
       {
@@ -540,9 +567,13 @@ it.each([true, false])("unreadable migration preserves availability (JSON: %s)",
       availability: expect.any(Object),
       migrationWarningsError: expect.any(String),
     });
-    expect(result).not.toHaveProperty("migrationWarnings");
+    expect(result.migrationWarnings).toEqual([`${storePath}: [entry_invalid] Missing sessionId.`]);
   } else {
-    expectOutput("OpenClaw update status", "Pending migration status unavailable:");
+    expectOutput(
+      "OpenClaw update status",
+      "Pending migration status unavailable:",
+      "Missing sessionId.",
+    );
   }
 });
 
@@ -694,7 +725,7 @@ it.each([undefined, "work"])("abandoned history stays read-only (profile=%s)", a
   const cli = `openclaw${profile ? " --profile work" : ""}`;
   expectOutput(
     "Abandoned update detected;",
-    `Stop the Gateway first (${cli} gateway stop)`,
+    `Stop the Gateway first (${cli} gateway stop --force)`,
     `${cli} update repair`,
   );
   expect(outputText()).not.toContain("update in progress:");

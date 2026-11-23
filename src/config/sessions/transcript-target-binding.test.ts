@@ -2,6 +2,17 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
+it("preserves the selected profile when capturing default storage routing", () => {
+  const home = path.resolve("synthetic-profile-home");
+  expect(
+    captureSessionTranscriptStorageEnvironment({
+      HOME: home,
+      OPENCLAW_HOME: home,
+      OPENCLAW_PROFILE: "named-profile",
+    }),
+  ).toEqual({ OPENCLAW_STATE_DIR: path.join(home, ".openclaw-named-profile") });
+});
+
 it.each([
   ["linux", "OPENCLAW_STATE_DIR"],
   ["win32", "OPENCLAW_STATE_DIR"],

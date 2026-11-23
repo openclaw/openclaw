@@ -79,6 +79,9 @@ Configure the provider plugin before selecting its model:
   `choice`, and `sort` questions with relevance scores, which suits matching
   judgments such as the Knowledge recall gate, not rubric scoring.
 - [SubQ](/plugins/subq) connects to hosted SubQ Snap for text/JSON decisions.
+  SubQ retired `subq-snap-preview` on November 11, 2026
+  ([Models page](https://docs.subq.ai/using-the-api/models/)); no SubQ model is
+  listed until the hosted catalog publishes one.
   Configure a protected SubQ credential. This V1 adapter supports text/JSON
   input only; it does not expose the vendor API's image input.
 - [TypeSafe AI](/plugins/typesafe) connects to hosted Jev or a self-hosted System One
@@ -109,7 +112,6 @@ The current plugins declare these model references:
 | `openai/gpt-6-luna`                                  | GPT-6 Luna             | OpenAI Platform API key and Decisions API access       |
 | `openrouter/typesafe/jev-1.14`                       | Jev 1.14               | OpenRouter credential                                  |
 | `perplexity-decisions/pplx-decider-v1.2`             | Decider v1.2           | Perplexity credential                                  |
-| `subq/subq-snap-preview`                             | SubQ Snap (preview)    | SubQ credential and account credits                    |
 | `typesafe/jev-1.13.0`                                | Jev 1.13.0             | TypeSafe credential                                    |
 | `typesafe/jev-latest`                                | Jev                    | TypeSafe credential; follows the vendor's latest model |
 | `typesafe/kev-latest`                                | Kev (local server)     | Running System One server and explicit loopback URL    |
@@ -381,7 +383,7 @@ Provider limits differ:
 | Provider    | Choice alternatives | Score levels | Additional limits                                                                  |
 | ----------- | ------------------- | ------------ | ---------------------------------------------------------------------------------- |
 | ONNX        | 2–64                | 2–64         | Up to 32 questions; 512 tokens per encoded input; one MiB of compiled batch inputs |
-| SubQ        | 2–255               | 2–10         | Up to 16 questions; text/JSON state; question IDs at most 100 characters           |
+| SubQ        | 2–255               | 2–10         | Up to 128 questions; text/JSON state; question IDs at most 100 characters          |
 | TypeSafe AI | 2–255               | 2–10         | Subject to the host's batch limits and the vendor input contract                   |
 
 The host bounds JSON evidence to one MiB, 20,000 nodes, and depth 32. V1 accepts

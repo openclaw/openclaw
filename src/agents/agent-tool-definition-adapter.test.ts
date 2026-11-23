@@ -24,13 +24,13 @@ import {
 import { toClientToolDefinitions, toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
-import { validateScriptFileForShellBleed } from "./bash-tools.exec-script-preflight.js";
 import type { ClientToolDefinition } from "./command/shared-types.js";
 import {
   findClientToolNameConflicts,
   isClientToolNameConflictError,
 } from "./embedded-agent-runner/tool-name-allowlist.js";
 import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
+import { markToolExecutionNotStarted } from "./tool-effect-receipt.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 import { ToolInputError } from "./tools/common.js";
 import {
@@ -173,7 +173,7 @@ describe("agent tool definition adapter", () => {
     { route: "prepared", owner: "closed" },
     { route: "prepared", owner: "replaced" },
   ] as const)(
-    "checks the retained $route invocation owner before file I/O ($owner)",
+    "finishes the started $route invocation when its owner is $owner",
     async ({ route, owner }, { signal }) => {
       await withTestDir({ prefix: "openclaw-adapter-authority-" }, async (dir) => {
         const runId = `adapter-${route}-${owner}`;
@@ -252,13 +252,8 @@ describe("agent tool definition adapter", () => {
           }
           release.resolve();
           const result = await withinTest(execution, signal);
-          if (owner === "live") {
-            expect(result).toEqual(receipt("written"));
-            expect(await fs.readFile(file, "utf8")).toBe("written by the admitted invocation");
-          } else {
-            expectError(result, expect.stringContaining("authority is no longer active"));
-            expect(await fs.readdir(dir)).toEqual([]);
-          }
+          expect(result).toEqual(receipt("written"));
+          expect(await fs.readFile(file, "utf8")).toBe("written by the admitted invocation");
         } finally {
           admission.close();
           replacement?.close();
@@ -299,22 +294,21 @@ describe("agent tool definition adapter", () => {
     },
   );
 
-  it("preserves no-start evidence when presenting a script-preflight refusal", async () => {
+  it("preserves no-start evidence when presenting a not-started refusal", async () => {
     const parameters = Type.Object({ command: Type.String(), workdir: Type.String() });
     const tool: AgentTool<typeof parameters> = {
       name: "exec",
       label: "Exec",
-      description: "Validate the script before execution",
+      description: "Reject the target before execution",
       parameters,
-      execute: async (_id, params) => {
-        await validateScriptFileForShellBleed(params);
-        return { content: [], details: {} };
+      execute: async () => {
+        throw markToolExecutionNotStarted(new Error("exec host not allowed (requested node)"));
       },
     };
-    const args = { command: "cat bad.py | python", workdir: process.cwd() };
+    const args = { command: "echo hi", workdir: process.cwd() };
     const result = await executeTool(tool, "call-preflight-refused", args);
 
-    expectError(result, expect.stringContaining("exec preflight: complex interpreter invocation"));
+    expectError(result, expect.stringContaining("exec host not allowed"));
     const terminal = createToolTerminalObserver("run-preflight-refused")({
       toolName: "exec",
       arguments: args,

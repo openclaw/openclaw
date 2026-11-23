@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import {
@@ -36,9 +36,10 @@ import {
 } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
+import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
+import { bindImmutableSubagentRun, subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
   getSubagentRegistryPublicationRevision,
@@ -65,9 +66,11 @@ import {
   stored,
   useSubagentRegistryWorkerFixture,
 } from "./subagent-registry-worker.test-support.js";
-import { streamSubagentRegistryInWorker } from "./subagent-registry.store.restore.worker.js";
+import * as codec from "./subagent-registry.store.codec.js";
+import type { SubagentRegistryWrite } from "./subagent-registry.store.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import { isSubagentRunPayloadEvicted } from "./subagent-run-payload-facts.js";
 
 const fixture = useSubagentRegistryWorkerFixture();
 const projections = [getSubagentRunsSnapshotForRead, getSubagentSessionListRunsSnapshotForRead];
@@ -96,34 +99,6 @@ function interceptChunks(
       }),
     );
 }
-
-it("restores rows without an explicit read transaction", async () => {
-  seed(entry("autocommit-restore"));
-  const databasePath = openOpenClawStateDatabase().path;
-  const context = captureOpenClawStateWorkerContext();
-  const execute = vi.spyOn(DatabaseSync.prototype, "exec");
-  const request = vi.fn(async () => ({ input: undefined, consumed: () => {} }));
-  const count = await streamSubagentRegistryInWorker(
-    {
-      context,
-      databasePath,
-      location: databasePath,
-      checkFreshAdmission: true,
-      command: { type: "subagents.restore" },
-    },
-    { consumeInput: () => {}, notify: () => {}, request },
-    () => {},
-  );
-  expect(count).toBe(1);
-  expect(request).toHaveBeenCalledWith([
-    expect.objectContaining({ entry: expect.objectContaining({ runId: "autocommit-restore" }) }),
-  ]);
-  expect(
-    execute.mock.calls
-      .map(([sql]) => sql)
-      .filter((sql) => /^(BEGIN|COMMIT|ROLLBACK)\b/iu.test(sql)),
-  ).toEqual([]);
-});
 
 it("streams bounded restore batches in one read and retains one snapshot", async () => {
   const entries = [3, 1, 2].map((createdAt, index) =>
@@ -662,10 +637,12 @@ it("installs captured raw postimages and runtime custody before notifying every 
       expect(read(new Map()).has("removed")).toBe(false);
     }
   });
+  const required = ["captured"];
   const draft = entry("changed", {
     label: "captured",
     cleanupHandled: true,
     execution: { status: "terminal" as const, endedAt: 2 },
+    outputSchema: Object.freeze({ required }),
   });
   const pending = mutateSubagentRuns(
     ["changed", "removed"],
@@ -683,12 +660,19 @@ it("installs captured raw postimages and runtime custody before notifying every 
   try {
     await awaitGateBeforeSettlement(reached.promise, pending, "publication missed ACK gate");
     draft.label = "uncommitted caller edit";
+    draft.execution.endedAt = 3;
+    required.push("uncommitted");
     expect(events).toEqual([]);
     expect(subagentRuns.has("removed")).toBe(true);
     release.resolve();
     await pending;
     expect(events).toEqual(["custody", "observer"]);
-    expect(subagentRuns.get("changed")).toMatchObject({ label: "captured", cleanupHandled: true });
+    expect(subagentRuns.get("changed")).toMatchObject({
+      label: "captured",
+      cleanupHandled: true,
+      execution: { endedAt: 2 },
+      outputSchema: { required: ["captured"] },
+    });
     expect(stored("changed")?.cleanupHandled).toBe(false);
   } finally {
     release.resolve();
@@ -833,7 +817,11 @@ it("retains the execution's Gateway binding through immutable metadata publicati
   expect(getGatewayContextResolver(initial)).toBe(resolver);
   expect(isSameSubagentRunOwner(initial, alias)).toBe(true);
 
+  const previousBinding = bindImmutableSubagentRun(initial);
+  using bind = vi.spyOn(codec, "bindSubagentRunRecord");
   await change(child.runId, { label: "updated metadata" });
+  expect(bindImmutableSubagentRun(initial)).toBe(previousBinding);
+  expect(bind).toHaveBeenCalledTimes(1);
 
   const published = subagentRuns.get(child.runId)!;
   expect(published).not.toBe(initial);
@@ -845,4 +833,121 @@ it("retains the execution's Gateway binding through immutable metadata publicati
   gatewayOpen = false;
   expect(getGatewayContextResolver(initial)?.()).toBeUndefined();
   expect(getGatewayContextResolver(published)?.()).toBeUndefined();
+});
+
+it("releases serialized payloads while their immutable registry rows remain resident", async () => {
+  await register(entry("binding-retention", { task: "synthetic retained task ".repeat(1024) }));
+  const resident = subagentRuns.get("binding-retention")!;
+  const expected = codec.bindSubagentRunRecord(resident);
+  const binding = weak(bindImmutableSubagentRun(resident));
+  await expectCollected(weakControl(), binding);
+  expect(subagentRuns.get(resident.runId)).toBe(resident);
+  expect(bindImmutableSubagentRun(resident)).toEqual(expected);
+  using worker = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+  await change(resident.runId, {});
+  expect(worker).not.toHaveBeenCalled();
+});
+
+it("matches the previous commit algorithm's writes and exact bytes through randomized row lifetimes", async () => {
+  type Write = Pick<SubagentRegistryWrite, "values" | "deleteRunIds">;
+  const actual: Write[] = [];
+  probe.command(stateWorker, (request, options, scope) => {
+    if (isSubagentRegistryWriteCommand(request)) {
+      actual.push({ values: request.input.values, deleteRunIds: request.input.deleteRunIds });
+    }
+    return scope.execute(request, options);
+  });
+  let random = 2673;
+  const nextRandom = () => (random = (Math.imul(random, 1664525) + 1013904223) >>> 0);
+  const covered = new Set<number>();
+  let evicted = 0;
+  let skipped = 0;
+  for (let step = 0; step < 160; step++) {
+    const slot = (nextRandom() >>> 16) % 8;
+    const id = `binding-${slot}`;
+    const operation = (nextRandom() >>> 16) % 8;
+    covered.add(operation);
+    const previous = subagentRuns.get(id);
+    if (previous && isSubagentRunPayloadEvicted(previous)) {
+      evicted++;
+    }
+    let draft: SubagentRunRecord | null = null;
+    let expected: Write | undefined;
+    actual.length = 0;
+    await mutateSubagentRuns([id], (rows) => {
+      const current = rows.get(id);
+      draft = current
+        ? { ...current }
+        : entry(id, {
+            task: `Synthetic task ${slot}`,
+            completionTarget: slot % 2 ? "parent" : undefined,
+            cleanupHandled: false,
+          });
+      switch (operation) {
+        case 0: // Same complete row, including runtime-only state.
+          break;
+        case 1:
+          draft.label = `label-${step}`;
+          break;
+        case 2:
+          draft.completion = {
+            ...draft.completion!,
+            resultText: `result-${step}`,
+            terminalReply: { disposition: "visible", text: `nested-${step}` },
+          };
+          break;
+        case 3: // Normalization removes this runtime reservation from durable state.
+          draft.cleanupHandled = !draft.cleanupHandled;
+          break;
+        case 4:
+          draft.execution = { status: "terminal", endedAt: 2 };
+          draft.cleanupCompletedAt = 2;
+          draft.delivery = { status: "delivered" };
+          break;
+        case 5:
+          draft.completion = structuredClone(draft.completion);
+          break;
+        case 6: // Equal fields with different insertion order must retain JSON byte differences.
+          draft.completion = {
+            terminalReply: draft.completion?.terminalReply,
+            resultText: draft.completion?.resultText,
+            required: draft.completion!.required,
+          };
+          break;
+        case 7:
+          draft = null;
+          break;
+      }
+      // Frozen pre-change algorithm: bind both sides, then compare the complete SQL row.
+      const value = draft && codec.bindSubagentRunRecord(draft);
+      const values =
+        value &&
+        !(
+          previous &&
+          !isSubagentRunPayloadEvicted(previous) &&
+          isDeepStrictEqual(value, codec.bindSubagentRunRecord(previous))
+        )
+          ? [value]
+          : [];
+      const deleteRunIds = draft ? [] : [id];
+      expected = values.length || deleteRunIds.length ? { values, deleteRunIds } : undefined;
+      return postimages([[id, draft]]);
+    });
+    expect(actual, `step ${step}, operation ${operation}`).toEqual(expected ? [expected] : []);
+    if (!expected) {
+      skipped++;
+    }
+    const published = subagentRuns.get(id);
+    if (published && draft) {
+      expect(isSameSubagentRunOwner(published, draft)).toBe(true);
+      expect(Object.isFrozen(published)).toBe(true);
+    }
+    // Restart-shaped replacement drops all process-local binding facts.
+    if (step === 53 || step === 107) {
+      await restore();
+    }
+  }
+  expect(covered.size).toBe(8);
+  expect(evicted).toBeGreaterThan(0);
+  expect(skipped).toBeGreaterThan(0);
 });

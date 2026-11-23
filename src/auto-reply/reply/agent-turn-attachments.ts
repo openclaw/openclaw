@@ -48,7 +48,7 @@ export async function resolveAgentTurnAttachments(params: {
   }
   const runtime = await loadAgentTurnMediaRuntime();
   const currentAttachments = runtime
-    .normalizeAttachments(params.ctx)
+    .normalizeAttachments(params.ctx.media)
     .map((attachment) =>
       normalizeOptionalString(attachment.path)
         ? Object.assign({}, attachment, { url: undefined })

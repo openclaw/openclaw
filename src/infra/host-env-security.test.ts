@@ -235,6 +235,34 @@ describe("git env exploit regression", () => {
   });
 });
 
+describe("perl env exploit regression", () => {
+  it("blocks PERLLIB, which Perl reads whenever the blocked PERL5LIB is unset", async () => {
+    expect(
+      sanitizeHostExecEnvWithDiagnostics({
+        baseEnv: {},
+        overrides: { PERLLIB: "./vendor/perl", PERL5SHELL: "./evil.exe" },
+      }).rejectedOverrideBlockedKeys,
+    ).toEqual(["PERL5SHELL", "PERLLIB"]);
+    const perlPath = findSystemCommandPath("perl");
+    if (!perlPath) {
+      return;
+    }
+    await withTestDir({ prefix: "openclaw-perllib-" }, async (root) => {
+      fs.mkdirSync(path.join(root, "vendor"));
+      fs.writeFileSync(
+        path.join(root, "vendor", "strict.pm"),
+        "package strict; print 'shadowed'; sub import {} sub unimport {} 1;\n",
+        "utf8",
+      );
+      const runPerl = (env: NodeJS.ProcessEnv) =>
+        execFileSync(perlPath, ["-e", "use strict;"], { cwd: root, env, encoding: "utf8" });
+      const unsafeEnv = { PATH: process.env.PATH ?? "/usr/bin:/bin", PERLLIB: "./vendor" };
+      expect(runPerl(unsafeEnv)).toBe("shadowed");
+      expect(runPerl(sanitizeHostExecEnv({ baseEnv: unsafeEnv }))).toBe("");
+    });
+  });
+});
+
 type HostEnvReportedBaseline = {
   reportedDangerousEverywhereKeys: string[];
   reportedDangerousOverrideOnlyKeys: string[];
@@ -271,7 +299,7 @@ it("keeps the fixed reported dangerous env baseline fully covered by inherited +
     baseline.reportedDangerousEverywhereKeys.length +
       baseline.reportedDangerousOverrideOnlyKeys.length,
   ).toBe(baseline.expectedTotalReportedEntries);
-  expect(baseline.expectedTotalReportedEntries).toBe(266);
+  expect(baseline.expectedTotalReportedEntries).toBe(268);
   expect(sortUniqueUpper(baseline.reportedDangerousEverywhereKeys)).toEqual(
     baseline.reportedDangerousEverywhereKeys,
   );

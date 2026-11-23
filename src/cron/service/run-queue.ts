@@ -28,6 +28,11 @@ import { CRON_ADMISSION_DEFERRED_RECEIPT_ERROR } from "./admission-deferred.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { locked } from "./locked.js";
 import { resolveCurrentDefaultAgentId } from "./ops-shared.js";
+import {
+  captureCronProviderBackoff,
+  createCronExtraRunCharge,
+  releaseCronExtraRunCharge,
+} from "./provider-backoff.js";
 import type { ManualRunOptions } from "./run-options.js";
 import { skipCronJobsWithoutOwners } from "./run-owner.js";
 import { launchCronRun, type CronLaunchContext } from "./run-queue-execution.js";
@@ -38,6 +43,7 @@ import {
 } from "./run-queue-requests.js";
 import {
   listCronRunQueueOwners,
+  notifyCronRunQueueTurn,
   registerCronRunQueue,
   releaseCronRunQueue,
   wakeCronRunQueues,
@@ -46,6 +52,7 @@ import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import {
   busyConversationCronJobIds,
   busyCronConversation,
+  cronMemoryAllowsExtraRun,
   preparingCronAgentIds,
 } from "./scheduler-config.js";
 import {
@@ -218,6 +225,7 @@ export async function commitCronRunRequests(
 }
 
 function publishSkipped(state: CronServiceState, skipped: CronSkippedRequest) {
+  releaseCronExtraRunCharge(skipped.runReceipt.receiptId);
   const pending = launchState(state).contexts.get(skipped.runReceipt.receiptId);
   if (!pending) {
     return;
@@ -323,7 +331,9 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
   if (
     state.stopped ||
     (![...launchState(state).contexts.values()].some((pending) => !pending.started) &&
-      !state.store?.jobs.some((job) => job.state.queuedAtMs !== undefined))
+      !state.store?.jobs.some(
+        (job) => job.state.queuedAtMs !== undefined || job.state.runSlotWaitReceiptId !== undefined,
+      ))
   ) {
     return;
   }
@@ -363,6 +373,8 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
             schedulingPaused: state.schedulingPaused || isGatewayRestartDraining(),
             preparingAgentIds: preparingCronAgentIds(state.deps.env),
             busyConversationJobIds: busyConversationCronJobIds(state),
+            memoryAllowsExtraRun: cronMemoryAllowsExtraRun(),
+            providerBackoff: captureCronProviderBackoff(),
             requests: getCronRunQueueRequests(state, { includePendingEvents: true }),
             hostProcessId: currentPluginCommandHostProcessId(),
             pluginCommandHosts: state.deps.resolvePluginCommandScheduleHosts?.(),
@@ -442,6 +454,8 @@ export async function launchCronRunQueueResult(
   context = captureOpenClawStateWorkerContext(),
   observedRevision = getCronJobsStoreRevision(state.deps.storeKey),
 ): Promise<void> {
+  result.promotedReceiptIds?.forEach(releaseCronExtraRunCharge);
+  notifyCronRunQueueTurn(state);
   if (result.launches.length || result.skipped.length) {
     const jobs = [...result.skipped, ...result.launches].flatMap(({ job }) => (job ? [job] : []));
     applyCronRuntimeRowsToState(state, jobs);
@@ -485,6 +499,10 @@ export async function launchCronRunQueueResult(
       pending.activation.resolve();
     }
     const launch = pending;
+    const { receiptId } = entry.runReceipt;
+    const charge = preparing
+      ? undefined
+      : createCronExtraRunCharge(receiptId, entry.job.state.extraRunSlotReceiptId === receiptId);
     // The launch owns its lifetime beyond the request acknowledgement and store lock.
     const running = runWithGatewayDetachedWorkContinuation(
       () =>
@@ -519,10 +537,11 @@ export async function launchCronRunQueueResult(
                 assertAgentDatabaseAdmitted(preparation.agentId, { env: state.deps.env });
                 // A stale readiness snapshot can settle immediately; wake after this drain unlocks.
                 await state.op;
-              } else {
-                await launchCronRun(state, entry, launch, (reason) =>
-                  cancelUnstartedLaunch(state, entry.runReceipt.receiptId, reason),
-                );
+              } else if (charge) {
+                await launchCronRun(state, entry, launch, charge, (reason) => {
+                  charge.release();
+                  return cancelUnstartedLaunch(state, receiptId, reason);
+                });
                 if (launch.receiptSettlement) {
                   // Admission joins the receipt tail; queue shutdown retains its result boundary.
                   void launch.receiptSettlement.then(() => {
@@ -559,6 +578,7 @@ export async function launchCronRunQueueResult(
           );
           launch.completion.reject(error);
           if (!launch.started) {
+            charge?.release();
             await cancelUnstartedLaunch(
               state,
               entry.runReceipt.receiptId,

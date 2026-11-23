@@ -8,7 +8,6 @@ import {
 import { hasBeforeToolCallPolicy } from "../../agents/agent-tools.before-tool-call.js";
 import { isGatewayToolAllowedWithoutAction } from "../../agents/gateway-tool-policy.js";
 import { createMcpClientElicitationHandler } from "../../agents/mcp-client-elicitation.js";
-import { resolveToolLoopDetectionConfig } from "../../agents/tool-loop-detection-config.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -17,6 +16,7 @@ import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-context-binding.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import type { WorkerToolAuthority } from "../../worker/launch-descriptor.js";
+import { canInvokeNodeMcpToolLocally } from "../node-command-policy.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { assertWorkerTurnInputAdmitted } from "./placement-turn-claim-events.js";
@@ -48,22 +48,26 @@ export function retainWorkerTurnTools(
 ): AnyAgentTool[] {
   const canPlace =
     options.localMcpNodeId &&
-    options.runPrepared(
-      () =>
-        !hasBeforeToolCallPolicy() &&
-        !hasGlobalHooks("after_tool_call") &&
-        !resolveToolLoopDetectionConfig({ cfg: options.config, agentId: options.agentId })?.enabled,
-    );
+    options.runPrepared(() => !hasBeforeToolCallPolicy() && !hasGlobalHooks("after_tool_call"));
   return tools.map((tool) => {
     const retained = copyAgentToolMetadata(tool, {
       ...tool,
       execute: (...args) => options.runPrepared(() => tool.execute(...args)),
     });
     const mcp = getPluginToolMeta(tool)?.mcp;
+    const nodeId = mcp?.node?.id;
     if (
       canPlace &&
       mcp?.operation === "tool" &&
-      mcp.node?.id === options.localMcpNodeId &&
+      nodeId &&
+      nodeId === options.localMcpNodeId &&
+      options.runPrepared(() =>
+        canInvokeNodeMcpToolLocally({
+          nodeId,
+          server: mcp.serverName,
+          tool: mcp.toolName,
+        }),
+      ) &&
       isGatewayToolAllowedWithoutAction(tool.name, options.config)
     ) {
       bindAgentToolExecutionLocation(retained, { kind: "placement" });
@@ -79,6 +83,7 @@ type WorkerLaunchToolSetup = Pick<
   surface: WorkerToolSurface;
   localMcpNodeId?: string;
   exec: WorkerToolAuthority["exec"];
+  memoryBoundary?: "sandbox";
   connectionIdentity: WorkerConnectionIdentity;
   placements: WorkerSessionPlacementStore;
   questionsEnabled: boolean;
@@ -92,6 +97,17 @@ type WorkerLaunchToolSetup = Pick<
 
 export async function prepareWorkerLaunchTools(params: WorkerLaunchToolSetup) {
   const { surface, runtimeIdentity } = params;
+  const localMcpTools = surface.tools.flatMap(({ execution, plugin }) => {
+    const mcp = plugin?.mcp;
+    return execution === "placement" && mcp?.node
+      ? [{ nodeId: mcp.node.id, server: mcp.serverName, tool: mcp.toolName }]
+      : [];
+  });
+  const assertLocalMcpAuthorityCurrent = () => {
+    if (localMcpTools.some((subject) => !canInvokeNodeMcpToolLocally(subject))) {
+      throw new Error("Worker MCP policy changed while preparing its launch");
+    }
+  };
   const allowedToolNames = surface.tools.map((tool) => tool.definition.name);
   await params.placements.authorizeWorkerTurnTools(
     runtimeIdentity.workerTurnClaim,
@@ -104,7 +120,17 @@ export async function prepareWorkerLaunchTools(params: WorkerLaunchToolSetup) {
       assertCurrent: params.assertActive,
     });
   }
-  return { allowedToolNames, issueLaunchAuthority: () => issueWorkerLaunchToolAuthority(params) };
+  return {
+    allowedToolNames,
+    bindAuthority: (assertCurrent: () => void) => () => {
+      assertCurrent();
+      assertLocalMcpAuthorityCurrent();
+    },
+    issueAuthority: () => {
+      assertLocalMcpAuthorityCurrent();
+      return issueWorkerLaunchToolAuthority(params);
+    },
+  };
 }
 
 /** Issue grants only after turn input and replay admission have passed. */
@@ -166,7 +192,10 @@ function issueWorkerLaunchToolAuthority(params: WorkerLaunchToolSetup): WorkerTo
     mcpTools.push({ ...handle, allowElicitation: true });
   }
   return {
-    exec: params.exec,
+    exec:
+      params.exec && params.memoryBoundary
+        ? { ...params.exec, memoryBoundary: params.memoryBoundary }
+        : params.exec,
     ...(mcpTools.length && { mcpTools }),
     allowedToolNames: surface.tools
       .filter((tool) => tool.execution === "placement")

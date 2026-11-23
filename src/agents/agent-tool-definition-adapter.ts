@@ -12,10 +12,7 @@ import { isLocalStorageOutcomeError } from "../infra/sqlite-error-diagnostics.js
 import { logDebug, logError } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { isPlainObject } from "../utils.js";
-import {
-  captureAgentToolSourceExecutionGuard,
-  runAgentToolSourceExecutionGuard,
-} from "./agent-tool-source-execution-guard.js";
+import { runAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
   buildBlockedToolResult,
@@ -39,7 +36,7 @@ import {
 } from "./code-mode-control-tools.js";
 import type { ClientToolDefinition } from "./command/shared-types.js";
 import { readNodePermissionError } from "./node-permission-error.js";
-import { projectAgentToolDefinition } from "./prepared-tool-surface.js";
+import { projectAgentToolDefinition } from "./prepared-tool-definition.js";
 import type { AgentTool as AnyAgentTool, AgentToolResult } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { ToolInputError } from "./tool-input-error.js";
@@ -47,14 +44,6 @@ import { readToolOperatorHint } from "./tool-operator-hint.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { copyAgentToolReplaySafety } from "./tool-replay-safety.js";
 import { jsonResult, payloadTextResult } from "./tools/tool-results.js";
-
-function captureSourceInvocationGuard(tool: AnyAgentTool, signal?: AbortSignal): () => void {
-  const assertCurrent = captureAgentToolSourceExecutionGuard(signal);
-  return () => {
-    assertCurrent();
-    runAgentToolSourceExecutionGuard(tool);
-  };
-}
 
 type ToolExecuteArgs = Parameters<ToolDefinition["execute"]>;
 const toolDefinitionSources = new WeakMap<ToolDefinition, AnyAgentTool>();
@@ -172,7 +161,7 @@ export function toToolDefinitions(
         const [toolCallId, params, callSignal, onUpdate] = args;
         const signal = resolveAbortSignal(callSignal);
         signal?.throwIfAborted();
-        const assertSourceCurrent = captureSourceInvocationGuard(tool, signal);
+        runAgentToolSourceExecutionGuard(tool);
         const control = readInternalExecutionControl(args[4]);
         recordStructuredReplayTrustForToolCall(toolCallId, tool, hookContext?.runId);
         let executeParams = params;
@@ -230,11 +219,11 @@ export function toToolDefinitions(
               if (decision && !decision.launch) {
                 return { content: [], details: { status: "skipped" } };
               }
-              assertSourceCurrent();
+              signal?.throwIfAborted();
               decision?.start?.();
               recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
             }
-            assertSourceCurrent();
+            signal?.throwIfAborted();
             return await tool.execute(toolCallId, executeParams, signal, onUpdate);
           },
         });
@@ -248,7 +237,6 @@ export function toToolDefinitions(
     }
     return attachInternalToolExecutionPreparer(definition, async (params) => {
       const signal = resolveAbortSignal(params.signal);
-      const assertSourceCurrent = captureSourceInvocationGuard(tool, signal);
       signal?.throwIfAborted();
       recordStructuredReplayTrustForToolCall(params.toolCallId, tool, hookContext?.runId);
       const settle = (run: () => Promise<unknown>) =>
@@ -282,7 +270,7 @@ export function toToolDefinitions(
       };
       let prepared: Awaited<ReturnType<typeof sourcePreparer>>;
       try {
-        assertSourceCurrent();
+        runAgentToolSourceExecutionGuard(tool);
         prepared = await sourcePreparer({
           toolCallId: params.toolCallId,
           args: params.args,
@@ -300,9 +288,9 @@ export function toToolDefinitions(
         kind: "ready",
         args: ready.args,
         execute: (onImplementationStart) =>
-          settle(async () => {
-            assertSourceCurrent();
-            return await ready.execute(onImplementationStart);
+          settle(() => {
+            signal?.throwIfAborted();
+            return ready.execute(onImplementationStart);
           }),
         dispose: ready.dispose,
       };
@@ -361,7 +349,7 @@ export function toClientToolDefinitions(
       parameters: func.parameters as ToolDefinition["parameters"],
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const [toolCallId, params, signal] = args;
-        const assertSourceCurrent = captureAgentToolSourceExecutionGuard(signal);
+        signal?.throwIfAborted();
         const control = readInternalExecutionControl(args[4]);
         recorder?.reserve?.(toolCallId, func.name);
         try {
@@ -393,7 +381,7 @@ export function toClientToolDefinitions(
             recorder?.discard?.(toolCallId, func.name);
             return { content: [], details: { status: "skipped" } };
           }
-          assertSourceCurrent();
+          signal?.throwIfAborted();
           decision?.start?.();
           if (typeof onClientToolCall === "function") {
             onClientToolCall(func.name, paramsRecord);

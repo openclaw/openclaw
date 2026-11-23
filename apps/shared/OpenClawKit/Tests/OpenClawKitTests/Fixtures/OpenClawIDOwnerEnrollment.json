@@ -1,0 +1,193 @@
+{
+  "source": "packages/openclaw-id-protocol (openclaw#197573 at dfef9f9d8951): sas.ts, kit.ts, envelope.ts, discovery peer-key proof; kit from fixtures/v1-draft/statements.json",
+  "now": 1793318400,
+  "claw_id": "0123456789abcdef0123456789abcdef",
+  "keys": {
+    "device_seed_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+    "device_pub": "ed25519:d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+    "device_fp": "fp:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+    "peer_seed_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+    "peer_key": "iroh:a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0",
+    "node_seed_hex": "3333333333333333333333333333333333333333333333333333333333333333",
+    "node_key": "iroh:17cb79fb2b4120f2b1ec65e4198d6e08b28e813feb01e4a400839b85e18080ce",
+    "approver_pub": "ed25519:d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48"
+  },
+  "description": {
+    "display_name": "Example Mac",
+    "platform": "macos",
+    "commands": [
+      "system.run",
+      "screen.snapshot"
+    ],
+    "caps": [
+      "screen"
+    ]
+  },
+  "kit": {
+    "secret_hex": "000102030405060708090a0b0c0d0e0f",
+    "text": "OCK1-04002-0G30G-2GC1R-81450-P30D1-R7PZZ-8",
+    "root_seed_hex": "fcde7f53bfe629b1661840c12ec17c4ec8b20c5cd461a0a5daaa997f1e31dd16",
+    "root_pub": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+    "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+    "root_fp_display": "F1877-1EKJN-1JBHJ-WQ8D1"
+  },
+  "sas": {
+    "start": {
+      "request_id": "00112233445566778899aabbccddeeff",
+      "claw_id": "0123456789abcdef0123456789abcdef",
+      "device_pub": "ed25519:d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+      "peer_key": "iroh:a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0",
+      "label": "Example Mac",
+      "node": {
+        "peer_key": "iroh:17cb79fb2b4120f2b1ec65e4198d6e08b28e813feb01e4a400839b85e18080ce",
+        "description": {
+          "display_name": "Example Mac",
+          "platform": "macos",
+          "commands": [
+            "system.run",
+            "screen.snapshot"
+          ],
+          "caps": [
+            "screen"
+          ]
+        }
+      }
+    },
+    "eph_n_seed_hex": "0101010101010101010101010101010101010101010101010101010101010101",
+    "eph_e_seed_hex": "0202020202020202020202020202020202020202020202020202020202020202",
+    "eph_n_pub_hex": "a4e09292b651c278b9772c569f5fa9bb13d906b46ab68c9df9dc2b4409f8a209",
+    "eph_e_pub_hex": "ce8d3ad1ccb633ec7b70c17814a5c76ecd029685050d344745ba05870e587d59",
+    "commit": "11a5f9c97095ef9ef359dc43b27d7d11a0c0f979f6a0cbdad8fcb9a27d9fe46b",
+    "transcript_hex": "4a689689570c6132279d3bfdff547e2861c47d957fbbb95db1c6bb469038fa85",
+    "shared_secret_hex": "2ed76ab549b1e73c031eb49c9448f0798aea81b698279a0c3dc3e49fbfc4b953",
+    "code": "784969",
+    "sealed": {
+      "nonce": "e24ed692d3608bb94c0aa5af",
+      "ciphertext": "acc3e82b12c67cca42d41aa05da101d172bd8c47b048d153642507ac5b195551002fc7856a6f991144a013820d0a1dfcd267b4139d19eafa8ab577f805ec91d6cbbdefb3f48f34872d38b265c2de2f549832b9953cb5ab94950a0f898d2afde2a0f77745fd6953080fcd16008e1530d712c129fc7c026cf0fc7e9a4ec8ac6a2869"
+    },
+    "handoff": {
+      "root_pub": "ed25519:abababababababababababababababababababababababababababababababab",
+      "cert": {
+        "note": "fixture"
+      }
+    }
+  },
+  "peer_key_proof": {
+    "account_id": "acct_fixture",
+    "ts": 1793318400,
+    "proof": "3UV5mMUzPM4R_0dcElzVzjw7OY6zcRppeTGQlSpYjVcKPewqcpZ1EI7zOk7Hwc6tBhgmEHxOYSkmmPR11PK-Ag"
+  },
+  "kit_enrollment": {
+    "cert": {
+      "v": 1,
+      "type": "OwnerDeviceCert",
+      "body": {
+        "device_pub": "ed25519:d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+        "peer_keys": [
+          "iroh:a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0"
+        ],
+        "label": "Example Mac",
+        "scope": "owner",
+        "caps": [
+          "approve_device",
+          "bind",
+          "invite",
+          "manage_members"
+        ],
+        "issued_at": 1793318400,
+        "expires_at": null,
+        "root_epoch": 1
+      },
+      "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+      "alg": "ed25519",
+      "sig": "6mUg5NiHU3AdhQG94HOrNWR1Pe3BN2iPWYI1-xeyd3iTksR4JRIO3LKovI8Db5ZIjlxbFQwguF2FMozbELwNDA"
+    },
+    "change": {
+      "v": 1,
+      "type": "MembershipChange",
+      "body": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "seq": 8,
+        "target": {
+          "op": "add_owner_device",
+          "cert": {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+              "peer_keys": [
+                "iroh:a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0"
+              ],
+              "label": "Example Mac",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793318400,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+            "alg": "ed25519",
+            "sig": "6mUg5NiHU3AdhQG94HOrNWR1Pe3BN2iPWYI1-xeyd3iTksR4JRIO3LKovI8Db5ZIjlxbFQwguF2FMozbELwNDA"
+          },
+          "node": {
+            "peer_key": "iroh:17cb79fb2b4120f2b1ec65e4198d6e08b28e813feb01e4a400839b85e18080ce",
+            "label": "Example Mac",
+            "description": {
+              "display_name": "Example Mac",
+              "platform": "macos",
+              "commands": [
+                "system.run",
+                "screen.snapshot"
+              ],
+              "caps": [
+                "screen"
+              ]
+            }
+          }
+        },
+        "issued_at": 1793318400
+      },
+      "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+      "alg": "ed25519",
+      "sig": "L5NbPhGOwNzyirzox8uP-jdYMRWC8mZyS1qA7ZlNWlwAkwvVqHdOTkBL6dXcsQrUSUlw4nPfWd5ICUkWjVk1AQ"
+    }
+  },
+  "remove_node": {
+    "v": 1,
+    "type": "MembershipChange",
+    "body": {
+      "claw_id": "0123456789abcdef0123456789abcdef",
+      "seq": 9,
+      "target": {
+        "op": "remove_node",
+        "peer_key": "iroh:17cb79fb2b4120f2b1ec65e4198d6e08b28e813feb01e4a400839b85e18080ce"
+      },
+      "issued_at": 1793318400
+    },
+    "signer": "ed25519:d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+    "alg": "ed25519",
+    "sig": "l85QGs9ZDsfSbYy4Wm3qyRFYWDFgbycLxpvwNYbqZ29j06yj-ez9BUsCbGNQgOqKg7uLpM1GXaMk64C2cQB6Bw"
+  },
+  "revocation": {
+    "v": 1,
+    "type": "Revocation",
+    "body": {
+      "claw_id": "0123456789abcdef0123456789abcdef",
+      "seq": 9,
+      "target_fp": "fp:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+      "target_kind": "owner_device",
+      "reason": "removed from this Mac",
+      "root_epoch": 1,
+      "issued_at": 1793318400
+    },
+    "signer": "ed25519:d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+    "alg": "ed25519",
+    "sig": "fB3uE5V1tr-YkeQa2WQYYt_nc9uBTb3KuBMYXxlRzbHH_XEtRArZ8X4MST-kUfw6YYpVW-CsjTW0Yj6hiotzBw"
+  },
+  "canonical_change_body": "{\"claw_id\":\"0123456789abcdef0123456789abcdef\",\"issued_at\":1793318400,\"seq\":8,\"target\":{\"cert\":{\"alg\":\"ed25519\",\"body\":{\"caps\":[\"approve_device\",\"bind\",\"invite\",\"manage_members\"],\"device_pub\":\"ed25519:d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737\",\"expires_at\":null,\"issued_at\":1793318400,\"label\":\"Example Mac\",\"peer_keys\":[\"iroh:a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0\"],\"root_epoch\":1,\"scope\":\"owner\"},\"sig\":\"6mUg5NiHU3AdhQG94HOrNWR1Pe3BN2iPWYI1-xeyd3iTksR4JRIO3LKovI8Db5ZIjlxbFQwguF2FMozbELwNDA\",\"signer\":\"ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012\",\"type\":\"OwnerDeviceCert\",\"v\":1},\"node\":{\"description\":{\"caps\":[\"screen\"],\"commands\":[\"system.run\",\"screen.snapshot\"],\"display_name\":\"Example Mac\",\"platform\":\"macos\"},\"label\":\"Example Mac\",\"peer_key\":\"iroh:17cb79fb2b4120f2b1ec65e4198d6e08b28e813feb01e4a400839b85e18080ce\"},\"op\":\"add_owner_device\"}}"
+}

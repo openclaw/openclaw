@@ -5,6 +5,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHostAccountName } from "../infra/host-account-name.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-operations.js";
@@ -29,6 +30,7 @@ import {
 } from "./ingress-attribution.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
+  openclawIdSubjectRolePolicy,
   openclawIdTunnelRolePolicy,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
@@ -38,10 +40,15 @@ import {
   resolveGatewayOperatorAccessAuthority,
 } from "./operator-access-policy.js";
 import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.types.js";
+import {
+  isNamedOperatorRoleEnforcementEnabled,
+  operatorRoleSubject,
+} from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { isGatewayDelegationCurrent } from "./trusted-proxy-delegation.js";
+import { syncTrustedProxyGitCoauthor } from "./trusted-proxy-git-coauthor.js";
 import { formatForLog } from "./ws-log.js";
 
 const profileLog = createSubsystemLogger("gateway/user-profiles");
@@ -66,17 +73,16 @@ function failedHttpProfileAuthentication(error?: unknown): HttpUserProfileAuthRe
     ok: false,
     authResult: {
       ok: false,
-      reason:
-        error instanceof GatewayOperatorAccessDeniedError
+      reason: isOperatorAuthorityUnavailable(error)
+        ? "operator_access_unavailable"
+        : error instanceof GatewayOperatorAccessDeniedError
           ? "operator_access_denied"
           : "user_profile_unavailable",
     },
   };
 }
 
-// An OpenClaw ID tunnel device is capped by its membership role on every HTTP
-// surface, and its request keeps authority only while that membership is
-// unchanged: a removal or role change fails every later authority check.
+// HTTP requests retain membership admission independently of their profile role.
 function withOpenClawIdPrincipal(
   profile: AuthenticatedHttpUserProfile,
   principal: OpenClawIdTunnelPrincipal,
@@ -110,7 +116,10 @@ export function checkHttpCookieUserProfile(
   cfg: OpenClawConfig,
   profileId: string | undefined,
 ): HttpUserProfileAuthResult {
-  if (!profileId && (cfg.gateway?.roles || hasGatewayOperatorAccessPolicies(cfg))) {
+  if (
+    !profileId &&
+    (isNamedOperatorRoleEnforcementEnabled(cfg) || hasGatewayOperatorAccessPolicies(cfg))
+  ) {
     return failedHttpProfileAuthentication();
   }
   // A signed viewer still narrows session sharing when named roles are disabled.
@@ -168,6 +177,7 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
     const principal = ingress.resolvePrincipal();
     return {
       authenticatedUserProfile: principal.authenticatedUserProfile,
+      openclawIdPrincipal: principal.openclawIdPrincipal,
       preparedSessionProfile: principal.preparedSessionProfile,
       operatorRolePolicy: principal.operatorRolePolicy,
       operatorRoleActor: principal.operatorRoleActor,
@@ -205,8 +215,12 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
   assertCurrent();
   const options = { assertCurrent };
   const authenticatedUserId = normalizeOptionalString(params.authResult.user);
-  const rolesConfigured = Boolean(params.cfg.gateway?.roles);
-  const accessPoliciesConfigured = hasGatewayOperatorAccessPolicies(params.cfg);
+  const rolesConfigured = isNamedOperatorRoleEnforcementEnabled(params.cfg);
+  const openclawIdPrincipal =
+    params.authResult.method === "trusted-proxy" ? params.authResult.openclawId : undefined;
+  const accessPoliciesConfigured = hasGatewayOperatorAccessPolicies(params.cfg, {
+    openclawIdPrincipal,
+  });
   if (!authenticatedUserId) {
     if (
       shouldUseGatewayOwnerProfile({
@@ -262,11 +276,19 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
               )
             : await ensureCanonicalUserProfileForEmail(authenticatedUserId, options);
     const profileId = "profileId" in profile ? profile.profileId : profile.id;
+    await syncTrustedProxyGitCoauthor({
+      authConfig: params.cfg.gateway?.auth,
+      authResult: params.authResult,
+      headers: params.req.headers,
+      profileId,
+      assertCurrent,
+    });
     const prepared = await prepareHttpProfile(
       profileId,
       profile.updatedAt,
       assertCurrent,
       usesSharedSecretGatewayMethod(params.authResult.method) ? undefined : params.cfg,
+      openclawIdPrincipal,
     );
     const delegation = params.authResult.delegation;
     if (delegation) {
@@ -283,7 +305,13 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
     assertCurrent();
     // Attribution enriches authenticated requests; configured role/access policies
     // make durable profile resolution a prerequisite for authorization.
-    if (params.authResult.delegation || rolesConfigured || accessPoliciesConfigured) {
+    if (
+      params.authResult.delegation ||
+      openclawIdPrincipal?.kind === "member" ||
+      rolesConfigured ||
+      Boolean(params.cfg.gateway?.openclawId?.enabled) ||
+      accessPoliciesConfigured
+    ) {
       throw error;
     }
     return {};
@@ -295,9 +323,10 @@ async function prepareHttpProfile(
   updatedAt: number,
   assertCurrent: () => void,
   cfg?: OpenClawConfig,
+  openclawIdPrincipal?: OpenClawIdTunnelPrincipal,
 ) {
   assertCurrent();
-  if (cfg && hasGatewayOperatorAccessPolicies(cfg)) {
+  if (cfg && hasGatewayOperatorAccessPolicies(cfg, { openclawIdPrincipal })) {
     (await prepareUserProfileCatalog()).release();
     assertCurrent();
   }
@@ -307,16 +336,22 @@ async function prepareHttpProfile(
     throw new Error("HTTP profile authority changed during acquisition");
   }
   const display = authority.display;
+  const member = operatorRoleSubject(authority).openclawIdMember;
+  const hasCurrentProfileAuthority = () =>
+    authority.isCurrent() && member === operatorRoleSubject(authority).openclawIdMember;
   const operatorRolePolicy = cfg
-    ? resolveOperatorRolePolicyForAssignment(
-        display.id,
-        authority.role,
-        cfg,
-        authority.githubLogin ?? null,
+    ? openclawIdSubjectRolePolicy(openclawIdPrincipal, () =>
+        resolveOperatorRolePolicyForAssignment(
+          display.id,
+          authority.role,
+          cfg,
+          authority.githubLogin ?? null,
+          operatorRoleSubject(authority),
+        ),
       )
     : undefined;
   const operatorAccessAuthority = cfg
-    ? resolveGatewayOperatorAccessAuthority(profileId, cfg)
+    ? resolveGatewayOperatorAccessAuthority(profileId, cfg, { openclawIdPrincipal })
     : undefined;
   assertCurrent();
   if (!authority.isCurrent()) {
@@ -326,7 +361,7 @@ async function prepareHttpProfile(
     ...projectHttpProfile(display, updatedAt, operatorRolePolicy, operatorAccessAuthority),
     // Identity-derived HTTP authority must not outlive the profile binding that admitted it.
     // Shared-secret authority remains independent of owner-profile attribution.
-    ...(cfg ? { hasCurrentProfileAuthority: authority.isCurrent } : {}),
+    ...(cfg ? { hasCurrentProfileAuthority } : {}),
     ...(cfg
       ? {
           preparedSessionProfile: {
@@ -334,6 +369,7 @@ async function prepareHttpProfile(
             aliases: new Set(authority.aliases),
             role: authority.role,
             githubLogin: authority.githubLogin,
+            openclawIdAccountIds: authority.openclawIdAccountIds,
           },
         }
       : {}),
@@ -341,20 +377,29 @@ async function prepareHttpProfile(
 }
 
 /** Cookie and media disclosure retain their existing synchronous final policy check. */
-export function resolveHttpProfile(profileId: string, cfg?: OpenClawConfig) {
+export function resolveHttpProfile(
+  profileId: string,
+  cfg?: OpenClawConfig,
+  openclawIdPrincipal?: OpenClawIdTunnelPrincipal,
+) {
   const profile = captureResidentUserProfileAccess(profileId).assertCurrent();
   const display = projectUserProfileDisplay(profile);
   const operatorRolePolicy = cfg
-    ? resolveOperatorRolePolicyForAssignment(
-        profile.id,
-        profile.role ?? null,
-        cfg,
-        profile.githubLogin ?? null,
+    ? openclawIdSubjectRolePolicy(openclawIdPrincipal, () =>
+        resolveOperatorRolePolicyForAssignment(
+          profile.id,
+          profile.role ?? null,
+          cfg,
+          profile.githubLogin ?? null,
+          operatorRoleSubject(profile),
+        ),
       )
     : undefined;
-  const operatorAccessAuthority = cfg
-    ? resolveGatewayOperatorAccessAuthority(profileId, cfg)
-    : undefined;
+  // An owner certificate carries owner access independently of its linked person's policies.
+  const operatorAccessAuthority =
+    cfg && openclawIdPrincipal?.kind !== "owner"
+      ? resolveGatewayOperatorAccessAuthority(profileId, cfg, { openclawIdPrincipal })
+      : undefined;
   return projectHttpProfile(
     display,
     profile.updated_at,

@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { makeReleaseFixture } from "./worker-config-owner-fixture.mjs";
-const library = new URL("./release-lib.mjs", import.meta.url).pathname;
+import { makeReleaseFixture, runLibrary } from "./worker-config-owner-fixture.mjs";
 export function makeHandoffSnapshotFixture(t) {
   const f = makeReleaseFixture(t);
   const stateRoot = join(f.runtime, ".openclaw"), config = join(stateRoot, "openclaw.json"), shared = join(stateRoot, "state/openclaw.sqlite");
@@ -32,7 +30,7 @@ export function makeHandoffSnapshotFixture(t) {
   mkdirSync(join(f.initial, "node_modules/sqlite-vec"));
   // The fixture has no vector tables; backup, WAL, digests and integrity remain native SQLite.
   writeFileSync(join(f.initial, "node_modules/sqlite-vec/index.js"), "exports.load=db=>db.function('vec_version',()=> 'fixture');");
-  const seal = spawnSync(process.execPath, [library, "seal-tree", f.initial], { env: f.env, encoding: "utf8" });
+  const seal = runLibrary(f, ["seal-tree", f.initial]);
   assert.equal(seal.status, 0, seal.stderr);
   return { ...f, shared, config, agents };
 }

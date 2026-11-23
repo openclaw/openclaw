@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as pricing from "../../model-catalog/pricing.js";
 import { resolveRemoteCatalogUrl } from "../../model-catalog/remote-config.js";
 import { prepareRemoteModelCatalogStartupSnapshot } from "../../model-catalog/remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../../model-catalog/remote-overlay.test-support.js";
@@ -76,7 +77,7 @@ vi.mock("../model-suppression.js", async (importOriginal) => {
     buildSuppressedBuiltInModelError: (params: Parameters<typeof suppressed>[0]) => {
       const { provider } = params;
       if (suppressed(params)) {
-        return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run \`openclaw models auth login --provider openai\` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.`;
+        return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Sign in to OpenAI with ChatGPT in OpenClaw and use openai/gpt-5.3-codex-spark with that sign-in; OpenAI API-key auth cannot use this model.`;
       }
       return undefined;
     },
@@ -548,6 +549,9 @@ describe("resolveModel", () => {
       return expectResolvedModel(result).cost;
     };
 
+    using preparePricing = vi.spyOn(pricing, "prepareModelPricingContext");
+    expect(await resolve(bundled)).toMatchObject(bundled);
+    expect(preparePricing).not.toHaveBeenCalled();
     // The transport bills each call from this cost: hosted beats bundled, a placeholder never bills $0.
     expect(await resolve(undefined)).toMatchObject(hosted);
     expect(await resolve(bundled, free)).toMatchObject(bundled);
@@ -920,7 +924,7 @@ describe("resolveModel", () => {
     const result = await resolveModelForTest("openai", "gpt-5.3-codex-spark");
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Sign in to OpenAI with ChatGPT in OpenClaw and use openai/gpt-5.3-codex-spark with that sign-in; OpenAI API-key auth cannot use this model.",
     );
   });
 

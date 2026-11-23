@@ -105,7 +105,7 @@ suite.define(() => {
           await navigate(foreign);
           await expect.poll(() => composer.isDisabled()).toBe(true);
         }
-        const newSession = page.locator(".sidebar-rail .sidebar-new-session");
+        const newSession = page.locator(".sidebar-session-toolbar .sidebar-new-session");
         await expect.poll(() => newSession.isEnabled()).toBe(true);
         await newSession.click();
         const draft = page.locator(".new-session-page__message");
@@ -252,7 +252,7 @@ suite.define(() => {
         await gateway.waitForRequest("sessions.patch", { match: { key, thinkingLevel: "high" } });
         await page.keyboard.press("Escape");
         await model.click();
-        const contextWindow = pane.locator("[data-chat-context-window-toggle]");
+        const contextWindow = pane.locator(".chat-controls__context-trigger");
         await expect.poll(() => contextWindow.isVisible()).toBe(true);
         await expect.poll(() => contextWindow.isDisabled()).toBe(true);
         await page.keyboard.press("Escape");

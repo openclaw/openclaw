@@ -15,13 +15,32 @@ import {
   type MediaFactInput,
 } from "../media/media-facts.js";
 import { applyInputProvenanceToUserMessage } from "./input-provenance.js";
-import { buildPersistedUserTurnMetadata } from "./user-turn-transcript.metadata.js";
 import type {
   PersistedUserTurnMediaInput,
   PersistedUserTurnMessage,
   UserTurnInput,
-  UserTurnMessagePersistenceParams,
-} from "./user-turn-transcript.types.js";
+} from "./user-turn-input.types.js";
+import { buildPersistedUserTurnMetadata } from "./user-turn-transcript.metadata.js";
+import type { UserTurnMessagePersistenceParams } from "./user-turn-transcript.types.js";
+
+/** Approved text replacement invalidates annotations tied to the prior text. */
+export function applyUserTurnReplacementText(
+  candidate: PersistedUserTurnMessage | undefined,
+  replacementText: string | undefined,
+): PersistedUserTurnMessage | undefined {
+  if (!candidate || replacementText === undefined) {
+    return candidate;
+  }
+  const metadata = { ...candidate["__openclaw"] };
+  if (candidate.content !== replacementText) {
+    delete metadata.humanMentions;
+    delete metadata.workContext;
+    delete metadata.appContext;
+  }
+  const next = { ...candidate, content: replacementText };
+  delete next["__openclaw"];
+  return Object.keys(metadata).length > 0 ? { ...next, __openclaw: metadata } : next;
+}
 
 const URL_LIKE_MEDIA_PATH_PATTERN = /^[a-z][a-z0-9+.-]*:/i;
 const MIME_TYPE_PATTERN = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/iu;

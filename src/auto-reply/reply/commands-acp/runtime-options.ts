@@ -101,7 +101,6 @@ function defineRuntimeOptionAction(action: keyof typeof SINGLE_RUNTIME_OPTIONS |
         let key = parsed.value.key;
         let value = single ? String(single.parseValue(parsed.value.value)) : parsed.value.value;
         const input = {
-          assertActive: commandParams.command.assertOwnerCurrent,
           cfg: commandParams.cfg,
           ...target,
         };
@@ -155,7 +154,6 @@ export async function handleAcpStatusAction(
   return await withAcpCommandErrorBoundary({
     run: async () => {
       const status = await getAcpSessionManager().getSessionStatus({
-        assertActive: params.command.assertOwnerCurrent,
         cfg: params.cfg,
         ...target,
       });
@@ -217,7 +215,6 @@ export async function handleAcpResetOptionsAction(
   return await withAcpCommandErrorBoundary({
     run: async () => {
       await getAcpSessionManager().resetSessionRuntimeOptions({
-        assertActive: params.command.assertOwnerCurrent,
         cfg: params.cfg,
         ...target,
       });

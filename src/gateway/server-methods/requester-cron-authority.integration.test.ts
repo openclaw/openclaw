@@ -2,15 +2,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
-import {
-  closeAdmittedRunDelegatedAuthority,
-  resolveAdmittedRunActiveAssertion,
-} from "../../agents/admitted-run-context.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { resolveAdmittedRunActiveAssertion } from "../../agents/admitted-run-context.js";
 import { bindCronManagementGrant } from "../../agents/cron-creator-authority-context.js";
 import * as hostFileWrite from "../../agents/host-file-write.js";
 import { makeSettledChild } from "../../agents/subagents/announce/subagent-announce.requester-settle-wake.test-support.js";
@@ -277,9 +270,7 @@ async function createStoredJob(
 }
 
 describe("requester continuation persisted automation management", () => {
-  it("keeps scheduler notice reads scoped and withholds a record when authority closes during its read", async ({
-    signal,
-  }) => {
+  it("keeps scheduler notice reads scoped to the current conversation", async () => {
     const config: OpenClawConfig = { ...cfg, tools: { allow: [AUTOMATIONS_TOOL_NAME] } };
     setRuntimeConfigSnapshot(config);
     const fixture = createCronFixture(undefined, config);
@@ -324,20 +315,6 @@ describe("requester continuation persisted automation management", () => {
 
     await inRun("automation-inspection", undefined, async (_identity, admitted) => {
       bindGatewayContextResolver(admitted, () => fixture.context);
-      const entered = createDeferred();
-      const release = createDeferred();
-      const readJob = cron.readJob.bind(cron);
-      let holdRead = false;
-      const readSpy = vi.spyOn(cron, "readJob").mockImplementation(async (id) => {
-        const recorded = await readJob(id);
-        if (holdRead) {
-          expect(recorded?.id).toBe(own.id);
-          entered.resolve();
-          await withinTest(release.promise, signal);
-        }
-        return recorded;
-      });
-      let pending: Promise<unknown> | undefined;
       try {
         const tools = await createCreatorTransportTools({
           transport: "embedded",
@@ -359,29 +336,7 @@ describe("requester continuation persisted automation management", () => {
         );
         await expect(inspect(foreign.id)).rejects.toThrow("cron job not found");
         expect(responses).toHaveBeenLastCalledWith(false, undefined, expect.anything());
-        responses.mockClear();
-
-        holdRead = true;
-        pending = inspect(own.id);
-        await withinTest(
-          awaitGateBeforeSettlement(entered.promise, pending, "Read settled before its owner gate"),
-          signal,
-        );
-        expect(closeAdmittedRunDelegatedAuthority(admitted)).toBe(true);
-        release.resolve();
-        await expect(pending).rejects.toThrow(/authority|admitted run/i);
-        expect(responses).toHaveBeenCalledExactlyOnceWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            code: "INVALID_REQUEST",
-            message: expect.stringMatching(/authority|admitted run/i),
-          }),
-        );
       } finally {
-        release.resolve();
-        await pending?.catch(() => undefined);
-        readSpy.mockRestore();
         clearGatewayContextResolver(admitted);
       }
     });

@@ -56,7 +56,6 @@ beforeAll(() => {
     "scripts/lib/canonical-json.mjs",
     "scripts/lib/docker-e2e-plan.mts",
     "scripts/lib/docker-e2e-scenarios.mts",
-    "scripts/e2e/lib/upgrade-survivor/installed-recovery-cases.mjs",
     "scripts/lib/official-external-channel-catalog.json",
     "scripts/lib/official-external-provider-catalog.json",
     "scripts/lib/record-shared.mjs",
@@ -468,6 +467,32 @@ describe("release validation no-push transport", () => {
     expect(
       job(release, "live_repo_e2e_release_checks").with?.use_github_hosted_runners,
     ).toBeUndefined();
+  });
+
+  it("uploads only public repo E2E timeout diagnostics after failure", () => {
+    const repo = readWorkflow(".github/workflows/openclaw-repo-e2e-reusable.yml");
+    const test = job(repo, "test");
+    const run = step(test, "Run repo E2E suite");
+    const directory =
+      ".artifacts/control-ui-e2e-timeouts/repo-e2e-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}";
+    expect(run.env?.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR).toBe(directory);
+    const upload = step(test, "Upload public repo E2E timeout diagnostics");
+    expect(upload.with).toMatchObject({
+      path: `${directory}/failure-*/failure.public.json`,
+      "include-hidden-files": true,
+      "if-no-files-found": "ignore",
+      "retention-days": 7,
+    });
+    for (const failed of [false, true]) {
+      expect(
+        evaluateWorkflowCondition(upload.if ?? "true", {
+          eventName: "workflow_dispatch",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          failed,
+        }),
+      ).toBe(failed);
+    }
   });
 
   it("builds the sandbox image only for repo E2E consumers that require it", () => {
@@ -1507,6 +1532,7 @@ describe("release validation no-push transport", () => {
       repository: "openclaw/openclaw",
       ref: "${{ github.sha }}",
       "persist-credentials": false,
+      "sparse-checkout": "scripts",
     });
     const binder = job(workflow, "bind_full_release_candidate_evidence");
     const binderIdentity = step(binder, "Resolve exact trusted workflow identity");
@@ -1519,7 +1545,7 @@ describe("release validation no-push transport", () => {
       binder.steps!.indexOf(binderCheckout!.candidate) + 1,
     );
     expect(binder.steps!.indexOf(binderRestore)).toBeLessThan(
-      binder.steps!.indexOf(step(binder, "Setup trusted release harness")),
+      binder.steps!.indexOf(step(binder, "Create full release candidate evidence")),
     );
     const exactRevisionCheckouts = trustedCheckouts.filter(
       ({ jobName }) => jobName !== "bind_full_release_candidate_evidence",
@@ -1957,11 +1983,7 @@ describe("release validation no-push transport", () => {
     const fullText = readFileSync(FULL_RELEASE, "utf8");
     const performance = readWorkflow(PERFORMANCE);
     const publisher = job(performance, "publish");
-    const dangerousSteps = [
-      "Prepare clawgrit report commit",
-      "Create clawgrit reports app token",
-      "Publish to clawgrit reports",
-    ];
+    const dangerousSteps = ["Prepare clawgrit report commit", "Publish to clawgrit reports"];
 
     expect(performance.on?.workflow_dispatch?.inputs?.publish_reports).toMatchObject({
       default: true,
@@ -2045,7 +2067,7 @@ describe("release validation no-push transport", () => {
       ["Extended-stable core npm publication stays on the canonical extended-stable release flow"],
     );
     expect(publishJob.if).toBe("${{ !inputs.publish_docker_only }}");
-    expect(validateEvidence.env?.EXPECTED_WORKFLOW_BRANCH).toBe("${{ github.ref_name }}");
+    expect(validateEvidence.env?.TRUSTED_WORKFLOW_FULL_REF).toBe("${{ github.ref }}");
     expectText(validateReleaseBranch.run, [
       'expected_ref="refs/remotes/origin/${EXPECTED_VALIDATION_BRANCH}"',
       "must be reachable from ${EXPECTED_VALIDATION_BRANCH}",

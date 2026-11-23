@@ -8,8 +8,6 @@ export type CronRunRequestContext = {
   mode: "scheduled" | "force" | "if-enabled" | "on-exit";
   onExitSchedule?: { kind: "on-exit"; command: string; cwd?: string };
   event?: CronEventAdmission;
-  /** Set when a manual or stream run still evaluates the job's condition before its payload. */
-  evaluateTrigger?: boolean;
 };
 
 export type CronQueuedRun = {
@@ -22,6 +20,12 @@ export type CronSkippedRequest = {
   runReceipt: CronRunReceiptHandle;
   error: string;
   eventInvalidated?: true;
+};
+
+/** Host observations used by the worker when allocating a known provider an extra slot. */
+export type CronProviderBackoffSnapshot = {
+  allowances: { provider: string; slots: number }[];
+  charges: { receiptId: string; provider?: string }[];
 };
 
 export type CronRunQueueOperations = {
@@ -52,6 +56,9 @@ export type CronRunQueueOperations = {
       nowMs: number;
       defaultAgentId?: string;
       maxConcurrentRuns: number;
+      /** At least 1 GiB was free when the host read memory: see `cronMemoryAllowsExtraRun`. */
+      memoryAllowsExtraRun?: boolean;
+      providerBackoff?: CronProviderBackoffSnapshot;
       requests: CronRunRequestContext[];
       schedulingPaused?: boolean;
       preparingAgentIds?: string[];
@@ -72,6 +79,7 @@ export type CronRunQueueOperations = {
       launches: CronQueuedRun[];
       preparing: CronQueuedRun[];
       skipped: CronSkippedRequest[];
+      promotedReceiptIds?: string[];
     };
   };
   "cron.cancelRequests": {
@@ -84,9 +92,14 @@ export type CronRunQueueOperations = {
     };
     output: { skipped: CronSkippedRequest[] };
   };
-  /** A fired condition stops counting as a check while its payload runs. */
-  "cron.settleConditionCheck": {
-    input: { storeKey: string; jobId: string; receiptId: string };
-    output: { job?: CronStoredJob };
+  /**
+   * Settle a fired condition or return a provisional extra slot after provider selection.
+   * The receipt keeps its place in the queue without holding a slot. The host asks again
+   * after each drain until another slot is granted.
+   */
+  "cron.reconcileRunSlot": {
+    input: { storeKey: string; jobId: string; receiptId: string; parkProvider?: string };
+    /** `stale`: the receipt no longer owns the job's running marker. */
+    output: { job?: CronStoredJob; runSlot: boolean; stale?: true };
   };
 };

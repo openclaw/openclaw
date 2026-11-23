@@ -8,18 +8,18 @@ import {
 } from "../admitted-run-context.js";
 import { classifyToolAgainstSandboxToolPolicy } from "../sandbox/tool-policy.js";
 import { SANDBOX_DEFAULT_TOOL_ALLOW, type SandboxToolPolicy } from "../sandbox/types.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 export function captureSessionControlAuthority(prepared?: AdmittedRunOperatorAuthority) {
   const invocation = readOperatorToolGatewayAuthority();
   const caller = getGatewayToolCallerIdentity()?.operatorAuthority;
   const scope = getPluginRuntimeGatewayRequestScope();
-  // The admitted caller owns continuation authority; the ambient client may still
-  // belong to the completed recovery request that launched this child.
-  const retained = caller ? undefined : scope?.client?.internal?.operatorRunAuthority;
+  const ambient = scope?.client?.internal?.operatorRunAuthority;
+  // An admitted run owns its continuation authority, whether it arrives as the caller
+  // identity or as the run's own prepared authority. The ambient client may still belong
+  // to a completed recovery request or scheduled occurrence that launched this run. A
+  // prepared authority that is the ambient client's own keeps its live-client check.
+  const retained = caller || (prepared && prepared !== ambient) ? undefined : ambient;
   const authority = prepared ?? caller ?? invocation?.operatorRunAuthority ?? retained;
   if (!authority) {
     return undefined;
@@ -38,7 +38,6 @@ export function captureSessionControlAuthority(prepared?: AdmittedRunOperatorAut
           }
         }),
       ),
-      captureGatewayToolCallerAssertion("sessions.patch"),
       composeSessionSourceAssertion([invocation?.assertCurrent], (assertSource) => {
         invocation?.signal.throwIfAborted();
         assertSource();

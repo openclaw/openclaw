@@ -1,7 +1,7 @@
-// Covers provider-owned target prefixes, generic kind prefixes, topic suffixes,
+// Covers provider-owned target prefixes, generic kind prefixes,
 // and selected-channel prefix validation.
 import { describe, expect, it } from "vitest";
-import { stripOutboundTargetKindPrefix, stripTargetTopicSuffix } from "./channel-target-prefix.js";
+import { stripOutboundTargetKindPrefix } from "./channel-target-prefix.js";
 
 describe("stripOutboundTargetKindPrefix", () => {
   it("uses the current custom kinds on every call", () => {
@@ -17,17 +17,5 @@ describe("stripOutboundTargetKindPrefix", () => {
     expect(stripOutboundTargetKindPrefix("THREAD:Room-A", [" room|thread "])).toBe("Room-A");
     expect(stripOutboundTargetKindPrefix(" room:Room-A ", [])).toBe("room:Room-A");
     expect(() => stripOutboundTargetKindPrefix("room:Room-A", ["["])).toThrow(SyntaxError);
-  });
-});
-
-describe("stripTargetTopicSuffix", () => {
-  it("strips explicit topic suffixes", () => {
-    expect(stripTargetTopicSuffix("room-a:topic:77")).toBe("room-a");
-  });
-
-  it("strips Telegram numeric topic shorthand only when requested", () => {
-    expect(stripTargetTopicSuffix("-100200300:77", { allowNumericShorthand: true })).toBe(
-      "-100200300",
-    );
   });
 });

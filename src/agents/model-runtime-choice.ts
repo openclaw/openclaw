@@ -8,7 +8,7 @@ import {
   resolveModelRuntimeRoute,
 } from "../shared/model-runtime-route.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
-import { resolveNativeOwnedRuntimeModel } from "./defaults.js";
+import { resolveNativeOwnedRuntimeModel, DEFAULT_PROVIDER } from "./defaults.js";
 import { FailoverError } from "./failover/error.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import type { AgentHarness } from "./harness/types.js";
@@ -95,7 +95,7 @@ export async function prepareModelChoice(params: {
         const selection = {
           cfg: owner.config,
           agentId: params.agentId,
-          defaultProvider: defaults.provider,
+          defaultProvider: defaults?.provider ?? DEFAULT_PROVIDER,
           defaultModel: defaults,
           catalog: owner.modelCatalog.entries,
           manifestPlugins: owner.metadataSnapshot.plugins,
@@ -230,6 +230,7 @@ export async function prepareModelChoice(params: {
             entry,
             evaluation: auth,
             pluginRegistry: owner.pluginRegistry,
+            resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
           })?.id;
           // Same ownership rule as the turn path: a harness-listed model has no host transport.
           const nativeModel = resolveNativeOwnedRuntimeModel({
@@ -475,6 +476,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
         entry: row,
         evaluation,
         pluginRegistry: owner.pluginRegistry,
+        resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
       })?.id;
     const claudeCli = resolveModelRuntimeRoute(params.provider, routeRuntimeId) === "claudeCli";
     switch (reason) {

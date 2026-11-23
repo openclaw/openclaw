@@ -44,6 +44,7 @@ import { showToast } from "../../lib/toast.ts";
 import { CloudEnvironmentsAdminRequired } from "./cloud-worker-admin-required.tsx";
 import {
   cloudEnvironments,
+  environmentReadyAt,
   environmentState,
   isUnassignedPreparation,
   showPreparationRow,
@@ -545,6 +546,8 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
     return settled;
   }
 
+  const snapshotsKnown = () =>
+    view.result !== null || (gateway.connected && !canCall("crabbox.images.list"));
   const environments = createMemo(() =>
     cloudEnvironments(
       view.result?.images ?? [],
@@ -621,18 +624,8 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
               >
                 <For each={environments()} keyed={(environment) => environment.key}>
                   {(entry) => {
-                    const state = () => environmentState(entry());
-                    const age = () => {
-                      const builtAt = entry()
-                        .images.filter((image) => image.state === "available")
-                        .toSorted(
-                          (a, b) => (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0),
-                        )[0]?.createdAtMs;
-                      const worker = entry().workers.find(
-                        (w) => w.worker?.state === "ready",
-                      )?.worker;
-                      return builtAt ?? (worker ? Date.now() - worker.ageMs : undefined);
-                    };
+                    const state = () => environmentState(entry(), snapshotsKnown());
+                    const age = () => environmentReadyAt(entry());
                     return (
                       <button
                         type="button"
@@ -647,7 +640,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
                       >
                         <span>{entry().label}</span>
                         <span class="cloud-environments__status">
-                          {t(`cloudWorkersPage.environments.${state()}`)}
+                          {state() ? t(`cloudWorkersPage.environments.${state()}`) : null}
                           {state() === "ready" && age() !== undefined
                             ? ` · ${formatRelativeTimestamp(age())}`
                             : ""}
@@ -662,6 +655,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
                   <CloudWorkerEnvironmentSheet
                     environment={environment()}
                     profiles={view.result?.profiles ?? []}
+                    snapshotsKnown={snapshotsKnown()}
                     busy={
                       presentation().image.read() || presentation().preparing.read() || loading()
                     }

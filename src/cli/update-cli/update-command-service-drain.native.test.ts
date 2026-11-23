@@ -38,13 +38,15 @@ const mocks = vi.hoisted(() => ({
   location: vi.fn(),
   systemctl: vi.fn(),
 }));
-vi.mock("node:fs", async (original) => {
-  const actual = await original<typeof import("node:fs")>();
-  return {
-    ...actual,
-    readFileSync: (...args: Parameters<typeof actual.readFileSync>) => fs.readFileSync(...args),
-  };
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = { readFileSync: vi.fn(actual.readFileSync) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
+const { readFileSync: nativeReadFileSync } =
+  await vi.importActual<typeof import("node:fs")>("node:fs");
 vi.mock("../../gateway/call.js", () => ({ callGatewayCli: mocks.call }));
 vi.mock("../../daemon/systemd-peer-native.js", () => ({
   openSystemdBroker: mocks.openBroker,
@@ -210,8 +212,7 @@ beforeEach(() => {
       `Id=${descriptor.service.unit}\nLoadState=loaded\nActiveState=${f.alive ? "active" : "inactive"}\nSubState=${f.alive ? "running" : "dead"}\nMainPID=${f.alive ? pid : 0}\nControlGroup=${controlGroup}\nTasksCurrent=${f.alive ? 1 : 0}\nJob=0\nKillMode=control-group\nTimeoutStopUSec=330s\nDynamicUser=no\nRootDirectory=\nRootImage=\n`,
     ),
   );
-  const readFile = fs.readFileSync;
-  vi.spyOn(fs, "readFileSync").mockImplementation((file, ...args) => {
+  vi.mocked(fs.readFileSync).mockImplementation((file, ...args) => {
     if (String(file) === `/proc/${pid}/stat`) {
       if (!f.alive) {
         throw Object.assign(new Error("fixture process exited"), { code: "ENOENT" });
@@ -228,7 +229,7 @@ beforeEach(() => {
       f.events.push(f.alive ? "cgroup:populated" : "cgroup:empty");
       return `populated ${f.alive ? 1 : 0}\nfrozen 0\n`;
     }
-    return readFile(file, ...args);
+    return nativeReadFileSync(file, ...args);
   });
   const readlink = fs.readlinkSync;
   vi.spyOn(fs, "readlinkSync").mockImplementation((file, ...args) => {

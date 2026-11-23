@@ -94,7 +94,6 @@ export function createRecoveryDefaults(
     adoptCompactionTranscript: vi.fn(async () => undefined),
     getActiveSession: () => ({ id: "session-1", file: "/tmp/session-1.jsonl" }),
     prepareCompactedTranscriptRetry: vi.fn(async () => {}),
-    armPostCompactionGuard: vi.fn(),
     usageAccumulator: createUsageAccumulator(),
   };
 }

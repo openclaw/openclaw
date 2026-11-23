@@ -30,6 +30,11 @@ extension OpenClawChatViewModel {
     func flushStreamingAssistantDisplay(scheduledID: UUID) {
         // A clear/session switch retires the callback, even if another run starts before it fires.
         guard self.streamPacing.scheduledID == scheduledID else { return }
+        self.flushPendingStreamingAssistantDisplay()
+    }
+
+    /// Shows held-back words now and retires the scheduled flush.
+    func flushPendingStreamingAssistantDisplay() {
         self.streamPacing.scheduledID = nil
         guard let pending = self.streamPacing.pending else { return }
         self.streamPacing.pending = nil

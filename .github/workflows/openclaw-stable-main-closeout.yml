@@ -453,6 +453,7 @@ jobs:
 
       - name: Verify release workflow evidence
         env:
+          CLOSEOUT_TOOLING_SHA: ${{ github.workflow_sha }}
           RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
           GH_TOKEN: ${{ github.token }}
           EVIDENCE_TAG: ${{ needs.resolve.outputs.evidence_tag }}
@@ -465,23 +466,6 @@ jobs:
           . "$RUNNER_TEMP/github-api-backoff.sh"
           gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" \
             > "$RUNNER_TEMP/full-release-validation-run.json"
-          node --input-type=module - "$RUNNER_TEMP/full-release-validation-run.json" <<'NODE'
-          import { readFileSync } from "node:fs";
-          const run = JSON.parse(readFileSync(process.argv[2], "utf8"));
-          for (const [key, expected] of [
-            ["name", "Full Release Validation"],
-            ["event", "workflow_dispatch"],
-            ["status", "completed"],
-            ["conclusion", "success"],
-          ]) {
-            if (run[key] !== expected) {
-              throw new Error(`Full Release Validation must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`);
-            }
-          }
-          if (String(run.run_attempt ?? "") !== process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT) {
-            throw new Error(`Full Release Validation run attempt mismatch: expected ${process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT}, got ${run.run_attempt ?? "<missing>"}.`);
-          }
-          NODE
           publish_workflow_path="$(gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_PUBLISH_RUN_ID}" --jq .path)"
           gh_with_retry run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" \
             --json event,status,conclusion,headSha,jobs | \
@@ -512,6 +496,40 @@ jobs:
             echo "Full Release Validation manifest does not contain the required stable release controls." >&2
             exit 1
           }
+          SOURCE_SHA="$tag_sha" node --input-type=module - "$RUNNER_TEMP/full-release-validation-run.json" "$manifest_dir/$manifest_asset" <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { createReleaseEvidenceClient, validateReleaseRunEvidence } from "./.closeout-tooling/scripts/release-ci-summary.mjs";
+          const manifest = JSON.parse(readFileSync(process.argv[3], "utf8"));
+          const run = JSON.parse(readFileSync(process.argv[2], "utf8"));
+          for (const [key, expected] of [
+            ...(!manifest.receiptRecovery ? [["name", "Full Release Validation"]] : []),
+            ["event", "workflow_dispatch"],
+            ["status", "completed"],
+            ["conclusion", "success"],
+          ]) {
+            if (run[key] !== expected) {
+              throw new Error(`Full Release Validation must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`);
+            }
+          }
+          if (String(run.run_attempt ?? "") !== process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT) {
+            throw new Error(`Full Release Validation run attempt mismatch: expected ${process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT}, got ${run.run_attempt ?? "<missing>"}.`);
+          }
+          if (manifest.receiptRecovery) {
+            // Recovery is a separate authenticated producer, never a renamed FRV.
+            // The shared owner binds this published manifest to its exact artifact,
+            // original C/Q receipts, successful seal, and current operator authority.
+            const evidence = await validateReleaseRunEvidence({
+              repository: process.env.GITHUB_REPOSITORY,
+              runId: process.env.FULL_RELEASE_VALIDATION_RUN_ID,
+              manifestPath: process.argv[3],
+              expectedTargetSha: process.env.SOURCE_SHA,
+              verifierSourceSha: process.env.CLOSEOUT_TOOLING_SHA,
+            }, createReleaseEvidenceClient(process.env.GITHUB_REPOSITORY));
+            if (String(evidence.current.runAttempt) !== process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT) {
+              throw new Error("Receipt recovery current attempt differs from published evidence.");
+            }
+          }
+          NODE
           node .closeout-tooling/scripts/lib/release-publish-gates.mts \
             --consumer stable-closeout --manifest "$manifest_dir/$manifest_asset"
 
