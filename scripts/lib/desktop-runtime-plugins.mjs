@@ -135,7 +135,8 @@ function normalizeStagedCodexVoiceHost(packageRoot) {
       // Codex also carries a portable ../lib path. Drop only missing Bazel
       // build-tree paths from the installed copy before the app is signed.
       if (
-        rpath.startsWith("@loader_path/../../_solib_darwin_") &&
+        (rpath.startsWith("@loader_path/../../_solib_darwin_") ||
+          rpath.startsWith("@loader_path/codex-voice-host.runfiles/_main/_solib_darwin_")) &&
         rpath.includes("/voice/native_link_macos_") &&
         !fs.existsSync(path.resolve(path.dirname(host), rpath.slice("@loader_path/".length)))
       ) {

@@ -125,25 +125,29 @@ it.each([
   }
 });
 
-it.runIf(process.platform === "darwin")("normalizes only staged voice rpaths", async () => {
+it.runIf(process.platform === "darwin").each([
+  ["arm64", "aarch64-apple-darwin", "arm64", "aarch64"],
+  ["x64", "x86_64-apple-darwin", "x86_64", "x86_64"],
+])("normalizes only staged %s voice rpaths", async (architecture, target, cpu, native) => {
   const { auditMacRuntimePortability } =
     await import("../../scripts/lib/mac-runtime-portability.mjs");
   const root = temps.make("desktop-runtime-codex-native-");
   const commit = "a".repeat(40);
   writeJson(root, "dist/build-info.json", { commit });
   writePlugin(root, "codex");
-  for (const name of ["codex", "codex-darwin-arm64"]) {
+  for (const name of ["codex", `codex-darwin-${architecture}`]) {
     writeJson(root, `node_modules/@openai/${name}/package.json`, {});
   }
   const voice = path.join(
     root,
-    "node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-resources/voice",
+    `node_modules/@openai/codex-darwin-${architecture}/vendor/${target}/codex-resources/voice`,
   );
   mkdirSync(path.join(voice, "lib"), { recursive: true });
   mkdirSync(path.join(voice, "bin"));
   const host = path.join(voice, "bin/codex-voice-host");
   const rpaths = [
-    "@loader_path/../../_solib_darwin_arm64/voice/native_link_macos_aarch64",
+    `@loader_path/../../_solib_darwin_${cpu}/voice/native_link_macos_${native}`,
+    `@loader_path/codex-voice-host.runfiles/_main/_solib_darwin_${cpu}/voice/native_link_macos_${native}`,
     "@loader_path/../lib",
   ];
   const args = ["-x", "c", "-", "-o", host, ...rpaths.map((rpath) => `-Wl,-rpath,${rpath}`)];
