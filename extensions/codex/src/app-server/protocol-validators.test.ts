@@ -4,10 +4,11 @@ import { createModelFixture } from "./model-fixture.test-support.js";
 import {
   assertCodexModelListResponse,
   assertCodexPassiveTurnItems,
-  prepareCodexServerNotification,
-  assertCodexThreadStartResponse,
+  assertCodexThreadForkResponse,
   assertCodexThreadResumeResponse,
+  assertCodexThreadStartResponse,
   assertCodexTurnStartResponse,
+  prepareCodexServerNotification,
   readCodexDynamicToolCallParams,
   readCodexErrorNotification,
 } from "./protocol-validators.js";
@@ -46,6 +47,20 @@ function turn(text: string | number = "Answer.") {
     status: "completed",
     items: [{ id: "item-1", type: "agentMessage", text }],
   };
+}
+
+function displayTurn() {
+  const items = [
+    { version: 1, mode: "show", trustedContacts: "skip" },
+    { version: 1, mode: "hide", replacement: { kind: "wellbeingPromptHelpline" } },
+    { version: 1, mode: "block", reason: { kind: "protection", protectionType: "fixture" } },
+  ].map((display) => ({
+    id: display.mode,
+    type: "agentMessage",
+    text: "Answer.",
+    moderation: { moderated: true, display },
+  }));
+  return { ...turn(), items };
 }
 
 function completedTurn(value: ReturnType<typeof turn>) {
@@ -141,15 +156,39 @@ describe("passive native turn items", () => {
 describe("Codex thread response validators", () => {
   it.each([
     { label: "start", assertResponse: assertCodexThreadStartResponse },
+    { label: "fork", assertResponse: assertCodexThreadForkResponse },
     { label: "resume", assertResponse: assertCodexThreadResumeResponse },
-  ])("validates nested thread items in $label responses", ({ assertResponse }) => {
-    const response = makeMinimalResponse({
-      turns: [turn()],
-    });
-    expect(assertResponse(response)).toMatchObject(response);
+  ])("accepts v1 display items in thread/$label responses unchanged", ({ assertResponse }) => {
+    const response = makeMinimalResponse({ turns: [displayTurn()] });
+    expect(assertResponse(response)).toBe(response);
     expect(() => assertResponse(makeMinimalResponse({ turns: [turn(12)] }))).toThrow(
       "Invalid Codex app-server",
     );
+  });
+
+  it("restricts only unreadable display items in a resumed thread and its initial page", () => {
+    const nativeTurn = displayTurn();
+    const valid = nativeTurn.items[0]!;
+    const base = { type: "agentMessage", id: "legacy", text: "Previous answer." };
+    const legacy = { ...base, moderation: { moderated: false, display: { action: "allow" } } };
+    const restricted = { ...base, moderation: { moderated: true, display: null } };
+    const response = {
+      ...makeMinimalResponse({ turns: [{ ...nativeTurn, items: [legacy, valid] }] }),
+      initialTurnsPage: { data: [nativeTurn] },
+    };
+    expect(assertCodexThreadResumeResponse(response)).toMatchObject({
+      thread: { turns: [{ items: [restricted, valid] }] },
+      initialTurnsPage: { data: [nativeTurn] },
+    });
+    expect(response.thread).toMatchObject({ turns: [{ items: [legacy, valid] }] });
+
+    const pageWithLegacyItem = {
+      ...makeMinimalResponse({ turns: [nativeTurn] }),
+      initialTurnsPage: { data: [{ ...nativeTurn, items: [legacy] }] },
+    };
+    expect(assertCodexThreadResumeResponse(pageWithLegacyItem)).toMatchObject({
+      initialTurnsPage: { data: [{ items: [restricted] }] },
+    });
   });
 
   // The pinned Codex protocol requires both thread identities; never silently
@@ -300,11 +339,32 @@ describe("generated response resources", () => {
     ).toThrow("Invalid Codex app-server");
   });
 
-  it("validates turn-start item contents inside the shared resource", () => {
-    const response = { turn: { ...turn(), status: "inProgress" } };
-    expect(assertCodexTurnStartResponse(response)).toMatchObject(response);
+  it("accepts v1 display items in turn/start unchanged", () => {
+    const response = { turn: { ...displayTurn(), status: "inProgress" } };
+    expect(assertCodexTurnStartResponse(response)).toBe(response);
     expect(() =>
       assertCodexTurnStartResponse({ turn: { ...turn(12), status: "inProgress" } }),
+    ).toThrow("Invalid Codex app-server");
+  });
+
+  it("revalidates the entire turn/start response after restricting an unreadable display", () => {
+    const base = turn().items[0]!;
+    const display = { version: 1, mode: "future" };
+    const item = { ...base, moderation: { moderated: false, display } };
+    const response = { turn: { ...turn(), items: [item] } };
+    expect(assertCodexTurnStartResponse(response).turn.items).toEqual([
+      { ...base, moderation: { moderated: true, display: null } },
+    ]);
+    expect(() =>
+      assertCodexTurnStartResponse({ turn: { ...response.turn, status: "future" } }),
+    ).toThrow("Invalid Codex app-server");
+    expect(() =>
+      assertCodexTurnStartResponse({
+        turn: {
+          ...response.turn,
+          items: [{ ...base, moderation: { moderated: "invalid", display } }],
+        },
+      }),
     ).toThrow("Invalid Codex app-server");
   });
 

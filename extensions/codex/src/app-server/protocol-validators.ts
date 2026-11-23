@@ -3,6 +3,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Errors } from "typebox/schema";
 import { readCodexNotificationScope } from "./notification-correlation.js";
 import {
+  isCodexAgentMessageDisplay,
   isCodexDynamicToolCallParams,
   isCodexErrorNotification,
   isCodexModelListResponse,
@@ -99,15 +100,24 @@ const validateTurnStartResponse = createCodexValidator(
 );
 
 export function assertCodexThreadStartResponse(value: unknown): CodexThreadStartResponse {
-  return assertCodexShape(validateThreadStartResponse, value, "thread/start response");
+  return assertCodexShape(
+    validateThreadStartResponse,
+    value,
+    "thread/start response",
+    repairThread,
+  );
 }
 
 export function assertCodexThreadForkResponse(value: unknown): CodexThreadForkResponse {
-  return assertCodexShape(validateThreadStartResponse, value, "thread/fork response");
+  return assertCodexShape(validateThreadStartResponse, value, "thread/fork response", repairThread);
 }
 
 export function assertCodexThreadResumeResponse(value: unknown): CodexThreadResumeResponse {
-  return assertCodexShape(validateThreadResumeResponse, value, "thread/resume response");
+  return assertCodexShape(validateThreadResumeResponse, value, "thread/resume response", (input) =>
+    repairField(repairThread(input), "initialTurnsPage", (page) =>
+      repairField(page, "data", (turns) => repairList(turns, repairTurnItems)),
+    ),
+  );
 }
 
 export class CodexThreadDirectInputError extends Error {
@@ -131,7 +141,7 @@ export function assertCodexThreadAcceptsDirectInput(
 }
 
 export function assertCodexTurnStartResponse(value: unknown): CodexTurnStartResponse {
-  return assertCodexShape(validateTurnStartResponse, value, "turn/start response");
+  return assertCodexShape(validateTurnStartResponse, value, "turn/start response", repairTurn);
 }
 
 /** Exact input echoes and attested managed-hook continuations cannot admit native capabilities. */
@@ -201,7 +211,7 @@ export function assertCodexModelListResponse(value: unknown): CodexModelListResp
 function readCodexTurnCompletedNotification(
   value: unknown,
 ): CodexTurnCompletedNotification | undefined {
-  const notification = readCodexShape(validateTurnCompletedNotification, value);
+  const notification = readCodexShape(validateTurnCompletedNotification, value, repairTurn);
   // Turn is shared with turn/start, but only terminal states belong in this notification.
   return notification?.turn.status === "inProgress" ? undefined : notification;
 }
@@ -233,15 +243,84 @@ export function assertExactSupervisionModelSelection(
   }
 }
 
-function assertCodexShape<T>(validate: CodexValidator<T>, value: unknown, label: string): T {
-  if (validate.check(value)) {
+type DisplayCompatibilityRepair = (value: unknown) => unknown;
+
+function repairField(value: unknown, field: string, repair: DisplayCompatibilityRepair): unknown {
+  if (!isRecord(value)) {
     return value;
+  }
+  const original = value[field];
+  const next = repair(original);
+  return next === original ? value : { ...value, [field]: next };
+}
+
+function repairList(value: unknown, repair: DisplayCompatibilityRepair): unknown {
+  if (!Array.isArray(value)) {
+    return value;
+  }
+  const next = value.map(repair);
+  return next.every((item, index) => item === value[index]) ? value : next;
+}
+
+function repairDisplay(item: unknown): unknown {
+  if (!isRecord(item) || item.type !== "agentMessage") {
+    return item;
+  }
+  return repairField(item, "moderation", (moderation) => {
+    if (
+      !isRecord(moderation) ||
+      typeof moderation.moderated !== "boolean" ||
+      moderation.display == null ||
+      isCodexAgentMessageDisplay(moderation.display)
+    ) {
+      return moderation;
+    }
+    // Match Codex's restricted read of unsupported display instructions. No other
+    // invalid field is repaired, and the entire response must still validate.
+    return { ...moderation, display: null, moderated: true };
+  });
+}
+
+function repairTurnItems(turn: unknown): unknown {
+  return repairField(turn, "items", (items) => repairList(items, repairDisplay));
+}
+
+function repairTurn(value: unknown): unknown {
+  return repairField(value, "turn", repairTurnItems);
+}
+
+function repairThread(value: unknown): unknown {
+  return repairField(value, "thread", (thread) =>
+    repairField(thread, "turns", (turns) => repairList(turns, repairTurnItems)),
+  );
+}
+
+function assertCodexShape<T>(
+  validate: CodexValidator<T>,
+  value: unknown,
+  label: string,
+  repair?: DisplayCompatibilityRepair,
+): T {
+  const valid = readCodexShape(validate, value, repair);
+  if (valid !== undefined) {
+    return valid;
   }
   throw new Error(`Invalid Codex app-server ${label}: ${formatValidationErrors(validate, value)}`);
 }
 
-function readCodexShape<T>(validate: CodexValidator<T>, value: unknown): T | undefined {
-  return validate.check(value) ? value : undefined;
+function readCodexShape<T>(
+  validate: CodexValidator<T>,
+  value: unknown,
+  repair?: DisplayCompatibilityRepair,
+): T | undefined {
+  if (validate.check(value)) {
+    return value;
+  }
+  if (!repair) {
+    return undefined;
+  }
+  const restricted = repair(value);
+  return restricted !== value && validate.check(restricted) ? restricted : undefined;
 }
 
 function formatValidationErrors(validate: CodexValidator<unknown>, value: unknown): string {

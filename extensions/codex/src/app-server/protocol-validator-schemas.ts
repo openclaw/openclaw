@@ -39,6 +39,10 @@ export function createCodexValidationSchemas() {
       }),
     },
     schemas: {
+      CodexAgentMessageDisplay: normalize(
+        { $ref: `${sharedDefinitionsId}#/definitions/AgentMessageDisplay` },
+        "v2/AgentMessageDisplay.json",
+      ),
       CodexDynamicToolCallParams: normalize(
         rawDynamicToolCallParamsSchema,
         "DynamicToolCallParams.json",
