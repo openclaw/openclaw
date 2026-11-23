@@ -399,19 +399,22 @@ suite.define(() => {
         await open.press("Enter");
         const title = panel.locator(".chat-processes__detail-name");
         expect(await title.textContent()).toBe(name);
-        const fits = await title.evaluate((el) => {
+        expect(await title.getAttribute("title")).toBe(name);
+        const compact = await title.evaluate((el) => {
+          const text = el.querySelector("bdi")!.firstChild!;
           const range = document.createRange();
-          range.selectNodeContents(el);
-          const bounds = el.getBoundingClientRect();
-          const lines = Array.from(range.getClientRects());
+          range.selectNodeContents(text);
+          const lines = new Set(Array.from(range.getClientRects(), (rect) => rect.top));
+          range.setStart(text, text.textContent!.lastIndexOf("/") + 1);
+          const executable = range.getBoundingClientRect();
+          const column = el.getBoundingClientRect();
           return (
-            lines.length > 1 &&
-            lines.every(
-              (line) => line.right <= bounds.right + 1 && line.bottom <= bounds.bottom + 1,
-            )
+            lines.size === 1 &&
+            executable.left >= column.left - 1 &&
+            executable.right <= column.right + 1
           );
         });
-        expect(fits).toBe(true);
+        expect(compact).toBe(true);
         await panel.getByText("Compiling", { exact: true }).waitFor();
         await panel.getByRole("button", { name: "Back to processes" }).press("Enter");
         expect(await open.evaluate((el) => el === document.activeElement)).toBe(true);

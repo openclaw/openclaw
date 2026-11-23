@@ -352,8 +352,9 @@
     color: var(--text);
     font-weight: 400;
     line-height: 1.4;
-    white-space: normal;
-    overflow-wrap: anywhere;
+    direction: rtl;
+    text-align: match-parent;
+    text-overflow: ellipsis;
   }
 }
 :root[data-theme-mode="light"] .chat-processes__panel[data-mobile="false"] {
