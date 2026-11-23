@@ -511,6 +511,7 @@ it("uses requester catalogs through the real command and agent tool assembly cal
             sessionId: requester.readerParams.sessionId,
             preparedModelRuntime: pluginOwner,
             pluginExecutionAuthority: admitted ? requester.readerParams.authority : undefined,
+            assertInvocationCurrent: () => {},
             pluginToolAllowlist: ["catalog_probe"],
           },
         });

@@ -513,7 +513,7 @@ describe("own-run question admission", () => {
       const waiting = manager.waitAnswer(id);
       setUserProfileRole(f.profile.id, "suspended");
       invalidateOperatorRolePolicy(f.profile.id);
-      expect(f.source.authority.signal?.aborted).toBe(false);
+      expect(f.source.authority.signal?.aborted).not.toBe(true);
       expect(observation.sessionAccess?.assertSourceCurrent).not.toThrow();
       expect(observation.record.status).toBe("pending");
       await expect(

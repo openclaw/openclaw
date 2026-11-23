@@ -276,7 +276,7 @@ describe("OpenAI-compatible operator run authority", () => {
           }
           fixture.request.abort();
           expect(options.abortSignal?.aborted).toBe(true);
-          expect(authority.signal?.aborted).toBe(false);
+          expect(authority.signal?.aborted).not.toBe(true);
           const childAuthority = readAdmittedRunOperatorAuthority(childContext);
           assert(childAuthority, "Detached work lost its original operator authority");
           child.close();

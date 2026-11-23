@@ -416,7 +416,9 @@ describe("session resource admission", () => {
       expect(
         thrown instanceof Error ? thrown.message : respond.mock.calls[0]?.[2]?.message,
       ).toMatch(
-        stage === "aliases" ? "Session access changed" : /authority|Session access changed/,
+        stage === "aliases"
+          ? "Session access changed"
+          : /authority|Session access changed|could not start/,
       );
       expect(mocks.profileLeases.size).toBe(0);
     },

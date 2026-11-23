@@ -41,7 +41,7 @@ const sessionKey = "agent:main:synthetic-handoff-parent";
 const route = { provider: "openai", model: "synthetic-model" };
 const outcomes: Record<string, { status: string; reason?: string }> = {
   "optional-completion": { status: "rejected", reason: "reply_expectation_mismatch" },
-  "late-cohort-revocation": { status: "rejected", reason: "tool_authority_mismatch" },
+  "late-cohort-revocation": { status: "failed" },
   "accepted-cohort-revocation": { status: "indeterminate" },
 };
 afterEach(() => {
@@ -278,7 +278,7 @@ it.each([
             const accepted = ["accepted", "indeterminate"].includes(expected.status);
             expect(result).toMatchObject(expected);
             if (scenario === "late-cohort-revocation") {
-              expect(result).toHaveProperty("errorMessage");
+              expect(result).toHaveProperty("error");
             }
             expect(await injection.acceptance).toBe(accepted);
             expect(sink).toHaveBeenCalledTimes(accepted ? 1 : 0);

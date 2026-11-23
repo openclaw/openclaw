@@ -697,7 +697,14 @@ describe("operator model policy on plugin completions", () => {
       const pending = completeAs(authority, mode);
       await Promise.race([started.promise, pending]);
       controller.abort(stop);
-      await expectDenied(pending);
+      if (mode === "direct") {
+        await expect(pending).rejects.toBe(stop);
+      } else {
+        await expect(pending).rejects.toMatchObject({
+          name: "LlmCompleteError",
+          code: "LLM_COMPLETION_ABORTED",
+        });
+      }
       expect(mocks.complete).not.toHaveBeenCalled();
     },
   );

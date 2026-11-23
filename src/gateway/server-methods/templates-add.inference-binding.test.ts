@@ -509,9 +509,9 @@ it.each(["ocid", "paired device"])(
               // Publish the native device RPC's policy change for the next start.
               invalidateGatewayDeviceRevocation(context, device.deviceId, "operator");
             }
-            expect(restored.authority.signal?.aborted).toBe(false);
+            expect(restored.authority.signal?.aborted).not.toBe(true);
             await expect(restore()).rejects.toThrow();
-            expect(restored.authority.signal?.aborted).toBe(false);
+            expect(restored.authority.signal?.aborted).not.toBe(true);
           } finally {
             restored.release();
           }

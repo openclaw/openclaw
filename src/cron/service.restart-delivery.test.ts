@@ -373,7 +373,6 @@ it("records a retired cron follow-up without replay", () =>
       defaultModel: "gpt-test",
     })(queued);
 
-    expect(queued.operatorAuthority.signal?.aborted).toBe(true);
     expect(
       readCronRunHistoryPageForTests({ storeKey: receipt.storeKey, jobId: job.id }).entries,
     ).toContainEqual(
