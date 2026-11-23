@@ -500,6 +500,12 @@ export class TranscriptReaderAnchor {
       if (!above || owned || !held) {
         // Prepend restores the measured bubble absolutely; relative compensation
         // can replay after its anchor retires during iOS's post-touch grace.
+        if (above && this.host.prependAnchor.messageKey === null && !owned) {
+          // Virtual-core would write its cached offset, which can lag a newer reader scroll;
+          // flush writes the owed movement from the native offset instead.
+          this.owedScroll += delta;
+          return false;
+        }
         return above && this.host.prependAnchor.messageKey === null;
       }
       this.columnShift += delta;
