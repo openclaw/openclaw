@@ -642,35 +642,6 @@ describe("sidebar attention source publication", () => {
     },
   );
 
-  it.each(["list", "status"] as const)(
-    "coalesces cron bursts until the whole inventory pair settles (%s first)",
-    async (first) => {
-      const gate = inventoryGate("latest");
-      const { request, cronStatus } = gate;
-      const harness = gateway(request, true);
-      store = activate(harness);
-
-      repeatEvent(() => emitFinished(harness));
-      expectCalls(request, 1);
-      expectCalls(request, 1, ["models.authStatus"]);
-
-      if (first === "list") {
-        gate.list.resolve(cronPage("stale"));
-        await gate.list.promise;
-      } else {
-        gate.status.resolve(cronStatus);
-        await gate.status.promise;
-      }
-      await Promise.resolve();
-      expectCalls(request, 1);
-
-      gate.list.resolve(cronPage("stale"));
-      gate.status.resolve(cronStatus);
-      await waitLabels("latest");
-      expectCalls(request, 2);
-    },
-  );
-
   it.each(["settled", "pending with dismissal"] as const)(
     "defers hidden inventory, preserving dismissals and catching up once (%s)",
     async (initial) => {

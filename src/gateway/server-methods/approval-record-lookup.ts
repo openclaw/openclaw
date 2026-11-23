@@ -418,7 +418,6 @@ async function resolveApprovalRecordForState<TPayload>(
   if (!snapshot || isResolved !== (expectedState === "resolved") || !(await visible(snapshot))) {
     return { ok: false, response: "missing" };
   }
-  params.authority?.bindSource(readApprovalRequestSource(snapshot));
   return { ok: true, approvalId: resolvedId.id, snapshot };
 }
 

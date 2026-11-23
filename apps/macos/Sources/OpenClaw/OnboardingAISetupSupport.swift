@@ -292,7 +292,7 @@ extension OnboardingAISetupModel {
         let kind: String
         let featured: Bool
         let modelTarget: ModelTarget?
-        var actionLabel: String? = nil
+        var actionLabel: String?
     }
 
     struct RecommendedInstall: Identifiable, Equatable, Decodable {

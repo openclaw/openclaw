@@ -3,7 +3,7 @@ import {
   isRuntimeContextMessage,
   runtimeContextContentToText,
   type Api,
-  type AssistantMessage,
+  type AssistantHistoryMessage,
   type Context,
   type Model,
 } from "@openclaw/llm-core";
@@ -145,7 +145,7 @@ function prepareOpenAIResponsesReasoningItemForReplay(
 
 export { encodeTextSignatureV1 } from "../utils/text-signature.js";
 
-function responsesAssistantTurnKey(message: AssistantMessage) {
+function responsesAssistantTurnKey(message: AssistantHistoryMessage) {
   // Early fragments keep this identity when the provider ID arrives at completion.
   const id = message.turnId || message.responseId;
   return id ? `${message.provider}:${message.api}:${message.model}:${id}` : undefined;

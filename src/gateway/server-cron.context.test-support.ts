@@ -2,12 +2,16 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
-  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gateway.js";
 import { setRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  composePreparedOnlySessionSource,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import { refreshCronScheduler } from "../cron/service/scheduler-actor.js";
 import type { CronServiceState } from "../cron/service/state.js";
 import type { CronJobCreate } from "../cron/types.js";
@@ -122,7 +126,7 @@ export function registerGatewayCronContextTests({
   ) {
     const caller = {
       active: true,
-      assertCurrent: captureGatewayToolCallerAssertion(),
+      assertCurrent: composePreparedOnlySessionSource(getGatewayToolCallerIdentity()),
       run<T>(run: () => T) {
         return withGatewayToolCallerIdentity(
           {
@@ -136,7 +140,7 @@ export function registerGatewayCronContextTests({
             },
           },
           () => {
-            caller.assertCurrent = captureGatewayToolCallerAssertion();
+            caller.assertCurrent = composePreparedOnlySessionSource(getGatewayToolCallerIdentity());
             return withPluginRuntimeGatewayRequestScope(scope, run);
           },
         );
@@ -272,7 +276,7 @@ export function registerGatewayCronContextTests({
     let observedBroker: unknown = "never-ran";
     const settled = createDeferred();
     let settlementContext: unknown = "never-settled";
-    let assertScheduledCaller: ReturnType<typeof captureGatewayToolCallerAssertion>;
+    let assertScheduledCaller: SessionSourceAssertion | undefined;
     const ran = createDeferred();
     runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
       observed = getInProcessGatewayToolContext();
@@ -280,7 +284,7 @@ export function registerGatewayCronContextTests({
       observedCreator = creatorContext.getStore();
       observedBroker = getSpawnBroker();
       observedWork = await trackAsyncWork(() => "completed").catch((error: unknown) => error);
-      assertScheduledCaller = captureGatewayToolCallerAssertion();
+      assertScheduledCaller = composePreparedOnlySessionSource(getGatewayToolCallerIdentity());
       ran.resolve();
       return { status: "ok", text: "done" } as never;
     });
@@ -323,7 +327,7 @@ export function registerGatewayCronContextTests({
     expect(settlementContext).toBe(context);
     expect(observed).toBe(context);
     expect(observedBroker).toBe(broker);
-    expect(() => assertScheduledCaller?.("chat.history")).not.toThrow();
+    expect(() => assertScheduledCaller?.()).not.toThrow();
   });
 
   it.each(["absent", "retired", "session"] as const)(
@@ -386,14 +390,14 @@ export function registerGatewayCronContextTests({
     const schedulerContext = gatewayContext();
     const resolveGatewayContext = vi.fn(() => schedulerContext);
     let observed: unknown = "never-ran";
-    let assertCaller: ReturnType<typeof captureGatewayToolCallerAssertion>;
+    let assertCaller: SessionSourceAssertion | undefined;
     const caller = callerFixture("manual-run", {
       context: rpcContext,
       isWebchatConnect: () => false,
     } as never);
     runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
       observed = getInProcessGatewayToolContext();
-      assertCaller = captureGatewayToolCallerAssertion();
+      assertCaller = composePreparedOnlySessionSource(getGatewayToolCallerIdentity());
       return { status: "ok", text: "done" } as never;
     });
 
@@ -407,6 +411,6 @@ export function registerGatewayCronContextTests({
     expect(observed).toBe(schedulerContext);
     expect(assertCaller).toBeUndefined();
     expect(caller.assertCurrent).toBeTypeOf("function");
-    expect(() => caller.assertCurrent?.("chat.history")).not.toThrow();
+    expect(() => caller.assertCurrent?.()).not.toThrow();
   });
 }

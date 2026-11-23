@@ -22,6 +22,7 @@ it.each(["execution", "resource"] as const)(
             moduleUrl: "file:///synthetic/resource.mjs",
             ownerPort: false,
           },
+          setReferenced: vi.fn(),
           receive: vi.fn(),
           ownerMessage: vi.fn(() => ({ sequence: 1 })),
           close: vi.fn(async () => {}),

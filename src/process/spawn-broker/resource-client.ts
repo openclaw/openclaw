@@ -119,6 +119,8 @@ export function attachBrokerNativeResource(
     let candidate: Socket;
     try {
       candidate = connect(attachment.endpoint);
+      // The native lease owns liveness, including startup and unsettled work.
+      candidate.unref();
     } catch (error) {
       // An invalid endpoint throws before any socket exists. Report it like an asynchronous
       // connection failure, after the caller has installed this attachment's owner.
@@ -188,6 +190,7 @@ export function attachBrokerNativeResource(
           (error: unknown) => failDelivery(error, "Native resource input delivery failed"),
         );
       });
+      target.unref();
     },
     () => {},
   );

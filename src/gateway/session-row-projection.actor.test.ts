@@ -110,7 +110,7 @@ it("publishes terminal actor recency before another run begins", async () => {
     const { query, reads } = projection;
     await projection.ensureMaterialized();
     expect(projection.snapshot(query).row?.updatedAt).toBe(1);
-    await actor.completeTurn(
+    const completed = await actor.completeTurn(
       {
         commandId: "visible-result",
         phaseId: "terminal",
@@ -123,7 +123,16 @@ it("publishes terminal actor recency before another run begins", async () => {
         },
       },
       authority,
+      {
+        committed() {
+          expect(projection.snapshot(query).row?.updatedAt).toBe(2);
+        },
+      },
     );
+    expect(completed.kind).toBe("committed");
+    if (completed.kind === "committed") {
+      expect(completed.failure).toBeUndefined();
+    }
     await projection.ensureMaterialized();
     expect(projection.snapshot(query).row?.updatedAt).toBe(2);
     expect(reads).toEqual([]);

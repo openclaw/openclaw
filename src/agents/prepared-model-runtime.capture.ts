@@ -1,6 +1,11 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { copyPreparedModelRuntimeAuthBindings } from "./prepared-model-runtime-auth.js";
+import {
+  bindPreparedModelRuntimeAuth,
+  copyPreparedModelRuntimeAuthBindings,
+  getPreparedModelRuntimePolicyConfigReader,
+} from "./prepared-model-runtime-auth.js";
 import { mergePreparedNativeCatalog } from "./prepared-model-runtime.catalog-publication.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 
@@ -96,4 +101,35 @@ export function capturePreparedModelRuntimeCatalog(
   });
   copyPreparedModelRuntimeAuthBindings(snapshot, captured);
   return captured;
+}
+
+/** Shared model inventory never replaces a caller's admitted live-versus-scoped policy. */
+export function withPreparedModelRuntimePolicyConfig(
+  snapshot: PreparedModelRuntimeSnapshot,
+  readPolicyConfig: (() => OpenClawConfig) | undefined,
+): PreparedModelRuntimeSnapshot {
+  if (getPreparedModelRuntimePolicyConfigReader(snapshot) === readPolicyConfig) {
+    return snapshot;
+  }
+  const captured = Object.freeze({ ...snapshot });
+  copyPreparedModelRuntimeAuthBindings(snapshot, captured);
+  bindPreparedModelRuntimeAuth(captured, { readPolicyConfig });
+  return captured;
+}
+
+export function stampPreparedModelRuntimeSnapshotConfig(
+  snapshot: PreparedModelRuntimeSnapshot,
+  config: OpenClawConfig,
+  readPolicyConfig: (() => OpenClawConfig) | undefined,
+): PreparedModelRuntimeSnapshot {
+  if (
+    snapshot.config === config &&
+    getPreparedModelRuntimePolicyConfigReader(snapshot) === readPolicyConfig
+  ) {
+    return snapshot;
+  }
+  const stamped = Object.freeze({ ...snapshot, config });
+  copyPreparedModelRuntimeAuthBindings(snapshot, stamped);
+  bindPreparedModelRuntimeAuth(stamped, { readPolicyConfig });
+  return stamped;
 }

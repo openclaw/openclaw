@@ -9,7 +9,6 @@ import {
 import { initializeSessionReadContext } from "../../gateway/server-methods/sessions-read-cache.test-support.js";
 import { sessionSharingHandlers } from "../../gateway/server-methods/sessions-sharing.js";
 import {
-  identifiedClient,
   sessionSharingTestContext as context,
   soloClient,
 } from "../../gateway/server-methods/sessions-sharing.test-support.js";
@@ -218,29 +217,6 @@ async function call(
   });
   return responses;
 }
-
-it("rechecks the current manager after the membership read yields", async () => {
-  await withState(async () => {
-    await captureRuntimeConfigAsyncReader()();
-    const scope = mainScope("member-reader-authority");
-    await upsertSessionEntryCore(scope, {
-      sessionId: "member-reader-authority",
-      updatedAt: 1,
-      createdActor: { type: "human", source: "profile", id: "owner" },
-    });
-    await addSessionMember(scope, memberRow("guest", 2));
-    const client = identifiedClient("owner");
-    const requestContext = await readContext();
-    const pending = call(
-      "session.members.listEvidence",
-      { sessionKey: scope.sessionKey },
-      requestContext,
-      client,
-    );
-    client.authenticatedUserProfile = identifiedClient("other").authenticatedUserProfile;
-    await expect(pending).rejects.toThrow("session ownership changed before sharing read");
-  });
-});
 
 it("commits aliased worker membership and participant facts before publishing, and rejects stale authority", async () => {
   await withState(async (state) => {

@@ -238,7 +238,7 @@ export function bindOperatorModelExecution(
   let released = false;
   const assertCurrent = () => {
     if (released) {
-      throw mapError(new Error("operator model execution authority is no longer active"));
+      throw mapError(new Error("This agent run is no longer active. Start a new turn to retry."));
     }
     revoked.signal.throwIfAborted();
     try {
@@ -330,7 +330,9 @@ export function runWithPreparedRunSourceScope<T>(
   if (params.admittedRunContext) {
     const captured = resolveAdmittedRunActiveAssertion(params.admittedRunContext);
     if (!captured) {
-      return Promise.reject(new Error("admitted run authority is no longer active"));
+      return Promise.reject(
+        new Error("This agent run is no longer active. Start a new turn to retry."),
+      );
     }
     assertion = captured;
   }
@@ -378,7 +380,7 @@ export function readAdmittedRunOperatorAuthority(
     return undefined;
   }
   if (!getAdmittedRunDelegatedAuthority(context)) {
-    throw new Error("admitted run operator authority is no longer active");
+    throw new Error("This agent run is no longer active. Start a new turn to retry.");
   }
   return operatorAuthority;
 }
@@ -430,7 +432,7 @@ export function resolveAdmittedRunActiveAssertion(
   const operationalRunInstance = context.operationalRunInstance;
   const refuse = (): never => {
     throw new Error(
-      "admitted run authority is no longer active",
+      "This agent run is no longer active. Start a new turn to retry.",
       readAgentRunDelegatedAuthorityFailure(authority),
     );
   };
@@ -572,9 +574,12 @@ export function prepareAgentRunAdmission(params: {
           assertSources();
         } catch (error) {
           if (!isOperatorAuthorityUnavailable(error)) {
-            sourceFailure = new Error("source execution authority is no longer active", {
-              cause: error,
-            });
+            sourceFailure = new Error(
+              "This agent run is no longer active. Start a new turn to retry.",
+              {
+                cause: error,
+              },
+            );
           }
           throw error;
         }
@@ -608,7 +613,7 @@ export function prepareAgentRunAdmission(params: {
       }
       const assertActive = resolveAdmittedRunActiveAssertion(admittedContext);
       if (!assertActive) {
-        throw new Error("prepared execution authority is no longer active");
+        throw new Error("This agent run is no longer active. Start a new turn to retry.");
       }
       assertActive.assertScopeCurrent();
     },
@@ -623,12 +628,10 @@ export function prepareAgentRunAdmission(params: {
       },
     ),
     readOperatorAuthority: () => {
-      if (operatorAuthority) {
-        if (closed) {
-          throw new Error("prepared operator authority is no longer active");
-        }
-        operatorAuthority.assertCurrent();
+      if (operatorAuthority && closed) {
+        throw new Error("This agent run is no longer active. Start a new turn to retry.");
       }
+      operatorAuthority?.assertCurrent();
       return operatorAuthority;
     },
     close: () => {
@@ -707,7 +710,7 @@ export async function resolvePreparedRunAdmission(params: {
   }
   const lease = delegatedAuthorityLeases.get(admitted);
   if (lease && !getAdmittedRunDelegatedAuthority(admitted)) {
-    throw new Error("prepared execution authority is no longer active");
+    throw new Error("This agent run is no longer active. Start a new turn to retry.");
   }
   return admitted;
 }

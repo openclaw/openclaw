@@ -110,11 +110,19 @@ export function resolveSessionLaunchPresentation(
   const kind = (launch.childKey ? isDashboardSessionKey(launch.childKey) : launch.ownSession)
     ? "chat"
     : "subagent";
+  // Existing transcripts store the per-session rejection as the tool's error text.
+  const capacity =
+    kind === "subagent" && result.status === "forbidden"
+      ? /^sessions_spawn has reached max active children for this session \((\d+)\/(\d+); agents\.defaults\.subagents\.maxChildrenPerAgent\)\.$/u.exec(
+          text(result.error) ?? "",
+        )
+      : null;
   const row = launch.childKey
     ? rows?.find((candidate) => areUiSessionKeysEquivalent(candidate.key, launch.childKey))
     : undefined;
-  const phase =
-    outcome === "running"
+  const phase = capacity
+    ? "failed"
+    : outcome === "running"
       ? "running"
       : outcome === "skipped" ||
           result.status === "skipped" ||
@@ -134,6 +142,7 @@ export function resolveSessionLaunchPresentation(
     childKey: launch.childKey,
     runId: text(result.runId),
     phase,
+    capacity: capacity ? { active: capacity[1]!, limit: capacity[2]! } : undefined,
   } as const;
 }
 

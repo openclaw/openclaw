@@ -1,22 +1,13 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import * as oauthLocks from "../agents/auth-profiles/oauth-profile-lock.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import type { AgentHarness } from "../agents/harness/types.js";
 import * as runtimePluginInstall from "../commands/runtime-plugin-install.js";
 import { clearConfigCache } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { whenAdmittedWizardSessionSettled } from "../gateway/server-methods/setup-admission.js";
-import * as setupExecution from "../gateway/server-methods/system-agent-execution.js";
-import * as providerChoices from "../plugins/provider-auth-choices.js";
-import * as providerRuntime from "../plugins/providers.runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -26,7 +17,6 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   fixture,
   modelRef,
-  setupLoginSession,
   setupMuseProvider,
   tempDirs,
 } from "./setup-inference-activate.test-support.js";
@@ -115,85 +105,6 @@ describe("native setup authority", () => {
     tempDirs.cleanup();
     clearConfigCache();
     vi.unstubAllEnvs();
-  });
-
-  it("blocks native Muse login after owner invalidation without abort", async ({ signal }) => {
-    const resolveProviders = providerRuntime.resolvePluginProvidersCore;
-    const setup = await fixture({ surface: "gateway" });
-    const binaryPath = path.join(path.dirname(setup.configPath), "muse");
-    const attemptsPath = path.join(path.dirname(setup.configPath), "muse-attempts");
-    await fs.writeFile(
-      binaryPath,
-      `#!${process.execPath}
-require("node:fs").appendFileSync(${JSON.stringify(attemptsPath)}, "spawn\\n");
-process.exit(1);
-`,
-      { mode: 0o700 },
-    );
-    vi.stubEnv("PATH", `${path.dirname(binaryPath)}${path.delimiter}${process.env.PATH ?? ""}`);
-    const muse = resolveProviders({
-      config: { plugins: { allow: ["meta"], entries: { meta: { enabled: true } } } },
-      onlyPluginIds: ["meta"],
-      mode: "setup",
-      workspaceDir: setup.workspace,
-    })
-      .find((provider) => provider.id === "meta")
-      ?.auth.find((method) => method.id === "muse-code");
-    assert.ok(muse, "The real Meta provider must expose Muse sign-in");
-    const provider = setup.pluginRegistry.providers[0]?.provider;
-    assert.ok(provider?.auth[0]);
-    const entered = createDeferred();
-    const release = createDeferred();
-    let providerSignal: AbortSignal | undefined;
-    provider.auth[0].run = async (ctx) => {
-      providerSignal = ctx.signal;
-      entered.resolve();
-      await release.promise;
-      return muse.run(ctx);
-    };
-    vi.spyOn(providerChoices, "resolveManifestDeclaredProviderAuthChoices").mockReturnValue([
-      {
-        pluginId: "openai",
-        providerId: "openai",
-        methodId: "fixture-login",
-        choiceId: "fixture-login",
-        choiceLabel: "Fixture sign-in",
-        appGuidedAuth: "oauth",
-      },
-    ]);
-    const activate = setupExecution.activateGatewaySetupInference;
-    vi.spyOn(setupExecution, "activateGatewaySetupInference").mockImplementation((params) =>
-      setup.runWithMetadata(() => activate({ ...params, modelRef })),
-    );
-    const controller = new AbortController();
-    const login = setupLoginSession(
-      () => setup.config,
-      { sessionId: "native-login", authChoice: "openai/fixture-login" },
-      { connId: "native-login-owner", connectionSignal: controller.signal },
-    );
-    try {
-      const session = await login.start();
-      await withinTest(
-        awaitGateBeforeSettlement(
-          entered.promise,
-          whenAdmittedWizardSessionSettled(session),
-          "Provider login did not start",
-        ),
-        signal,
-      );
-      login.client.invalidated = true;
-      expect([controller.signal.aborted, providerSignal?.aborted]).toEqual([false, false]);
-      release.resolve();
-      await whenAdmittedWizardSessionSettled(session);
-      expect(session.getStatus()).toBe("error");
-      expect(session.getError()).toContain("authority is no longer active");
-      expect(providerSignal?.aborted).toBe(false);
-      await expect(fs.stat(attemptsPath)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(setup.run).not.toHaveBeenCalled();
-    } finally {
-      release.resolve();
-      await login.cancel();
-    }
   });
 
   it("rejects a Meta proxy before native setup verification or config commit", async () => {

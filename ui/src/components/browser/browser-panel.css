@@ -417,6 +417,27 @@ openclaw-browser-panel {
   }
   .bp-note--error {
     color: var(--danger);
+
+    > div {
+      display: inline-block;
+      max-inline-size: 100%;
+      padding-inline-end: 0.5em;
+      overflow-wrap: anywhere;
+
+      /* The shared text baseline keeps this gap below the copy when the toggle wraps. */
+      &:not(:last-child) {
+        margin-block-end: 6px;
+      }
+    }
+
+    /* Keep the toggle in the message line; expanded diagnostics take a full line. */
+    .lazy-view-error__details {
+      display: inline;
+    }
+
+    .lazy-view-error__summary {
+      margin-block-start: 0;
+    }
   }
 }
 

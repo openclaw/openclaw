@@ -456,7 +456,8 @@ export async function prepareEmbeddedCompactionSession(
           completed.tokensBefore,
           completed.details,
           fromHook,
-          { itemId: work.itemId },
+          // Progress announced this run and item; the UI reconciles the entry by both.
+          { runId: runtime.runId, itemId: work.itemId },
           finalized.tokensAfter,
         ),
         appendIntent: "active-branch" as const,

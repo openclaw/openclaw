@@ -151,7 +151,9 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     expect(result.meta.providerStarted).toBe(false);
     expect(effect).toHaveBeenCalledOnce();
     expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
-    expect(() => requestAuthority?.()).toThrow("Guarded request authority is no longer active");
+    expect(() => requestAuthority?.()).toThrow(
+      "The guarded request ended. Start a new request to retry.",
+    );
     expect(() => claimAuthority?.()).toThrow();
   });
 

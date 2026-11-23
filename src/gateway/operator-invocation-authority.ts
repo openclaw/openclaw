@@ -2,11 +2,11 @@ import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
+import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "../agents/tools/gateway-caller-context.js";
-import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+  composePreparedOnlySessionSource,
+  composeSessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
@@ -66,7 +66,7 @@ export async function captureAmbientGatewayOperatorAuthority(params: {
   const inheritedOperator = readOperatorToolRunAuthority();
   const context = scope?.context ?? scope?.resolveGatewayContext?.();
   const direct = readOperatorToolGatewayAuthority();
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
+  const assertCallerCurrent = composePreparedOnlySessionSource(getGatewayToolCallerIdentity());
   // Admitted once here; later calls keep only Stop and the caller's session fences.
   const assertInvocationCurrent =
     inheritedOperator || !scope?.client || !context

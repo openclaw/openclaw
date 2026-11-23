@@ -55,6 +55,25 @@ export function createActivitySummaryAuthority({
       // Resolve historical aliases once; effect checks retain the same catalog
       // and canonical identity without rebuilding the alias set.
       const source = captureResidentUserProfileAccess(profileId);
+      assertOwnerCurrent();
+      const profile = source.assertCurrent();
+      if (
+        profile.id !== canonicalProfileId ||
+        (profile.role || null) !== assignedRole ||
+        (profile.githubLogin ?? null) !== githubLogin
+      ) {
+        throw new Error("Activity recap operator role changed");
+      }
+      const role = resolveOperatorRolePolicyForAssignment(
+        canonicalProfileId,
+        assignedRole,
+        getConfig(),
+        githubLogin,
+        operatorRoleSubject(profile),
+      );
+      if (role && role.agents !== "*" && !role.agents.includes(agentId)) {
+        throw new Error("Activity recap operator role cannot access this agent");
+      }
       authority = captureChannelOperatorRunAuthority({
         profileId: canonicalProfileId,
         canonicalIdentity: { profileId: canonicalProfileId },
@@ -64,27 +83,6 @@ export function createActivitySummaryAuthority({
         scopes: [],
         gatewayAccessGrant: null,
         getRuntimeConfig: getConfig,
-        assertCurrent: () => {
-          assertOwnerCurrent();
-          const profile = source.assertCurrent();
-          if (
-            profile.id !== canonicalProfileId ||
-            (profile.role || null) !== assignedRole ||
-            (profile.githubLogin ?? null) !== githubLogin
-          ) {
-            throw new Error("Activity recap operator role changed");
-          }
-          const role = resolveOperatorRolePolicyForAssignment(
-            canonicalProfileId,
-            assignedRole,
-            getConfig(),
-            githubLogin,
-            operatorRoleSubject(profile),
-          );
-          if (role && role.agents !== "*" && !role.agents.includes(agentId)) {
-            throw new Error("Activity recap operator role cannot access this agent");
-          }
-        },
       });
       return authority;
     },

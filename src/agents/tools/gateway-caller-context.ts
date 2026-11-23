@@ -205,7 +205,7 @@ export function createAdmittedGatewayToolCallerIdentity(
     receiptAuthority: composeReceiptAuthority(
       resolveAdmittedRunActiveAssertion(params.admittedRunContext) ??
         (() => {
-          throw new Error("agent tool caller authority is no longer active");
+          throw new Error("The agent run ended. Start a new turn to retry.");
         }),
       params.receiptAuthority,
     ),
@@ -352,28 +352,6 @@ export function resolveGatewayPersonalToolParticipant(
     );
   }
   return undefined;
-}
-
-/** Admission checked authority; a started tool call only honors Stop and the session-store write fences. */
-export function captureGatewayToolCallerAssertion(
-  _boundMethod?: string,
-): ((method?: string) => void) | undefined {
-  const caller = getGatewayToolCallerIdentity();
-  if (!caller?.operationalRunInstance) {
-    return undefined;
-  }
-  const signals = caller.approvalSignals ?? [];
-  const assertNotStopped = () => {
-    for (const signal of signals) {
-      signal.throwIfAborted();
-    }
-  };
-  // Prepared writes still run the receipt's session fences; the synchronous call checks Stop only.
-  const fences = composeSessionSourceAssertion([caller.receiptAuthority], (assertSources) => {
-    assertNotStopped();
-    assertSources();
-  });
-  return Object.assign(assertNotStopped, fences);
 }
 
 /** Watch admission preserves opaque lifecycle assertions while moving registered row predicates. */
