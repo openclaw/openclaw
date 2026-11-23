@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createSandbox } from "./fs-bridge.test-helpers.js";
+import type { ReadOnlyWorkspaceSkillMount } from "./fs-bridge.types.js";
 import { buildSandboxFsMounts, resolveSandboxFsPathWithMounts } from "./fs-paths.js";
 import { createRemoteShellSandboxFsBridge } from "./remote-fs-bridge.js";
 import { createLocalRemoteShellScriptRunner } from "./remote-fs-bridge.test-helpers.js";
@@ -10,7 +11,6 @@ import {
   ensureReadOnlyWorkspaceSkillMountSources,
   resolveWorkspaceMounts,
   resolveSandboxMountSelection,
-  type ReadOnlyWorkspaceSkillMount,
 } from "./workspace-mounts.js";
 
 function mountParams(workspaceDir: string) {
@@ -101,12 +101,16 @@ async function expectWriteRejected(
 describe("resolveWorkspaceMounts", () => {
   it("reports only new protected sources while preserving their contents", async () => {
     const workspaceDir = makeTempWorkspace();
-    const params = mountParams(workspaceDir);
-    expect(await ensureReadOnlyWorkspaceSkillMountSources(params)).toBe(true);
+    const params = { ...mountParams(workspaceDir), workspaceAccess: "none" as const };
+    expect(await ensureReadOnlyWorkspaceSkillMountSources(params)).toEqual([
+      path.join(workspaceDir, "skills"),
+      path.join(workspaceDir, ".agents", "skills"),
+      path.join(workspaceDir, ".agents"),
+    ]);
     const mounts = resolveSandboxMountSelection(params).readOnlyWorkspaceSkillMounts;
     expect(mounts.map((mount) => mount.containerPath)).toContain("/workspace/skills");
     fs.writeFileSync(path.join(workspaceDir, "skills", "notes.md"), "saved skill content");
-    expect(await ensureReadOnlyWorkspaceSkillMountSources(params)).toBe(false);
+    expect(await ensureReadOnlyWorkspaceSkillMountSources(params)).toEqual([]);
     expect(fs.readFileSync(path.join(workspaceDir, "skills", "notes.md"), "utf8")).toBe(
       "saved skill content",
     );

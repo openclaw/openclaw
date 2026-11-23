@@ -512,6 +512,7 @@ export type SessionControllerSourceCustody = {
   cancellationRetired?: boolean;
   stopHeartbeat?: () => void;
   releaseAuthority?: () => void;
+  releaseCallbacks?: () => void;
   failure?: unknown;
   disposeSource?: () => void;
   /** One in-process Gateway registration may adopt a pre-reserved source. */
@@ -527,6 +528,8 @@ export type SessionControllerInput = {
   sequence: number;
   readonly sourceTurnId?: string;
   protocolRunId?: string;
+  /** Producer records transcript custody after the input owner commits it. */
+  onTranscriptCommitted?: (runId: string) => void | Promise<void>;
   policy: Readonly<QueueSettings>;
   mailbox: SessionControllerMailbox;
   readonly custody: SessionControllerSourceCustody;

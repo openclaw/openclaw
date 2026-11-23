@@ -198,9 +198,9 @@ vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
 
-vi.mock("../../tts/captioned-final.js", async () => {
-  const actual = await vi.importActual<typeof import("../../tts/captioned-final.js")>(
-    "../../tts/captioned-final.js",
+vi.mock("../../tts/captioned-final-eligibility.js", async () => {
+  const actual = await vi.importActual<typeof import("../../tts/captioned-final-eligibility.js")>(
+    "../../tts/captioned-final-eligibility.js",
   );
   return {
     ...actual,
@@ -208,12 +208,10 @@ vi.mock("../../tts/captioned-final.js", async () => {
   };
 });
 
-vi.mock("../../tts/status-config.js", () => ({
-  resolveStatusTtsSnapshot: () => ({
+vi.mock("../../tts/tts-settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../tts/tts-settings.js")>()),
+  resolveTtsSettingsSnapshot: () => ({
     autoMode: "always",
-    provider: "auto",
-    maxLength: 1500,
-    summarize: true,
   }),
 }));
 

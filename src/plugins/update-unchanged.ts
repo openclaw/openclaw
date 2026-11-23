@@ -80,3 +80,22 @@ export async function reconcileUnchangedUpdate(params: {
     },
   };
 }
+
+/** Preserve install identity and timestamps when only its selected spec changes. */
+export function reconcileRetainedSpec(
+  config: OpenClawConfig,
+  pluginId: string,
+  record: UpdatablePluginInstallRecord,
+  recordSpec: string | undefined,
+): OpenClawConfig {
+  if (recordSpec === undefined || recordSpec === record.spec) {
+    return config;
+  }
+  return {
+    ...config,
+    plugins: {
+      ...config.plugins,
+      installs: { ...config.plugins?.installs, [pluginId]: { ...record, spec: recordSpec } },
+    },
+  };
+}

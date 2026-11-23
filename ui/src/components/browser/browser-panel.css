@@ -27,6 +27,10 @@ openclaw-browser-panel {
     font-size: 11px;
   }
 
+  .bp-toolbar[data-mobile="false"] {
+    padding-block: 8px;
+  }
+
   .bp-toolbar[data-mobile="true"] {
     display: flex;
     flex: none;
@@ -304,6 +308,16 @@ openclaw-browser-panel {
   .bp-stage--native {
     flex: 1 1 auto;
     min-height: 100px;
+  }
+  .bp-native-backdrop {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: top left;
+    pointer-events: none;
+    user-select: none;
   }
   .bp-native-loading {
     display: block;

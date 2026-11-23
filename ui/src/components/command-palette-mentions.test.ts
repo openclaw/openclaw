@@ -10,6 +10,7 @@ import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import {
   createSessionResult,
+  liveSessionSearches,
   mountPalette,
   openPalette,
   prepareDraftContext,
@@ -249,9 +250,9 @@ describe("command palette people mentions", () => {
     await vi.advanceTimersByTimeAsync(200);
     await f.palette.updateComplete;
     expect(f.menu()).toBeNull();
-    expect(search).toHaveBeenCalledExactlyOnceWith(
+    expect(liveSessionSearches(search)).toEqual([
       expect.objectContaining({ search: "Review @Al" }),
-    );
+    ]);
   });
 
   it("keeps name selections but closes when the selection leaves the invocation", async () => {
@@ -271,9 +272,9 @@ describe("command palette people mentions", () => {
     expect(searchSessions).not.toHaveBeenCalled();
     await f.key("Tab");
     await vi.advanceTimersByTimeAsync(200);
-    expect(searchSessions).toHaveBeenCalledExactlyOnceWith(
+    expect(liveSessionSearches(searchSessions)).toEqual([
       expect.objectContaining({ search: "Review @Al" }),
-    );
+    ]);
     expect(f.recipients()).toHaveLength(0);
   });
 
@@ -355,6 +356,20 @@ describe("command palette people mentions", () => {
     await vi.advanceTimersByTimeAsync(0);
     // Acceptance never closes the next prompt.
     expect(f.palette.isOpen).toBe(true);
+  });
+
+  it("explains a blocked Search submission without losing the draft or changing mode", async () => {
+    const f = await mount(undefined, ["operator.read"]);
+    await f.key("Tab");
+    await f.append("Keep this prompt");
+    await f.send();
+    expect(f.query('.cmd-palette__creation-error[role="alert"]')?.textContent).toMatch(
+      /permission|access|scope/i,
+    );
+    expect(f.input.value).toBe("Keep this prompt");
+    expect(f.query("#cmd-palette-tab-search")?.getAttribute("aria-selected")).toBe("true");
+    expect(f.palette.isOpen).toBe(true);
+    expect(f.context.sessions.createResult).not.toHaveBeenCalled();
   });
 
   it.each(["anonymous", "read-only", "session-read-only", "offline", "create-unavailable"])(

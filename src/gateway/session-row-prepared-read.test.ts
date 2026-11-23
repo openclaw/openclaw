@@ -277,7 +277,7 @@ it("dispatches broad lists while an agent remains in startup preparation", async
 });
 
 it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)(
-  "settles startup discovery after %s before dispatch",
+  "settles an admitted startup discovery across %s before dispatch",
   async (outcome) => {
     await withPendingStartupInspection(
       async ({ authorize, context, client, databasePath, complete }) => {
@@ -329,9 +329,16 @@ it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)
             expect(prepare).toHaveBeenCalledTimes(2);
             complete();
           }
-          await expect(reading).resolves.toMatchObject(
-            outcome === "revoked" ? { error: { code: "FORBIDDEN" } } : { error: null },
-          );
+          await expect(reading).resolves.toMatchObject({ error: null });
+          if (outcome === "revoked") {
+            const discoveries = prepare.mock.calls.length;
+            await expect(authorize("sessions.list", { agentId: "healthy" })).resolves.toMatchObject(
+              {
+                error: { code: "FORBIDDEN", details: { code: "MISSING_SCOPE" } },
+              },
+            );
+            expect(prepare).toHaveBeenCalledTimes(discoveries);
+          }
         }
         expect(discoverySignal?.aborted).toBe(true);
       },
@@ -340,7 +347,7 @@ it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)
 );
 
 it.each(["current", "revoked"] as const)(
-  "bounds startup reads with %s authority without cancelling preparation or granting writes",
+  "bounds admitted startup reads across %s authority changes without granting writes",
   async (authority) => {
     await withPendingStartupInspection(async ({ authorize, client, complete, admission }) => {
       const read = authorize();
@@ -349,17 +356,18 @@ it.each(["current", "revoked"] as const)(
         client.connect.scopes = [];
       }
       await vi.advanceTimersByTimeAsync(20_000);
-      await expect(read).resolves.toMatchObject(
-        authority === "revoked"
-          ? { error: { code: "FORBIDDEN", details: { code: "MISSING_SCOPE" } } }
-          : {
-              error: {
-                code: "UNAVAILABLE",
-                retryable: true,
-                details: { code: "agent-database-inspection-pending" },
-              },
-            },
-      );
+      await expect(read).resolves.toMatchObject({
+        error: {
+          code: "UNAVAILABLE",
+          retryable: true,
+          details: { code: "agent-database-inspection-pending" },
+        },
+      });
+      if (authority === "revoked") {
+        await expect(authorize()).resolves.toMatchObject({
+          error: { code: "FORBIDDEN", details: { code: "MISSING_SCOPE" } },
+        });
+      }
       expect(admission.signal.aborted).toBe(false);
       expect(() => assertAgentDatabaseAdmitted("main")).toThrow("synthetic inspection");
       complete();
@@ -407,54 +415,36 @@ it("preserves the admin dispatch shortcut without preparing private rows", async
   expect(prepare).not.toHaveBeenCalled();
 });
 
-it.each(["dispatch scopes", "private access"] as const)(
-  "rechecks %s after row preparation",
-  async (boundary) => {
-    const { projection, context, client, describe: dispatchDescription } = describeFixture();
-    const prepare = projection.withPreparedExactRows.bind(projection);
-    const describe = vi.spyOn(projection, "describe");
-    if (boundary === "dispatch scopes") {
-      client.connect.scopes = ["operator.read"];
-    }
-    vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(async (...args) => {
-      await Promise.resolve();
-      client.connect.scopes = boundary === "dispatch scopes" ? [] : ["operator.read"];
-      if (boundary === "private access") {
-        client.authenticatedUserProfile = {
-          profileId: "identified-viewer",
-          displayName: "Viewer",
-          hasAvatar: false,
-          updatedAt: 1,
-        };
-      }
-      return prepare(...args);
-    });
-    if (boundary === "dispatch scopes") {
-      const respond = vi.fn();
-      await dispatchDescription(respond);
-      expect(respond).toHaveBeenCalledExactlyOnceWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "FORBIDDEN" }),
-      );
-    } else {
-      const respond = vi.fn();
-      await sessionByKeyReadHandlers["sessions.describe"]!({
-        req: { type: "req", id: "private-description", method: "sessions.describe" },
-        params: { key: query.key },
-        context,
-        client,
-        respond,
-        isWebchatConnect: () => false,
-      });
-      expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
-        code: "INVALID_REQUEST",
-        message: `Incognito session "${query.key}" was not found.`,
-      });
-      expect(describe).not.toHaveBeenCalled();
-    }
-  },
-);
+it("rechecks private access after row preparation", async () => {
+  const { projection, context, client } = describeFixture();
+  const prepare = projection.withPreparedExactRows.bind(projection);
+  const describe = vi.spyOn(projection, "describe");
+  vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(async (...args) => {
+    await Promise.resolve();
+    client.connect.scopes = ["operator.read"];
+    client.authenticatedUserProfile = {
+      profileId: "identified-viewer",
+      displayName: "Viewer",
+      hasAvatar: false,
+      updatedAt: 1,
+    };
+    return prepare(...args);
+  });
+  const respond = vi.fn();
+  await sessionByKeyReadHandlers["sessions.describe"]!({
+    req: { type: "req", id: "private-description", method: "sessions.describe" },
+    params: { key: query.key },
+    context,
+    client,
+    respond,
+    isWebchatConnect: () => false,
+  });
+  expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
+    code: "INVALID_REQUEST",
+    message: `Incognito session "${query.key}" was not found.`,
+  });
+  expect(describe).not.toHaveBeenCalled();
+});
 
 it.each(["operator.admin", "operator.read"])(
   "ends describe preparation after its %s connection closes",

@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.entry.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
@@ -171,7 +171,7 @@ it.each(["commands.list", "skills.status"] as const)(
           client.internal = {
             syntheticClient: true,
             operatorRoleActor: { kind: "operator", profileId: "alice" },
-            operatorRunAuthority: createAdmittedRunOperatorAuthority({
+            operatorRunAuthority: createTestOperatorAuthority({
               profileId: "alice",
               scopes: ["operator.read", "operator.write"],
               assertCurrent: () => {

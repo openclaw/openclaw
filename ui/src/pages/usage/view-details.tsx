@@ -1,18 +1,15 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createMemo, For, Show } from "solid-js";
-import { Checkbox } from "../../components/solid/checkbox.tsx";
 import "../../components/tooltip.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { parseSessionLog, prepareUsageDateRange } from "./helpers.ts";
 import { charsToTokens, formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { renderUsageRefreshStatus } from "./page-shell.tsx";
 import { createUsageRead, UsagePending, UsageReadStatus } from "./read-status.tsx";
-import type { SessionLogRole, UsageContextDetail, UsageProps, UsageSessionEntry } from "./types.ts";
-import { UsageLogFilterMenu } from "./view-log-filter-menu.tsx";
-import { SessionLogList, type SessionLogRow } from "./view-session-log-list.tsx";
+import type { UsageContextDetail, UsageProps, UsageSessionEntry } from "./types.ts";
 import { renderSessionSummary } from "./view-session-summary.tsx";
 import { deriveTimeSeries, TimeSeriesCompact } from "./view-timeseries.tsx";
 
@@ -28,10 +25,12 @@ export function SessionDetailPanel(props: {
   contextExpanded: boolean;
   onClose: () => void;
 }) {
-  const logsSource = createMemo(() => props.detail.sessionLogs);
-  const entries = createMemo(() =>
-    (logsSource() ?? []).map((log, id) => Object.assign(parseSessionLog(log), { id })),
+  const logsRead = createUsageRead(
+    () => props.detail.sessionLogsRead,
+    () => props.detail.sessionLogsStatus.error,
   );
+  const logsSource = createMemo(() => props.detail.sessionLogs);
+  const entries = createMemo(() => (logsSource() ?? []).map(parseSessionLog));
   const rangeInputs = createMemo(
     () => ({
       startDate: props.range.startDate,
@@ -148,6 +147,22 @@ export function SessionDetailPanel(props: {
             </>
           ) : undefined}
         </div>
+        <Show when={props.detail.conversationHref}>
+          {(href) => (
+            <a
+              class="btn btn--sm"
+              href={href()}
+              onClick={(event) => {
+                if (shouldHandleNavigationClick(event)) {
+                  event.preventDefault();
+                  props.callbacks.onOpenConversation();
+                }
+              }}
+            >
+              {t("usage.details.openConversation")}
+            </a>
+          )}
+        </Show>
         <button
           class="btn btn--sm btn--ghost session-detail-close"
           onClick={() => props.onClose()}
@@ -168,22 +183,21 @@ export function SessionDetailPanel(props: {
         <div class="session-detail-row">
           <TimeSeriesCompact detail={props.detail} callbacks={props.callbacks} view={series()} />
         </div>
-        <div class="session-detail-bottom">
-          <SessionLogs
-            detail={props.detail}
-            callbacks={props.callbacks}
-            entries={entries()}
-            intervalEntries={intervalEntries()}
-          />
-          {
-            <ContextPanel
-              context={props.detail.context}
-              usage={props.session.usage}
-              expanded={props.contextExpanded}
-              onToggleExpanded={props.callbacks.onToggleContextExpanded}
-            />
+        <UsageReadStatus read={logsRead}>
+          {() =>
+            renderUsageRefreshStatus(
+              props.detail.sessionLogsStatus,
+              "usage.details.intervalCounts",
+              "interval-counts",
+            )
           }
-        </div>
+        </UsageReadStatus>
+        <ContextPanel
+          context={props.detail.context}
+          usage={props.session.usage}
+          expanded={props.contextExpanded}
+          onToggleExpanded={props.callbacks.onToggleContextExpanded}
+        />
       </div>
     </div>
   );
@@ -403,243 +417,5 @@ function ContextPanel(props: {
 
   return (
     <UsagePending read={read}>{(loading) => <ContextContent loading={loading()} />}</UsagePending>
-  );
-}
-
-const SESSION_LOG_ROLES = [
-  ["user", "usage.overview.user"],
-  ["assistant", "usage.overview.assistant"],
-  ["tool", "usage.details.tool"],
-  ["toolResult", "usage.details.toolResult"],
-] as const;
-
-function isSessionLogRole(value: string): value is SessionLogRole {
-  return SESSION_LOG_ROLES.some(([role]) => role === value);
-}
-
-function selectedLogFilterValues(select: HTMLSelectElement): string[] {
-  return Array.from(select.selectedOptions, (option) => option.value);
-}
-
-function SessionLogs(props: {
-  detail: UsageProps["detail"];
-  callbacks: UsageProps["callbacks"]["details"];
-  entries: SessionLogRow[];
-  intervalEntries: SessionLogRow[];
-}) {
-  const read = createUsageRead(
-    () => props.detail.sessionLogsRead,
-    () => props.detail.sessionLogsStatus.error,
-  );
-  const phone = createMediaQuery("(max-width: 640px)");
-  function SessionLogsContent(content: { loading: boolean }) {
-    const state = createMemo(() => {
-      const detail = props.detail;
-      const {
-        sessionLogsStatus: status,
-        logFilters: filters,
-        timeSeriesCursorStart: cursorStart,
-        timeSeriesCursorEnd: cursorEnd,
-      } = detail;
-      const logs = detail.sessionLogs;
-      const parsedEntries = props.entries;
-      // Loaded logs must not join the pending lane during a background refresh.
-      const initialLoading = !status.hasLoaded && (content.loading || status.awaitingGateway);
-      const initialError = status.error && !status.hasLoaded;
-      const refreshStatus = initialLoading
-        ? undefined
-        : renderUsageRefreshStatus(status, "usage.details.conversation", "conversation");
-      const showLogData = !initialLoading && !initialError && Boolean(logs?.length);
-      const message = initialLoading ? "usage.loading.badge" : "usage.details.noMessages";
-
-      const normalizedQuery = normalizeLowercaseStringOrEmpty(filters.query).normalize("NFC");
-      const toolOptions = Array.from(
-        new Set(parsedEntries.flatMap((entry) => entry.toolInfo.tools.map(([name]) => name))),
-      ).toSorted((a, b) => a.localeCompare(b));
-      const hasCursorFilter = cursorStart != null && cursorEnd != null;
-      const filteredEntries = props.intervalEntries.filter(
-        (entry) =>
-          (filters.roles.length === 0 || filters.roles.includes(entry.log.role)) &&
-          (!filters.hasTools || entry.toolInfo.tools.length > 0) &&
-          (filters.tools.length === 0 ||
-            entry.toolInfo.tools.some(([name]) => filters.tools.includes(name))) &&
-          (!normalizedQuery ||
-            normalizeLowercaseStringOrEmpty(entry.cleanContent)
-              .normalize("NFC")
-              .includes(normalizedQuery)),
-      );
-      const hasActiveFilters =
-        filters.roles.length > 0 || filters.tools.length > 0 || filters.hasTools || normalizedQuery;
-      const displayedCount =
-        hasActiveFilters || hasCursorFilter
-          ? `${filteredEntries.length} ${t("usage.details.of")} ${logs?.length ?? 0}${hasCursorFilter ? ` (${t("usage.details.timelineFiltered")})` : ""}`
-          : `${logs?.length ?? 0}`;
-
-      const roleSelected = new Set(filters.roles);
-      const toolSelected = new Set(filters.tools);
-
-      return {
-        showLogData,
-        displayedCount,
-        refreshStatus,
-        roleSelected,
-        toolOptions,
-        toolSelected,
-        filteredEntries,
-        initialLoading,
-        initialError,
-        message,
-      };
-    });
-    return (
-      <>
-        {state().showLogData ? (
-          <div class="session-logs-compact">
-            <div class="session-logs-header">
-              <span>
-                {t("usage.details.conversation")}{" "}
-                <span class="session-logs-header-count">
-                  ({state().displayedCount}{" "}
-                  {normalizeLowercaseStringOrEmpty(t("usage.overview.messages"))})
-                </span>
-              </span>
-              <button
-                class="btn btn--sm"
-                onClick={() => props.callbacks.onToggleSessionLogsExpanded()}
-              >
-                {props.detail.sessionLogsExpanded
-                  ? t("usage.details.collapseAll")
-                  : t("usage.details.expandAll")}
-              </button>
-            </div>
-            <UsageReadStatus read={read}>{() => state().refreshStatus}</UsageReadStatus>
-            <div class="usage-filters-inline session-log-filters">
-              {phone() ? (
-                <>
-                  <UsageLogFilterMenu
-                    id="usage-log-filter-role"
-                    label={t("usage.details.filterByRole")}
-                    options={SESSION_LOG_ROLES.map(([value, labelKey]) => ({
-                      value,
-                      label: t(labelKey),
-                    }))}
-                    selected={props.detail.logFilters.roles}
-                    onChange={(values) =>
-                      props.callbacks.onLogFiltersChange({
-                        roles: values.filter(isSessionLogRole),
-                      })
-                    }
-                  />
-                  <UsageLogFilterMenu
-                    id="usage-log-filter-tool"
-                    label={t("usage.details.filterByTool")}
-                    options={state().toolOptions.map((tool) => ({ value: tool, label: tool }))}
-                    selected={props.detail.logFilters.tools}
-                    onChange={(tools) => props.callbacks.onLogFiltersChange({ tools })}
-                  />
-                </>
-              ) : (
-                <>
-                  <select
-                    multiple
-                    size="4"
-                    aria-label={t("usage.details.filterByRole")}
-                    onChange={(event) =>
-                      props.callbacks.onLogFiltersChange({
-                        roles: selectedLogFilterValues(event.currentTarget).filter(
-                          isSessionLogRole,
-                        ),
-                      })
-                    }
-                  >
-                    <For each={SESSION_LOG_ROLES}>
-                      {([role, labelKey]) => (
-                        <>
-                          {" "}
-                          <option value={role} selected={state().roleSelected.has(role)}>
-                            {t(labelKey)}
-                          </option>{" "}
-                        </>
-                      )}
-                    </For>
-                  </select>
-                  <select
-                    multiple
-                    size="4"
-                    aria-label={t("usage.details.filterByTool")}
-                    onChange={(event) =>
-                      props.callbacks.onLogFiltersChange({
-                        tools: selectedLogFilterValues(event.currentTarget),
-                      })
-                    }
-                  >
-                    <For each={state().toolOptions}>
-                      {(tool) => (
-                        <>
-                          {" "}
-                          <option value={tool} selected={state().toolSelected.has(tool)}>
-                            {tool}
-                          </option>{" "}
-                        </>
-                      )}
-                    </For>
-                  </select>
-                </>
-              )}
-              <label class="usage-filters-inline session-log-has-tools">
-                <Checkbox
-                  checked={props.detail.logFilters.hasTools}
-                  onChange={(event) =>
-                    props.callbacks.onLogFiltersChange({ hasTools: event.currentTarget.checked })
-                  }
-                />
-                {t("usage.details.hasTools")}
-              </label>
-              <input
-                type="text"
-                placeholder={t("usage.details.searchConversation")}
-                aria-label={t("usage.details.searchConversation")}
-                value={props.detail.logFilters.query}
-                onInput={(event) =>
-                  props.callbacks.onLogFiltersChange({ query: event.currentTarget.value })
-                }
-              />
-              <button
-                class="btn btn--sm"
-                onClick={() =>
-                  props.callbacks.onLogFiltersChange({
-                    roles: [],
-                    tools: [],
-                    hasTools: false,
-                    query: "",
-                  })
-                }
-              >
-                {t("usage.filters.clear")}
-              </button>
-            </div>
-            <SessionLogList
-              entries={state().filteredEntries}
-              source={props.entries}
-              expanded={props.detail.sessionLogsExpanded}
-            />
-          </div>
-        ) : (
-          <div class="session-logs-compact">
-            <div class="session-logs-header">{t("usage.details.conversation")}</div>
-            <UsageReadStatus read={read}>{() => state().refreshStatus}</UsageReadStatus>
-            {state().initialLoading || !state().initialError ? (
-              <div class="usage-empty-block">{t(state().message)}</div>
-            ) : undefined}
-          </div>
-        )}
-      </>
-    );
-  }
-
-  return (
-    <UsagePending read={read}>
-      {(loading) => <SessionLogsContent loading={loading()} />}
-    </UsagePending>
   );
 }

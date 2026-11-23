@@ -72,6 +72,22 @@ it.each([
   expect(container.querySelector(".chat-question-panel")).toBeNull();
 });
 
+it.each([false, true])(
+  "shows a deliberately blank optional answer (recovered: %s)",
+  (recovered) => {
+    const question = prompt("answered");
+    question.questions[0]!.allowEmpty = true;
+    question.answeredElsewhere = recovered;
+    question.answers = { answers: { choice: [] } };
+    const container = document.createElement("div");
+
+    mountSolid(ChatQuestionSummary, { prompt: question }, container);
+
+    expect(container.textContent?.replace(/\s+/g, " ")).toContain("Choice: Left blank");
+    expect(container.textContent).not.toContain("Answered");
+  },
+);
+
 it("never echoes a secret answer in the terminal transcript summary", () => {
   const answered = prompt("answered");
   answered.questions = [

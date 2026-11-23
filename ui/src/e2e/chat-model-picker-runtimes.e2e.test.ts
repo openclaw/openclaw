@@ -67,7 +67,7 @@ suite.define(() => {
       expect(menuBox.x).toBeGreaterThanOrEqual(0);
       expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(width);
       if (width === 1280) {
-        expect(menuBox.width).toBeCloseTo(440, 0);
+        expect(menuBox.width).toBeCloseTo(416, 0);
       }
       for (const id of ["openclaw", "agentsapi", "codex"]) {
         await picker
@@ -95,7 +95,7 @@ suite.define(() => {
           lineHeight: width === 1280 ? "20.15px" : "21.7px",
           fontWeight: "500",
           rowHeight: width === 1280 ? 36 : 44,
-          padding: "0px 12px 0px 10px",
+          padding: "0px 6px 0px 10px",
         });
         expect(await row.getAttribute("aria-label")).toContain("Atlas Pro Extended");
         if (width === 1280) {
@@ -108,8 +108,11 @@ suite.define(() => {
         const badge = row.locator(".chat-controls__model-state-label--default");
         const lastLabelBox = (await badge.count()) ? (await badge.boundingBox())! : nameBox;
         expect(metaBox.x - lastLabelBox.x - lastLabelBox.width).toBeGreaterThanOrEqual(4);
-        const actionBox = (await row.locator(".chat-controls__model-option-action").boundingBox())!;
-        expect(actionBox.x - metaBox.x - metaBox.width).toBe(width === 1280 ? 4 : 8);
+        const favoriteSlotBox = (await row
+          .locator(".chat-controls__model-favorite-slot")
+          .boundingBox())!;
+        expect(favoriteSlotBox.width).toBe(28);
+        expect(favoriteSlotBox.x - metaBox.x - metaBox.width).toBe(width === 1280 ? 4 : 12);
         expect(
           Math.abs(metaBox.y + metaBox.height / 2 - nameBox.y - nameBox.height / 2),
         ).toBeLessThanOrEqual(1);

@@ -126,6 +126,33 @@ runWithWindowsPowerShell(
     runHandoffFixture("launch");
   },
 );
+runWithWindowsPowerShell("accepts a Git checkout directly under a drive root", () => {
+  const define = (name: string) => `function ${name} {\n${body(name)}}`;
+  const result = runPowerShell([
+    "-Command",
+    `$ErrorActionPreference = 'Stop'
+${define("Resolve-PhysicalDirectoryPath")}
+${define("Resolve-GitCheckoutPath")}
+Resolve-GitCheckoutPath -RepoDir "$env:SystemDrive\\openclaw-drive-root-checkout"`,
+  ]);
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  expect(result.stdout.trim()).toMatch(/^[A-Za-z]:\\openclaw-drive-root-checkout$/);
+});
+runWithPowerShell("replaces an existing command wrapper when reinstalling", () => {
+  const define = (name: string) => `function ${name} {\n${body(name)}}`;
+  const wrapper = join(harness.createTempDir("openclaw-install-wrapper-"), "openclaw.cmd");
+  const result = runPowerShell([
+    "-Command",
+    `$ErrorActionPreference = 'Stop'
+${define("Publish-TextFileAtomically")}
+$path = '${wrapper.replaceAll("'", "''")}'
+Set-Content -LiteralPath $path -Value 'previous wrapper'
+Publish-TextFileAtomically -Path $path -Contents 'current wrapper'
+Get-Content -LiteralPath $path`,
+  ]);
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  expect(result.stdout.trim()).toBe("current wrapper");
+});
 runWithPowerShell("restores a conflicted pull before continuing a Git install", () => {
   const result = runPowerShell([
     "-File",

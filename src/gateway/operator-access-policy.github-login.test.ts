@@ -11,10 +11,9 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
   hasCurrentGatewayOperatorAccess,
   resolvePreparedGatewayOperatorAccessAuthority,
-  resumeGatewayOperatorAccessGrant,
 } from "./operator-access-policy.js";
 
-it("keeps GitHub login private while applying its mapped plugin binding on admission and recovery", () => {
+it("keeps GitHub login private while applying its mapped plugin binding at admission", () => {
   const pluginId = "person-access";
   const grantId = "780a6c68-5d66-4df6-b4e8-dba6d24264a2";
   const controller = new AbortController();
@@ -24,13 +23,12 @@ it("keeps GitHub login private while applying its mapped plugin binding on admis
     assertCurrent: () => controller.signal.throwIfAborted(),
   };
   const authorize = vi.fn<PluginGatewayAccessPolicy["authorize"]>(() => nativeAuthority);
-  const resume = vi.fn<NonNullable<PluginGatewayAccessPolicy["resume"]>>(() => nativeAuthority);
   const registry = createEmptyPluginRegistry();
   registry.plugins.push(createPluginRecord({ id: pluginId }));
   registry.gatewayAccessPolicies.push({
     pluginId,
     source: "fixture",
-    policy: { authorize, resume },
+    policy: { authorize },
   });
   const previous = captureActivePluginRegistrySnapshot();
   stageActivePluginRegistry(registry, null, "default");
@@ -68,7 +66,6 @@ it("keeps GitHub login private while applying its mapped plugin binding on admis
     expect(hasCurrentGatewayOperatorAccess(authority)).toBe(true);
     expect(authority?.gatewayAccessGrant).toEqual({ pluginId, grantId });
     expect(authority?.requiredPolicyPlugin).toBe(pluginId);
-    resumeGatewayOperatorAccessGrant(profile, config, { pluginId, grantId });
     const expected = {
       config,
       profile: {
@@ -80,7 +77,6 @@ it("keeps GitHub login private while applying its mapped plugin binding on admis
       requiredByRole: true,
     };
     expect(authorize).toHaveBeenCalledExactlyOnceWith(expected);
-    expect(resume).toHaveBeenCalledExactlyOnceWith({ ...expected, grantId });
   } finally {
     controller.abort();
     hasCurrentGatewayOperatorAccess(authority);

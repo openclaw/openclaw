@@ -1,5 +1,9 @@
 import { beforeEach, expect, test, vi } from "vitest";
-import { buildNodeJoinLink, fingerprint } from "../../packages/openclaw-id-protocol/src/index.js";
+import {
+  buildNodeJoinLink,
+  fingerprint,
+  parseNodeJoinLink,
+} from "../../packages/openclaw-id-protocol/src/index.js";
 import { buildWorld } from "../../packages/openclaw-id-protocol/src/testing/world.js";
 import { runNodeJoin } from "./openclaw-id-join.js";
 
@@ -121,6 +125,22 @@ test("missing Discovery configuration fails before key creation or mail", async 
   await expect(runNodeJoin(link, {})).rejects.toThrow("--discovery-url");
   expect(mocks.key).not.toHaveBeenCalled();
   expect(mocks.enroll).not.toHaveBeenCalled();
+});
+
+test("uses the link's Discovery origin when no flag is given, and the flag still wins", async () => {
+  mocks.load.mockResolvedValue(null);
+  const carried = buildNodeJoinLink({
+    ...parseNodeJoinLink(link)!,
+    discovery_url: "https://carried.example",
+  });
+  await runNodeJoin(carried, {});
+  expect(mocks.enroll).toHaveBeenLastCalledWith(
+    expect.objectContaining({ discoveryUrl: "https://carried.example" }),
+  );
+  await runNodeJoin(carried, { discoveryUrl: "https://override.example" });
+  expect(mocks.enroll).toHaveBeenLastCalledWith(
+    expect.objectContaining({ discoveryUrl: "https://override.example" }),
+  );
 });
 
 test("does not install after a runner exits without a successful first hello", async () => {

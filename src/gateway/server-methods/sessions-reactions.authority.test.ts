@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import {
   addSessionMember,
   removeSessionMember,
@@ -125,7 +125,7 @@ it("rechecks current membership, policy, source, and caller after message prepar
         reactor.internal = {
           syntheticClient: true,
           operatorRoleActor: { kind: "operator", profileId: "alice" },
-          operatorRunAuthority: createAdmittedRunOperatorAuthority({
+          operatorRunAuthority: createTestOperatorAuthority({
             profileId: "alice",
             scopes: ["operator.read", "operator.write"],
             assertCurrent: () => {

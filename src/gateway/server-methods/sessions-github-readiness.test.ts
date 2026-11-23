@@ -20,8 +20,7 @@ import * as readCandidates from "../../config/sessions/session-store-read-candid
 import * as targetInventory from "../../config/sessions/session-store-target-inventory.js";
 import {
   historyLane,
-  projectionLane,
-  targetDiscoveryLane,
+  sessionStoreLane,
   rotateDatabaseWorkers,
 } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -402,7 +401,6 @@ it("keeps an absent shared database absent and does not manufacture an exact rec
 });
 it.each([
   "connection",
-  "profile",
   "grant",
   "session",
   "visibility",
@@ -411,7 +409,7 @@ it.each([
   "published-replacement",
   "registry-same",
   "session-metadata",
-] as const)("checks post-await %s custody before observation", async (kind) => {
+] as const)("keeps admitted reads while fencing %s custody", async (kind) => {
   await fixture(
     async (f) => {
       const grant = new AbortController();
@@ -445,8 +443,6 @@ it.each([
         );
         if (kind === "connection") {
           f.disconnect();
-        } else if (kind === "profile") {
-          f.client.authenticatedUserProfile = undefined;
         } else if (kind === "grant") {
           grant.abort();
         } else if (kind === "source") {
@@ -491,10 +487,15 @@ it.each([
           expect(registered).toBe(kind !== "registry-remove");
           expect(physicalUnchanged).toBe(kind !== "published-replacement");
         }
-        if (kind === "registry-same" || kind === "session-metadata") {
+        if (["connection", "grant", "registry-same", "session-metadata"].includes(kind)) {
           expect(ok).toBe(true);
           expect(payload).toMatchObject(unbound);
           expect(error).toBeUndefined();
+          if (kind === "connection" || kind === "grant") {
+            const next = await call(f);
+            expect(next[0]).toBe(false);
+            expect(next[2]?.code).toBe("FORBIDDEN");
+          }
         } else {
           expect(ok).toBe(false);
           expect(payload).toBeUndefined();
@@ -691,7 +692,7 @@ it.each([
         await closeOpenClawAgentDatabasesAsync();
         // Agent close releases database handles but may retain qualified idle Workers.
         // Rotate the read lanes too: instrumentation must precede their next real imports.
-        for (const lane of [historyLane, projectionLane, targetDiscoveryLane]) {
+        for (const lane of [historyLane, sessionStoreLane]) {
           await rotateDatabaseWorkers(lane);
           expect(lane.native).toBe(false);
           expect(lane.pending).toBe(0);
@@ -762,7 +763,7 @@ it.each([
               (await addSessionMember(scope, { identityId: member, addedBy: creator!.id }))
                 .inserted,
             ).toBe(false);
-            for (const changed of ["member", "role", "scope"] as const) {
+            for (const changed of ["member", "role"] as const) {
               const held = holdStateRead("githubPublications.sharedObservation");
               const pending = call(f);
               try {
@@ -785,7 +786,7 @@ it.each([
                         definitions: {
                           ...current.gateway?.roles?.definitions,
                           guest: {
-                            scopes: changed === "scope" ? [] : ["operator.sessions.read"],
+                            scopes: ["operator.sessions.read"],
                             agents: ["main"],
                             sessions: { others: changed === "role" ? "none" : "view" },
                           },
@@ -801,15 +802,16 @@ it.each([
                 }
                 held.release();
                 const [ok, payload, error] = await pending;
-                if (changed === "member") {
-                  // View grants non-draft reads independently of explicit membership.
-                  expect(ok).toBe(true);
-                  expect(payload).toMatchObject(unbound);
-                  expect(error).toBeUndefined();
-                } else {
-                  expect(ok).toBe(false);
-                  expect(payload).toBeUndefined();
-                  expect(error?.code).toBe("FORBIDDEN");
+                expect(ok).toBe(true);
+                expect(payload).toMatchObject(unbound);
+                expect(error).toBeUndefined();
+                if (changed === "role") {
+                  const receiptRead = vi.spyOn(f.context.githubPublicationService!, "latestShared");
+                  const next = await call(f);
+                  expect(next[0]).toBe(false);
+                  expect(next[2]?.code).toBe("INVALID_REQUEST");
+                  expect(receiptRead).not.toHaveBeenCalled();
+                  receiptRead.mockRestore();
                 }
               } finally {
                 held.release();

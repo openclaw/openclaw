@@ -1,3 +1,5 @@
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+
 export const OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS = 272_000;
 export const OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS = 500_000;
 
@@ -10,12 +12,11 @@ export const OPENAI_DAYBREAK_MODEL_IDS = [
 ] as const;
 export const OPENAI_GPT_6_ASTRA_MODEL_ID = "gpt-6-astra";
 export const OPENAI_GPT_61_SOL_MODEL_ID = "gpt-6.1-sol";
-export const OPENAI_GPT_6_MODEL_IDS = [
-  OPENAI_GPT_6_ASTRA_MODEL_ID,
-  "gpt-6-sol",
-  "gpt-6-luna",
-  OPENAI_GPT_61_SOL_MODEL_ID,
-] as const;
+// Curated GPT-6 catalog rows share Platform and ChatGPT routes. New releases
+// acquire metadata and route membership from the same manifest, not another ID list.
+export const OPENAI_GPT_6_MODEL_IDS = manifest.modelCatalog.providers.openai.models
+  .map(({ id }) => id)
+  .filter((id) => /^gpt-6(?:\.\d+)?-/.test(id));
 export const OPENAI_GPT_56_MODEL_ID = "gpt-5.6";
 export const OPENAI_GPT_56_SOL_MODEL_ID = "gpt-5.6-sol";
 export const OPENAI_GPT_56_TERRA_MODEL_ID = "gpt-5.6-terra";
@@ -151,5 +152,5 @@ export function buildOpenAIUnknownModelHint(modelId: string): string | undefined
   if (normalized !== OPENAI_GPT_53_CODEX_SPARK_MODEL_ID) {
     return undefined;
   }
-  return "gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.";
+  return "gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Sign in to OpenAI with ChatGPT in OpenClaw and use openai/gpt-5.3-codex-spark with that sign-in; OpenAI API-key auth cannot use this model.";
 }

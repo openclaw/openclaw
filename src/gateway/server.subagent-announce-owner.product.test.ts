@@ -181,6 +181,16 @@ it("delivers an idle requester's child completion to that requester while a peer
     await wait(opsAccepted.runId);
     const completedOpsRequests = requests.filter((body) => body.includes(opsPrompt));
     expect(completedOpsRequests.some((body) => body.includes(childResult))).toBe(false);
+    // History records the completion receipt, never the private child result.
+    type HistoryMessage = { subagentCompletions?: unknown[] };
+    const { messages } = await gateway.client.request<{ messages: HistoryMessage[] }>(
+      "chat.history",
+      { sessionKey: "global", agentId: "research" },
+    );
+    expect(messages.flatMap((message) => message.subagentCompletions ?? [])).toContainEqual(
+      expect.objectContaining({ runId: child.runId, sessionKey: child.childSessionKey }),
+    );
+    expect(JSON.stringify(messages)).not.toContain(childResult);
   } finally {
     releaseChild.resolve();
     releaseOps.resolve();

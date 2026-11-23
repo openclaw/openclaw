@@ -155,16 +155,15 @@ export function resolveGoogleThinkingProfile({
     return undefined;
   }
 
-  const levels: ProviderThinkingProfile["levels"] = isGoogleGemini3ProModel(normalizedModelId)
-    ? [{ id: "off" }, { id: "low" }, { id: "adaptive" }, { id: "high" }]
-    : [
-        { id: "off" },
-        { id: "minimal" },
-        { id: "low" },
-        { id: "medium" },
-        { id: "adaptive" },
-        { id: "high" },
-      ];
+  // Gemini 3.1 Pro has no MINIMAL thinking level.
+  const levels: ProviderThinkingProfile["levels"] = [
+    { id: "off" },
+    ...(isGoogleGemini3ProModel(normalizedModelId) ? [] : [{ id: "minimal" as const }]),
+    { id: "low" },
+    { id: "medium" },
+    { id: "adaptive" },
+    { id: "high" },
+  ];
 
   return {
     levels,

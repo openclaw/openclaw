@@ -10,7 +10,7 @@ const reloadedIssuer = await import("../agents/admitted-run-context.js");
 
 function inherit(authority: AdmittedRunOperatorAuthority, scopes: string[]) {
   const connect = createOperatorClient({ profileId: "module-owner", scopes }).connect;
-  return consumer.captureGatewayOperatorRunAuthority({
+  return consumer.prepareGatewayOperatorRunAuthority({
     client: { connect, internal: { operatorRunAuthority: authority } },
     context: { getRuntimeConfig: () => ({}) },
   });
@@ -25,6 +25,7 @@ it.each(["assertion", "abort"] as const)(
     let current = true;
     let holds = 0;
     const original = issue({
+      canonicalIdentity: null,
       profileId: "module-owner",
       scopes: ["operator.read", "operator.write"],
       signal: controller.signal,
@@ -47,7 +48,7 @@ it.each(["assertion", "abort"] as const)(
       expect(narrowed?.authority).not.toBe(original);
       expect(narrowed?.authority.scopes).toEqual(["operator.read"]);
       expect(narrowed?.authority.source).toBe(original.source);
-      expect(narrowed?.authority.signal).toBe(controller.signal);
+      expect(narrowed?.authority.signal?.aborted).toBe(false);
       expect(holds).toBe(2);
       expect(() => narrowed?.authority.assertCurrent()).not.toThrow();
 
@@ -61,6 +62,10 @@ it.each(["assertion", "abort"] as const)(
         current = false;
       }
       expect(() => narrowed?.authority.assertCurrent()).toThrow(failure);
+      expect(original.signal?.aborted).toBe(true);
+      expect(narrowed?.authority.signal?.aborted).toBe(true);
+      expect(narrowed?.authority.signal?.reason).toBe(failure);
+      expect(controller.signal.aborted).toBe(revocation === "abort");
       current = true;
       await expect(inherit(original, ["operator.read"])).rejects.toBe(failure);
       expect(() => reloadedIssuer.assertAdmittedRunOperatorAuthority(original)).not.toThrow();
@@ -75,7 +80,13 @@ it.each(["assertion", "abort"] as const)(
 
 it.each(["unissued", "spread", "json"] as const)("rejects %s before callbacks", async (copy) => {
   const [assertCurrent, retain] = [vi.fn(), vi.fn(() => () => {})] as const;
-  const source = { profileId: "module-owner", scopes: ["operator.read"], assertCurrent, retain };
+  const source = {
+    canonicalIdentity: null,
+    profileId: "module-owner",
+    scopes: ["operator.read"],
+    assertCurrent,
+    retain,
+  };
   const issued = issue(source);
   const unissued: AdmittedRunOperatorAuthority =
     copy === "unissued"

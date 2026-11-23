@@ -13,7 +13,7 @@ export function startGatewayPageActivation(
     > & {
       readonly client: Pick<
         GatewayBrowserClient,
-        "needsWakeReconnect" | "needsReachabilityReconnect" | "gatewayUrl"
+        "needsWakeReconnect" | "needsReachabilityReconnect" | "checkInboundSilence" | "gatewayUrl"
       > | null;
     };
     connect: () => void;
@@ -83,7 +83,8 @@ export function startGatewayPageActivation(
       probe = controller;
       const timeout = setTimeout(() => controller.abort(), 1_500);
       try {
-        const reachable = await probeGatewayReachability(client.gatewayUrl, controller.signal);
+        const reachable =
+          (await probeGatewayReachability(client.gatewayUrl, controller.signal)) === "live";
         if (!reachable && probe === controller) {
           failedProbes = Math.min(9, failedProbes + 1);
         }
@@ -133,10 +134,15 @@ export function startGatewayPageActivation(
       failedProbes = Math.min(failedProbes, 1);
       clearTimeout(probeTimer);
       probeTimer = undefined;
-      if (client && recoveryAllowed() && (forceQueuedRecovery || client.needsWakeReconnect)) {
-        // Replacing the client retires Safari's ghost socket synchronously. A
-        // socket close would depend on the suspended transport firing `close`.
-        gateway.connect();
+      if (client && recoveryAllowed()) {
+        if (forceQueuedRecovery || client.needsWakeReconnect) {
+          // Replacing the client retires Safari's ghost socket synchronously. A
+          // socket close would depend on the suspended transport firing `close`.
+          gateway.connect();
+        } else {
+          // A socket that died while the app was away still looks open until it fails to answer.
+          client.checkInboundSilence(true);
+        }
       }
       syncProbe(0);
       if (!refreshQueuedWorker) {

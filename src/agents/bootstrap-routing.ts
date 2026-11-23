@@ -6,7 +6,11 @@
 import { isAcpSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import type { BootstrapContextRunKind, BootstrapMode } from "./bootstrap-mode.js";
 import { resolveBootstrapMode } from "./bootstrap-mode.js";
-import { DEFAULT_BOOTSTRAP_FILENAME, type WorkspaceBootstrapFile } from "./workspace.js";
+import {
+  DEFAULT_BOOTSTRAP_FILENAME,
+  isWorkspaceSetupCompleted,
+  type WorkspaceBootstrapFile,
+} from "./workspace.js";
 
 /**
  * Returns whether a session should receive primary bootstrap context. Subagents
@@ -24,6 +28,7 @@ export function isPrimaryBootstrapRun(sessionKey?: string): boolean {
  */
 export async function resolveWorkspaceBootstrapRouting(params: {
   isWorkspaceBootstrapPending: (workspaceDir: string) => Promise<boolean>;
+  isWorkspaceSetupCompleted?: (workspaceDir: string) => Promise<boolean>;
   bootstrapFilesProvideAccess?: boolean;
   bootstrapContextRunKind?: BootstrapContextRunKind;
   trigger?: string;
@@ -40,6 +45,8 @@ export async function resolveWorkspaceBootstrapRouting(params: {
   /** Routing withholds no workspace bootstrap content. Readability is checked after loading. */
   deliversCompleteWorkspaceContext: boolean;
   includeBootstrapInSystemContext: boolean;
+  /** Recorded setup completion; earlier turns of this session may have followed BOOTSTRAP.md. */
+  bootstrapCompleted: boolean;
 }> {
   const hasBootstrapContent =
     params.bootstrapFiles?.some(
@@ -68,5 +75,11 @@ export async function resolveWorkspaceBootstrapRouting(params: {
     // Completed workspaces deliver context even though they no longer need onboarding.
     deliversCompleteWorkspaceContext: bootstrapMode === "full" || !workspaceBootstrapPending,
     includeBootstrapInSystemContext: bootstrapMode === "full",
+    bootstrapCompleted:
+      !workspaceBootstrapPending &&
+      params.isPrimaryRun &&
+      (await (params.isWorkspaceSetupCompleted ?? isWorkspaceSetupCompleted)(
+        params.resolvedWorkspace,
+      )),
   };
 }

@@ -13,10 +13,27 @@ const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 
 export const CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE = "cli_partial_output_rejected";
 export const MODEL_CHAT_UNSUPPORTED_TEXT = "This model doesn't support chat; pick another model.";
+/** A listed model failed its chat request; see `isListedModelChatRejection`. */
+export const MODEL_CHAT_REJECTED_CODE = "model_chat_rejected";
+export const MODEL_CHAT_REJECTED_TEXT =
+  "The provider lists this model but rejected a chat request. It may not be a chat model, or it isn't enabled for this account. Choose another model.";
 /** Host-authored planner diagnostic that names a saved login; never provider reply copy. */
 export const AUTH_PROFILE_COOLDOWN_ERROR_CODE = "auth_profile_cooldown";
 /** The host refused another warm CLI process because its free memory is low. */
 export const CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE = "cli_live_session_host_memory";
+/** The host refused another warm CLI process because every process slot is busy. */
+export const CLI_LIVE_SESSION_LIMIT_ERROR_CODE = "cli_live_session_limit";
+/** Host-authored copy for these refusals; no provider request was sent. */
+export const CLI_LIVE_SESSION_REFUSAL_TEXT = new Map<unknown, string>([
+  [
+    CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE,
+    "⚠️ This host is low on memory, so it could not start another session. Try again after active conversations finish.",
+  ],
+  [
+    CLI_LIVE_SESSION_LIMIT_ERROR_CODE,
+    "⚠️ This host is already running as many sessions as it allows, so it could not start another one. Try again after active conversations finish.",
+  ],
+]);
 
 export type CliTimeoutContext = {
   mode: "overall" | "no-output";

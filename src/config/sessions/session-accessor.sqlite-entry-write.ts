@@ -44,13 +44,13 @@ import {
   readSessionActorTransactionState,
   replaceSessionActorStoredEntry,
 } from "./session-actor-transaction.js";
+import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 import {
   assertCanonicalSessionEntryLineageWrite,
   assertCanonicalSessionKeyWrite,
   canonicalSessionKeyMigrationRequiredError,
-  markCanonicalSessionValidationPending,
-} from "./session-canonical-key.js";
-import { validateCanonicalSessionRow } from "./session-canonical-row.js";
+  validateCanonicalSessionRow,
+} from "./session-canonical-row.js";
 import { normalizeSessionEntryTimestamp } from "./session-entry-json.js";
 import {
   splitSessionEntrySnapshots,

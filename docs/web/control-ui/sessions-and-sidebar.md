@@ -17,12 +17,22 @@ Session-list failures appear in the sidebar while that list is active and clear
 when it recovers or you change filters. A failed session action, such as a
 rename, keeps its error with that action instead of adding a list error.
 
-On phones, swipe right across the chat to open navigation. A deliberate swipe opens the full drawer while your finger is still down, rather than holding a partly clipped sidebar over the conversation. Short drags and vertical scrolling leave navigation closed. Tap outside the drawer to close it.
+On phones, swipe right starting within 32 CSS pixels of the chat’s left edge to
+open navigation, or tap **Expand sidebar** in the header. The opening strip starts
+after any device safe-area inset, including in landscape. Swipes farther inside
+the content stay with that content, such as a 3D viewer’s orbit controls.
+A deliberate edge swipe opens the full drawer while your finger is still down,
+rather than holding a partly clipped sidebar over the conversation. Short drags
+and vertical scrolling leave navigation closed. In the mobile browser, opening
+**Automations**, **Customize**, **Systems**, or **Workboard** from the rail or
+**Pages** keeps the drawer open so you can use that section's list. Tap outside
+the drawer to close it and see the page underneath.
 
 To work directly in a folder on a paired device, select that specific device,
-then choose **Existing folder on** _device_ in the workspace picker. Admins
-pick a folder from that device's folder browser; other operators enter an
-absolute path on that device. The option appears only when the
+then choose **Existing folder on** _device_ in the workspace picker. Browse to
+the folder, or enter its absolute path if browsing is unavailable, then select
+**Use this folder**. The picker shows the folder name; reopen it to change the
+folder. Only admins can browse device folders. The option appears only when the
 connected session host advertises support; **Auto** cannot select an existing
 device folder.
 The session stays bound to that device and displays its folder path. Files stay
@@ -43,21 +53,22 @@ their name on hover or keyboard focus and stays visible on touch screens. Use
 Pages always hides dashboards from
 archived sessions and has no archive toggle. To find archived sessions in the
 sidebar, use the **Sessions** filter instead. Hover or focus an icon for its name.
-The active agent's avatar sits at the top of the rail and opens the agent menu;
-in team mode it opens the workspace menu. The accented **+**, labeled **New session**,
-sits directly below the avatar, separated from navigation by a divider. It stays in
-the same place in Pages, Sessions, and Users, even when the list is collapsed.
-It opens New session for the selected agent; in team mode, choose an agent from
-its menu first. Command-palette search sits below the three view buttons.
+The active agent's avatar sits at the top of the rail and only opens the agent menu,
+from any page and with the list open or collapsed; in team mode it opens the workspace
+menu. **Sessions** sits directly below the avatar and opens the session list; its icon
+fills while that list is open. **New session** (**+**) sits in the Sessions list header,
+beside **Filter & sort**, and opens New session for the selected agent; in team mode,
+choose an agent from its menu first. Command-palette search sits below the three view buttons.
 Search failures show **Couldn’t search sessions. Try again.**, rather than an empty result.
 If message search is unavailable, the palette still shows matching session titles and details.
-Click the selected Pages or Sessions view again to collapse its list, or press ⌘B on
+Middle-click a search result, or use Cmd+click on Mac or Ctrl+click on Windows and Linux, to open its destination in a new browser tab without closing the palette.
+Use the list's collapse button to hide it, or press ⌘B on
 Mac or Ctrl+B on Windows/Linux. Clicks use the normal sidebar animation; the
 keyboard shortcut opens or closes navigation immediately. Reduced-motion preferences
 also keep clicks immediate. While the list is hidden, none of the three view
 buttons is selected; click any view to open its list. Selecting a different view
-while the list is open switches directly to that view. Clicking Users again keeps
-its list open; use the collapse button or keyboard shortcut to hide it.
+while the list is open switches directly to that view. Clicking Sessions or Users again
+keeps its list open.
 Home, Inbox, and your account controls stay together at the bottom of the rail.
 When gateway switching is available, the account menu shows one current-gateway row.
 Open it to switch gateways or open **Gateway settings**; **Set as primary** appears
@@ -116,13 +127,19 @@ participation and mentions. External catalog entries appear in **Involving me**
 only when their adopted OpenClaw conversation is in the Gateway-filtered list.
 Shared or imported catalog access alone does not establish involvement; use
 **All owners** to browse those sources. The separate filter button controls the
-remaining session filters. New session stays in the rail rather than moving
-into this header. In mobile chat, open navigation to reach **New session**
-in the rail; the conversation header reserves its two right-hand controls for
-**Session actions** and **Panels**. Other mobile pages keep an equivalent **+** in
-the page topbar while the drawer is closed. Opening the drawer moves that action
-back to the rail, without a second header button. In team mode, creation opens the
-same agent picker as the rail. Native apps keep their native creation controls.
+remaining session filters. On mobile chat, open navigation and choose **Sessions**
+to reach **New session** in the list header. The conversation header keeps its
+two right-hand controls for **Session actions** and **Panels**. Other mobile pages
+also offer **New session** (**+**) in the page topbar while the drawer is closed.
+In team mode, **New session** first opens an agent picker. Native apps keep their
+native creation controls.
+
+The agent picker sets the sidebar's agent scope. **My sessions**, a named owner,
+**Involving me**, and **All owners** stay within the selected agent; changing the
+owner never expands the list to other agents. Sidebar pins
+also follow that agent scope without removing their saved references. Choose
+**Show all** in the agent picker to browse across agents. Explicit rail shortcuts
+remain available across agent selections.
 
 Session activity and unread indicators stay in the leading column across owner
 filters, grouping modes, pinned sessions, and child rows. Idle rows reserve the
@@ -201,7 +218,7 @@ clearing alongside navigation.
 ## Move an existing session
 
 Right-click one session in the sidebar or Sessions page, or open its chat-header
-actions. **Move to cloud…** opens the destination picker for a local session;
+actions. **Move to cloud…** appears for a local session only when you have a configured cloud profile you can use. It opens the destination picker;
 **Move session…** does the same for an active cloud or device session. Choose a
 configured cloud profile or eligible paired device. Active remote sessions can
 also move back to the **Gateway**. The conversation keeps its session identity.
@@ -275,7 +292,7 @@ Enter opens the typed path; use Up or Down first to open a highlighted folder.
 Tab completes a folder name. If the starting workspace does not exist yet, Browse
 opens the home folder. Errors for paths you enter remain visible.
 
-For connections with a durable user profile, the Gateway stores each agent's latest folder, worktree, model, thinking, and fast-mode choices. New sessions restore the last fast-mode choice, including an explicit off choice, for supported providers. The new-session picker also shows recent projects and folders derived only from sessions created by that profile. These conveniences follow the person across browsers; they do not grant access to a project or path.
+For connections with a durable user profile, the Gateway stores each agent's latest folder, worktree, model, thinking, and fast-mode choices. New sessions restore the last fast-mode choice, including an explicit off choice, for supported providers. The new-session picker also shows up to five recent places, including the agent workspace, derived only from sessions created by that profile. Helper sessions that an agent spawns are left out, so their task checkouts do not appear as recents. These conveniences follow the person across browsers; they do not grant access to a project or path.
 
 For a selected project, **Checkout** uses the Gateway's availability decision for
 the chosen agent. If Current checkout is unavailable and a managed checkout is
@@ -315,6 +332,8 @@ An unrecognized Git clone or refresh failure includes a **Diagnostic ID**. Give
 that ID to the Gateway operator to find the matching `projects/clone` file-log
 entry, which retains Git's exit status and process output. Raw Git output stays
 out of the shared conversation; the diagnostic ID does not grant log access.
+Refresh preparation and branch-update failures ask you to retry first by sending
+your message again; if they persist, give the diagnostic ID to the Gateway operator.
 
 Accepted browser messages, including initial prompts waiting for workspace
 preparation and follow-ups during a run, remain visible as normal message bubbles
@@ -492,7 +511,7 @@ Hover a session to see its project and branch. Repository details and the workin
 
 Hover a session with an enabled automation to inspect its attached jobs without leaving the conversation. The clock row shows the automation name for one job or a count for multiple jobs. Hover or focus that row to open a read-only flyout; clicking keeps it open. The flyout lists attached jobs, including paused jobs, and shows the selected job’s schedule, next run, current state, last outcome, and instructions. Expand **Full instructions** to read long prompts, commands, or scripts. Loading, empty, and unavailable states are explicit; a failed read offers **Retry**. **Open automation** opens the selected job in the existing editor, with the usual permissions for settings, history, and changes. Escape dismisses the flyout before the session hovercard. Cmd/Ctrl-click retains normal new-tab navigation. **Show all automations** on the Automations page clears the session filter.
 
-Inside the **Sessions** view, the default chip mode organizes conversations around the active agent. The identity at the top of the rail is that agent. Pages and Users have their own navigation views instead of appearing above the conversation list. The session list splits into zones: **Other** for the agent's ungrouped chat sessions (the main session is represented by Home rather than an ordinary session row, including when it is pinned or has subagents; independent conversations it spawned appear here as top-level threads, and named threads show without a type prefix), **Groups** for group and room conversations, and **Coding** for sessions bound to a managed worktree or exec node (rows show a `repo ⎇ branch` line plus the node host), ACP-backed harness sessions, and external CLI catalogs. The **Other** heading is omitted when it is the only section. Coding starts collapsed on first run and remembers your choice; its collapsed header keeps the true count and shows a running indicator while contained sessions work. Custom groups (the session `category`) sit above Other, while personal pins live in Pinned, and assigning an independent session to a custom group wins over the automatic zone classification. The single session toolbar shows the owner-filter title, **Filter & sort**, and the **+** that opens the New session page. Inside **Filter & sort**, **Display** contains sorting (Created, Updated, or Owners when the loaded session roster contains multiple owners) and **Group by** — **Custom groups** (the default zone layout above), **Project** to bucket sessions by their repo or workspace checkout (sessions without one keep their zones), **Person** to bucket readable sessions by their stable owner identity, or **None** for a single flat list with no zone headers. **Filters** contains the persisted **Status** filter for Active, Snoozed, Archived, or All. The Updated sort mode orders sessions by their latest conversation activity, such as a message you send or an agent reply or run result, so renaming, pinning, archiving, snoozing, changing chat settings, or marking a session read or unread keeps its position; sessions without recorded activity fall back to their last metadata change. The Owners sort mode orders owner groups by name and keeps Created order within each group. On multi-user gateways the title chip selects **All owners**, one specific person or agent, or **Involving me** — sessions you own, have prompted, or have been explicitly mentioned in, excluding sessions you personally hid with **Hide from Involving me**. A new explicit mention brings a hidden session back. **Show in Involving me** restores it from **All owners**. The personal Hide/Show menu entry appears only when the Gateway has more than one identity. These personal choices do not archive sessions or alter access, and the Gateway evaluates the filter before pagination (see [Multi-user mode](/concepts/multi-user#finding-sessions-by-owner)). Archived rows stay inline, dimmed with an archive glyph; they do not contribute unread or attention state and stay outside lineage promotion. Opening a session moves the selection highlight without reordering rows. Parents with nested persistent sessions or forks keep a disclosure and child count visible on the right so you can collapse or reopen the group without leaving the sidebar. A newly added child automatically expands its parent; ordinary updates and reordering preserve your manual collapse. Loading existing children does not expand previously collapsed groups. Nested sessions follow the selected sort within their parent, so with Updated the most recently active children lead the list. Selecting a nested session opens its chat and reveals its ancestor path. If a persistent session has subagent runs between it and its nearest loaded non-subagent ancestor, it nests under that ancestor. If no such ancestor is loaded, it keeps its normal top-level placement. Nested rows stay outside root pinning, multi-select, and pagination until promoted. Drag a child onto **Move to top level**, the session list or a custom group, or choose **Move to top level** from its menu. Promotion preserves the conversation URL, transcript, workspace, origin link, and active execution relationships; the conversation then supports ordinary root organization. Moving it to a group also keeps it independent if that group is later removed; collapsed zones do not consume the visible page budget. Personal pinning remains separate: promote a child first, then pin it in the sidebar or drag it into the rail. Subagent runs never appear as sidebar rows, even when selected or assigned a custom group, and do not add a disclosure to a parent with no nested persistent sessions. Inspect them through their session transcripts. Sessions with new activity since they were last read show an unread dot, and opening one marks it read. Accepted work immediately shows an activity ring around the row’s own icon for Home, sessions, child sessions, and catalog rows; a row without an icon shows a compact ring in the icon slot. Subagent runs still contribute to their ancestors’ running and queued counts, unread activity, and actionable attention. Terminal child failures stay in the child transcript instead of adding failure warnings to ancestors; a conversation’s own failures remain visible. Opening that ancestor, or choosing **Mark as read** on it, also acknowledges the unread subagent runs it summarizes, even when the ancestor itself was already read. Failed runs, manual unread marks on a run, and run activity after the read stay unread; nested persistent sessions keep their own unread state. A session’s ring stays active while its subagents work. When only delegated work is executing, the ring is labeled **Subagents working**. Collapsed groups and collapsed child toggles summarize hidden running rows on the right. It spins during startup and execution, pauses with **Queued** only during a scheduler-confirmed concurrency-slot wait, and resumes when a slot is granted. With reduced motion enabled, the ring stays still. A session holding composer text you typed but never sent shows a pencil badge until the draft is sent or cleared; the active session hides it because its composer is already in view. An agent can also publish a short expiring status line and optionally request attention with a curated amber icon; that declaration clears when you open the session, send the next message, clear it explicitly, or its TTL expires. Cloud-worker lifecycle states use a globe badge; local and reclaimed sessions omit a placement badge because local execution is the default. Each session row offers a direct **Archive** button alongside **Pin**; archived rows offer **Restore**. Archive affects that conversation only. Unarchived persistent children remain available at the top level while their parent is archived. **Archive session and children…** in the session menu collects the accessible nested conversations, including collapsed descendants, and confirms the affected count. Promoted or separately grouped conversations and already archived branches are excluded. Running work is called out before confirmation. Concurrent promotion, grouping, or archival rejects that target instead of archiving a newly independent conversation; partial failures are reported, and **Undo** restores only successful targets from the action. Right-click a row, or focus its link and press **Shift+F10** or the **Menu** key, to open the full [session menu](#session-menu). Touch layouts keep Pin, Archive, and a separate menu button visible so every action remains available without right-click. The chat header also provides the session menu. The chat header composes the same single-session management actions with its pane-specific **View** actions; panel and split controls live in the header's **Layout** menu on desktop. Mobile chat uses the rightmost **Panels** icon instead, including **Details** for progress and session information; the adjacent ellipsis retains session management actions. Cmd/Ctrl-click opens a session in a new browser tab. Alt/Option-click toggles root rows into a multi-select and Shift-click extends it across the visible order; opening the menu on a selected row then offers batch actions (Mark N as unread/read, Move N to group, Archive N, Delete N) that apply to every selected session, with a single confirmation for batch delete. Drag a root session into the rail to add a personal shortcut, or onto a custom group to move it. Custom group headers can be collapsed, expanded, or dragged to reorder them; group names, order, and New Session defaults live in the gateway (`sessions.groups.*`), so they follow you across browsers, while collapsed state stays in the browser profile. Each custom group header has a **+** that opens the normal New Session page and assigns the created session to that group. When the **Other** header is visible, its **+** opens an ungrouped draft without inheriting the current named group. **New session defaults** in the group menu sets its working directory and Local or Worktree preference; the page prefills those values but leaves them editable. Leaving the directory empty uses the selected agent's workspace. A Git repository without an initial commit can use Current checkout; creating a Worktree requires an initial commit. The menu also has Rename group, New group, and Delete group; renaming or deleting a group updates every member session server-side, including archived ones, and deleting a group keeps its sessions and moves them back to Other.
+Inside the **Sessions** view, the default chip mode organizes conversations around the active agent. The identity at the top of the rail is that agent. Pages and Users have their own navigation views instead of appearing above the conversation list. The session list splits into zones: **Other** for the agent's ungrouped chat sessions (the main session is represented by Home rather than an ordinary session row, including when it is pinned or has subagents; independent conversations it spawned appear here as top-level threads, and named threads show without a type prefix), **Groups** for group and room conversations, and **Coding** for sessions bound to a managed worktree or exec node (rows show a `repo ⎇ branch` line plus the node host), ACP-backed harness sessions, and external CLI catalogs. The **Other** heading is omitted when it is the only section. Coding starts collapsed on first run and remembers your choice; its collapsed header keeps the true count and shows a running indicator while contained sessions work. Custom groups (the session `category`) sit above Other, while personal pins live in Pinned, and assigning an independent session to a custom group wins over the automatic zone classification. The single session toolbar shows the owner-filter title, **Filter & sort**, and the **+** that opens the New session page. On mobile web, a second **+** above Home in the side rail opens the same page for the selected agent. Inside **Filter & sort**, **Display** contains sorting (Created, Updated, or Owners when the loaded session roster contains multiple owners) and **Group by** — **Custom groups** (the default zone layout above), **Project** to bucket sessions by their repo or workspace checkout (sessions without one keep their zones), **Person** to bucket readable sessions by their stable owner identity, or **None** for a single flat list with no zone headers. **Filters** contains the persisted **Status** filter for Active, Snoozed, Archived, or All. The Updated sort mode orders sessions by their latest conversation activity, such as a message you send or an agent reply or run result, so renaming, pinning, archiving, snoozing, changing chat settings, or marking a session read or unread keeps its position; sessions without recorded activity fall back to their last metadata change. The Owners sort mode orders owner groups by name and keeps Created order within each group. On multi-user gateways the title chip selects **All owners**, one specific person or agent, or **Involving me** — sessions you own, have prompted, or have been explicitly mentioned in, excluding sessions you personally hid with **Hide from Involving me**. A new explicit mention brings a hidden session back. **Show in Involving me** restores it from **All owners**. The personal Hide/Show menu entry appears only when the Gateway has more than one identity. These personal choices do not archive sessions or alter access, and the Gateway evaluates the filter before pagination (see [Multi-user mode](/concepts/multi-user#finding-sessions-by-owner)). Archived rows stay inline, dimmed with an archive glyph; they do not contribute unread or attention state and stay outside lineage promotion. Opening a session moves the selection highlight without reordering rows. Parents with nested persistent sessions or forks keep a disclosure and child count visible on the right so you can collapse or reopen the group without leaving the sidebar. Background changes update the child count without opening a collapsed parent. Nested chats look like ordinary session rows, indented under their parent. They use the same owner, unread, and activity indicators, without a separate completion check or elapsed timer. Nested sessions follow the selected sort within their parent, so with Updated the most recently active children lead the list. Selecting a nested session opens its chat and reveals its ancestor path. If a persistent session has subagent runs between it and its nearest loaded non-subagent ancestor, it nests under that ancestor. If no such ancestor is loaded, it keeps its normal top-level placement. Nested rows stay outside root pinning, multi-select, and pagination until promoted. Drag a child onto **Move to top level**, the session list or a custom group, or choose **Move to top level** from its menu. Promotion preserves the conversation URL, transcript, workspace, origin link, and active execution relationships; the conversation then supports ordinary root organization. Moving it to a group also keeps it independent if that group is later removed; collapsed zones do not consume the visible page budget. Personal pinning remains separate: promote a child first, then pin it in the sidebar or drag it into the rail. Subagent runs never appear as sidebar rows, even when selected or assigned a custom group, and do not add a disclosure to a parent with no nested persistent sessions. Inspect them through their session transcripts. Sessions with new activity since they were last read show an unread dot, and opening one marks it read. Accepted work immediately shows an activity ring around the row’s own icon for Home, sessions, child sessions, and catalog rows; a row without an icon shows a compact ring in the icon slot. Subagent runs still contribute to their ancestors’ running and queued counts, unread activity, and actionable attention. Terminal child failures stay in the child transcript instead of adding failure warnings to ancestors; a conversation’s own failures remain visible. Opening that ancestor, or choosing **Mark as read** on it, also acknowledges the unread subagent runs it summarizes, even when the ancestor itself was already read. Failed runs, manual unread marks on a run, and run activity after the read stay unread; nested persistent sessions keep their own unread state. A session’s ring stays active while its subagents work. When only delegated work is executing, the ring is labeled **Subagents working**. Collapsed groups and collapsed child toggles summarize hidden running rows on the right. It spins during startup and execution, pauses with **Queued** only during a scheduler-confirmed concurrency-slot wait, and resumes when a slot is granted. With reduced motion enabled, the ring stays still. A session holding composer text you typed but never sent shows a pencil badge until the draft is sent or cleared; the active session hides it because its composer is already in view. An agent can also publish a short expiring status line and optionally request attention with a curated amber icon; that declaration clears when you open the session, send the next message, clear it explicitly, or its TTL expires. Cloud-worker lifecycle states use a globe badge; local and reclaimed sessions omit a placement badge because local execution is the default. Each session row offers a direct **Archive** button alongside **Pin**; archived rows offer **Restore**. Archive affects that conversation only. Unarchived persistent children remain available at the top level while their parent is archived. **Archive session and children…** in the session menu collects the accessible nested conversations, including collapsed descendants, and confirms the affected count. Promoted or separately grouped conversations and already archived branches are excluded. Running work is called out before confirmation. Concurrent promotion, grouping, or archival rejects that target instead of archiving a newly independent conversation; partial failures are reported, and **Undo** restores only successful targets from the action. Right-click a row, or focus its link and press **Shift+F10** or the **Menu** key, to open the full [session menu](#session-menu). Touch layouts keep Pin, Archive, and a separate menu button visible so every action remains available without right-click. The chat header also provides the session menu. The chat header composes the same single-session management actions with its pane-specific **View** actions; panel and split controls live in the header's **Layout** menu on desktop. Mobile chat uses the rightmost **Panels** icon instead, including **Details** for progress and session information; the adjacent ellipsis retains session management actions. Cmd/Ctrl-click opens a session in a new browser tab. Alt/Option-click toggles root rows into a multi-select and Shift-click extends it across the visible order; opening the menu on a selected row then offers batch actions (Mark N as unread/read, Move N to group, Archive N, Delete N) that apply to every selected session, with a single confirmation for batch delete. Drag a root session into the rail to add a personal shortcut, or onto a custom group to move it. Custom group headers can be collapsed, expanded, or dragged to reorder them; group names, order, and New Session defaults live in the gateway (`sessions.groups.*`), so they follow you across browsers, while collapsed state stays in the browser profile. Each custom group header has a **+** that opens the normal New Session page and assigns the created session to that group. When the **Other** header is visible, its **+** opens an ungrouped draft without inheriting the current named group. **New session defaults** in the group menu sets its working directory and Local or Worktree preference; the page prefills those values but leaves them editable. Leaving the directory empty uses the selected agent's workspace. A Git repository without an initial commit can use Current checkout; creating a Worktree requires an initial commit. The menu also has Rename group, New group, and Delete group; renaming or deleting a group updates every member session server-side, including archived ones, and deleting a group keeps its sessions and moves them back to Other.
 
 A confirmed group rename keeps the new name and its current New Session defaults
 when an earlier catalog refresh finishes late. Overlapping background refreshes
@@ -501,6 +520,12 @@ finish loading the latest group catalog without requiring a reconnect.
 Persistent child conversations and forks stay nested after their turns finish,
 including after a reload or Gateway restart. Archiving hides them from the
 **Active** list; restoring them brings them back under their parent.
+
+GitHub publication keeps internal records for its checkout, retries, and recovery.
+These stay out of the conversation tree and child counts by default, including
+records created before an update. Enable **Show system sessions** to inspect them.
+Publication results and pull requests remain attached to the original conversation;
+this display filter does not change permissions or publication authority.
 
 Choose **Show all** in the agent switcher to open the **Sessions** page across all agents and expand the compact agent roster. This clears any agent filter, even when the roster is already selected. The browser remembers the roster mode. Selecting an agent row opens its main conversation; use **Sessions** in that agent's options menu to browse only its conversations.
 
@@ -569,7 +594,7 @@ Reading a parent acknowledges its hidden subagent runs in sequential batches of 
 
 An older list response preserves newer session names and run status already loaded in another open session list.
 
-Loaded persistent child-session rows stay visible while an expanded or selected parent fetches updated child data after a session-list refresh. Child loads preserve newer names and run status already observed in other session lists. A selected child also adopts its refreshed name and run status as soon as its details arrive, including while its ancestors are still loading. Its ancestor path refreshes when the session is replaced or its parent changes, including in filtered lists. Collapsed, unselected parents drop stale child snapshots on refresh and reload when reopened; the selected session's ancestry stays available. A loading placeholder appears only when the parent has no loaded child rows yet. Child-load errors remain visible until you choose **Retry** or collapse and reopen the parent. In **Active**, archived children stop contributing to the parent’s child count. A completed child load also removes links to absent children after a reload; unloaded or failed child reads keep their discovery controls.
+Loaded persistent child-session rows stay visible while an expanded or selected parent fetches updated child data after a session-list refresh. Child loads preserve newer names and run status already observed in other session lists. A selected child also adopts its refreshed name and run status as soon as its details arrive, including while its ancestors are still loading. Its ancestor path refreshes when the session is replaced or its parent changes, including in filtered lists. Collapsed, unselected parents drop stale child snapshots on refresh and reload when reopened; the selected session's ancestry stays available. While children load, the disclosure reports that it is busy without inserting a temporary row. Child-load errors remain visible until you choose **Retry** or collapse and reopen the parent. In **Active**, archived children stop contributing to the parent’s child count. A completed child load also removes links to absent children after a reload; unloaded or failed child reads keep their discovery controls.
 
 **Archived** hides active sessions even when their conversation remains open. In **Active**, a directly opened archived session can retain its selected row. Archiving a visible session hides its row immediately while keeping its conversation open, and offers **Undo** while the notification stays open; hovering or focusing the notification pauses it. The archive is sent only when that window closes: the notification times out, is dismissed, or is replaced by the next archive, or you leave the page. Until then nothing has changed on the Gateway and any active work keeps running, so **Undo** brings the row back instantly. An open conversation shows as archived right away and keeps its unsent draft; its **Unarchive** button cancels the pending archive the same way, and shows progress once the archive is already being sent. The window continues when you leave the Sessions page or navigate away from the archived chat. A Gateway reconnect during the window drops the pending archive and the row returns; archive it again. Repeated archive actions stay disabled while the Gateway confirms the request. If the request fails, the row returns with an error explaining what prevented archiving. Confirmed archive and restore changes remain applied to loaded rows if the follow-up refresh fails. The refresh error is shown separately; it does not undo a successful archive or restore. Refresh the session list to recover missing rows.
 
@@ -631,6 +656,8 @@ original session's checkbox, preserving a replacement you selected meanwhile.
 
 **Rename** in the sidebar, chat header, and Sessions page starts with your custom name or the generated dashboard title. Edit the text, then save or press Enter. Saving an unchanged generated title leaves automatic naming intact; clearing a custom name restores the generated title. Channel and account decorations stay outside the editable name. Rename targets the session you started editing. If that session is deleted and recreated at the same key before you save, the edit is rejected instead of renaming the replacement. Reopen Rename on the current session to try again. Resetting the conversation keeps the same session identity and does not invalidate the edit.
 
+While you edit a title inline, existing rows in that sidebar section keep their order. Status changes still appear, removed sessions leave the list, and new sessions appear after the existing rows. The selected sort resumes when you save or cancel.
+
 Automatic titles follow the language of the first message, including short instructions with quoted literals. Titles are capped at 60 characters and unmatched quotation marks are removed after truncation. Empty or quote-only model output uses a readable crustacean-themed fallback name.
 
 **New group** from the sidebar, chat header, or Sessions page keeps the original session selection while the dialog is open and the group is being saved. A deleted or replaced session is not moved; an error is shown and the new group remains available. For a sidebar multi-selection, sessions that still exist can move even if another target fails. Paging a selected session out of the visible list does not cancel its move.
@@ -647,14 +674,15 @@ Select the agent to open its session and workspace context: rename the session,
 open its parent conversation, or use the workspace actions. **Details** also
 keeps workspace information available. The regular session view and external
 CLI catalog headers keep their workspace/session breadcrumbs.
+An ordinary **New Session** chat starts without a parent. When you explicitly
+create a child session or fork a conversation, the header links to its parent.
 
 ### Session menu
 
 Root sessions and ordinary Home-linked dashboard sessions can be pinned. Spawned and nested-child sessions reject pin requests, including when they appear as top-level threads. Subagent runs also reject pin requests and remain outside sidebar navigation.
 
-An ordinary conversation's **Actions** menu also offers **Move to group**, even
-when its header links back to Home. That breadcrumb does not make the
-conversation a nested child.
+An ordinary conversation's **Actions** menu also offers **Move to group**.
+Existing ordinary chats that still link to Home remain top-level sessions.
 
 A pinned parent is a single rail shortcut. Its indented child tree and expand/collapse controls remain in the Sessions list, subject to the current filters.
 
@@ -685,7 +713,7 @@ the search; Arrow Down and Enter let you select a matching owner.
 
 1. Open the saved session and select **Session sharing** in the chat header. In the compact header menu, select **Session sharing** there instead.
 2. Under **Link sharing**, enable **Anyone with the link**, review **Make this session public?**, then select **Make public**.
-3. Select **Copy public link** to copy the normal thread URL, or scan the QR code in the sharing menu to open that same URL on another device. The mobile sharing page also shows the code. Select **Use claw QR** for the image-styled version, **Download claw QR** to save its full-size PNG, or **Use standard QR** if scanning is difficult. The **Public** badge in the chat header remains visible while the transcript is published and updates when another window changes public access.
+3. Select **Copy public link** to copy the normal thread URL, or scan the QR code in the sharing menu to open that same URL on another device. The sharing menu and mobile sharing page show the claw QR automatically. If the panel is too narrow or the artwork can’t load, a plain QR appears instead. The **Public** badge in the chat header remains visible while the transcript is published and updates when another window changes public access.
 4. Open that same URL in a signed-out browser to verify the read-only conversation and **Log in** button. Signing in returns to the thread with your existing permissions. New user and assistant text, including progress updates, becomes visible to public readers automatically.
 5. Return to **Session sharing** and select **Disable public access** to stop anonymous reads. The same URL then returns an unavailable page to signed-out readers. Enabling access again makes that URL public again; disabling access cannot recall saved copies.
 
@@ -767,6 +795,10 @@ single-line and shortened to 50 characters or fewer, or cleared. Between 51 and
 edit. Counts exclude leading and trailing whitespace. Session-creation errors and
 recovery actions remain visible in either mode.
 
+The palette leaves your text as typed: it turns off automatic corrections,
+capitalization, and writing suggestions. Compose still marks possible spelling
+mistakes when the browser supports it; Search does not.
+
 Pasted images appear as small, removable thumbnails below the text. Pasting or
 removing them leaves the input, **New session** action, and settings control in
 place; the palette grows downward. Images can start a session on their own or
@@ -775,13 +807,15 @@ accompany text. There is no attachment picker in the palette.
 Type **@** to search eligible people by name or verified GitHub handle, just as
 in the chat composer. Use **↑/↓** or **Home/End**, then **Enter** or **Tab** to
 select a person; **Escape** dismisses the people picker before the palette.
-The compact **Will notify** row shows selected people once each, with **+N**
+The compact **Notify or invite** row shows selected people once each, with **+N**
 when space is tight. You can select up to ten mention references. Editing or
 deleting a selected name removes that reference; **Remove mention** clears all
 recipient selections without deleting the text. Pasted names and email addresses
 remain ordinary text. The picker replaces search results while open, and selected
 mentions keep the palette in composer mode. Mentions travel with the first message
-of the new session; they never share a session, invite people, or grant access.
+of the new session. For roles with `sessions.others: "invited"`, a selected
+mention from the creator or an admin grants membership when that message commits.
+It does not change session visibility or the recipient's operator scopes.
 
 - **Enter** selects a person while the people picker is open; otherwise it opens
   or runs the selected search result. With no result, Enter does not send.

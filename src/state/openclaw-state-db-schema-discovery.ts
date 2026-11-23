@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
-import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-attribution.js";
+import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-context.js";
 import type {
   OpenClawStateDatabaseOptions,
   OpenClawStateDatabaseSchemaMigration,

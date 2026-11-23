@@ -13,7 +13,15 @@
 
 import MarkdownIt, { type MarkdownIt as MarkdownItParser } from "markdown-it";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { isMap, isScalar, LineCounter, parseDocument, stringify, type Scalar } from "yaml";
+import {
+  isCollection,
+  isMap,
+  isScalar,
+  LineCounter,
+  parseDocument,
+  stringify,
+  type Scalar,
+} from "yaml";
 import type { AstBlock, AstItem, FrontmatterEntry, MdAst } from "./ast.js";
 import { slugify } from "./slug.js";
 
@@ -37,7 +45,7 @@ export function parseMdItemKeyValue(text: string): AstItem["kv"] {
 
 export function parseMd(raw: string): MdAst {
   const withoutBom = raw.startsWith(BOM) ? raw.slice(BOM.length) : raw;
-  const lines = withoutBom.split(/\r?\n/);
+  const lines = withoutBom.split(/\r\n?|\n/);
 
   const fm = detectFrontmatter(lines);
   const bodyStartIdx = fm === null ? 0 : fm.endLine + 1;
@@ -80,7 +88,8 @@ function detectFrontmatter(lines: readonly string[]): FrontmatterRange | null {
   const frontmatter = lines.slice(1, closeIndex);
   const lineCounter = new LineCounter();
   // Keep the final newline so YAML owns multiline folding and chomping.
-  const doc = parseDocument(frontmatter.join("\n") + "\n", {
+  const frontmatterSource = frontmatter.join("\n") + "\n";
+  const doc = parseDocument(frontmatterSource, {
     prettyErrors: false,
     lineCounter,
   });
@@ -99,10 +108,15 @@ function detectFrontmatter(lines: readonly string[]): FrontmatterRange | null {
           key: expectDefined(match[1], "frontmatter key capture"),
           value: isScalar(value)
             ? scalarText(value)
-            : // capture is empty (block value starts below); out-of-scope anchors stay alias text
-              capture === ""
-              ? stringify(value, { verifyAliasOrder: false }).trimEnd()
-              : unquote(capture),
+            : isCollection(value) && value.flow && value.range
+              ? frontmatterSource
+                  .slice(key.range[1], value.range[1])
+                  .replace(/^\s*:\s*/, "")
+                  .trimEnd()
+              : // capture is empty (block value starts below); out-of-scope anchors stay alias text
+                capture === ""
+                ? stringify(value, { verifyAliasOrder: false }).trimEnd()
+                : unquote(capture),
           line: keyLine + 1,
         });
       }

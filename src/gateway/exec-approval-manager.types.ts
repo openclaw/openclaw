@@ -40,6 +40,8 @@ export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   createdAtMs: number;
   expiresAtMs: number;
   // Requester bindings prevent another client from replaying an approval id.
+  /** Host-bound profile of the turn that raised this approval; never request payload data. */
+  requestedByProfileId?: string | null;
   requestedByConnId?: string | null;
   requestedByDeviceId?: string | null;
   requestedByClientId?: string | null;

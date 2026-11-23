@@ -89,8 +89,7 @@ function registerNodeToolElicitation(
   signal?: AbortSignal,
 ) {
   const caller = getGatewayToolCallerIdentity();
-  const assertCurrent = captureGatewayToolCallerAssertion();
-  if (!caller || !assertCurrent || caller.sessionKey !== sessionKey) {
+  if (!caller?.operationalRunInstance || caller.sessionKey !== sessionKey) {
     return undefined;
   }
   const registry = getInProcessGatewayRequestContext(caller.gatewayContextResolver)?.nodeRegistry;
@@ -98,19 +97,18 @@ function registerNodeToolElicitation(
   if (!registry || !node) {
     return undefined;
   }
-  assertCurrent();
+  const stopSignal = AbortSignal.any([
+    ...(caller.approvalSignals ?? []),
+    ...(signal ? [signal] : []),
+  ]);
+  stopSignal.throwIfAborted();
   const id = randomUUID();
   const handle = createMcpClientElicitationHandler({
     sessionKey,
     agentId: caller.agentId,
-    assertCurrent,
+    assertCurrent: () => stopSignal.throwIfAborted(),
   });
-  const release = registry.mcpElicitation.register({
-    id,
-    node,
-    signal: AbortSignal.any([...(caller.approvalSignals ?? []), ...(signal ? [signal] : [])]),
-    handle,
-  });
+  const release = registry.mcpElicitation.register({ id, node, signal: stopSignal, handle });
   return { id, [Symbol.dispose]: release };
 }
 
@@ -405,7 +403,6 @@ function* resolveOpenClawPluginToolSteps(
               provider: providerId,
               cfg: availabilityConfig,
               workspaceDir: pluginToolInputs.context.workspaceDir,
-              agentDir: params.options?.agentDir,
               authStore: authProfileStore,
               runtimeLookup: availabilityRuntimeLookup,
             })
@@ -612,9 +609,11 @@ function* resolveOpenClawPluginToolSteps(
     ) {
       continue;
     }
-    // Unregistered nodes cannot grant themselves plugin-scoped access by
-    // claiming another plugin's ID. Only the reserved node-mcp ID is trusted.
-    const pluginIdTrusted = entry.registered || pluginId === NODE_MCP_PLUGIN_ID;
+    const mcpTool = descriptor.command === NODE_MCP_TOOLS_CALL_COMMAND ? descriptor.mcp : undefined;
+    // Decide ownership once after normalizing the ID. The reserved exception
+    // requires the core MCP shape; every policy projection consumes this trust.
+    const isNodeMcp = pluginId === NODE_MCP_PLUGIN_ID && Boolean(mcpTool?.server && mcpTool.tool);
+    const pluginIdTrusted = entry.registered || isNodeMcp;
     if (
       !allowlist.includesDefaults &&
       !(
@@ -626,7 +625,6 @@ function* resolveOpenClawPluginToolSteps(
       continue;
     }
     existingNormalized.add(exposedToolName);
-    const mcpTool = descriptor.command === NODE_MCP_TOOLS_CALL_COMMAND ? descriptor.mcp : undefined;
     const tool: AnyAgentTool = {
       name: toolName,
       label: toolName,
@@ -692,6 +690,7 @@ function* resolveOpenClawPluginToolSteps(
     setPluginToolMeta(tool, {
       pluginId: descriptor.pluginId,
       optional: false,
+      ...(pluginIdTrusted ? {} : { ownerUnverified: true as const }),
       ...(descriptor.mcp
         ? {
             mcp: {
@@ -699,7 +698,7 @@ function* resolveOpenClawPluginToolSteps(
               safeServerName: sanitizeServerName(descriptor.mcp.server, new Set<string>()),
               toolName: descriptor.mcp.tool,
               operation: "tool",
-              ...(descriptor.pluginId === NODE_MCP_PLUGIN_ID && mcpTool
+              ...(isNodeMcp && mcpTool
                 ? {
                     node: {
                       id: entry.nodeId,

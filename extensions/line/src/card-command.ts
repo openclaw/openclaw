@@ -8,7 +8,7 @@ import {
   createListCard,
 } from "./flex-templates/basic-cards.js";
 import { createReceiptCard } from "./flex-templates/schedule-cards.js";
-import { createFlexMessage } from "./send.js";
+import { createFlexMessage } from "./template-messages.js";
 import type { LineChannelData, LineTemplateActionPayload } from "./types.js";
 
 const CARD_USAGE = `Usage: /card <type> "title" "body" [options]

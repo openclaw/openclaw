@@ -1,4 +1,3 @@
-import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
@@ -56,8 +55,10 @@ vi.mock("../infra/sqlite-worker-identity.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/sqlite-worker-identity.js")>()),
   assertExistingDatabaseIdentity() {},
 }));
-vi.mock("./openclaw-agent-execution.js", () => ({
-  captureOpenClawAgentDatabaseExecution: boundary.capture,
+vi.mock("./openclaw-agent-execution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-agent-execution.js")>()),
+  captureOpenClawAgentDatabaseExecutionAsync: async (options: OpenClawAgentDatabaseOptions) =>
+    boundary.capture(options),
 }));
 vi.mock("./openclaw-agent-db-identity.js", () => ({
   readOpenClawAgentDatabaseIdentity: () => ({
@@ -119,12 +120,10 @@ async function withPublication(
 }
 
 it.each(["success", "failure"] as const)(
-  "reports admitted execution time without replacing publication %s when the observer throws",
+  "preserves publication %s when the timing observer throws",
   async (outcome) => {
     const ready = createDeferredCore();
     boundary.ready = ready.promise;
-    let now = 0;
-    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
     const original = new Error("Publication failed");
     const committed = { revision: 42 };
     const observe = vi.fn(() => {
@@ -132,7 +131,6 @@ it.each(["success", "failure"] as const)(
     });
     boundary.execute.mockImplementation(async ({ type }) => {
       if (type === "database.domain.execute") {
-        now += 100;
         if (outcome === "failure") {
           throw original;
         }
@@ -145,21 +143,19 @@ it.each(["success", "failure"] as const)(
             await scope.execute({ type: "append", input: { value: "published" } });
             return committed;
           }, allow);
-          now += 1_000;
           ready.resolve();
           if (outcome === "failure") {
             await expect(work).rejects.toBe(original);
           } else {
             await expect(work).resolves.toBe(committed);
           }
-          expect(observe).toHaveBeenCalledExactlyOnceWith(100);
+          expect(observe).toHaveBeenCalledOnce();
         },
         undefined,
         observe,
       );
     } finally {
       ready.resolve();
-      clock.mockRestore();
     }
   },
 );

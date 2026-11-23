@@ -282,85 +282,79 @@ suite.define(() => {
     {
       name: "authored activation and limits",
       initialMode: { enabled: "auto", timeoutMs: 5000 },
-      expectedPatch: { executor: "quickjs" },
     },
     {
       name: "inherited automatic activation",
       initialMode: undefined,
-      expectedPatch: { enabled: "auto", executor: "quickjs" },
     },
-  ])(
-    "saves and reloads the Code Mode executor with $name",
-    async ({ initialMode, expectedPatch }) => {
-      await withPage(
-        async ({ page }) => {
-          const initialConfig = initialMode ? { tools: { codeMode: initialMode } } : {};
-          const retainedMode = { enabled: "auto", ...initialMode };
-          const quickjsConfig = {
-            tools: { codeMode: { ...retainedMode, executor: "quickjs" } },
-          };
-          const gateway = await installMockGateway(page, {
-            methodResponses: {
-              "config.get": configResponse(initialConfig, "executor-node"),
-            },
-          });
+  ])("saves and reloads the Code Mode executor with $name", async ({ initialMode }) => {
+    await withPage(
+      async ({ page }) => {
+        const initialConfig = initialMode ? { tools: { codeMode: initialMode } } : {};
+        const retainedMode = { enabled: "auto", ...initialMode };
+        const quickjsConfig = {
+          tools: { codeMode: { ...retainedMode, executor: "quickjs" } },
+        };
+        const nodeConfig = {
+          tools: { codeMode: { ...retainedMode, executor: "node" } },
+        };
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "config.get": configResponse(initialConfig, "executor-node"),
+            "config.schema": configSchemaResponse(),
+          },
+        });
 
-          expect((await page.goto(`${suite.server.baseUrl}settings/labs`))?.status()).toBe(200);
-          const executorRow = settingsRow(page, "Code Mode executor");
-          const executor = executorRow.getByRole("combobox", { name: "Code Mode executor" });
-          const enabled = settingsRow(page, "Code Mode").getByRole("switch", {
-            name: "Code Mode",
-            exact: true,
-          });
-          await expect.poll(() => executor.inputValue()).toBe("node");
-          expect(await executorRow.textContent()).toContain("not a security sandbox");
-          expect(await enabled.isChecked()).toBe(true);
-          await capture(page, "code-mode-node-default.png", executor);
+        expect(
+          (await page.goto(`${suite.server.baseUrl}settings/ai-agents?section=tools`))?.status(),
+        ).toBe(200);
+        const executorRow = settingsRow(page, "Code Mode executor");
+        const executor = executorRow.getByRole("combobox", { name: "Code Mode executor" });
+        const enabled = settingsRow(page, "Code Mode").getByRole("switch", {
+          name: "Code Mode",
+          exact: true,
+        });
+        await expect.poll(() => executor.inputValue()).toBe("node");
+        expect(await executorRow.textContent()).toContain("not a security sandbox");
+        expect(await enabled.isChecked()).toBe(true);
+        await capture(page, "code-mode-node-default.png", executor);
 
-          await gateway.deferNext("config.patch");
-          await executor.selectOption("quickjs");
-          const quickjsPatch = mutationParams(await gateway.waitForRequest("config.patch"));
-          expect(quickjsPatch.baseHash).toBe("executor-node");
-          expect(JSON.parse(String(quickjsPatch.raw))).toEqual({
-            tools: { codeMode: expectedPatch },
-          });
-          expect(await executor.isDisabled()).toBe(true);
+        await gateway.deferNext("config.set");
+        await executor.selectOption("quickjs");
+        const quickjsSave = mutationParams(await gateway.waitForRequest("config.set"));
+        expect(quickjsSave.baseHash).toBe("executor-node");
+        expect(JSON.parse(String(quickjsSave.raw))).toEqual(quickjsConfig);
+        await expectSaveStatus(page, "Saving");
 
-          const quickjsResponse = configResponse(quickjsConfig, "executor-quickjs");
-          await gateway.setMethodResponse("config.get", quickjsResponse);
-          await gateway.resolveDeferred("config.patch", { ok: true, ...quickjsResponse });
-          await expect.poll(() => executor.isDisabled()).toBe(false);
-          expect((await page.reload())?.status()).toBe(200);
-          await expect.poll(() => executor.inputValue()).toBe("quickjs");
-          expect(await enabled.isChecked()).toBe(true);
-          await capture(page, "code-mode-quickjs-reloaded.png", executor);
+        const quickjsResponse = configResponse(quickjsConfig, "executor-quickjs");
+        await gateway.setMethodResponse("config.get", quickjsResponse);
+        await gateway.resolveDeferred("config.set", { ok: true, ...quickjsResponse });
+        await expectSaveStatus(page, "Saved");
+        expect((await page.reload())?.status()).toBe(200);
+        await expect.poll(() => executor.inputValue()).toBe("quickjs");
+        expect(await enabled.isChecked()).toBe(true);
+        await capture(page, "code-mode-quickjs-reloaded.png", executor);
 
-          const priorPatches = (await gateway.getRequests("config.patch")).length;
-          await gateway.deferNext("config.patch");
-          await executor.selectOption("node");
-          const nodePatch = mutationParams(
-            await gateway.waitForRequest("config.patch", { after: priorPatches }),
-          );
-          expect(nodePatch.baseHash).toBe("executor-quickjs");
-          expect(JSON.parse(String(nodePatch.raw))).toEqual({
-            tools: { codeMode: { executor: null } },
-          });
+        const priorSaves = (await gateway.getRequests("config.set")).length;
+        await gateway.deferNext("config.set");
+        await executor.selectOption("node");
+        const nodeSave = mutationParams(
+          await gateway.waitForRequest("config.set", { after: priorSaves }),
+        );
+        expect(nodeSave.baseHash).toBe("executor-quickjs");
+        expect(JSON.parse(String(nodeSave.raw))).toEqual(nodeConfig);
 
-          const nodeResponse = configResponse(
-            { tools: { codeMode: retainedMode } },
-            "executor-node-restored",
-          );
-          await gateway.setMethodResponse("config.get", nodeResponse);
-          await gateway.resolveDeferred("config.patch", { ok: true, ...nodeResponse });
-          await expect.poll(() => executor.isDisabled()).toBe(false);
-          expect((await page.reload())?.status()).toBe(200);
-          await expect.poll(() => executor.inputValue()).toBe("node");
-          expect(await enabled.isChecked()).toBe(true);
-        },
-        { recordVideo: undefined },
-      );
-    },
-  );
+        const nodeResponse = configResponse(nodeConfig, "executor-node-restored");
+        await gateway.setMethodResponse("config.get", nodeResponse);
+        await gateway.resolveDeferred("config.set", { ok: true, ...nodeResponse });
+        await expectSaveStatus(page, "Saved");
+        expect((await page.reload())?.status()).toBe(200);
+        await expect.poll(() => executor.inputValue()).toBe("node");
+        expect(await enabled.isChecked()).toBe(true);
+      },
+      { recordVideo: undefined },
+    );
+  });
 
   it("retains a Raw revert when an autosave commits after its connection closes", async () => {
     await withPage(async ({ page }) => {
@@ -502,29 +496,30 @@ suite.define(() => {
       const initialConfig = {
         ...laboratoryConfig("local-api"),
         tools: { codeMode: { timeoutMs: 5000 } },
+        gateway: { controlUi: { experimental: { chatBubbles: false } } },
       };
       const patchedConfig = {
-        laboratory: initialConfig.laboratory,
-        tools: { codeMode: { enabled: "auto", timeoutMs: 5000 } },
+        ...initialConfig,
+        gateway: { controlUi: { experimental: { chatBubbles: true } } },
       };
       const gateway = await installConfig(page, initialConfig, "snapshot-1");
 
       expect((await page.goto(`${suite.server.baseUrl}settings/labs`))?.status()).toBe(200);
       const labsLink = page.locator('.settings-sidebar__item[href="/settings/labs"]');
       await expect.poll(() => labsLink.getAttribute("aria-current")).toBe("page");
-      const codeModeRow = settingsRow(page, "Code Mode");
-      const codeModeSwitch = codeModeRow.getByRole("switch", { name: "Code Mode", exact: true });
-      await codeModeSwitch.waitFor();
-      await expect.poll(() => codeModeRow.textContent()).not.toContain("Using default:");
+      const bubblesRow = settingsRow(page, "Speech bubbles");
+      const bubblesSwitch = bubblesRow.getByRole("switch", { name: "Speech bubbles", exact: true });
+      await expect.poll(() => bubblesSwitch.isEnabled()).toBe(true);
+      await expect.poll(() => bubblesRow.textContent()).not.toContain("Using default:");
 
       const configGetsBeforePatch = (await gateway.getRequests("config.get")).length;
       await gateway.deferNext("config.patch");
-      await codeModeSwitch.click();
+      await bubblesSwitch.click();
       const patchParams = mutationParams(await gateway.waitForRequest("config.patch"));
       expect(patchParams.baseHash).toBe("snapshot-1");
       expect(patchParams.sessionKey).toBe("agent:main:main");
       expect(JSON.parse(String(patchParams.raw))).toEqual({
-        tools: { codeMode: { enabled: "auto" } },
+        gateway: { controlUi: { experimental: { chatBubbles: true } } },
       });
 
       const patchedResponse = configResponse(patchedConfig, "snapshot-2", "snapshot-1");
@@ -537,9 +532,9 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("config.get")).length)
         .toBe(configGetsBeforePatch);
-      await expect.poll(() => codeModeSwitch.isChecked()).toBe(true);
+      await expect.poll(() => bubblesSwitch.isChecked()).toBe(true);
       await expect.poll(() => labsLink.getAttribute("aria-current")).toBe("page");
-      await capture(page, "00-labs-canonical-refresh.png", codeModeSwitch);
+      await capture(page, "00-labs-canonical-refresh.png", bubblesSwitch);
 
       const endpoint = await openLaboratory(page, "local-api", true);
       const advancedLink = page.locator('.settings-sidebar__item[href="/settings/advanced"]');
