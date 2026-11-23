@@ -246,6 +246,25 @@ it.each([false, true])(
   },
 );
 
+it("bounds cleanup by a tenth of --timeout and gives the update the rest", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    maintainRuntimes.mockImplementation(async (_repair, authority) => {
+      // Cleanup outlasts its share of a 5 s budget.
+      vi.setSystemTime(Date.now() + 600);
+      expect(() => authority.assertCurrent()).toThrow("ran out of time");
+      return [];
+    });
+    await expect(
+      runReleaseUpdateCli({ json: true, restart: true, runningRoot: root, timeoutMs: 5_000 }),
+    ).rejects.toThrow("refused for the test");
+    expect(sent).toEqual([{ timeoutMs: expect.any(Number) }]);
+    expect((sent[0] as { timeoutMs: number }).timeoutMs).toBeLessThanOrEqual(4_400);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("says the update is still running when the --timeout budget ends first", async () => {
   const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
   vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});

@@ -29,7 +29,7 @@ import { PREPARE_DEADLINE_MS, prepareUpdate } from "./run.js";
 import { resolveTarget } from "./target.js";
 
 const POLL_MS = 2_000;
-/** Earlier updaters' runtime cleanup is advisory; it never holds the command much longer. */
+/** Earlier updaters' runtime cleanup is advisory: at most this, and a tenth of `--timeout`. */
 const RETAINED_RUNTIME_BUDGET_MS = 2 * 60_000;
 /** Prepare, plus a trial that includes the boot migration. */
 const RUN_DEADLINE_MS = PREPARE_DEADLINE_MS + 30 * 60_000;
@@ -122,12 +122,19 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
       : undefined;
   // Like the releases prepareUpdate collects, an earlier updater's leftover is removed before
   // this update starts; afterwards the release launcher would count as a possible holder.
-  for (const line of await reclaimRetainedUpdateRuntimes(opts.runningRoot)) {
+  const cleanupBudgetMs = Math.min(
+    RETAINED_RUNTIME_BUDGET_MS,
+    timeoutMs === undefined ? RETAINED_RUNTIME_BUDGET_MS : timeoutMs / 10,
+  );
+  for (const line of await reclaimRetainedUpdateRuntimes(opts.runningRoot, cleanupBudgetMs)) {
     if (opts.json) {
       defaultRuntime.error(line);
     } else {
       defaultRuntime.log(line);
     }
+  }
+  if (opts.timeoutMs !== undefined) {
+    timeoutMs = Math.max(1, opts.timeoutMs - (Date.now() - startedAt));
   }
   // Explicit package targets stay local: update.run cannot carry them without a protocol change.
   // --no-restart prepares in this process; the release starts at the Gateway's next start.
@@ -185,8 +192,11 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
  * process census. It runs in this command, not the Gateway: the census is synchronous, and
  * without an owner record it cannot tell the requesting `openclaw update` from an old updater.
  */
-async function reclaimRetainedUpdateRuntimes(runningRoot: string): Promise<string[]> {
-  const deadline = Date.now() + RETAINED_RUNTIME_BUDGET_MS;
+async function reclaimRetainedUpdateRuntimes(
+  runningRoot: string,
+  budgetMs: number,
+): Promise<string[]> {
+  const deadline = Date.now() + budgetMs;
   try {
     const { prepareRetainedUpdateRuntimeMaintenance } =
       await import("../commands/doctor-retained-runtime.js");

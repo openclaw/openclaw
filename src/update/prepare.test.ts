@@ -223,6 +223,10 @@ fs.copyFileSync(${JSON.stringify(pnpm)}, path.join(args[args.indexOf('--install-
     const { checkout } = await repository(true, ">=1", true);
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     vi.stubEnv("GIT_COMMIT", "");
+    // An earlier updater's leftover is reclaimed before the update; the outcome stays the build's.
+    const abandoned = createDoctorRuntimeProjection(path.join(root, "tmp"), checkout, "Gone01");
+    vi.spyOn(processCensus, "inspectOtherOpenClawProcesses").mockReturnValue({ pids: [] });
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     try {
       openOpenClawStateDatabase({ env: process.env });
@@ -241,6 +245,8 @@ fs.copyFileSync(${JSON.stringify(pnpm)}, path.join(args[args.indexOf('--install-
       expect(detail?.length).toBeLessThanOrEqual(1024);
       expect(error).toHaveBeenCalledWith(expect.stringContaining("fixture build failed"));
       expect(process.exitCode).toBe(1);
+      await expect(fs.access(abandoned)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(log).toHaveBeenCalledWith(`Removed abandoned updater runtime: ${abandoned}`);
     } finally {
       process.exitCode = undefined;
       await closeOpenClawStateDatabaseAsync();
@@ -767,37 +773,6 @@ describe("retained updater runtimes", () => {
         ),
       ]);
       expect(printed.at(-1)).toBe("Already up to date.");
-    } finally {
-      process.exitCode = undefined;
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-    }
-  });
-
-  it("keeps a failed update's outcome after reclaiming a runtime", async () => {
-    const { checkout } = await repository(true, ">=1", true);
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
-    vi.stubEnv("GIT_COMMIT", "");
-    const abandoned = project(checkout, "Gone01");
-    vi.spyOn(processCensus, "inspectOtherOpenClawProcesses").mockReturnValue({ pids: [] });
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    try {
-      openOpenClawStateDatabase({ env: process.env });
-      await runReleaseUpdateCli({
-        json: false,
-        restart: false,
-        runningRoot: checkout,
-        storedChannel: "dev",
-        timeoutMs: 30_000,
-      });
-      expect(process.exitCode).toBe(1);
-      expect((await getUpdateRunStatusAsync()).lastRun).toMatchObject({
-        status: "failed",
-        reason: "build-failed",
-      });
-      await expect(fs.access(abandoned)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(log).toHaveBeenCalledWith(`Removed abandoned updater runtime: ${abandoned}`);
     } finally {
       process.exitCode = undefined;
       await closeOpenClawStateDatabaseAsync();

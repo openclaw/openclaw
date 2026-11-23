@@ -392,8 +392,9 @@ not run it: the process census would block the serving Gateway, and for a runtim
 using it. Inside a container, cleanup keeps runtimes and says so, because host processes
 are not visible. A runtime without `owner.json` that the first release update did not remove
 (for example, because that update ran from the Gateway) is reported afterwards as
-`no recognized runtime marker`. Once no `openclaw update` is running, remove that directory
-by hand. Run
+`no recognized runtime marker`. Remove it by hand only after checking that its `tree/`
+holds the replaced installation and that no process has files open in it (for example,
+`lsof +D <directory>` prints nothing); otherwise keep it and [get support](/help/support). Run
 `openclaw doctor --fix` before uninstalling; manual removal on Windows needs the
 extended-length path prefix ([Uninstall](/install/uninstall#remove-the-cli)). Incomplete preparation
 keeps immediate best-effort cleanup. Unsettled workers retain their runtime with
