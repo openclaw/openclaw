@@ -41,13 +41,21 @@ it.each([390, 1440])(
     const button = view.getByRole("button", { name: "Choose notification agents" }),
       label = button.querySelector("span")!,
       control = button.closest(".settings-row__control")!;
-    expect(label.textContent).toContain(agent);
+    expect(label.textContent).toBe(`Account default: ${name}`);
+    expect(button.getAttribute("aria-description")).toContain(agent);
     const bounds = button.getBoundingClientRect(),
       available = control.getBoundingClientRect();
     expect(bounds.width).toBeGreaterThan(0);
     expect(bounds.left).toBeGreaterThanOrEqual(available.left - 0.5);
     expect(bounds.right).toBeLessThanOrEqual(available.right + 0.5);
-    expect(label.scrollWidth).toBeLessThanOrEqual(label.clientWidth + 1);
-    expect(label.scrollHeight).toBeLessThanOrEqual(label.clientHeight + 1);
+    expect(
+      Math.abs(
+        label.getBoundingClientRect().height - parseFloat(getComputedStyle(label).lineHeight),
+      ),
+    ).toBeLessThan(1);
+    expect(getComputedStyle(label).textOverflow).toBe("ellipsis");
+    expect(button.querySelector("svg")!.getBoundingClientRect().right).toBeLessThanOrEqual(
+      bounds.right,
+    );
   },
 );

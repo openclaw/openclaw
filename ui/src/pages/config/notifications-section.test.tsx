@@ -366,10 +366,10 @@ const catalog = {
 };
 
 it.each([
-  { ids: ["support-eu"], visible: "Support (support-eu)", full: "Support (support-eu)" },
+  { ids: ["support-eu"], visible: "Support", full: "Support (support-eu)" },
   {
     ids: ["support-eu", "support-us"],
-    visible: "Support (support-eu), Support (support-us)",
+    visible: "2 selected",
     full: "Support (support-eu), Support (support-us)",
   },
   {

@@ -37,26 +37,23 @@ export function NotificationAgentsRow(props: AgentRowProps) {
     scope();
     return undefined;
   });
-  const names = (ids: readonly string[]) => {
-    const agents = props.agentCatalog?.agentsList?.agents;
-    return ids
-      .map((id) => {
-        const agent = agents?.find((entry) => entry.id === id);
-        const name = agent ? normalizeAgentLabel(agent) : id;
-        return (agents?.filter((entry) => normalizeAgentLabel(entry) === name).length ?? 0) > 1
-          ? `${name} (${id})`
-          : name;
-      })
-      .join(", ");
-  };
   const summary = createMemo(() => {
     const ids = props.agentIds ?? props.inheritedAgentIds ?? [];
-    const full = ids.length ? names(ids) : t("configView.notifications.allAgents");
-    // Keep small selections readable without growing a settings row for an entire roster.
+    const agents = props.agentCatalog?.agentsList?.agents;
+    const selected = ids.map((id) => {
+      const agent = agents?.find((entry) => entry.id === id);
+      const name = agent ? normalizeAgentLabel(agent) : id;
+      const duplicate = agents?.some(
+        (entry) => entry.id !== id && normalizeAgentLabel(entry) === name,
+      );
+      return { name, full: duplicate ? `${name} (${id})` : name };
+    });
+    const full =
+      selected.map((agent) => agent.full).join(", ") || t("configView.notifications.allAgents");
     const compact =
-      ids.length > 2
-        ? t("configView.notifications.agentsSelected", { count: String(ids.length) })
-        : full;
+      selected.length > 1
+        ? t("configView.notifications.agentsSelected", { count: String(selected.length) })
+        : (selected[0]?.name ?? full);
     const scoped = (agents: string) =>
       props.agentIds === undefined
         ? t("configView.notifications.inheritAgents", { agents })
@@ -234,7 +231,7 @@ function AgentSelectionDialog(
             <div>
               <For each={rows()} keyed={(row) => row.id}>
                 {(row) => (
-                  <label class="settings-row">
+                  <label class="settings-row notification-agents__option">
                     <Checkbox
                       checked={props.selection.ids.includes(row().id)}
                       disabled={
@@ -252,14 +249,20 @@ function AgentSelectionDialog(
                         })
                       }
                     />
-                    <span class="settings-row__text">
-                      <span class="settings-row__title">{row().name}</span>{" "}
-                      <small class="settings-row__desc">
+                    <span class="settings-row__title" title={row().name}>
+                      {row().name}
+                    </span>{" "}
+                    <small
+                      class="settings-row__desc"
+                      dir={row().available ? "rtl" : undefined}
+                      title={row().id}
+                    >
+                      <bdi>
                         {row().available
                           ? row().id
                           : t("configView.notifications.savedAgentUnavailable")}
-                      </small>
-                    </span>
+                      </bdi>
+                    </small>
                   </label>
                 )}
               </For>
