@@ -23,6 +23,7 @@ import { normalizeManifestProviderEndpoints } from "./manifest-capability-normal
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
+  completePluginMetadataSnapshot,
   loadPluginMetadataSnapshot,
   projectPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot,
@@ -158,6 +159,26 @@ describe("plugin metadata snapshot", () => {
       envSnapshot.restore();
       await Promise.all(roots.map(removeBundledDiscoveryStateRoot));
     }
+  });
+
+  it("completes a narrowed planning view before publishing the Gateway inventory", () => {
+    const config = {};
+    const index = makeIndex();
+    index.plugins = [...index.plugins, ...makeIndex("other").plugins];
+    index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
+    mockRegistrySnapshot(index);
+    const registry = makeManifestRegistry();
+    registry.plugins.push(...makeManifestRegistry("other").plugins);
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
+
+    const planning = loadPluginMetadataSnapshot({ config, env: {}, index, pluginIds: ["demo"] });
+    expect(planning.plugins.map((plugin) => plugin.id)).toEqual(["demo"]);
+    const complete = completePluginMetadataSnapshot({ snapshot: planning, config, env: {} });
+
+    expect(complete?.pluginIds).toBeUndefined();
+    expect(complete?.plugins.map((plugin) => plugin.id)).toEqual(["demo", "other"]);
+    setGatewayPluginMetadataSnapshot(complete, { config, env: {} });
+    expect(getCurrentPluginMetadataSnapshotState().snapshot).toBe(complete);
   });
 
   it("cold-loads the requested workspace instead of reusing a different lifecycle graph", () => {
