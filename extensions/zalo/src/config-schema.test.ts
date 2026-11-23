@@ -33,3 +33,20 @@ describe("ZaloConfigSchema SecretInput", () => {
     expect(result.success).toBe(true);
   });
 });
+
+describe("ZaloConfigSchema groups", () => {
+  it("accepts groups at top level and per account", () => {
+    const input = {
+      groups: { "zgr-top": { enabled: true, tools: { deny: ["exec"] } } },
+      accounts: { work: { groups: { "zgr-work": {}, "*": { enabled: false } } } },
+    } satisfies ZaloConfig;
+    expect(ZaloConfigSchema.safeParse(input).success).toBe(true);
+  });
+
+  it("rejects requireMention because Zalo only delivers mentioned group messages", () => {
+    const result = ZaloConfigSchema.safeParse({
+      groups: { "zgr-top": { requireMention: false } },
+    });
+    expect(result.success).toBe(false);
+  });
+});

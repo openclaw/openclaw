@@ -85,8 +85,26 @@ Group chats are supported by the plugin (`chatTypes: ["direct", "group"]`) and g
 
 - `channels.zalo.groupPolicy`: `open` | `allowlist` | `disabled`.
 - `channels.zalo.groupAllowFrom` restricts which sender IDs can trigger the bot in groups. Falls back to `allowFrom` when unset.
+- `channels.zalo.groups` limits which groups the bot answers in, keyed by group ID (the inbound `chat.id`, for example `zgr-<group-id>`). Once the map has any entry, groups that are not listed are dropped under every `groupPolicy`, and `"*"` matches any group. Each entry accepts `enabled` (`false` turns that group off) and `tools` (a per-group tool policy). `requireMention` is not available because Zalo only delivers group messages that mention the bot.
+- Under `groupPolicy: "allowlist"`, a group listed by its own ID admits any member while no sender allowlist is in effect (`groupAllowFrom` and its `allowFrom` fallback both empty). When a sender allowlist is in effect, the sender must also match it, and a `"*"` match never skips that check. To admit every member of a listed group while `allowFrom` is set for DMs, set `groupAllowFrom: ["*"]`. Under `open`, listed groups admit any member.
+- `accounts.<id>.groups` replaces the channel-level `groups` map as a whole instead of merging with it. An account without `groups` inherits the channel map. Control commands still need an authorized sender in any admitted group.
 - Default resolution: when `channels.zalo` is configured, an unset `groupPolicy` resolves to `open`. When `channels.zalo` is missing entirely, runtime defaults to `allowlist`.
 - Reported real-world caveat: on some Marketplace-bot setups the bot could not be added to a group at all. If you hit that, verify with your bot's Zalo Bot Platform settings. It is a platform-side constraint, not an OpenClaw policy.
+
+Allow one group and admit all of its members:
+
+```json5
+{
+  channels: {
+    zalo: {
+      groupPolicy: "allowlist",
+      groups: {
+        "zgr-<group-id>": {},
+      },
+    },
+  },
+}
+```
 
 ## Long-polling vs webhook
 
@@ -150,24 +168,25 @@ openclaw message send --channel zalo --target 123456789 --message "hi"
 
 Full configuration: [Configuration](/gateway/configuration)
 
-| Setting                                      | Description                                       | Default               |
-| -------------------------------------------- | ------------------------------------------------- | --------------------- |
-| `channels.zalo.enabled`                      | Enable/disable channel startup                    | `true`                |
-| `channels.zalo.accounts.<id>.botToken`       | Bot token from Zalo Bot Platform                  | -                     |
-| `channels.zalo.accounts.<id>.tokenFile`      | Read token from a file (symlinks rejected)        | -                     |
-| `channels.zalo.accounts.<id>.name`           | Display name                                      | -                     |
-| `channels.zalo.accounts.<id>.enabled`        | Enable/disable this account                       | `true`                |
-| `channels.zalo.accounts.<id>.dmPolicy`       | Per-account DM policy                             | `pairing`             |
-| `channels.zalo.accounts.<id>.allowFrom`      | DM allowlist (user IDs)                           | -                     |
-| `channels.zalo.accounts.<id>.groupPolicy`    | Per-account group policy                          | see [Groups](#groups) |
-| `channels.zalo.accounts.<id>.groupAllowFrom` | Group sender allowlist; falls back to `allowFrom` | -                     |
-| `channels.zalo.accounts.<id>.mediaMaxMb`     | Inbound/outbound media cap (MB)                   | `5`                   |
-| `channels.zalo.accounts.<id>.webhookUrl`     | Enable webhook mode (HTTPS required)              | -                     |
-| `channels.zalo.accounts.<id>.webhookSecret`  | Webhook secret (8-256 chars)                      | -                     |
-| `channels.zalo.accounts.<id>.webhookPath`    | Webhook path on the gateway HTTP server           | webhook URL path      |
-| `channels.zalo.accounts.<id>.proxy`          | Proxy URL for API requests                        | -                     |
-| `channels.zalo.accounts.<id>.responsePrefix` | Outbound response prefix override                 | -                     |
-| `channels.zalo.defaultAccount`               | Default account when multiple are configured      | `default`             |
+| Setting                                      | Description                                        | Default               |
+| -------------------------------------------- | -------------------------------------------------- | --------------------- |
+| `channels.zalo.enabled`                      | Enable/disable channel startup                     | `true`                |
+| `channels.zalo.accounts.<id>.botToken`       | Bot token from Zalo Bot Platform                   | -                     |
+| `channels.zalo.accounts.<id>.tokenFile`      | Read token from a file (symlinks rejected)         | -                     |
+| `channels.zalo.accounts.<id>.name`           | Display name                                       | -                     |
+| `channels.zalo.accounts.<id>.enabled`        | Enable/disable this account                        | `true`                |
+| `channels.zalo.accounts.<id>.dmPolicy`       | Per-account DM policy                              | `pairing`             |
+| `channels.zalo.accounts.<id>.allowFrom`      | DM allowlist (user IDs)                            | -                     |
+| `channels.zalo.accounts.<id>.groupPolicy`    | Per-account group policy                           | see [Groups](#groups) |
+| `channels.zalo.accounts.<id>.groupAllowFrom` | Group sender allowlist; falls back to `allowFrom`  | -                     |
+| `channels.zalo.accounts.<id>.groups`         | Group allowlist and per-group settings by group ID | -                     |
+| `channels.zalo.accounts.<id>.mediaMaxMb`     | Inbound/outbound media cap (MB)                    | `5`                   |
+| `channels.zalo.accounts.<id>.webhookUrl`     | Enable webhook mode (HTTPS required)               | -                     |
+| `channels.zalo.accounts.<id>.webhookSecret`  | Webhook secret (8-256 chars)                       | -                     |
+| `channels.zalo.accounts.<id>.webhookPath`    | Webhook path on the gateway HTTP server            | webhook URL path      |
+| `channels.zalo.accounts.<id>.proxy`          | Proxy URL for API requests                         | -                     |
+| `channels.zalo.accounts.<id>.responsePrefix` | Outbound response prefix override                  | -                     |
+| `channels.zalo.defaultAccount`               | Default account when multiple are configured       | `default`             |
 
 `channels.zalo.botToken`, `channels.zalo.dmPolicy`, and other flat top-level keys are the legacy single-account shorthand for the fields above. Both forms are supported.
 

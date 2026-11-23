@@ -238,6 +238,27 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
       groups: {
         resolveRequireMention: () => true,
       },
+      doctor: {
+        // A group listed by id admits its members without a sender allowlist.
+        shouldSkipDefaultEmptyGroupAllowlistWarning: ({ channelName, account, parent }) => {
+          const groups = account.groups ?? parent?.groups;
+          return (
+            channelName === "zalo" &&
+            typeof groups === "object" &&
+            groups !== null &&
+            Object.entries(groups).some(
+              ([key, entry]) =>
+                key !== "*" &&
+                !(
+                  typeof entry === "object" &&
+                  entry !== null &&
+                  "enabled" in entry &&
+                  entry.enabled === false
+                ),
+            )
+          );
+        },
+      },
       actions: {
         describeMessageTool: ({ cfg, accountId }) => {
           const accounts = accountId

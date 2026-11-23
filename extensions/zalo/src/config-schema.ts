@@ -1,5 +1,6 @@
 import {
   AllowFromListSchema,
+  buildGroupEntrySchema,
   buildMultiAccountChannelSchema,
   DmPolicySchema,
   GroupPolicySchema,
@@ -7,6 +8,15 @@ import {
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
+
+// Zalo delivers group messages only when the bot is mentioned, so requireMention is not offered.
+const ZaloGroupConfigSchema = buildGroupEntrySchema().omit({
+  requireMention: true,
+  toolsBySender: true,
+  skills: true,
+  allowFrom: true,
+  systemPrompt: true,
+});
 
 export const ZaloAccountSchema = z.object({
   name: z.string().optional(),
@@ -22,6 +32,7 @@ export const ZaloAccountSchema = z.object({
   allowFrom: AllowFromListSchema,
   groupPolicy: GroupPolicySchema.optional(),
   groupAllowFrom: AllowFromListSchema,
+  groups: z.object({}).catchall(ZaloGroupConfigSchema).optional(),
   mediaMaxMb: z.number().optional(),
   proxy: z.string().optional(),
   responsePrefix: z.string().optional(),
