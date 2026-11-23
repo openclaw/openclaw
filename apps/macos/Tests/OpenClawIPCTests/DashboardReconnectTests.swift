@@ -293,7 +293,7 @@ struct DashboardReconnectTests {
         #expect(reconnected.auth == identified.auth)
     }
 
-    @Test func `unhiding the app reconciles a native reconnect missed by the retained window`() async throws {
+    @Test func `hidden dashboard follows native reconnects before returning and stops on close`() async throws {
         try await TestIsolation.withIsolatedState {
             let server = try await DashboardHTTPFixture.start()
             defer { server.stop() }
@@ -308,9 +308,7 @@ struct DashboardReconnectTests {
                         credentials: [:],
                         isCurrent: { generation.value == accepted },
                         waitForInvalidation: nil)
-                },
-                endpointStateProvider: { endpoint },
-                observeGatewayChanges: true)
+                })
             let controller = DashboardWindowController(
                 url: server.url(),
                 auth: .nativeDevice(gatewayUrl: url.absoluteString, token: "synthetic-owner", password: nil),
@@ -328,17 +326,24 @@ struct DashboardReconnectTests {
             try #require(current.documentHost.hasCurrentNativeStartupCredentials)
 
             window.orderOut(nil)
-            try #require(!current.hasRetainedWindow)
-            generation.setValue(1)
-            await manager.handleEndpointState(endpoint)
-            try #require(!current.documentHost.hasCurrentNativeStartupCredentials)
-            window.orderFront(nil)
-            NotificationCenter.default.post(name: NSApplication.didUnhideNotification, object: NSApp)
-            try await TestWait.state("visible dashboard received the current native binding") {
-                current.documentHost.hasCurrentNativeStartupCredentials
+            for revision in 1...2 {
+                generation.setValue(revision)
+                try #require(!current.documentHost.hasCurrentNativeStartupCredentials)
+                await manager.handleEndpointState(endpoint)
+                try #require(current.documentHost.hasCurrentNativeStartupCredentials)
+                #expect(!window.isVisible)
+                #expect(current.documentHost.isNativeAuthAvailable())
             }
+            window.orderFront(nil)
             #expect(manager._testController() === current)
             #expect(try await current.webView.evaluateJavaScript("window.unsentDraft") as? String == "keep me")
+
+            current.closeDashboard()
+            generation.setValue(3)
+            await manager.handleEndpointState(endpoint)
+            #expect(!current.documentHost.hasCurrentNativeStartupCredentials)
+            #expect(!current.documentHost.isNativeAuthAvailable())
+            #expect(!window.isVisible)
         }
     }
 
