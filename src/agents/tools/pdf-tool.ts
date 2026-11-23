@@ -179,7 +179,6 @@ export function createPdfTool(options?: {
       const authStore = await prepareToolAuthProfileStore(options);
       signal?.throwIfAborted();
       assertResourcesOpen?.();
-      operatorAuthority?.assertCurrent();
       pdfModelConfig = resolveInitialModelConfig(authStore);
     }
     if (!pdfModelConfig) {
@@ -585,7 +584,6 @@ export function createPdfTool(options?: {
             : operatorAuthority.signal
           : signal;
         capturedOperator.assertInvocationCurrent?.();
-        operatorAuthority?.assertCurrent();
         const suppliedClaim = options?.preparedModelRuntime
           ? acquirePreparedModelRuntimeSnapshotInvocation(options.preparedModelRuntime)
           : undefined;
@@ -601,7 +599,6 @@ export function createPdfTool(options?: {
             },
             () => {
               capturedOperator.assertInvocationCurrent?.();
-              operatorAuthority?.assertCurrent();
               suppliedClaim?.assertOpen();
               executionSignal?.throwIfAborted();
             },

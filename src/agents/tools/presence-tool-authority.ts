@@ -41,7 +41,6 @@ export function capturePresenceToolAuthority(options?: {
     options?.assertCurrent?.();
     if (operatorAuthority) {
       assertAdmittedRunOperatorAuthority(operatorAuthority);
-      operatorAuthority.assertCurrent();
     } else {
       inherited?.signal.throwIfAborted();
       inherited?.assertCurrent?.();

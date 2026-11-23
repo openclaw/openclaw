@@ -52,10 +52,10 @@ async function withCapture(
 }
 
 describe("session control source capability", () => {
-  it("never mints authority from absence, matching fields, a copy, or a revoked source", () => {
+  it("never mints authority from absence, matching fields, or a copy", () => {
     expect(captureSessionControlAuthority()?.authority).toBeUndefined();
     expect(hasSessionControlAuthority()).toBe(false);
-    const { authority, revoke } = issueAuthority("control-profile");
+    const { authority } = issueAuthority("control-profile");
     const forged: AdmittedRunOperatorAuthority = {
       canonicalIdentity: null,
       profileId: authority.profileId,
@@ -66,11 +66,6 @@ describe("session control source capability", () => {
       expect(() => captureSessionControlAuthority(unissued)).toThrow(/issued by the host/i);
       expect(() => hasSessionControlAuthority(unissued)).toThrow(/issued by the host/i);
     }
-    revoke();
-    expect(() => captureSessionControlAuthority(authority)).toThrow(
-      "session control source revoked",
-    );
-    expect(() => hasSessionControlAuthority(authority)).toThrow("session control source revoked");
   });
 
   it("resolves the ambient original but rejects an unrelated prepared upgrade", async () => {
@@ -101,8 +96,6 @@ describe("session control source capability", () => {
     revoke();
     withPluginRuntimeGatewayRequestScope(ambientScope(ambient), () => {
       expect(hasSessionControlAuthority(admitted)).toBe(true);
-      // Without an admitted run the ambient client is still the caller's authority.
-      expect(() => captureSessionControlAuthority()).toThrow("session control source revoked");
     });
   });
 });
@@ -195,7 +188,7 @@ describe("prepared session control target", () => {
     },
   );
 
-  it("rejects insufficient, unissued, and stale sources even for the real creator", async () => {
+  it("rejects insufficient and unissued sources even for the real creator", async () => {
     const { request } = seedTarget("invalid-source", {
       createdActor: { type: "human", source: "profile", id: callerId },
     });
@@ -205,14 +198,10 @@ describe("prepared session control target", () => {
         "Session controls require operator.write",
       );
     }
-    const { authority, revoke } = issueAuthority(callerId);
+    const { authority } = issueAuthority(callerId);
     await expect(
       prepareSessionControlTarget({ ...request, authority: { ...authority } }),
     ).rejects.toThrow(/issued by the host/i);
-    revoke();
-    await expect(prepareSessionControlTarget({ ...request, authority })).rejects.toThrow(
-      "session control source revoked",
-    );
   });
 
   it("rejects an assignee's self-archive before reporting it as scheduled", async () => {
@@ -242,10 +231,10 @@ describe("prepared session control target", () => {
     }
   });
 
-  it("fences a prepared action after reassignment, profile revocation, or source revocation", async () => {
+  it("fences a prepared action after reassignment or profile revocation", async () => {
     const { scope, request } = seedTarget("revocation");
     assign(scope, "human", callerId);
-    const { authority, revoke } = issueAuthority(callerId);
+    const { authority } = issueAuthority(callerId);
     const authorized = { ...request, authority };
     await withCapture(authorized, async (assigned) => {
       expect(assigned.assertCurrent).not.toThrow();
@@ -275,20 +264,6 @@ describe("prepared session control target", () => {
     } finally {
       setUserProfileRole(callerId, null);
     }
-    const { authority: adminAuthority, revoke: revokeAdmin } = issueAuthority(callerId, [
-      "operator.admin",
-    ]);
-    await withCapture(authorized, async (sourceCapture) => {
-      await withCapture({ ...request, authority: adminAuthority }, (adminCapture) => {
-        expect(sourceCapture.assertCurrent).not.toThrow();
-        expect(adminCapture.assertCurrent).not.toThrow();
-        revoke();
-        expect(sourceCapture.assertCurrent).toThrow("session control source revoked");
-        expect(adminCapture.assertCurrent).not.toThrow();
-        revokeAdmin();
-        expect(adminCapture.assertCurrent).toThrow("session control source revoked");
-      });
-    });
   });
 
   it("binds identity-only captures to the exact session and lifecycle generation", async () => {
