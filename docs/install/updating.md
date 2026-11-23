@@ -185,11 +185,12 @@ the last Doctor result and run those inspections after Gateway readiness; a
 narrow repair pass must not replace them with an empty list. The candidate must
 contain this fix.
 
-Candidate Doctor accepts a read-only reader rebuilding a checkpointed SQLite WAL
-index. Rebuilding that index can clear its commit counter and checksum without
-changing the database. Migration admission still checks physical identity and
-committed content, so an outside write remains refused. The candidate must contain
-this repair; shipped first-hop updaters need no change.
+Candidate Doctor accepts a read-only reader that finishes rebuilding a checkpointed
+SQLite WAL index between update capture and source verification. Rebuilding that
+index can clear its commit counter and checksum without changing the database.
+Migration admission still checks physical identity and committed content, so an
+outside write remains refused. The candidate must contain this repair; shipped
+first-hop updaters need no change.
 
 At Gateway start, a preparation lock whose owner is dead or has the new Gateway's
 PID is released after its run is recorded as failed with reason `interrupted`.

@@ -305,39 +305,45 @@ function retainedWalFixture(checkpointed = false) {
   }
   writer.close();
   reader.close();
-  expect(fs.statSync(`${fixture.file}-wal`).size > 32).toBe(!checkpointed);
+  if (checkpointed) {
+    expect(fs.statSync(`${fixture.file}-wal`).size).toBe(0);
+  } else {
+    expect(fs.statSync(`${fixture.file}-wal`).size).toBeGreaterThan(32);
+  }
   expect(fs.readFileSync(`${fixture.file}-shm`).readUInt32LE(8)).not.toBe(0);
   return fixture;
 }
 
-it.each([false, true])(
-  "binds a rebuilt WAL index during the read (checkpointed=%s)",
-  (checkpointed) => {
-    const { file, staging } = retainedWalFixture(checkpointed);
-    const live = readUpdateDatabaseGenerationPair([file]);
-    let rebuilt: DatabaseSync | undefined;
-    duringGenerationRead(() => {
-      rebuilt = openReader(file);
-    });
-    try {
-      const pair = readUpdateDatabaseGenerationPair([file]);
-      expect(fs.readFileSync(`${file}-shm`).readUInt32LE(8)).toBe(0);
-      expect(pair.committed[file]).not.toBe(live.committed[file]);
-      expect(pair.committed[file]).toBe(live.rebuiltIndexAlternates[file]);
-      expect(readUpdateDatabaseGenerationPair([file]).committed).toEqual(pair.committed);
-    } finally {
-      rebuilt?.close();
-    }
-    expect(fs.readdirSync(staging)).toEqual([]);
-  },
-);
+it("binds a WAL index an outside reader rebuilds over retained frames during the read", () => {
+  const { file, staging } = retainedWalFixture();
+  const live = readUpdateDatabaseGenerationPair([file]);
+  let rebuilt: DatabaseSync | undefined;
+  duringGenerationRead(() => {
+    rebuilt = openReader(file);
+  });
+  try {
+    const pair = readUpdateDatabaseGenerationPair([file]);
+    expect(fs.readFileSync(`${file}-shm`).readUInt32LE(8)).toBe(0);
+    expect(pair.committed[file]).not.toBe(live.committed[file]);
+    expect(pair.committed[file]).toBe(live.rebuiltIndexAlternates[file]);
+    expect(readUpdateDatabaseGenerationPair([file]).committed).toEqual(pair.committed);
+  } finally {
+    rebuilt?.close();
+  }
+  expect(fs.readdirSync(staging)).toEqual([]);
+});
 
 it.each([false, true])(
   "refuses a writer committing during the read (checkpointed=%s)",
   (checkpointed) => {
-    const { file, staging } = generationFixture("wal-absent");
+    const { file, staging } = checkpointed
+      ? retainedWalFixture(true)
+      : generationFixture("wal-absent");
     const writer = new DatabaseSync(file);
     let reader: DatabaseSync | undefined;
+    if (checkpointed) {
+      expect(fs.readFileSync(`${file}-shm`).readUInt32LE(8)).not.toBe(0);
+    }
     try {
       duringGenerationRead(() => {
         writer.exec("INSERT INTO receipt VALUES ('during')");
@@ -348,7 +354,9 @@ it.each([false, true])(
         }
       });
       expect(() => readUpdateDatabaseGenerationPair([file])).toThrow(
-        /SQLite file generation changed while reading/,
+        checkpointed
+          ? /SQLite (?:file generation changed while reading|WAL commit publication could not be verified)/
+          : /SQLite file generation changed while reading/,
       );
     } finally {
       reader?.close();
