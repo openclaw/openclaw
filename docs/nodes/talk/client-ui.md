@@ -1,12 +1,24 @@
 ---
-summary: "Talk controls and behavior in the macOS, Apple Watch, and Android clients"
+summary: "Talk controls and behavior in the iOS, macOS, Apple Watch, and Android clients"
 read_when:
+  - Ending Talk on iPhone or iPad without canceling accepted work
   - Using Talk from the macOS menu bar or overlay
   - Setting up standalone voice on Apple Watch
   - Using dictation, voice notes, or Talk on Android
 title: "Talk client UI"
 sidebarTitle: "Client UI"
 ---
+
+## iOS UI
+
+- Ending Talk stops listening and playback without canceling accepted agent work.
+  Its answer can still finish in chat history. To cancel the work, use the chat
+  run's **Stop** control or say "cancel" before ending the call.
+- Realtime Gateway relay detachment requires a Gateway that advertises
+  `talk-session-close-disposition`; older Gateways retain their legacy aborting
+  close. Direct WebRTC Talk also preserves accepted work when ended.
+- Stopping the iPhone's Talk session from Apple Watch has the same behavior.
+  Standalone Watch Talk is unchanged.
 
 ## macOS UI
 

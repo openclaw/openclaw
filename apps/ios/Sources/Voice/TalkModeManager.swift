@@ -792,7 +792,8 @@ final class TalkModeManager {
         self.silenceTask = nil
         self.resetRealtimeRestartState()
         self.cancelRealtimePrefetch()
-        self.stopRealtimeSession()
+        // Ending the audio conversation does not cancel work already accepted by the agent.
+        self.stopRealtimeSession(preserveRuns: true)
         self.closeLogicalRealtimeVoiceSessions()
         self.stopRecognition()
         self.stopSpeaking()
@@ -2655,7 +2656,12 @@ final class TalkModeManager {
         self.realtimeRelayStartGeneration = nil
         let realtimeRelaySession = self.realtimeRelaySession
         self.realtimeRelaySession = nil
-        realtimeRelaySession?.stop()
+        if preserveRuns {
+            // Reuse the relay's capability-gated detach cleanup for End Talk.
+            realtimeRelaySession?.stopAfterFailure()
+        } else {
+            realtimeRelaySession?.stop()
+        }
         if hadRealtimeOwner {
             self.isListening = false
             self.isSpeaking = false
@@ -4458,7 +4464,12 @@ extension TalkModeManager {
         self.handleRealtimeRelayTermination(termination)
     }
 
-    func _test_prepareEnabledRealtimeSessionForClose() {
+    func _test_prepareEnabledRealtimeSessionForClose(
+        direct: TalkRealtimeWebRTCSession? = nil,
+        relay: RealtimeTalkRelaySession? = nil)
+    {
+        if let direct { self.realtimeSession = direct }
+        if let relay { self.realtimeRelaySession = relay }
         self.isEnabled = true
         self.gatewayConnected = true
         self.captureMode = .idle
