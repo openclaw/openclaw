@@ -291,7 +291,8 @@ it.each([
   { language: "fr", request: { language: "" }, expected: undefined },
   { language: "pt-BR", expected: "pt" },
   { command: "whisper-cli", language: "fr", request: { language: "pt-BR" }, expected: "pt" },
-  { command: "whisper-cli", converted: true, expected: undefined },
+  { command: "whisper-cli", converted: true, expected: "auto" },
+  { command: "whisper-cli", language: "fr", request: { language: "" }, expected: "auto" },
   { command: "sherpa-onnx-offline", expected: undefined },
 ])("runs auto-discovered audio tools with language: %j", async (options) => {
   await withTestDir({ prefix: "openclaw-auto-language-" }, async (dir) => {
@@ -379,7 +380,9 @@ it.each([
       ).toContain(`${path.parse(mediaPath).name}.wav`);
       expect(args.slice(0, 4)).toEqual(["-m", model, "-otxt", "-of"]);
       expect(args[5]).toBe("-nt");
-      expect(path.basename(args[6])).toBe(`${path.parse(mediaPath).name}.wav`);
+      expect(path.basename(expectDefined(args.at(-1), "converted audio argument"))).toBe(
+        `${path.parse(mediaPath).name}.wav`,
+      );
     }
     if (options.expected === undefined) {
       expect(args).not.toContain("--language");

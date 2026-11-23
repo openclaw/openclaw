@@ -275,7 +275,8 @@ export async function inspectLocalAudioSelection(language?: string): Promise<Loc
     "{{OutputBase}}",
     "-nt",
     // whisper.cpp assumes English without a language, unlike Python Whisper's autodetection.
-    ...languageArgs,
+    "--language",
+    languageCode || "auto",
     "{{AttachmentPath}}",
   ];
   const sherpaArgs = [
