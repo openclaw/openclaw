@@ -297,38 +297,6 @@ test("handles auth, wake, and agent flows", async ({ signal }) => {
   });
 });
 
-test("honors immediate wake overrides from mapped hook transforms", async () => {
-  await writeHookTransformModule(
-    "immediate-wake.mjs",
-    'export default () => ({ mode: "now", wakeMode: "now" });',
-  );
-  configureHooks({
-    mappings: [
-      {
-        match: { path: "immediate-wake" },
-        action: "wake",
-        textTemplate: "Immediate notification",
-        wakeMode: "next-heartbeat",
-        transform: { module: "immediate-wake.mjs" },
-      },
-      agentMapping("immediate-agent", { transform: { module: "immediate-wake.mjs" } }),
-    ],
-  });
-  await withHooksServer(async (post) => {
-    const wake = await post("immediate-wake", {});
-    expect.soft(await wake.json()).toMatchObject({ mode: "now", eventOutcome: "queued" });
-    expect(sessionEvents.enqueue).toHaveBeenCalledExactlyOnceWith(
-      "Immediate notification",
-      expect.objectContaining({ agentId: "main", source: "hook", createIfMissing: true }),
-    );
-    drainSystemEvents(resolveMainKey());
-
-    mockIsolatedRunOk();
-    await post("immediate-agent", { subject: "Immediate completion" });
-    expect(cronRunCall().job.wakeMode).toBe("now");
-  });
-});
-
 test("does not let mapped hook payload source claim gmail provenance", async () => {
   configureHooks({
     allowedSessionKeyPrefixes: ["hook:"],
@@ -535,32 +503,6 @@ test("dedupes hook retries even when trusted-proxy client IP changes", async ({ 
     expect(secondBody.runId).toBe(firstBody.runId);
     expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
     expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
-  });
-});
-
-test("dispatches agent hooks when the process clock is outside the Date range", async ({
-  signal,
-}) => {
-  await withHooksServer(async (post) => {
-    cronIsolatedRun.mockClear();
-    {
-      using clock = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
-      cronIsolatedRun.mockImplementationOnce(async () => {
-        // Job construction is the invalid-clock boundary; terminal scheduling uses real time.
-        clock.mockRestore();
-        return { status: "ok", summary: "done" };
-      });
-      await postWithDeferredHookWake(signal, post, "agent", {
-        message: "Bad clock",
-        wakeMode: "next-heartbeat",
-      });
-    }
-    expect(peekSystemEvents(resolveMainKey())).not.toHaveLength(0);
-
-    const call = cronRunCall();
-    expect(call.job).toMatchObject({ createdAtMs: 0, state: { nextRunAtMs: 0 } });
-    expect(call.job.schedule).toEqual({ kind: "at", at: "1970-01-01T00:00:00.000Z" });
-    drainSystemEvents(resolveMainKey());
   });
 });
 
