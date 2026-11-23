@@ -18,8 +18,8 @@ import {
 } from "../../routing/session-key.js";
 import { resolveDefaultSessionStorePath } from "./paths.js";
 import { isSessionTranscriptProjectionUnavailableError } from "./session-accessor.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { withSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
 import type { SessionTranscriptInactiveIdentityProbe } from "./session-transcript-worker-read.types.js";
 
