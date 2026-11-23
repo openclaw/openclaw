@@ -485,6 +485,13 @@ suite.define(() => {
 
   it("opens an external question step without answering until completion is submitted", async () => {
     const { gateway, page } = await openQuestionPage();
+    const submissionCodeLoaded = () =>
+      page.evaluate(() =>
+        performance
+          .getEntriesByType("resource")
+          .some((entry) => entry.name.includes("question-prompt-submission")),
+      );
+    expect(await submissionCodeLoaded()).toBe(false);
     const url = "https://chatgpt.com/apps/github/connector_question_proof";
     const prompt = "Sign in to GitHub on ChatGPT to use it in Codex.";
     await page.context().route(url, (route) =>
@@ -530,6 +537,7 @@ suite.define(() => {
     } satisfies QuestionResolveResult);
     await button(panel, "Submit").click();
     await expectResolution(gateway, { id: request.id, answers });
+    expect(await submissionCodeLoaded()).toBe(true);
     expect(await gateway.getRequests("question.resolve")).toHaveLength(1);
     await expectCount(panel, 0);
     await expectQuestionAttention(page, null);
