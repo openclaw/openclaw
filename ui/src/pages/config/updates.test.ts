@@ -150,6 +150,22 @@ describe("renderUpdates", () => {
     expect(action.querySelector("button")?.classList.contains("primary")).toBe(false);
   });
 
+  it.each([
+    { canAdmin: false, refreshing: false, title: "Admin access required." },
+    { canAdmin: true, refreshing: true, title: "Checking for updates…" },
+  ])("explains a disabled retry as $title", ({ canAdmin, refreshing, title }) => {
+    renderUpdates({
+      canAdmin,
+      canUpdate: canAdmin,
+      update: { updateRun: failedRun(), updateStatusRefreshing: refreshing },
+    });
+    const retry = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Retry update",
+    )!;
+    expect(retry.disabled).toBe(true);
+    expect(retry.title).toBe(title);
+  });
+
   it.each(["Update Gateway…", "Retry update"])(
     "dispatches %s to the latest handler without replacing the button",
     (label) => {
