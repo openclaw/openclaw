@@ -29,6 +29,7 @@ import {
   isSystemEventStoreCurrent,
   registerSystemEventStoreOwner,
   recordSystemEventStoreReplaced,
+  resolveSystemEventQueueKey,
 } from "./system-event-ownership.js";
 
 export type SystemEvent = {
@@ -406,6 +407,26 @@ export function claimSystemEventTurn(
 export function isSystemEventTurnOwned(sessionKey: string, occurrence: SystemEvent): boolean {
   const event = getSessionQueue(sessionKey)?.queue.find((entry) => entry.id === occurrence.id);
   return event !== undefined && turnOwners.has(event);
+}
+
+/**
+ * A producer occurrence claimed for its own turn that has not started yet: its admission is
+ * still preparing, or a session-event batch lane holds it behind the previous event turn.
+ * Deferred automation notices wait for their own job, so they are not pending turns.
+ */
+export function hasPendingSystemEventTurn(sessionKey: string, agentId?: string): boolean {
+  let key: string;
+  try {
+    key = resolveSystemEventQueueKey(sessionKey, agentId);
+  } catch {
+    return false;
+  }
+  return Boolean(
+    getSessionQueue(key)?.queue.some((event) => {
+      const owner = turnOwners.get(event);
+      return owner !== undefined && !owner.started && !owner.automation;
+    }),
+  );
 }
 
 /** Legacy deferred wakes attach notices to one ordinary job, never a later user message. */

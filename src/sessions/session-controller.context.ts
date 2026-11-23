@@ -1,3 +1,4 @@
+import { hasPendingSystemEventTurn } from "../infra/system-events.js";
 import { runWithAsyncStore } from "../shared/async-store.js";
 import type {
   ReplyOperation,
@@ -112,22 +113,29 @@ export function sourceSettlements(
   );
 }
 
-/** Includes direct producers and accepted unbound sources, not only reply payloads. */
+/**
+ * Includes direct producers and accepted unbound sources, not only reply payloads, and
+ * producer occurrences claimed for a turn that have not reached the mailbox yet.
+ */
 export function hasSessionControllerQueuedWork(
   scope: string,
   identities: Iterable<string | undefined>,
   agentId?: string,
 ): boolean {
-  return matchingEntries(targetFrom({ scope, identities, agentId })).some((entry) => {
-    const mailbox = entry.mailbox;
-    return Boolean(
-      mailbox &&
-      (mailbox.droppedCount > 0 ||
-        mailbox.entries.some(
-          (input) => input.phase !== "consumed" && !isCurrentSessionControllerTurnInput(input),
-        )),
-    );
-  });
+  const ids = [...identities];
+  return (
+    ids.some((key) => key !== undefined && hasPendingSystemEventTurn(key, agentId)) ||
+    matchingEntries(targetFrom({ scope, identities: ids, agentId })).some((entry) => {
+      const mailbox = entry.mailbox;
+      return Boolean(
+        mailbox &&
+        (mailbox.droppedCount > 0 ||
+          mailbox.entries.some(
+            (input) => input.phase !== "consumed" && !isCurrentSessionControllerTurnInput(input),
+          )),
+      );
+    })
+  );
 }
 export function isCompetingSessionControllerWorkActive(
   scope: string,

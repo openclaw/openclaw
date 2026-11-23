@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
@@ -21,6 +22,13 @@ import { createChatSendLateFollowupDisposition } from "../../gateway/server-meth
 import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import { localPlacement } from "../../gateway/worker-environments/placement-suite.test-support.js";
 import { rotateAgentRunRegistryLifecycleGeneration } from "../../infra/agent-run-registry.js";
+import {
+  claimSystemEventTurn,
+  enqueueAutomationSystemEvent,
+  enqueueSystemEvent,
+  peekSystemEventEntries,
+  resetSystemEventsForTest,
+} from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import {
@@ -343,6 +351,49 @@ describe("Goal continuation eligibility", () => {
     f.params.result = { ...normal, ...result, meta: { ...normal.meta, ...result.meta } };
     expect(await enqueueGoalContinuation(f.params)).toBe(false);
     expect(enqueueFollowupRun).not.toHaveBeenCalled();
+  });
+
+  // A background exec result claims its own turn before admission reaches the mailbox:
+  // its target preparation is still reading, or a session-event batch lane holds it
+  // behind the previous event turn. That pending result runs before the Goal.
+  const claimPendingResult = (sessionKey = "agent:main:goal") => {
+    enqueueSystemEvent("Exec completed (goal-exec, code 0)", { sessionKey });
+    const claim = claimSystemEventTurn(sessionKey, peekSystemEventEntries(sessionKey), () => {});
+    return expectDefined(claim, "pending exec result claim");
+  };
+  afterEach(() => resetSystemEventsForTest());
+
+  it("waits for a held exec result, then lets its own turn continue the Goal", async () => {
+    const f = fixture();
+    const held = claimPendingResult();
+    expect(await enqueueGoalContinuation(f.params)).toBe(false);
+    expect(enqueueFollowupRun).not.toHaveBeenCalled();
+    // The lane drains: the held result starts its turn, which owns the next continuation.
+    held.start();
+    expect(await enqueueGoalContinuation(f.params)).toBe(true);
+    expect(enqueueFollowupRun).toHaveBeenCalledOnce();
+  });
+
+  it("stops deferring once a held exec result drains with an error", async () => {
+    const f = fixture();
+    const held = claimPendingResult();
+    expect(await enqueueGoalContinuation(f.params)).toBe(false);
+    // A rejected flush consumes the occurrence; nothing pending remains for this chat.
+    expect(held.cancel()).toBe(true);
+    // The check no longer blocks; the Goal's next turn-end evaluation continues it.
+    expect(await enqueueGoalContinuation(f.params)).toBe(true);
+    expect(enqueueFollowupRun).toHaveBeenCalledOnce();
+  });
+
+  it("does not wait for another chat's result or a deferred automation notice", async () => {
+    const f = fixture();
+    claimPendingResult("agent:main:other");
+    enqueueAutomationSystemEvent(
+      "Scheduled notice",
+      { sessionKey: "agent:main:goal" },
+      { jobId: "job-1", notBeforeRunAtMs: Date.now() + 3_600_000, assertCurrent: () => {} },
+    );
+    expect(await enqueueGoalContinuation(f.params)).toBe(true);
   });
 });
 
