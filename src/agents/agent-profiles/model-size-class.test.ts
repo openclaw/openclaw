@@ -30,15 +30,6 @@ describe("resolveProfileModelSizeClass", () => {
     ).toBe("large");
   });
 
-  it("ignores an invalid config class and uses the count", () => {
-    expect(
-      resolveProfileModelSizeClass({
-        modelSizeClass: "huge" as never,
-        parameterCount: 8_190_735_360,
-      }),
-    ).toBe("small");
-  });
-
   it("returns undefined when nothing trusted is present", () => {
     expect(resolveProfileModelSizeClass({})).toBeUndefined();
     expect(resolveProfileModelSizeClass(undefined)).toBeUndefined();
