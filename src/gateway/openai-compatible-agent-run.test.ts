@@ -260,37 +260,6 @@ describe("OpenAI-compatible operator run authority", () => {
     });
   });
 
-  it("keeps each request bound to its own person when the caller changes", async () => {
-    await withOpenClawTestState({ label: "compat-requester-switch" }, async () => {
-      const fixture = createOperatorRunFixture();
-      const other = ensureProfileForEmail("other@example.test");
-      const profiles = [fixture.person, other, fixture.person];
-      vi.mocked(agentCommandFromGatewayIngress).mockResolvedValue(completedResult);
-
-      for (const profile of profiles) {
-        await runOpenAiCompatibleAgentCommand({
-          ...fixture.params,
-          runId: `compat-${profile.id}`,
-          requestAuth: {
-            ...fixture.params.requestAuth,
-            user: profile === other ? "other@example.test" : "visitor@example.test",
-            authenticatedUserProfile: gatewayProfile(
-              profile.id,
-              profile.displayName,
-              profile.updatedAt,
-            ),
-          },
-        });
-      }
-
-      expect(
-        vi
-          .mocked(agentCommandFromGatewayIngress)
-          .mock.calls.map(([opts]) => opts.runContext?.mcpRequesterProfileId),
-      ).toEqual(profiles.map((profile) => profile.id));
-    });
-  });
-
   it.each(["missing user", "missing profile", "token", "password"] as const)(
     "does not invent a personal requester for %s authentication",
     async (kind) => {

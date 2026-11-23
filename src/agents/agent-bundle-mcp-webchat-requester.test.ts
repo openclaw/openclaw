@@ -238,6 +238,41 @@ it("keeps turn guards off cached runtimes and fences every MCP operation", async
   }
 });
 
+it("settles an admitted personal write even if someone else steers before its reply", async () => {
+  await withTurn("ada-profile", async ({ turn }) => {
+    const owner = readWebchatMcpRequester(turn)!;
+    const respond = createDeferred<{ content: [{ type: "text"; text: string }] }>();
+    const callTool = vi.fn(() => respond.promise);
+    const runtime = makeManagerRuntime({
+      sessionId: turn.sessionId,
+      workspaceDir: "/workspace",
+      requesterScope: { requesterSenderId: owner.requesterSenderId },
+    });
+    runtime.callTool = callTool;
+    const view = createMcpRunView(runtime, owner.assertCurrent);
+    const pending = view.callTool("calendar", "write", {});
+    expect(callTool).toHaveBeenCalledOnce();
+    turn.replyOperation!.personalToolParticipants!.accept({
+      operatorAuthority: createAdmittedRunOperatorAuthority({
+        profileId: "grace-profile",
+        canonicalIdentity: { profileId: "grace-profile" },
+        scopes: ["operator.read", "operator.write"],
+        gatewayAccessGrant: null,
+        modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: {} }),
+        assertCurrent() {},
+      }),
+      gatewayUiCommandTarget: { connId: "grace-connection", profileId: "grace-profile" },
+    });
+    const receipt = { content: [{ type: "text", text: "write committed" }] } as const;
+    respond.resolve({ content: [...receipt.content] });
+    await expect(pending).resolves.toEqual(receipt);
+    await expect(view.callTool("calendar", "write", {})).rejects.toThrow(
+      "Several people have steered",
+    );
+    expect(callTool).toHaveBeenCalledOnce();
+  });
+});
+
 it("does not lend a captured personal credential to another session or run", async () => {
   await withTurn("ada-profile", async ({ turn }) => {
     expect(readWebchatMcpRequester(turn)?.requesterSenderId).toBe("ada-profile");

@@ -26,12 +26,14 @@ export function createMcpRunView(
     signal?.throwIfAborted();
     assertCurrent();
   };
-  const run = <T>(request: () => Promise<T>) =>
-    withGuardedFetchRequestAuthority(assertActive, async () => {
-      const result = await runWithSessionMcpToolCallAuthority(assertActive, request);
-      assertActive();
-      return result;
-    });
+  const run = async <T>(request: () => Promise<T>) => {
+    assertActive();
+    // An admitted operation settles under its original requester. A new participant
+    // can deny a later call, not discard a result the server already produced.
+    return await withGuardedFetchRequestAuthority(assertActive, () =>
+      runWithSessionMcpToolCallAuthority(assertActive, request),
+    );
+  };
   return new Proxy(runtime, {
     get(target, key) {
       if (key === "requesterConnect") {
