@@ -183,8 +183,7 @@ Candidate Doctor's retirement-only pass retains deferred advisory inspection
 selectors in its result. Shipped v2026.11.7 and v2026.11.10-beta.1 updaters read
 the last Doctor result and run those inspections after Gateway readiness; a
 narrow repair pass must not replace them with an empty list. The candidate must
-contain this fix. Release updates in `src/update/` do not yet run these advisory
-inspections after commit.
+contain this fix.
 
 At Gateway start, a preparation lock whose owner is dead or has the new Gateway's
 PID is released after its run is recorded as failed with reason `interrupted`.

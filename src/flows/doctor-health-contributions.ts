@@ -487,8 +487,10 @@ async function selectPostActivationInspections(
     }
     // These runners also report diagnostics their lint checks do not preserve:
     // snapshot scan errors and the identities of errored workspace plugins.
-    const { id } = contribution;
-    if (id === "doctor:session-snapshots" || id === "doctor:workspace-status") {
+    if (
+      contribution.id === "doctor:session-snapshots" ||
+      contribution.id === "doctor:workspace-status"
+    ) {
       return [];
     }
     const checks = resolveContributionHealthChecks(contribution, checksById);
