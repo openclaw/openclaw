@@ -11,7 +11,6 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
 import { hasErrnoCode } from "../../src/infra/errno.js";
 import { createFileLockManager } from "../../src/infra/file-lock-manager.js";
 import {
@@ -22,6 +21,7 @@ import {
 import { resolveMaxOutputBytes } from "../../src/process/exec-output.js";
 import { withEnvAsync } from "../../src/test-utils/env.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import {
   createOpenClawTestInstance,
   formatGatewayReadinessDiagnostic,
@@ -319,6 +319,16 @@ if (kind === "cli-json") {
   process.exit(0);
 }
 process.stdout.write("fake gateway attempt " + attempt + "\\n");
+if (kind === "held-ready-tree") {
+  const descendant = spawn(process.execPath, ["-e", 'process.send("ready");setInterval(() => {}, 1000);'], {
+    detached: true, stdio: ["ignore", "ignore", "ignore", "ipc"],
+  });
+  await new Promise((resolve) => descendant.once("message", resolve));
+  writeFileSync(tracePath + ".writer-pid", String(descendant.pid));
+  recordFixtureProcess(descendant.pid);
+  descendant.disconnect();
+  descendant.unref();
+}
 if (kind === "cli" || kind === "cli-drain") {
   process.stderr.write("cli diagnostic\\n");
   if (argv[0] === "wait") {
@@ -382,7 +392,7 @@ if (kind === "detached-stopped") {
 }
 const server = createServer(async (req, res) => {
   if (req.url === "/startupz") {
-    if (kind === "held-ready") await waitForControl(controlUrl + "/wait");
+    if (kind === "held-ready" || kind === "held-ready-tree") await waitForControl(controlUrl + "/wait");
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ ok: true, status: "started" }));
     return;
@@ -432,6 +442,7 @@ writeFileSync("dist/.runtime-postbuildstamp", "");
           kind === "late-refuse" ||
           kind === "late-legacy-refuse" ||
           kind === "startup-late-legacy-refuse" ||
+          kind === "held-ready-tree" ||
           kind === "cli-drain",
       )
       ? `${tracePath}.writer-pid`
@@ -1177,14 +1188,18 @@ describe("openclaw test instance", () => {
       const cancelled = new Error(`instance owner cancelled during ${phase}`);
       const pending = phase === "pending probe";
       const control = pending ? await createGatewayControl() : undefined;
-      const { instance } = await createFakeGateway(pending ? "held-ready" : "ready", {
-        control,
-        signal: controller.signal,
-      });
+      const { instance, tracePath } = await createFakeGateway(
+        pending ? "held-ready-tree" : "ready",
+        {
+          control,
+          signal: controller.signal,
+        },
+      );
       // Cancellation owns this proof; native bootstrap must not consume its policy budget.
       const { restoreClock } = freezePolicyClock(signal);
       const nativeFetch = globalThis.fetch;
       let child: typeof instance.child;
+      let descendantPid: number | undefined;
       const fetchSpy = pending
         ? undefined
         : vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
@@ -1200,29 +1215,43 @@ describe("openclaw test instance", () => {
             }
             return response;
           });
-      try {
-        const startup = trackOperation(instance.startGateway());
-        const outcome = startup.catch((error: unknown) => error);
-        if (control) {
-          await Promise.race([control.reached, startup]);
-          child = instance.child;
+      await runQaGatewayFixture(
+        async () => {
+          const startup = trackOperation(instance.startGateway());
+          const outcome = startup.catch((error: unknown) => error);
+          if (control) {
+            await Promise.race([control.reached, startup]);
+            child = instance.child;
+            expect(child).toBeDefined();
+            descendantPid = Number(await fs.readFile(`${tracePath}.writer-pid`, "utf8"));
+            expect(Number.isSafeInteger(descendantPid) && descendantPid > 1).toBe(true);
+            expect(isProcessAlive(descendantPid)).toBe(true);
+            controller.abort(cancelled);
+          }
+          expect(await outcome).toBe(cancelled);
           expect(child).toBeDefined();
-          controller.abort(cancelled);
-        }
-        expect(await outcome).toBe(cancelled);
-        expect(child).toBeDefined();
-        expect(instance.child).toBeUndefined();
-        expect(child?.stdout.closed).toBe(true);
-        expect(child?.stderr.closed).toBe(true);
-        expect(isProcessAlive(child!.pid!)).toBe(false);
-        if (pending) {
-          expect(inspectManagedProcessGroup(child!, { errorPolicy: "indeterminate" })).toBe("dead");
-          await expect(fs.stat(instance.state.root)).resolves.toBeDefined();
-        }
-      } finally {
-        restoreClock();
-        fetchSpy?.mockRestore();
-      }
+          expect(instance.child).toBeUndefined();
+          expect(child?.stdout.closed).toBe(true);
+          expect(child?.stderr.closed).toBe(true);
+          expect(isProcessAlive(child!.pid!)).toBe(false);
+          if (pending) {
+            // Observe the detached descendant itself; the canonical adapter owns
+            // its Job/group, not the retired managed-child registry.
+            expect(isProcessAlive(descendantPid!)).toBe(false);
+            await expect(fs.stat(instance.state.root)).resolves.toBeDefined();
+          }
+        },
+        async () => {
+          restoreClock();
+          fetchSpy?.mockRestore();
+          // Rescue the detached fixture if the owner under test fails to stop it.
+          // Run after liveness assertions so cleanup cannot hide that regression.
+          killPidIfAlive(descendantPid);
+          if (descendantPid !== undefined) {
+            await waitForDead(descendantPid, AbortSignal.timeout(WRITER_CLEANUP_HANG_GUARD_MS));
+          }
+        },
+      );
     },
   );
 
