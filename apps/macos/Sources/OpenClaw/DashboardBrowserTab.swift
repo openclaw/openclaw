@@ -3,7 +3,7 @@ import Foundation
 import WebKit
 
 @MainActor
-final class DashboardBrowserTab {
+final class DashboardBrowserTab: NSView, @MainActor NSTextFinderBarContainer {
     /// WebKit preserves one WKNavigation identity across a redirect chain.
     /// A different identity means the opened-link alias is no longer current.
     private enum RequestAliasPhase {
@@ -18,6 +18,7 @@ final class DashboardBrowserTab {
     static let automaticReloadLimit = 2
 
     let webView: WKWebView
+    private let finder = NSTextFinder()
     let requestedURL: URL
     var representedURL: URL?
     var title: String?
@@ -45,6 +46,55 @@ final class DashboardBrowserTab {
         self.webView.setValue(true, forKey: "drawsBackground")
         self.requestedURL = requestedURL
         self.representedURL = requestedURL
+        super.init(frame: .zero)
+        self.webView.autoresizingMask = [.width, .height]
+        self.addSubview(self.webView)
+        self.finder.client = self.webView
+        self.finder.findBarContainer = self
+        self.finder.isIncrementalSearchingEnabled = true
+        self.finder.incrementalSearchingShouldDimContentView = false
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    var findBarView: NSView?
+    var isFindBarVisible = false {
+        didSet {
+            guard oldValue != self.isFindBarVisible, let bar = self.findBarView else { return }
+            if self.isFindBarVisible {
+                bar.autoresizingMask = [.width, .minYMargin]
+                self.addSubview(bar)
+            } else {
+                bar.removeFromSuperview()
+                if !self.isHiddenOrHasHiddenAncestor { self.window?.makeFirstResponder(self.webView) }
+            }
+            self.findBarViewDidChangeHeight()
+        }
+    }
+
+    func findBarViewDidChangeHeight() {
+        // Keep even a match on the first line visible: the bar is a sibling, not a page overlay.
+        let bar = self.isFindBarVisible ? self.findBarView : nil
+        let height = bar?.frame.height ?? 0
+        let width = self.bounds.width
+        let pageHeight = max(0, self.bounds.height - height)
+        bar?.frame = NSRect(x: 0, y: pageHeight, width: width, height: height)
+        self.webView.frame = NSRect(x: 0, y: 0, width: width, height: pageHeight)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        let key = modifiers == .command ? event.characters : event.charactersIgnoringModifiers
+        guard event.type == .keyDown, modifiers == .command || modifiers == .control, key?.lowercased() == "f",
+              self.failureView == nil, !self.isHiddenOrHasHiddenAncestor,
+              let responder = self.window?.firstResponder as? NSView,
+              responder.isDescendant(of: self)
+        else { return super.performKeyEquivalent(with: event) }
+        self.finder.performAction(.showFindInterface)
+        return true
     }
 
     var requestedURLAlias: URL? {
@@ -125,6 +175,7 @@ final class DashboardBrowserTab {
 
     /// Covers the blank or previous page with native text that page script cannot reach.
     func showFailure(at url: URL, title: String, message: String, reload: @escaping @MainActor () -> Void) {
+        if self.isFindBarVisible { self.finder.performAction(.hideFindInterface) }
         self.failureView?.removeFromSuperview()
         let view = DashboardBrowserFailureView(title: title, message: message, reload: reload)
         view.frame = self.webView.bounds
@@ -186,8 +237,11 @@ final class DashboardBrowserTab {
         self.clearFailure()
         self.webView.navigationDelegate = nil
         self.webView.uiDelegate = nil
+        self.finder.client = nil
+        self.finder.findBarContainer = nil
         self.webView.stopLoading()
         self.webView.removeFromSuperview()
+        self.removeFromSuperview()
     }
 }
 
