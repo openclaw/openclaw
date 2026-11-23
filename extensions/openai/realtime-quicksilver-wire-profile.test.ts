@@ -2,6 +2,21 @@ import { describe, expect, it } from "vitest";
 import { buildOpenAIQuicksilverSession } from "./realtime-quicksilver-wire.js";
 
 describe("GPT-Live session shaping", () => {
+  it.each(["flitz", "nuri", "juni", "pearl", "luciernaga", "noeul"])(
+    "keeps the documented public voice %s on gpt-live-1",
+    (voice) => {
+      expect(buildOpenAIQuicksilverSession({ model: "gpt-live-1", voice }).audio).toEqual({
+        output: { voice },
+      });
+    },
+  );
+
+  it("still defaults an unknown public voice to Marin", () => {
+    expect(
+      buildOpenAIQuicksilverSession({ model: "gpt-live-1", voice: "not-a-voice" }).audio,
+    ).toEqual({ output: { voice: "marin" } });
+  });
+
   it("defaults a released-only voice to Marin on the unlisted route", () => {
     expect(
       buildOpenAIQuicksilverSession({ model: "gpt-live-test-canary", voice: "spruce" }).audio,

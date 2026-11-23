@@ -296,10 +296,13 @@ sidebarTitle: "Voice and speech"
     Physical-device voice validation remains pending.
 
     The default voice is `marin`. Supported built-in voices are `alloy`, `ash`,
-    `ballad`, `beacon`, `bossa`, `cedar`, `cinder`, `coral`, `delta`, `echo`,
-    `gleam`, `marin`, `meridian`, `quartz`, `ripple`, `sage`, `shimmer`, `stone`,
-    `tempo`, `verse`, `vesper`, and `willow`. Unsupported configured voices fall
-    back to `marin`. Choose the voice before starting a session.
+    `ballad`, `beacon`, `bossa`, `brise`, `calandria`, `cedar`, `cinder`,
+    `compas`, `coral`, `delta`, `destello`, `echo`, `flitz`, `gleam`, `halo`,
+    `harema`, `hornero`, `juni`, `luciernaga`, `marin`, `meridian`, `nira`,
+    `noeul`, `nuri`, `pearl`, `quartz`, `ripple`, `sage`, `shida`, `shimmer`,
+    `sillage`, `stone`, `tempo`, `verse`, `vesper`, and `willow`. Unsupported
+    configured voices fall back to `marin`. Choose the voice before starting a
+    session.
     `cove` belongs to `gpt-live-1-codex`; selecting it with the public
     `gpt-live-1` model falls back to `marin`.
 
