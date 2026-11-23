@@ -655,6 +655,11 @@ export default defineSingleProviderPluginEntry({
           apiKey,
           discoveryApiKey: apiKey,
           baseUrl: ctx.providerConfig?.baseUrl ?? configuredBaseUrl(ctx.config),
+          requestedModelId: ctx.modelId,
+          requestedModelApi:
+            ctx.providerConfig?.models?.find((model) => model.id === ctx.modelId)?.api ??
+            ctx.modelRegistry?.find(PROVIDER_ID, ctx.modelId)?.api ??
+            ctx.providerConfig?.api,
         });
         const model = providerConfig.models.find((entry) => entry.id === ctx.modelId);
         if (!model) {
