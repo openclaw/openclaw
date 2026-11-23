@@ -485,7 +485,7 @@ async function workloadTree(sha, request, deps) {
 // Original Q pins the before side; the bounded GitHub comparison pins the after side.
 const BETA2_BOOKKEEPING_SOURCE = "f95261af52cdf1f6abcbd77a459dd5a630e0f3c7";
 const BETA2_BOOKKEEPING_BLOBS = new Map([
-  ["scripts/full-release-artifacts.mjs", "cdeac9e53c8482821ffbcb911a05a4f7d4e86a7e"],
+  ["scripts/full-release-artifacts.mjs", "85f1345a36895d91c174b35d7822222b6a109936"],
   ["scripts/full-release-publication-contract.d.mts", "6f8cfcb1f57d4dfc60c27ae777d041effa7c5812"],
   ["scripts/full-release-publication-contract.mjs", "d0abcf5d86ac1a746f3796323b1c5c8db8cf8184"],
   ["scripts/full-release-validation-at-sha.mts", "e1fb448ed1833e7d25c2cb47a3bc9ec875e1093c"],
@@ -513,7 +513,7 @@ const BETA2_BOOKKEEPING_BLOBS = new Map([
     "test/scripts/full-release-artifact-contract.test.ts",
     "bae2928a25ac7a955941bf9e885dd5e834b4c5f9",
   ],
-  ["test/scripts/full-release-artifacts.test.ts", "493c57b4f1d4682f23c201a6fef55256fa68670b"],
+  ["test/scripts/full-release-artifacts.test.ts", "d865511c2a1880d801349a5678d83d85f51d0425"],
   [
     "test/scripts/full-release-validation-at-sha.candidate.test.ts",
     "8642e22cab6c0aff3f968e6ae47afe249026c7b4",

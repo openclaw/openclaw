@@ -1562,7 +1562,7 @@ const originalPublicationRepairBlobs = [
   [
     "scripts/full-release-artifacts.mjs",
     "943086f7044bfb5b2219275081f36069cfe7c1c8",
-    "cdeac9e53c8482821ffbcb911a05a4f7d4e86a7e",
+    "85f1345a36895d91c174b35d7822222b6a109936",
   ],
   [
     "scripts/full-release-publication-contract.d.mts",
@@ -1642,7 +1642,7 @@ const originalPublicationRepairBlobs = [
   [
     "test/scripts/full-release-artifacts.test.ts",
     "ecfe13974194370d1943d86710b0c748e12695c1",
-    "493c57b4f1d4682f23c201a6fef55256fa68670b",
+    "d865511c2a1880d801349a5678d83d85f51d0425",
   ],
   [
     "test/scripts/full-release-validation-at-sha.candidate.test.ts",

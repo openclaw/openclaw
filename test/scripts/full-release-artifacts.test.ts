@@ -616,7 +616,11 @@ process.stdout.write(${JSON.stringify(JSON.stringify(evidence))});
       ...architectureArchives,
       ...(pluginArchive ? [pluginArchive] : []),
     ],
-    verifyRetained: (options: Record<string, unknown>, root = evidence.manifest) => {
+    verifyRetained: (
+      options: Record<string, unknown>,
+      root = evidence.manifest,
+      env: NodeJS.ProcessEnv = {},
+    ) => {
       const entrypoint = join(test.root, "verify-retained.mjs");
       writeFileSync(
         entrypoint,
@@ -632,6 +636,7 @@ console.log(JSON.stringify(result));
           // Recovery tooling can differ; original identities come only from root.
           PARENT_WORKFLOW_SHA: "f".repeat(40),
           PLUGIN_NPM_REQUIRED: withPayloads ? "true" : "false",
+          ...env,
         },
         entrypoint,
       );
@@ -1571,8 +1576,12 @@ function selectionFixture(
       };
     },
     verifyRetainedPublicationArtifacts: vi.fn(
-      async (root: Parameters<typeof retained.verifyRetained>[1]) => {
-        const verified = expectSuccess(retained.verifyRetained({ verifyPayloads: true }, root));
+      async (root: Parameters<typeof retained.verifyRetained>[1], env: NodeJS.ProcessEnv) => {
+        const verified = expectSuccess(
+          retained.verifyRetained({ verifyPayloads: true }, root, {
+            RELEASE_TAG: env.RELEASE_TAG,
+          }),
+        );
         return JSON.parse(verified.stdout);
       },
     ),
@@ -1585,11 +1594,30 @@ function selectionFixture(
     PARENT_WORKFLOW_SHA: current.q,
     SOURCE_ADMISSION_JSON: JSON.stringify(current.source),
     CANDIDATE_REQUEST_JSON: JSON.stringify({ ...candidate.request, toolingSha: current.q }),
+    RELEASE_TAG: "v" + candidate.package.version,
   };
   return { f, current, client, env, candidate, archives, artifacts, qualified };
 }
 
 describe("explicit publication artifact selection", () => {
+  it("rejects a caller release tag that differs from the sealed candidate", async () => {
+    const { client, env } = selectionFixture();
+    await expect(
+      selectPublicationArtifactSource(
+        { runId: "51", runAttempt: 1 },
+        { ...env, RELEASE_TAG: "v2026.8.2" },
+        client,
+      ),
+    ).rejects.toThrow("release tag differs from the sealed candidate");
+    expect(client.verifyRetainedPublicationArtifacts).not.toHaveBeenCalled();
+  });
+  it("keeps exact receipt tag equality in the real retained verifier", () => {
+    const retained = publicationReuseFixture(false, true);
+    expectRejected(
+      retained.verifyRetained({ verifyPayloads: true }, undefined, { RELEASE_TAG: "v2026.8.2" }),
+      RECEIPT_MISMATCH,
+    );
+  });
   it("adopts exact original bytes from a failed parent without changing producer Q", async () => {
     const { f, client, env } = selectionFixture();
     const selected = await selectPublicationArtifactSource(
@@ -1681,6 +1709,10 @@ describe("explicit publication artifact selection", () => {
     };
     const evidence = await validateReleaseRunEvidence(options, finalClient);
     expect(evidence.current.conclusion).toBe("success");
+    expect(client.verifyRetainedPublicationArtifacts).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ RELEASE_TAG: "v" + selected.candidate.package.version }),
+    );
     expect(
       validateFullReleaseNpmPreflight({
         manifest: current.manifest,

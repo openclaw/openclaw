@@ -481,7 +481,16 @@ export async function selectPublicationArtifactSource(selectionInput, env, provi
     workflowFullRef: source.workflow.ref,
     publicationArtifacts: descriptors.publicationArtifacts,
   };
-  const retained = await client.verifyRetainedPublicationArtifacts(root, env);
+  // Final verification has no dispatch environment; the sealed candidate owns the tag.
+  const releaseTag = `v${candidate.package.version}`;
+  requireValue(
+    env.RELEASE_TAG === undefined || env.RELEASE_TAG === releaseTag,
+    "Selected publication release tag differs from the sealed candidate.",
+  );
+  const retained = await client.verifyRetainedPublicationArtifacts(root, {
+    ...env,
+    RELEASE_TAG: releaseTag,
+  });
   return {
     source,
     candidate,
