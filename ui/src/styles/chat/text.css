@@ -566,6 +566,13 @@
   padding-inline-start: var(--chat-markdown-indent);
 }
 
+.chat-text :where(ul, ol) {
+  /* Separate item formatting contexts keep WebKit's native selection paint
+     on the text instead of extending it across the list at item boundaries. */
+  display: flex;
+  flex-direction: column;
+}
+
 .chat-text :where(li + li) {
   margin-top: 0.4em;
 }
