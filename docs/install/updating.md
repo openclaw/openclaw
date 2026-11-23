@@ -2113,12 +2113,15 @@ When the new release would migrate state, its check stops that update before the
 switched, leaves the Gateway untouched, and prints a one-time rebuild to run from the checkout:
 
 ```sh
-git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw doctor --fix && openclaw gateway install --force; openclaw gateway start
+git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force && openclaw doctor --fix; openclaw gateway start
 ```
 
 The rebuild also moves the service back to the checkout, which ends the startup failure above.
-Later `openclaw update` runs use the rebuilt checkout's updater. Updates that change no schema
-still go through the older updater.
+Later `openclaw update` runs use the rebuilt checkout's updater; their first trial falls back to
+the rebuilt checkout. The older layout's `git-install/lib/node_modules/openclaw` link and the
+release it names stay on disk (about 4.6 GiB) and are no longer used. To free that space, remove
+the release directory the link names, then the link, then run `git worktree prune` in the
+checkout. Updates that change no schema still go through the older updater.
 
 The inspection reports data at risk only on evidence: a schema that moved, or a store it
 cannot read after a new-version Doctor or boot check may have written it. When no
