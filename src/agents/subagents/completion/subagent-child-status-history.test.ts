@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import type { Message } from "../../../llm/types.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -7,7 +7,15 @@ import { convertToLlm } from "../../sessions/messages.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
-import { appendChildStatusToRequester } from "./subagent-completion-admission.store.js";
+import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { settleSubagentCompletionInHistory } from "./subagent-completion-admission.store.js";
+import {
+  armRequesterWake,
+  seedSubagentCompletionOwner,
+  settleRequesterCompletionBatch,
+} from "./subagent-completion-admission.test-helpers.js";
+
+afterEach(() => subagentRuns.clear());
 
 type RequesterScope = { agentId: string; sessionId: string; sessionKey: string; storePath: string };
 
@@ -55,8 +63,9 @@ it("appends a failed child's status once to an idle parent and keeps it after co
     const answerId = await manager.appendMessageAsync(answer);
 
     const child = failedChild(scope);
-    await appendChildStatusToRequester([child]);
-    await appendChildStatusToRequester([child]);
+    seedSubagentCompletionOwner({ subagent: child });
+    await settleSubagentCompletionInHistory({ subagent: child });
+    await settleSubagentCompletionInHistory({ subagent: child });
 
     const context = (await SessionManager.openModelContextAsync(scope)).buildSessionContext();
     const llm = convertToLlm(context.messages);
@@ -96,7 +105,14 @@ it("bounds a large failed cohort to one shared history budget", () =>
         outcome: { status: "error", error: "e".repeat(5_000) },
       }),
     );
-    await appendChildStatusToRequester(cohort);
+    const runIds = cohort.map((child) => child.runId);
+    for (const subagent of cohort) {
+      seedSubagentCompletionOwner(armRequesterWake({ subagent }, runIds));
+    }
+    await settleRequesterCompletionBatch({
+      entries: cohort,
+      outcome: { delivered: false, path: "direct", reason: "requester_aborted" },
+    });
 
     const statuses = statusTexts(
       convertToLlm(
@@ -125,7 +141,9 @@ it("keeps tool call and result adjacent at the provider boundary when a child en
       }),
     );
 
-    await appendChildStatusToRequester([failedChild(scope)]);
+    const child = failedChild(scope);
+    seedSubagentCompletionOwner({ subagent: child });
+    await settleSubagentCompletionInHistory({ subagent: child });
 
     await manager.appendMessageAsync({
       role: "toolResult",

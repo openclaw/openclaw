@@ -39,7 +39,7 @@ export async function tryRunWindowsGatewayTaskSupervisor(argv: string[]): Promis
  * The task launcher owns an outer Job containing this supervisor. The
  * command anchor owns the inner Job used for cancellation and extinction joins.
  */
-export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
+async function runWindowsGatewayTaskSupervisor(): Promise<void> {
   if (process.platform !== "win32") {
     throw new Error("--task-supervisor is only available to the Windows Gateway service");
   }

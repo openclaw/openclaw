@@ -20,7 +20,7 @@ import {
 import type { GatewayClient } from "./server-methods/shared-types.js";
 
 /** A named role's registry project grant: every project, or the listed project IDs. */
-export type ProjectGrant = "*" | readonly string[];
+type ProjectGrant = "*" | readonly string[];
 
 /**
  * Who asks for a registry project's source. Gateway-internal callers (owner runs,
