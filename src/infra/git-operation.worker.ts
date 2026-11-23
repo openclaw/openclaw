@@ -75,6 +75,7 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
             case "workspace.manifest.equal":
             case "workspace.manifest.snapshot":
             case "workspace.manifest.document":
+            case "workspace.manifest.initial":
             case "workspace.manifest.template":
             case "workspace.manifest.reference":
             case "workspace.manifest.parse":
@@ -229,7 +230,11 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
         return [value.buffer];
       }
       if (value && typeof value === "object" && "patch" in value) {
-        return [value.patch.buffer, value.basePack.buffer];
+        return [
+          value.patch.buffer,
+          value.basePack.buffer,
+          ...(value.publicationPack ? [value.publicationPack.buffer] : []),
+        ];
       }
       return [];
     },

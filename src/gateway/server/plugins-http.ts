@@ -26,11 +26,7 @@ import {
   finishFailedGatewayHttpResponse,
   finishGatewayHttpDatabaseAdmissionError,
 } from "../http-common.js";
-import {
-  bindHttpResponseAuthority,
-  finishGatewayHttpAuthorityError,
-  GatewayHttpRequestAuthorityError,
-} from "../http-request-authority.js";
+import { finishGatewayHttpAuthorityError } from "../http-request-authority.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import {
   getRemoteControlUiIngressContext,
@@ -176,7 +172,6 @@ function createPluginRouteRuntimeScope(params: {
   registry: PluginRegistry;
   route: PluginHttpRouteRegistration;
   req: IncomingMessage;
-  res?: ServerResponse;
   gatewayRequestContext?: GatewayRequestContext;
   gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
   gatewayRequestOperatorScopes?: readonly string[];
@@ -204,30 +199,10 @@ function createPluginRouteRuntimeScope(params: {
     hasCurrentRemoteControlUiIngress(ingress) &&
     requestAuth?.hasCurrentClientAuthority?.() !== false &&
     hasCurrentGatewayOperatorAccess(operatorAccessAuthority);
-  if (params.res) {
-    bindHttpResponseAuthority(
-      { operatorAccessAuthority },
-      params.res,
-      hasCurrentClientAuthority,
-    ).assertCurrent();
-  } else if (!hasCurrentClientAuthority()) {
-    params.req.socket.destroy();
-    throw new GatewayHttpRequestAuthorityError("HTTP request authority expired");
-  }
   return {
     pluginRegistry: params.registry,
-    ...(requestAuth?.revalidate || ingress
-      ? {
-          revalidate: async () => {
-            assertRemoteControlUiIngressCurrent(ingress);
-            await requestAuth?.revalidate?.();
-            assertRemoteControlUiIngressCurrent(ingress);
-          },
-        }
-      : {}),
-    ...(requestAuth?.hasCurrentClientAuthority || operatorAccessAuthority || ingress
-      ? { hasCurrentClientAuthority }
-      : {}),
+    ...(ingress ? { revalidate: async () => assertRemoteControlUiIngressCurrent(ingress) } : {}),
+    ...(requestAuth || operatorAccessAuthority || ingress ? { hasCurrentClientAuthority } : {}),
     ...(params.gatewayRequestContext ? { context: params.gatewayRequestContext } : {}),
     client: runtimeClient,
     ...(operatorAccessAuthority || ingress
@@ -394,7 +369,6 @@ export function createGatewayPluginRequestHandler(params: {
                 registry,
                 route,
                 req,
-                res,
                 gatewayRequestContext,
                 gatewayRequestAuth,
                 gatewayRequestOperatorScopes,

@@ -1,8 +1,6 @@
 import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { recordGatewaySessionRunFailure } from "../../../sessions/session-run-error.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
 import { renderRuntimeCoordinationFailureCopy } from "../../failover/assistant-request-failure-copy.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
@@ -10,14 +8,12 @@ import type {
   RequesterWakeCommittedWrite,
   RequesterWakeMutation,
 } from "../completion/subagent-completion-mutation.types.js";
+import { settleConsumedRequesterDelivery } from "../completion/subagent-completion-settlement.js";
 import { captureSubagentControllerInputRetirement } from "./subagent-controller-inputs.js";
 import type { SubagentLifecycleWakeContext } from "./subagent-registry-lifecycle-context.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  buildRequesterSettleWakeIdentity,
-  sameRequesterSettleRunIdentity,
-} from "./subagent-requester-settle-identity.js";
+import { sameRequesterSettleRunIdentity } from "./subagent-requester-settle-identity.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 export type RequesterWakeMutationReceipt = { committed?: RequesterWakeCommittedWrite };
@@ -109,25 +105,6 @@ export async function mutateRequesterSettleWakeBatch(
   return result.applied === true && result.publication === "published";
 }
 
-/** Records one observed outcome, or retires a wake that owes no delivery. */
-export function settleRequesterSettleWakeBatch(
-  context: SubagentLifecycleWakeContext,
-  batch: readonly SubagentRunRecord[],
-  rearmGeneration: number | undefined,
-  outcome: SubagentAnnounceDeliveryResult | undefined,
-  stateContext: OpenClawStateWorkerContext,
-  receipt: RequesterWakeMutationReceipt = {},
-): Promise<boolean> {
-  return mutateRequesterSettleWakeBatch(
-    context,
-    batch,
-    rearmGeneration,
-    outcome ? { kind: "settle", outcome } : { kind: "complete" },
-    stateContext,
-    receipt,
-  );
-}
-
 // Observed outcomes belong to the run owner, not the transient evaluation. Weak keys release
 // retired owners; the scope keeps a later yield generation from consuming an older receipt.
 export const pendingRequesterSettlements = new WeakMap<
@@ -178,12 +155,13 @@ export function createRequesterWakeSettlement(params: {
     scope,
     batch,
     rearmGeneration,
-    outcome,
+    outcome: observedOutcome,
     onCommitted,
     stateContext,
     admittedWake,
     release,
   } = params;
+  let outcome = observedOutcome;
   // Retry bookkeeping with the observed outcome, never by replaying delivery or inventing failure.
   const receipt: RequesterWakeMutationReceipt = {};
   const retireInputs = batch.map(captureSubagentControllerInputRetirement);
@@ -204,13 +182,19 @@ export function createRequesterWakeSettlement(params: {
         (outcome !== undefined ||
           receipt.committed !== undefined ||
           members.length === batch.length);
+      if (settlesMembers && outcome && !receipt.committed) {
+        outcome = await settleConsumedRequesterDelivery(
+          members.map((member) => context.options.runs.get(member.runId) ?? member),
+          outcome,
+        );
+      }
       if (
         settlesMembers &&
-        !(await settleRequesterSettleWakeBatch(
+        !(await mutateRequesterSettleWakeBatch(
           context,
           members,
           rearmGeneration,
-          outcome,
+          outcome ? { kind: "settle", outcome } : { kind: "complete" },
           stateContext,
           receipt,
         ))
@@ -246,28 +230,6 @@ export function createRequesterWakeSettlement(params: {
                 ts: Date.now(),
                 data: { phase: "error", error, errorNotice: notice },
               },
-            });
-          } else {
-            // Stable batches lost their original run id. Report the batch failure,
-            // never assign whichever writer now occupies this session to that batch.
-            const { batchKey } = buildRequesterSettleWakeIdentity({
-              requesterSessionKey: requester.requesterSessionKey,
-              requesterAgentId: requester.requesterAgentId,
-              batchRunIds: admittedWake.batchRunIds ?? batch.map((entry) => entry.runId),
-              rearmGeneration,
-            });
-            await recordGatewaySessionRunFailure({
-              target: {
-                sessionKey: requester.requesterSessionKey,
-                agentId: requester.requesterAgentId,
-                storePath: requester.requesterStorePath,
-                sessionId: requester.completionRequesterSessionId,
-                expectedLifecycleRevision: requester.completionRequesterLifecycleRevision,
-              },
-              runId: buildAnnounceIdempotencyKey(`${batchKey}:delivery-failure`),
-              error,
-              notice,
-              assertCommitAllowed: () => assertSubagentRegistryWriteSourceCurrent(stateContext),
             });
           }
         }

@@ -28,9 +28,10 @@ export function presentSessionRowTranscriptFields(
   params: BackfillParams,
   fields: Pick<
     SessionRowTranscriptProjection,
-    "lastMessagePreview" | "lastAssistantMessage" | "terminalModel"
+    "hasMessages" | "lastMessagePreview" | "lastAssistantMessage" | "terminalModel"
   >,
 ): {
+  hasMessages?: boolean;
   lastMessagePreview?: string;
   lastAssistantMessage?: SessionRowAssistantMessage;
   fallbackModel?: { provider: string; model: string };
@@ -46,6 +47,7 @@ export function presentSessionRowTranscriptFields(
       terminalModel: terminal && terminal.runId === sessionEntry.lastRunId ? terminal : null,
     });
   return {
+    hasMessages: fields.hasMessages,
     ...(fields.lastMessagePreview !== null
       ? { lastMessagePreview: fields.lastMessagePreview }
       : {}),

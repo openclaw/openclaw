@@ -75,6 +75,8 @@ type ConfigViewOptions = Partial<
     | "nativeNotifications"
     | "onNativeNotificationsRequestPermission"
     | "onNativeNotificationsSendTest"
+    | "notificationAgents"
+    | "onNotificationAgentsLoad"
     | "onWebPushSubscribe"
     | "onWebPushUnsubscribe"
     | "onWebPushTest"

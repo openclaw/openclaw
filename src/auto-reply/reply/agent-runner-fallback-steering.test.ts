@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { normalizeProviderModelRef } from "../../agents/embedded-agent-runner/model.registry-resolution.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../../agents/embedded-agent-runner/run/attempt-queue-message.js";
 import { FailoverError } from "../../agents/failover-error.js";
@@ -61,7 +61,7 @@ function steer(run: FollowupRun, key: string, overrides: Partial<ReplyParams>) {
 }
 
 function operator(run: FollowupRun, profileId: string, assertCurrent = () => {}) {
-  return createAdmittedRunOperatorAuthority({
+  return createTestOperatorAuthority({
     profileId,
     scopes: ["operator.read", "operator.write"],
     gatewayAccessGrant: null,
@@ -226,7 +226,6 @@ describe("ordinary steering into automatic model fallback", () => {
     { preparation: "fingerprint-1", revoked: false, aborted: true, replaceBackend: false },
     { preparation: "fingerprint-1", revoked: false, aborted: false, replaceBackend: true },
     { preparation: "backend-ready", revoked: false, aborted: false, replaceBackend: false },
-    { preparation: "backend-ready", revoked: true, aborted: false, replaceBackend: false },
   ])(
     "preserves input at $preparation (caller revoked: $revoked, target aborted: $aborted, backend replaced: $replaceBackend)",
     async ({ preparation, revoked, aborted, replaceBackend }) => {

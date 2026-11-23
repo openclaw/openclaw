@@ -6,7 +6,6 @@ import {
   formatIrohEndpointKey,
   rawPublicKey,
   type IrohEndpointKey,
-  type Ed25519PublicKey,
   type KeyFingerprint,
 } from "../keys.js";
 import {
@@ -28,6 +27,7 @@ import {
   withoutMemberPeerKeys,
 } from "./allowlist.js";
 import { inviteLifetimeError, withoutSpentInvites } from "./invite-retention.js";
+import { addMemberDevice, deviceSigningKeyListed, setMemberRecoveryKit } from "./member-devices.js";
 import { addNode, bindOwnerDeviceNode, nodeRemovalEvents, withoutNodes } from "./nodes.js";
 import { applyRevocation } from "./revocation.js";
 import {
@@ -35,6 +35,7 @@ import {
   certificateWindowError,
   ownerLookup,
   memberLookup,
+  isMemberRecoveryKey,
   proofKeyHex,
   refuse,
   type AuthorityEvent,
@@ -54,9 +55,16 @@ function verifyOptions(state: AuthorityState, now: UnixSeconds): VerifyOptions {
 }
 
 // Mailbox policy (spec sections 6 and 7): through Discovery, only root-signed statements,
-// revocations and redemption requests. Device-signed approvals must arrive directly.
+// revocations, redemption requests and recovery-only member approvals. Browser approvals are direct.
 function mailboxAllows(statement: SignedStatement, authority: Authority): boolean {
-  return statement.type === "Revocation" || authority.kind === "root";
+  return (
+    statement.type === "Revocation" ||
+    authority.kind === "root" ||
+    (authority.kind === "member_recovery_kit" &&
+      statement.type === "MembershipChange" &&
+      // SAFETY: parseStatement validated the body for the checked MembershipChange type.
+      (statement as SignedStatement<"MembershipChange">).body.target.op === "add_member_device")
+  );
 }
 
 /**
@@ -105,7 +113,14 @@ async function applyOwnerStatement(
   if (!verified.ok) {
     return refuse(state, verified.code, verified.detail);
   }
-  if (context.channel === "mailbox" && !mailboxAllows(statement, verified.authority)) {
+  if (
+    context.channel === "mailbox" &&
+    (!mailboxAllows(statement, verified.authority) ||
+      (statement.type === "MembershipChange" &&
+        // SAFETY: parseStatement validated the body for the checked MembershipChange type.
+        (statement as SignedStatement<"MembershipChange">).body.target.op ===
+          "set_member_recovery_kit"))
+  ) {
     return refuse(
       state,
       "not_direct",
@@ -138,18 +153,21 @@ async function applyMembershipChange(
   if (body.seq !== state.seq + 1) {
     return refuse(state, "seq_conflict", `expected seq ${state.seq + 1}`);
   }
-  const result = await applyTarget({ ...state, seq: body.seq }, body.target, authority, context);
+  const result = await applyTarget({ ...state, seq: body.seq }, body, authority, context);
   return result.ok ? result : { ...result, state };
 }
 
 // Dispatches a MembershipChange target. `state` already carries the new seq.
 async function applyTarget(
   state: AuthorityState,
-  target: SignedStatement<"MembershipChange">["body"]["target"],
+  body: SignedStatement<"MembershipChange">["body"],
   authority: Authority,
   context: WriteContext,
 ): Promise<AuthorityResult> {
+  const target = body.target;
   switch (target.op) {
+    case "set_member_recovery_kit":
+      return setMemberRecoveryKit(state, target, authority, body.issued_at);
     case "add_member_device":
       return addMemberDevice(state, target, authority, context.now);
     case "add_node":
@@ -298,95 +316,12 @@ async function applyRemovalOfPeer(
   ]);
 }
 
-function deviceSigningKeyListed(state: AuthorityState, devicePub: Ed25519PublicKey): boolean {
-  return (
-    Object.values(state.owner_devices).some((owner) => owner.cert.body.device_pub === devicePub) ||
-    Object.values(state.members).some((member) =>
-      member.peer_keys.some((peer) => member.devices?.[peer]?.device_pub === devicePub),
-    )
-  );
-}
-
-async function addMemberDevice(
-  state: AuthorityState,
-  target: Extract<
-    SignedStatement<"MembershipChange">["body"]["target"],
-    { op: "add_member_device" }
-  >,
-  authority: Authority,
-  now: UnixSeconds,
-): Promise<AuthorityResult> {
-  if (
-    authority.kind !== "root" &&
-    authority.kind !== "owner_device" &&
-    authority.kind !== "member_device"
-  ) {
-    return refuse(state, "not_an_owner", "signer cannot add a member device");
-  }
-  const member = state.members[target.account_id];
-  if (!member) {
-    return refuse(state, "target_mismatch", "unknown member");
-  }
-  if (authority.kind === "member_device" && authority.account_id !== target.account_id) {
-    return refuse(state, "target_mismatch", "a member may add devices only to their own account");
-  }
-  if (member.peer_keys.length >= MAX_MEMBER_PEER_KEYS) {
-    return refuse(
-      state,
-      "limit_reached",
-      `a member has at most ${MAX_MEMBER_PEER_KEYS} devices at a claw`,
-    );
-  }
-  if (peerKeyListedSeq(state, target.peer_key) !== undefined) {
-    return refuse(state, "target_mismatch", "peer key is already listed");
-  }
-  if (deviceSigningKeyListed(state, target.device_pub)) {
-    return refuse(state, "target_mismatch", "device signing key is already listed");
-  }
-  const approved_by =
-    authority.kind === "member_device"
-      ? { kind: "member_device" as const, device_fp: await fingerprint(authority.device_pub) }
-      : {
-          kind: "owner" as const,
-          by:
-            authority.kind === "root" ? ("root" as const) : await fingerprint(authority.device_pub),
-        };
-  return applied(
-    {
-      ...state,
-      members: {
-        ...state.members,
-        [target.account_id]: {
-          ...member,
-          peer_keys: [...member.peer_keys, target.peer_key],
-          listed_seq: [...member.peer_keys.map((_, i) => member.listed_seq?.[i] ?? 0), state.seq],
-          last_seen: { ...member.last_seen, [target.peer_key]: now },
-          devices: {
-            ...member.devices,
-            [target.peer_key]: { device_pub: target.device_pub, label: target.label, approved_by },
-          },
-        },
-      },
-    },
-    [
-      { type: "publish_snapshot" },
-      {
-        type: "notify_owners",
-        event: "member_device_added",
-        ref: await fingerprint(target.peer_key),
-      },
-    ],
-  );
-}
-
-// Adds a member directly, or approves a pending redemption when `invite_id` is set.
-// The caps hold: at most MAX_MEMBERS members and MAX_MEMBER_PEER_KEYS browsers each.
 function addMember(
   state: AuthorityState,
   target: Extract<SignedStatement<"MembershipChange">["body"]["target"], { op: "add" }>,
   now: UnixSeconds,
 ): AuthorityResult {
-  if (target.peer_keys.some((key) => state.nodes[key])) {
+  if (target.peer_keys.some((key) => state.nodes[key] || isMemberRecoveryKey(state, key))) {
     return refuse(state, "target_mismatch", "a node key cannot be a member key");
   }
   const existing = state.members[target.account_id];
@@ -434,7 +369,10 @@ function addMember(
   if (peerKeyListedSeq(state, pending.peer_key) !== undefined) {
     return refuse(state, "target_mismatch", "redemption peer key is already listed");
   }
-  if (deviceSigningKeyListed(state, pending.device_pub)) {
+  if (
+    deviceSigningKeyListed(state, pending.device_pub) ||
+    isMemberRecoveryKey(state, pending.device_pub)
+  ) {
     return refuse(state, "target_mismatch", "device signing key is already listed");
   }
   member.devices = {
@@ -554,7 +492,7 @@ async function addOwnerDevice(
   }
   if (
     [formatIrohEndpointKey(rawPublicKey(cert.body.device_pub)), ...cert.body.peer_keys].some(
-      (key) => state.nodes[key],
+      (key) => state.nodes[key] || isMemberRecoveryKey(state, key),
     )
   ) {
     return refuse(state, "target_mismatch", "a node key cannot be an owner device key");

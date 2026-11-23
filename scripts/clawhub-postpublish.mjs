@@ -449,6 +449,10 @@ export async function verifyClawHubPostpublish({
     "normalClawHubRunId",
     "normalClawHubRunAttempt",
   ];
+  // The shared publication receipt also records npm bootstrap closeout work.
+  if (Object.hasOwn(dispatch ?? {}, "npmRunId")) {
+    dispatchFields.push("npmRunId");
+  }
   if (Object.hasOwn(dispatch ?? {}, "clawHubDeferred")) {
     dispatchFields.push("clawHubDeferred");
   }
@@ -1146,13 +1150,6 @@ async function authenticateClawHubParentRequest({
           verifierSourceContent: await readFile(
             new URL("./release-ci-summary.mjs", import.meta.url),
           ),
-          isTrustedMainAncestor: (sha) => {
-            const comparison = client.compareCommits(sha, "main");
-            return (
-              ["ahead", "identical"].includes(comparison.status) &&
-              comparison.merge_base_commit?.sha === sha
-            );
-          },
           expectedPublicationOperation: () => {
             const source = manifest.sourceAdmission;
             const selection = source?.publicationSelection;
@@ -1224,8 +1221,9 @@ export async function recoverClawHubFromParent(options) {
   });
 }
 
-// Immutable original bytes are a source, not recovery authority. Unavailable
-// receipts alone never prove that the reusable publisher did not run.
+// Immutable original bytes are a source, not recovery authority. A partially
+// executed publisher requires an explicit selection with no sealed attempts;
+// the prepared-artifact owner additionally requires authoritative absence.
 /** @param {Omit<Parameters<typeof authenticateClawHubParentRequest>[0], "originalPacked">} options */
 export async function authenticateOriginalPackedClawHubSource(options) {
   const { context, child, seal, revalidateAuthority } = await authenticateClawHubParentRequest({
@@ -1256,20 +1254,10 @@ export async function authenticateOriginalPackedClawHubSource(options) {
   if (
     publishers.some(
       (job) =>
-        job.steps?.length > 0 ||
-        (job.status === "completed" &&
-          ["success", "failure", "cancelled", "timed_out", "action_required"].includes(
-            job.conclusion,
-          )),
-    )
-  ) {
-    return null;
-  }
-  if (
-    publishers.some(
-      (job) =>
         job.status !== "completed" ||
-        job.conclusion !== "skipped" ||
+        !["skipped", "success", "failure", "cancelled", "timed_out", "action_required"].includes(
+          job.conclusion,
+        ) ||
         job.run_id !== child.id ||
         job.run_attempt !== child.run_attempt ||
         job.head_sha !== child.head_sha,
@@ -1277,13 +1265,8 @@ export async function authenticateOriginalPackedClawHubSource(options) {
   ) {
     throw new Error("Original ClawHub publisher execution is unproven.");
   }
-  if (
-    seal.packages.some(
-      (entry) => entry.publicationStatus !== "unavailable" || entry.attemptId !== undefined,
-    )
-  ) {
-    return null;
-  }
+  const names = options.event.inputs.plugins.split(/[,\s]+/u).filter(Boolean);
+  const attempted = publishers.some((job) => job.steps?.length > 0 || job.conclusion !== "skipped");
   // Authenticate the full admission before deriving a selected view.
   await revalidateAuthority(seal);
   const { transactions } = await downloadClawHubTransactions({
@@ -1342,18 +1325,31 @@ export async function authenticateOriginalPackedClawHubSource(options) {
     });
     validateActionsArtifactProducerJob({ expected, workflowJobs: jobs });
   }
-  const names = options.event.inputs.plugins.split(/[,\s]+/u).filter(Boolean);
   if (
     new Set(names).size !== names.length ||
     names.some((name) => !roster.some((entry) => entry.name === name))
   ) {
     throw new Error("Original ClawHub selection is outside the authenticated roster.");
   }
+  if (attempted && names.length === 0) {
+    return null;
+  }
+  const selected = seal.packages.filter(
+    (entry) => names.length === 0 || names.includes(entry.name),
+  );
+  if (
+    selected.some(
+      (entry) => entry.publicationStatus !== "unavailable" || entry.attemptId !== undefined,
+    )
+  ) {
+    return null;
+  }
   return {
     identity: seal.identity,
     child,
     artifacts,
     packages: roster.filter((entry) => names.length === 0 || names.includes(entry.name)),
+    revalidateAuthority: () => revalidateAuthority(seal),
   };
 }
 

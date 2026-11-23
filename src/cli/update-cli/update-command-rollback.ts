@@ -231,6 +231,7 @@ export async function rollbackFailedUpdate(params: {
         if (params.databaseBackup && run && packageTransaction) {
           return false;
         }
+        dataAtRisk = "rollback-state-unverified";
         throw new Error(
           `Automatic rollback refused: newly created ${kind} database ${entry.path} uses schema ${version}; retained previous package support is ${supported ?? "unknown"}. Keep the update installed.`,
         );
@@ -242,8 +243,10 @@ export async function rollbackFailedUpdate(params: {
   };
   let stoppedForRollback: PreManagedServiceStop | undefined;
   let failureReason = "rollback-state-unverified";
-  let dataAtRisk: "rollback-state-unverified" | "state-migrated-no-rollback" | undefined =
-    "rollback-state-unverified";
+  // A state read that fails before restoration leaves the candidate installed with
+  // nothing restored: that is unverified, not at risk. Risks need evidence: a forward
+  // schema, preserved operator edits, an unknown active root or a partial restoration.
+  let dataAtRisk: "rollback-state-unverified" | "state-migrated-no-rollback" | undefined;
   const assertConfigUnchanged = async () => {
     assertCurrent();
     const unchanged = await isUpdateConfigRollbackUnchanged({
@@ -324,9 +327,24 @@ export async function rollbackFailedUpdate(params: {
     if (params.definitionRecovery.unverified) {
       return failed("service-definition-rollback-unverified");
     }
-    if (!params.schemaVersions) {
+    if (!result.root) {
+      // Without the active root, no runtime can be named to serve this state.
       return failed("rollback-state-unverified", "rollback-state-unverified");
     }
+    if (!params.schemaVersions) {
+      // PostgreSQL state has no pre-activation baseline; the candidate remains installed.
+      return failed("rollback-state-unverified");
+    }
+    // Restored databases or plugin cohort state are a live mutation; an unreadable recheck
+    // leaves them unverified.
+    let databasesRestored = false;
+    const restoredStateUnchanged = async () => {
+      dataAtRisk =
+        databasesRestored || cohortConfigSettled ? "rollback-state-unverified" : undefined;
+      const unchanged = await stateUnchanged();
+      dataAtRisk = undefined;
+      return unchanged;
+    };
     if (!(await stateUnchanged())) {
       // Compatible databases stay in place: update ledger writes alone must
       // not force snapshot restoration or prevent package-only rollback.
@@ -349,11 +367,14 @@ export async function rollbackFailedUpdate(params: {
           cause,
         });
       }
-      if (!restored || !(await stateUnchanged())) {
+      if (!restored) {
+        return failed("state-migrated-no-rollback", "state-migrated-no-rollback");
+      }
+      databasesRestored = true;
+      if (!(await restoredStateUnchanged())) {
         return failed("state-migrated-no-rollback", "state-migrated-no-rollback");
       }
     }
-    dataAtRisk = undefined;
     await packageTransaction?.assertRollbackSafe?.();
     assertCurrent();
     const definitionBackup = params.definitionRecovery.backup;
@@ -404,11 +425,9 @@ export async function rollbackFailedUpdate(params: {
       const restore = async () => {
         // Recheck after stop so a final startup migration cannot race the first read.
         failureReason = "rollback-state-unverified";
-        dataAtRisk = "rollback-state-unverified";
-        if (!(await stateUnchanged())) {
+        if (!(await restoredStateUnchanged())) {
           return failed("state-migrated-no-rollback", "state-migrated-no-rollback");
         }
-        dataAtRisk = undefined;
         failureReason = "source-rollback-failed";
         if (!packageTransaction) {
           throw new Error("The retained package transaction is unavailable.");
@@ -469,6 +488,7 @@ export async function rollbackFailedUpdate(params: {
             await fs.rm(targetPath, { force: true });
           } else {
             await replaceFileAtomic({
+              allowDrvfsRenameRecovery: true,
               filePath: targetPath,
               content: file.raw,
               mode: 0o600,

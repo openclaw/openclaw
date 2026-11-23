@@ -6,18 +6,15 @@ import {
   type CronJobsPageOptions,
   type CronJobsProjection,
 } from "./jobs.ts";
+import { applyFullCronRuntime } from "./runtime-projection.ts";
 import type { CronJobsState } from "./types.ts";
 
 const fullCronJobsProjection: CronJobsProjection<CronJob> = {
   read: (client, params, options) => readCronInventory(client, params, options),
-  applyRuntime: (state, index, { updatedAtMs, runtime }) => {
+  applyRuntime: (state, index, event) => {
     const previous = state.cronJobs[index]!;
     state.cronJobs = sortCronJobs(
-      state.cronJobs.with(index, {
-        ...previous,
-        updatedAtMs,
-        state: { ...previous.state, ...runtime },
-      }),
+      state.cronJobs.with(index, applyFullCronRuntime(previous, event)),
       state.cronJobsSortBy,
       state.cronJobsSortDir,
     );

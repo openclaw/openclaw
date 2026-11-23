@@ -65,7 +65,7 @@ describe("confirmed outbound logical payloads", () => {
           from: "matrix:destination",
           to: "!destination:example",
         },
-        transcriptExpectedGeneration: { sessionId: "prepared-session", lifecycleRevision: "old" },
+        transcriptExpectedGeneration: { sessionKey: "agent:main:source" },
       };
       await deliverOutboundPayloadsCore(params);
       if (confirmed) {

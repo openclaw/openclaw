@@ -11,6 +11,7 @@ import {
 import { FailoverError } from "../agents/failover-error.js";
 import { agentCommandFromGatewayIngress } from "../commands/agent.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { SessionWorkStartChangedError } from "../config/sessions/work-start-error.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import * as profileReader from "../state/user-profile-list.js";
@@ -122,7 +123,7 @@ describe("OpenAI-compatible operator run authority", () => {
   });
 
   it.each(["member", "owner"] as const)(
-    "retains the authenticated HTTP %s instead of the named-reader default",
+    "retains the authenticated HTTP %s profile grant instead of the named-reader default",
     async (kind) => {
       await withOpenClawTestState({ label: "compat-http-membership" }, async () => {
         const fixture = createOperatorRunFixture();
@@ -165,6 +166,9 @@ describe("OpenAI-compatible operator run authority", () => {
               : await ensureCanonicalUserProfileForOpenClawIdIdentity({
                   accountId: principal.accountId,
                 });
+          if (principal.kind === "member") {
+            setUserProfileRole(person.id, "operator");
+          }
           const authenticated = await authorizeScopedGatewayHttpRequestOrReply({
             req,
             res,
@@ -224,13 +228,11 @@ describe("OpenAI-compatible operator run authority", () => {
           res.destroy();
           req.destroy();
           expect(() => authority.assertCurrent()).not.toThrow();
-          // Another device for the same account cannot replace this authenticated source.
+          // Replacing membership affects a new start, not this admitted child.
           membership.clear();
           const replacement = { ...principal, peerKey: `iroh:${"22".repeat(32)}` };
           membership.set(replacement.peerKey, replacement);
-          expect(() => authority.assertCurrent()).toThrow(
-            /OpenClaw ID membership authority changed/,
-          );
+          expect(() => authority.assertCurrent()).not.toThrow();
         } finally {
           admission?.close();
           res.destroy();
@@ -282,7 +284,7 @@ describe("OpenAI-compatible operator run authority", () => {
           assert(childAuthority, "Detached work lost its original operator authority");
           expect(() => childAuthority.assertCurrent()).not.toThrow();
           child.close();
-          expect(() => authority.assertCurrent()).toThrow(/no longer active/);
+          expect(() => authority.assertCurrent()).toThrow(/Operator execution ended/);
         } finally {
           await close();
           child?.close();
@@ -292,7 +294,7 @@ describe("OpenAI-compatible operator run authority", () => {
   );
 
   it.each(["grant", "role", "host", "committed config"] as const)(
-    "rejects retained effects and late results after the original %s changes",
+    "settles against captured admission after the original %s changes",
     async (changed) => {
       await withOpenClawTestState({ label: "compat-run-currentness" }, async () => {
         const fixture = createOperatorRunFixture();
@@ -311,7 +313,7 @@ describe("OpenAI-compatible operator run authority", () => {
           assert(authority, "Expected the original operator authority");
           if (changed === "grant") {
             fixture.source.abort(new Error("Visitor access ended"));
-            expect(options.abortSignal?.aborted).toBe(true);
+            expect(options.abortSignal?.aborted).toBe(false);
           } else if (changed === "role") {
             setUserProfileRole(fixture.person.id, "blocked");
             invalidateOperatorRolePolicy(fixture.person.id);
@@ -334,9 +336,9 @@ describe("OpenAI-compatible operator run authority", () => {
             expect(() => authority.assertCurrent()).not.toThrow();
             committed = restricted;
           }
-          expect(() => authority.assertCurrent()).toThrow();
           settlement.resolve(completedResult);
-          await expect(running).rejects.toThrow();
+          expect(() => authority.assertCurrent()).not.toThrow();
+          await expect(running).resolves.toBe(completedResult);
         } finally {
           await close();
         }
@@ -561,48 +563,43 @@ describe("OpenAI-compatible agent run terminal metadata", () => {
 });
 
 describe("OpenAI-compatible agent error envelopes", () => {
-  it("gives certificate failure guidance while retaining the native diagnostic code", () => {
-    const error = new FailoverError("Connection error.", {
-      reason: "tls_certificate",
-      code: "CERT_REVOKED",
-    });
-    expect(resolveOpenAiCompatibleAgentError(error)).toEqual({
-      status: 502,
-      error: {
-        message:
-          "Couldn't connect securely to the AI service. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
-        type: "api_error",
-        code: "CERT_REVOKED",
-      },
-    });
-  });
-
+  const changed = new SessionWorkStartChangedError("changed");
+  const serializedChanged = { code: changed.code, message: "changed" };
   it.each([
-    {
-      name: "a Gateway-cancelled run",
-      error: () => AbortSignal.abort().reason,
-      status: 500,
-      message: "agent run was cancelled",
-    },
-    {
-      name: "a provider transport timeout",
-      error: () => new FailoverError("This operation was aborted", { reason: "timeout" }),
-      status: 504,
-      message: "upstream provider timeout",
-    },
-    {
-      name: "an abort caused by a timeout",
-      error: () =>
-        createAbortError("This operation was aborted", {
-          cause: new DOMException("The operation was aborted due to timeout", "TimeoutError"),
-        }),
-      status: 504,
-      message: "upstream provider timeout",
-    },
-  ])("reports $name as $status", ({ error, status, message }) => {
-    expect(resolveOpenAiCompatibleAgentError(error())).toEqual({
+    [
+      new FailoverError("Connection error.", { reason: "tls_certificate", code: "CERT_REVOKED" }),
+      502,
+      "Couldn't connect securely to the AI service. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
+      "CERT_REVOKED",
+    ],
+    [AbortSignal.abort().reason, 500, "agent run was cancelled", undefined],
+    [
+      new FailoverError("This operation was aborted", { reason: "timeout" }),
+      504,
+      "upstream provider timeout",
+      undefined,
+    ],
+    [
+      createAbortError("This operation was aborted", {
+        cause: new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+      }),
+      504,
+      "upstream provider timeout",
+      undefined,
+    ],
+    [changed, 409, "changed", "SESSION_WORK_START_CHANGED"],
+    [
+      new Error("preparation failed", { cause: changed }),
+      409,
+      "changed",
+      "SESSION_WORK_START_CHANGED",
+    ],
+    [serializedChanged, 409, "changed", "SESSION_WORK_START_CHANGED"],
+    [{ code: changed.code }, 500, "internal error", undefined],
+  ] as const)("maps %s to HTTP %i", (error, status, message, code) => {
+    expect(resolveOpenAiCompatibleAgentError(error)).toEqual({
       status,
-      error: { message, type: "api_error" },
+      error: { message, type: status === 409 ? "invalid_request_error" : "api_error", code },
     });
   });
 });

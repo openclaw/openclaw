@@ -9,6 +9,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { CronCreatorAuthorityCapability } from "../gateway/cron-creator-authority-grant.types.js";
 import type { GatewaySchedulerClock } from "../infra/gateway-scheduler.js";
 import { resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
@@ -45,10 +46,7 @@ import {
   settlePreparedCliRun,
 } from "./cli-runner/cli-run-settlement.js";
 import type { AgentCommandOpts } from "./command/types.js";
-import {
-  bindActiveOperatorTurnAuthority,
-  type CronCreatorAuthorityCapability,
-} from "./cron-creator-authority-context.js";
+import { bindActiveOperatorTurnAuthority } from "./cron-creator-authority-context.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 
 const mocks = vi.hoisted(() => {

@@ -7,6 +7,7 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { acquireGitSource } from "../infra/git-source.js";
+import { resolveUserFilesystemPath } from "../infra/home-dir.js";
 import {
   resolveInstallWorkTimeoutMs,
   resolveTimedInstallModeOptions,
@@ -214,7 +215,7 @@ export function parseGitPluginSpec(raw: string): ParsedGitPluginSpec | null {
     const repo = stripGitSuffix(base.replace(/^github\.com\//i, ""));
     normalized = { url: `https://github.com/${repo}.git`, label: repo };
   } else if (hasHttpUrlPrefix(base) || isGitUrl(base) || localPath) {
-    const url = localPath ? resolveUserPath(base) : base;
+    const url = localPath ? resolveUserFilesystemPath(base) : base;
     normalized = { url, label: normalizeGitLabel(url) };
   } else {
     return null;

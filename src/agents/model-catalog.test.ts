@@ -8,7 +8,10 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../config/validation-core.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
-import { buildOpenAICompatibleLiveProviderCatalog } from "../plugin-sdk/provider-catalog-live-runtime.js";
+import {
+  buildOpenAICompatibleLiveProviderCatalog,
+  clearLiveCatalogCacheForTests,
+} from "../plugin-sdk/provider-catalog-live-runtime.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
@@ -137,9 +140,86 @@ const customRoute = {
 beforeEach(() => {
   mocks.augmentModelCatalogWithProviderPlugins.mockReset();
   mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([]);
+  // Live rows are cached by provider, endpoint and credential; cases must not share a listing.
+  clearLiveCatalogCacheForTests();
 });
 
-it.each([undefined, { input: ["text"], output: ["audio"] }])(
+it("publishes a listed row without capability metadata as unknown, not excluded", async () => {
+  const baseUrl = "https://synthetic.invalid/v1";
+  const discovered = await buildOpenAICompatibleLiveProviderCatalog({
+    providerId: "synthetic",
+    providerConfig: { baseUrl, api: "openai-completions", models: [] },
+    discoveryMode: "strict",
+    fetchGuard: async () => ({
+      response: Response.json({ data: [{ id: "voice-v2" }] }),
+      finalUrl: `${baseUrl}/models`,
+      release: async () => {},
+    }),
+  });
+  expect(discovered && "provider" in discovered && discovered.provider.models).toEqual([
+    expect.not.objectContaining({ inference: expect.anything() }),
+  ]);
+});
+
+it("keeps an unlikely-chat bare row out of the default view but runs a typed ref", async () => {
+  const baseUrl = "https://synthetic.invalid/v1";
+  const config: OpenClawConfig = { plugins: { enabled: false } };
+  const discovered = await buildOpenAICompatibleLiveProviderCatalog({
+    providerId: "synthetic",
+    providerConfig: { baseUrl, api: "openai-completions", models: [] },
+    discoveryMode: "strict",
+    fetchGuard: async () => ({
+      response: Response.json({ data: [{ id: "voice-tts-2" }, { id: "chat-v2" }] }),
+      finalUrl: `${baseUrl}/models`,
+      release: async () => {},
+    }),
+  });
+  if (!discovered || !("provider" in discovered)) {
+    throw new Error("Expected provider discovery");
+  }
+  const snapshot = await build({
+    config,
+    entries: discovered.provider.models.map((model) => ({ ...model, provider: "synthetic" })),
+    providerOutcomes: copyProviderCatalogOutcomes(discovered),
+  });
+  const listed = async (view: "default" | "all") =>
+    (
+      await resolveLogicalVisibleModelCatalog({
+        cfg: config,
+        catalog: snapshot.entries,
+        routeVariants: snapshot.routeVariants,
+        defaultProvider: "synthetic",
+        view,
+        metadataSnapshot,
+        evaluateEntry: async () =>
+          resolveLogicalModelCatalogEntryState({
+            evaluation: { availability: true, routeResolution: null },
+          }),
+      })
+    ).map(({ id }) => id);
+  expect(await listed("default")).toEqual(["chat-v2"]);
+  expect((await listed("all")).toSorted()).toEqual(["chat-v2", "voice-tts-2"]);
+  const preparedModelRuntime = {
+    ...createEmptyPreparedModelRuntimeFixture({
+      config,
+      agentDir: "unused:unlikely-chat",
+      metadataSnapshot,
+      createStores: createEmptyAgentDiscoveryStores,
+    }),
+    modelCatalog: snapshot,
+  };
+  // The pre-run chat check passes; this fixture's empty registry has no transport for the row.
+  const resolution = await resolveModelAsync(
+    "synthetic",
+    "voice-tts-2",
+    preparedModelRuntime.agentDir,
+    config,
+    { preparedModelRuntime, skipAgentDiscovery: true },
+  );
+  expect(resolution.error).toMatch(/^Unknown model: synthetic\/voice-tts-2\./);
+});
+
+it.each([{ input: ["text"], output: ["audio"] }])(
   "keeps an excluded pin with metadata %j and rejects it before execution",
   async (modalities) => {
     const baseUrl = "https://synthetic.invalid/v1";

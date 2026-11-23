@@ -54,6 +54,8 @@ The Home dock uses the same session read permissions as the full page. If you ca
 
 Your Home draft and attachments follow the conversation between the page and dock. Files still being prepared keep their progress and Remove action, and Send waits until preparation finishes.
 
+To see pull requests or saved task progress, open Home full page and select **Details**. Neither appears above the dock composer.
+
 Home can include a bounded, quoted work-context reference with your message. Before sending, that reference follows the page's agent, session, title, and visible file, not merely the Home conversation receiving it. You can remove it before sending.
 
 Sent messages show **Context attached** below your words instead of displaying the generated context as message text. Open it to inspect the captured session, page, agent, workspace, file, or selection; **Technical details** shows the snapshot as JSON. The snapshot is frozen when you send, including through queues and retries. Copying or editing your message does not include the generated reference. It remains reference data, not instructions or permission to access another conversation. Older messages without a recorded attachment are left unchanged.

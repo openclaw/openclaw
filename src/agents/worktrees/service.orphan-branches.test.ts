@@ -52,9 +52,7 @@ describe("managed orphan branch cleanup", () => {
     });
   const prune = (dryRun = false) =>
     withWorktreeRunEnd(env, () =>
-      withWorktreeAllocationLease({ env }, (guard) =>
-        collectOrphanWorktreeBranches({ repoRoot: repo, dryRun, env, ...guard }),
-      ),
+      collectOrphanWorktreeBranches({ repoRoot: repo, dryRun, env, commitGuard: () => {} }),
     );
 
   it("deletes only unowned managed branches, previews safely and reports retryable failures", async () => {
@@ -117,7 +115,7 @@ describe("managed orphan branch cleanup", () => {
     ]);
   });
 
-  it("revalidates the actual allocation lease after awaited Git admission", async () => {
+  it("revalidates caller authority after awaited Git admission", async () => {
     await git(repo, "branch", "openclaw/late");
     const reached = createDeferred();
     const resume = createDeferred();
@@ -130,12 +128,18 @@ describe("managed orphan branch cleanup", () => {
       return execute(...args);
     });
     const native = vi.spyOn(commands, "runCommandWithTimeout");
-    let cleanup: Promise<unknown> | undefined;
-    await withWorktreeAllocationLease({ env }, async (guard) => {
-      cleanup = collectOrphanWorktreeBranches({ env, repoRoot: repo, ...guard });
-      await reached.promise;
+    let current = true;
+    const cleanup = collectOrphanWorktreeBranches({
+      env,
+      repoRoot: repo,
+      commitGuard: () => {
+        if (!current) {
+          throw new Error("caller authority ended");
+        }
+      },
     });
-    // The owner has released its real lease while the prepared effect was waiting.
+    await reached.promise;
+    current = false;
     resume.resolve();
     await expect(cleanup).rejects.toThrow();
     expect(native.mock.calls.some(([args]) => args.includes("branch") && args.includes("-D"))).toBe(

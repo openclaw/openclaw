@@ -45,7 +45,6 @@ const PROVIDER_POLICY_PRECEDENCE = {
   escalated: 3,
   unavailable: 3,
 } as const;
-const TOOL_STREAM_LIMIT = 50;
 const RUN_USAGE_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
 const TOOL_OUTPUT_CHAR_LIMIT = 120_000;
@@ -134,12 +133,8 @@ function publishToolStreamEntry(
   } else {
     refreshToolStreamMessage(entry);
   }
-  if (host.toolStreamOrder.length > TOOL_STREAM_LIMIT) {
-    const overflow = host.toolStreamOrder.length - TOOL_STREAM_LIMIT;
-    for (const id of host.toolStreamOrder.splice(0, overflow)) {
-      host.toolStreamById.delete(id);
-    }
-  }
+  // Live calls stay until durable history or run cleanup replaces them. Dropping
+  // a prefix here removes visible operations before their saved rows are loaded.
   if (force) {
     flushToolStreamSync(host);
     return;
@@ -613,6 +608,22 @@ export function handleAgentEvent(
   }
   entry.name = name;
   entry.parentToolCallId ??= parentToolCallId;
+  if (phase === "start" && !entry.parentToolCallId) {
+    // Bind completed commentary to the next root call, not to nested work or
+    // a replayed start that predates it. Saved call timestamps may be earlier.
+    const introducesCall = (segment: (typeof host.chatStreamSegments)[number]) =>
+      Boolean(segment.itemId) &&
+      !segment.toolCallId &&
+      segment.runId === payload.runId &&
+      (segment.afterUserSendId === undefined ||
+        segment.afterUserSendId === entry.afterUserSendId) &&
+      segment.ts <= entry.startedAt;
+    if (host.chatStreamSegments.some(introducesCall)) {
+      host.chatStreamSegments = host.chatStreamSegments.map((segment) =>
+        introducesCall(segment) ? { ...segment, toolCallId } : segment,
+      );
+    }
+  }
   if (args !== undefined) {
     entry.args = args;
   }
@@ -647,6 +658,7 @@ export function handleAgentEvent(
   if (phase === "result") {
     entry.liveDiffStat = undefined;
     entry.resultReceived = true;
+    entry.resultTimestamp ??= payload.ts;
   }
 
   if (approvalReview) {

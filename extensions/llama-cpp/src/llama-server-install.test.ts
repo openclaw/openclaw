@@ -7,7 +7,7 @@ import path from "node:path";
 import * as fileDurability from "@openclaw/fs-safe/durability";
 import JSZip from "jszip";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClosedChunkStream } from "../../test-support/streaming-error-response.js";
 

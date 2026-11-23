@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import type { LegacyStateMigrationPlan } from "../infra/state-migrations.types.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../infra/update-control-plane-sentinel.js";
 import { getUpdateRun } from "../infra/update-run-ledger.js";
@@ -17,6 +18,7 @@ import {
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import { updateExecutorNativeEntrypoints } from "./update-cli/update-command-executor-native-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const blockedStep = { outcome: "deferred", refusal: { code: "blocked-by-prior-refusal" } };
@@ -76,16 +78,17 @@ function runPreview(root: string, command = "update") {
   );
 }
 
-async function snapshotTree(root: string): Promise<string[]> {
+async function snapshotTree(root: string, includeLogs = false): Promise<string[]> {
   const snapshot: string[] = [];
   const logDirectory = path.join("state", "logs");
   for (const { relativePath, dirent } of await listDirectoryTreeStrict(root)) {
     // Startup refusals can write daily diagnostics without mutating update state.
     if (
-      (relativePath === logDirectory && dirent.isDirectory()) ||
-      (path.dirname(relativePath) === logDirectory &&
-        dirent.isFile() &&
-        /^openclaw-\d{4}-\d{2}-\d{2}\.log$/u.test(dirent.name))
+      !includeLogs &&
+      ((relativePath === logDirectory && dirent.isDirectory()) ||
+        (path.dirname(relativePath) === logDirectory &&
+          dirent.isFile() &&
+          /^openclaw-\d{4}-\d{2}-\d{2}\.log$/u.test(dirent.name)))
     ) {
       continue;
     }
@@ -158,6 +161,29 @@ async function expectImmutableRefusal(
 }
 
 describe("update process state", () => {
+  it("keeps registry timeout status byte-identical, including file logs", async () => {
+    const { root } = await createStateFixture("openclaw-status-timeout-");
+    const preload = path.join(root, "registry.mjs");
+    await fs.writeFile(
+      preload,
+      `globalThis.fetch = async (_input, { signal }) => {
+  return new Promise((_resolve, reject) => {
+    signal.throwIfAborted();
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+};
+`,
+    );
+    const args = ["update", "status", "--timeout", "1", "--json"];
+    const before = await snapshotTree(root, true);
+    const status = await runUpdateProcess(root, args, {}, preload);
+    expect(status.code, status.stderr).toBe(0);
+    const { activeRun, lastRun, update } = JSON.parse(status.stdout);
+    expect([activeRun, lastRun]).toEqual([undefined, undefined]);
+    expect(update.registry.error).toContain("TimeoutError: request timed out");
+    expect(await snapshotTree(root, true)).toEqual(before);
+  });
+
   it("allows cleanup after an admitted updater dies without finishing its ledger", async () => {
     const root = tempDirs.make("openclaw-cleanup-orphan-");
     const configPath = path.join(root, "config", "openclaw.json");
@@ -171,19 +197,22 @@ describe("update process state", () => {
     };
     await writeFixture(configPath, { gateway: { mode: "local" } });
     const entry = path.join(root, "admit.mjs");
-    const admissionModule = pathToFileURL(
-      path.resolve("src/cli/update-cli/update-command-run.ts"),
-    ).href;
+    const admissionModule = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandRun);
     await fs.writeFile(
       entry,
-      `import { admitUpdateCommandRun } from ${JSON.stringify(admissionModule)};
+      `import { admitUpdateCommandRun } from ${JSON.stringify(admissionModule.href)};
 const run = await admitUpdateCommandRun({ env: process.env, opts: { dryRun: true }, root: ${JSON.stringify(path.resolve("."))} });
 process.stdout.write(JSON.stringify({ runId: run.runId }) + "\\n");
 process.stdin.resume();
 `,
     );
     const admitted = await runCliProcessChild({
-      nodeArgs: ["--import", path.resolve("scripts/tsx.mjs"), entry],
+      nodeArgs: [
+        ...(admissionModule.pathname.endsWith(".ts")
+          ? ["--import", path.resolve("scripts/tsx.mjs")]
+          : []),
+        entry,
+      ],
       env,
       interact: async (child) => {
         await once(child.stdout, "data");
@@ -359,7 +388,10 @@ channel("sqlite.db.query").subscribe(({ database }) => {
       expect(plan).toMatchObject({
         mutationAllowed: false,
         outcome: "refused",
-        refusal: { code: "candidate-artifact-digest-required" },
+        refusal: {
+          code: "candidate-artifact-digest-required",
+          message: expect.stringContaining("`openclaw update` verifies the staged candidate"),
+        },
         candidate: {
           root: path.resolve("."),
           version: expect.any(String),

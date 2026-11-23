@@ -1,0 +1,17 @@
+1478
+# Issue #201526 part D: invitation-only permission ceilings and approval raiser
+# boundaries across real Gateway RPC, pending/terminal events and all approval kinds.
+# The role/membership compatibility matrix preserves main for creator/admin,
+# view/suggest/write teammates (including members), unprofiled paired devices,
+# nonadmin iOS push targets, sessionless node approvals, deleted-session history
+# and legacy owner sessions. Invitation scopes are tested independently of device
+# binding and transport; baseline nonadmin/device custody fixtures remain intact.
+# Separate storage-owner proofs cover authenticated runtime provenance, SQLite
+# runtime/doctor v40->v41 migration and rollback, and real PostgreSQL preservation.
+# Extra matrix coverage is requested explicitly for option B; it catches collateral
+# policy regressions that the narrower invitee red/green security tests cannot.
+# Includes red/green reviewer findings: delegated invitee readers without display
+# profile metadata and excluded-writer reset completion after adopted cleanup.
+# The restored device-ownership case lives in a coherent sibling test to satisfy
+# the line-cap ratchet; its imports/default config setup add 15 net test lines.
+# One additional line preserves real lookup exports in the lazy approval fixture.

@@ -31,12 +31,12 @@ import { captureSessionTarget } from "../../../sessions/session-controller.lifec
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import {
-  createAdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
   type AdmittedRunOperatorAuthority,
 } from "../../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../admitted-run-context.test-support.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
 import type { RequesterOrigin } from "../../requester-origin.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
@@ -102,7 +102,7 @@ export function createSpawnOperatorSource(
       throw new Error("operator source has no live owner");
     }
   };
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId,
     scopes,
     ...policy,

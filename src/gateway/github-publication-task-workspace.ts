@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { ok } from "@openclaw/normalization-core/result";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import {
   captureWorkspaceFilesystemEvidence,
   createWorkspaceFilesystemSource,
@@ -17,7 +18,6 @@ import {
 } from "./github-publication-requester.js";
 import type { PublicationSessionRead } from "./github-publication-session.types.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { resolveRequesterProject } from "./project-access.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { createGatewaySession } from "./session-create-service.js";
@@ -28,6 +28,7 @@ import { prepareSessionWorktree } from "./session-worktree-preparation.js";
 export async function prepareGitHubPublicationTaskWorkspace(params: {
   options: GatewayRequestHandlerOptions;
   parent: PublicationSessionRead & { entry: InternalSessionEntry };
+  operatorAuthority: AdmittedRunOperatorAuthority | undefined;
   requester: GitHubPublicationRequesterV2;
   source: string;
   idempotencyKey: string;
@@ -78,7 +79,7 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
       entry.createdVia !== "spawn" ||
       entry.projectId !== parent.entry.projectId ||
       (receipt && entry.sessionId !== receipt.session_id) ||
-      entry.worktree?.canonicalWorkspaceDir !== source
+      (entry.worktree?.canonicalWorkspaceDir !== source && entry.spawnedCwd !== source)
     ) {
       throw new Error("The local publication task changed; its saved checkout was preserved.");
     }
@@ -98,8 +99,11 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
     throw new Error("The original publication task is unavailable; inspect its existing receipt.");
   }
   if (!existing?.entry) {
-    // Earlier versions keyed tasks by invocation. Reuse their recorded checkout
-    // custody instead of opening another PR after an upgrade.
+    // No task is keyed to this checkout, but an existing one may still own it:
+    // - Earlier versions keyed tasks by invocation. Reuse their recorded checkout custody
+    //   instead of opening another PR after an upgrade.
+    // - A task's own checkout is the only place its PR branch is checked out, so follow-up
+    //   work lands there. It publishes as that task; as a source it would open a second PR.
     const children = await listSessionChildEntriesReadOnly({
       agentId: parent.agentId,
       sessionKey: parent.canonicalKey,
@@ -110,7 +114,7 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
       ({ entry }) =>
         entry.createdVia === "spawn" &&
         entry.label?.startsWith("github-publication-") &&
-        entry.worktree?.canonicalWorkspaceDir === source,
+        (entry.worktree?.canonicalWorkspaceDir === source || entry.spawnedCwd === source),
     );
     if (matches.length > 1) {
       throw new Error(
@@ -186,16 +190,43 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
     const [head, tree, an, ae, cn, ce] = (
       await requireGit(source, ["log", "-1", format], gitOptions)
     ).split("\n");
-    const ancestry = await runGit(cwd, ["merge-base", "--is-ancestor", head!, "HEAD"], gitOptions);
-    if (ancestry.termination !== "exit" || (ancestry.code !== 0 && ancestry.code !== 1)) {
-      throw commandError("git merge-base --is-ancestor", ancestry);
-    }
-    // A rebase can change ancestry without changing a single file. Retain that
-    // ancestry too, so GitHub's merge-base diff excludes changes already upstream.
-    if (
-      ancestry.code === 1 ||
+    const contains = async (ancestor: string, descendant: string) => {
+      const ancestry = await runGit(
+        cwd,
+        ["merge-base", "--is-ancestor", ancestor, descendant],
+        gitOptions,
+      );
+      if (ancestry.termination !== "exit" || (ancestry.code !== 0 && ancestry.code !== 1)) {
+        throw commandError("git merge-base --is-ancestor", ancestry);
+      }
+      return ancestry.code === 0;
+    };
+    // The history the task branch must keep, when the source no longer carries it.
+    let retained: string | undefined;
+    if (cwd === source) {
+      // Commits made in the task's own checkout are already on its branch. A rebase or
+      // amend there drops the published head, which the push must still descend from.
+      const published = await readSharedGitHubPublication(
+        {
+          agentId: parent.agentId,
+          sessionKey: existing.canonicalKey,
+          sessionId: existing.entry.sessionId,
+          lifecycleRevision: existing.entry.lifecycleRevision ?? null,
+        },
+        { status: "published" },
+      );
+      if (published?.head_commit && !(await contains(published.head_commit, head!))) {
+        retained = published.head_commit;
+      }
+    } else if (
+      // A rebase can change ancestry without changing a single file. Retain that
+      // ancestry too, so GitHub's merge-base diff excludes changes already upstream.
+      !(await contains(head!, "HEAD")) ||
       tree !== (await requireGit(cwd, ["rev-parse", "HEAD^{tree}"], gitOptions))
     ) {
+      retained = "HEAD";
+    }
+    if (retained) {
       const env = {
         GIT_AUTHOR_NAME: an,
         GIT_AUTHOR_EMAIL: ae,
@@ -204,7 +235,7 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
       };
       const merge = await requireGit(
         cwd,
-        ["commit-tree", "--no-gpg-sign", "-p", "HEAD", "-p", head!, "-m", `Merge ${head}`, tree!],
+        ["commit-tree", "--no-gpg-sign", "-p", retained, "-p", head!, "-m", `Merge ${head}`, tree!],
         { ...gitOptions, env },
       );
       await requireGit(cwd, ["merge", "--ff-only", "--quiet", merge], gitOptions);
@@ -212,7 +243,10 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
     return { agentId: parent.agentId, sessionKey: existing.canonicalKey };
   }
   const checkoutCommit = await requireGit(source, ["rev-parse", "HEAD"], gitOptions);
-  const captured = await captureGatewayOperatorRunAuthority(options);
+  const authority = params.operatorAuthority;
+  const captured = authority
+    ? { authority, release: authority.retain?.() ?? (() => {}) }
+    : undefined;
   using _ = { [Symbol.dispose]: () => captured?.release() };
   assertPreparationCurrent();
   const actor = requester.snapshot.actor;
@@ -232,6 +266,7 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
     operatorRoleActor: actor,
     creation: {
       via: "spawn",
+      surface: "github-publication",
       actor: {
         type: "agent",
         id: parent.agentId,

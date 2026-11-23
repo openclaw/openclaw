@@ -18,7 +18,7 @@ function connectionResetAfterWrite() {
 describe("routed final replies after an ambiguous transport failure", () => {
   const fixtures = installRouteReplyFixture(true);
 
-  function register(replayAmbiguousFinalText: boolean) {
+  function register() {
     const visible: string[] = [];
     let attempts = 0;
     const outbound: ChannelOutboundAdapter = {
@@ -33,7 +33,6 @@ describe("routed final replies after an ambiguous transport failure", () => {
       },
     };
     const message = createChannelMessageAdapterFromOutbound({ id: "matrix", outbound });
-    message.durableFinal = { ...message.durableFinal, replayAmbiguousFinalText };
     const plugin = { ...createOutboundTestPlugin({ id: "matrix", outbound }), message };
     setActivePluginRegistry(createTestRegistry([{ pluginId: "matrix", source: "test", plugin }]));
     return { visible, attempts: () => attempts };
@@ -50,10 +49,10 @@ describe("routed final replies after an ambiguous transport failure", () => {
       assertCurrent: () => undefined,
     });
 
-  it("resends a routed exec-completion final once when the channel accepts duplicates", async () => {
+  it("resends a routed exec-completion final once on a channel without reconciliation", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      const channel = register(true);
+      const channel = register();
       const result = await route("final");
       expect(result).toMatchObject({ ok: true, delivered: true });
       expect(channel.attempts()).toBe(2);
@@ -66,12 +65,9 @@ describe("routed final replies after an ambiguous transport failure", () => {
     }
   });
 
-  it.each([
-    ["a channel without the opt-in", true, false],
-    ["a non-final reply", false, true],
-  ] as const)("does not blindly replay %s", async (_label, final, optIn) => {
-    const channel = register(optIn);
-    const result = await route(final ? "final" : "tool");
+  it("does not blindly replay a non-final reply", async () => {
+    const channel = register();
+    const result = await route("tool");
     expect(result).toMatchObject({ ok: false, delivered: false, ambiguous: true });
     expect(channel.attempts()).toBe(1);
   });

@@ -9,6 +9,11 @@ import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { WorkerTaskOptions, WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  assertAgentCreationClaimAliases,
+  captureAgentCreationClaim,
+  reserveAgentCreationClaimAdmission,
+} from "../../state/agent-creation-claim.js";
+import {
   captureAgentDatabaseAdmission,
   runWithAgentDatabaseReadAdmissionTurn,
 } from "../../state/agent-database-admission.js";
@@ -19,7 +24,10 @@ import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw
 import type { SessionBranchSummaryReadRequest } from "./session-accessor.sqlite-branches.js";
 import { readSessionActorProjectionReceipt } from "./session-actor-replica.js";
 import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-errors.js";
-import { createSessionHistoryWorkerReaders } from "./session-transcript-worker-readers.js";
+import {
+  createSessionHistoryWorkerReaders,
+  type SessionHistoryWorkerRequestRunner,
+} from "./session-transcript-worker-readers.js";
 import {
   acquireHistoryDatabaseResource,
   armDatabaseWorkerIdleRetirement,
@@ -36,7 +44,6 @@ import {
 } from "./session-transcript-worker-resources.js";
 import type {
   SessionHistoryWorkerRequestOptions,
-  SessionHistoryWorkerRequestRunner,
   SessionHistoryWorkerDatabase,
   SessionHistoryWorkerInput,
   SessionHistoryWorkerPreparedInput,
@@ -61,8 +68,8 @@ function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
   switch (input.kind) {
     case "history-page":
       return input.request.kind === "active-accounting" ? input.target.transcript : undefined;
-    case "compaction-source":
     case "transcript-hydration":
+    case "compaction-preparation":
     case "current-turn-entry":
     case "recent-active-events":
     case "latest-active-message":
@@ -195,6 +202,11 @@ export function retainSessionHistoryWorkerDatabase(
         aborters: owned.aborters,
       };
       const { lane: requestedLane, ...readOptions } = readAdmissionOptions;
+      assertAgentCreationClaimAliases(readOptions);
+      const creationClaim = captureAgentCreationClaim(readOptions);
+      if (creationClaim) {
+        reserveAgentCreationClaimAdmission(database, readOptions, () => owned.retire());
+      }
       const deadline = performance.now() + readRequest.timeoutMs;
       const remainingTime = () => {
         const remaining = deadline - performance.now();
@@ -272,6 +284,8 @@ export function retainSessionHistoryWorkerDatabase(
                 return requestLane.pool.run(
                   () => {
                     assertCurrent();
+                    assertAgentCreationClaimAliases(readOptions);
+                    creationClaim?.assertCurrent();
                     const cleanup = getAgentDeletionDatabaseCleanup(readOptions);
                     if (cleanup) {
                       cleanup.assertCurrentHost();
@@ -317,6 +331,7 @@ export function retainSessionHistoryWorkerDatabase(
                     return {
                       ...input,
                       database,
+                      creationClaim: creationClaim?.witness,
                       validation: validation?.validation,
                       readCustody: options.readCustody,
                       projectionReceipt:
@@ -371,6 +386,7 @@ export function retainSessionHistoryWorkerDatabase(
             );
           });
           await retirement;
+          creationClaim?.assertCurrent();
           const received =
             unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
           if (

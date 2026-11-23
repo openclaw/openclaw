@@ -149,6 +149,7 @@ async function retireWorktreeTemplate(
       (
         await listGitWorktrees(record.repoRoot, {
           signal: options.signal,
+          idleIoPriority: options.idleIoPriority,
           beforeRun: assertCurrent,
           stateOwnerPath: options.workerAuthority?.stateOwnerPath,
         })
@@ -160,6 +161,7 @@ async function retireWorktreeTemplate(
     if (registered) {
       await requireGit(record.repoRoot, ["worktree", "remove", "--force", record.path], {
         signal: options.signal,
+        idleIoPriority: options.idleIoPriority,
         beforeRun: assertCurrent,
         stateOwnerPath: options.workerAuthority?.stateOwnerPath,
         killProcessTree: true,
@@ -183,6 +185,7 @@ export async function collectWorktreeTemplates(
   options: WorktreeFilesystemOptions & {
     beforeRemoval?: () => Promise<void>;
     maxRemovals?: number;
+    readyOnly?: boolean;
     scope?: Pick<WorktreeTemplateRecord, "commonDir" | "worktreeRoot">;
   },
   onError?: (error: unknown, id: string) => void,
@@ -197,12 +200,16 @@ export async function collectWorktreeTemplates(
   );
   const retained = new Set<string>();
   const groups = new Map<string, { count: number; currentKey: string }>();
+  const groupKey = (record: WorktreeTemplateRecord) =>
+    record.backend.startsWith("sandbox-")
+      ? JSON.stringify([record.commonDir, record.worktreeRoot])
+      : worktreeTemplateMutationKey(record.cacheKey);
   // Bound across runtime identities, so a changed image/store cannot add another allowance.
   for (const record of records.toReversed()) {
-    if (record.status !== "ready" || !record.backend.startsWith("sandbox-")) {
+    if (record.status !== "ready" || record.cacheKey.startsWith("warm:")) {
       continue;
     }
-    const group = JSON.stringify([record.commonDir, record.worktreeRoot]);
+    const group = groupKey(record);
     const selection = groups.get(group) ?? {
       count: 0,
       currentKey: worktreeTemplateMutationKey(record.cacheKey),
@@ -214,12 +221,15 @@ export async function collectWorktreeTemplates(
   }
   let removed = 0;
   for (const record of records) {
+    if (options.readyOnly && record.status !== "ready") {
+      continue;
+    }
     const sandbox = record.backend.startsWith("sandbox-");
-    const overCapacity = sandbox && record.status === "ready" && !retained.has(record.id);
+    const overCapacity =
+      !record.cacheKey.startsWith("warm:") && record.status === "ready" && !retained.has(record.id);
     const supersededIdentity =
       sandbox &&
-      groups.get(JSON.stringify([record.commonDir, record.worktreeRoot]))?.currentKey !==
-        worktreeTemplateMutationKey(record.cacheKey);
+      groups.get(groupKey(record))?.currentKey !== worktreeTemplateMutationKey(record.cacheKey);
     const expiresBefore = supersededIdentity
       ? Math.max(before, Date.now() - 6 * 60 * 60_000)
       : record.cacheKey.startsWith("warm:")
@@ -298,8 +308,13 @@ export async function prepareWorktreeTemplate(params: {
   ) => Promise<boolean>;
   prepare: (record: WorktreeTemplateRecord, options: WorktreeAllocationGuard) => Promise<void>;
 }): Promise<PreparedWorktreeTemplate | undefined> {
+  setWorktreePreparationTemplate(undefined, {
+    refreshRejectReason: undefined,
+    validationFailure: undefined,
+    refreshErrorClass: undefined,
+  });
   const { validate } = params;
-  const retainCommits = params.backend.startsWith("sandbox-");
+  const retainCommits = params.refresh !== undefined;
   let built = false;
   let retained: PreparedWorktreeTemplate | undefined;
   let preparationKey: string | undefined;
@@ -404,12 +419,20 @@ export async function prepareWorktreeTemplate(params: {
           // no reader until it succeeds keeps fast readers behind that validation.
           let valid = hasReaders;
           try {
-            valid ||=
-              (await worktreePathExists(existing.path)) &&
-              (!validate ||
-                (await timeWorktreePreparationPhase("templateValidate", () =>
-                  validate(existing, options),
-                )));
+            if (!valid) {
+              const exists = await worktreePathExists(existing.path);
+              valid =
+                exists &&
+                (!validate ||
+                  (await timeWorktreePreparationPhase("templateValidate", () =>
+                    validate(existing, options),
+                  )));
+              if (!valid) {
+                setWorktreePreparationTemplate(undefined, {
+                  refreshRejectReason: exists ? "validation-failed" : "template-missing",
+                });
+              }
+            }
           } catch (error) {
             if (hasWorktreeUnknownOutcome(error)) {
               retained = await retainWorktreeTemplate(
@@ -563,6 +586,8 @@ export async function prepareWorktreeTemplate(params: {
       await collectWorktreeTemplates(params.env, 0, {
         ...params.options,
         maxRemovals: 1,
+        // Invalid managed generations remain deferred to maintenance, not request-path IO.
+        readyOnly: !params.backend.startsWith("sandbox-"),
         scope: { commonDir: params.commonDir, worktreeRoot: params.worktreeRoot },
       });
     }
@@ -581,6 +606,9 @@ export async function prepareWorktreeTemplate(params: {
     }
     throw error;
   } finally {
+    setWorktreePreparationTemplate(undefined, {
+      identity: `${params.backend}:${params.cacheKey}:${params.contentKey}`,
+    });
     if (finishPreparation && preparationKey) {
       pendingPreparations.delete(preparationKey);
       finishPreparation();

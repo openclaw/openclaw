@@ -187,6 +187,26 @@ it.each([false, true])(
   },
 );
 
+it("reports an unmeasured direct Node exception under bun-all without rerouting it", async () => {
+  const target = "src/process/spawn-utils.test.ts";
+  const plans = resolveShardPlans({ OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify([target]) });
+  const output: string[] = [];
+  vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+    output.push(String(chunk));
+    return true;
+  });
+  const result = await recordPlans(plans, { env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-all" } });
+  expect(result.code).toBe(0);
+  expect(result.calls).toHaveLength(1);
+  expect(result.calls[0]![0]).toEqual([target]);
+  expect(result.calls[0]![1].OPENCLAW_VITEST_RUNTIME).toBe("node");
+  expect(
+    output
+      .filter((line) => line.startsWith("[shard:volume] "))
+      .map((line) => JSON.parse(line.slice("[shard:volume] ".length))),
+  ).toEqual([expect.objectContaining({ target, runtime: "node", full: null, selected: null })]);
+});
+
 function machine(cpus: number, gib: number) {
   vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(true);
   vi.spyOn(os, "availableParallelism").mockReturnValue(cpus);
@@ -1295,6 +1315,55 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       "CI target does not provide scripts/test-projects.mts or .mjs",
     );
   });
+
+  it.each(["node", "bun"] as const)(
+    "runs and retries only the selected %s job with unchanged coverage",
+    async (runtime) => {
+      const plans = groupPlans([
+        {
+          configs: [bunConfig],
+          shard_name: "eligible",
+          includePatterns: [nodeTarget, vitestBunTarget, nativeBunTarget],
+        },
+      ]);
+      const env = { CI: "true", OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual-all" };
+      const capture = async (selected?: string, outcome = 0) => {
+        const calls: {
+          args: string[];
+          runtime: string | undefined;
+          include: unknown;
+          label: string;
+          timingKey: string | undefined;
+        }[] = [];
+        const code = await runPlans(plans, {
+          concurrency: 1,
+          env: { ...env, OPENCLAW_CI_TEST_RUNTIME: selected },
+          runChild: async (args, childEnv, label, timingKey) => {
+            calls.push({
+              args,
+              runtime: childEnv.OPENCLAW_VITEST_RUNTIME,
+              include: childEnv.OPENCLAW_VITEST_INCLUDE_FILE
+                ? readList(childEnv.OPENCLAW_VITEST_INCLUDE_FILE)
+                : undefined,
+              label,
+              timingKey,
+            });
+            return outcome;
+          },
+        });
+        return { code, calls };
+      };
+      const original = await capture();
+      const expected = original.calls.filter((call) => call.runtime === runtime);
+      expect(expected.length).toBeGreaterThan(0);
+      const failed = await capture(runtime, 1);
+      expect(failed.code).toBe(1);
+      expect(failed.calls).toEqual(expected);
+      const retry = await capture(runtime);
+      expect(retry.code).toBe(0);
+      expect(retry.calls).toEqual(expected);
+    },
+  );
 
   it("finishes every release engine after ordinary test failures", async () => {
     const { code, calls } = await recordPlans(

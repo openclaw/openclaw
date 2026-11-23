@@ -17,26 +17,35 @@ import {
   withWorktreePreparationTiming,
 } from "../../agents/worktrees/preparation-timing.js";
 import { IDLE_GC_MS } from "../../agents/worktrees/retention.js";
+import { ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
-import { collectWorktreeTemplates } from "../../agents/worktrees/template-cache.js";
+import {
+  collectWorktreeTemplates,
+  retainWorktreeTemplate,
+} from "../../agents/worktrees/template-cache.js";
 import {
   listTemplatesAsync,
   markTemplateReadyAsync,
 } from "../../agents/worktrees/template-registry-async.js";
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { RuntimeMsgContext, TemplateContext } from "../../auto-reply/templating.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
+import * as gitExec from "../../infra/git-exec.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.message.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { startChatSendDiagnostics } from "../server-methods/chat-send-diagnostics.js";
 import { initializeLocalWorkspaceProjection } from "./local-workspace-checkout.js";
+import { createLocalWorkspaceBaselineTree } from "./local-workspace-manifest-tree.js";
 import { prewarmLocalWorkspaceTemplates } from "./local-workspace-prewarm.js";
 import { cloneLocalWorkspaceTemplate } from "./local-workspace-template.js";
 import { captureWorkspaceManifestDocument } from "./workspace-manifest-worker.js";
+import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
 const mocks = vi.hoisted(() => ({
   backend: vi.fn(),
@@ -123,6 +132,7 @@ beforeAll(async () => {
   await write(source, "pnpm-lock.yaml", firstLock);
   await write(source, "package.json", '{"name":"fixture","private":true}\n');
   await write(source, "packages/tool/package.json", '{"name":"fixture-tool"}\n');
+  await write(source, ".agents/.DS_Store", "synthetic metadata\n");
   await write(source, ".gitignore", "node_modules/\n.env*\n.npmrc\nbuild/\n");
   await git(source, "add", ".");
   await git(source, "commit", "--quiet", "-m", "fixture");
@@ -131,6 +141,9 @@ beforeAll(async () => {
   await git(source, "commit", "--quiet", "-am", "source update");
   sourceCommit = await git(source, "rev-parse", "HEAD");
   await write(source, "pnpm-lock.yaml", secondLock);
+  await write(source, "package.json", '{"name":"fixture","private":true,"version":"2.0.0"}\n');
+  await write(source, "lock-generation.txt", "second generation\n");
+  await git(source, "add", ".");
   await git(source, "commit", "--quiet", "-am", "lockfile update");
   changedCommit = await git(source, "rev-parse", "HEAD");
   await write(source, ".gitattributes", "source.ts text eol=crlf\n");
@@ -194,7 +207,7 @@ async function fixture(signal: AbortSignal) {
   };
 }
 
-it("refreshes source changes once, isolates clones, and rebuilds changed lockfiles", async ({
+it("refreshes source and lockfile changes without rewriting unchanged files", async ({
   signal,
 }) => {
   const backend = createCopyWorktreeBackend();
@@ -219,6 +232,16 @@ it("refreshes source changes once, isolates clones, and rebuilds changed lockfil
     (record) => record.worktreeRoot === path.join(path.dirname(first), "templates"),
   );
   assert(template, "Template was not reserved");
+  const reader = await retainWorktreeTemplate(env, template, () => signal.throwIfAborted());
+  assert(reader, "Old generation reader was not retained");
+  const readers = [reader];
+  await using _ = {
+    async [Symbol.asyncDispose]() {
+      for (const retained of readers) {
+        await retained.release();
+      }
+    },
+  };
   const indexPath = path.join(template.path, ".git", "index");
   const originalIndex = await fs.readFile(indexPath);
   // Reuse consumes producer validation without rescanning or changing the shared index.
@@ -261,17 +284,68 @@ it("refreshes source changes once, isolates clones, and rebuilds changed lockfil
   expect(mocks.install.mock.calls[0]![0].scopeKey).not.toBe(
     mocks.install.mock.calls[1]![0].scopeKey,
   );
+  const currentTemplate = (await listTemplatesAsync(env)).find(
+    (record) =>
+      record.worktreeRoot === template.worktreeRoot && record.sourceCommit === sourceCommit,
+  );
+  assert(currentTemplate, "Refreshed generation was not published");
+  const currentReader = await retainWorktreeTemplate(env, currentTemplate, () =>
+    signal.throwIfAborted(),
+  );
+  assert(currentReader, "Current generation reader was not retained");
+  readers.push(currentReader);
+  // Count file replacements at the real checkout boundary, after the copy has
+  // assigned new stat identities. Cold builds start with no retained files.
+  const priorStats = new Map<string, Map<string, Awaited<ReturnType<typeof fs.stat>>>>();
+  const copy = backend.cloneTemplate;
+  backend.cloneTemplate = async (...args) => {
+    await copy(...args);
+    const files = (await git(args[1], "ls-files", "-z")).split("\0").filter(Boolean);
+    priorStats.set(
+      args[1],
+      new Map(
+        await Promise.all(
+          files.map(async (file) => [file, await fs.stat(path.join(args[1], file))] as const),
+        ),
+      ),
+    );
+  };
+  let rewritten = 0;
+  const install = mocks.install.getMockImplementation()!;
+  mocks.install.mockImplementationOnce(async (params) => {
+    for (const file of (await git(params.directory, "ls-files", "-z"))
+      .split("\0")
+      .filter(Boolean)) {
+      const before = priorStats.get(params.directory)?.get(file);
+      const after = await fs.stat(path.join(params.directory, file));
+      if (!before || before.ino !== after.ino || before.mtimeMs !== after.mtimeMs) {
+        rewritten++;
+      }
+    }
+    return install(params);
+  });
   const third = await withWorktreePreparationTiming("managed", () =>
     clone("changed-lock", changedCommit),
   );
+  expect(await read(currentTemplate.path, "pnpm-lock.yaml")).toBe(firstLock);
+  expect(await git(currentTemplate.path, "rev-parse", "HEAD")).toBe(sourceCommit);
   expect(await read(third, dependencyFile)).toBe(secondLock);
   expect(await read(third, "pnpm-lock.yaml")).toBe(secondLock);
   expect(mocks.install).toHaveBeenCalledTimes(3);
-  expect(backend.createTemplate).toHaveBeenCalledTimes(2);
+  expect(rewritten).toBe(3);
+  expect(backend.createTemplate).toHaveBeenCalledOnce();
+  const selected = (await listTemplatesAsync(env)).find(
+    (record) => record.path !== template.path && record.sourceCommit === changedCommit,
+  );
+  assert(selected, "Updated template was not published");
   expect(mocks.preparation.mock.lastCall?.[0].details).toMatchObject({
-    template: "cold",
+    template: "warm",
+    "template.identity": `${selected.backend}:${selected.cacheKey}:${selected.contentKey}`,
     "template.reason": "ready",
     "template.missReason": "commit-changed",
+    "template.refreshRejectReason": undefined,
+    "template.validationFailure": undefined,
+    "template.refreshErrorClass": undefined,
     "template.priorSourceCommit": sourceCommit.slice(0, 12),
     "template.requestedSourceCommit": changedCommit.slice(0, 12),
   });
@@ -328,12 +402,77 @@ it("refreshes source changes once, isolates clones, and rebuilds changed lockfil
     }
   }
   expect(mocks.install).toHaveBeenCalledTimes(3);
-  const attributes = await clone("attributes", attributeCommit);
+  expect(await read(template.path, "pnpm-lock.yaml")).toBe(firstLock);
+  expect(await read(template.path, "source.ts")).toBe(sourceText);
+  const attributes = await withWorktreePreparationTiming("sandbox", () => {
+    markManagedWorktreePreparation();
+    return clone("attributes", attributeCommit);
+  });
   expect(await read(attributes, "source.ts")).toBe("export const version = 'updated';\r\n");
-  expect(backend.createTemplate).toHaveBeenCalledTimes(3);
+  expect(backend.createTemplate).toHaveBeenCalledTimes(2);
+  expect(mocks.preparation.mock.lastCall?.[0].details).toMatchObject({
+    template: "cold",
+    "template.reason": "ready",
+    "template.missReason": "commit-changed",
+    "template.refreshRejectReason": "attributes-changed",
+  });
 });
 
+it.for(["exit-nonzero", "timeout", "no-output-timeout", "signal", "output-truncated"] as const)(
+  "reports a sandbox cold rebuild after a failed diff probe (%s)",
+  async (errorClass, { signal }) => {
+    const clone = await fixture(signal);
+    await clone("seed");
+    const execute = gitExec.executeGitCommand;
+    let failedProbes = 0;
+    using _ = vi.spyOn(gitExec, "executeGitCommand").mockImplementation((cwd, args, options) => {
+      if (args.includes("diff-tree")) {
+        failedProbes++;
+        return Promise.resolve({
+          ...createCommandResult({
+            code: errorClass === "output-truncated" ? 0 : 128,
+            termination:
+              errorClass === "exit-nonzero" || errorClass === "output-truncated"
+                ? "exit"
+                : errorClass,
+            stdoutTruncatedBytes: errorClass === "output-truncated" ? 1 : undefined,
+            stderr: "synthetic private diff detail",
+          }),
+          timeoutMs: 0,
+        });
+      }
+      return execute(cwd, args, options);
+    });
+    const result = await withWorktreePreparationTiming("sandbox", () => {
+      markManagedWorktreePreparation();
+      return clone("advanced", sourceCommit);
+    });
+    expect(await git(result, "rev-parse", "HEAD")).toBe(sourceCommit);
+    expect(await read(result, "node_modules/source-derived.txt")).toBe(
+      "export const version = 'updated';\n",
+    );
+    expect(failedProbes).toBe(1);
+    const details = mocks.preparation.mock.lastCall?.[0].details;
+    expect(details).toMatchObject({
+      kind: "sandbox",
+      template: "cold",
+      "template.reason": "ready",
+      "template.missReason": "commit-changed",
+      "template.refreshRejectReason": "diff-probe-failed",
+      "template.refreshErrorClass": errorClass,
+    });
+    expect(JSON.stringify(details)).not.toContain("synthetic private diff detail");
+  },
+);
+
 it("retains dependencies without credentials or install debris", async ({ signal }) => {
+  const rm = fs.rm;
+  using _ = vi.spyOn(fs, "rm").mockImplementation((target, options) => {
+    if (path.basename(String(target)) === "build" && options?.recursive) {
+      throw new Error("Bulk template cleanup entered the Gateway libuv pool");
+    }
+    return rm(target, options);
+  });
   mocks.install.mockImplementation(async ({ directory }) => {
     await expectMissing(directory, ...hostSecrets);
     return installFiles(directory, {
@@ -374,7 +513,7 @@ it.for(["none", "same", "previous"])(
     );
     try {
       const projectionPath = path.join(path.dirname(seed), "templates", "fetch-proof", "workspace");
-      await withWorktreeAllocationLease({ env, signal }, (allocation) =>
+      const initial = await withWorktreeAllocationLease({ env, signal }, (allocation) =>
         initializeLocalWorkspaceProjection({
           owner: {
             agentId: "main",
@@ -394,6 +533,22 @@ it.for(["none", "same", "previous"])(
         }),
       );
       expect(mocks.install).toHaveBeenCalledOnce();
+      expect(await read(projectionPath, ".agents/.DS_Store")).toBe("synthetic metadata\n");
+      expect(initial.preparedDirectories).toContain(".agents/skills");
+      expect(initial.preparedDirectories).not.toContain(".agents");
+      const cached = parseWorkerWorkspaceManifest(initial.rawManifest, initial.manifestRef);
+      expect(cached.directories).not.toContain(".agents");
+      const fresh = await captureWorkspaceManifestDocument({
+        root: projectionPath,
+        baseCommit,
+        buildCacheInputs: new Set(),
+        signal,
+      });
+      expect(createLocalWorkspaceBaselineTree(cached, initial.preparedDirectories)).toEqual(
+        createLocalWorkspaceBaselineTree(
+          parseWorkerWorkspaceManifest(fresh.rawManifest, fresh.manifestRef),
+        ),
+      );
       vi.stubEnv("GIT_CONFIG_PARAMETERS", undefined);
       expect(await git(projectionPath, "config", "--get-all", "remote.origin.url")).toBe(url);
       expect(await git(projectionPath, "config", "--get-all", "openclaw.projection")).toBe("true");
@@ -463,10 +618,20 @@ function prewarmFixture() {
   };
   const prepare = (signal: AbortSignal) =>
     prewarmLocalWorkspaceTemplates({ getConfig: () => config, signal });
+  setRuntimeConfigSnapshot(config, config);
   const prewarmEnv = { ...process.env };
   const seed = async (signal: AbortSignal) => {
+    const usedAt = Date.now();
+    using _ = vi.spyOn(Date, "now").mockReturnValue(usedAt);
+    await new ManagedWorktreeService({ getConfig: () => config }).create({
+      repoRoot: source,
+      name: path.basename(state).toLowerCase(),
+      baseRef: baseCommit,
+      provisionIgnoredFiles: false,
+      signal,
+    });
     const templateRoot = path.join(state, "worktree-projections");
-    await fs.mkdir(templateRoot);
+    await fs.mkdir(templateRoot, { recursive: true });
     await withWorktreeAllocationLease({ env: prewarmEnv, signal }, (guard) =>
       cloneLocalWorkspaceTemplate({
         source,
@@ -482,6 +647,7 @@ function prewarmFixture() {
       }),
     );
     mocks.install.mockClear();
+    return usedAt;
   };
   return { state, config, env: prewarmEnv, prepare, seed };
 }
@@ -515,7 +681,7 @@ it("defers dependency builds while maintenance reports pressure", async ({ signa
   expect(mocks.install).not.toHaveBeenCalled();
 });
 
-it("does not build for a configured workspace before its first sandboxed session", async ({
+it("does not build for a configured workspace without a recent managed create", async ({
   signal,
 }) => {
   const warmed = prewarmFixture();
@@ -523,25 +689,6 @@ it("does not build for a configured workspace before its first sandboxed session
   expect(mocks.install).not.toHaveBeenCalled();
   await expectMissing(warmed.state, "worktree-projections");
 });
-
-it.each(["default", "agent-override"] as const)(
-  "does not prepare dependency templates when sandboxing is off (%s)",
-  async (mode) => {
-    const warmed = prewarmFixture();
-    warmed.config.agents = {
-      ...(mode === "agent-override" ? { defaults: { sandbox: { mode: "all" } } } : {}),
-      entries: {
-        main: {
-          workspace: source,
-          ...(mode === "agent-override" ? { sandbox: { mode: "off" } } : {}),
-        },
-      },
-    };
-    await warmed.prepare(new AbortController().signal);
-    await expectMissing(warmed.state, "worktree-projections");
-    expect(mocks.install).not.toHaveBeenCalled();
-  },
-);
 
 it("joins background preparation through the allocation owner", async ({ signal }) => {
   const warmed = prewarmFixture();
@@ -595,7 +742,7 @@ it("prepares the current base of a previously sandboxed project with sandbox mod
 }) => {
   const warmed = prewarmFixture();
   const templateRoot = path.join(warmed.state, "worktree-projections");
-  await fs.mkdir(templateRoot);
+  await warmed.seed(signal);
   const clone = (name: string, commit: string) =>
     withWorktreeAllocationLease({ env: warmed.env, signal }, (guard) =>
       cloneLocalWorkspaceTemplate({
@@ -611,13 +758,12 @@ it("prepares the current base of a previously sandboxed project with sandbox mod
         guard: { ...guard, signal: guard.signal ?? signal },
       }),
     );
-  await clone("prior-session", baseCommit);
   const priorUse = (await listTemplatesAsync(warmed.env))[0]!.lastUsedAt;
   warmed.config.agents = {
     entries: { main: { workspace: path.join(warmed.state, "unused"), sandbox: { mode: "off" } } },
   };
   await warmed.prepare(signal);
-  expect(mocks.install).toHaveBeenCalledTimes(2);
+  expect(mocks.install).toHaveBeenCalledTimes(1);
   expect(
     (await listTemplatesAsync(warmed.env)).every((record) => record.lastUsedAt === priorUse),
   ).toBe(true);
@@ -653,7 +799,7 @@ it("prepares the current base of a previously sandboxed project with sandbox mod
   expect(await read(path.join(templateRoot, "first-after-advance"), dependencyFile)).toBe(
     secondLock,
   );
-  expect(mocks.install).toHaveBeenCalledTimes(2);
+  expect(mocks.install).toHaveBeenCalledTimes(1);
   expect(
     (await listTemplatesAsync(warmed.env)).some((record) => record.lastUsedAt > priorUse),
   ).toBe(true);
@@ -664,12 +810,14 @@ it.each([false, true])(
   async (removed) => {
     const signal = new AbortController().signal;
     const warmed = prewarmFixture();
-    await warmed.seed(signal);
+    const usedAt = await warmed.seed(signal);
     await warmed.prepare(signal);
     const commit = await git(source, "rev-parse", "HEAD");
     const templateRoot = path.join(warmed.state, "worktree-projections");
     const guard = { commitGuard: () => {} };
-    for (const record of await listTemplatesAsync(warmed.env)) {
+    for (const record of (await listTemplatesAsync(warmed.env)).filter((row) =>
+      row.backend.startsWith("sandbox-"),
+    )) {
       await markTemplateReadyAsync(warmed.env, record.id, 1, guard.commitGuard);
     }
     await withWorktreeAllocationLease({ env: warmed.env, signal }, (allocation) =>
@@ -687,21 +835,23 @@ it.each([false, true])(
       }),
     );
     const pinned = (await listTemplatesAsync(warmed.env)).find(
-      (record) => record.sourceCommit === baseCommit,
+      (record) => record.backend.startsWith("sandbox-") && record.sourceCommit === baseCommit,
     )!;
     const collect = () => collectWorktreeTemplates(warmed.env, Date.now() - IDLE_GC_MS, guard);
     if (removed) {
       await collect();
-      expect((await listTemplatesAsync(warmed.env)).map((record) => record.id)).toEqual([
-        pinned.id,
-      ]);
+      expect(
+        (await listTemplatesAsync(warmed.env))
+          .filter((record) => record.backend.startsWith("sandbox-"))
+          .map((record) => record.id),
+      ).toEqual([pinned.id]);
     }
     mocks.install.mockClear();
     await warmed.prepare(signal);
     await collect();
     expect(await listTemplatesAsync(warmed.env)).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ sourceCommit: commit, lastUsedAt: pinned.lastUsedAt }),
+        expect.objectContaining({ sourceCommit: commit, lastUsedAt: usedAt }),
       ]),
     );
     await warmed.prepare(signal);

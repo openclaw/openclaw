@@ -66,3 +66,12 @@ and snapshots, and refuses malformed names at each field. Deterministic signed v
 changes its role and mirrors the name in a snapshot; different invite/approval roles fail in
 both directions without mutating membership or consuming the invite. Role meaning belongs to
 the consuming Gateway, which must deny names it cannot resolve.
+
+## Member recovery
+
+`authority/member-recovery.test.ts` exercises invite admission, recovery-only key creation,
+same-account browser recovery over the mailbox, current role inheritance, sequence replay,
+wrong signer/account/operation refusals, replacement, removal and re-invitation. Kit keys never
+enter peer admission or snapshots and survive browser inactivity. `member-recovery-kit.test.ts`
+checks export decoding, complete identity/pin fields and owner/member key separation. These
+protocol tests do not prove the browser, Discovery or real Gateway transport.

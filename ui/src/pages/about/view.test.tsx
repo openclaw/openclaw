@@ -119,6 +119,7 @@ it("shows Control UI and Gateway build identity with the shared settings facts",
     expect(
       row.querySelector(".settings-row__control button.chat-copy-btn")?.getAttribute("aria-label"),
     ).toBe("Copy version and commit");
+    expect(row.querySelector(".chat-copy-btn__icon-failed")).not.toBeNull();
   }
   const time = ui.rows.get("Built")?.querySelector("time");
   expect(time).toMatchObject({ dateTime: BUILT_AT, title: BUILT_AT, dir: "auto" });
@@ -142,20 +143,21 @@ it("copies version and full commit, falling back to whichever exists", async () 
   const writeText = vi.fn(async () => {});
   vi.stubGlobal("navigator", { clipboard: { writeText } });
   const { container, props, update } = render();
-  const copy = async (index: number) => {
+  const copy = async (index: number, label: string) => {
     writeText.mockClear();
     const rows = container.querySelectorAll(".about-build");
+    expect(rows[index]?.querySelector(".chat-copy-btn")?.getAttribute("aria-label")).toBe(label);
     rows[index]?.querySelector<HTMLButtonElement>(".chat-copy-btn")?.click();
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledOnce());
     return writeText.mock.calls[0]?.at(0);
   };
-  expect(await copy(0)).toBe(`2026.7.10 (${COMMIT})`);
+  expect(await copy(0, "Copy version and commit")).toBe(`2026.7.10 (${COMMIT})`);
   update({ ...props, gateway: { version: "2026.7.9", commit: null, builtAt: null } });
   flush();
-  expect(await copy(1)).toBe("2026.7.9");
+  expect(await copy(1, "Copy version")).toBe("2026.7.9");
   update({ ...props, gateway: { version: null, commit: "abcdef0", builtAt: null } });
   flush();
-  expect(await copy(1)).toBe("abcdef0");
+  expect(await copy(1, "Copy commit")).toBe("abcdef0");
   vi.unstubAllGlobals();
 });
 

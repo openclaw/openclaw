@@ -76,6 +76,7 @@ export async function computeWorkspaceManifest<Command extends WorkspaceManifest
   command: Command,
   signal?: AbortSignal,
   git?: GitWorkerOperationOptions["git"],
+  idleIoPriority?: boolean,
 ): Promise<WorkspaceManifestComputationOperations[Command["type"]]["output"]> {
   if (hasGitWorkerContext()) {
     const { executeWorkspaceManifestComputation } =
@@ -85,6 +86,7 @@ export async function computeWorkspaceManifest<Command extends WorkspaceManifest
   return await runGitWorkerOperation(command, {
     signal,
     git,
+    idleIoPriority,
     inputBytes: 256 + computationInputBytes(command.input),
     transferList: transferableManifestInput,
   });
@@ -94,16 +96,20 @@ function computeValue<Type extends keyof WorkspaceManifestValueInputs>(
   type: Type,
   input: WorkspaceManifestValueInputs[Type],
   signal?: AbortSignal,
+  idleIoPriority?: boolean,
 ): Promise<WorkspaceManifestComputationOperations[Type]["output"]>;
 async function computeValue(
   type: keyof WorkspaceManifestValueInputs,
   input: WorkspaceManifestValueInputs[keyof WorkspaceManifestValueInputs],
   signal?: AbortSignal,
+  idleIoPriority?: boolean,
 ) {
   signal?.throwIfAborted();
   return computeWorkspaceManifest(
     { type, input: { payload: new TextEncoder().encode(JSON.stringify(input)) } },
     signal,
+    undefined,
+    idleIoPriority,
   );
 }
 
@@ -139,6 +145,7 @@ type WorkspaceCaptureCommand =
   | "workspace.manifest.capture"
   | "workspace.manifest.snapshot"
   | "workspace.manifest.document"
+  | "workspace.manifest.initial"
   | "workspace.manifest.reference";
 
 function captureWorkspace<Type extends WorkspaceCaptureCommand>(
@@ -155,7 +162,7 @@ async function captureWorkspace(type: WorkspaceCaptureCommand, params: Workspace
     gitIgnore,
     signal,
   } = params;
-  if (hasGitWorkerContext()) {
+  if (hasGitWorkerContext() && type !== "workspace.manifest.initial") {
     const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
     const snapshot = await readActualWorkspaceManifestImpl(params);
     if (type === "workspace.manifest.document") {
@@ -251,12 +258,23 @@ export async function captureWorkspaceManifestDocument(params: WorkspaceCaptureA
   return await captureWorkspace("workspace.manifest.document", params);
 }
 
+/** Initialization publishes these same scan identities with its baseline, before guest access. */
+export async function captureInitialLocalWorkspaceManifest(params: WorkspaceCaptureArguments) {
+  const result = await captureWorkspace("workspace.manifest.initial", params);
+  return {
+    ...result,
+    projectionFingerprints:
+      result.projectionFingerprints && Buffer.from(result.projectionFingerprints),
+  };
+}
+
 /** Only the template owner supplies a previous generation after validating immutable source. */
 export async function captureTemplateWorkspaceManifest(
   input: WorkspaceManifestValueInputs["workspace.manifest.template"],
   signal?: AbortSignal,
+  idleIoPriority?: boolean,
 ) {
-  return await computeValue("workspace.manifest.template", input, signal);
+  return await computeValue("workspace.manifest.template", input, signal, idleIoPriority);
 }
 
 export async function captureWorkspaceManifestReference(params: WorkspaceCaptureArguments) {
@@ -403,6 +421,7 @@ export async function prepareWorkspaceStageInput(
         buildCacheInputs: input.buildCacheInputs,
         gitHistory: input.gitHistory,
         parentCommit: input.parentCommit,
+        blobsOnly: input.blobsOnly,
         ...("publication" in input
           ? {
               publication: {

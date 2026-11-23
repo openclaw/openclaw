@@ -1,6 +1,11 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  loadTranscriptEvents,
+  upsertSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
+import { composePreparedOnlySessionSource } from "../../../config/sessions/session-source-authority.js";
 import type { SqliteWorkerCommand } from "../../../infra/sqlite-worker-contract.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { resetGatewayWorkAdmission } from "../../../process/gateway-work-admission.js";
@@ -11,7 +16,7 @@ import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import type { DomainScope } from "../../../state/openclaw-state-worker-store.types.js";
 import { createOperationalRunInstanceRef } from "../../operational-run-instance.js";
 import {
-  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../tools/gateway-caller-context.js";
 import {
@@ -98,16 +103,16 @@ describe("requester settle retry lifetime", () => {
         agentId: "main",
         sessionKey: input.subagent.requesterSessionKey,
         operationalRunInstance: createOperationalRunInstanceRef("originating-wake-turn"),
-        receiptAuthority: () => !origin.signal.aborted,
+        receiptAuthority: () => origin.signal.throwIfAborted(),
         approvalSignals: [origin.signal],
       };
       const entered = createDeferred();
       const release = createDeferred();
       driver.wake.mockImplementation(async (params) => {
-        const assertCaller = captureGatewayToolCallerAssertion();
+        const assertCaller = composePreparedOnlySessionSource(getGatewayToolCallerIdentity());
         entered.resolve();
         await release.promise;
-        assertCaller?.("agent");
+        assertCaller?.();
         expect(params.isSourceCurrent()).toBe(true);
         await params.completeBatch(
           [params.settledEntry],
@@ -120,9 +125,9 @@ describe("requester settle retry lifetime", () => {
         await awaitGateBeforeSettlement(entered.promise, running, "Wake did not start");
         origin.abort();
         await withGatewayToolCallerIdentity(caller, () => {
-          expect(() => captureGatewayToolCallerAssertion()?.("agent")).toThrow(
-            "agent tool caller authority is no longer active",
-          );
+          expect(() =>
+            composePreparedOnlySessionSource(getGatewayToolCallerIdentity())?.(),
+          ).toThrow("operation was aborted");
         });
         release.resolve();
         await running;
@@ -132,6 +137,57 @@ describe("requester settle retry lifetime", () => {
       } finally {
         release.resolve();
         await running;
+        driver.controller.clearRuntimeState();
+      }
+    });
+  });
+
+  it("reports a lost-run batch failure in the requester's current transcript", async () => {
+    await withSubagentCompletionWorkerState(async (database) => {
+      const input = armRequesterWake(records());
+      const requester = {
+        agentId: "main",
+        sessionKey: input.subagent.requesterSessionKey,
+        storePath: path.join(
+          path.dirname(database.path),
+          "agents",
+          "main",
+          "sessions",
+          "sessions.json",
+        ),
+      };
+      // A compaction successor replaced the transcript that admitted the yield.
+      await upsertSessionEntryCore(requester, {
+        sessionId: "successor",
+        lifecycleRevision: "rev-2",
+        updatedAt: Date.now(),
+      });
+      Object.assign(input.subagent, {
+        requesterStorePath: requester.storePath,
+        completionRequesterSessionId: "predecessor",
+        completionRequesterLifecycleRevision: "rev-1",
+      });
+      input.subagent.requesterSettleWake!.requesterYieldBatch = true;
+      const driver = seedDriver(database, input);
+      driver.wake.mockImplementation(async (params) => {
+        await params.completeBatch([params.settledEntry], 1, {
+          delivered: false,
+          path: "direct",
+          error: "requester turn failed",
+        });
+        return true;
+      });
+      try {
+        await driver.run();
+        const events = await loadTranscriptEvents({ ...requester, sessionId: "successor" });
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "custom_message",
+            customType: "subagent-completion",
+            details: expect.objectContaining({ error: "requester turn failed" }),
+          }),
+        );
+      } finally {
         driver.controller.clearRuntimeState();
       }
     });

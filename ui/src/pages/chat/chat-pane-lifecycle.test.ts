@@ -299,6 +299,8 @@ it("routes explicit composer focus to its visible editor after the textarea is h
     focus: () => editor.focus(),
     select: vi.fn(),
     replace: vi.fn(),
+    replaceAll: vi.fn(),
+    undo: vi.fn(),
   });
   try {
     getChatComposerState(pane.presentationId).composerTextarea = textarea;

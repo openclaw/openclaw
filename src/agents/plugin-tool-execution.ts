@@ -11,6 +11,7 @@ import {
   bindOperatorModelExecution,
   type AdmittedRunOperatorAuthority,
 } from "./admitted-run-context.js";
+import { DEFAULT_PROVIDER } from "./defaults.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./sandbox/constants.js";
 import { prepareSandboxProcessCleanup } from "./sandbox/process-cleanup.js";
@@ -136,7 +137,7 @@ export function preparePluginToolExecutionCapabilities(params: {
               const visibility = createModelVisibilityPolicy({
                 ...modelContext,
                 catalog: params.preparedModelRuntime?.modelCatalog.entries ?? [],
-                defaultProvider: primary.provider,
+                defaultProvider: primary?.provider ?? DEFAULT_PROVIDER,
                 defaultModel: primary,
               });
               const requested =
@@ -145,14 +146,14 @@ export function preparePluginToolExecutionCapabilities(params: {
                   : resolveModelRefFromString({
                       ...modelContext,
                       raw: selection.model,
-                      defaultProvider: primary.provider,
+                      defaultProvider: primary?.provider ?? DEFAULT_PROVIDER,
                       aliasIndex: visibility.selectionAliasIndex,
                     })?.ref;
               const allowed =
                 requested &&
                 (visibility.allows(requested)
                   ? requested
-                  : selection.explicit
+                  : selection.explicit || !primary
                     ? undefined
                     : visibility.resolveSelection({ ...primary, routeResolution: "resolved" }));
               if (!allowed) {

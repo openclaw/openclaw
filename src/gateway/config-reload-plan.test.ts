@@ -300,3 +300,9 @@ describe("Gateway core reload policy", () => {
     });
   });
 });
+
+it("hot-applies the publication-reader opt-in without restarting", () => {
+  const plan = buildGatewayReloadPlan(["gateway.sessionControl.publicationReadEnabled"]);
+  expect(plan.restartGateway).toBe(false);
+  expect(plan.reloadPlugins).toBe(false);
+});

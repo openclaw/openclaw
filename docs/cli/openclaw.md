@@ -201,7 +201,19 @@ only once nothing uses it. For environment storage, use
 `config set-ref <path> env <ENV_VAR>`.
 `set default model <provider/model>` still live-tests the route before saving it.
 
-Plugin installation keeps its source restrictions. Plugin uninstall refuses a
+Plugin installation accepts ClawHub, npm, bundled/official, and remote `git:`
+sources. A regular agent can complete the request from Telegram or another
+messaging channel without enabling `/plugins` or opening a terminal. Non-ClawHub
+sources require explicit source acknowledgement in the requesting chat. If the
+plugin needs capability consent, OpenClaw presents the declared capabilities
+as a separate exact approval before installing and applying the runtime. Source
+approval does not accept capabilities. Approving capabilities grants conversation
+access only when the plugin declares `contracts.conversationAccess`; otherwise it
+remains a separate `plugins.entries.<id>.hooks.allowConversationAccess` config
+change. Local files and marketplace sources are not accepted by
+`plugin_install`; task-authored archives use `plugin_activate_artifact`.
+
+Plugin uninstall refuses a
 plugin that backs the active inference route; exit OpenClaw and run
 `openclaw plugins uninstall <id>` from a terminal.
 
@@ -210,10 +222,19 @@ Approval is given in your own words: unambiguous replies ("yes", "sure", "go ahe
 ### Change history
 
 The Ask OpenClaw page can show recent applied system-agent operations, Doctor
-migrations, Settings and CLI config writes, and manual edits to
-`openclaw.json`. The config journal detects external edits while the Gateway
-is watching, during an OpenClaw-owned write, or at the next startup after an
-offline edit.
+migrations, Settings and CLI config writes, manual edits to `openclaw.json`,
+and role assignments. The config journal detects external edits while the
+Gateway is watching, during an OpenClaw-owned write, or at the next startup
+after an offline edit.
+
+A committed `users.setRole` change is listed as an operation with source
+`config-rpc` (shown as "settings"). Its summary names the target profile, the
+previous and new role (or that the role was cleared), and the requester's
+profile, or its device when it has no profile. Refused requests and requests
+that leave the role unchanged are not recorded. Recording is best effort: if
+the history write fails after the role committed, the role change still
+succeeds and the Gateway logs a warning, so a missing entry does not prove the
+role is unchanged. Check `users.list` for the current role.
 
 History is stored in the `diagnostic_events` table of the shared
 `~/.openclaw/state/openclaw.sqlite` database, under the `system-agent-audit`
@@ -297,6 +318,12 @@ never changes config; the app automatically walks down the ladder and finally
 offers a manual key/token step populated from the Gateway's active
 text-inference provider plugins. The selected provider owns its starter model
 and config, and the credential is verified the same way before it is saved.
+While detection still probes local tools and services, the app and the Control
+UI list the provider sign-in and key/token choices that
+`openclaw.setup.options` reads from config and plugin manifests, so you can
+start one right away. Results that arrive later add detected candidates without
+moving focus, changing your selection, or interrupting a sign-in or test you
+already started.
 
 Codex supervision and other optional plugin features stay outside this
 inference activation transaction. Configure them only after inference is

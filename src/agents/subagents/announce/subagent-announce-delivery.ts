@@ -34,6 +34,7 @@ import { RUNTIME_EVENT_USER_PROMPT } from "../../internal-runtime-context.js";
 import { admitCorrelatedSubagentSessionDelivery } from "../completion/subagent-completion-delivery.js";
 import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
 import {
+  classifyAnnounceDeliveryError,
   resolveSubagentAnnounceTimeoutMs,
   summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
@@ -266,6 +267,7 @@ async function deliverSubagentAnnouncementBound(
       createUserTurnTranscriptRecorder({
         input: {
           text: transcriptMessage,
+          subagentCompletions: params.subagentCompletions,
           idempotencyKey: `${directIdempotencyKey}:active-wake`,
           provenance,
         },
@@ -294,7 +296,11 @@ async function deliverSubagentAnnouncementBound(
     return sourceOwnerChangedResult();
   }
   if (params.signal?.aborted) {
-    return { delivered: false, path: "none", phases: [] };
+    return classifyAnnounceDeliveryError(params.signal.reason, {
+      path: "none",
+      interruption: "requester_aborted",
+      replaySafe: true,
+    });
   }
   let directError: unknown;
   const delivery = await sendSubagentAnnounceDirectly({

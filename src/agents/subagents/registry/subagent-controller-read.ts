@@ -10,13 +10,14 @@ import {
   captureSessionActorStorageOwner,
   readCapturedSessionActorEntry,
 } from "../../../config/sessions/session-actor-storage-binding.js";
-import { prepareSessionGenerationFacts } from "../../../config/sessions/session-delivery-generation.js";
 import { withSessionEntriesFromStoreInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionStoreReadCandidates } from "../../../config/sessions/session-store-target-inventory.js";
+import { acquireTranscriptLease } from "../../../config/sessions/transcript-lease.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { SessionMutationFactsUnavailableError } from "../../../gateway/session-sharing-preparation.js";
 import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../../routing/session-key.js";
+import { chatRef } from "../../../sessions/chat-ref.js";
 import { onSessionIdentityMutation } from "../../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
@@ -118,14 +119,13 @@ async function prepareControllerFacts(
             membership: new Set(),
           });
         try {
-          const generation = await prepareSessionGenerationFacts({
-            storePath,
-            agentId,
-            sessionKey,
-            sessionId: entry?.sessionId ?? null,
-            lifecycleRevision: entry?.lifecycleRevision ?? null,
-            exactTranscript: true,
-          });
+          const generation = await acquireTranscriptLease(
+            chatRef({ storePath, agentId, sessionKey }),
+            {
+              sessionId: entry?.sessionId ?? null,
+              lifecycleRevision: entry?.lifecycleRevision,
+            },
+          );
           try {
             // Both leases overlap the original reader; closing/reopening cannot adopt a source.
             read.assertCurrent();

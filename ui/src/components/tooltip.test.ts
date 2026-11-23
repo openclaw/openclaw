@@ -62,6 +62,17 @@ function interactiveTooltipContent(tooltip: TooltipElement) {
   return tooltip.shadowRoot?.querySelector(".tooltip-rich-content");
 }
 
+// Fake timers cannot advance CSS animations; motion contracts live in tooltip.browser.test.ts.
+beforeEach(() => {
+  document.documentElement.style.setProperty("--openclaw-tooltip-popup-show-duration", "0ms");
+  document.documentElement.style.setProperty("--openclaw-tooltip-popup-hide-duration", "0ms");
+});
+
+afterEach(() => {
+  document.documentElement.style.removeProperty("--openclaw-tooltip-popup-show-duration");
+  document.documentElement.style.removeProperty("--openclaw-tooltip-popup-hide-duration");
+});
+
 describe("openclaw-tooltip", () => {
   beforeEach(() => {
     vi.useFakeTimers();

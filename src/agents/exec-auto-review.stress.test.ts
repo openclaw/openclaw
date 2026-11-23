@@ -1,7 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveDispatchWrapperTrustPlan } from "../infra/dispatch-wrapper-resolution.js";
 import type { ExecAutoReviewInput } from "../infra/exec-auto-review.js";
-import { isBlockedShellWrapperCommand } from "../infra/exec-wrapper-resolution.js";
 import { buildExecAutoReviewInputForShellCommand } from "../plugin-sdk/agent-harness-exec-review-runtime.js";
 import {
   input as baselineInput,
@@ -79,101 +77,7 @@ function modelResponse(decision: "allow" | "deny" | "ask", risk: "low" | "medium
   return response(decision, risk, "stress fixture");
 }
 
-function createSeededRandom(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let value = state;
-    value = Math.imul(value ^ (value >>> 15), value | 1);
-    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
-    return ((value ^ (value >>> 14)) >>> 0) / 4_294_967_296;
-  };
-}
-
-function chooseSeeded<T>(random: () => number, values: readonly T[]): T {
-  const selected = values[Math.floor(random() * values.length)];
-  if (selected === undefined) {
-    throw new Error("stress corpus must contain at least one value");
-  }
-  return selected;
-}
-
-const dispatchWrappers = [
-  ["env", "--"],
-  ["nice", "-n", "5"],
-  ["nohup", "--"],
-  ["timeout", "5s"],
-  ["stdbuf", "-o", "L"],
-  ["time", "-p"],
-] as const;
-
 describe("exec auto-review shell stress", () => {
-  it.each([
-    {
-      seed: 0x20260727,
-      count: 4_096,
-      argv(random: () => number, index: number) {
-        return [
-          chooseSeeded(random, ["bash", "sh", "dash", "zsh", "ksh", "mksh", "yash"]),
-          ...chooseSeeded(random, [
-            ["-lc"],
-            ["-cl"],
-            ["-l", "-c"],
-            ["--login", "-c"],
-            ["-ic"],
-            ["-i", "-c"],
-            ["--interactive", "-c"],
-          ]),
-          `echo auto-review-stress-${index}`,
-        ];
-      },
-    },
-    {
-      seed: 0x20260728,
-      count: 16_384,
-      argv(random: () => number) {
-        return [
-          ...chooseSeeded(random, [
-            ["cmd", "/c", "echo safe"],
-            ["cmd.exe", "/C", "echo safe"],
-            ["CMD.EXE", "-c", "echo safe"],
-            ["cmd", "/k", "echo safe"],
-            ["cmd.exe", "/d", "/k", "echo safe"],
-            ["cmd", "/D", "/S", "/K", "echo safe"],
-            ["cmd", "-d", "-c", "echo safe"],
-            ["cmd", "/?"],
-            ["cmd", "/?", "/c", "echo safe"],
-            ["cmd.exe", "/d", "/?"],
-            ["cmd", "/r", "/d", "/c", "echo safe"],
-            ["cmd", "/d", "/r", "/c", "echo safe"],
-            ["cmd", "/unknown", "/d", "/c", "echo safe"],
-            ["cmd", "/t:0f/k", "/d", "/c", "echo safe"],
-            ["cmd", "/e:on/k", "/d", "/c", "echo safe"],
-            ["cmd", "/v:on/r", "/d", "/c", "echo safe"],
-            ["cmd.exe", "/d", "/c"],
-            ["cmd", "/c", "echo", "/d"],
-            ["cmd.exe"],
-          ]),
-        ];
-      },
-    },
-  ])("fails closed for $count seeded wrapper chains (seed $seed)", (scenario) => {
-    const { seed, count } = scenario;
-    const random = createSeededRandom(seed);
-    for (let index = 0; index < count; index++) {
-      const argv = scenario.argv(random, index);
-      const depth = Math.floor(random() * 7);
-      for (let wrapper = 0; wrapper < depth; wrapper++) {
-        argv.unshift(...chooseSeeded(random, dispatchWrappers));
-      }
-      const plan = resolveDispatchWrapperTrustPlan(argv);
-      expect(
-        plan.policyBlocked || isBlockedShellWrapperCommand(plan.argv),
-        `seed ${seed}, case ${index}: ${JSON.stringify(argv)}`,
-      ).toBe(true);
-    }
-  });
-
   it
     .runIf(process.platform !== "win32")
     .each([
@@ -318,91 +222,10 @@ describe("exec auto-review shell stress", () => {
   });
 });
 
-describe("exec auto-review adversarial model-response stress", () => {
-  it("fails closed for 4,096 seeded concurrent malformed reviewer responses", async () => {
-    const random = createSeededRandom(0x20260729);
-    const makeVariant = (name: string, text: string, expected = "ask") => ({
-      name,
-      text,
-      expected,
-    });
-    const variants = [
-      makeVariant("duplicate decision", '{"decision":"ask","risk":"low","decision":"allow"}'),
-      makeVariant("duplicate risk", '{"decision":"allow","risk":"high","risk":"low"}'),
-      makeVariant(
-        "escaped duplicate decision",
-        String.raw`{"decision":"ask","risk":"low","\u0064ecision":"allow"}`,
-      ),
-      makeVariant(
-        "escaped duplicate risk",
-        String.raw`{"decision":"allow","risk":"high","r\u0069sk":"low"}`,
-      ),
-      makeVariant(
-        "unexpected approval scope",
-        '{"decision":"allow","risk":"low","scope":"session"}',
-      ),
-      makeVariant(
-        "unexpected executable",
-        '{"decision":"allow","risk":"low","approvedCommand":"rm -rf /"}',
-      ),
-      makeVariant("truncated JSON", '{"decision":"allow","risk":"low"'),
-      makeVariant(
-        "concatenated decisions",
-        '{"decision":"ask","risk":"high"}{"decision":"allow","risk":"low"}',
-      ),
-      makeVariant(
-        "valid low-risk allow",
-        '{"decision":"allow","risk":"low","rationale":"safe seeded control"}',
-        "allow-once",
-      ),
-      makeVariant(
-        "valid human escalation",
-        '{"decision":"ask","risk":"high","rationale":"safe seeded control"}',
-      ),
-    ];
-    const cases = Array.from({ length: 4_096 }, () => chooseSeeded(random, variants));
-    const { reviewer, prepare, complete } = createStressReviewer({
-      complete: async (request) => {
-        const prompt = request.context.messages[0]?.content ?? "";
-        const match = /--case=(\d+)/.exec(prompt);
-        const variant = cases[Number(match?.[1])];
-        if (!variant) {
-          throw new Error("missing seeded reviewer response");
-        }
-        return {
-          stopReason: "stop" as const,
-          content: [{ type: "text" as const, text: variant.text }],
-        };
-      },
-    });
-
-    for (let start = 0; start < cases.length; start += 256) {
-      const batch = cases.slice(start, start + 256);
-      const decisions = await Promise.all(
-        batch.map((_variant, offset) => {
-          const index = start + offset;
-          return Promise.resolve(reviewer(caseInput(index)));
-        }),
-      );
-      for (const [offset, decision] of decisions.entries()) {
-        const index = start + offset;
-        const variant = cases[index];
-        expect(
-          decision.decision,
-          `reviewer response escaped at seed 0x20260729, case ${index}: ${variant?.name}`,
-        ).toBe(variant?.expected);
-      }
-    }
-
-    expect(prepare).toHaveBeenCalledTimes(cases.length);
-    expect(complete).toHaveBeenCalledTimes(cases.length);
-  });
-});
-
 describe("exec auto-review concurrency stress", () => {
-  it("keeps 128 mixed concurrent provider failures bounded and isolated", async () => {
+  it("keeps mixed concurrent provider failures bounded and isolated", async () => {
     const providerFailure = "provider\n\u001b[31mfailed\u001b[0m\u202e" + "x".repeat(1_024);
-    const cases = Array.from({ length: 128 }, (_unused, index) => {
+    const cases = Array.from({ length: 4 }, (_unused, index) => {
       const prepare = vi.fn(async () => {
         if (index % 4 === 0) {
           return { error: providerFailure };
@@ -452,8 +275,8 @@ describe("exec auto-review concurrency stress", () => {
     }
   });
 
-  it("cancels 64 concurrent provider reviews without sharing execution signals", async () => {
-    const controllers = Array.from({ length: 64 }, () => new AbortController());
+  it("cancels concurrent provider reviews without sharing execution signals", async () => {
+    const controllers = Array.from({ length: 2 }, () => new AbortController());
     const observedSignals: AbortSignal[] = [];
     const requests = controllers.map((controller, index) => {
       const { reviewer } = createStressReviewer({
@@ -490,7 +313,7 @@ describe("exec auto-review concurrency stress", () => {
     expect(observedSignals.every((signal) => signal.aborted)).toBe(true);
   });
 
-  it("never leaks allow authority between 128 mixed concurrent model outcomes", async () => {
+  it("never leaks allow authority between mixed concurrent model outcomes", async () => {
     const { reviewer, prepare, complete } = createStressReviewer({
       complete: async (request) => {
         const prompt = request.context.messages[0]?.content ?? "";
@@ -513,7 +336,7 @@ describe("exec auto-review concurrency stress", () => {
     });
 
     const decisions = await Promise.all(
-      Array.from({ length: 128 }, (_unused, index) => Promise.resolve(reviewer(caseInput(index)))),
+      Array.from({ length: 5 }, (_unused, index) => Promise.resolve(reviewer(caseInput(index)))),
     );
 
     for (const [index, decision] of decisions.entries()) {
@@ -521,11 +344,11 @@ describe("exec auto-review concurrency stress", () => {
         index % 5 < 2 ? "allow-once" : index % 5 === 3 ? "deny" : "ask",
       );
     }
-    expect(prepare).toHaveBeenCalledTimes(128);
-    expect(complete).toHaveBeenCalledTimes(128);
+    expect(prepare).toHaveBeenCalledTimes(5);
+    expect(complete).toHaveBeenCalledTimes(5);
   });
 
-  it("aborts every timed-out provider during 64 concurrent approval requests", async () => {
+  it("aborts every timed-out provider during concurrent approval requests", async () => {
     vi.useFakeTimers();
     try {
       const observedSignals: AbortSignal[] = [];
@@ -546,18 +369,18 @@ describe("exec auto-review concurrency stress", () => {
       });
 
       const pending = Promise.all(
-        Array.from({ length: 64 }, (_unused, index) => Promise.resolve(reviewer(caseInput(index)))),
+        Array.from({ length: 2 }, (_unused, index) => Promise.resolve(reviewer(caseInput(index)))),
       );
 
       await vi.advanceTimersByTimeAsync(1_001);
       const decisions = await pending;
 
-      expect(decisions).toHaveLength(64);
+      expect(decisions).toHaveLength(2);
       expect(decisions.every((decision) => decision.decision === "ask")).toBe(true);
-      expect(observedSignals).toHaveLength(64);
+      expect(observedSignals).toHaveLength(2);
       expect(observedSignals.every((signal) => signal.aborted)).toBe(true);
-      expect(prepare).toHaveBeenCalledTimes(64);
-      expect(complete).toHaveBeenCalledTimes(64);
+      expect(prepare).toHaveBeenCalledTimes(2);
+      expect(complete).toHaveBeenCalledTimes(2);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();

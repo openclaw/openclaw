@@ -26,16 +26,13 @@ import { createReplyOperation } from "../sessions/session-controller.operation.j
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import {
-  captureGatewayDeviceRevocation,
-  invalidateGatewayDeviceRevocation,
-} from "./device-revocation.js";
+import { captureGatewayDeviceRevocation } from "./device-revocation.js";
 import {
   setupPersistentSessionCreateTestHarness,
   removeSessionWorktree,
   chatSendOwner,
-  sessionCreateRuntimeClient,
 } from "./server.sessions.create.test-support.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import { readSessionGroupCatalog } from "./session-group-catalog.js";
 import * as sharingAuthorization from "./session-sharing-authorization-async.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
@@ -88,8 +85,8 @@ type CreatedSession = { key: string; sessionId: string; entry: SessionEntry; run
 type CreateParams = Parameters<
   (typeof import("./session-create-service.js"))["createGatewaySession"]
 >[0];
-const adminClient = () => ({ client: { connect: { scopes: ["operator.admin"] } } as never });
-const writeClient = () => ({ client: { connect: { scopes: ["operator.write"] } } as never });
+const adminClient = () => ({ client: { connect: gatewayConnect(["operator.admin"]) } as never });
+const writeClient = () => ({ client: { connect: gatewayConnect(["operator.write"]) } as never });
 const mainReset = { parentSessionKey: "main", emitCommandHooks: true };
 const expectOk = (result: { ok: boolean }) => expect(result.ok).toBe(true);
 const missingAdmin = {
@@ -226,17 +223,22 @@ test.for([
 
 test("sessions.create registers a category only after the session commit succeeds", async () => {
   const category = "Deferred category";
-  let validations = 0;
-  const failed = await createSession(
-    { category, key: "agent:main:dashboard:failed-category-create" },
-    {
-      context: {
-        validateAgentRuntimeApprovalAuthority: () => ++validations < 3,
+  const bindCreation = vi.fn(() => {
+    throw new Error("session commit rejected");
+  });
+  await expect(
+    createSession(
+      { category, key: "agent:main:dashboard:failed-category-create" },
+      {
+        sessionMutationAuthorization: {
+          assertCurrent: vi.fn(),
+          assertTargetCurrent: vi.fn(),
+          bindCreation,
+        },
       },
-      client: sessionCreateRuntimeClient(["operator.write"]) as never,
-    },
-  );
-  expect(failed.ok).toBe(false);
+    ),
+  ).rejects.toThrow("session commit rejected");
+  expect(bindCreation).toHaveBeenCalledOnce();
   expect(readSessionGroupCatalog().groups.map((group) => group.name)).not.toContain(category);
   const broadcastToConnIds = vi.fn();
   const created = await createSession(
@@ -563,11 +565,7 @@ test("sessions.create replays an identical creation once and rejects conflicting
   const context = { dedupe: new Map() };
   const ownerId = ensureProfileForEmail("replay@owner.test").id;
   const clientFor = (scopes = ["operator.write", "operator.admin"], profileId = ownerId) => ({
-    connect: {
-      role: "operator",
-      scopes,
-      device: { id: "control-ui-device" },
-    },
+    connect: { ...gatewayConnect(scopes), device: { id: "control-ui-device" } },
     authenticatedUserProfile: { profileId },
   });
   const params = {
@@ -639,8 +637,7 @@ test("sessions.create replays an identical creation once and rejects conflicting
 test("durable creation replays before label claims and refuses a reset incarnation", async () => {
   const client = {
     connect: {
-      role: "operator",
-      scopes: ["operator.write", "operator.admin"],
+      ...gatewayConnect(["operator.write", "operator.admin"]),
       device: { id: "receipt-device" },
     },
     authenticatedUserProfile: { profileId: ensureProfileForEmail("receipt-owner@example.test").id },
@@ -697,91 +694,84 @@ test("durable creation replays before label claims and refuses a reset incarnati
   });
 });
 
-test.each(["requester", "membership"] as const)(
-  "durable replay refuses %s revocation after authorization and before metadata disclosure",
-  async (change) => {
-    const client = roleClient("view", "durable-replay-member");
-    const profileId = client.authenticatedUserProfile!.profileId;
-    const creator = ensureProfileForEmail("durable-replay-creator@example.test").id;
-    const key = "agent:main:dashboard:restricted-replay";
-    const scope = { agentId: "main", storePath, sessionKey: key };
-    replaceSessionEntrySync(scope, {
-      sessionId: "restricted-original",
-      lifecycleRevision: "original",
-      updatedAt: 1,
-      label: "Private replay metadata",
-      visibility: "read-only",
-      createdActor: { type: "human", source: "profile", id: creator },
-    });
-    await addSessionMember(scope, { identityId: profileId, addedBy: creator });
-    const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
-    const deviceOwner = {};
-    const source = captureGatewayDeviceRevocation(
-      deviceOwner,
-      { deviceId: "replay-device", role: "operator" },
-      () => true,
+test("durable replay refuses membership revocation after authorization and before metadata disclosure", async () => {
+  const client = roleClient("view", "durable-replay-member");
+  const profileId = client.authenticatedUserProfile!.profileId;
+  const creator = ensureProfileForEmail("durable-replay-creator@example.test").id;
+  const key = "agent:main:dashboard:restricted-replay";
+  const scope = { agentId: "main", storePath, sessionKey: key };
+  replaceSessionEntrySync(scope, {
+    sessionId: "restricted-original",
+    lifecycleRevision: "original",
+    updatedAt: 1,
+    label: "Private replay metadata",
+    visibility: "read-only",
+    createdActor: { type: "human", source: "profile", id: creator },
+  });
+  await addSessionMember(scope, { identityId: profileId, addedBy: creator });
+  const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
+  const deviceOwner = {};
+  const source = captureGatewayDeviceRevocation(
+    deviceOwner,
+    { deviceId: "replay-device", role: "operator" },
+    () => true,
+  );
+  const request = () =>
+    directSessionReq<CreatedSession>(
+      "sessions.create",
+      {
+        agentId: "main",
+        key,
+        idempotencyKey: "restricted-replay-once",
+      },
+      {
+        client,
+        hasCurrentClientAuthority: source.isCurrent,
+        // Distinct context removes the process-local cache without manufacturing a receipt.
+        context: { dedupe: new Map(), getRuntimeConfig: () => cfg },
+      },
     );
-    const request = () =>
-      directSessionReq<CreatedSession>(
-        "sessions.create",
-        {
-          agentId: "main",
-          key,
-          idempotencyKey: "restricted-replay-once",
-        },
-        {
-          client,
-          hasCurrentClientAuthority: source.isCurrent,
-          // Distinct context removes the process-local cache without manufacturing a receipt.
-          context: { dedupe: new Map(), getRuntimeConfig: () => cfg },
-        },
-      );
-    try {
-      expectOk(await request());
-      expect(await request()).toMatchObject({
-        ok: true,
-        payload: {
-          key,
-          sessionId: "restricted-original",
-          creationReplayed: true,
-          entry: { label: "Private replay metadata" },
-        },
+  try {
+    expectOk(await request());
+    expect(await request()).toMatchObject({
+      ok: true,
+      payload: {
+        key,
+        sessionId: "restricted-original",
+        creationReplayed: true,
+        entry: { label: "Private replay metadata" },
+      },
+    });
+    const authorize = sharingAuthorization.resolveSessionMutationAuthorizationAsync;
+    let revoked = false;
+    // Delay only completion: real policy, membership writer, and revocation owner run unchanged.
+    using _ = vi
+      .spyOn(sharingAuthorization, "resolveSessionMutationAuthorizationAsync")
+      .mockImplementation(async (input) => {
+        const result = await authorize(input);
+        if (input.method === "sessions.create" && input.expectedTarget && !revoked) {
+          expect(result.error).toBeNull();
+          expect(result.authorization).toBeDefined();
+          revoked = true;
+          expect(await removeSessionMember(scope, profileId)).toMatchObject({
+            identityId: profileId,
+          });
+        }
+        return result;
       });
-      const authorize = sharingAuthorization.resolveSessionMutationAuthorizationAsync;
-      let revoked = false;
-      // Delay only completion: real policy, membership writer, and revocation owner run unchanged.
-      using _ = vi
-        .spyOn(sharingAuthorization, "resolveSessionMutationAuthorizationAsync")
-        .mockImplementation(async (input) => {
-          const result = await authorize(input);
-          if (input.method === "sessions.create" && input.expectedTarget && !revoked) {
-            expect(result.error).toBeNull();
-            expect(result.authorization).toBeDefined();
-            revoked = true;
-            if (change === "requester") {
-              invalidateGatewayDeviceRevocation(deviceOwner, "replay-device", "operator");
-            } else {
-              expect(await removeSessionMember(scope, profileId)).toMatchObject({
-                identityId: profileId,
-              });
-            }
-          }
-          return result;
-        });
-      const refused = await request();
-      expect(revoked).toBe(true);
-      expect(refused).toMatchObject({ ok: false });
-      expect(refused.payload).toBeUndefined();
-      expect(JSON.stringify(refused)).not.toContain("Private replay metadata");
-      expect(readEntry(key)?.sessionId).toBe("restricted-original");
-      console.info(
-        `PASS durable replay ${change} revoked after live authorization: no session metadata disclosed`,
-      );
-    } finally {
-      source.release();
-    }
-  },
-);
+    const refused = await request();
+    expect(revoked).toBe(true);
+    expect(refused).toMatchObject({ ok: false });
+    expect(refused.payload).toBeUndefined();
+    expect(JSON.stringify(refused)).not.toContain("Private replay metadata");
+    expect(readEntry(key)?.sessionId).toBe("restricted-original");
+    console.info(
+      "PASS durable replay membership revoked after live authorization: no session metadata disclosed",
+    );
+  } finally {
+    source.release();
+  }
+});
 
 test.each(["cold", "warm"] as const)(
   "durable %s replay refuses membership removal at final response publication",
@@ -849,7 +839,7 @@ test.each(["new-session", "reset"] as const)(
   "warm replay uses the replacement receipt for %s",
   async (replacement) => {
     const client = {
-      connect: { role: "operator", scopes: ["operator.write", "operator.admin"] },
+      connect: gatewayConnect(["operator.write", "operator.admin"]),
       authenticatedUserProfile: {
         profileId: ensureProfileForEmail("receipt-replacement@example.test").id,
       },

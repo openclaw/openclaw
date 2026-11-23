@@ -284,7 +284,7 @@ export function registerSessionsSendActiveSteeringTests({
         abortOnUnconfirmedTranscript: false,
         options: {
           requesterToolAuthority: { requesterOrigin: { senderId: "sessions-requester" } },
-          waitForTranscriptCommit: true,
+          waitForTranscriptCommit: false,
         },
       });
       const agentCalls = gatewayCalls("agent");
@@ -393,7 +393,7 @@ export function registerSessionsSendActiveSteeringTests({
       abort,
     });
     queueMessage.mockImplementationOnce(async (_text, options) => {
-      expect(options?.waitForTranscriptCommit).toBe(true);
+      expect(options?.waitForTranscriptCommit).toBe(false);
       options?.onQueueAccepted?.(true);
       throw new Error("synthetic consumption confirmation unavailable after acceptance");
     });
@@ -424,7 +424,7 @@ export function registerSessionsSendActiveSteeringTests({
     expect(queueMessage).toHaveBeenCalledOnce();
     expect(queueMessage.mock.calls[0]).toMatchObject([
       expect.stringContaining("synthetic sibling update"),
-      { waitForTranscriptCommit: true },
+      { waitForTranscriptCommit: false },
     ]);
     expect([gatewayCalls("agent"), gatewayCalls("agent.wait")]).toEqual([[], []]);
     expect(abort).not.toHaveBeenCalled();

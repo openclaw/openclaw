@@ -1,7 +1,13 @@
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
+import type { SessionTranscriptActiveContextReadOptions } from "./session-accessor.sqlite-active-context-read.js";
 import type { SessionCompactionPreparation } from "./session-history-read.types.js";
-import type { SessionTranscriptHydrationWorkerRequest } from "./session-transcript-hydration.types.js";
+import type {
+  SessionTranscriptHydrationWorkerRequest,
+  SessionTranscriptHydrationWorkerInput,
+  SessionTranscriptHydrationWorkerResult,
+} from "./session-transcript-hydration.types.js";
+import type { SessionTranscriptHydrationConsumer } from "./session-transcript-hydration.worker.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
   type SessionTranscriptWorkerValues,
@@ -13,10 +19,6 @@ export async function readSessionTranscriptHydrationRequest(
   channel: WorkerTaskChannel | undefined,
   control: WorkerTaskControl,
 ): Promise<SessionTranscriptWorkerValues[SessionTranscriptHydrationWorkerRequest["kind"]]> {
-  if (request.kind === "compaction-source") {
-    const { runSessionCompactionSource } = await import("./session-compaction-source.worker.js");
-    return runSessionCompactionSource(request, control);
-  }
   if (request.kind === "transcript-maintenance") {
     const { withOpenClawAgentDatabaseReadOnly } =
       await import("../../state/openclaw-agent-db-readonly.js");
@@ -64,8 +66,22 @@ export async function readSessionTranscriptHydrationRequest(
       resolvedScope: request.resolvedScope,
     });
   }
-  const { readSessionTranscriptBoundedActiveContextCore, readSessionTranscriptCompactionPlan } =
-    await import("./session-accessor.sqlite-active-context.js");
+  const consume: SessionTranscriptHydrationConsumer | undefined = channel
+    ? async (chunk, transfers) => {
+        const response = await channel.request(chunk, transfers);
+        response.consumed();
+      }
+    : undefined;
+  return readTranscriptHydration(request, consume, control);
+}
+
+async function readTranscriptHydration(
+  request: SessionTranscriptHydrationWorkerInput,
+  consume: SessionTranscriptHydrationConsumer | undefined,
+  control: WorkerTaskControl,
+): Promise<SessionTranscriptHydrationWorkerResult> {
+  const { readSessionTranscriptCompactionPlanInTransaction } =
+    await import("./session-accessor.sqlite-active-context-read.js");
   const { readSessionCompactionPreparation, streamSessionTranscriptHydration } =
     await import("./session-transcript-hydration.worker.js");
   if (request.limits) {
@@ -88,10 +104,8 @@ export async function readSessionTranscriptHydrationRequest(
     let residentRows: Array<{ rawSeq: number; serializedBytes: number }> | undefined;
     let compaction: SessionCompactionPreparation | undefined;
     let sequences: number[] = [];
-    const options: Parameters<typeof readSessionTranscriptBoundedActiveContextCore>[1] = {
+    const options: SessionTranscriptActiveContextReadOptions = {
       ...request.limits,
-      readOnly: true,
-      resolvedScope: request.resolvedScope,
       onRead: (projection, rows, messagePresence) => {
         sequences = rows.map((row) => row.rawSeq);
         if (!projection.hasUnindexedPrefix) {
@@ -123,22 +137,29 @@ export async function readSessionTranscriptHydrationRequest(
       ...(compaction ? { compaction } : {}),
     });
     if ("compaction" in request.limits && request.limits.compaction) {
-      if (!channel) {
+      if (!consume) {
         throw new Error("Compaction transcript hydration requires its host channel");
       }
-      return streamSessionTranscriptHydration(request, channel, control, (database) => {
-        const snapshot = readSessionTranscriptCompactionPlan(request.target, {
-          ...options,
-          transaction: database,
-        });
+      return streamSessionTranscriptHydration(request, consume, control, (database) => {
+        const snapshot = readSessionTranscriptCompactionPlanInTransaction(
+          database,
+          request.resolvedScope,
+          options,
+        );
         return { snapshot, sequences, ...facts() };
       });
     }
-    const snapshot = readSessionTranscriptBoundedActiveContextCore(request.target, options);
+    const { readSessionTranscriptBoundedActiveContextCore } =
+      await import("./session-accessor.sqlite-active-context.js");
+    const snapshot = readSessionTranscriptBoundedActiveContextCore(request.target, {
+      ...options,
+      readOnly: true,
+      resolvedScope: request.resolvedScope,
+    });
     return { kind: "bounded" as const, snapshot, ...facts() };
   }
-  if (!channel) {
+  if (!consume) {
     throw new Error("Full transcript hydration requires its host channel");
   }
-  return streamSessionTranscriptHydration(request, channel, control);
+  return streamSessionTranscriptHydration(request, consume, control);
 }

@@ -11,9 +11,11 @@ import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
 import { outputItem } from "./openai-stream-cases.test-support.js";
 const initialHost = getAiTransportHost();
 const model = fixtures.createModel({
-  id: "gpt-5.4",
+  id: "gpt-6.2-sol",
   api: "openai-chatgpt-responses",
   baseUrl: "https://chatgpt.com/backend-api/codex",
+  // The shared OpenAI catalog row also serves the API-key runtime.
+  compat: { cachesInstructions: false },
 });
 const options = {
   apiKey: `eyJhbGciOiJub25lIn0.${Buffer.from(
@@ -112,6 +114,8 @@ describe.each([
     const result = await compact(context, hooked);
     const [normal, v2] = requests;
     assert(normal && v2, "Expected normal and compaction requests");
+    expect(normal.body.instructions).toBe("Stable instructions");
+    expect(JSON.stringify(normal.body.input)).not.toContain("Stable instructions");
     expect(v2.url).toBe(normal.url);
     expect(v2.url.endsWith("/responses")).toBe(true);
     expect(v2.body).toEqual({

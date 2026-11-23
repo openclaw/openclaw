@@ -373,6 +373,8 @@ test.for([
         const entryAfterCreation = readEntry(storePath, key);
         const failureMessage =
           "Git clone could not reach GitHub. Check the Gateway network connection and retry.";
+        const retainedCause = expect.stringContaining(failureMessage);
+        const desktopNotice = "Git clone could not reach GitHub.";
         await withinTest(materializationStarted.promise, testSignal);
         materialization.reject(new ProjectCloneError("network", failureMessage));
         await settleWorkspaceRuns(context, storePath, key);
@@ -396,7 +398,7 @@ test.for([
               status: "failed",
               hasActiveRun: false,
               lastRunId: runId,
-              lastRunError: expect.stringContaining(failureMessage),
+              lastRunError: retainedCause,
             },
             messages: [
               expect.objectContaining({ role: "user" }),
@@ -404,7 +406,7 @@ test.for([
                 role: "custom",
                 customType: "run-failed-before-reply",
                 display: true,
-                content: "Your request couldn't be completed.",
+                content: failureMessage,
               }),
             ],
           });
@@ -417,7 +419,7 @@ test.for([
           expect.objectContaining({
             type: "custom_message",
             customType: "run-failed-before-reply",
-            details: { runId, error: expect.stringContaining(failureMessage) },
+            details: { runId, error: retainedCause, desktopNotice },
           }),
         );
 
@@ -430,9 +432,9 @@ test.for([
         }
         if (worktree) {
           const retryFailure =
-            "Synthetic retry clone failure; check the Gateway Git configuration.";
+            "GitHub denied access to this repository. Ask the Gateway operator to check the configured GitHub credential and repository access before retrying.";
           projectCloneMocks.materialize.mockRejectedValueOnce(
-            new ProjectCloneError("clone_failed", retryFailure),
+            new ProjectCloneError("auth_required", retryFailure),
           );
           await retryRemoteProjectSession(key, "remote-project-failed-retry", context);
           await settleWorkspaceRuns(context, storePath, key);
@@ -443,7 +445,7 @@ test.for([
               status: "failed",
               hasActiveRun: false,
               lastRunId: "remote-project-failed-retry",
-              lastRunError: expect.stringContaining(retryFailure),
+              lastRunError: expect.stringContaining("GitHub denied access"),
             },
           });
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();

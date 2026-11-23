@@ -19,7 +19,11 @@ import {
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
-import { SettingsEmpty, SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
+import {
+  SettingsEmpty,
+  SettingsLoadingSkeleton,
+  SettingsRow,
+} from "../../components/solid/settings-ui.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
@@ -54,6 +58,7 @@ export function pluginSettingsNodeOptions(model: PluginSettingsEditorModel) {
 
 export type PluginSettingsEditorProps = {
   model?: PluginSettingsEditorModel;
+  onConnectProvider?: () => void;
   permissions?: { fields: PluginSettingsField[]; loading?: boolean; known?: boolean };
   onAskSetting?: (field: PluginSettingsField) => void;
   resolveCredential?: (field: PluginSettingsField) => PluginCredentialEditorProps | undefined;
@@ -401,6 +406,25 @@ export function PluginSettingsEditor(props: PluginSettingsEditorProps) {
               onBack: props.model.onBack,
             })}
           </header>
+          <Show when={props.onConnectProvider}>
+            {(onConnect) => (
+              <EditorSection title={t("pluginsPage.auth.accounts")}>
+                <SettingsRow
+                  title={t("routeTitles.modelProviders")}
+                  control={
+                    <button
+                      type="button"
+                      class="btn oc-action oc-action-secondary"
+                      onClick={() => onConnect()()}
+                    >
+                      {t("pluginsPage.auth.connect")}
+                    </button>
+                  }
+                  carapace
+                />
+              </EditorSection>
+            )}
+          </Show>
           <label class="plugin-editor__search">
             <Icon name="search" />
             <input

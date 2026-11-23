@@ -8,7 +8,7 @@ import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import type { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import {

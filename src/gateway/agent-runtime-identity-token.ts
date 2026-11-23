@@ -1,7 +1,10 @@
 import { createHmac } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
-import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import {
+  getAdmittedRunOperatorProfileId,
+  type OperationalRunInstanceRef,
+} from "../agents/admitted-run-context.js";
 import {
   parseExecutionIdentityAdmissionToken,
   type ExecutionIdentityAdmissionToken,
@@ -49,6 +52,8 @@ export type AgentRuntimeIdentity = {
   operationalRunInstance: OperationalRunInstanceRef;
   delegatedAuthority: AgentRuntimeDelegatedAuthority;
   approvalOwnerPluginId?: string;
+  /** Signed host-admission provenance for approval visibility, never public request input. */
+  approvalRequesterProfileId?: string;
   executionIdentity?: ExecutionIdentityAdmissionToken;
   turnSourceChannel?: string;
   /** Explicit admission fact; omission is unknown, never inferred from session routing. */
@@ -239,6 +244,7 @@ const agentRuntimeIdentityTokenPayloadSchema = z.object({
   turnSourceAccountId: z.string().optional().catch(undefined),
   turnSourceThreadId: z.union([z.string(), z.number()]).optional().catch(undefined),
   gatewayUiCommandTarget: gatewayUiCommandTargetSchema.optional(),
+  approvalRequesterProfileId: normalizedRequiredStringSchema.optional(),
   messageActionContext: messageActionContextSchema.optional(),
   cronSelfManagementContext: cronSelfManagementContextSchema.optional(),
   cronToolsAllowCapture: z.literal("final-executable-surface").optional(),
@@ -417,6 +423,9 @@ function parsePayload(value: unknown, nowMs: number): AgentRuntimeIdentityTokenP
       ...(turnSourceTo ? { turnSourceTo } : {}),
       ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
       ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
+      ...(raw.approvalRequesterProfileId
+        ? { approvalRequesterProfileId: raw.approvalRequesterProfileId }
+        : {}),
       ...(raw.gatewayUiCommandTarget
         ? { gatewayUiCommandTarget: Object.freeze(raw.gatewayUiCommandTarget) }
         : {}),
@@ -437,7 +446,11 @@ function parsePayload(value: unknown, nowMs: number): AgentRuntimeIdentityTokenP
 
 export type AgentRuntimeIdentityTokenParams = Omit<
   AgentRuntimeIdentity,
-  "kind" | "delegatedAuthority" | "executionIdentity" | "cronSelfManagementContext"
+  | "kind"
+  | "delegatedAuthority"
+  | "executionIdentity"
+  | "cronSelfManagementContext"
+  | "approvalRequesterProfileId"
 > & {
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   cronSelfManagementJobId?: string;
@@ -479,6 +492,7 @@ function prepareAgentRuntimeIdentityTokenPayload(
   ) {
     throw new Error("worker delegated authority disagrees with the operational run");
   }
+  const approvalRequesterProfileId = getAdmittedRunOperatorProfileId(activeAuthority);
   const approvalAuthority = params.approvalAuthority ?? activeAuthority;
   if (params.workerTurnClaim && approvalAuthority.claimId === activeAuthority.claimId) {
     throw new Error("worker runtime identity requires its original claim approval authority");
@@ -549,6 +563,7 @@ function prepareAgentRuntimeIdentityTokenPayload(
     ...(turnSourceTo ? { turnSourceTo } : {}),
     ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
     ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
+    ...(approvalRequesterProfileId ? { approvalRequesterProfileId } : {}),
     ...(params.gatewayUiCommandTarget
       ? {
           gatewayUiCommandTarget: gatewayUiCommandTargetSchema.parse(params.gatewayUiCommandTarget),

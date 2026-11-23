@@ -29,6 +29,7 @@ export const pluginArrays = [
   "agentHarnesses",
   "legacyInternalHooks",
   "memoryCapabilities",
+  "memoryBackends",
   "memoryCorpusSupplements",
   "memoryPromptPreparations",
   "memoryPromptSupplements",

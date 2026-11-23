@@ -245,7 +245,13 @@ describe("openclaw session lookup context", () => {
 
     expect(createEmbeddedCallGatewayMock).toHaveBeenCalledWith();
     expectGateway("sessions.list", { spawnedBy: "agent:research:main" });
-    expectGateway("sessions.search", { sessionKeys: ["agent:research:main"] });
+    expectGateway("sessions.search", {
+      recall: expect.objectContaining({
+        requesterAgentId: "research",
+        requesterSessionKey: "agent:research:main",
+        sandboxed: true,
+      }),
+    });
     expectGateway("chat.history", { sessionKey: "agent:research:main" });
   });
 
@@ -257,17 +263,15 @@ describe("openclaw session lookup context", () => {
         return { messages: [{ role: "user", content: "private history" }] };
       }
       if (request.method === "sessions.search") {
-        const { agentId, sessionKeys } = request.params ?? {};
-        const sessionKey = Array.isArray(sessionKeys) ? sessionKeys[0] : undefined;
-        return typeof agentId === "string" && typeof sessionKey === "string"
-          ? {
-              results: [
-                { sessionKey, timestamp: 1, role: "user", snippet: `${agentId} hit`, score: 1 },
-              ],
-              indexing: false,
-              truncated: false,
-            }
-          : { results: [] };
+        return {
+          results: ["main", "research"].map((agentId) => ({
+            sessionKey: `agent:${agentId}:main`,
+            timestamp: 1,
+            role: "user",
+            snippet: `${agentId} hit`,
+            score: 1,
+          })),
+        };
       }
       return undefined;
     });

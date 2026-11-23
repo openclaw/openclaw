@@ -8,12 +8,66 @@ import { runCiManifestFixture } from "./ci-workflow-manifest.test-support.js";
 import {
   evaluateWorkflowExpression,
   readCiWorkflow,
+  readWorkflow,
   requiredWorkflowStep,
   runWorkflowShellScript,
   writeExecutable,
 } from "./ci-workflow.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("spends a mixed Boat allowance on the longest rows without dropping overflow", () => {
+  const result = runCiManifestFixture({
+    bundledPlanner: true,
+    runnerBackend: "hybrid",
+    historicalCompatibility: false,
+    nodeTestShards: [
+      {
+        checkName: "dist",
+        shardName: "dist",
+        runner: "blacksmith-16vcpu-ubuntu-2404",
+        predictedSeconds: 600,
+      },
+      {
+        checkName: "short",
+        shardName: "short",
+        runner: "blacksmith-8vcpu-ubuntu-2404",
+        predictedSeconds: 20,
+      },
+      {
+        checkName: "long",
+        shardName: "long",
+        runner: "blacksmith-16vcpu-ubuntu-2404",
+        predictedSeconds: 500,
+      },
+      {
+        checkName: "medium",
+        shardName: "medium",
+        runner: "blacksmith-8vcpu-ubuntu-2404",
+        predictedSeconds: 100,
+      },
+    ].map((row) =>
+      Object.assign(row, {
+        requiresDist: row.checkName === "dist",
+        configs: ["test/vitest/bundled.config.ts"],
+      }),
+    ),
+    targetFiles: ["test/vitest/bundled.config.ts"],
+    scopeEnv: { OPENCLAW_CI_BOAT_NODE_JOB_LIMIT: "1" },
+  });
+  expect(result.status, result.output).toBe(0);
+  const rows = JSON.parse(
+    expectDefined(result.outputs.checks_node_core_nondist_matrix, "Node matrix"),
+  ).include;
+  expect(
+    rows.map((row: { check_name: string; runner: string }) => [row.check_name, row.runner]),
+  ).toEqual([
+    ["long", "boat-large"],
+    ["medium", "blacksmith-8vcpu-ubuntu-2404"],
+    ["short", "blacksmith-8vcpu-ubuntu-2404"],
+  ]);
+});
+
 const routes = [
   { name: "Boat", backend: "boat", runner: "boat-xlarge", attempt: 1, boat: true },
   { name: "Boat retry", backend: "boat", runner: "boat-xlarge", attempt: 2, boat: false },
@@ -66,6 +120,80 @@ it.each(routes)("runs $name Node tests through the correct permission boundary",
     "node --import tsx scripts/ci-run-node-test-shard.mts",
   ]);
 });
+
+it.each(["extensions-batch", "extension-file-shard"])(
+  "runs hourly %s through the selected runner's permission boundary",
+  (task) => {
+    const job = readWorkflow(".github/workflows/plugin-prerelease.yml").jobs[
+      "plugin-prerelease-extension-shard"
+    ];
+    const step = requiredWorkflowStep(job.steps, "Run extension shard");
+    for (const route of [
+      { eventName: "schedule", runner: "boat", attempt: 1, boat: true },
+      { eventName: "schedule", runner: "boat", attempt: 2, boat: false },
+      { eventName: "schedule", runner: "boat-large", attempt: 1, boat: true },
+      { eventName: "schedule", runner: "blacksmith-4vcpu-ubuntu-2404", attempt: 1, boat: false },
+      { eventName: "workflow_dispatch", runner: "boat", attempt: 1, boat: false },
+    ] as const) {
+      const root = dirs.make("openclaw-hourly-boat-step-");
+      const bin = path.join(root, "bin");
+      mkdirSync(bin);
+      const calls = path.join(root, "calls");
+      writeExecutable(path.join(bin, "node"), [
+        "#!/bin/bash",
+        'printf "node %s\\n" "$*" >> "$CALLS"',
+        "exit 7",
+      ]);
+      writeExecutable(path.join(bin, "setpriv"), [
+        "#!/bin/bash",
+        'printf "setpriv %s %s\\n" "$1" "$2" >> "$CALLS"',
+        "shift 2",
+        'exec "$@"',
+      ]);
+      writeExecutable(path.join(bin, "jq"), ["#!/bin/bash", "exit 0"]);
+      const context = {
+        eventName: route.eventName,
+        repository: "openclaw/openclaw",
+        runAttempt: route.attempt,
+        matrix: { runner: route.runner, runner_label: route.runner },
+      };
+      expect(evaluateWorkflowExpression(job["runs-on"], context)).toBe(
+        route.eventName === "workflow_dispatch" || route.attempt > 1
+          ? "ubuntu-24.04"
+          : route.runner,
+      );
+      const selected = evaluateWorkflowExpression(
+        step.env.BOAT_TEST_RUNNER ?? "${{ false }}",
+        context,
+      );
+      const result = runWorkflowShellScript(step.run, {
+        linuxWorkflow: true,
+        cwd: root,
+        env: {
+          PATH: `${bin}:/usr/bin:/bin`,
+          CALLS: calls,
+          BOAT_TEST_RUNNER: String(selected),
+          OPENCLAW_EXTENSION_TASK: task,
+          OPENCLAW_EXTENSION_BATCH: "browser,memory-wiki",
+          OPENCLAW_EXTENSION_INCLUDE_PATTERNS_JSON: '["extensions/browser/**/*.test.ts"]',
+          OPENCLAW_EXTENSION_VITEST_CONFIG: "test/vitest/vitest.extensions.config.ts",
+          FRV_TEST_EXCLUDE_PATHS_JSON: "[]",
+          RUNNER_TEMP: root,
+          GITHUB_JOB: "fixture",
+        },
+      });
+      expect(result.status, result.stderr).toBe(7);
+      expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual([
+        ...(route.boat
+          ? ["setpriv --inh-caps=-dac_read_search --ambient-caps=-dac_read_search"]
+          : []),
+        task === "extensions-batch"
+          ? "node .frv-tooling/scripts/frv-test-exclusions.mjs run -- pnpm test:extensions:batch browser,memory-wiki --"
+          : "node .frv-tooling/scripts/frv-test-exclusions.mjs run -- pnpm test -- test/vitest/vitest.extensions.config.ts",
+      ]);
+    }
+  },
+);
 
 it.each(routes)("preserves Android build JVM options for $name", (route) => {
   const root = dirs.make("openclaw-boat-android-step-");

@@ -14,16 +14,24 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { selectNextTemplateAgentId } from "./add-agent-id.js";
+import { readRetainedTemplateInitialization } from "./add-checkpoint.js";
+import { readClawHubCatalogExcerpt } from "./clawhub-preview-content.js";
+import type { ClawHubTemplateTrust } from "./clawhub-source.js";
 import {
-  withResolvedClawHubSource,
-  type ClawHubTemplateTrust,
-  type ClawHubCoordinate,
-} from "./clawhub-source.js";
+  withResolvedTemplateAddSource,
+  type TemplateAddSource,
+  type TemplateAddStageHook,
+} from "./gateway-add-source.js";
 import { bindTemplateLifecycleTrust, projectTemplateAddPlan } from "./gateway-plan-projection.js";
 import { buildTemplateAddPlan } from "./lifecycle.js";
 import { preflightTemplatePackage } from "./packages.js";
 import { projectTemplatePluginCapabilityReviews } from "./plugin-capability-review.js";
-import type { TemplateAddPlan, TemplatePackagePreflight, TemplateReadResult } from "./types.js";
+import type {
+  TemplateAddPlan,
+  TemplateAddPlanContext,
+  TemplatePackagePreflight,
+  TemplateReadResult,
+} from "./types.js";
 
 type VerifiedTemplateSource = Extract<TemplateReadResult, { ok: true }>;
 
@@ -91,6 +99,7 @@ export type GatewayTemplateAddPlanningContext = {
   /** Trusted in-flight creation receipt; never a wire field. */
   admittedWorkspace?: string;
   packagePreflight?: TemplatePackagePreflight;
+  resolvePreferredModel?: TemplateAddPlanContext["resolvePreferredModel"];
 };
 
 export async function buildGatewayTemplateAddPlan(
@@ -121,6 +130,9 @@ export async function buildGatewayTemplateAddPlan(
       existingAgentIds,
       existingWorkspacePaths: existingWorkspaces,
       ...(context.admittedWorkspace ? { admittedWorkspace: context.admittedWorkspace } : {}),
+      ...(context.resolvePreferredModel
+        ? { resolvePreferredModel: context.resolvePreferredModel }
+        : {}),
       // Most Templates have no MCP declarations. Do not read and validate the
       // entire authored host configuration for an unrelated requirement type.
       existingMcpServers:
@@ -143,7 +155,7 @@ export async function buildGatewayTemplateAddPlan(
 export function projectGatewayTemplateAddPlan(
   plan: TemplateAddPlan,
   source: VerifiedTemplateSource,
-  trust: ClawHubTemplateTrust,
+  trust: Pick<ClawHubTemplateTrust, "trustWarning" | "riskAcknowledgementRequired">,
   config: OpenClawConfig,
 ): TemplateLifecyclePlanResult {
   const pluginReviews = projectTemplatePluginCapabilityReviews(plan);
@@ -156,18 +168,107 @@ export function projectGatewayTemplateAddPlan(
 export async function planTemplateAddForGateway(
   input: GatewayTemplateAddPlanningContext &
     ClawHubFetchOptions & {
-      source: ClawHubCoordinate;
+      source: TemplateAddSource;
+      onStage?: TemplateAddStageHook;
     },
 ): Promise<TemplateLifecyclePlanResult> {
-  const resolved = await withResolvedClawHubSource({
+  // Apply resumes an agent that a failed Add kept when its pending initialization
+  // matches this source. Review that agent as apply will: without its admission.
+  let context: GatewayTemplateAddPlanningContext = input;
+  const agentId = input.agentId ? normalizeAgentId(input.agentId) : undefined;
+  if (!("kind" in input.source) && agentId && input.config.agents?.entries?.[agentId]) {
+    const workspace = await selectTemplateAgentWorkspace(input.config, agentId);
+    const retained = await readRetainedTemplateInitialization(
+      input.config,
+      agentId,
+      workspace,
+      input.source,
+      () => {},
+    ).then(
+      () => true,
+      () => false,
+    );
+    if (retained) {
+      const entries = { ...input.config.agents.entries };
+      delete entries[agentId];
+      context = {
+        ...input,
+        config: { ...input.config, agents: { ...input.config.agents, entries } },
+        admittedWorkspace: workspace,
+      };
+    }
+  }
+  const resolved = await withResolvedTemplateAddSource({
     coordinate: input.source,
+    onStage: input.onStage,
     mode: "preview",
     ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
     ...(input.token ? { token: input.token } : {}),
     ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
     run: async (source, trust) => {
-      const plan = await buildGatewayTemplateAddPlan(source, input);
-      return projectGatewayTemplateAddPlan(plan, source, trust, input.config);
+      input.onStage?.("plan");
+      const plan = await buildGatewayTemplateAddPlan(source, context);
+      const projected = projectGatewayTemplateAddPlan(plan, source, trust, context.config);
+      if ("kind" in input.source) {
+        const instructions = [
+          ...Object.entries(source.manifest.workspace.bootstrapFiles).flatMap(([name, file]) =>
+            file ? [{ name, source: file.source }] : [],
+          ),
+          ...source.manifest.workspace.files.map((file) => ({
+            name: file.path,
+            source: file.source,
+          })),
+          ...(source.templateMarkdownBody &&
+          !source.manifest.workspace.bootstrapFiles["SOUL.md"] &&
+          !source.manifest.workspace.files.some((file) => file.path === "SOUL.md")
+            ? [{ name: "SOUL.md", source: "CLAW.md#body" }]
+            : []),
+          ...(source.packageBootstrap
+            ? [{ name: "BOOTSTRAP.md", source: source.packageBootstrap.sourcePath }]
+            : []),
+        ];
+        const bundledSkills =
+          source.snapshot.bundledSources
+            ?.filter((item) => item.kind === "skill")
+            .map((item) => ({ name: item.path, source: "bundled" as const, path: item.path })) ??
+          [];
+        const previewInput = {
+          params: { packageName: source.source.name, version: source.source.version },
+          instructions,
+          skills: bundledSkills,
+          verified: source,
+          rootDir: source.source.packageRoot,
+        };
+        const files: NonNullable<TemplateLifecyclePlanResult["reviewFiles"]> = [];
+        for (const instruction of instructions) {
+          const existing = files.find((file) => file.path === instruction.source);
+          if (existing) {
+            existing.workspacePaths!.push(instruction.name);
+            continue;
+          }
+          const preview = await readClawHubCatalogExcerpt({
+            ...previewInput,
+            requested: { kind: "instruction", name: instruction.name },
+          });
+          files.push({
+            path: instruction.source,
+            ...(preview ? { content: preview.content } : {}),
+            workspacePaths: [instruction.name],
+          });
+        }
+        for (const skill of bundledSkills) {
+          const preview = await readClawHubCatalogExcerpt({
+            ...previewInput,
+            requested: { kind: "skill", name: skill.name },
+          });
+          files.push({
+            path: skill.path + "/SKILL.md",
+            ...(preview ? { content: preview.content } : {}),
+          });
+        }
+        projected.reviewFiles = files;
+      }
+      return projected;
     },
   });
   return resolved.value;

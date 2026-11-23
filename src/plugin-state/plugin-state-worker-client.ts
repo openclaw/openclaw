@@ -614,6 +614,7 @@ export async function lookupManyPluginStateInWorker(
   if (input.keys.length === 0) {
     return [];
   }
+  input.keys = [...input.keys];
   const results = await execute(
     { env, assertActive, sessionEntryCurrent, context, signal },
     { type: "pluginState.lookupMany", input },
@@ -647,10 +648,10 @@ export function clearRuntimeHealthInWorker(
 
 export const countPluginStateInWorker = createOperation("pluginState.count", () => 0);
 export const registerPluginStateJournalInWorker = createOperation("pluginState.appendJournal");
-export const listPluginStateInKeyRangeInWorker = createOperation(
-  "pluginState.entriesInKeyRange",
-  () => [],
-);
+const listKeyRange = createOperation("pluginState.entriesInKeyRange", () => []);
+export function listPluginStateInKeyRangeInWorker(params: Input<"pluginState.entriesInKeyRange">) {
+  return listKeyRange({ ...params, valueFilter: params.valueFilter && { ...params.valueFilter } });
+}
 export const movePluginStateEntriesInWorker = createOperation("pluginState.moveEntries");
 
 /**

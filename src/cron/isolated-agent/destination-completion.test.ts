@@ -611,7 +611,7 @@ it("delivers into the current destination after resets before send and between r
     }
   }, "isolated"));
 
-it("rejects implicit current delivery when the creator resets after route resolution", () =>
+it("delivers implicit current delivery to the creator's chat after a reset", () =>
   withCompletionFixture(
     async (fixture) => {
       const { params } = fixture;
@@ -636,10 +636,8 @@ it("rejects implicit current delivery when the creator resets after route resolu
       setReport(fixture, "Stale report");
 
       const result = await dispatchCronDelivery(params);
-      expect(result).toMatchObject({ delivered: false });
-      expect(result.deliveryError).toBeDefined();
-      expect(sendText).not.toHaveBeenCalled();
-      expect(await readConversationMessages(fixture.scope)).toEqual([]);
+      expect(result).toMatchObject({ delivered: true });
+      expect(sendText).toHaveBeenCalledOnce();
     },
     "current",
     "agent:main:telegram:direct:12345",
@@ -685,10 +683,10 @@ it("records a visible delivery failure when the creating conversation is deleted
       delivered: false,
       deliveryAttempted: true,
       deliveryState: { status: "not-delivered" },
-      deliveryError: expect.stringContaining("session rebound"),
+      deliveryError: expect.stringContaining("session deleted"),
       disposition: { kind: "error", errorKind: "delivery-target" },
     });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("delivery failed: session rebound"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("delivery failed: session deleted"));
     expect(await fixture.messages()).toEqual([]);
     expect(fixture.updates()).toBe(0);
   }, "isolated"));

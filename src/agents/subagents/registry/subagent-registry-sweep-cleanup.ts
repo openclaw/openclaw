@@ -81,13 +81,13 @@ export const sweptContext = (entry: SubagentRunRecord) => ({
 });
 
 export const isSessionCleanupDeferred = (entry: SubagentRunRecord) =>
+  entry.delivery?.disposition === "retryable" ||
   ((entry.delivery?.status === "pending" || entry.delivery?.status === "in_progress") &&
     entry.delivery.disposition === "session_queued") ||
-  (!subagentRuns.isCompletionAuthorityRetired(entry) &&
-    (entry.pauseReason === "sessions_yield" ||
-      entry.delivery?.status === "in_progress" ||
-      (entry.delivery?.status === "pending" &&
-        (entry.expectsCompletionMessage === true || entry.delivery.payload !== undefined))));
+  entry.pauseReason === "sessions_yield" ||
+  entry.delivery?.status === "in_progress" ||
+  (entry.delivery?.status === "pending" &&
+    (entry.expectsCompletionMessage === true || entry.delivery.payload !== undefined));
 
 export const isCollectorArchiveReady = (entry: SubagentRunRecord, now: number): boolean =>
   entry.collectorCompletion !== undefined &&
@@ -150,7 +150,7 @@ export function mutateCleanup(
   runs: Map<string, SubagentRunRecord>,
   entry: SubagentRunRecord,
   ready: (current: SubagentRunRecord) => boolean,
-  update: (draft: SubagentRunRecord) => void | null,
+  update: ((draft: SubagentRunRecord) => void) | null,
 ) {
   return mutateSubagentRuns(
     [entry.runId],
@@ -160,10 +160,16 @@ export function mutateCleanup(
         return { value: undefined };
       }
       // Cleanup changes only top-level bookkeeping and the frozen execution record.
-      const draft = { ...current, execution: { ...current.execution } };
-      const next = update(draft) === null ? null : draft;
-      return { value: next, postimages: new Map([[entry.runId, next]]) };
+      const next = update ? { ...current, execution: { ...current.execution } } : null;
+      if (update && next) {
+        update(next);
+      }
+      return {
+        value: next,
+        postimages: new Map([[entry.runId, next]]),
+        removalReason: "retention",
+      };
     },
-    { runs },
+    { runs, deleteOnly: update === null },
   );
 }

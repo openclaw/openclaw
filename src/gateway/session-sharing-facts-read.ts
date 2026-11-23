@@ -10,10 +10,18 @@ import type {
   SessionStoreWorkerReadScope,
 } from "../config/sessions/session-entry-read-runtime.types.js";
 import type { SessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
+import { createSessionStoreRegistryMutationFilter } from "../config/sessions/session-store-target-inventory.js";
 import type { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
+import { getSqliteDatabaseAdmissionSourceForPath } from "../infra/sqlite-database-admission.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { assertDatabaseFileIdentity } from "../infra/sqlite-worker-identity.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../state/openclaw-agent-db-registry-listing.js";
 import { registerOpenClawAgentDatabaseReadCandidateResource } from "../state/openclaw-agent-db-resources.js";
+import {
+  getPendingOpenClawAgentDatabasePreparation,
+  readPendingOpenClawAgentDatabaseIdentity,
+} from "../state/openclaw-agent-execution.js";
 import { SessionMutationFactsUnavailableError } from "./session-sharing-incognito.js";
 import type {
   SessionFactsRequest,
@@ -83,7 +91,7 @@ async function readSessionSharingFactsInWorker(
 
 /** Keep the acquired publication facts with the read that initializes and reconciles them. */
 export function createSessionSharingFactAcquisition(
-  params: Pick<SessionFactsRequest, "followLifecycle" | "followTranscript"> & {
+  params: Pick<SessionFactsRequest, "followLifecycle" | "followTranscript" | "storageReady"> & {
     scope: "sharing" | "session-access";
     inspection: boolean;
     releases: Array<() => void>;
@@ -93,6 +101,9 @@ export function createSessionSharingFactAcquisition(
     phases: Pick<ReturnType<typeof observeDiagnosticsTimelinePhases>, "mark">;
   },
 ) {
+  const storageReady = params.storageReady;
+  const storage = storageReady && "ready" in storageReady ? storageReady : undefined;
+  const readiness = storageReady && "ready" in storageReady ? storageReady.ready : storageReady;
   const paths = new Set<string>();
   const reads = new Map<string, ReturnType<typeof retainPreparedSessionSharingFacts>>();
   const initialized = new Set<string>();
@@ -126,7 +137,56 @@ export function createSessionSharingFactAcquisition(
   return {
     paths,
     sources,
+    storage,
+    readiness,
     capture,
+    prepareRegistry(
+      this: void,
+      captured: Parameters<typeof createSessionStoreRegistryMutationFilter>[0]["captured"],
+      agentId: string,
+      env: NodeJS.ProcessEnv,
+      readMissingDatabaseIdentity: () => string | undefined,
+    ) {
+      const registryScope: Parameters<typeof createSessionStoreRegistryMutationFilter>[0] = {
+        captured,
+        preparedSources: sources,
+      };
+      const unchangedRegistry = createSessionStoreRegistryMutationFilter(registryScope);
+      const registryFilter: typeof unchangedRegistry = (mutation, entries) =>
+        unchangedRegistry(mutation, entries) ||
+        // Empty-store creation changes no session facts; row publications still invalidate them.
+        (mutation.kind === "upsert" &&
+          mutation.sources.every(
+            (source) =>
+              source.agentId === agentId &&
+              source.identity === readMissingDatabaseIdentity() &&
+              source.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION,
+          ));
+      const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env }, registryFilter);
+      if (storage) {
+        const { followRegistration, assertCurrent } = registry;
+        params.releases.push(
+          storage.observeRegistration((change) => {
+            params.assertActive();
+            params.assertRoutingCurrent();
+            followRegistration(change);
+            assertCurrent();
+          }),
+        );
+      }
+      return { registryScope, registryFilter, registry };
+    },
+    pendingFirstUsePreparation(this: void, candidate: SessionStoreReadCandidate) {
+      // Join an existing creator; never open storage or hold its preparation here.
+      if (
+        storageReady !== undefined ||
+        getSqliteDatabaseAdmissionSourceForPath(candidate.path) ||
+        readPendingOpenClawAgentDatabaseIdentity(candidate.physicalPath)
+      ) {
+        return undefined;
+      }
+      return getPendingOpenClawAgentDatabasePreparation(candidate.physicalPath);
+    },
     retainCandidate(candidate: SessionStoreReadCandidate) {
       for (const pathname of new Set([candidate.path, candidate.physicalPath])) {
         params.releases.push(

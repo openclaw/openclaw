@@ -97,6 +97,7 @@ const SPAWN_OPERATIONS = {
   "workspace.manifest.equal": "workspace.manifest",
   "workspace.manifest.snapshot": "workspace.manifest",
   "workspace.manifest.document": "workspace.manifest",
+  "workspace.manifest.initial": "workspace.manifest",
   "workspace.manifest.template": "workspace.manifest",
   "workspace.manifest.reference": "workspace.manifest",
   "workspace.manifest.parse": "workspace.manifest",
@@ -194,6 +195,7 @@ function poolFor(
 }
 
 export type GitWorkerOperationOptions = {
+  idleIoPriority?: boolean;
   diffTiming?: DiffReadTiming;
   inputBytes?: number;
   /** Move task-owned inputs at admission and again when the worker receives them. */
@@ -374,6 +376,7 @@ async function executeOperation(
                   beforeRun: options.assertCurrent,
                   killProcessTree: true,
                   lowerPriority: contentGit,
+                  idleIoPriority: options.idleIoPriority,
                 };
                 if (effect.type === "git.text") {
                   const textOutput = await (options.git?.text ?? runGitBytes)(

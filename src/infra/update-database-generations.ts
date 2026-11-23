@@ -35,6 +35,7 @@ export type UpdateDatabaseGenerationPair = {
   committed: UpdateDatabaseGenerations;
   physical: UpdateDatabaseGenerations;
   emptyReaderAlternates: Record<string, string>;
+  rebuiltIndexAlternates: Record<string, string>;
 };
 export type UpdateDatabaseWriteReceipt = {
   unchanged: boolean;
@@ -131,13 +132,30 @@ function readWalIndexHeader(pathname: string): Buffer | null {
   }
 }
 
+/**
+ * A native open after every index user leaves rebuilds the index over the retained
+ * frames: iChange restarts at zero and only the header checksum follows it. A commit
+ * changes the frame count and checksum; a WAL restart changes the salts.
+ */
+function isRebuiltWalIndex(before: Buffer, after: Buffer) {
+  return (
+    after.readUInt32LE(8) === 0 &&
+    after.subarray(0, 8).equals(before.subarray(0, 8)) &&
+    after.subarray(12, 40).equals(before.subarray(12, 40))
+  );
+}
+
 /** Without journal data or WAL frames, the verified family proves no commit; the index can come or go. */
 function sameWalCommitPublication(
   before: Buffer | null,
   after: Buffer | null,
   generation: SqliteFileGeneration,
 ) {
-  if (before === null ? after === null : after?.equals(before)) {
+  if (
+    before === null
+      ? after === null
+      : after !== null && (after.equals(before) || isRebuiltWalIndex(before, after))
+  ) {
     return true;
   }
   if (generation.journal || (generation.wal?.size ?? 0n) !== 0n) {
@@ -155,6 +173,7 @@ type DatabaseGenerationObservation = {
   generation: string | null;
   physical: string | null;
   emptyReaderAlternate?: string;
+  rebuiltIndexAlternate?: string;
   preparedSource?: PreparedSqliteSnapshotSource;
 };
 
@@ -314,6 +333,11 @@ export function readUpdateDatabaseGeneration(
       observation: {
         generation: fingerprint(change, checksum),
         physical: serializePhysicalGeneration(current, after),
+        // An index rebuilt over these frames binds the same identity, content, and
+        // last commit checksum; only iChange restarts.
+        ...(after !== null && (generation.wal?.size ?? 0n) !== 0n && change !== "00000000"
+          ? { rebuiltIndexAlternate: fingerprint("00000000", checksum) }
+          : {}),
         // The first read-only native open can create this zero-write WAL index;
         // closing the last writer can remove it. Neither changes committed content.
         ...(emptyReader
@@ -398,6 +422,7 @@ export function readUpdateDatabaseGenerationPair(
   const committed: UpdateDatabaseGenerations = {};
   const physical: UpdateDatabaseGenerations = {};
   const emptyReaderAlternates: Record<string, string> = {};
+  const rebuiltIndexAlternates: Record<string, string> = {};
   for (const pathname of paths) {
     const observation = readUpdateDatabaseGeneration(pathname, inspectImage);
     committed[pathname] = observation.generation;
@@ -405,17 +430,24 @@ export function readUpdateDatabaseGenerationPair(
     if (observation.emptyReaderAlternate) {
       emptyReaderAlternates[pathname] = observation.emptyReaderAlternate;
     }
+    if (observation.rebuiltIndexAlternate) {
+      rebuiltIndexAlternates[pathname] = observation.rebuiltIndexAlternate;
+    }
   }
-  return { committed, physical, emptyReaderAlternates };
+  return { committed, physical, emptyReaderAlternates, rebuiltIndexAlternates };
 }
 
-/** Same raw-close restrictions as readUpdateDatabaseGenerations; never under native exclusion. */
+/**
+ * Same raw-close restrictions as readUpdateDatabaseGenerations; never under native exclusion.
+ * `accepted` holds the expected generation and its no-write equivalents.
+ */
 export function readMatchingUpdateDatabaseGeneration(
   pathname: string,
-  expected: string,
+  accepted: readonly string[],
 ): string | undefined {
-  const observed = readUpdateDatabaseGeneration(pathname);
-  return observed.generation === expected || observed.emptyReaderAlternate === expected
-    ? (observed.generation ?? undefined)
+  const { generation, emptyReaderAlternate } = readUpdateDatabaseGeneration(pathname);
+  return (generation !== null && accepted.includes(generation)) ||
+    (emptyReaderAlternate !== undefined && accepted.includes(emptyReaderAlternate))
+    ? (generation ?? undefined)
     : undefined;
 }

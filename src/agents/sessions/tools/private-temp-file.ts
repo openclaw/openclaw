@@ -4,9 +4,11 @@
  * Creates owner-only log files without reusing predictable names.
  */
 import { randomBytes } from "node:crypto";
-import { open } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { open, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { finished } from "node:stream/promises";
 import type { SandboxFsBridge } from "../../sandbox/fs-bridge.types.js";
 import { getSandboxInputStager } from "../../sandbox/input-staging.js";
 
@@ -76,6 +78,62 @@ export async function writePrivateTempFile(
   }
   options?.assertCurrent?.();
   return filePath;
+}
+
+/** Streamed private temp file: the same location and retention as writePrivateTempFile. */
+export type PrivateTempFileStream = {
+  readonly path: string;
+  /** Bytes written; never more than the stream's maxBytes. */
+  readonly bytes: number;
+  /** Later writes were discarded at maxBytes. */
+  readonly limitReached: boolean;
+  write: (text: string) => void;
+  /** Resolves true when every accepted byte is on disk. */
+  close: () => Promise<boolean>;
+  remove: () => Promise<void>;
+};
+
+/** Host-only: opens one owner-only temp file for ordered appends up to maxBytes. */
+export function openPrivateTempFileStream(prefix: string, maxBytes: number): PrivateTempFileStream {
+  const path = createPrivateTempFilePath(prefix);
+  // An exclusive open never grants custody of an existing path.
+  const stream = createWriteStream(path, { flags: "wx", mode: 0o600 });
+  const done = finished(stream).then(
+    () => true,
+    () => false,
+  );
+  let bytes = 0;
+  let limitReached = false;
+  return {
+    path,
+    get bytes() {
+      return bytes;
+    },
+    get limitReached() {
+      return limitReached;
+    },
+    write(text) {
+      if (limitReached || stream.writableEnded || stream.destroyed) {
+        return;
+      }
+      let data = Buffer.from(text);
+      if (bytes + data.length > maxBytes) {
+        data = data.subarray(0, maxBytes - bytes);
+        limitReached = true;
+      }
+      bytes += data.length;
+      stream.write(data);
+    },
+    close() {
+      stream.end();
+      return done;
+    },
+    async remove() {
+      stream.end();
+      await done;
+      await unlink(path).catch(() => undefined);
+    },
+  };
 }
 
 function createPrivateTempFilePath(prefix: string): string {

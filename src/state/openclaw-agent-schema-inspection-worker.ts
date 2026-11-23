@@ -19,10 +19,10 @@ import {
   readSqliteDatabaseCleanClose,
 } from "../infra/sqlite-database-admission.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import {
   isSqliteInspectionDeadlineOwnedByCaller,
   readSqliteInspectionBudget,
-  resolveSqliteInspectionSignal,
   sqliteInspectionTimeoutError,
 } from "../infra/sqlite-readonly-worker.js";
 import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";

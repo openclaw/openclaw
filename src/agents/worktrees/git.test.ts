@@ -31,6 +31,8 @@ import {
 } from "./git.js";
 
 const git = (cwd: string, ...args: string[]) => requireGit(cwd, args);
+const commit = (cwd: string, message: string) =>
+  git(cwd, ...gitIdentity, "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", message);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -50,16 +52,7 @@ describe("Git ref mutation ownership", () => {
   async function repository() {
     const root = tempDirs.make("openclaw-git-ref-");
     await git(root, "init", "--quiet", "-b", "main");
-    await git(
-      root,
-      ...gitIdentity,
-      "-c",
-      "commit.gpgSign=false",
-      "commit",
-      "--allow-empty",
-      "-m",
-      "seed",
-    );
+    await commit(root, "seed");
     await git(root, "update-ref", snapshotRef, "HEAD");
     await git(root, "update-ref", queuedRef, "HEAD");
     return root;
@@ -557,13 +550,16 @@ describe("Git checkout discovery", () => {
   it.for(["files", "reftable"] as const)(
     "parses native %s worktree paths, locks, symbolic heads, and detached tips",
     async (refStorage, context) => {
+      const separate = process.platform !== "win32";
       const root = tempDirs.make("openclaw-git-worktree-list-");
       const repo = path.join(root, "repo");
+      const commonDir = separate ? path.join(root, " metadata ") : path.join(repo, ".git");
       const linked = path.join(root, "linked");
       const detached = path.join(root, "detached");
       const initialized = await runGit(root, [
         "init",
         "--template=",
+        ...(separate ? [`--separate-git-dir=${commonDir}`] : []),
         ...(refStorage === "reftable" ? ["--ref-format=reftable"] : []),
         "-b",
         "main",
@@ -578,16 +574,11 @@ describe("Git checkout discovery", () => {
         context.skip("Installed Git does not support reftable repositories");
       }
       expect(initialized.code, initialized.stderr).toBe(0);
-      await requireGit(repo, ["config", "user.name", "OpenClaw Test"]);
-      await requireGit(repo, ["config", "user.email", "openclaw-test@example.invalid"]);
-      await requireGit(repo, ["config", "commit.gpgSign", "false"]);
-      await fs.writeFile(path.join(repo, "README.md"), "base\n");
-      await requireGit(repo, ["add", "README.md"]);
-      await requireGit(repo, ["commit", "-m", "initial"]);
+      await commit(repo, "initial");
       const initialHead = await requireGit(repo, ["rev-parse", "HEAD"]);
       await requireGit(repo, ["worktree", "add", "-b", "linked", linked, "HEAD"]);
       await requireGit(repo, ["worktree", "add", "--detach", detached, "HEAD"]);
-      await requireGit(linked, ["commit", "--allow-empty", "-m", "linked tip"]);
+      await commit(linked, "linked tip");
       const linkedHead = await requireGit(linked, ["rev-parse", "HEAD"]);
       await requireGit(repo, ["symbolic-ref", "refs/heads/alias-middle", "refs/heads/linked"]);
       await requireGit(repo, ["symbolic-ref", "refs/heads/alias", "refs/heads/alias-middle"]);
@@ -599,9 +590,10 @@ describe("Git checkout discovery", () => {
       for (const entry of worktrees) {
         entry.path = await fs.realpath(entry.path);
       }
+      const canonicalRoot = await fs.realpath(separate ? commonDir : repo);
       expect(worktrees).toEqual(
         expect.arrayContaining([
-          { path: await fs.realpath(repo), branch: "refs/heads/main", head: initialHead },
+          { path: canonicalRoot, branch: "refs/heads/main", head: initialHead },
           {
             path: await fs.realpath(linked),
             lockedReason: "held by test",
@@ -611,21 +603,26 @@ describe("Git checkout discovery", () => {
           { path: await fs.realpath(detached), branch: null, head: initialHead },
         ]),
       );
-      const normalized = vi.spyOn(gitExec, "normalizeGitPathForFilesystem");
-      await expect(resolveGitRepositoryPaths(linked)).resolves.toEqual({
-        canonicalRoot: await fs.realpath(repo),
-        commonDir: await fs.realpath(path.join(repo, ".git")),
+      await withWorktreeGitConfig(linked, true, {}, async (policy) => {
+        await expect(
+          policy.require(linked, ["symbolic-ref", "HEAD", "refs/heads/alias"]),
+        ).resolves.toBe("");
       });
-      // The common directory and primary checkout are the only paths this reader consumes.
-      expect(normalized).toHaveBeenCalledTimes(2);
+      const run = processExec.runCommandWithTimeout;
+      vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+        const result = await run(argv, options);
+        return { ...result, stdout: result.stdout.replace(/\r?\n$/u, "\r\n") };
+      });
+      await expect(resolveGitRepositoryPaths(linked)).resolves.toEqual({
+        canonicalRoot,
+        commonDir: await fs.realpath(commonDir),
+      });
       const detachedPath = await fs.realpath(detached);
       await fs.rm(detached, { recursive: true });
       const paths = await readGitWorktreePathInventory(repo);
-      normalized.mockClear();
       expect(paths.has(await fs.realpath(linked))).toBe(true);
       expect(paths.has(detachedPath)).toBe(true);
       expect(paths.has(`${detachedPath}-sibling`)).toBe(false);
-      expect(normalized).not.toHaveBeenCalled();
     },
   );
 });

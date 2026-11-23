@@ -513,7 +513,7 @@ it("keeps distinct peer avatars and focused message content across group updates
   ).toBe(true);
 });
 
-it("retains aggregate disclosure and legacy card focus when options refresh", async () => {
+it("retains aggregate disclosure and operation focus when options refresh", async () => {
   const messages = ["one", "two"].map((key, index) => ({
     key,
     message: {
@@ -538,17 +538,19 @@ it("retains aggregate disclosure and legacy card focus when options refresh", as
   ));
   await waitForSolid(() => {
     expect(
-      view.container.querySelectorAll(".chat-tools-inline .chat-tool-row:not([aria-busy])"),
+      view.container.querySelectorAll(".chat-activity-group__body .chat-tool-row:not([aria-busy])"),
     ).toHaveLength(2);
   });
   const summary = view.container.querySelector<HTMLButtonElement>(".chat-activity-group__summary")!;
-  const card = view.container.querySelector(".chat-tools-inline .chat-tool-msg-collapse");
+  const card = view.container.querySelector(".chat-activity-group__body .chat-tool-msg-collapse");
   const cardControl = card!.querySelector<HTMLButtonElement>("button")!;
   cardControl.focus();
   setOptions((previous) => ({ ...previous, assistantName: "Updated assistant" }));
   flush();
   expect(document.activeElement).toBe(cardControl);
-  expect(view.container.querySelector(".chat-tools-inline .chat-tool-msg-collapse")).toBe(card);
+  expect(view.container.querySelector(".chat-activity-group__body .chat-tool-msg-collapse")).toBe(
+    card,
+  );
   expect(view.container.querySelector(".chat-activity-group__summary")).toBe(summary);
   summary.focus();
   setOptions((previous) => ({ ...previous, userName: "Updated viewer" }));

@@ -21,6 +21,7 @@ import type { PluginSourceSnapshotDescriptor } from "./plugin-source-snapshot.ty
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeDefaultRetainedNativeWorkerSource());
+afterEach(() => vi.restoreAllMocks());
 
 async function withSnapshot(
   run: (fixture: {
@@ -106,6 +107,49 @@ it("prepares independent runtime instances from worker-published immutable sourc
     });
   });
 });
+
+it.each(["capture failure", "frozen receipt mismatch"] as const)(
+  "awaits retained cleanup without synchronous worker waits after %s",
+  async (failure) => {
+    await withSnapshot(async ({ stateDir, rootDir, entry, descriptor }) => {
+      const readDirectory = fs.readdirSync;
+      const captureError = new Error("Host reconstruction cannot read source");
+      const captures = new Set<string>();
+      // Workers keep the real filesystem view. Only host reconstruction fails or
+      // misses a file, exercising both cleanup owners after custody transfers.
+      vi.spyOn(fs, "readdirSync").mockImplementation((...args) => {
+        const entries = readDirectory(...args);
+        if (
+          String(args[0]) !== rootDir &&
+          entries.some((name) => typeof name === "string" && name === "index.js")
+        ) {
+          captures.add(String(args[0]));
+          if (failure === "capture failure") {
+            throw captureError;
+          }
+          return entries.filter((name) => typeof name !== "string" || name !== "index.js");
+        }
+        return entries;
+      });
+      using wait = vi.spyOn(Atomics, "wait");
+      await expect(
+        preparePluginGenerationArtifact({
+          rootDir,
+          source: entry,
+          sourceSnapshot: { stateDir, descriptor },
+        }),
+      ).rejects.toThrow(
+        failure === "capture failure"
+          ? captureError
+          : "Plugin snapshot runtime receipt differs from its immutable source receipt",
+      );
+      expect(captures.size).toBe(1);
+      expect(captures.has(rootDir)).toBe(false);
+      expect.soft(wait).not.toHaveBeenCalled();
+      expect([...captures].every((directory) => !fs.existsSync(directory))).toBe(true);
+    });
+  },
+);
 
 it.each(["manifest", "directory", "token"] as const)(
   "preserves named snapshot validation failures for a damaged %s",

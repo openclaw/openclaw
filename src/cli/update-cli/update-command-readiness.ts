@@ -43,7 +43,6 @@ export async function verifyPreviousGatewayForUpdate(params: {
   env: NodeJS.ProcessEnv;
   opts: UpdateCommandOptions;
   timeoutMs?: number;
-  observedStartupMs?: number;
   assertCurrent?: () => void;
   signal?: AbortSignal;
   expectedVersion?: string;
@@ -55,9 +54,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
   const run = proofOptions.run;
   const { deadlineMs: timeoutMs, derivation } = resolveGatewayStartupTiming(process.platform, {
     timeoutMs: params.timeoutMs,
-    observedStartupMs: params.observedStartupMs,
     migrationLeaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
-    previousGateway: true,
   });
   const startedAtMs = Date.now();
   const sharedDeadline = params.opts.run?.deadline;
@@ -188,7 +185,6 @@ export type UpdateGatewayReadinessParams = {
   deadlineMs?: number;
   deadline?: GatewayRestartDeadline;
   onProgress?: (stage: string, reason: string) => void;
-  observedStartupMs?: number;
   expectedVersion?: string;
   expectedBuildId?: string;
   requireRunningService?: boolean;
@@ -208,6 +204,13 @@ export type UpdateGatewayReadinessParams = {
     launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null;
   }>;
 };
+
+export function hasRunningGatewayService(health: GatewayRestartSnapshot): boolean {
+  return (
+    health.runtime.status === "running" &&
+    (process.platform === "win32" || health.runtime.pid !== undefined)
+  );
+}
 
 export function gatewayReadinessPending(health: GatewayRestartSnapshot): boolean {
   if (health.waitOutcome === "still-starting") {
@@ -230,7 +233,6 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
   const waitForStartup = params.waitForStartup !== false;
   const { deadlineMs: timeoutMs } = resolveGatewayStartupTiming(process.platform, {
     timeoutMs: params.timeoutMs,
-    observedStartupMs: params.observedStartupMs,
     migrationLeaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
   });
   const startedAtMs = performance.now();
@@ -368,11 +370,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       assertCurrent();
       const readyz = http.readyz === 200;
       // HTTP does not change the restart owner's observed process/build identity.
-      if (
-        params.requireRunningService &&
-        (health.runtime.status !== "running" ||
-          (process.platform !== "win32" && health.runtime.pid === undefined))
-      ) {
+      if (params.requireRunningService && !hasRunningGatewayService(health)) {
         health.healthy = false;
       }
       if (!(http.coreReady ?? readyz) || remainingMs() === 0) {

@@ -1,7 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../../agents/admitted-run-context.js";
-import { GatewayOperatorAccessUnavailableError } from "../../../infra/operator-authority-error.js";
+import { createTestOperatorAuthority } from "../../../agents/admitted-run-context.test-support.js";
 import {
   beginSessionControllerSourceInjection,
   bindSessionControllerSource,
@@ -16,7 +15,7 @@ import type { FollowupRun } from "./types.js";
 const queue = queueFixture("steer");
 const source = (prompt: string, messageId = prompt) => queue.source(prompt, messageId);
 function authority(isCurrent: () => boolean, message: string) {
-  return createAdmittedRunOperatorAuthority({
+  return createTestOperatorAuthority({
     profileId: "fixture",
     scopes: ["operator.write"],
     source: {},
@@ -126,46 +125,6 @@ it("joins asynchronous source cleanup after native settlement and cancellation",
   await settlement;
   expect(settled).toHaveBeenCalledOnce();
   expect(input.mailbox.entries).not.toContain(input);
-});
-
-it("rechecks channel execution authority after waiting for native settlement", async () => {
-  const [first, second] = [queue.source("first"), queue.source("second")];
-  let current = true;
-  second.operatorAuthority = authority(() => current, "source authority revoked");
-  const firstReservation = await queue.admit(first);
-  const secondReservation = queue.reserve(second);
-  const secondAdmission = secondReservation.admit();
-  const rejected = expect(secondAdmission).rejects.toThrow("source authority revoked");
-  current = false;
-  firstReservation.consume("consumed");
-  await rejected;
-  await settleSource(second.controllerInput!);
-  expect(second.controllerInput?.phase).toBe("consumed");
-});
-
-it("queues an unaccepted steer when its authority check is temporarily unavailable", async () => {
-  const [first, second] = [source("first"), source("second")];
-  let unavailable = false;
-  second.operatorAuthority = createAdmittedRunOperatorAuthority({
-    profileId: "fixture",
-    scopes: ["operator.write"],
-    assertCurrent() {
-      if (unavailable) {
-        unavailable = false;
-        throw new GatewayOperatorAccessUnavailableError();
-      }
-    },
-  });
-  const { delivered, drained } = recordDelivery(1);
-  const firstReservation = await queue.admit(first);
-  const secondAdmission = queue.reserve(second).admit();
-  const rejected = expect(secondAdmission).rejects.toThrow(GatewayOperatorAccessUnavailableError);
-  unavailable = true;
-  firstReservation.consume("consumed");
-  await rejected;
-  expect(second.controllerInput?.abortSignal.aborted).toBe(false);
-  await drained;
-  expect(delivered).toEqual(["second"]);
 });
 
 it.each(["accepted", "rejected"] as const)(

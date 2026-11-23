@@ -74,7 +74,7 @@ type ProviderModelRouteAuthDecision =
       message: string;
       source?: ProviderModelAuthProfileSource;
       route?: ProviderModelRouteCandidate;
-      /** Credential modes cannot serve this route, independently of readiness. */
+      /** Credential contracts cannot serve this route, independently of readiness. */
       authModeIncompatible?: true;
     };
 
@@ -352,15 +352,39 @@ export function selectProviderModelRouteAuth(params: {
     params.sourcePlan.kind === "automatic" &&
     params.sourcePlan.orderedProfiles.length > 0 &&
     params.sourcePlan.orderedProfiles.every((profile) => {
-      const requirement = resolveProviderModelRouteAuthRequirement(profile.mode);
+      // Identity-only login explicitly denies inference on every route.
+      if (profile.authRequirement === null) {
+        return true;
+      }
+      const requirement = resolveProviderModelRouteAuthRequirement(
+        profile.mode,
+        profile.authRequirement,
+      );
       return (
         requirement !== undefined &&
-        (!routeForMode(params.resolution, profile.mode) ||
+        (!routeForMode(params.resolution, profile.mode, profile.authRequirement) ||
           (configuredRequirement !== undefined && requirement !== configuredRequirement))
       );
     });
+  const explainProfileMismatch = (message: string): string => {
+    if (!onlyIncompatibleProfiles || params.sourcePlan.kind !== "automatic") {
+      return message;
+    }
+    const offered = new Set(
+      params.sourcePlan.orderedProfiles.map((profile) =>
+        resolveProviderModelRouteAuthRequirement(profile.mode, profile.authRequirement),
+      ),
+    );
+    if (offered.has(undefined)) {
+      return message;
+    }
+    const routes = configuredRoute ? [configuredRoute] : params.resolution.routes;
+    const required = [...new Set(routes.map((route) => route.authRequirement))].join(" or ");
+    const apis = [...new Set(routes.map((route) => route.api))].join(" or ");
+    return `${message} Selected model route requires ${required} authentication (${apis}); configured profiles support ${[...offered].join(" or ")} authentication. Select a model route compatible with the configured account, or select a compatible account.`;
+  };
   if (sourceDecision.kind === "rejected") {
-    return reject(sourceDecision.reason, sourceDecision.message, {
+    return reject(sourceDecision.reason, explainProfileMismatch(sourceDecision.message), {
       source: sourceDecision.source,
       route: configuredRoute,
       authModeIncompatible: onlyIncompatibleProfiles,
@@ -419,7 +443,9 @@ export function selectProviderModelRouteAuth(params: {
   ) {
     return reject(
       "explicit-order",
-      `Explicit auth order has no route-compatible profiles for ${params.provider}.`,
+      explainProfileMismatch(
+        `Explicit auth order has no route-compatible profiles for ${params.provider}.`,
+      ),
       { authModeIncompatible: onlyIncompatibleProfiles },
     );
   }
@@ -483,9 +509,11 @@ export function selectProviderModelRouteAuth(params: {
     }
     return reject(
       "configured-auth",
-      configuredRoute
-        ? `Configured ${params.provider} authentication has no compatible credential source for the selected model route.`
-        : `No route-compatible authentication source is configured for ${params.provider}.`,
+      explainProfileMismatch(
+        configuredRoute
+          ? `Configured ${params.provider} authentication has no compatible credential source for the selected model route.`
+          : `No route-compatible authentication source is configured for ${params.provider}.`,
+      ),
       {
         source: rejectedProfile,
         route: configuredRoute,

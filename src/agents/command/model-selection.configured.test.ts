@@ -18,7 +18,7 @@ import {
   TURN_MODEL_OVERRIDE_REF,
   turnModelRefLabel,
 } from "../../test-utils/turn-model-selection-differential.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import * as authProfiles from "../auth-profiles/store-runtime.js";
 import * as harnessRuntime from "../harness/runtime-plugin.js";
 import { loadManifestModelCatalog } from "../model-catalog.js";
@@ -192,7 +192,7 @@ function createRestrictedFixture() {
     "custom/manual": { alias: "permitted" },
   };
   fixture.inventory.mockReturnValue(customCatalog("base", "child", "manual"));
-  const operatorAuthority = createAdmittedRunOperatorAuthority({
+  const operatorAuthority = createTestOperatorAuthority({
     profileId: "limited-operator",
     scopes: ["operator.write"],
     assertCurrent: () => {},
@@ -620,7 +620,7 @@ describe("command selection with session routing", () => {
     });
     const lifetime = new AbortController();
     const denied = new Error("operator authority ended during thinking catalog loading");
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "transcript-operator",
       scopes: ["operator.write"],
       assertCurrent: () => {},

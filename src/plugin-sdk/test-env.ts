@@ -5,7 +5,11 @@ export {
 } from "../cli/cli-process-child.test-helpers.js";
 export { jsonResponse, requestBodyText, requestUrl } from "../test-helpers/http.js";
 export { mockPinnedHostnameResolution } from "../test-helpers/ssrf.js";
-export { PROXY_FIXTURE_CERTIFICATE, PROXY_FIXTURE_KEY } from "../test-helpers/proxy-tls-fixture.js";
+export {
+  PROXY_FIXTURE_CERTIFICATE,
+  PROXY_FIXTURE_KEY,
+  PROXY_FIXTURE_SERVER_CERTIFICATE,
+} from "../test-helpers/proxy-tls-fixture.js";
 export {
   PROXY_FIXTURE_HOST,
   PROXY_FIXTURE_PAYLOAD,

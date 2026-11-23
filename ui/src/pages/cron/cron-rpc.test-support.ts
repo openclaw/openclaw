@@ -25,6 +25,11 @@ export function mountCronPage(
   return { client, gateway, context, page };
 }
 
+/** A catalog row as the Gateway sends it: every model names its provider and display name. */
+export function catalogModel(id: string) {
+  return { id, provider: "fixture", name: id };
+}
+
 export function cronRpc(
   handlers: Record<string, (params?: unknown) => unknown>,
   fallback: (method: string) => unknown = createRequest(),

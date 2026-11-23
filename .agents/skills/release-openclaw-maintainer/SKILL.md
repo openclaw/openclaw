@@ -33,16 +33,20 @@ Read only the references needed for the selected phase:
 - Backport discovery and porting: [candidate inventory and worker brief](references/backport-discovery.md). For extended-stable also read [backport preparation](references/extended-stable-backports.md); SDK/config changes need a visible maintenance-risk warning and maintainer decision.
 - Extended-stable `.33+` Gateway publication: [extended-stable publication](references/extended-stable-publish.md). Use the shared publisher with extended-stable inputs; its non-Latest GitHub Release carries evidence without native-app or ClawHub publication.
 - Validation selection or failed proof: [validation and confidence](references/validation.md), with `$release-openclaw-ci` for workflow execution and immutable manifests.
+- Failed validation sealing/collection after checks finish: assess [receipt-backed aggregate recovery](../release-openclaw-ci/SKILL.md#receipt-backed-aggregate-recovery) before replacing the FRV; this is distinct from same-parent continuation and publication recovery.
 - Interrupted publication or registry promotion: [publication recovery](references/publication-recovery.md).
 - Native assets: [platform publication](references/platform-publication.md), with `$release-openclaw-mac` for macOS operations.
 - Stable postpublish synchronization and the exact-SHA deployment handoff:
   [main closeout](references/stable-main-closeout.md).
 - Release retrospective and shared issue ledger (every track, and any handoff
-  snapshot): [retrospective](references/retrospective.md).
+  snapshot): [retrospective](references/retrospective.md), including
+  [in-flight fix tracking](references/retrospective.md#track-in-flight-fixes-per-agent).
 - Release notes: `$openclaw-changelog-update`, including its separate approved post-release docs-mirror route. Initial release generation keeps its existing format; docs publication does not run automatically during release. Requested announcements: `$release-openclaw-announcement` for Discord, `$release-tweets` for X. Announcements never gate publication and require explicit posting authorization.
 - Published artifact verification: `$verify-release`. GHSA operations: `$openclaw-ghsa-maintainer` only with explicit security-workflow authorization.
 
 ## Backports and new fixes
+
+During preparation, complete the required [bundled Codex update and pin](references/preparation.md#update-and-pin-bundled-codex-required).
 
 For every release track, apply approved changes already on `main` directly to
 the canonical release branch, one commit at a time in dependency order with
@@ -69,17 +73,57 @@ evidence remain unchanged; direct backports do not authorize publication.
 Prefer the [shared hotfix ledger](references/hotfix-ledger-management.md) for
 backport discovery, selection, and outcomes, including Tideclaw-owned releases.
 Reuse candidates, add discoveries from main/sibling releases, and update each
-release's assessments. If access is unavailable, keep local evidence and sync
-later. This is recommended bookkeeping, not another release gate.
+release's assessments immediately after every backport adaptation, including
+new validation failures and their resolution. Parallel release owners may need
+the same fix or adaptation before this release finishes. If access is
+unavailable, keep each pending update in local evidence and sync later. This is
+recommended bookkeeping, not another release gate.
+
+## Fast-track approval is human-only
+
+**NEVER approve your own or another agent's fast-track request. NEVER use an
+available maintainer token to impersonate human approval.** Obtain explicit
+approval from another human member of the normal release-managers group for the
+exact request/digest, candidate, artifacts, publication scope, run/attempt,
+expiry and explicit skip/incomplete-validation action. Preparation authority,
+generic publish authority, silence and previous approvals do not qualify.
+If approval is missing, rejected, expired or ambiguous, stop the fast-track path
+and ask that human. Changed contents require a new request and approval.
+
+Preserve the human decision's permalink, identity and timestamp with the exact
+request and original FRV results. Keep the normal `npm-release` environment
+approval and existing release receipt. Shared tokens make this a procedural
+rule, not a technical guarantee of human independence. There is no Google Chat
+app, Firebase service or alternate approval API. See
+[fast-track approval](../../../docs/reference/fast-track-release-approval.md).
+Request preparation does not enable skipping: until existing publishers support
+these policies, use the ordinary validation/waiver path below.
 
 ## Shared release boundaries
 
-FRV must conclude **success** under pinned P's
+FRV must conclude **success** with trusted P evaluating pinned Q’s
 [checked-in release-tooling policy](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers).
 Apply only the exact exceptions in that policy, including its operator-authorized
 Kova grants; preserve each grant’s version, job, optional candidate SHA, and
-optional attempt restrictions.
-A failed-job grant is not permission to skip the job or change C/Q. All other
+optional attempt restrictions. When an operator approves a job waiver, default
+to the exact release version, child role, and job across all future FRV runs,
+attempts, and candidates for that release. Do not add `evidence` run/attempt or
+`targetSha` restrictions by default. Reserve attempt-specific waivers for
+exceptionally high-risk cases where approval intentionally covers only the
+reviewed execution; record that risk and the explicit limit in the PR/handoff.
+Preserve any narrower scope the operator explicitly requested. Diagnostic run
+IDs belong in the PR/handoff, not in matching restrictions merely because they
+identify the original failure. See the [attempt-binding correction in #201694](https://github.com/openclaw/openclaw/pull/201694)
+and the [operator-directed release-wide default in #201769](https://github.com/openclaw/openclaw/pull/201769).
+For grant-only edits, reuse the policy tests; add cases only for new matching or
+validation behavior. Keep new reasons to one sentence and authorization details
+in the release handoff, not public Q data or published docs ([#199776](https://github.com/openclaw/openclaw/pull/199776)).
+Commit authorized grants directly to Q’s `scripts/lib/release-validation-waivers.json`;
+no grant PR to `main`, no grant cherry-pick into C. Pin the new Q in a fresh
+request/admission, then reevaluate eligible raw successful/failed receipts under
+its grants. The ledger-only delta preserves workload identity; executable Q
+changes do not. Public Q branches are not private storage.
+A failed-job grant is not permission to skip the job or change C. All other
 required lanes must succeed: Windows
 and macOS Node and other normal CI jobs, install smoke, survivor
 lanes, `update-first-hop-compat*`, pack/npm qualification, package integrity,
@@ -103,11 +147,19 @@ blocker is a regression in shipped bytes or behavior, or an update/install/
 publish defect; fix it on the release branch. Rerun a flake on
 the same Release SHA with at most two recorded reruns by default, and file a
 fix-in-parallel issue or PR on `main` with the evidence. Never re-cut for a flake.
-A deliberate tooling-code waiver requires FRV validation under the new pinned P,
+A deliberate grant requires FRV validation under the new pinned Q,
 not a publisher override. An unwaived flake that remains red blocks publication.
 Main-only failures and infrastructure
 failures (runner outages, GitHub ghost jobs, hosted-runner offload) count as
-flakes for the release.
+flakes for the release. A job that passed in the previous run and is unlikely
+to be affected by intervening changes is presumed flaky, unless its failure
+indicates a race that could affect production users. Apparent infrastructure
+failures and test flakes may use the full bounded retry budget until contrary
+evidence establishes a deterministic defect or production-impacting race;
+repeated failure alone is not that evidence. Record the prior run and input
+comparison; exact-same-SHA success is not required for this classification.
+Follow the CI skill's [retry and proactive cancellation rules](../release-openclaw-ci/SKILL.md#parent-ownership-and-cancellation)
+when a deterministic repair makes the current FRV obsolete.
 
 Dependency advisories never delay a release. A newly published advisory is
 never a reason to re-cut, change tooling, or rerun validation. Record it in the
@@ -187,11 +239,24 @@ matching record, and root index may use `split-changelog-release-v1`
 to reuse product proof while qualifying new publication bytes. Any other
 source delta, rename, or deletion returns to the Code SHA loop. Historical
 root-only receipts retain `changelog-only-release-v1`.
-New test qualification freezes **Q=C**: the candidate's test workflow closure
-belongs to the candidate. Keep independently trusted **P** (admission, aggregate
-decision, verifier, and publisher) separate. A Q harness repair requires a new C/Q and newly bound
-evidence; P-only or infrastructure repairs can preserve the candidate. Missing
-qualification contracts need a deliberate backport, never future-main fallback.
+New test qualification defaults to **Q=C**. An explicit assessed qualification
+**Q** may instead be admitted through the candidate route while **C** retains
+source, package bytes, version, and baselines. Keep independently trusted **P**
+(admission, aggregate decision, verifier, and publisher) separate. A Q repair
+requires a new request, admission, and successful parent, not a new C unless
+product source changes. Missing contracts need a deliberate Q repair or candidate
+backport, never a moving-main fallback. Follow the
+[qualification-tooling recovery procedure](../../../docs/reference/full-release-validation/dispatch.md#recover-qualification-tooling-without-changing-the-candidate)
+and the CI skill's [C ≠ Q decision and command guide](../release-openclaw-ci/SKILL.md#repair-release-tooling-without-changing-the-product-c--q).
+Use new Q for changed qualification workflow/harness behavior, P for admission/aggregate/verifier/publisher
+repairs, and new C only for changed product bytes. For a drained FRV with a sealing/collector
+defect, first assess [receipt-backed aggregate recovery](../release-openclaw-ci/SKILL.md#receipt-backed-aggregate-recovery):
+a reviewed P-only repair may authenticate the original admission, C/Q, child receipts,
+and unchanged artifact bytes without a fresh test run, even when same-parent continuation
+cannot restore its plan. Require a successful authenticated recovery aggregate; never
+relabel the original failed parent or bypass publication verification. Reuse the explicitly qualified
+parent through the checklist's `--full-release-validation-run-id` and `--skip-dispatch`;
+its `--workflow-sha` still selects P, and its fresh qualification defaults to Q=C.
 
 Once a candidate is cut, its base is the operator's decision. Never re-cut
 (re-base the candidate on newer `main`) unless Peter explicitly asks for it in
@@ -206,14 +271,18 @@ Explicit operator-approved additions follow the
 record the changed scope and requalify the new candidate, never silently reuse
 invalidated proof. A manager's opportunity notification is not that approval.
 
-Release process improvements made during a release land on both branches.
-Workflow, release-script, release-test, `RELEASING.md`, and release-skill changes
+All release channels, including extended-stable, backport applicable release
+tooling and validation changes regardless of product-hotfix severity. Release
+process improvements normally land on both branches, except independent
+qualification-only repairs and Q-only grant data as described below.
+Executable workflow, release-script, release-test, `RELEASING.md`, and release-skill changes
 normally merge to `main` first, then get cherry-picked (`-x`) directly onto the
 canonical release branch for the next candidate or patch, without a backport PR.
 Urgent release-first repairs follow [the new-fix route](#backports-and-new-fixes).
-A qualification repair needed for this release
-must land before freezing a new C/Q; never silently swap the harness for an
-already qualified candidate. Where `main`-only CI infrastructure is missing on the branch,
+A qualification-only repair can instead land
+in a reviewed independent Q and be newly admitted against unchanged C; no
+release-branch cherry-pick is required solely to update tooling. Never silently
+swap the harness or relabel an already qualified candidate's evidence. Where `main`-only CI infrastructure is missing on the branch,
 keep the branch's expression form and port only the logic. Product code on the
 release branch stays blocker-only per the rule above.
 
@@ -222,7 +291,8 @@ retrospective PR described below is the required open closeout deliverable, not
 an unresolved repair. List every PR created during the release (`gh pr list --author
 @me --state open` plus any PR bound to the session) and land or explicitly close
 each repair PR with a reason; confirm its fix is on `main` and, when it is release
-tooling, on the release branch. Also remove the release's temporary worktrees,
+tooling, on the release branch when the selected Q=C route requires it. Also
+remove the release's temporary worktrees,
 abandoned local cut branches, and stale `scripts/pr` worktrees. Then write the
 [retrospective](references/retrospective.md) and open its `openclaw/tideclaw`
 PR with the issue-ledger update; keep a findings notes file from the start of the

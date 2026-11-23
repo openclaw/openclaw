@@ -81,12 +81,6 @@ export function libraryAuthority(
       ],
       (assertSources) => {
         assertSources();
-        if (ownerDevice && currentOwnerDevicePrincipal(client) === undefined) {
-          throw new SkillLibraryError(
-            "AUTHORITY_EXPIRED",
-            "Skill library authority changed. Refresh and retry.",
-          );
-        }
         // Synthetic agents must carry host-bound operator authority; identityless agents cannot publish.
         if (client?.internal?.syntheticClient) {
           throw new SkillLibraryError(
@@ -175,6 +169,12 @@ function assertPluginMutationCurrent(
   }
 }
 
+const sessionNotFound = () =>
+  new SkillLibraryError(
+    "NOT_FOUND",
+    "Session not found. A session starts with its first message; send one, then retry.",
+  );
+
 async function selectedSession(
   options: SkillLibraryRequestOwner,
   sessionKey: string,
@@ -188,7 +188,13 @@ async function selectedSession(
   if (!isIncognitoSessionKey(sessionKey)) {
     const profiles = await prepareSessionSharingProfiles(options.client);
     const { agentId } = resolveSessionStoreIdentity({ cfg: sourceCfg, sessionKey });
-    const facts = await prepareSessionMutationFacts({ cfg: sourceCfg, sessionKey, agentId });
+    // A session row exists only after its first message; name that instead of a storage retry.
+    const facts = await prepareSessionMutationFacts({
+      cfg: sourceCfg,
+      sessionKey,
+      agentId,
+      allowMissing: true,
+    });
     let entryRead:
       | Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsyncInternal>>
       | undefined;
@@ -205,6 +211,9 @@ async function selectedSession(
     };
     try {
       const identity = facts.readCurrent(sourceCfg).target;
+      if (!identity) {
+        throw sessionNotFound();
+      }
       entryRead = await captureSessionEntryCurrentCheckAsyncInternal({
         agentId: identity.agentId,
         sessionKey: identity.storeKey,
@@ -216,7 +225,7 @@ async function selectedSession(
       const entry = entryRead.entry;
       const readSource = identity.readSource;
       if (!entry || !readSource || typeof readSource.databaseIdentity !== "string") {
-        throw new SkillLibraryError("NOT_FOUND", "Session not found.");
+        throw sessionNotFound();
       }
       pins = retainPreparedSessionEntryPredicate({
         databaseIdentity: `file:${readSource.databaseIdentity}`,
@@ -293,7 +302,7 @@ async function selectedSession(
     },
   );
   if (!actorFacts) {
-    throw new SkillLibraryError("NOT_FOUND", "Session not found.");
+    throw sessionNotFound();
   }
   const assertRouting = captureSessionMutationRouting(sourceCfg);
   const resolve = (): SessionSharingTarget => {
@@ -301,7 +310,7 @@ async function selectedSession(
     assertRouting(cfg);
     const { target, membership } = actorFacts.readCurrent();
     if (!target) {
-      throw new SkillLibraryError("NOT_FOUND", "Session not found.");
+      throw sessionNotFound();
     }
     const sharing = prepareProjectedSessionSharing({
       cfg,
@@ -422,7 +431,7 @@ export const skillsLibraryHandlers: GatewayRequestHandlers = {
         const listed = await access.read("list", {});
         const result = projectSkillLibraryList(listed.value, params);
         if (session) {
-          const pins = session.target.entry.skillLibrarySelections ?? [];
+          const pins = structuredClone(session.target.entry.skillLibrarySelections ?? []);
           const selected = await access.read("pins", pins);
           listed.assertCurrent();
           selected.assertCurrent();

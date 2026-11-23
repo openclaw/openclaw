@@ -2,7 +2,7 @@
   "base": "codex-dynamic-tools.telegram-direct.json",
   "replace": {
     "message": {
-      "description": "Send/manage channel messages. Supports actions: broadcast, react, send. When the current WebChat prompt permits reactions, react with emoji (and optional remove:true) as the agent. Omit channel, target, and messageId. This stays local; use an explicit external channel and messageId for external reactions.",
+      "description": "Send/manage channel messages. Supports actions: react, send.",
       "inputSchema": {
         "properties": {
           "accountId": {
@@ -11,7 +11,6 @@
           "action": {
             "description": "Select one action. For action=\"send\", provide message or another send payload; fields for other actions do not count as send content.",
             "enum": [
-              "broadcast",
               "react",
               "send"
             ],
@@ -62,6 +61,25 @@
           "channel": {
             "type": "string"
           },
+          "components": {
+            "additionalProperties": true,
+            "description": "Discord Components V2 payload for send actions. Accepts the same object consumed by the Discord components adapter.",
+            "properties": {
+              "blocks": {
+                "description": "Discord Components V2 blocks such as text, buttons, selects, media, containers, and separators.",
+                "items": {},
+                "type": "array"
+              },
+              "modal": {
+                "additionalProperties": true,
+                "description": "Optional Discord modal triggered by generated components.",
+                "properties": {},
+                "required": [],
+                "type": "object"
+              }
+            },
+            "type": "object"
+          },
           "contentType": {
             "type": "string"
           },
@@ -77,7 +95,7 @@
             "type": "string"
           },
           "emoji": {
-            "description": "One Unicode emoji for the current WebChat prompt; explicit external channels validate their own emoji.",
+            "description": "Unicode emoji or custom name:id (also <:name:id> / <a:name:id>). Use action:\"emoji-list\" for server emojis.",
             "type": "string"
           },
           "filename": {
@@ -121,6 +139,352 @@
           },
           "mimeType": {
             "type": "string"
+          },
+          "presentation": {
+            "description": "Rich text/chart/table/button/select/context; unsupported degrades to text.",
+            "properties": {
+              "blocks": {
+                "items": {
+                  "properties": {
+                    "buttons": {
+                      "items": {
+                        "properties": {
+                          "action": {
+                            "anyOf": [
+                              {
+                                "properties": {
+                                  "command": {
+                                    "type": "string"
+                                  },
+                                  "type": {
+                                    "const": "command",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "command"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "properties": {
+                                  "type": {
+                                    "const": "callback",
+                                    "type": "string"
+                                  },
+                                  "value": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "value"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "properties": {
+                                  "type": {
+                                    "const": "url",
+                                    "type": "string"
+                                  },
+                                  "url": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "url"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "properties": {
+                                  "type": {
+                                    "const": "web-app",
+                                    "type": "string"
+                                  },
+                                  "url": {
+                                    "type": "string"
+                                  },
+                                  "widgetId": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "url"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "properties": {
+                                  "type": {
+                                    "const": "web-app",
+                                    "type": "string"
+                                  },
+                                  "url": {
+                                    "type": "string"
+                                  },
+                                  "widgetId": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "widgetId"
+                                ],
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          "disabled": {
+                            "type": "boolean"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "reusable": {
+                            "type": "boolean"
+                          },
+                          "style": {
+                            "enum": [
+                              "primary",
+                              "secondary",
+                              "success",
+                              "danger"
+                            ],
+                            "type": "string"
+                          },
+                          "url": {
+                            "type": "string"
+                          },
+                          "value": {
+                            "type": "string"
+                          },
+                          "web_app": {
+                            "properties": {
+                              "url": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "url"
+                            ],
+                            "type": "object"
+                          },
+                          "webApp": {
+                            "properties": {
+                              "url": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "url"
+                            ],
+                            "type": "object"
+                          }
+                        },
+                        "required": [
+                          "label"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "caption": {
+                      "type": "string"
+                    },
+                    "categories": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "chartType": {
+                      "enum": [
+                        "pie",
+                        "bar",
+                        "area",
+                        "line"
+                      ],
+                      "type": "string"
+                    },
+                    "headers": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "options": {
+                      "items": {
+                        "properties": {
+                          "action": {
+                            "anyOf": [
+                              {
+                                "properties": {
+                                  "command": {
+                                    "type": "string"
+                                  },
+                                  "type": {
+                                    "const": "command",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "command"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "properties": {
+                                  "type": {
+                                    "const": "callback",
+                                    "type": "string"
+                                  },
+                                  "value": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "value"
+                                ],
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "value": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "label"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "placeholder": {
+                      "type": "string"
+                    },
+                    "rowHeaderColumnIndex": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "rows": {
+                      "items": {
+                        "items": {
+                          "type": [
+                            "string",
+                            "number"
+                          ]
+                        },
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "segments": {
+                      "items": {
+                        "properties": {
+                          "label": {
+                            "type": "string"
+                          },
+                          "value": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "label",
+                          "value"
+                        ],
+                        "type": "object"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "series": {
+                      "items": {
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "values": {
+                            "items": {
+                              "type": "number"
+                            },
+                            "minItems": 1,
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "values"
+                        ],
+                        "type": "object"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "text": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "text",
+                        "context",
+                        "divider",
+                        "buttons",
+                        "select",
+                        "chart",
+                        "table"
+                      ],
+                      "type": "string"
+                    },
+                    "xLabel": {
+                      "type": "string"
+                    },
+                    "yLabel": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "title": {
+                "type": "string"
+              },
+              "tone": {
+                "enum": [
+                  "info",
+                  "success",
+                  "warning",
+                  "danger",
+                  "neutral"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "blocks"
+            ],
+            "type": "object"
           },
           "quoteText": {
             "description": "Telegram reply quote text.",

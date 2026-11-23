@@ -1,12 +1,9 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  REPETITIVE_OUTPUT_ERROR_MESSAGE,
-  REPEATED_TOOL_ERROR_CODE,
-  REPEATED_TOOL_ERROR_MESSAGE,
-} from "../../../packages/agent-core/src/errors.js";
+import { REPETITIVE_OUTPUT_ERROR_MESSAGE } from "../../../packages/agent-core/src/errors.js";
+import { TOOL_REPEAT_LIMIT_CODE } from "../../../packages/agent-core/src/tool-repeat-guard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
-import { REPETITIVE_OUTPUT_ERROR_CODE, type AssistantMessage } from "../../llm/types.js";
+import { REPETITIVE_OUTPUT_ERROR_CODE, type AssistantHistoryMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   CONTEXT_OVERFLOW_ERROR_MESSAGE,
@@ -52,11 +49,12 @@ import {
   formatSandboxToolPolicyBlockedMessage,
   type resolveSandboxRuntimeStatus,
 } from "../sandbox/runtime-status.js";
-import { readRepeatedToolErrorSummary } from "../tool-error-summary.js";
 import { buildAssistantFailoverSignal } from "./assistant-message-failures.js";
 import { classifyProviderRuntimeFailureKind } from "./provider-runtime-failure.js";
 const log = createSubsystemLogger("errors");
-const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
+const TOOL_REPEAT_LIMIT_FALLBACK =
+  "OpenClaw stopped this turn: the model repeated the same tool call too many times. Send a new message to continue.";
+const sandboxToolPolicyAuditMessages = new WeakSet<AssistantHistoryMessage>();
 export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
 export const SYNTHESIZED_TIMEOUT_ERROR_TEXT = "LLM request timed out.";
 const MODEL_NOT_FOUND_USER_TEXT =
@@ -71,8 +69,6 @@ const RUNTIME_FAILURE_COPY: Partial<
     "Signing in took too long. Try again in a moment. If it keeps happening, sign in again under Models in the OpenClaw app.",
   callback_timeout:
     "Sign-in wasn't completed. Try signing in again. If asked for a link, paste the full link from your browser.",
-  callback_validation:
-    "The sign-in link wasn't accepted. Try signing in again. If asked for a link, paste the full link from your browser.",
   auth_scope:
     "This login doesn't have the access OpenClaw needs. Sign in again under Models in the OpenClaw app.",
   auth_html:
@@ -101,7 +97,10 @@ type AssistantErrorTextOptions = {
   sandboxRuntime?: ReturnType<typeof resolveSandboxRuntimeStatus>;
 };
 type ClassifiedAssistantErrorFacts = ReturnType<typeof classifyAssistantErrorFacts>;
-function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErrorTextOptions) {
+function classifyAssistantErrorFacts(
+  msg: AssistantHistoryMessage,
+  opts?: AssistantErrorTextOptions,
+) {
   const signal = buildAssistantFailoverSignal(msg, {
     provider: opts?.providerOwner?.id ?? opts?.provider,
   });
@@ -122,7 +121,7 @@ function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErro
   };
 }
 export function formatAssistantErrorText(
-  msg: AssistantMessage,
+  msg: AssistantHistoryMessage,
   opts?: AssistantErrorTextOptions,
   facts?: ClassifiedAssistantErrorFacts,
 ): string | undefined {
@@ -231,7 +230,7 @@ export function formatAssistantErrorText(
     return (
       "Session history looks corrupted (tool call input missing). " +
       "Use /new to start a fresh session. " +
-      "If this keeps happening, reset the session or delete the corrupted session transcript."
+      "If this keeps happening, reset the session or delete the corrupted chat history."
     );
   }
 
@@ -322,14 +321,20 @@ function isRawAssistantErrorPassthrough(params: {
 }
 
 export function formatUserFacingAssistantErrorText(
-  msg: AssistantMessage,
+  msg: AssistantHistoryMessage,
   opts?: AssistantErrorTextOptions,
 ): string {
   if (msg.errorCode === REPETITIVE_OUTPUT_ERROR_CODE) {
     return REPETITIVE_OUTPUT_ERROR_MESSAGE;
   }
-  if (msg.errorCode === REPEATED_TOOL_ERROR_CODE) {
-    return readRepeatedToolErrorSummary(msg.errorMessage) ?? REPEATED_TOOL_ERROR_MESSAGE;
+  if (msg.errorCode === TOOL_REPEAT_LIMIT_CODE) {
+    // Show only the agent-core template; never arbitrary text carried under this code.
+    return msg.errorMessage &&
+      /^OpenClaw stopped this turn: the model called (?:[\w.-]{1,64}|a tool) with the same arguments \d+ times in a row\. Send a new message to continue\.$/.test(
+        msg.errorMessage,
+      )
+      ? msg.errorMessage
+      : TOOL_REPEAT_LIMIT_FALLBACK;
   }
   const modelLoadCopy = renderModelLoadFailureCopy(msg);
   if (modelLoadCopy) {

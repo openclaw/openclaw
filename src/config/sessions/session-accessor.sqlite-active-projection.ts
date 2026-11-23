@@ -3,6 +3,7 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import {
   readCurrentProjectionSnapshot,
+  withBorrowedProjectionSnapshot,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
 import {
@@ -27,16 +28,14 @@ export function withCurrentProjectionSnapshot<T>(
 ): T {
   const resolved = options.resolvedScope ?? resolveSqliteTranscriptReadScope(scope);
   const databaseOptions = toDatabaseOptions(resolved);
+  if (options.transaction) {
+    return withBorrowedProjectionSnapshot(options.transaction, resolved, read);
+  }
   const readSnapshot = (database: CurrentTranscriptProjection["database"]) =>
     readCurrentProjectionSnapshot(database, resolved, read);
-  if (options.transaction && !options.transaction.db.isTransaction) {
-    throw new Error("Transcript projection lost its borrowed transaction");
-  }
-  const result = options.transaction
-    ? { found: true as const, value: readSnapshot(options.transaction) }
-    : options.readOnly
-      ? withOpenClawAgentDatabaseReadOnly(readSnapshot, databaseOptions, { snapshot: true })
-      : { found: true as const, value: readSnapshot(openOpenClawAgentDatabase(databaseOptions)) };
+  const result = options.readOnly
+    ? withOpenClawAgentDatabaseReadOnly(readSnapshot, databaseOptions, { snapshot: true })
+    : { found: true as const, value: readSnapshot(openOpenClawAgentDatabase(databaseOptions)) };
   if (!result.found) {
     throw new SessionTranscriptStorageUnavailableError(result.reason);
   }
@@ -45,7 +44,7 @@ export function withCurrentProjectionSnapshot<T>(
   }
   // Only the writer lifecycle may rebuild after this stack unwinds. Read-only catalogs
   // report unavailable and leave reconciliation to the source Gateway.
-  if (!options.readOnly && !options.transaction) {
+  if (!options.readOnly) {
     startSessionTranscriptIndexReconcile({
       ...databaseOptions,
       preferredSessionId: resolved.sessionId,

@@ -15,6 +15,10 @@ import { getOwnedSessionTranscriptWriterFence } from "../config/sessions/transcr
 import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
 import { getUserTurnTranscriptAdmissionOwner } from "./user-turn-transcript-admission.js";
 import { prepareUserTurnTranscriptAnnotation } from "./user-turn-transcript-annotation-message.js";
+import {
+  prepareModelPromptProjection,
+  readModelPromptProjection,
+} from "./user-turn-transcript.message.js";
 import type {
   UserTurnTranscriptAnnotation,
   UserTurnTranscriptRecorder,
@@ -55,6 +59,25 @@ export function bindUserTurnTranscriptAnnotation(params: {
   }
   const assertLive = () => {
     params.assertCurrent();
+    const currentAdmission = owner.receipt();
+    const currentMessage = owner.message();
+    const projection = readModelPromptProjection(currentMessage);
+    // The recorder freezes model input after host binding but before native dispatch.
+    // Follow only that exact metadata addition; edits and retargeting still invalidate us.
+    if (
+      currentAdmission &&
+      currentMessage &&
+      projection !== undefined &&
+      readModelPromptProjection(admittedMessage) === undefined &&
+      isDeepStrictEqual(currentAdmission, {
+        ...admission,
+        generation: currentAdmission.generation,
+      }) &&
+      isDeepStrictEqual(currentMessage, prepareModelPromptProjection(admittedMessage, projection))
+    ) {
+      admission = snapshotTranscriptTurnAdmission(currentAdmission);
+      admittedMessage = structuredClone(currentMessage);
+    }
     if (
       params.abortSignal?.aborted ||
       owner.blocked() ||

@@ -3,14 +3,14 @@ import { SqliteTranscriptMutationConflictError } from "../../config/sessions/ses
 import { createEmbeddedRunReplayState } from "./replay-state.js";
 import {
   isReplaySafeTranscriptConflict,
-  isTranscriptConflictReplaySafe,
+  isEmbeddedRunReplaySafe,
   ReplaySafeTranscriptConflictError,
 } from "./transcript-conflict.js";
 
 const safe = { replayMetadata: { replaySafe: true, hadPotentialSideEffects: false } };
 it("requires positive whole-run replay evidence and refuses already started effects", () => {
   const previous = createEmbeddedRunReplayState();
-  expect(isTranscriptConflictReplaySafe(previous, safe)).toBe(true);
+  expect(isEmbeddedRunReplaySafe(previous, safe)).toBe(true);
   for (const attempt of [
     {},
     { replayMetadata: { replaySafe: false, hadPotentialSideEffects: false } },
@@ -29,16 +29,13 @@ it("requires positive whole-run replay evidence and refuses already started effe
       ],
     },
   ]) {
-    expect(isTranscriptConflictReplaySafe(previous, attempt)).toBe(false);
+    expect(isEmbeddedRunReplaySafe(previous, attempt)).toBe(false);
   }
+  expect(isEmbeddedRunReplaySafe(createEmbeddedRunReplayState({ replayInvalid: true }), safe)).toBe(
+    false,
+  );
   expect(
-    isTranscriptConflictReplaySafe(createEmbeddedRunReplayState({ replayInvalid: true }), safe),
-  ).toBe(false);
-  expect(
-    isTranscriptConflictReplaySafe(
-      createEmbeddedRunReplayState({ hadPotentialSideEffects: true }),
-      safe,
-    ),
+    isEmbeddedRunReplaySafe(createEmbeddedRunReplayState({ hadPotentialSideEffects: true }), safe),
   ).toBe(false);
 });
 it("recognizes only the live typed safety proof, including wrapped failures", () => {

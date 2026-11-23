@@ -104,22 +104,45 @@ it.each(["success", "caller-revoked", "session-replaced", "native-denied"] as co
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       } else {
         expectRpcResult(respond, expect.objectContaining({ status: "started" }));
-        // Chat retains its own exact target and source after the onboarding router releases.
-        expect(() => chat!.sessionMutationAuthorization!.assertCurrent()).not.toThrow();
         if (scenario === "caller-revoked") {
           callerCurrent = false;
-          expect(() => chat!.sessionMutationAuthorization!.assertCurrent()).toThrow();
         } else if (scenario === "session-replaced") {
           await patchSessionEntryCore(fixture.scope, () => ({ sessionId: "replacement-session" }));
           await projection.ensureMaterialized();
-          expect(() => chat!.sessionMutationAuthorization!.assertCurrent()).toThrow();
         }
         await fixture.finishDispatch();
-        if (scenario === "success") {
+        if (scenario !== "session-replaced") {
           expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
           expect(JSON.stringify(loadTranscriptEventsSync(fixture.scope))).toContain(
             "Run the setup skill for plugin demo.",
           );
+          if (scenario === "caller-revoked") {
+            const refused = vi.fn();
+            await expect(
+              handleGatewayRequest({
+                req: {
+                  type: "req",
+                  id: "onboarding-after-revocation",
+                  method: "mcp.app.onboard",
+                  params: { ...params, idempotencyKey: "onboarding-after-revocation" },
+                },
+                client,
+                context: fixture.context,
+                isWebchatConnect: () => true,
+                respond: refused,
+                hasCurrentClientAuthority: () => callerCurrent,
+                methodRegistry: registry,
+              }),
+            ).rejects.toThrow("Gateway caller authority is no longer active");
+            expect(chatHandler).toHaveBeenCalledOnce();
+            expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+          }
+        } else {
+          expect(
+            JSON.stringify(
+              loadTranscriptEventsSync({ ...fixture.scope, sessionId: "replacement-session" }),
+            ),
+          ).not.toContain("Run the setup skill for plugin demo.");
         }
       }
       expect(rpcSourceTesting.size).toBe(0);

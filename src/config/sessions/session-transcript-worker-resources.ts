@@ -36,6 +36,7 @@ import {
 } from "./session-store-read-candidates.js";
 import type { SessionStoreTargetPreparationRequest } from "./session-store-target-inventory.js";
 import {
+  createSessionHistoryLanePool,
   createSessionTranscriptHistoryPool,
   createUsageCostPool,
   type SessionCostWorkerLane,
@@ -111,8 +112,9 @@ function createHistoryLane(name: string, maxWorkers?: number) {
   );
 }
 
-export const historyLane = registerSessionTranscriptReaderLane("Session history", (closed) =>
-  createSessionTranscriptHistoryPool(SESSION_TRANSCRIPT_FOREGROUND_WORKERS, closed),
+export const historyLane = registerSessionTranscriptReaderLane(
+  "Session history",
+  createSessionHistoryLanePool,
 );
 // Search readiness can await a host writer; it cannot occupy committed-history workers.
 export const transcriptSearchLane = createHistoryLane(
@@ -124,8 +126,6 @@ export const sessionStoreLane = createHistoryLane(
   "Session store",
   SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
 );
-// Compaction waits for host setup/hooks that can themselves read session projections.
-export const compactionLane = createHistoryLane("Session compaction");
 function createCostLane(name: string, kind: "read" | "refresh"): SessionCostWorkerLane {
   const lane: SessionCostWorkerLane = registerSessionTranscriptReaderLane(name, (closed) =>
     createUsageCostPool(kind, closed, (databases) => clearClosedDatabaseCustody(lane, databases)),
@@ -135,7 +135,7 @@ function createCostLane(name: string, kind: "read" | "refresh"): SessionCostWork
 
 export const costReadLane = createCostLane("Session usage read", "read");
 export const costRefreshLane = createCostLane("Session usage refresh", "refresh");
-const historyWorkerLanes = [historyLane, transcriptSearchLane, sessionStoreLane, compactionLane];
+const historyWorkerLanes = [historyLane, transcriptSearchLane, sessionStoreLane];
 
 export const refreshDatabaseWorkerPressureSubscription =
   createStateWorkerMemoryPressureSubscription(
@@ -586,18 +586,25 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
         return;
       }
       const retained = new Set<string>();
+      const revokedResources: HistoryDatabaseResource[] = [];
       for (const resource of historyDatabases.values()) {
-        if (resource.revoked || !resource.nativeLanes.has(lane)) {
+        if (!resource.nativeLanes.has(lane)) {
           continue;
         }
         for (const candidate of capturedCandidates) {
           if (
-            !matchesAgentDatabaseReadCandidatePath(
-              { ...candidate, path: candidate.physicalPath },
-              resource.database.path,
-            )
+            candidate.scope
+              ? !matchesAgentDatabaseReadCandidatePath(
+                  { path: candidate.physicalPath, scope: candidate.scope },
+                  resource.database.path,
+                )
+              : candidate.physicalPath !== resource.database.path
           ) {
             continue;
+          }
+          if (resource.revoked) {
+            revokedResources.push(resource);
+            break;
           }
           const alias = candidate.scope
             ? path.join(path.dirname(candidate.path), path.basename(resource.database.path))
@@ -608,25 +615,24 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
           retained.add(resource.database.path);
         }
       }
-      const closing: HistoryDatabaseResource[] = [];
-      for (const resource of historyDatabases.values()) {
-        if (
-          resource.nativeLanes.has(lane) &&
-          !retained.has(resource.database.path) &&
-          selected.some((candidate) =>
-            matchesAgentDatabaseReadCandidatePath(candidate, resource.database.path),
-          )
-        ) {
-          resource.nativeLanes.delete(lane);
-          closing.push(resource);
-        }
+      const closing = revokedResources.filter((resource) => !retained.has(resource.database.path));
+      for (const resource of closing) {
+        resource.nativeLanes.delete(lane);
+      }
+      // Exact retained paths have nothing to close; families may include unowned siblings.
+      const unretained = selected.filter(
+        (candidate) => candidate.scope || !retained.has(candidate.path),
+      );
+      if (!unretained.length) {
+        pruneHistoryDatabases();
+        return;
       }
       // Discovery uses its captured paths; changing aliases mid-read is best effort.
       try {
         await lane.pool.closeResources(
           encodeAgentDatabaseReaderRequest({
             kind: "close",
-            candidates: selected,
+            candidates: unretained,
             retainedPaths: [...retained],
             deleted: false,
           }),

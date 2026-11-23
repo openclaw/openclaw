@@ -145,6 +145,7 @@ describe("gateway server chat", () => {
       await waitForAgentRunDrained("idem-timeout-1");
       testState.agentConfig = undefined;
 
+      mockGetReplyFromConfigOnce(async () => ({ text: "Subagent session reply." }));
       const sessionRes = await sendChat("idem-session-key-1", {
         sessionKey: "agent:main:subagent:abc",
       });

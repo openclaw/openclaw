@@ -92,6 +92,22 @@ const modelConfig = (modelPolicy: unknown, extraRoles = {}) => ({
   ...rolesConfig({ definitions: { guest: { ...validRole, modelPolicy }, ...extraRoles } }),
 });
 
+test.each(["none", "view", "invited"])("preserves explicit session access mode %s", (others) => {
+  const config = validated(
+    rolesConfig({
+      definitions: { guest: { ...validRole, sessions: { others } } },
+    }),
+  );
+  expect(config.gateway?.roles?.definitions.guest?.sessions.others).toBe(others);
+});
+
+test("does not enable invitation-only access in an unconfigured Gateway", () => {
+  expect(validated({}).gateway?.roles).toBeUndefined();
+  expect(validated(rolesConfig({})).gateway?.roles?.definitions.guest?.sessions.others).toBe(
+    "view",
+  );
+});
+
 test("accepts a conversation-scoped automation role without operator.write", () => {
   const scopes = ["operator.sessions.write", "operator.cron"];
   const config = validated(rolesConfig({ definitions: { guest: { ...validRole, scopes } } }));

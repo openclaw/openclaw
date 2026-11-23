@@ -13,6 +13,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { supportsOpenAIReasoningEffort } from "../providers/openai-reasoning-effort.js";
 import { OPENAI_RESPONSES_APIS } from "./openai-responses-contracts.js";
+import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 import { parsePositiveInteger } from "./positive-integer.js";
 
 type OpenAIResponsesPayloadModel = {
@@ -87,6 +88,7 @@ function isOpenAIResponsesApi(api: string | undefined): boolean {
 function readCompatPayloadBoolean(
   compat: unknown,
   key:
+    | "cachesInstructions"
     | "supportsInstructions"
     | "supportsPromptCacheKey"
     | "supportsResponsesContinuation"
@@ -323,6 +325,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
     storeMode?: "provider-policy" | "transport-default" | "disable" | "preserve";
     enablePromptCacheStripping?: boolean;
     enableServerCompaction?: boolean;
+    nativeCompactEndpoint?: boolean;
   } = {},
 ): OpenAIResponsesPayloadPolicy {
   const capabilities = resolveOpenAIResponsesPayloadCapabilities(model);
@@ -361,8 +364,19 @@ export function resolveOpenAIResponsesPayloadPolicy(
   // Verified native OpenAI/xAI routes default instructions on; compat overrides.
   // Other endpoints could silently drop this field and the system prompt.
   // Stored-continuation support does not prove instructions support.
+  // The catalog row is shared with subscription runtimes; the cache workaround
+  // applies only to native API-key turns, not to ChatGPT or /responses/compact.
   const instructionsCompat = readCompatPayloadBoolean(model.compat, "supportsInstructions");
-  const usesInstructionsField = instructionsCompat ?? capabilities.usesVerifiedInstructionsEndpoint;
+  const embedForNativeCache =
+    options.nativeCompactEndpoint !== true &&
+    readCompatPayloadBoolean(model.compat, "cachesInstructions") === false &&
+    supportsNativeOpenAIResponsesEndpoint({
+      provider: readStringValue(model.provider) ?? "",
+      api: readStringValue(model.api) ?? "",
+      baseUrl: readStringValue(model.baseUrl),
+    });
+  const usesInstructionsField =
+    (instructionsCompat ?? capabilities.usesVerifiedInstructionsEndpoint) && !embedForNativeCache;
 
   return {
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,

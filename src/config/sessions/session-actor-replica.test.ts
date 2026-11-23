@@ -20,7 +20,12 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSessionEntryWithTranscript } from "./session-accessor.entry-mutation.js";
-import { loadSessionEntry } from "./session-accessor.js";
+import {
+  appendTranscriptMessageSync,
+  loadSessionEntry,
+  readSessionTranscriptMessageEvents,
+  waitForSessionTranscriptProjection,
+} from "./session-accessor.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import {
   deleteSessionEntryRows,
@@ -42,6 +47,7 @@ import type {
   SessionActorReceipt,
 } from "./session-actor-contract.js";
 import { hydrateSessionActorState } from "./session-actor-hydration.worker.js";
+import * as replicaReceipts from "./session-actor-replica-receipts.js";
 import {
   createSessionActorReplica,
   readSessionActorEntryFacts,
@@ -270,11 +276,14 @@ it("keeps transcript replacement charges within the shared byte and entry budget
     fixture.replica.close();
     fixture.replica.invalidate();
     const cells: Array<{ replica: Replica; state: SessionActorHotState }> = [];
-    const create = (entryFirst = false, keepOpen = false) => {
+    const create = (entryFirst = false, keepOpen = false, sharedPrompt = "") => {
       const state: SessionActorHotState = {
         ...structuredClone(original),
         target: { ...original.target, sessionKey: `agent:main:budget-${cells.length}` },
       };
+      if (sharedPrompt) {
+        state.entry = { ...state.entry!, skillsSnapshot: { prompt: sharedPrompt, skills: [] } };
+      }
       state.dependencySessionIds = [];
       state.writeToken = tokenFor(state, fixture.database.path);
       if (entryFirst) {
@@ -335,8 +344,12 @@ it("keeps transcript replacement charges within the shared byte and entry budget
         cell.replica.close();
         cell.replica.invalidate();
       }
+      // Retired shared values must release their pool charge before the next cohort.
+      for (let index = 0; index < 40; index++) {
+        create(false, false, String(index).padStart(2, "0").repeat(60000)).replica.invalidate();
+      }
       const small = Array.from({ length: 129 }, (_, index) => {
-        const cell = create(index % 2 === 0, true);
+        const cell = create(index % 2 === 0, true, "Shared instructions".repeat(6000));
         return { cell, transcript: retain(cell, 16) };
       });
       expect(readSessionActorTranscriptReplica(small[0]!.cell.state)).toBeUndefined();
@@ -554,6 +567,26 @@ it("shares committed facts across released handles and retires them for writes a
     hydrate({ ...fixture, replica: restarted }, "restarted");
     expect(restarted.read()?.version.epoch).toBe("restarted");
   }, "agent:main:matrix:group:!Room:server");
+});
+
+it("leaves reset-window history presence to the history reader", async ({ fixture }) => {
+  const target = { ...fixture.scope, sessionId: "replica-session" };
+  expect(
+    appendTranscriptMessageSync(target, {
+      eventId: "saved",
+      message: { role: "user", content: "Before reset" },
+    }).ok,
+  ).toBe(true);
+  hydrate(fixture);
+  const rowTarget = { path: fixture.database.path, sessionKey: fixture.scope.sessionKey };
+  expect(readSessionActorRowFacts(rowTarget)?.transcriptHasMessages).toBe(true);
+  expect(
+    appendTranscriptEventSync(target, { type: "reset", id: "reset", parentId: "saved" }).ok,
+  ).toBe(true);
+  await waitForSessionTranscriptProjection(target);
+  expect(readSessionTranscriptMessageEvents(target)).toEqual([]);
+  hydrate(fixture);
+  expect(readSessionActorRowFacts(rowTarget)?.transcriptHasMessages).toBeUndefined();
 });
 
 it("retains session entry facts across tool-usage-only commits", ({ fixture }) => {
@@ -810,6 +843,66 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
   });
 });
 
+it("bounds exact row lookups by matching keys while retaining physical store isolation", async () => {
+  await withReplica((fixture) => {
+    const { database, scope } = fixture;
+    const state = hydrate(fixture);
+    const target = sessionActorFileTarget(database, scope.sessionKey);
+    const other = openOpenClawAgentDatabase({ agentId: "other", env: scope.env });
+    const otherTarget = sessionActorFileTarget(other, scope.sessionKey);
+    retainSessionActorEntryFacts(
+      otherTarget.database,
+      [
+        {
+          sessionKey: scope.sessionKey,
+          facts: {
+            entry: entry("other store", 1, "other-session"),
+            snapshots: "full",
+            projection: { hasBoard: true },
+          },
+        },
+      ],
+      readOpenClawAgentDatabaseIdentity(other).incarnation,
+    );
+    retainSessionActorEntryFacts(
+      target.database,
+      Array.from({ length: 80 }, (_, index) => ({
+        sessionKey: `agent:main:unrelated-${index}`,
+        facts: {
+          entry: entry("unrelated", 1, `unrelated-${index}`),
+          snapshots: "full" as const,
+          projection: { hasBoard: false },
+        },
+      })),
+      readOpenClawAgentDatabaseIdentity(database).incarnation,
+    );
+    let visited = 0;
+    const select = replicaReceipts.sessionActorReplicaCellsForPath;
+    using lookup = vi.spyOn(replicaReceipts, "sessionActorReplicaCellsForPath");
+    lookup.mockImplementation(function* (cells, databasePath) {
+      yield* select(
+        (function* () {
+          for (const cell of cells) {
+            visited++;
+            yield cell;
+          }
+        })(),
+        databasePath,
+      );
+    });
+    expect(
+      readSessionActorRowFacts({ path: other.path, sessionKey: scope.sessionKey }),
+    ).toMatchObject({ entry: { sessionId: "other-session" }, hasBoard: true });
+    expect(
+      readSessionActorRowFacts({ path: database.path, sessionKey: scope.sessionKey }),
+    ).toMatchObject({ entry: state.entry, hasBoard: false });
+    expect(
+      readSessionActorRowFacts({ path: database.path, sessionKey: "agent:main:absent" }),
+    ).toBeUndefined();
+    expect(visited).toBeLessThanOrEqual(4);
+  }, "agent:main:bounded-row-lookup");
+});
+
 it("invalidates pending custody for staging, promotion, terminal completion and withdrawal", ({
   fixture,
 }) => {
@@ -878,9 +971,15 @@ it("invalidates pending custody for staging, promotion, terminal completion and 
 
   const withdraw = stage("withdraw");
   hydrate(fixture);
-  mutate({ ...withdraw, kind: "finish", inputId: "withdraw", disposition: "cancelled" });
+  mutate({
+    ...withdraw,
+    kind: "finish",
+    inputId: "withdraw",
+    disposition: "cancelled",
+    endCause: "failed",
+  });
   expect(reloadInvalidated(fixture).pendingInputs).toMatchObject([
-    { input_id: "withdraw", state: "cancelled" },
+    { input_id: "withdraw", state: "cancelled", end_cause: "failed" },
   ]);
 });
 

@@ -121,6 +121,20 @@ pause invocation through successful unpause return and conservatively include
 engine CLI overhead. Command latency includes guest execution and finalization;
 the subsequent correctness read is excluded.
 
+Use `--checkpoint-changed-files 10,100,1000,5000` to rotate changed-set sizes in
+command-checkpoint traces. Each changed file contains `--file-bytes` bytes
+(at least 64 bytes) of deterministic incompressible data, seeded uniquely for
+each process. The seed is printed before execution and included in the report;
+`--checkpoint-seed <seed>` replays the same content for failure diagnosis. Reset
+both arms to the same isolated fixture state for matched seed replays. Unique
+contents keep prior runs' Git objects from hiding object write cost in timing
+comparisons. Every changed file is checked after finalization. Use at least two
+measured turns per process to cover all four sizes, excluding warmup; retain the
+raw `changedFiles`, `pausedDurationMs`, and `maxPauseDurationMs` samples. Compare
+changed-command pause percentiles separately from unchanged commands' zero pauses.
+The synthetic engine seam also supports this trace, but does not measure native
+container or btrfs pause latency.
+
 The native driver acquires the existing reconciliation lease after warmup and
 after the measured burst, then awaits outstanding native removal operations
 observed by its phase instrumentation. This settles cleanup after canonical
@@ -192,8 +206,11 @@ correctness reads and reset. CPU profile duration is elapsed coverage, not CPU
 consumption. Workers created during a window and exited workers are unmeasured;
 missing/failed profile values are null. First-use work may therefore lack worker
 coverage; check the post-import reuse's captured Git worker and hash counters
-before making an allocation claim. This adds no profiler work or awaits to timing
-mode. Main and worker samples have different boundaries and must stay separate.
+before making an allocation claim. Timing mode does not run profilers. The serial
+`--fingerprint-import` workload also reads native worker allocation counters before
+and after each owner call, outside its timing window, so allocation comparisons can
+use the same interleaved arms. Main and worker samples have different boundaries
+and must stay separate; their sum covers only the matched workers, not child processes.
 
 Supplemental `retainedMemory` collection runs after the measured work and, for
 serial preparation, after full correctness validation. It reports main memory after

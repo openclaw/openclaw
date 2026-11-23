@@ -58,6 +58,7 @@ type CiManifestFixtureOptions = {
   nodeTestShards?: Record<string, unknown>[];
   nodeTestGroupsCodec?: boolean;
   bunTestRuntime?: boolean;
+  runtimeJobs?: boolean;
   nativeBunInspection?: {
     report: {
       staleEntries: string[];
@@ -77,6 +78,7 @@ type CiManifestFixtureOptions = {
   publishedDriverUpdateCapability?: boolean;
   changedPaths?: string[] | null;
   checkFamilyScope?: boolean;
+  extensionLintCapability?: boolean;
   checkPlanSource?: string;
   ciLintPlan?: Awaited<ReturnType<typeof createChangedCiLintPlan>>;
   ciTypeGraphNames?: string[];
@@ -111,6 +113,7 @@ type CiManifestFixtureOptions = {
   targetFiles?: string[];
   missingTargetFiles?: string[];
   uiE2eProjectsCapability?: boolean;
+  uiNativeSharding?: boolean;
   uiReleaseTier?: boolean;
   uiTestGroupsSource?: string;
   uiE2eSelectorSource?: string;
@@ -186,7 +189,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       const inspection = options.nativeBunInspection;
       writeScript(
         "ci-test-runtime.mts",
-        `export { resolveCiTestRuntimePolicy } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-test-runtime.mts")).href)};
+        `export { resolveCiTestRuntimePolicy${options.runtimeJobs ? ", ciTestShardRuntimes" : ""} } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-test-runtime.mts")).href)};
         ${options.bunUiTestRuntime ? `import { ciTestShardRequiresBun as currentRuntime } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-test-runtime.mts")).href)};` : ""}
         export const ciTestShardRequiresBun = (shard, policy) =>
           policy !== "node" && (shard.configs?.includes("fixture-bun.config.ts") ||
@@ -332,6 +335,12 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
         "scripts/run-tsgo-core-test-shards.mts",
         "scripts/run-additional-boundary-checks.mts",
       ]);
+    }
+    if (options.extensionLintCapability) {
+      writeScript(
+        "ci-extension-lint-plan.mts",
+        "export async function resolveCiExtensionLintSelection() { return null; }\n",
+      );
     }
     if (options.checkFamilyScope) {
       writeFixture(
@@ -563,6 +572,10 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       ".github/workflows/ci.yml",
       [
         [options.formatCheck, "pnpm format:check\npnpm format:check"],
+        [
+          options.uiNativeSharding === true,
+          `OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ${readCiWorkflow().jobs["checks-ui"].steps.find((step: WorkflowStep) => step.name === "Test Control UI")?.env?.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON ?? ""}`,
+        ],
         [options.androidCiCapabilities, "android-ci-contract-v2"],
         [options.bundledPlanner, "openclawkit-tests-contract-v1"],
         [options.bundledPlanner, "docker-seed-e2e-contract-v1"],

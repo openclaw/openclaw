@@ -16,9 +16,7 @@ describe("command discovery English loading", () => {
     ] as const) {
       expect(getSlashCommandTitle({ key, name: key, description: "" })).toBe(title);
     }
-    expect(manager.t("sessionsView.personalGroupScopeMine")).toBe(
-      "sessionsView.personalGroupScopeMine",
-    );
+    expect(manager.t("sessionsView.searchPlaceholder")).toBe("sessionsView.searchPlaceholder");
   });
 
   it.each([
@@ -49,7 +47,7 @@ describe("command discovery English loading", () => {
   it.each<[key: string, expected: string, load: () => Promise<unknown>]>([
     [
       "sessionsView.transcriptSearchTitle",
-      "Search transcripts",
+      "Search chats",
       () => import("../pages/sessions/view.tsx"),
     ],
     ["chat.commands.menu", "Slash commands", () => import("../lib/chat/commands.ts")],

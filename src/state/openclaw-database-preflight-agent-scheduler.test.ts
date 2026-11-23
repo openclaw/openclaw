@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import * as sqliteInspection from "../infra/sqlite-readonly-worker.js";
 import { preflightAgentDatabasesBounded } from "./openclaw-database-preflight-agent-scheduler.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
@@ -156,7 +157,7 @@ it("keeps deferred inspections alive until the Gateway owner stops", async () =>
   await sqliteInspection.withSqliteReadOnlyWorkerScope(async () => {
     const foreground = f.run(
       async () => {
-        signal = sqliteInspection.resolveSqliteInspectionSignal();
+        signal = resolveSqliteInspectionSignal();
         await f.pending[0]!.promise;
         signal?.throwIfAborted();
       },

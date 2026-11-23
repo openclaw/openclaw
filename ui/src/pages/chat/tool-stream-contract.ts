@@ -49,6 +49,7 @@ export type ToolStreamEntry = {
   exitCode?: number;
   /** True once a result event landed, even when the output text is empty. */
   resultReceived?: boolean;
+  resultTimestamp?: number;
   startedAt: number;
   receivedAt: number;
   /** Live-only placement; durable invocation positions supersede this boundary. */

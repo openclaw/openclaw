@@ -17,11 +17,10 @@ import { runWithToolExecutionValidation } from "./agent-tools.execution-validati
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import type { NativeSubagentRequestSource } from "./plugin-native-subagent.types.js";
 import { preparePluginCommandScheduledTurns } from "./plugin-scheduled-command.js";
-import { matchesSubagentRequesterSession } from "./subagents/registry/subagent-registry-queries.js";
 import { isSubagentRunQueued } from "./subagents/registry/subagent-registry-read.js";
 import {
   getSwarmRunByLaunchReplayKey,
-  listCollectorRunsForRequesterIncarnation,
+  listCollectorRunsForRequester,
   prepareSubagentRunsByRunIds,
   type SubagentRunRecord,
 } from "./subagents/registry/subagent-registry.js";
@@ -106,11 +105,7 @@ export function createRequestNativeSubagentRuntime(
       if (
         !record?.collect ||
         record.childSessionKey !== childSessionKey ||
-        record.requesterSessionKey !== source.options.sessionKey ||
-        !matchesSubagentRequesterSession(record, {
-          sessionId: source.options.sessionId,
-          lifecycleRevision: source.lifecycleRevision,
-        })
+        record.requesterSessionKey !== source.options.sessionKey
       ) {
         return { requested };
       }
@@ -336,13 +331,7 @@ export function createRequestNativeSubagentRuntime(
         );
         assertSpawnCurrent();
         if (existing) {
-          if (
-            !matchesSubagentRequesterSession(existing, {
-              sessionId: source.options.sessionId,
-              lifecycleRevision: source.lifecycleRevision,
-            }) ||
-            existing.swarmLaunchRequestFingerprint !== fingerprint
-          ) {
+          if (existing.swarmLaunchRequestFingerprint !== fingerprint) {
             throw new Error("Native subagent replay does not match the admitted request.");
           }
           if (existing.swarmLaunchPending && !isSubagentRunQueued(existing)) {
@@ -460,11 +449,9 @@ export function createRequestNativeSubagentRuntime(
       if (!isCallableCollectorReader(surface.find((tool) => tool.name === "agents_wait"))) {
         throw new Error("agents_wait is not available to the current requester.");
       }
-      const records = await listCollectorRunsForRequesterIncarnation({
+      const records = await listCollectorRunsForRequester({
         sessionKey: source.options.sessionKey,
         agentId: source.options.agentId,
-        sessionId: source.options.sessionId,
-        lifecycleRevision: source.lifecycleRevision,
       });
       assertPolicyCurrent();
       return records
@@ -513,10 +500,6 @@ export function createRequestNativeSubagentRuntime(
             currentSessionKeys: new Set([source.options.sessionKey]),
             currentAgentId: source.options.agentId,
             config: source.options.config,
-            expectedRequester: {
-              sessionId: source.options.sessionId,
-              lifecycleRevision: source.lifecycleRevision,
-            },
             assertCurrent,
           },
           () =>

@@ -3,6 +3,7 @@ import type { JSX } from "@solidjs/web";
 import {
   createEffect,
   createMemo,
+  createSignal,
   lazy,
   For,
   Match,
@@ -51,6 +52,7 @@ import {
   AssistantAttachments,
   ChatClawHubCard,
   ChatTemplatePluginCards,
+  AutomationCreationCard,
   MessageAttachment,
 } from "./chat-message-deferred.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
@@ -308,8 +310,16 @@ function VideoPreview(props: ContentProps & { item: Accessor<AttachmentItem | un
   const presented = usePanePresentation(
     () => parentPresented() && (props.options.transcriptVisible ?? true),
   );
+  const identity = createMemo(() => props.item()?.attachment.url);
+  const [playing, setPlaying] = createSignal(() => {
+    identity();
+    presented();
+    return false;
+  });
   return (
-    <div class="chat-image-frame chat-video-preview">
+    <div
+      class={["chat-image-frame chat-video-preview", { "chat-video-preview--active": playing() }]}
+    >
       <Show when={props.item()}>
         {(item) => (
           <Show when={presented()}>
@@ -318,7 +328,8 @@ function VideoPreview(props: ContentProps & { item: Accessor<AttachmentItem | un
               options={props.state().imageRenderOptions}
               onOpenSidebar={props.onOpenSidebar}
               onAssistantAttachmentLoaded={props.options.onAssistantAttachmentLoaded}
-              presentation="preview"
+              presentation={playing() ? "inline" : "preview"}
+              onPlay={() => setPlaying(true)}
             />
           </Show>
         )}
@@ -381,6 +392,9 @@ function BubbleContents(props: ContentProps) {
   return (
     <>
       <Show when={props.state().sourceRole === "assistant"}>
+        <Show when={props.state().automationPlan}>
+          {(plan) => <AutomationCreationCard plan={plan()} />}
+        </Show>
         <ChatTemplatePluginCards notices={props.state().templatePluginCards} />
         <For each={props.state().clawHubCards} keyed={(card) => card.id}>
           {(card) => <ChatClawHubCard recommendation={card()} agentId={props.options.agentId} />}

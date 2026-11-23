@@ -318,13 +318,19 @@ describe("push APNs send semantics", () => {
     const readControl = () => {
       throw new Error("approval must not read lifecycle controls");
     };
+    const isCurrent = async () => true;
     Object.defineProperties(approval, {
       signal: { enumerable: true, get: readControl },
-      isCurrent: { enumerable: true, get: readControl },
+      isCurrent: alert
+        ? { enumerable: true, value: isCurrent }
+        : { enumerable: true, get: readControl },
     });
     const result = await invoke(approval);
     const sent = requireSendRequest(fixture.send);
-    expectNoProperties(sent, ["signal", "isCurrent"]);
+    expectNoProperties(sent, alert ? ["signal"] : ["signal", "isCurrent"]);
+    if (alert) {
+      expect(sent.isCurrent).toBe(isCurrent);
+    }
     expect(sent).toMatchObject({ pushType, timeoutMs: MAX_TIMER_TIMEOUT_MS });
     const payload = requirePayload(sent);
     expect(payload.aps).toEqual(
@@ -369,6 +375,36 @@ describe("push APNs send semantics", () => {
     const aps = requireRecord(requirePayload(requireSendRequest(send)).aps, "APNs aps payload");
     expect(requireRecord(aps.alert, "APNs alert").title).toBe("Approval required");
   });
+
+  it.each([sendApnsExecApprovalAlert, sendApnsPluginApprovalAlert])(
+    "rejects stale approval authority on direct and relay sends",
+    async (sendApproval) => {
+      const direct = createDirectApnsSendFixture("ios-node-revoked");
+      mockApnsRelayIdentity();
+      const fetchMock = vi.fn<typeof fetch>();
+      vi.stubGlobal("fetch", fetchMock);
+      const approval = {
+        approvalId: "approval-revoked",
+        gatewayDeviceId: "gateway-device-123",
+        title: "Review plugin action",
+        description: "Synthetic approval",
+        isCurrent: async () => false,
+      };
+      await expect(sendApproval({ ...direct, ...approval })).rejects.toThrow(
+        "APNs send invalidated",
+      );
+      await expect(
+        sendApproval({
+          ...approval,
+          nodeId: "ios-node-revoked",
+          registration: relayRegistration("ios-node-revoked"),
+          relayConfig: { baseUrl: "https://relay.example.test", timeoutMs: 1000 },
+        }),
+      ).rejects.toThrow("APNs send invalidated");
+      expect(direct.send).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["topic", "ownership"])("rejects invalid direct %s before sending", async (invalid) => {
     const fixture = createDirectApnsSendFixture("ios-node-invalid-topic");

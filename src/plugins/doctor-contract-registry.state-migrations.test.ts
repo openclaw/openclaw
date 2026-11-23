@@ -153,6 +153,21 @@ function modernLegacyFixture(source = directDetector) {
 }
 
 describe("doctor-contract-registry state migrations", () => {
+  it("fails with the load cause when the caller cannot defer declared migrations", () => {
+    const root = makeTempDir();
+    fs.writeFileSync(
+      path.join(root, "doctor-contract-api.cjs"),
+      'throw new Error("fixture load failure");\n',
+    );
+    mockDoctorPlugins(
+      pluginRecord(root, { doctorContract: { stateMigrations: [{ id: "alpha-state" }] } }),
+    );
+
+    expect(() => migrationEntries()).toThrow(
+      /Could not load the Doctor migration contract for plugin "alpha": .*fixture load failure/u,
+    );
+  });
+
   it("orders dynamic and declared owners while preserving each owner's action order", async () => {
     const acpxRoot = makeTempDir();
     const codexRoot = makeTempDir();

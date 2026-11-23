@@ -1,11 +1,12 @@
 import type { ResponsesInputItem, StreamEvent } from "./mock-openai-contracts.js";
 import { buildAssistantEvents } from "./mock-openai-events.js";
+import { countCurrentToolOutputs } from "./mock-openai-input.js";
 
 const QA_CRON_ONE_SHOT_RE = /Cron one-shot QA mode=(yield|service|spawn)/;
 const QA_CRON_ONE_SHOT_CHILD_MARKER = "Cron one-shot QA child";
-export const QA_CRON_ONE_SHOT_YIELD_OUTPUT = "QA-ONE-SHOT-YIELD-DONE";
-export const QA_CRON_ONE_SHOT_SERVICE_OUTPUT = "QA-ONE-SHOT-SERVICE-EXIT";
-export const QA_CRON_ONE_SHOT_CHILD_RESULT = "QA-ONE-SHOT-CHILD-RESULT";
+const QA_CRON_ONE_SHOT_YIELD_OUTPUT = "QA-ONE-SHOT-YIELD-DONE";
+const QA_CRON_ONE_SHOT_SERVICE_OUTPUT = "QA-ONE-SHOT-SERVICE-EXIT";
+const QA_CRON_ONE_SHOT_CHILD_RESULT = "QA-ONE-SHOT-CHILD-RESULT";
 
 function inputText(content: unknown): string {
   if (typeof content === "string") {
@@ -38,9 +39,7 @@ export function planCronOneShotTurn(params: {
   if (mode === "yield" && params.prompt.includes(QA_CRON_ONE_SHOT_YIELD_OUTPUT)) {
     return buildAssistantEvents(`QA-ONE-SHOT-YIELD-OK ${QA_CRON_ONE_SHOT_YIELD_OUTPUT}`);
   }
-  const completed = params.input
-    .slice(start + 1)
-    .filter((item) => item.type === "function_call_output").length;
+  const completed = countCurrentToolOutputs(params.input.slice(start + 1));
   if (completed === 0) {
     return mode === "spawn"
       ? params.buildToolCall("sessions_spawn", {

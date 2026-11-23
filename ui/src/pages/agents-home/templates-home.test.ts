@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import "../../lib/toast-host.tsx";
@@ -21,32 +21,51 @@ import { createDetail } from "./templates-catalog.test-helpers.ts";
 beforeEach(setupAgentsHomePageTest);
 afterEach(cleanupAgentsHomePageTest);
 
-describe("Templates discovery", () => {
-  it.each([
-    {
-      names: ["AGENTS.md", "SOUL.md", "USER.md", "notes/context.md"],
-      ordered: ["SOUL.md", "AGENTS.md", "USER.md", "View all"],
-    },
-    { names: ["USER.md", "notes/context.md"], ordered: ["USER.md", "View all"] },
-    { names: ["templates/AGENTS.md", "fixtures/request.json"], ordered: ["View all"] },
-    { names: ["IDENTITY.md"], ordered: ["IDENTITY.md"] },
-  ])(
-    "lists only root agent documents and a View all row for $names",
-    async ({ names, ordered }) => {
-      const { detail } = createDetail({ templatesEnabled: true, workspaceFileNames: names });
-      await vi.waitFor(() => expect(detail.querySelector(".plugin-capabilities")).not.toBeNull());
-      const section = detail.querySelector(".plugin-capabilities")!;
-      const titles = [...section.querySelectorAll(".settings-row__title")].map(
-        (node) => node.textContent,
-      );
-      expect(titles).toEqual(ordered);
-      expect(section.querySelectorAll(".templates-workspace-file__info")).toHaveLength(
-        ordered.filter((name) => name !== "View all").length,
-      );
-    },
-  );
+/** jsdom has no image decoding; tests decide when catalog artwork becomes ready. */
+function stubImageDecode(decode: () => Promise<void>) {
+  const stub = vi.fn(decode);
+  HTMLImageElement.prototype.decode = stub;
+  onTestFinished(() => {
+    Reflect.deleteProperty(HTMLImageElement.prototype, "decode");
+  });
+  return stub;
+}
 
-  it("opens named files and View all in the shared complete-file preview without navigating from help", async () => {
+function openCertifiedShelf() {
+  const fixture = createPage({ templatesEnabled: false });
+  const cards = Array.from({ length: 6 }, (_, index) => ({
+    ...workflowOperator,
+    packageName: `@openclaw/card-${index + 1}`,
+    displayName: `Card ${index + 1}`,
+    iconUrl: `https://clawhub.ai/api/v1/skill-icons/${String(index + 1).repeat(64)}`,
+  }));
+  const original = fixture.request.getMockImplementation()!;
+  fixture.request.mockImplementation((method, params, options) =>
+    method === "templates.catalog.search" &&
+    params &&
+    typeof params === "object" &&
+    "overview" in params
+      ? {
+          entries: [],
+          overview: {
+            featured: [],
+            sections: [
+              {
+                category: "productivity",
+                entries: cards.slice(0, 4),
+                additionalEntries: [...cards.slice(4), { ...workflowOperator, channel: "private" }],
+              },
+            ],
+          },
+        }
+      : original(method, params, options),
+  );
+  fixture.setTemplatesEnabled(true);
+  return fixture;
+}
+
+describe("Templates discovery", () => {
+  it("opens the complete workspace inventory from Personality and reads the selected file", async () => {
     const names = [
       "AGENTS.md",
       "SOUL.md",
@@ -59,14 +78,9 @@ describe("Templates discovery", () => {
     ];
     const { detail, request } = createDetail({ templatesEnabled: true, workspaceFileNames: names });
     await vi.waitFor(() =>
-      expect(detail.querySelector(".templates-workspace-file__info")).not.toBeNull(),
+      expect(detail.querySelector(".templates-personality__file")?.textContent).toBe("SOUL.md"),
     );
-    const section = detail.querySelector(".plugin-capabilities")!;
-    section.querySelector<HTMLButtonElement>(".templates-workspace-file__info")!.click();
-    expect(
-      request.mock.calls.filter(([method]) => method === "templates.catalog.preview"),
-    ).toHaveLength(0);
-    section.querySelector<HTMLButtonElement>(".templates-workspace-file__open")!.click();
+    detail.querySelector<HTMLButtonElement>(".templates-personality__file")!.click();
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith(
         "templates.catalog.preview",
@@ -75,21 +89,8 @@ describe("Templates discovery", () => {
     );
     const preview = detail.querySelector("openclaw-file-preview-modal")!;
     expect(preview.files.map((file) => file.path)).toEqual(names);
-    expect(section.querySelectorAll(".templates-workspace-file__open")).toHaveLength(5);
-    preview.dispatchEvent(new CustomEvent("file-preview-close", { bubbles: true }));
-    await waitForSolid(() =>
-      expect(detail.querySelector("openclaw-file-preview-modal")).toBeNull(),
-    );
-    [...section.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent === "View all")!
-      .click();
-    await waitForSolid(() =>
-      expect(detail.querySelector("openclaw-file-preview-modal")).not.toBeNull(),
-    );
-    const allFilesPreview = detail.querySelector("openclaw-file-preview-modal")!;
-    expect(allFilesPreview.files.map((file) => file.path)).toEqual(names);
-    for (const name of names) {
-      allFilesPreview.dispatchEvent(
+    for (const name of names.filter((fileName) => fileName !== "SOUL.md")) {
+      preview.dispatchEvent(
         new CustomEvent("file-preview-select", { detail: name, bubbles: true }),
       );
       await vi.waitFor(() =>
@@ -104,11 +105,11 @@ describe("Templates discovery", () => {
   it("releases a closed preview before transport settles and isolates its replacement", async () => {
     const { detail, request } = createDetail({ templatesEnabled: true });
     await waitForSolid(() =>
-      expect(detail.querySelector(".templates-workspace-file__open")).not.toBeNull(),
+      expect(detail.querySelector(".templates-personality__file")).not.toBeNull(),
     );
     const retired = createDeferredCore<unknown>();
     request.mockReturnValueOnce(retired.promise);
-    detail.querySelector<HTMLButtonElement>(".templates-workspace-file__open")!.click();
+    detail.querySelector<HTMLButtonElement>(".templates-personality__file")!.click();
     await waitForSolid(() =>
       expect(detail.querySelector("openclaw-file-preview-modal")).not.toBeNull(),
     );
@@ -123,7 +124,7 @@ describe("Templates discovery", () => {
 
     const replacement = createDeferredCore<unknown>();
     request.mockReturnValueOnce(replacement.promise);
-    detail.querySelector<HTMLButtonElement>(".templates-workspace-file__open")!.click();
+    detail.querySelector<HTMLButtonElement>(".templates-personality__file")!.click();
     await waitForSolid(() =>
       expect(
         detail.querySelector("openclaw-file-preview-modal .body")?.getAttribute("aria-busy"),
@@ -144,7 +145,7 @@ describe("Templates discovery", () => {
     "/templates",
     "/templates/workflow-operator",
     "/templates/packages/%40openclaw%2Fworkflow-operator",
-  ])("rejects direct visits to %s while Labs is disabled", async (pathname) => {
+  ])("rejects direct visits to %s while Templates is explicitly disabled", async (pathname) => {
     const { context, page, request, ensureConfigLoaded } = createPage({ pathname });
     const location = { pathname, search: "", hash: "" };
     const result = await templatesRoute.loader!(
@@ -159,7 +160,7 @@ describe("Templates discovery", () => {
     expect(request.mock.calls.some(([method]) => method.startsWith("templates."))).toBe(false);
   });
 
-  it("removes discovery when the Labs toggle is disabled during a visit", async () => {
+  it("removes discovery when Templates is disabled during a visit", async () => {
     const { page, setTemplatesEnabled } = createPage({ templatesEnabled: true });
     await vi.waitFor(() => expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1));
     setTemplatesEnabled(false);
@@ -171,6 +172,11 @@ describe("Templates discovery", () => {
     const { page, navigate, request } = createPage({ templatesEnabled: true });
     await vi.waitFor(() => expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1));
     expect(page.querySelector(".hub-page-header h1.page-title")?.textContent).toBe("Templates");
+    const subtitle = page.querySelector(".hub-page-header .page-subtitle");
+    expect(subtitle?.textContent).toBe("Ready-made Claws that get the job done Learn more");
+    expect(subtitle?.querySelector("a")?.getAttribute("href")).toBe(
+      "https://docs.openclaw.ai/concepts/agents-and-templates",
+    );
     expect(page.querySelector(".settings-page [data-templates-search]")).not.toBeNull();
     expect(page.querySelector(".settings-page .hub-page-header")).toBeNull();
     expect(page.querySelector(".agents-home__card")).toBeNull();
@@ -184,8 +190,125 @@ describe("Templates discovery", () => {
     });
     expect(request).toHaveBeenCalledWith("templates.catalog.search", {
       overview: true,
-      limit: 8,
+      includeCategoryEntries: true,
+      limit: 4,
     });
+  });
+
+  it("shows the full category without preloading decorative artwork a second time", async () => {
+    const decode = stubImageDecode(async () => {});
+    const { page, request } = createPage({
+      templatesEnabled: true,
+      templateIconUrl: `https://clawhub.ai/api/v1/skill-icons/${"e".repeat(64)}`,
+    });
+    const shelf = '[data-catalog-section="productivity"]';
+    await waitForSolid(() => expect(page.querySelector(shelf)).not.toBeNull());
+    expect(decode).toHaveBeenCalledOnce();
+    page.querySelector<HTMLButtonElement>(shelf + " .plugin-catalog-section__view-all")!.click();
+    await waitForSolid(() =>
+      expect(page.querySelector(shelf + " [data-templates-results] img")).not.toBeNull(),
+    );
+    expect(request).toHaveBeenCalledWith("templates.catalog.search", { category: "productivity" });
+    expect(decode).toHaveBeenCalledOnce();
+  });
+
+  it("expands the four visible cards to the complete public shelf without another request or artwork wait", async () => {
+    const decode = stubImageDecode(async () => {});
+    const { page, request } = openCertifiedShelf();
+    const names = () =>
+      [...page.querySelectorAll("[data-templates-entry] h3")].map((node) => node.textContent);
+    await waitForSolid(() => expect(names()).toEqual(["Card 1", "Card 2", "Card 3", "Card 4"]));
+    expect(
+      request.mock.calls.filter(([method]) => method === "templates.catalog.search"),
+    ).toHaveLength(1);
+    expect(decode).toHaveBeenCalledTimes(4);
+    request.mockClear();
+    page.querySelector<HTMLButtonElement>(".plugin-catalog-section__view-all")!.click();
+    flush();
+    expect(page.querySelector("[data-templates-placeholder]")).toBeNull();
+    expect(names()).toEqual(["Card 1", "Card 2", "Card 3", "Card 4", "Card 5", "Card 6"]);
+    expect(page.querySelector("[data-templates-results]")).not.toBeNull();
+    expect(request).not.toHaveBeenCalled();
+    expect(decode).toHaveBeenCalledTimes(4);
+    expect(page.querySelector('.plugin-catalog-chip[aria-pressed="true"]')?.textContent).toBe(
+      "Productivity",
+    );
+
+    const search = page.querySelector<HTMLInputElement>("[data-templates-search]")!;
+    search.value = "workflow";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await waitForSolid(() => expect(names()).toEqual(["Workflow Operator"]));
+    expect(request).toHaveBeenCalledWith("templates.catalog.search", {
+      query: "workflow",
+      category: "productivity",
+    });
+  });
+
+  it.each(["expired shelf", "retired connection", "superseded shelf", "category chip"])(
+    "reads the selected category from the Gateway: %s",
+    async (selection) => {
+      stubImageDecode(async () => {});
+      const { page, request, setPhase } = openCertifiedShelf();
+      await waitForSolid(() =>
+        expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(4),
+      );
+      const viewAll = page.querySelector<HTMLButtonElement>(".plugin-catalog-section__view-all")!;
+      const clickChip = (label: string) =>
+        [...page.querySelectorAll<HTMLButtonElement>(".plugin-catalog-chip")]
+          .find((chip) => chip.textContent === label)!
+          .click();
+      if (selection === "expired shelf") {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(Date.now() + 60_000);
+      } else if (selection === "retired connection") {
+        // The old row can still receive a click before Solid flushes the new connection.
+        setPhase("reconnecting");
+        setPhase("connected");
+      } else if (selection === "superseded shelf") {
+        clickChip("Health");
+      }
+      if (selection === "category chip") {
+        clickChip("Productivity");
+      } else {
+        viewAll.click();
+      }
+      await waitForSolid(() =>
+        expect(page.querySelector("[data-templates-results] h3")?.textContent).toBe(
+          "Workflow Operator",
+        ),
+      );
+      expect(request).toHaveBeenCalledWith("templates.catalog.search", {
+        category: "productivity",
+      });
+      expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1);
+    },
+  );
+
+  it("lists the category chips in catalog order and filters by the selected slug", async () => {
+    const { page, request } = createPage({ templatesEnabled: true });
+    await vi.waitFor(() => expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1));
+
+    const chips = [...page.querySelectorAll<HTMLButtonElement>(".plugin-catalog-chip")];
+    expect(chips.map((chip) => chip.textContent)).toEqual([
+      "All",
+      "Engineering",
+      "Operations",
+      "Household",
+      "Entertainment",
+      "Travel",
+      "Productivity",
+      "Research",
+      "Health",
+      "Sales",
+      "Product",
+      "Other",
+    ]);
+    expect(chips.every((chip) => chip.querySelector("svg"))).toBe(true);
+
+    chips.find((chip) => chip.textContent === "Household")?.click();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("templates.catalog.search", { category: "household" }),
+    );
   });
 
   it("updates Explore results when the search changes", async () => {
@@ -344,16 +467,15 @@ describe("Templates discovery", () => {
         packageName: workflowOperator.packageName,
         version: workflowOperator.latestVersion,
       };
-      expect(request).toHaveBeenCalledWith("templates.add.plan", { source });
-
       expect(request.mock.calls.some(([method]) => method === "templates.add.apply")).toBe(false);
       detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")?.click();
       await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith("chat", expect.anything()));
       expect(request).toHaveBeenCalledWith(
         "templates.add.apply",
-        expect.objectContaining({ source }),
+        { mode: "chat", source, agentId: "workflow-operator" },
         expect.objectContaining({ onSent: expect.any(Function) }),
       );
+      expect(request.mock.calls.some(([method]) => method === "templates.add.plan")).toBe(false);
     },
   );
 
@@ -455,7 +577,7 @@ describe("Templates discovery", () => {
     await waitForSolid(() =>
       expect(request).toHaveBeenCalledWith("templates.catalog.search", {
         category: "productivity",
-        limit: 8,
+        limit: 4,
       }),
     );
     await waitForSolid(() =>
@@ -575,21 +697,83 @@ describe("Templates discovery", () => {
 });
 
 it.each(["card", "detail"])(
-  "shows Template artwork and falls back on an image error in the %s",
+  "shows Template artwork and falls back to the Blobster in the %s",
   async (surface) => {
     const templateIconUrl = `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`;
-    const options = { templateIconUrl, templatesEnabled: true };
-    const container = surface === "card" ? createPage(options).page : createDetail(options).detail;
+    stubImageDecode(() => Promise.resolve());
+    const create = (iconUrl?: string) => {
+      const options = { templateIconUrl: iconUrl, templatesEnabled: true };
+      return surface === "card" ? createPage(options).page : createDetail(options).detail;
+    };
     const selector =
       surface === "card" ? ".agents-home__template-art" : ".plugin-catalog-detail__icon";
+    const blobster = `${selector} svg[stroke="currentColor"]`;
+    const blobsterEyes = `${blobster} circle[fill="currentColor"]`;
+    const withoutArtwork = create();
+    await waitForSolid(() => expect(withoutArtwork.querySelectorAll(blobsterEyes)).toHaveLength(2));
+    expect(withoutArtwork.querySelector(`${selector} img`)).toBeNull();
+    const fallback = withoutArtwork.querySelector<SVGSVGElement>(blobster)!;
+    expect(fallback.style.strokeWidth).toBe("1.55px");
+    expect(fallback.style.color).toBe("rgb(156, 111, 62)");
+
+    const container = create(templateIconUrl);
     await waitForSolid(() =>
       expect(container.querySelector(`${selector} img`)?.getAttribute("src")).toBe(templateIconUrl),
     );
     const image = container.querySelector(`${selector} img`)!;
     expect(image.getAttribute("referrerpolicy")).toBe("no-referrer");
     expect(image.getAttribute("crossorigin")).toBe("anonymous");
+    expect(container.querySelector(blobster)).toBeNull();
     image.dispatchEvent(new Event("error"));
     await waitForSolid(() => expect(container.querySelector(`${selector} img`)).toBeNull());
-    expect(container.querySelector(`${selector} svg`)).not.toBeNull();
+    expect(container.querySelectorAll(blobsterEyes)).toHaveLength(2);
+    const failedFallback = container.querySelector<SVGSVGElement>(blobster)!;
+    expect(failedFallback.style.strokeWidth).toBe(fallback.style.strokeWidth);
+    expect(failedFallback.style.color).toBe(fallback.style.color);
   },
 );
+
+it.each(["decoded", "failed"] as const)(
+  "keeps the catalog placeholders until first-screen artwork has %s",
+  async (outcome) => {
+    const templateIconUrl = `https://clawhub.ai/api/v1/skill-icons/${"b".repeat(64)}`;
+    const artwork = createDeferredCore();
+    const decode = stubImageDecode(() => artwork.promise);
+    const { page } = createPage({ templateIconUrl, templatesEnabled: true });
+    await waitForSolid(() => expect(decode).toHaveBeenCalledOnce());
+    const preloaded = decode.mock.contexts[0] as HTMLImageElement;
+    // The preload must share the card image's request mode to reuse its response.
+    expect(preloaded.src).toBe(templateIconUrl);
+    expect(preloaded.crossOrigin).toBe("anonymous");
+    expect(preloaded.referrerPolicy).toBe("no-referrer");
+    await nextTurn();
+    expect(page.querySelector("[data-templates-entry]")).toBeNull();
+    expect(page.querySelectorAll("[data-templates-placeholder]")).not.toHaveLength(0);
+
+    if (outcome === "decoded") {
+      artwork.resolve();
+    } else {
+      artwork.reject(new Error("decode failed"));
+    }
+    await waitForSolid(() => expect(page.querySelector("[data-templates-entry]")).not.toBeNull());
+    expect(page.querySelector("[data-templates-placeholder]")).toBeNull();
+    expect(page.querySelector(".agents-home__template-art img")?.getAttribute("src")).toBe(
+      templateIconUrl,
+    );
+  },
+);
+
+it("stops waiting for slow artwork after the reveal budget", async () => {
+  vi.useFakeTimers();
+  try {
+    const templateIconUrl = `https://clawhub.ai/api/v1/skill-icons/${"c".repeat(64)}`;
+    stubImageDecode(() => new Promise<void>(() => {}));
+    const { page } = createPage({ templateIconUrl, templatesEnabled: true });
+    await vi.advanceTimersByTimeAsync(499);
+    expect(page.querySelector("[data-templates-entry]")).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    await waitForSolid(() => expect(page.querySelector("[data-templates-entry]")).not.toBeNull());
+  } finally {
+    vi.useRealTimers();
+  }
+});

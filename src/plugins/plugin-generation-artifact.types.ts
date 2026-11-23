@@ -9,6 +9,10 @@ export type PluginGenerationArtifact = {
   boundaryRoot: string;
   sourceAliases: Record<string, string>;
   sourceDigest: string;
+  executionAliases: ReadonlyMap<string, string>;
+  executionSources: ReadonlyMap<string, string>;
+  executionAlias: (filename: string) => string | undefined;
+  sourceText: (filename: string) => string | undefined;
   sourceSnapshotFacts?: PluginSourceSnapshotFacts;
   frozenSource?: true;
   assertFrozenModule?: (filename: string) => void;
@@ -17,6 +21,8 @@ export type PluginGenerationArtifact = {
   hasSource: (source: string) => boolean;
   resolve: (source: string, rejectHardlinks?: boolean) => string;
   captureRecoverySource: () => PluginSourceCustodyFork["source"];
+  /** Nonblocking copy through the same capture owner; custody and forks stay synchronous. */
+  captureRecoverySourceAsync?: () => Promise<PluginSourceCustodyFork["source"]>;
   retainSourceCustody: () => PluginSourceCustodyFork;
   sourceForCaptured: (file: string) => string | undefined;
   moduleFacts: (importer: string) => Readonly<PluginModuleCapture> | undefined;

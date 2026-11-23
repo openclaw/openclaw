@@ -1,9 +1,9 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { resolveWorkspaceIconSource } from "../../../components/workspace-icon-source.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { createSessionContext } from "../chat-application-context.test-support.ts";
-import { resolveChatPaneWorkspaceIcon } from "../chat-pane-header-identity.ts";
 import { mountChatPaneHeader, mockWorkspaceIconFetch } from "./chat-pane-header.test-support.ts";
 import type { ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 
@@ -145,8 +145,9 @@ describe("chat pane workspace chip icon", () => {
     };
     publishConnection("initial-connection");
     const iconProps = () =>
-      resolveChatPaneWorkspaceIcon({
-        sessionKey: "agent:main:connection",
+      resolveWorkspaceIconSource({
+        route: "workspaceIcon",
+        value: "agent:main:connection",
         resourceBasePath: context.resourceBasePath,
         hello: context.gateway.snapshot.hello,
         token: context.gateway.connection.token,
