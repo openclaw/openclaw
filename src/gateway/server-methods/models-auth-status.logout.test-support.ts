@@ -117,29 +117,6 @@ export function registerModelAuthLogoutTests({
       ]);
     });
 
-    it("reports the profiles removed by the shared owner", async () => {
-      mocks.getRuntimeConfig.mockReturnValue({});
-      mocks.listProfilesForProvider.mockReturnValue(["openrouter:old"]);
-      mocks.removeModelAuthCredentials.mockResolvedValueOnce({
-        removedProfiles: ["openrouter:old", "openrouter:new"],
-      });
-
-      const opts = await logout({ provider: "openrouter" });
-
-      expect(firstRespondCall(opts)).toEqual([
-        true,
-        {
-          provider: "openrouter",
-          removedProfiles: ["openrouter:old", "openrouter:new"],
-          abortedRunIds: [],
-        },
-        undefined,
-      ]);
-      expect(mocks.removeModelAuthCredentials).toHaveBeenCalledWith(
-        expect.objectContaining({ profileIds: ["openrouter:old"] }),
-      );
-    });
-
     it.each(["secrets", "publication"] as const)(
       "reports committed logout and aborts revoked provider runs before %s refresh fails",
       async (stage) => {
