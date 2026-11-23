@@ -62,6 +62,12 @@ async function mountHistory(
   return { ...view, update };
 }
 
+async function expectNoFurtherPolls(request: ReturnType<typeof vi.fn>) {
+  const calls = request.mock.calls.length;
+  await tick(POLL_MS * 3);
+  expect(request.mock.calls.length).toBe(calls);
+}
+
 const stream = (container: Element) =>
   container.querySelector<HTMLElement>('[data-test-id="cron-live-output-stream"]');
 
@@ -96,9 +102,7 @@ it("follows a running command job by cursor and hands off when the run stops", a
   // The job's cleared runtime state retires the panel; the recorded run is the only copy.
   view.update(runningJob({ state: {} }));
   expect(view.container.querySelector('[data-test-id="cron-live-output"]')).toBeNull();
-  const calls = request.mock.calls.length;
-  await tick(POLL_MS * 3);
-  expect(request.mock.calls.length).toBe(calls);
+  await expectNoFurtherPolls(request);
 });
 
 it("only shows for a running command job", async () => {
@@ -142,11 +146,9 @@ it("stops polling and explains the handoff once the Gateway reports no live run"
   const view = await mountHistory(gateway);
   await tick(0);
   await tick();
-  const calls = request.mock.calls.length;
   expect(view.container.textContent).toContain("The run is finishing.");
   expect(stream(view.container)?.textContent).toBe("x\n");
-  await tick(POLL_MS * 3);
-  expect(request.mock.calls.length).toBe(calls);
+  await expectNoFurtherPolls(request);
 });
 
 it("keeps polling while the command has not started and follows once it does", async () => {

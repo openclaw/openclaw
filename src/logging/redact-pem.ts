@@ -132,12 +132,12 @@ function consumeDelimiter(
   return block;
 }
 
+function copyState(state: PemState): PemState {
+  return { ...state, scanner: { ...state.scanner }, open: state.open && { ...state.open } };
+}
+
 function* matchPem(text: string, context: PemState, incomplete: boolean): Iterable<RedactMatch> {
-  const state: PemState = {
-    ...context,
-    scanner: { ...context.scanner },
-    open: context.open && { ...context.open },
-  };
+  const state = copyState(context);
   const origin = state.scanner.offset;
   for (const delimiter of readDelimiters(text, state.scanner)) {
     const block = consumeDelimiter(state, delimiter);
@@ -185,12 +185,7 @@ function trackPemBlocks(state: PemState): PemBlockTracker {
         consumeDelimiter(state, delimiter);
       }
     },
-    clone: () =>
-      trackPemBlocks({
-        ...state,
-        scanner: { ...state.scanner },
-        open: state.open && { ...state.open },
-      }),
+    clone: () => trackPemBlocks(copyState(state)),
     pattern: {
       source: PEM_REDACT_PATTERN_SOURCE,
       exec: (text) => matchPem(text, state, true),

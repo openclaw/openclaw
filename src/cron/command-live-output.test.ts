@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { beginCronCommandLiveOutput, readCronCommandLiveOutput } from "./command-live-output.js";
 import { runCronCommandJob } from "./command-runner.js";
 import { cronTestJob } from "./service.fixture-builders.test-support.js";
@@ -185,6 +185,7 @@ describe("runCronCommandJob live output", () => {
       payload: { kind: "command", argv: [process.execPath, "-e", script], ...extra },
       state: { runningAtMs: 4242 },
     });
+  const liveText = () => readCronCommandLiveOutput("live-job").text;
 
   it("exposes output while running and discards it when the command finishes", async () => {
     const run = runCronCommandJob({
@@ -192,15 +193,13 @@ describe("runCronCommandJob live output", () => {
         "console.log('first'); console.error('warn'); setTimeout(() => console.log('second'), 400);",
       ),
     });
-    let seen = "";
-    for (let i = 0; i < 100 && !seen.includes("warn"); i += 1) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 50);
-      });
-      seen = readCronCommandLiveOutput("live-job").text;
-    }
-    expect(seen).toContain("first");
-    expect(seen).toContain("warn");
+    await vi.waitFor(
+      () => {
+        expect(liveText()).toContain("first");
+        expect(liveText()).toContain("warn");
+      },
+      { timeout: 5000 },
+    );
     expect(readCronCommandLiveOutput("live-job").runAtMs).toBe(4242);
     const result = await run;
     expect(result.status).toBe("ok");
@@ -215,11 +214,7 @@ describe("runCronCommandJob live output", () => {
 
     const controller = new AbortController();
     const aborted = runCronCommandJob({ job: job(slow), abortSignal: controller.signal });
-    for (let i = 0; i < 100 && !readCronCommandLiveOutput("live-job").text; i += 1) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 50);
-      });
-    }
+    await vi.waitFor(() => expect(liveText()).not.toBe(""), { timeout: 5000 });
     controller.abort();
     expect((await aborted).status).toBe("error");
     expect(readCronCommandLiveOutput("live-job").active).toBe(false);

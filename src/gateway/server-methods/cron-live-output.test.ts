@@ -64,19 +64,13 @@ describe("cron.liveOutput", () => {
     );
   });
 
-  it("rejects malformed params and unknown fields", async () => {
-    const bad = await invokeCron(
+  it.each([{ cursor: -1 }, { limit: 1 }])("rejects malformed params %j", async (extra) => {
+    const { respond } = await invokeCron(
       "cron.liveOutput",
-      { id: "live-job", cursor: -1 },
+      { id: "live-job", ...extra },
       { currentJob: job },
     );
-    expectResponseError(bad.respond, { code: "INVALID_REQUEST" });
-    const extra = await invokeCron(
-      "cron.liveOutput",
-      { id: "live-job", limit: 1 },
-      { currentJob: job },
-    );
-    expectResponseError(extra.respond, { code: "INVALID_REQUEST" });
+    expectResponseError(respond, { code: "INVALID_REQUEST" });
   });
 
   it("does not disclose output for a job the caller cannot see", async () => {
