@@ -160,13 +160,14 @@ export async function runPostActivationInspections(params: {
     const warnings = report.doctorLintFindings
       .filter((finding) => finding.severity !== "info")
       .map((finding) => `${finding.checkId}: ${finding.message}`);
-    if (warnings.length > 0) {
-      step.warnings = warnings;
-    }
-    if (warnings.length > 0) {
+    step.warnings = warnings;
+    if (report.doctorLintFindings.length > 0) {
       step.advisory = {
         kind: "recoverable-maintenance",
-        message: `Doctor inspections reported ${warnings.length} advisory finding${warnings.length === 1 ? "" : "s"} after restart. Run \`openclaw doctor --lint --all --severity-min info\` to inspect them.`,
+        message:
+          warnings.length > 0
+            ? `Doctor inspections reported ${warnings.length} advisory finding${warnings.length === 1 ? "" : "s"} after restart. Run \`openclaw doctor --lint --all --severity-min info\` to inspect them.`
+            : "Doctor inspections completed with informational findings.",
       };
     }
     return { ...params.result, steps: [...params.result.steps, step] };

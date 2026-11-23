@@ -52,9 +52,9 @@ it.each(["none", "info", "warning"] as const)(
     const observed = await inspectFixture(
       "doctor-advisory-retry-",
       `process.stdout.write(JSON.stringify({
-      ok: ${severity !== "warning"}, checksRun: 1,
+      ok: ${severity === "none"}, checksRun: 1,
       findings: ${severity === "none" ? "[]" : `[{ checkId: "core/doctor/hooks-model", severity: ${JSON.stringify(severity)}, message: "Review hooks.", target: ${JSON.stringify(target)} }]`}
-    })); process.exitCode = ${severity === "warning" ? 1 : 0};`,
+    })); process.exitCode = ${severity === "none" ? 0 : 1};`,
       ["core/doctor/hooks-model"],
       { steps: [] },
       ["core/doctor/hooks-model"],
@@ -72,8 +72,13 @@ it.each(["none", "info", "warning"] as const)(
         "openclaw doctor --lint --all --severity-min info",
       );
     } else {
-      expect(observed.steps.at(-1)?.advisory).toBeUndefined();
-      expect(observed.steps.at(-1)?.warnings).toBeUndefined();
+      expect(observed.steps.at(-1)?.warnings).toEqual([]);
+      const projected = updateRunReportInputFromResult(observed);
+      expect(projected.steps).not.toContainEqual(expect.objectContaining({ status: "failed" }));
+      expect(projected.steps).not.toContainEqual(
+        expect.objectContaining({ step: expect.stringMatching(/^warning:/) }),
+      );
+      expect(renderUpdateRunReport(projected).headline).not.toContain("attention");
     }
   },
 );
