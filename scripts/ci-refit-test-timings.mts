@@ -106,6 +106,7 @@ async function main() {
     ? ["--allow-escape-sequences"]
     : [];
   const runs: CiTimingRun[] = [];
+  const packedReleaseRunIds = new Set<number>();
   const seenRuns = new Map<number, string>();
   const seenJobs = new Map<number, string>();
   type TimingSource = "main" | "release" | "pull-request" | "tooling" | "packed-release";
@@ -183,9 +184,11 @@ async function main() {
             );
           const kind =
             source === "packed-release"
-              ? job.name.startsWith("checks-node-release-packed-")
-                ? "release-packed"
-                : undefined
+              ? compactJob
+                ? "compact"
+                : job.name.startsWith("checks-node-release-packed-")
+                  ? "release-packed"
+                  : undefined
               : source === "release"
                 ? /(?:^| \/ )Repo E2E \(Gateway \d+\/\d+\)$/u.test(job.name)
                   ? "repoE2e"
@@ -357,6 +360,9 @@ async function main() {
               : contributingRunIds.repoE2e.length > 0;
         if (contributes) {
           runs.push(timingRun);
+          if (source === "packed-release") {
+            packedReleaseRunIds.add(run.id);
+          }
         }
         if (source === "release" || contributes) {
           sampled += 1;
@@ -456,11 +462,6 @@ async function main() {
   const { blacksmith, github, boat, toolingBlacksmith, toolingGithub, toolingBoat } =
     contributingRunIds;
   const prRunIds = new Set(runs.filter((run) => run.pullRequestMergeRef).map((run) => run.id));
-  const packedReleaseRunIds = new Set(
-    runs
-      .filter((run) => run.logs.some((log) => log.kind === "release-packed"))
-      .map((run) => run.id),
-  );
   const mainBlacksmith = blacksmith.filter(
     (id) => !prRunIds.has(id) && !packedReleaseRunIds.has(id),
   );

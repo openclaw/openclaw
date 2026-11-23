@@ -52,7 +52,7 @@ import {
 } from "../../../talk/client-voice-session.js";
 import { abortChatRunById } from "../../chat-abort.js";
 import { transferGatewayLocalUserIngress } from "../../local-user-ingress.js";
-import { captureGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
 import { transferGatewayOperatorSourceIdentity } from "../../operator-run-source-retention.js";
 import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
 import { handleTrustedInternalChatSend } from "../../server-methods/chat-send-handler.js";
@@ -664,7 +664,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const captured = await captureGatewayOperatorRunAuthority({
+      const captured = await prepareGatewayOperatorRunAuthority({
         client: client ?? null,
         context,
         hasCurrentClientAuthority,

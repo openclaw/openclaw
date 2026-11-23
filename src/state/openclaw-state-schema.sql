@@ -410,6 +410,7 @@ CREATE TABLE IF NOT EXISTS operator_approvals (
   resolver_id TEXT,
   consumed_at_ms INTEGER,
   consumed_by TEXT,
+  requested_by_profile_id TEXT,
   CHECK (expires_at_ms >= created_at_ms),
   CHECK (updated_at_ms >= created_at_ms),
   CHECK (resolved_at_ms IS NULL OR resolved_at_ms >= created_at_ms),

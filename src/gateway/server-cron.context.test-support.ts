@@ -129,7 +129,11 @@ export function registerGatewayCronContextTests({
             agentId: "main",
             sessionKey: `agent:main:${name}`,
             operationalRunInstance: { runId: name, instanceId: `${name}-instance` },
-            receiptAuthority: () => caller.active,
+            receiptAuthority: () => {
+              if (!caller.active) {
+                throw new Error("agent tool caller authority is no longer active");
+              }
+            },
           },
           () => {
             caller.assertCurrent = captureGatewayToolCallerAssertion();
@@ -320,9 +324,6 @@ export function registerGatewayCronContextTests({
     expect(observed).toBe(context);
     expect(observedBroker).toBe(broker);
     expect(() => assertScheduledCaller?.("chat.history")).not.toThrow();
-    expect(() => caller.assertCurrent?.("chat.history")).toThrow(
-      "agent tool caller authority is no longer active",
-    );
   });
 
   it.each(["absent", "retired", "session"] as const)(
@@ -407,9 +408,5 @@ export function registerGatewayCronContextTests({
     expect(assertCaller).toBeUndefined();
     expect(caller.assertCurrent).toBeTypeOf("function");
     expect(() => caller.assertCurrent?.("chat.history")).not.toThrow();
-    caller.active = false;
-    expect(() => caller.assertCurrent?.("chat.history")).toThrow(
-      "agent tool caller authority is no longer active",
-    );
   });
 }

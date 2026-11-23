@@ -194,15 +194,7 @@ export function openEngineStore(ref: {
       // Exact current schema admission reads the existing seal/catalog only. The
       // PostgreSQL session also enforces READ ONLY, including accidental writes.
       db.runTransaction(() => admit(false), undefined, true);
-      publishSqliteDatabaseAdmission(anchor, admissionKey, {
-        engine: "postgres",
-        ...identity,
-        version: schema.version,
-      });
-      publishSearch?.();
-      return db;
-    }
-    if (!known || (known.engine === "postgres" && known.version !== schema.version)) {
+    } else if (!known || (known.engine === "postgres" && known.version !== schema.version)) {
       admitPostgresCapabilities(db);
       // Bootstrap borrows opening custody; ordinary writes still require domain admission.
       // Existing-only forbids creation; an unsealed port still needs writable schema admission.
@@ -280,6 +272,7 @@ export function openEngineStore(ref: {
           admit(!meta);
         },
         {
+          maintenance: true,
           withCommit(commit) {
             assertMigrationCurrent?.();
             migration?.beforeCommit();
@@ -292,7 +285,7 @@ export function openEngineStore(ref: {
     } else {
       admit(false);
     }
-    if (!known || (known.engine === "postgres" && known.version !== schema.version)) {
+    if (readOnly || !known || (known.engine === "postgres" && known.version !== schema.version)) {
       publishSqliteDatabaseAdmission(anchor, admissionKey, {
         engine: "postgres",
         ...identity,

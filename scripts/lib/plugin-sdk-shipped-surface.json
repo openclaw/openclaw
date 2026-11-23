@@ -1,5 +1,5 @@
 {
-  "commit": "e13cf15ece9bbd969b7362927c315362c90c97ff",
+  "commit": "e31bbf056de321127988ec5c1a36ff1b59297de0",
   "entrypoints": {
     "account-core": [
       "DEFAULT_ACCOUNT_ID",
@@ -3268,6 +3268,7 @@
       "getReplyFromConfig",
       "isAbortRequestText",
       "isBtwRequestText",
+      "isReplySessionInitConflictError",
       "isSilentReplyText",
       "normalizeGroupActivation",
       "parseActivationCommand",
@@ -4103,6 +4104,6 @@
       "isCompleteHtmlDocument"
     ]
   },
-  "release": "v2026.11.5",
+  "release": "v2026.11.7",
   "schema": "openclaw.plugin-sdk-shipped-surface/v1"
 }

@@ -202,12 +202,10 @@ it("admits each delegated call outside its caller generation without dropping ca
   };
   caches.bindPluginMetadataSnapshotCache(generation.pluginMetadataSnapshot, cache);
   const controller = new AbortController();
-  const approvalAuthorityCheck = vi.fn(() => true);
   const tool = delegate();
   const caller = {
     agentId: "main",
     sessionKey: runSessionKey,
-    approvalAuthorityCheck,
     approvalSignals: [controller.signal],
   };
   callGateway.mockImplementation(async () => {

@@ -170,11 +170,11 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
         (source.workerTurnClaim.sessionId !== sessionId ||
           source.workerTurnClaim.runId !== runId ||
           !source.receiptAuthority)) ||
-      source?.receiptAuthority?.() === false ||
       (source?.gatewayContextResolver && !source.gatewayContextResolver())
     ) {
       throw new Error("embedded tool authority lost its source execution claim");
     }
+    source?.receiptAuthority?.();
   };
   // Preserve the complete admitted snapshot, but bind its hash and projection
   // only after hooks or native ownership have selected the actual model.

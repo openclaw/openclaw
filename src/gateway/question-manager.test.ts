@@ -104,6 +104,25 @@ afterEach(async () => {
 });
 
 describe("QuestionManager", () => {
+  it("refuses an already revoked producer before registering or publishing a question", () => {
+    const controller = new AbortController();
+    controller.abort();
+    const onResolved = vi.fn();
+    const release = vi.fn();
+    expect(() =>
+      manager.request({
+        id: "revoked-producer",
+        questions,
+        timeoutMs: 10_000,
+        requesterLifetime: { signal: controller.signal, release },
+        onResolved,
+      }),
+    ).toThrow(QuestionManagerError);
+    expect(manager.observe("revoked-producer")).toBeNull();
+    expect(onResolved).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
+  });
+
   it("hides a committing question on reset and settles it without touching a reused id", async () => {
     const commit = createDeferredCore();
     const onResolved = vi.fn();
@@ -132,6 +151,7 @@ describe("QuestionManager", () => {
     "retains private read facts through completion and releases them on %s",
     async (retirement) => {
       const release = vi.fn();
+      const releaseProducer = vi.fn();
       const sessionAccess = {
         agentId: "main",
         sessionKey: "agent:main:own",
@@ -146,6 +166,7 @@ describe("QuestionManager", () => {
         questions,
         timeoutMs: 10_000,
         sessionAccess,
+        requesterLifetime: { release: releaseProducer },
         onResolved,
         isRequesterActive: () => requesterActive,
       });
@@ -158,6 +179,7 @@ describe("QuestionManager", () => {
       expect(observation.sessionAccess).toBe(sessionAccess);
       expect(onResolved.mock.calls[0]?.[1].sessionAccess).toBe(sessionAccess);
       expect(release).not.toHaveBeenCalled();
+      expect(releaseProducer).not.toHaveBeenCalled();
       if (retirement === "cleanup") {
         await manager.drain();
         await clock.advanceBy(15_000);
@@ -169,6 +191,7 @@ describe("QuestionManager", () => {
         manager.close();
       }
       expect(release).toHaveBeenCalledOnce();
+      expect(releaseProducer).toHaveBeenCalledOnce();
       expect(observation.isCurrent()).toBe(false);
       expect(observation.record).toMatchObject({ status: "answered", answers });
       if (retirement !== "close") {

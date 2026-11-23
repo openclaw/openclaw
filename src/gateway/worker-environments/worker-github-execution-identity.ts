@@ -22,15 +22,17 @@ import {
   matchesCurrentGitHubPublicationIdentity,
   prepareCurrentGitHubPublicationIdentity,
 } from "../github-publication-availability.js";
+import { requirePublicationSessionOwner } from "../github-publication-worktree-owner.js";
 import type {
   WorkerGitHubBindingGrant,
   WorkerGitHubBindingRefresh,
 } from "./worker-github-binding-contract.js";
+import { isWorkerGitHubRefreshAcknowledged } from "./worker-github-binding.js";
 
 const log = createSubsystemLogger("gateway/worker-github");
 
 /** A native worker receives only the selected execution identity under its current operator and session. */
-export async function prepareWorkerGitHubBindingGrant(params: {
+export async function prepareWorkerGitHubExecutionGrant(params: {
   sessionId: string;
   sessionKey: string;
   agentId: string;
@@ -106,22 +108,19 @@ export async function prepareWorkerGitHubBindingGrant(params: {
   let identity: Awaited<ReturnType<typeof prepareCurrentGitHubPublicationIdentity>> | undefined;
   try {
     const loaded = session.readCurrent();
-    if (loaded.entry?.sessionId !== params.sessionId || loaded.agentId !== params.agentId) {
-      throw new Error("Worker GitHub session authority changed");
-    }
-    const lifecycleRevision = loaded.entry.lifecycleRevision ?? null;
+    const owner = requirePublicationSessionOwner(
+      { ...params, sessionKey: loaded.canonicalKey },
+      loaded,
+      true,
+    );
+    const lifecycleRevision = owner.entry.lifecycleRevision ?? null;
+    const target = { ...params, sessionKey: owner.canonicalKey, lifecycleRevision };
     const assertCurrent = () => {
       assertAuthority();
       if (resolveGitHubApiBaseUrl() !== apiBaseUrl) {
         throw new Error("Worker GitHub issuer changed");
       }
-      const current = session.readCurrent();
-      if (
-        current.entry?.sessionId !== params.sessionId ||
-        (current.entry.lifecycleRevision ?? null) !== lifecycleRevision
-      ) {
-        throw new Error("Worker GitHub session authority changed");
-      }
+      requirePublicationSessionOwner(target, session.readCurrent(), true);
       if (
         identity &&
         (!matchesCurrentGitHubPublicationIdentity({ agentId: params.agentId, identity }) ||
@@ -242,7 +241,7 @@ export async function prepareWorkerGitHubBindingGrant(params: {
       refresh(installedGeneration) {
         pendingWork ??= (async () => {
           assertCurrent();
-          if (pending && installedGeneration === pending.update.generation) {
+          if (pending && isWorkerGitHubRefreshAcknowledged(pending.update, installedGeneration)) {
             identity = pending.identity;
             pending = undefined;
             // ACK advances only the installed deadline. Running commands keep their old

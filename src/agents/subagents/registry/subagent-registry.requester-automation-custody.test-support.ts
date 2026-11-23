@@ -69,7 +69,7 @@ export function registerRequesterAutomationCustodyTests({
         });
         const revoked = new AbortController();
         const source = expectDefined(
-          await operatorCapture.captureGatewayOperatorRunAuthority({
+          await operatorCapture.prepareGatewayOperatorRunAuthority({
             client,
             context,
             sourceAuthority: {
@@ -112,7 +112,11 @@ export function registerRequesterAutomationCustodyTests({
                     operationalRunInstance,
                     approvalAuthority: delegated,
                     operatorAuthority: source.authority,
-                    receiptAuthority: () => validateAgentRunDelegatedAuthority(delegated),
+                    receiptAuthority: () => {
+                      if (!validateAgentRunDelegatedAuthority(delegated)) {
+                        throw new Error("agent tool caller authority is no longer active");
+                      }
+                    },
                   },
                   async () => {
                     await registerSubagentRun(
@@ -183,12 +187,8 @@ export function registerRequesterAutomationCustodyTests({
           deliver.mockImplementation(async (params) => {
             const retained =
               getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
-            if (authority === "current") {
-              expect(retained?.source).toBe(source.authority.source);
-              expect(retained?.scopes).toEqual(["operator.admin"]);
-            } else {
-              expect(retained).toBeUndefined();
-            }
+            expect(retained?.source).toBe(source.authority.source);
+            expect(retained?.scopes).toEqual(["operator.admin"]);
             expect(params.triggerMessage).toContain(resultText);
             expect(
               resolveGatewayCronCreatorAuthorityAdmission({

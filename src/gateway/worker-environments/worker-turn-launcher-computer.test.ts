@@ -25,7 +25,7 @@ import type { PreparedWorkerComputer } from "./computer-transport.js";
 import * as skillTransfer from "./skill-resource-transfer.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import type { WorkerGitHubBindingGrant } from "./worker-github-binding-contract.js";
-import * as githubBinding from "./worker-github-binding.js";
+import * as githubBinding from "./worker-turn-github-binding.js";
 import {
   createLauncher,
   executeTurn,

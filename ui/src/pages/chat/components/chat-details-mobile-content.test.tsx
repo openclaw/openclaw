@@ -218,6 +218,32 @@ it("replaces the People activation owner while retaining the mobile host content
   expect(releaseReplacement).toHaveBeenCalledOnce();
 });
 
+it("links a task PR without claiming an unverified GitHub state", async () => {
+  const request = pullRequest();
+  const { query, navigate } = await mountMobileHost(
+    details({ displayPullRequests: [{ ...request, state: undefined }] }),
+  );
+  const link = query('[data-details-page="root"] a.chat-pr-mobile__row');
+  expect(link?.getAttribute("href")).toBe(request.url);
+  expect(link?.hasAttribute("data-state")).toBe(false);
+  expect(navigate).not.toHaveBeenCalled();
+});
+
+it("keeps a verified task PR readable without checkout-owned CI actions", async () => {
+  const request = pullRequest({ title: "Task PR", headSha: "a".repeat(40) });
+  const { element, navigate, show, query } = await mountMobileHost(
+    details({ pullRequests: [], displayPullRequests: [{ ...request, taskOnly: true }] }),
+  );
+  query('[data-details-page="root"] .chat-pr-mobile__row')!.click();
+  expect(navigate).toHaveBeenCalledOnce();
+  await show(navigate.mock.calls[0]![0]);
+  await vi.dynamicImportSettled();
+  await settle(element);
+  const actions = query('[data-details-page="pull-request"] .chat-pr-mobile__actions');
+  expect(actions?.querySelector("a")?.getAttribute("href")).toBe(request.url);
+  expect(actions?.textContent).not.toMatch(/Checks|CI monitoring/);
+});
+
 it("routes current mobile PRs to Checks and rejects hidden or superseded navigation", async () => {
   const request = pullRequest({
     title: "Current PR",

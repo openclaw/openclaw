@@ -50,6 +50,7 @@ import { formatForLog, formatPeerTextForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import type {
   AuthenticatedGatewayConnect,
+  DeviceAuthorizedGatewayConnect,
   GatewayConnectPhaseContext,
 } from "./message-handler-types.js";
 
@@ -183,10 +184,14 @@ export function rejectGatewayConnectOrigin(
 /** Recheck live authority after awaited work, before granting credentials or registering a client. */
 export function resolveGatewayConnectPolicyFailure(
   context: GatewayConnectPhaseContext,
-  state: AuthenticatedGatewayConnect,
+  state: AuthenticatedGatewayConnect &
+    Pick<DeviceAuthorizedGatewayConnect, "isDeviceTokenSubjectCurrent">,
 ): { kind: "auth" } | { kind: "origin"; reason: string } | undefined {
   const principal = state.authResult.openclawId;
-  if (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
+  if (
+    (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) ||
+    state.isDeviceTokenSubjectCurrent?.() === false
+  ) {
     return { kind: "auth" };
   }
   if (context.browserOrigin) {

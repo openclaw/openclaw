@@ -38,7 +38,7 @@ import {
 import { dispatchWorkerRequest } from "../server/ws-connection/worker-connection-dispatch.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import * as support from "./service.test-support.js";
-import { bindWorkerGitHubTurn } from "./worker-github-binding.js";
+import { bindWorkerGitHubTurn } from "./worker-turn-github-binding.js";
 import {
   claimAdmission,
   claimTarget,

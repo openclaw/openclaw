@@ -353,15 +353,17 @@ jobs:
             --producer-workflow-full-ref "${PRODUCER_WORKFLOW_FULL_REF}" \
             --producer-workflow-sha "${PRODUCER_WORKFLOW_SHA}"
 
-      - name: Download immutable full release qualification
+      - name: Acquire authenticated publication manifest
         if: ${{ inputs.full_release_validation_run_id != '' }}
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ inputs.full_release_validation_run_attempt }}
-          path: ${{ runner.temp }}/docker-qualification
-          repository: ${{ github.repository }}
-          run-id: ${{ inputs.full_release_validation_run_id }}
-          github-token: ${{ github.token }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
+          PUBLICATION_MANIFEST_DIR: ${{ runner.temp }}/docker-qualification
+        run: |
+          set -euo pipefail
+          mkdir -p "${PUBLICATION_MANIFEST_DIR}"
+          node workflow-source/scripts/release-ci-summary.mjs --acquire-publication-manifest "${FULL_RELEASE_VALIDATION_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --expected-run-attempts-json "$(printf '{"%s":%s}' "${FULL_RELEASE_VALIDATION_RUN_ID}" "${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}")" > "${PUBLICATION_MANIFEST_DIR}/full-release-validation-manifest.json"
 
       - name: Download prepared Docker manifest
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2

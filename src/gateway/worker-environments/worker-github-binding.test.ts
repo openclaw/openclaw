@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import {
   GitHubIdentityError,
   installManagedGitHubProfile,
@@ -18,18 +18,20 @@ import { recordCommittedSessionMetadataPublication } from "../../config/sessions
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RepositoryIntegration } from "../../plugins/repository-integration.types.js";
 import type { RepositoryCredentialSource } from "../github-user-identity.types.js";
-import { prepareWorkerGitHubBindingGrant } from "./worker-github-execution-identity.js";
+import { prepareWorkerGitHubExecutionGrant } from "./worker-github-execution-identity.js";
 const policy = vi.hoisted(() => ({ current: undefined as RepositoryIntegration | undefined }));
-vi.mock("../../plugins/repository-integration-runtime.js", () => ({
+vi.mock("../../plugins/repository-integration-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/repository-integration-runtime.js")>()),
   getRepositoryIntegration: () => policy.current,
 }));
 import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
-import { bindWorkerGitHubTurn, prepareGitHubPublicationFact } from "./worker-github-binding.js";
+import { prepareGitHubPublicationFact } from "./worker-github-binding.js";
 import {
   workerGitHubFixture,
   createWorkerGitHubBindingFixture,
 } from "./worker-github-binding.test-support.js";
+import { bindWorkerGitHubTurn } from "./worker-turn-github-binding.js";
 
 async function prepareWorkerGitHubBinding(
   params: Parameters<typeof prepareGitHubPublicationFact>[0],
@@ -232,11 +234,11 @@ describe("worker GitHub launch binding", () => {
     config = {};
     setRuntimeConfigSnapshot(config);
     mocks.nativeToken.mockRejectedValue(new Error("Optional host CLI is unavailable"));
-    await expect(prepareWorkerGitHubBindingGrant(session)).resolves.toBeUndefined();
+    await expect(prepareWorkerGitHubExecutionGrant(session)).resolves.toBeUndefined();
     expect(mocks.nativeToken).not.toHaveBeenCalled();
     expect(mocks.refresh).not.toHaveBeenCalled();
     await expect(
-      prepareWorkerGitHubBindingGrant({ ...session, expectedProfileId: profileId }),
+      prepareWorkerGitHubExecutionGrant({ ...session, expectedProfileId: profileId }),
     ).rejects.toThrow("Selected GitHub App changed");
   });
 
@@ -332,7 +334,7 @@ describe("worker GitHub launch binding", () => {
     let current = true;
     const release = vi.fn();
     const retain = vi.fn(() => release);
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "original-operator",
       scopes: ["operator.write"],
       assertCurrent: () => {
@@ -419,7 +421,7 @@ describe("worker GitHub launch binding", () => {
         mocks.verify.mockResolvedValue({ status: failure });
       }
       await expect(prepareWorkerGitHubBinding(session)).resolves.toBeUndefined();
-      await expect(prepareWorkerGitHubBindingGrant(session)).rejects.toBeInstanceOf(
+      await expect(prepareWorkerGitHubExecutionGrant(session)).rejects.toBeInstanceOf(
         GitHubIdentityError,
       );
       expect(mocks.nativeToken).not.toHaveBeenCalled();
@@ -815,7 +817,7 @@ describe("same-bound integrated worker credential renewal", () => {
       },
     };
     const controller = new AbortController();
-    const operator = createAdmittedRunOperatorAuthority({
+    const operator = createTestOperatorAuthority({
       profileId: "operator-profile",
       repositoryCredentialSource: credentialSource,
       scopes: ["operator.write"],
@@ -824,7 +826,7 @@ describe("same-bound integrated worker credential renewal", () => {
     });
     const grant = throughTurn
       ? await bindPreparedGrant(undefined, () => {}, operator)
-      : await prepareWorkerGitHubBindingGrant({ ...session, operatorAuthority: operator });
+      : await prepareWorkerGitHubExecutionGrant({ ...session, operatorAuthority: operator });
     if (!grant) {
       throw new Error("Expected admitted grant");
     }

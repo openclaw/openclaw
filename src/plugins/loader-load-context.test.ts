@@ -1,10 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import * as installedPluginIndexInstallRecords from "./installed-plugin-index-install-records.js";
 import * as installedPluginIndexRecords from "./installed-plugin-index-records.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
+import * as registrationConfig from "./loader-registration-config.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { restorePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
@@ -16,6 +18,32 @@ import {
 afterEach(() => {
   clearCurrentPluginMetadataSnapshot();
   vi.restoreAllMocks();
+});
+
+it("reuses registration facts per captured runtime/source pair and replaces them on reload", async () => {
+  await using owner = createPluginCache();
+  withPluginCache(owner, () => {
+    const config = (value: string, enabled = true) =>
+      freezeJsonSnapshot({
+        plugins: { slots: { memory: "none" }, entries: { alpha: { enabled, config: { value } } } },
+      });
+    const runtime = config("resolved");
+    const source = config("authored");
+    const replacement = config("replacement", false);
+    const metadataSnapshot = restorePluginMetadataSnapshot(createPluginMetadataSnapshotFixture());
+    const derive = vi.spyOn(registrationConfig, "resolvePluginRegistrationConfigKey");
+    const read = (activationSourceConfig: typeof source, current = runtime) =>
+      resolvePluginLoadCacheContext({ config: current, activationSourceConfig, metadataSnapshot });
+    const first = read(source);
+    const next = read(replacement);
+    expect(next.registrationConfigKey).not.toBe(first.registrationConfigKey);
+    expect(read(source).cacheKey).toBe(first.cacheKey);
+    expect(read(replacement).cacheKey).toBe(next.cacheKey);
+    const reloaded = read(source, replacement);
+    expect(reloaded.registrationConfigKey).not.toBe(first.registrationConfigKey);
+    expect(read(source, replacement).cacheKey).toBe(reloaded.cacheKey);
+    expect(derive).toHaveBeenCalledTimes(3);
+  });
 });
 
 it.each([false, true])(

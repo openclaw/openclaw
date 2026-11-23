@@ -76,6 +76,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     let documentHost: ControlUIDocumentHost
     let nativeBrowser: DashboardNativeBrowserHost
     private let messageHandler: DashboardMessageHandler
+    private let openClawIDSignIn: DashboardOpenClawIDSignIn
     let deviceSettingsMessageHandler: DashboardDeviceSettingsMessageHandler
     /// The canonical Dashboard mount URL supplied by the manager. WebKit route
     /// loads and SPA history do not mutate it, so native fallbacks stay rooted.
@@ -161,6 +162,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
         let messageHandler = DashboardMessageHandler()
         self.messageHandler = messageHandler
+        let openClawIDSignIn = DashboardOpenClawIDSignIn()
+        self.openClawIDSignIn = openClawIDSignIn
         let appLinkMessageHandler = DashboardAppLinkMessageHandler()
         let deviceSettingsMessageHandler = DashboardDeviceSettingsMessageHandler()
         self.deviceSettingsMessageHandler = deviceSettingsMessageHandler
@@ -189,6 +192,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
                 deviceSettingsMessageHandler, contentWorld: .page, name: Self.deviceSettingsMessageHandlerName)
             controller.addScriptMessageHandler(
                 browserMessageHandler, contentWorld: .page, name: DashboardBrowserMessageHandler.name)
+            controller.addScriptMessageHandler(
+                openClawIDSignIn, contentWorld: .page, name: DashboardOpenClawIDSignIn.name)
             if shouldEnableUpdateBridge {
                 // Handler presence is the Control UI feature probe; unsigned builds
                 // and remote dashboards must not advertise a local app update.
@@ -239,6 +244,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
                 preservingPendingCommands: true)
         }
         messageHandler.owner = self
+        openClawIDSignIn.owner = self
         appLinkMessageHandler.owner = self
         deviceSettingsMessageHandler.owner = self
         browserMessageHandler.owner = self
@@ -432,6 +438,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     func hideForExperience() {
         guard let window else { return }
+        self.openClawIDSignIn.cancel()
         // Keep the document and drafts, but retire actions admitted by the
         // outgoing experience before a delayed lookup can show it again.
         (window as? DashboardWindow)?.isHiddenForExperience = self.hasRetainedWindow
@@ -500,6 +507,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     private func retireDashboardDocument() {
+        self.openClawIDSignIn.cancel()
         guard self.retiredDocumentURL == nil else { return }
         self.webView.stopLoading()
         guard self.auth.usesNativeDevice, self.isTrustedDashboardDocument else { return }
@@ -511,6 +519,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     private func load(_ url: URL) {
+        self.openClawIDSignIn.cancel()
         self.retiredDocumentURL = nil
         self.invalidateGatewayHealth()
         self.nativeCommandsReady = false
@@ -1144,6 +1153,7 @@ extension DashboardWindowController {
     }
 
     func windowWillClose(_: Notification) {
+        self.openClawIDSignIn.cancel()
         self.finishDocumentLoad(.failure(CancellationError()))
         self.reconnectTask?.task.cancel()
         self.reconnectTask = nil
@@ -1459,6 +1469,7 @@ extension DashboardWindowController {
             return
         }
         guard webView === self.webView else { return }
+        self.openClawIDSignIn.cancel()
         self.documentHost.committed()
         self.invalidateGatewayHealth()
         self.deviceSettingsMessageHandler.cancelRequests()

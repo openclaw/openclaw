@@ -32,8 +32,13 @@ export const detection: SystemAgentSetupDetectResult = {
 
 export function createContext() {
   const request = vi.fn<GatewayBrowserClient["request"]>();
+  // The early option list is best-effort; scenarios opt in by resolving it.
+  const setupOptions = vi.fn<GatewayBrowserClient["request"]>(async () => {
+    throw new Error("setup options not mocked");
+  });
   const client = {
-    request: (...args: Parameters<GatewayBrowserClient["request"]>) => request(...args),
+    request: (...args: Parameters<GatewayBrowserClient["request"]>) =>
+      (args[0] === "openclaw.setup.options" ? setupOptions : request)(...args),
   } as unknown as GatewayBrowserClient;
   const snapshot = {
     client,
@@ -78,7 +83,7 @@ export function createContext() {
     navigate: vi.fn(),
     runtimeConfig,
   } as unknown as ApplicationContext;
-  return { client, request, runtimeConfig, snapshot, context };
+  return { client, request, setupOptions, runtimeConfig, snapshot, context };
 }
 
 export async function mountPage(

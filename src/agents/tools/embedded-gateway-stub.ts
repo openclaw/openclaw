@@ -2,6 +2,7 @@ import { normalizeFastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionsListParams,
   SessionsResolveParams,
+  SessionsSearchResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { validateSessionsSearchParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
@@ -121,11 +122,15 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
     }
     const { searchRecallSessionTranscripts } =
       await import("../../gateway/server-methods/sessions-search-recall.js");
-    return searchRecallSessionTranscripts({
-      query,
-      limit: readPositiveIntegerParam(params, "limit"),
-      recall: params.recall!,
-      projection: await borrowSessionRowProjection(),
+    const projection = await borrowSessionRowProjection();
+    return new Promise<SessionsSearchResult>((resolve, reject) => {
+      void searchRecallSessionTranscripts({
+        query,
+        limit: readPositiveIntegerParam(params, "limit"),
+        recall: params.recall!,
+        projection,
+        onResult: resolve,
+      }).catch(reject);
     });
   }
   if (params.agentId !== undefined && params.sessionKeys === undefined) {
@@ -263,7 +268,7 @@ async function handleChatHistory(params: Record<string, unknown>) {
   const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars();
   const pageParams = {
     entry: historyEntry,
-    provider: resolvedSessionModel.provider,
+    provider: resolvedSessionModel?.provider,
     sessionId,
     storePath,
     sessionAgentId,

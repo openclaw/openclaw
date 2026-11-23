@@ -6,7 +6,8 @@ import {
   resolveManagedGitHubProfileDir,
 } from "../../agents/github-tool-identity.js";
 import * as turnClaims from "./placement-turn-claim-events.js";
-import { bindWorkerGitHubTurn, prepareGitHubPublicationFact } from "./worker-github-binding.js";
+import { prepareGitHubPublicationFact } from "./worker-github-binding.js";
+import { bindWorkerGitHubTurn } from "./worker-turn-github-binding.js";
 
 type WorkerGitHubFixtureSession = { sessionId: string; sessionKey: string; agentId: string };
 

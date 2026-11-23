@@ -82,12 +82,23 @@ suite.define(() => {
         await expect(detail.locator(".settings-row").first()).toHaveCSS("display", "flex");
         await detail.getByRole("button", { name: "Edit Profile", exact: true }).click();
         await detail.locator("#nostr-profile-name").fill("Alice Updated");
+        const notice = detail.getByText("You have unsaved changes", { exact: true });
+        const saveProfile = detail.getByRole("button", { name: "Save & Publish", exact: true });
+        await expect(notice).toBeVisible();
+        const noticeBottom = await notice.evaluate((element) => {
+          const text = document.createRange();
+          text.selectNodeContents(element);
+          return text.getBoundingClientRect().bottom;
+        });
+        expect(noticeBottom).toBeLessThanOrEqual(
+          await saveProfile.evaluate((button) => button.getBoundingClientRect().top),
+        );
         await detail.locator(".oc-dialog__close").click();
         await open("Other");
         await detail.locator(".oc-dialog__close").click();
         await open();
         await expect(detail.locator("#nostr-profile-name")).toHaveValue("Alice Updated");
-        await detail.getByRole("button", { name: "Save & Publish", exact: true }).click();
+        await saveProfile.click();
         await expect(detail).toContainText("Profile published to relays.");
         const emptyProfile = Object.fromEntries(
           ["displayName", "about", "picture", "banner", "website", "nip05", "lud16"].map((key) => [

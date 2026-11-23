@@ -36,12 +36,9 @@ import { hasExplicitAcceptableMediaRange } from "./http-media-range.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import {
   authorizeScopedGatewayHttpRequestOrReply,
-  checkGatewayHttpRequestAuth,
   getHeader,
-  resolveSharedSecretHttpOperatorScopes,
   type AuthorizedGatewayHttpRequest,
 } from "./http-utils.js";
-import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
 import { operatorSessionCap } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
@@ -355,35 +352,6 @@ async function serveAuthorizedSessionHistory(
     } catch {
       return false;
     }
-    const cfgLocal = getRuntimeConfig();
-    const currentRequestAuth = await checkGatewayHttpRequestAuth({
-      ...opts,
-      req,
-      auth: opts.getResolvedAuth?.() ?? opts.auth,
-      trustedProxies: cfgLocal.gateway?.trustedProxies,
-      allowRealIpFallback: cfgLocal.gateway?.allowRealIpFallback,
-      cfg: cfgLocal,
-    });
-    if (!currentRequestAuth.ok || !requestAuth.hasCurrentClientAuthority()) {
-      return false;
-    }
-    if (
-      currentRequestAuth.requestAuth.authenticatedUserProfile?.profileId !==
-      requestAuth.authenticatedUserProfile?.profileId
-    ) {
-      return false;
-    }
-    const requestedScopes = resolveSharedSecretHttpOperatorScopes(
-      req,
-      currentRequestAuth.requestAuth,
-    );
-    if (!authorizeOperatorScopesForMethod("chat.history", requestedScopes).allowed) {
-      return false;
-    }
-    const currentClient = resolveSessionHistoryHttpClient(
-      currentRequestAuth.requestAuth,
-      requestedScopes,
-    );
     const currentConfig = getRuntimeConfig();
     try {
       assertSourceCurrent();
@@ -416,8 +384,7 @@ async function serveAuthorizedSessionHistory(
       currentTarget.entry.sessionId !== historyTarget.sessionId ||
       currentTarget.entry.lifecycleRevision !== entry.lifecycleRevision ||
       (entry.sessionStartedAt !== undefined &&
-        currentTarget.entry.sessionStartedAt !== entry.sessionStartedAt) ||
-      !canReadHistory(currentClient, currentConfig, currentTarget)
+        currentTarget.entry.sessionStartedAt !== entry.sessionStartedAt)
     ) {
       return false;
     }
@@ -426,7 +393,7 @@ async function serveAuthorizedSessionHistory(
       prepareOperatorModelPresentation({
         cfg: currentConfig,
         policyConfig: opts.getCommittedRuntimeConfig?.() ?? currentConfig,
-        client: currentClient,
+        client: historyClient,
       }),
     );
     return true;

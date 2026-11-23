@@ -7,6 +7,7 @@ import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { reserveSubagentCompletionControllerSource } from "../announce/subagent-announce-controller-source.js";
 import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
+import { settleConsumedRequesterDelivery } from "../completion/subagent-completion-settlement.js";
 import {
   matchesSubagentChildSessionOwner,
   resolveRecordedRequester,
@@ -20,7 +21,6 @@ import {
   isDeliverySuspended,
   clearSubagentPendingDelivery,
   loadPendingFinalDeliveryPayload,
-  resolveRequesterDeliveryOutcome,
   recordRequesterDelivery,
   recordRequesterHandoff,
 } from "./subagent-delivery-state.js";
@@ -482,11 +482,11 @@ export const startSubagentAnnounceCleanupFlow = (
         return;
       }
       assertCurrent();
-      const delivery = resolveRequesterDeliveryOutcome([entry], observedDelivery)!;
       // A stale announce cannot replace a delivery already committed by requester-settle.
       if (entry.delivery?.status === "delivered") {
         return;
       }
+      const delivery = await settleConsumedRequesterDelivery([entry], observedDelivery);
       // A late failure cannot rearm an announcement transferred to the batch.
       // Committed sends still retain their delivery evidence.
       if (!delivery.delivered && requesterTookCompletion(entry)) {
@@ -566,25 +566,23 @@ export const startSubagentAnnounceCleanupFlow = (
     const deadline = new AbortController();
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
     let controllerInput: Awaited<ReturnType<typeof reserveSubagentCompletionControllerSource>>;
-    const now = Date.now();
     const expiryMs =
       entry.expectsCompletionMessage === true
         ? ANNOUNCE_COMPLETION_HARD_EXPIRY_MS
         : ANNOUNCE_EXPIRY_MS;
-    const remainingMs = resolveAnnounceDeliveryDeadline(entry, now, expiryMs) - now;
-    const abortDelivery = () => {
+    const expireDelivery = () => {
+      const now = Date.now();
+      const remainingMs = resolveAnnounceDeliveryDeadline(entry, now, expiryMs) - now;
+      if (remainingMs > 0) {
+        deadlineTimer = setTimeout(expireDelivery, remainingMs);
+        deadlineTimer.unref();
+        return;
+      }
       const reason = new Error("subagent announce delivery expired");
       materializeErrorStack(reason);
       deadline.abort(reason);
     };
-    // Accepted handoffs can wait behind a busy parent without spending their
-    // execution timeout, but the lifecycle's delivery window still bounds that wait.
-    if (remainingMs <= 0) {
-      abortDelivery();
-    } else {
-      deadlineTimer = setTimeout(abortDelivery, remainingMs);
-      deadlineTimer.unref();
-    }
+    expireDelivery();
     try {
       if (entry.expectsCompletionMessage === true && !requesterOwnsCompletion()) {
         controllerInput = await reserveSubagentCompletionControllerSource(entry);
@@ -600,6 +598,8 @@ export const startSubagentAnnounceCleanupFlow = (
         )?.protocolRunId;
         await commit((draft) => recordRequesterHandoff(draft, blockingRunId));
       }
+      // The registry already owns this completion's admitted source. Starting
+      // the requester turn inside the announce flow owns its next admission.
       announceOutcome = await subagentRuns.runWithCompletionAuthority(entry, () =>
         params.runSubagentAnnounceFlow({
           ...announceParams,

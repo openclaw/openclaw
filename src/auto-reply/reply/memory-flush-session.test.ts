@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
@@ -32,7 +32,7 @@ it.each(["mkdir", "open"] as const)(
       const originalOpen = fs.open.bind(fs);
       const refusal = new Error("memory target authority revoked");
       let operatorCurrent = true;
-      const operatorAuthority = createAdmittedRunOperatorAuthority({
+      const operatorAuthority = createTestOperatorAuthority({
         profileId: "guest",
         scopes: ["operator.write"],
         assertCurrent: () => {
