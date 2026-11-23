@@ -294,12 +294,14 @@ it.each(["warning", "error"] as const)(
           detail: "Plaintext secret found.",
         }),
       );
-      expect(inspected?.steps).toContainEqual(
-        expect.objectContaining({
-          step: "finalize:doctor-lint:post-activation doctor inspections",
-          detail: expect.stringContaining("Plaintext secret found."),
-        }),
+      const receipt = inspected?.steps.find(
+        ({ step }) => step === "finalize:doctor-lint:post-activation doctor inspections",
       );
+      expect(receipt?.status).toBe("completed");
+      expect(JSON.parse(receipt!.detail!)).toMatchObject({
+        exitCode: 1,
+        counts: { error: 0, warning: 1, info: 0 },
+      });
     }
     expect(renderUpdateRunReport(inspected!).headline).toContain("updated");
     expect(renderUpdateRunReport(inspected!).headline).not.toContain("attention");
