@@ -1,10 +1,11 @@
-48
-# Reconciles the whole-PR test delta against a10e445719a6: 12,323 net lines,
+49
+# Reconciles the whole-PR test delta against a10e445719a6: 12,324 net lines,
 # less the unchanged 400-line allowance and 11,875 existing allocation lines.
 # Includes 28 net lines adapting the existing direct/unified approval matrix to
 # router-owned admission and canonical expected-profile selection. The tests keep
 # abbreviated-ID refusal, participant self-approval denial, and final-mutation
 # pending-state assertions; handler-only fixtures cannot prove these boundaries.
+# One line preserves all original exports in the lazy permission-content mock.
 # The remaining 20 lines reconcile the retained feature proofs after the main
-# rebase. Existing allocations, test assertions, file caps and timeouts are unchanged.
+# rebase. Existing earlier allocations, assertions, file caps and timeouts are unchanged.
 # Full local timings and the pinned-main comparison are retained in the PR evidence.

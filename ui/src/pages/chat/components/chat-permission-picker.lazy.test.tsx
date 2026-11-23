@@ -9,6 +9,7 @@ const contentState = vi.hoisted(() => ({ fail: true }));
 vi.mock("./chat-permission-picker-content.tsx", async (importOriginal) => {
   const original = await importOriginal<typeof import("./chat-permission-picker-content.tsx")>();
   return {
+    ...original,
     ChatPermissionPickerContent: (
       props: Parameters<typeof original.ChatPermissionPickerContent>[0],
     ) => {
