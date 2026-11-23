@@ -155,7 +155,7 @@ fs.copyFileSync(${JSON.stringify(pnpm)}, path.join(args[args.indexOf('--install-
   });
 
   it.each([
-    { version: "2026.11.20", maintained: true },
+    { version: "2026.11.6", maintained: true },
     { version: VERSION, maintained: false },
   ])(
     "maintains plugins before a trial only for a downgrade ($version)",
@@ -177,7 +177,7 @@ fs.copyFileSync(${JSON.stringify(pnpm)}, path.join(args[args.indexOf('--install-
           await prepareUpdate({
             runId: run.runId,
             runningRoot: checkout,
-            runningVersion: "2026.11.6",
+            runningVersion: "2026.11.5",
             channel: "dev",
             node,
           }),
