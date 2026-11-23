@@ -39,6 +39,8 @@ import type {
   PreparedAuthProfileStoreOwner,
 } from "./types.js";
 
+class AuthSnapshotPublicationConflictError extends Error {}
+
 /** Reconcile committed facts through the existing snapshot owner, without native host rereads. */
 export async function publishInlineAuthFailure(
   owner: PreparedAuthProfileStoreOwner,
@@ -92,7 +94,9 @@ export async function publishInlineAuthFailure(
     } else if (kind === "shared-state") {
       const context = captureOpenClawStateWorkerContext({ env: owner.env });
       if (context.admission.databasePath !== databasePath) {
-        throw new Error("Auth snapshot changed its captured shared database");
+        throw new AuthSnapshotPublicationConflictError(
+          "Auth snapshot changed its captured shared database",
+        );
       }
       rows = await readSharedAuthProfileRows(context);
       assertCurrent = () => context.admission.assertCurrent();
@@ -112,7 +116,9 @@ export async function publishInlineAuthFailure(
         nativeCurrent?.() === false ||
         getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath) !== revision
       ) {
-        throw new Error("Auth snapshot changed during committed-state preparation");
+        throw new AuthSnapshotPublicationConflictError(
+          "Auth snapshot changed during committed-state preparation",
+        );
       }
     };
     assert();
@@ -180,16 +186,18 @@ export async function publishInlineAuthFailure(
         { candidates },
       );
     } catch (error) {
-      try {
-        const latest = getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath(entry.databasePath);
-        if (latest && runtimeAuthProfileSnapshotSharesOwner(latest.owner, targetOwner)) {
-          clearRuntimeAuthProfileStoreSnapshotAtDatabasePath(entry.databasePath, entry.agentDir);
+      if (!(error instanceof AuthSnapshotPublicationConflictError)) {
+        try {
+          const latest = getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath(entry.databasePath);
+          if (latest && runtimeAuthProfileSnapshotSharesOwner(latest.owner, targetOwner)) {
+            clearRuntimeAuthProfileStoreSnapshotAtDatabasePath(entry.databasePath, entry.agentDir);
+          }
+        } catch (invalidationError) {
+          reportCommittedInlineAuthFailure(
+            "auth usage snapshot invalidation failed",
+            invalidationError,
+          );
         }
-      } catch (invalidationError) {
-        reportCommittedInlineAuthFailure(
-          "auth usage snapshot invalidation failed",
-          invalidationError,
-        );
       }
       reportCommittedInlineAuthFailure(
         "auth usage committed but runtime snapshot publication failed",
