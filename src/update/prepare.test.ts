@@ -235,7 +235,6 @@ fs.copyFileSync(${JSON.stringify(pnpm)}, path.join(args[args.indexOf('--install-
         restart: false,
         runningRoot: checkout,
         storedChannel: "dev",
-        timeoutMs: 30_000,
       });
       const { lastRun } = await getUpdateRunStatusAsync();
       expect(lastRun).toMatchObject({ status: "failed", reason: "build-failed" });
@@ -753,7 +752,6 @@ describe("retained updater runtimes", () => {
         restart: false,
         runningRoot: checkout,
         storedChannel: "dev",
-        timeoutMs: 30_000,
       });
       expect(process.exitCode).toBe(0);
       expect((await getUpdateRunStatusAsync()).lastRun).toMatchObject({
@@ -763,16 +761,11 @@ describe("retained updater runtimes", () => {
       await expect(fs.access(abandoned)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.access(held)).resolves.toBeUndefined();
       await expect(fs.access(unseen)).resolves.toBeUndefined();
-      const printed = log.mock.calls.map(([line]) => String(line));
-      // One line per runtime, then the update's own result.
-      expect(printed.slice(0, -1).toSorted()).toEqual([
+      // Kept runtimes are reported by the cleanup owner's log; the command prints removals.
+      expect(log.mock.calls.map(([line]) => String(line))).toEqual([
         `Removed abandoned updater runtime: ${abandoned}`,
-        `Runtime retained at ${unseen}: Could not inspect OpenClaw processes: census unavailable`,
-        expect.stringContaining(
-          `Runtime retained at ${held}: other OpenClaw processes are still running (PIDs: 4242)`,
-        ),
+        "Already up to date.",
       ]);
-      expect(printed.at(-1)).toBe("Already up to date.");
     } finally {
       process.exitCode = undefined;
       await closeOpenClawStateDatabaseAsync();

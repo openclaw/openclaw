@@ -29,8 +29,10 @@ import { PREPARE_DEADLINE_MS, prepareUpdate } from "./run.js";
 import { resolveTarget } from "./target.js";
 
 const POLL_MS = 2_000;
-/** Earlier updaters' runtime cleanup is advisory: at most this, and a tenth of `--timeout`. */
+/** Earlier updaters' runtime cleanup is advisory: no new deletion starts after this. */
 const RETAINED_RUNTIME_BUDGET_MS = 2 * 60_000;
+/** Below this `--timeout`, cleanup could take more than a tenth of the update's budget. */
+const RETAINED_RUNTIME_MIN_TIMEOUT_MS = 10 * RETAINED_RUNTIME_BUDGET_MS;
 /** Prepare, plus a trial that includes the boot migration. */
 const RUN_DEADLINE_MS = PREPARE_DEADLINE_MS + 30 * 60_000;
 
@@ -122,15 +124,18 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
       : undefined;
   // Like the releases prepareUpdate collects, an earlier updater's leftover is removed before
   // this update starts; afterwards the release launcher would count as a possible holder.
-  const cleanupBudgetMs = Math.min(
-    RETAINED_RUNTIME_BUDGET_MS,
-    timeoutMs === undefined ? RETAINED_RUNTIME_BUDGET_MS : timeoutMs / 10,
-  );
-  for (const line of await reclaimRetainedUpdateRuntimes(opts.runningRoot, cleanupBudgetMs)) {
-    if (opts.json) {
-      defaultRuntime.error(line);
-    } else {
-      defaultRuntime.log(line);
+  // A census cannot be interrupted (Windows allows it 15 s), so a short --timeout skips cleanup.
+  if (timeoutMs === undefined || timeoutMs >= RETAINED_RUNTIME_MIN_TIMEOUT_MS) {
+    for (const line of await reclaimRetainedUpdateRuntimes(opts.runningRoot)) {
+      // The cleanup owner already logs each runtime it keeps.
+      if (line.startsWith("Runtime retained at ")) {
+        continue;
+      }
+      if (opts.json) {
+        defaultRuntime.error(line);
+      } else {
+        defaultRuntime.log(line);
+      }
     }
   }
   if (opts.timeoutMs !== undefined) {
@@ -192,11 +197,8 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
  * process census. It runs in this command, not the Gateway: the census is synchronous, and
  * without an owner record it cannot tell the requesting `openclaw update` from an old updater.
  */
-async function reclaimRetainedUpdateRuntimes(
-  runningRoot: string,
-  budgetMs: number,
-): Promise<string[]> {
-  const deadline = Date.now() + budgetMs;
+async function reclaimRetainedUpdateRuntimes(runningRoot: string): Promise<string[]> {
+  const deadline = Date.now() + RETAINED_RUNTIME_BUDGET_MS;
   try {
     const { prepareRetainedUpdateRuntimeMaintenance } =
       await import("../commands/doctor-retained-runtime.js");

@@ -253,23 +253,24 @@ it.each([false, true])(
   },
 );
 
-it("bounds cleanup by a tenth of --timeout and gives the update the rest", async () => {
-  vi.useFakeTimers({ toFake: ["Date"] });
-  try {
-    maintainRuntimes.mockImplementation(async (_repair, authority) => {
-      // Cleanup outlasts its share of a 5 s budget.
-      vi.setSystemTime(Date.now() + 600);
-      expect(() => authority.assertCurrent()).toThrow("ran out of time");
-      return [];
-    });
-    await expect(
-      runReleaseUpdateCli({ json: true, restart: true, runningRoot: root, timeoutMs: 5_000 }),
-    ).rejects.toThrow("refused for the test");
-    expect(sent).toEqual([{ timeoutMs: expect.any(Number) }]);
-    expect((sent[0] as { timeoutMs: number }).timeoutMs).toBeLessThanOrEqual(4_400);
-  } finally {
-    vi.useRealTimers();
-  }
+it("skips cleanup under a short --timeout and gives the update the budget", async () => {
+  await expect(
+    runReleaseUpdateCli({ json: true, restart: true, runningRoot: root, timeoutMs: 5_000 }),
+  ).rejects.toThrow("refused for the test");
+  // A census cannot be interrupted, so a 5 s budget does not start one.
+  expect(maintainRuntimes).not.toHaveBeenCalled();
+  expect(sent).toEqual([{ timeoutMs: expect.any(Number) }]);
+});
+
+it("leaves kept-runtime lines to the cleanup owner's log", async () => {
+  const removed = "Removed abandoned updater runtime: /tmp/openclaw-update-runtime-Gone01";
+  maintainRuntimes.mockResolvedValue([
+    removed,
+    "Runtime retained at /tmp/openclaw-update-runtime-Held01: still in use",
+  ]);
+  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+  await runReleaseUpdateCli({ json: false, restart: false, runningRoot: root });
+  expect(log.mock.calls.map(([line]) => line)).toEqual([removed, "Already up to date."]);
 });
 
 it("says the update is still running when the --timeout budget ends first", async () => {

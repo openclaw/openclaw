@@ -190,7 +190,8 @@ Shipped in-place updaters leave their running code in an `openclaw-update-runtim
 directory and promise that the next update removes it. On the release path, `openclaw update`
 runs Doctor's retained-runtime maintenance in its own process before the update starts, the
 same way release preparation removes old releases first. A runtime still in use stays, and
-the command prints why; the cleanup never changes the update's outcome. The Gateway's
+the cleanup never changes the update's outcome. A `--timeout` under 20 minutes skips it,
+because the process census cannot be interrupted. The Gateway's
 `update.run` and automatic updates do not run it, because the process census would block the
 serving Gateway. After the switch to releases, the resident launcher counts as a possible
 holder of a runtime without `owner.json`, and later commands no longer recognize its marker.
