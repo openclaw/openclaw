@@ -1,4 +1,8 @@
 export { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+export {
+  ReplySessionInitConflictError,
+  runWithSessionInitConflictRetry,
+} from "../auto-reply/reply/session-init-conflict-retry.js";
 
 export { buildReplyPayloads } from "../auto-reply/reply/agent-runner-payloads.js";
 export { setBlockReplyDelivery } from "../auto-reply/reply/block-reply-delivery.js";

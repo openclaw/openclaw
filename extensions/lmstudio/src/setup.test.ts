@@ -461,7 +461,7 @@ describe("lmstudio-runtime", () => {
   beforeEach(() => resolveApiKeyForProviderMock.mockReset());
   it.each`
     name          | config                                              | key                         | source                        | env                                 | expected
-    ${"blank"}    | ${{ auth: "api-key" }}                              | ${"   "}                    | ${"profile:lmstudio:default"} | ${{}}                               | ${/openclaw models auth login --provider lmstudio/}
+    ${"blank"}    | ${{ auth: "api-key" }}                              | ${"   "}                    | ${"profile:lmstudio:default"} | ${{}}                               | ${/add an LM Studio API key in Models/}
     ${"missing"}  | ${{ auth: "api-key" }}                              | ${undefined}                | ${undefined}                  | ${{}}                               | ${/LM Studio API key is required/i}
     ${"fallback"} | ${{ auth: "api-key", apiKey: "${LM_API_TOKEN}" }}   | ${undefined}                | ${undefined}                  | ${{ LM_API_TOKEN: "template-key" }} | ${"template-key"}
     ${"local"}    | ${{ auth: "api-key" }}                              | ${localKey}                 | ${"synthetic"}                | ${{}}                               | ${localKey}

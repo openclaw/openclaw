@@ -64,7 +64,8 @@ validation even when first published to beta.
   same Release SHA at most twice. Never re-cut, change tooling, or restart FRV
   solely to clear a flake. An intentional
   [release-tooling waiver](/reference/full-release-validation/evidence#release-tooling-waivers)
-  is reviewed policy requiring validation with new pinned tooling, unchanged candidate.
+  is operator-approved Q grant data requiring a new qualification request with
+  pinned Q, unchanged candidate, and reevaluation of eligible raw receipts.
 - Blocking coverage: CI coverage gate, seal/evidence, Build Artifacts, install
   smoke, survivor lanes, `update-first-hop-compat*`, pack/npm qualification,
   package integrity, and all Linux/Windows/macOS Gateway checks, including
@@ -149,6 +150,24 @@ status, never invented success. Already-public deferred versions require normal
 integrity/selector checks; remaining recovery needs separate authorization and
 original qualified bytes.
 
+### Beta.1 plugin trust closeout
+
+After core npm, Docker, and GitHub activation complete, both the direct publisher
+and Release Button require **Plugin NPM Trust Closeout** for beta.1. It selects
+packages from successful token-bootstrap jobs in the original npm publication,
+not from current registry contents, and runs the existing trusted-publisher
+preflight in `plugin-npm-release.yml` with the original protected tooling ref.
+Releases without bootstrapped packages need no OIDC exchange.
+
+A failed closeout leaves the release published but the overall release run red.
+Configure the listed packages' npm trusted publisher for `openclaw/openclaw`,
+workflow `plugin-npm-release.yml`, environment `npm-publish`, then rerun **only
+the failed closeout job**. If its linked preflight is waiting for environment
+approval, resolve that run first. Closeout does not publish versions, create
+placeholders, change npm trust, or automate npm login/2FA. A successful exchange
+proves current authentication only, not a subsequent publish or permanent trust
+activation. Native app and ClawHub publication remain independent.
+
 ### Watch publication
 
 After stable dispatch, keep the read-only watcher in a separate shell:
@@ -219,8 +238,8 @@ remains available for diagnostic summaries, not qualification or publication.
 | Identity                | Owns                                                                                                                                                                                                      |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **C — candidate**       | Exact tested/published commit, package bytes, version, upgrade baselines.                                                                                                                                 |
-| **Q — qualification**   | Complete workflow/reusable-workflow/action/script/planner/contract/coverage closure; defaults to C. An independent Q requires review and verified main ancestry.                                          |
-| **P — trusted tooling** | Admission, aggregate validation, verification, publication, checked-in waivers, FRV verdict; independently trusted main revision or protected publication tag. May differ from C/Q; C need not precede P. |
+| **Q — qualification**   | Complete qualification closure and pinned grant ledger; defaults to C. Executable tooling requires review and verified lineage; authorized grants are committed directly to Q.                            |
+| **P — trusted tooling** | Admission, aggregate validation, verification, publication, Q-grant evaluation, FRV verdict; independently trusted main revision or protected publication tag. May differ from C/Q; C need not precede P. |
 
 [Dispatch](/reference/full-release-validation/dispatch) defines P's immutable
 operator-attestation/input/coverage admission before Q's `release-ci/*` dispatch.

@@ -14,9 +14,9 @@ export async function resolveReplyStoredModelSelection(params: {
   sessionKey: string;
   parentSessionKey?: string;
   defaultProvider: string;
-  defaultModel: string;
+  defaultModel: string | undefined;
   primaryProvider: string;
-  primaryModel: string;
+  primaryModel: string | undefined;
   sessionModelSelectionLocked: boolean;
   hasResolvedTurnModelOverride: boolean;
 }) {

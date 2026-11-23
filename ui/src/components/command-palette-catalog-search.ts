@@ -45,6 +45,8 @@ export type CommandPaletteItem = {
     | "search"
     | "navigation"
     | "chats"
+    | "archived"
+    | "more"
     | "messages";
   action: string;
   session?: GatewaySessionRow;
@@ -71,6 +73,8 @@ const CATEGORY_LABEL_KEYS = new Map([
   ["plugins", "palette.items.plugins"],
   ["settings", "palette.items.settings"],
   ["chats", "sessionsView.title"],
+  ["archived", "palette.archived"],
+  ["more", "palette.categories.more"],
   ["messages", "palette.categories.messages"],
 ]);
 
@@ -175,16 +179,38 @@ export function filterCommandPaletteItems(params: {
       ? 1
       : 0;
   };
-  const baseMatches = baseItems.filter((item) => matchRank(item) > 0);
-  const catalogMatches = params.catalogItems
-    .map((item) => ({ item, rank: matchRank(item) }))
-    .filter(({ rank }) => rank > 0)
-    .toSorted(
-      (left, right) => right.rank - left.rank || left.item.label.localeCompare(right.item.label),
-    )
-    .slice(0, CATALOG_SEARCH_LIMIT)
-    .map(({ item }) => item);
-  return [...params.sessionItems, ...baseMatches, ...catalogMatches];
+  const matchesName = (item: CommandPaletteItem) =>
+    normalizeLowercaseStringOrEmpty(item.label).normalize("NFC").includes(query);
+  const ranked = (items: readonly CommandPaletteItem[]) =>
+    items
+      .map((item) => ({ item, rank: matchRank(item), named: matchesName(item) }))
+      .filter(({ rank }) => rank > 0)
+      .toSorted(
+        (left, right) =>
+          Number(right.named) - Number(left.named) ||
+          right.rank - left.rank ||
+          left.item.label.localeCompare(right.item.label),
+      );
+  const commandMatches = [
+    ...ranked(baseItems),
+    ...ranked(params.catalogItems).slice(0, CATALOG_SEARCH_LIMIT),
+  ].toSorted((left, right) => right.rank - left.rank);
+  const sessions = (category: CommandPaletteItem["category"]) =>
+    params.sessionItems.filter((item) => item.category === category);
+  // Commands you named, your sessions, archived sessions, loose command matches by
+  // description or keyword, then message text.
+  return [
+    ...commandMatches.filter(({ named }) => named).map(({ item }) => item),
+    ...sessions("chats"),
+    ...sessions("archived"),
+    // A separate group keeps loose matches from joining a named match's group up top.
+    ...commandMatches
+      .filter(({ named }) => !named)
+      .map(({ item }): CommandPaletteItem =>
+        Object.assign({}, item, { category: "more" as const }),
+      ),
+    ...sessions("messages"),
+  ];
 }
 
 const APP_CARDS = [

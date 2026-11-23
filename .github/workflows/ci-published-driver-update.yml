@@ -23,6 +23,18 @@ jobs:
   update:
     name: Published driver update
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - name: Start cell budget
         run: |
@@ -51,7 +63,7 @@ jobs:
           node --input-type=module <<'NODE'
           import { execFileSync } from "node:child_process";
           import { appendFileSync, readFileSync } from "node:fs";
-          import { classifyReleaseTrain, parseReleaseVersion } from "./scripts/lib/release-version.mjs";
+          import { classifyReleaseTrain, compareReleaseVersions, parseReleaseVersion } from "./scripts/lib/release-version.mjs";
           const targetContextRef = (process.env.TARGET_CONTEXT_REF ?? "").replace(/^refs\/heads\//u, "");
           const candidateVersion = JSON.parse(readFileSync("package.json", "utf8")).version;
           const candidate = parseReleaseVersion(candidateVersion);
@@ -73,7 +85,8 @@ jobs:
           const parsed = parseReleaseVersion(version);
           const allowedTrains = frozenTarget ? ["stable", "extended-stable"] : ["stable"];
           if (!parsed || !allowedTrains.includes(classifyReleaseTrain(parsed))) throw new Error("Driver must resolve to a supported final release");
-          appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\ncache-mode=${process.env.DRIVER_CACHE_MODE}\n`);
+          const postgres = candidate !== null && !frozenTarget && compareReleaseVersions(candidateVersion, "2026.11.5") >= 0;
+          appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\ncache-mode=${process.env.DRIVER_CACHE_MODE}\npostgres=${postgres}\n`);
           NODE
       - name: Restore published driver install
         id: driver_cache
@@ -152,6 +165,17 @@ jobs:
             exit 1
           fi
           exit "$cell_exit"
+      - name: Run published PostgreSQL upgrade
+        if: steps.driver.outputs.postgres == 'true'
+        timeout-minutes: 20
+        env:
+          POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
+          OPENCLAW_UPGRADE_TEST_POSTGRES_DSN: postgresql://postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres
+        run: |
+          docker exec "$POSTGRES_SERVICE_ID" psql -U postgres -v ON_ERROR_STOP=1 \
+            -c 'CREATE EXTENSION unaccent; CREATE EXTENSION pg_trgm; CREATE EXTENSION vector;'
+          node scripts/e2e/lib/upgrade-survivor/published-driver-postgres.mjs \
+            .artifacts/published-driver-package/openclaw-candidate.tgz .artifacts/published-driver-update/postgres
       - name: Update published baseline under native systemd
         timeout-minutes: 15
         run: |

@@ -237,9 +237,21 @@ function validatePublicationSourceFact(value, expected = {}) {
   // Retire with those release lines and their retained publication recovery.
   object(
     value.coverage,
-    [...coverageKeys, "known_flaky_jobs_json", "telegram_waiver"],
+    [
+      ...coverageKeys,
+      "known_flaky_jobs_json",
+      "telegram_waiver",
+      "publication_artifact_source_json",
+    ],
     "source admission coverage",
   );
+  // beta.3 Q seals this empty field; retain its digest without enabling historical artifact reuse.
+  if (
+    Object.hasOwn(value.coverage, "publication_artifact_source_json") &&
+    value.coverage.publication_artifact_source_json !== ""
+  ) {
+    throw new Error("source admission publication_artifact_source_json must be empty");
+  }
   if (Object.hasOwn(value.coverage, "telegram_waiver") && value.coverage.telegram_waiver !== "") {
     throw new Error("source admission telegram_waiver must be empty");
   }
@@ -427,6 +439,11 @@ export function validatePublicationSourceBinding(record, expected = {}) {
       ) {
         throw new Error(`source admission coverage ${key} differs from manifest`);
       }
+    }
+    if ((record.validationInputs.publicationArtifactSourceJson ?? "") !== "") {
+      throw new Error(
+        "source admission coverage publicationArtifactSourceJson differs from manifest",
+      );
     }
     if ((record.validationInputs.coveragePolicy ?? "") !== fact.coverage.coverage_policy) {
       throw new Error("source admission coverage policy differs from manifest");
@@ -878,7 +895,21 @@ export function createPublicationObservations(source, observations) {
   });
 }
 
-export function createPublicationAdmission(source, observations, artifact, admittedAt) {
+export function createPublicationAdmission(
+  source,
+  observations,
+  artifact,
+  admittedAt,
+  { workflowPath = ".github/workflows/full-release-validation.yml" } = {},
+) {
+  if (
+    ![
+      ".github/workflows/full-release-validation.yml",
+      ".github/workflows/full-release-receipt-recovery.yml",
+    ].includes(workflowPath)
+  ) {
+    throw new Error("unsupported publication admission workflow");
+  }
   const admission = {
     observations,
     binding: {
@@ -888,7 +919,7 @@ export function createPublicationAdmission(source, observations, artifact, admit
       parentRunId: source.runId,
       parentRunAttempt: source.runAttempt,
       workflow: {
-        path: ".github/workflows/full-release-validation.yml",
+        path: workflowPath,
         event: "workflow_dispatch",
         ...source.workflow,
       },
@@ -899,12 +930,15 @@ export function createPublicationAdmission(source, observations, artifact, admit
       status: "admitted-for-validation",
     },
   };
-  return validatePublicationAdmissionBinding({
-    sourceAdmissionContract: FULL_RELEASE_SOURCE_ADMISSION_CONTRACT,
-    sourceAdmission: source,
-    publicationAdmissionContract: FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT,
-    publicationAdmission: admission,
-  });
+  return validatePublicationAdmissionBinding(
+    {
+      sourceAdmissionContract: FULL_RELEASE_SOURCE_ADMISSION_CONTRACT,
+      sourceAdmission: source,
+      publicationAdmissionContract: FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT,
+      publicationAdmission: admission,
+    },
+    { workflowPath },
+  );
 }
 
 export function validatePublicationAdmissionBinding(record, expected = {}) {
@@ -965,7 +999,8 @@ export function validatePublicationAdmissionBinding(record, expected = {}) {
     binding.repository !== source.repository ||
     binding.parentRunId !== source.runId ||
     binding.parentRunAttempt !== source.runAttempt ||
-    binding.workflow.path !== ".github/workflows/full-release-validation.yml" ||
+    binding.workflow.path !==
+      (expected.workflowPath ?? ".github/workflows/full-release-validation.yml") ||
     binding.workflow.event !== "workflow_dispatch" ||
     binding.workflow.ref !== source.workflow.ref ||
     binding.workflow.sha !== source.workflow.sha ||

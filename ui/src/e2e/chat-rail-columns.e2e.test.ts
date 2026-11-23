@@ -754,6 +754,7 @@ suite.define(() => {
         const request = await gateway.waitForRequest("sessions.companion.ask");
         expect(request.params).toEqual({
           agentId: "main",
+          askId: expect.any(String),
           question: "Can I use side chat here?",
           sessionKey,
         });

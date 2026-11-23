@@ -15,8 +15,7 @@ vi.mock("./reply-tool-authority.js", async (importOriginal) => ({
 }));
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import * as runFixtures from "../../agents/admitted-run-context.test-support.js";
 import { createCronTool } from "../../agents/tools/cron-tool.js";
 import {
   getGatewayToolCallerIdentity,
@@ -657,8 +656,7 @@ describe("runPreparedReply media-only handling", () => {
               kind === "owner-overflow" ||
               kind === "owner-batch" ||
               kind === "foreign-defaults" ||
-              kind === "discord-owner-alias" ||
-              refreshOwner
+              kind === "owner-source-replaced"
               ? "gateway"
               : kind === "revoked-after-bind"
                 ? "revoked"
@@ -685,6 +683,7 @@ describe("runPreparedReply media-only handling", () => {
     turn,
   });
   it.each([
+    "owner",
     "owner-alias",
     "non-owner",
 
@@ -695,13 +694,13 @@ describe("runPreparedReply media-only handling", () => {
     "revoked-before-bind",
     "revoked",
   ] as const)(
-    "admits configured Discord owner management through the reply ingress and real automation tool: %s",
+    "admits host-bound Discord owner management through the reply ingress and real automation tool: %s",
     async (kind) => {
       const runId = "discord-owner-management";
       const cfg = { commands: { ownerAllowFrom: ["discord:owner-1"] } };
-      const admitted = kind === "owner-alias" || kind === "revoked";
+      const admitted = kind === "owner" || kind === "revoked";
       setRuntimeConfigSnapshot(cfg);
-      const { operationalRunInstance } = createTestAdmittedRunContext(runId);
+      const { operationalRunInstance } = runFixtures.createTestAdmittedRunContext(runId);
       const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
       const identity: AgentRuntimeIdentity = {
         kind: "agentRuntime",
@@ -753,11 +752,10 @@ describe("runPreparedReply media-only handling", () => {
         );
         return undefined;
       });
+      const params = createOwnerIngress(kind, "discord", "list automations", runId);
+      bindOwnerIngress(params, "discord", kind);
       try {
-        await runPrepared({
-          ...createOwnerIngress(kind, "discord", "list automations", runId),
-          cfg,
-        });
+        await runPrepared({ ...params, cfg });
         expect(calls).toEqual(kind === "revoked" ? [] : admitted ? ["cron.list"] : ["restricted"]);
       } finally {
         releaseAgentRunDelegatedAuthority(authority);
@@ -1838,7 +1836,7 @@ describe("runPreparedReply media-only handling", () => {
     const abortController = new AbortController();
     const sourceAbortController = new AbortController();
     const operatorController = new AbortController();
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = runFixtures.createTestOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.write"],
       assertCurrent: () => operatorController.signal.throwIfAborted(),

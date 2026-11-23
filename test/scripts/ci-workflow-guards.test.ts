@@ -80,6 +80,10 @@ import {
   writeExecutable,
 } from "./ci-workflow.test-support.js";
 import { runGeneratedPublisherScenario } from "./generated-publisher.test-support.js";
+import {
+  gitPathShimShellPrelude,
+  resolveGitOutsideFixtures,
+} from "./git-path-shim.test-support.js";
 
 const manifestSource = readFileSync(
   new URL("../../scripts/ci-build-manifest.mjs", import.meta.url),
@@ -313,10 +317,7 @@ function runReleaseFallbackHistoryFixture(options: {
     for (const dir of [checkout, bin, home, hooks]) {
       mkdirSync(dir);
     }
-    const realGit = execFileSync("bash", ["--noprofile", "--norc", "-c", "command -v git"], {
-      env: fixtureEnv,
-      encoding: "utf8",
-    }).trim();
+    const realGit = resolveGitOutsideFixtures(fixtureEnv);
     const git = (cwd: string, args: string[], input?: string) =>
       execFileSync(realGit, args, {
         cwd,
@@ -427,6 +428,7 @@ function runReleaseFallbackHistoryFixture(options: {
     );
     writeExecutable(path.join(bin, "git"), [
       "#!/bin/bash",
+      gitPathShimShellPrelude(fixtureEnv),
       `exec ${quoteShell(testNodeExecPath)} ${quoteShell(launcher)} "$@"`,
     ]);
     const allocatedBytes = () =>
@@ -1097,14 +1099,14 @@ AFTER_CD
       "client-id": "${{ inputs.contents-client-id }}",
       "private-key": "${{ inputs.contents-private-key }}",
       owner: "${{ github.repository_owner }}",
-      repositories: "${{ github.event.repository.name }}",
+      repositories: "${{ inputs.repository || github.event.repository.name }}",
       "permission-contents": "write",
     });
     expect(pullRequest.with).toEqual({
       "client-id": "${{ inputs.pull-request-client-id }}",
       "private-key": "${{ inputs.pull-request-private-key }}",
       owner: "${{ github.repository_owner }}",
-      repositories: "${{ github.event.repository.name }}",
+      repositories: "${{ inputs.repository || github.event.repository.name }}",
       "permission-contents": "${{ inputs.pull-request-contents-permission }}",
       "permission-pull-requests": "write",
     });
@@ -1118,6 +1120,7 @@ AFTER_CD
     const tokens = publisher.runs.steps.find((step: WorkflowStep) => step.id === "tokens");
     expect(tokens.uses).toBe("./.github/actions/create-generated-pr-tokens");
     expect(tokens.with).toEqual({
+      repository: "${{ inputs.repository }}",
       "contents-client-id": "${{ inputs.contents-client-id }}",
       "contents-private-key": "${{ inputs.contents-private-key }}",
       "pull-request-client-id": "${{ inputs.pull-request-client-id }}",
@@ -1135,6 +1138,58 @@ AFTER_CD
       'GH_TOKEN="${CONTENTS_TOKEN}"',
       'HEAD:"${BASE_BRANCH}"',
     ]);
+  });
+
+  it("publishes changed timing refits only after planner admission and retains failed reports", () => {
+    const steps = readWorkflow(".github/workflows/ci-test-timings-refit.yml").jobs.refit
+      .steps as WorkflowStep[];
+    const refit = requiredWorkflowStep(steps, "Refit measured test timings");
+    const admission = requiredWorkflowStep(steps, "Validate refit planner admission");
+    const report = requiredWorkflowStep(steps, "Upload full timing refit report");
+    const publish = requiredWorkflowStep(steps, "Update standing refit pull request");
+    expect(steps.indexOf(refit)).toBeLessThan(steps.indexOf(admission));
+    expect(steps.indexOf(admission)).toBeLessThan(steps.indexOf(report));
+    expect(steps.indexOf(report)).toBeLessThan(steps.indexOf(publish));
+    expect(admission.run?.replace(/\\\s*/gu, "").trim().split(/\s+/u)).toEqual([
+      "pnpm",
+      "test",
+      "test/scripts/ci-node-test-plan.test.ts",
+      "test/scripts/ci-node-test-plan.commands.test.ts",
+      "test/scripts/ci-changed-node-test-plan.test.ts",
+      "--maxWorkers=1",
+    ]);
+    expect(admission["continue-on-error"]).not.toBe(true);
+    for (const [changed, outcome, shouldValidate, shouldPublish] of [
+      ["true", "success", true, true],
+      ["true", "failure", true, false],
+      ["true", "skipped", true, false],
+      ["", "skipped", false, false],
+    ] as const) {
+      const context = {
+        cancelled: () => false,
+        steps: {
+          [refit.id!]: { outputs: { changed }, outcome: "success" },
+          [admission.id!]: { outcome },
+        },
+      };
+      const evaluate = (step: WorkflowStep) =>
+        runInNewContext(step.if!.replace(/^\$\{\{|\}\}$/gu, ""), context);
+      expect(evaluate(admission)).toBe(shouldValidate);
+      expect(evaluate(publish)).toBe(shouldPublish);
+      expect(evaluate(report)).toBe(true);
+    }
+    for (const [outcome, cancelled, shouldReport] of [
+      ["failure", false, true],
+      ["skipped", false, false],
+      ["success", true, false],
+    ] as const) {
+      expect(
+        runInNewContext(report.if!.replace(/^\$\{\{|\}\}$/gu, ""), {
+          cancelled: () => cancelled,
+          steps: { [refit.id!]: { outcome } },
+        }),
+      ).toBe(shouldReport);
+    }
   });
 
   type PublicationCase = {
@@ -1156,11 +1211,25 @@ AFTER_CD
   const staleInputs = "Deferred stale generated output because generator inputs changed on main.";
   const staleOutput =
     "Deferred stale generated output because owned generated paths changed on main.";
-  const convergingHead = "Generated pull request head has not converged yet; rechecking";
+  const convergingHead =
+    "Generated pull request head or mergeability has not converged yet; rechecking";
   const preservedHead = { reference: "initialBranch", equals: true } as const;
   const stalePullRequest = { generatedA: "stale-pr-a", mergeCalls: "" };
 
   it.skipIf(process.platform === "win32").each<PublicationCase>([
+    {
+      name: "publishes and merges in the selected destination repository",
+      options: { repository: "openclaw/clawgrit-reports", autoMerge: true },
+      expected: { branchExists: true, generatedA: "desired-a" },
+      contains: [
+        [
+          "mergeCalls",
+          "pr merge https://github.com/openclaw/clawgrit-reports/pull/1 --repo openclaw/clawgrit-reports",
+        ],
+        ["mergeCalls", "--auto --squash --match-head-commit"],
+        ["summary", "Generated pull request: https://github.com/openclaw/clawgrit-reports/pull/1"],
+      ],
+    },
     {
       name: "enables auto-merge for the exact generated pull request head",
       options: { autoMerge: true },
@@ -1168,7 +1237,15 @@ AFTER_CD
       contains: [
         ["mergeCalls", "pr merge https://github.com/openclaw/openclaw/pull/1"],
         ["mergeCalls", "--auto --squash --match-head-commit"],
-        ["summary", "Enabled squash auto-merge for exact generated head"],
+        ["summary", "Requested squash merge for exact generated head"],
+      ],
+    },
+    {
+      name: "waits for known mergeability before requesting the exact-head merge",
+      options: { autoMerge: true, unknownMergeabilityOnce: true },
+      contains: [
+        ["mergeCalls", "--auto --squash --match-head-commit"],
+        ["publishOutput", convergingHead],
       ],
     },
     {
@@ -1234,13 +1311,31 @@ AFTER_CD
         ["summary", "Preserved stale generated pull request"],
       ],
     },
-    {
-      name: "defers timing refits when their codec changes on main",
+    ...[
+      "scripts/lib/ci-node-test-groups-codec.mts",
+      "scripts/lib/ci-node-test-plan.mts",
+      "test/vitest/vitest.unit-fast-paths.mjs",
+      "test/scripts/fixtures/ci-measured-compact-jobs.json",
+      "src/commands/agent.test.ts",
+    ].map((updateSource): PublicationCase => ({
+      name: `defers timing refits when admission input changes on main: ${updateSource}`,
       invalidationOwner: [".github/workflows/ci-test-timings-refit.yml", "refit"],
-      options: { updateSource: "scripts/lib/ci-node-test-groups-codec.mts" },
+      options: { updateSource },
       expected: { branchExists: false, mainGeneratedA: "old-a", mergeCalls: "" },
       contains: [["summary", staleInputs]],
-    },
+    })),
+    ...[
+      "src/commands/README.md",
+      "patches/README.md",
+      "ui/public/example.png",
+      ".github/actions/setup-android-toolchain/action.yml",
+    ].map((updateSource): PublicationCase => ({
+      name: `publishes timing refits after unrelated changes on main: ${updateSource}`,
+      invalidationOwner: [".github/workflows/ci-test-timings-refit.yml", "refit"],
+      options: { updateSource },
+      expected: { branchExists: true, generatedA: "desired-a" },
+      excludes: [["summary", staleInputs]],
+    })),
     ...(
       [
         [
@@ -2716,12 +2811,17 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     }
   });
 
+  it("keeps release decision and drain on Blacksmith independently of global CI routing", () => {
+    const watcher = readWorkflow(".github/workflows/full-release-state-watcher.yml");
+    expect(watcher.jobs.watch["runs-on"]).toBe("blacksmith-2vcpu-ubuntu-2404");
+    expect(watcher.jobs.watch["timeout-minutes"]).toBe(720);
+    expect(watcher.on.workflow_call.inputs.runner_label).toEqual({
+      type: "string",
+      required: true,
+    });
+  });
+
   it.each([
-    {
-      file: "full-release-state-watcher.yml",
-      runner: "blacksmith-2vcpu-ubuntu-2404",
-      job: "watch",
-    },
     {
       file: "openclaw-npm-preflight.yml",
       runner: "blacksmith-8vcpu-ubuntu-2404",
@@ -6111,6 +6211,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       policy: "dual-all",
       shards: [1, 2, 3],
     },
+    {
+      label: "native-shard capable compatibility",
+      frozenTarget: true,
+      compatibilityTarget: true,
+      policy: "node",
+      shards: [1, 2, 3],
+    },
+    {
+      label: "unknown compatibility",
+      frozenTarget: true,
+      compatibilityTarget: true,
+      policy: "node",
+      shards: [1],
+    },
   ])("executes the $label standalone UI envelope", (scenario) => {
     const workflow = readCiWorkflow();
     expect(workflow.env?.BUN_JSC_useFTLJIT).toBeUndefined();
@@ -6220,7 +6334,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           String(evaluateWorkflowExpression(expression, rowContext)),
         );
       expect(resolveValue(ui.name)).toBe(
-        scenario.compatibilityTarget
+        scenario.shards.length === 1
           ? "checks-ui"
           : `checks-ui (${shard}/${scenario.shards.length})`,
       );
@@ -6271,7 +6385,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(calls.filter((call) => call === "pnpm lint:ui:no-raw-window-open")).toHaveLength(1);
     expect(calls.filter((call) => call !== "pnpm lint:ui:no-raw-window-open")).toEqual(
       scenario.compatibilityTarget
-        ? ["pnpm --dir ui test --testTimeout=30000 --isolate"]
+        ? scenario.shards.map(
+            (shard) =>
+              `pnpm --dir ui test --testTimeout=30000 --isolate${scenario.shards.length > 1 ? ` --shard=${shard}/${scenario.shards.length}` : ""}`,
+          )
         : scenario.shards.map(() => "node --import tsx scripts/ci-run-node-test-shard.mts"),
     );
   });

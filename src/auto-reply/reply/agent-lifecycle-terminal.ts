@@ -7,12 +7,18 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/
 import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
 import { getFailoverErrorCode } from "../../agents/failover/error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
-import { AgentHarnessModelRequestPolicyError } from "../../agents/harness/errors.js";
+import {
+  AgentHarnessModelRequestPolicyError,
+  AgentHarnessRuntimeUpdateRequiredError,
+} from "../../agents/harness/errors.js";
+import { isProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { readProviderAuthFailure } from "../../plugins/provider-auth-failure.js";
+import { buildProviderLoginRecovery } from "../provider-login-recovery.js";
 
 export type AgentLifecycleTerminalBackstop = {
   beginAttempt: () => void;
@@ -163,11 +169,25 @@ export function createAgentLifecycleTerminalBackstop(params: {
           ...(oauthFailure.errorType ? { providerErrorType: oauthFailure.errorType } : {}),
           ...(oauthFailure.status ? { httpStatus: oauthFailure.status } : {}),
         };
+      } else if (
+        isProviderAuthError(terminalValue) &&
+        buildProviderLoginRecovery({
+          provider: terminalValue.provider,
+          providerAuthFailure: readProviderAuthFailure(terminalValue),
+        })
+      ) {
+        // The saved sign-in needs a new login; clients offer their sign-in action for it.
+        data.errorObservation = { provider: terminalValue.provider, failoverReason: "auth" };
       } else if (terminalValue instanceof AgentHarnessModelRequestPolicyError) {
         data.errorObservation = {
           ...(isRecord(data.errorObservation) ? data.errorObservation : {}),
           providerErrorCode: terminalValue.code,
           httpStatus: terminalValue.status,
+        };
+      } else if (terminalValue instanceof AgentHarnessRuntimeUpdateRequiredError) {
+        data.errorObservation = {
+          ...(isRecord(data.errorObservation) ? data.errorObservation : {}),
+          providerErrorCode: terminalValue.code,
         };
       }
       Object.assign(data, terminationFields);

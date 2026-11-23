@@ -52,7 +52,7 @@ export default defineControlUiPlugin({
           title = el("div"),
           actions = el("div", undefined, "knowledge-actions");
         const subtitle = el("p", undefined, "knowledge-subtitle");
-        title.append(el("h1", "Knowledge"), subtitle);
+        title.append(el("h1", "Knowledge", "plugin-page-title"), subtitle);
         // Silent until there is something to report: loading placeholders already say so.
         const status = el("span", "", "knowledge-status");
         status.hidden = true;

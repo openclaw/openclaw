@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   createHostIngressFixture,
   ingressInput,
@@ -6,17 +6,45 @@ import {
 } from "../../channels/message-access/host-ingress.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
-import { resolveReplyCronChannelRequester } from "./get-reply-run.cron-requester.js";
+import {
+  logReplyCronOwnerWithoutAuthority,
+  resolveReplyCronChannelRequester,
+} from "./get-reply-run.cron-requester.js";
 
-it.each(["default", "work"])(
-  "captures a configured Telegram owner through the real host ingress (%s)",
-  (accountId) =>
+const logInfo = vi.hoisted(() => vi.fn());
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (name: string) => ({
+      ...actual.createSubsystemLogger(name),
+      info: logInfo,
+    }),
+  };
+});
+const recordedReason = (context: object, params: { channel: string; accountId?: string }) => {
+  logInfo.mockClear();
+  logReplyCronOwnerWithoutAuthority(context, params);
+  expect(logInfo).toHaveBeenCalledOnce();
+  const [message, fields] = logInfo.mock.calls[0] ?? [];
+  expect(message).toBe("cron: owner turn without management authority");
+  expect(fields).toMatchObject({ channel: params.channel });
+  return (fields as { reason?: string } | undefined)?.reason;
+};
+
+it.each(
+  ["telegram", "discord", "slack"].flatMap((channel) =>
+    ["default", "work"].map((accountId) => ({ channel, accountId })),
+  ),
+)(
+  "captures a configured $channel owner through the real host ingress ($accountId)",
+  ({ channel, accountId }) =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const host = createHostIngressFixture("telegram", {
-        commands: { ownerAllowFrom: ["telegram:123"] },
+      const host = createHostIngressFixture(channel, {
+        commands: { ownerAllowFrom: [`${channel}:123`] },
       });
       try {
-        const message = ingressMessage("telegram", "agent:main:telegram:direct:123", "123", {
+        const message = ingressMessage(channel, `agent:main:${channel}:direct:123`, "123", {
           accountId: accountId === "default" ? undefined : accountId,
         });
         const channelIngress = await host.ingress.resolveStable(
@@ -26,19 +54,19 @@ it.each(["default", "work"])(
         const authority = getCommandOwnerAuthority(context);
         expect(authority?.isCurrent()).toBe(true);
         expect(authority?.channelPrincipal).toEqual({
-          channelId: "telegram",
+          channelId: channel,
           accountId,
           senderId: "123",
         });
         const params = {
-          channel: "telegram",
+          channel,
           senderId: "123",
           accountId: accountId === "default" ? undefined : accountId,
           replyAccountId: "other",
         };
         expect(resolveReplyCronChannelRequester(context, params)).toEqual({
           version: 1,
-          channel: "telegram",
+          channel,
           accountId,
           senderId: "123",
         });
@@ -48,8 +76,13 @@ it.each(["default", "work"])(
         expect(
           resolveReplyCronChannelRequester(context, { ...params, senderId: "other" }),
         ).toBeUndefined();
+        expect(
+          resolveReplyCronChannelRequester(context, { ...params, channel: "other" }),
+        ).toBeUndefined();
+        expect(recordedReason(context, { channel: "other" })).toBe("ingress-identity-mismatch");
         host.retire();
         expect(resolveReplyCronChannelRequester(context, params)).toBeUndefined();
+        expect(recordedReason(context, params)).toBe("owner-revoked");
       } finally {
         host.retire();
       }
@@ -62,14 +95,9 @@ it.each([undefined, "", "   ", "123"])("rejects an unbound Telegram sender %s", 
   ).toBeUndefined();
 });
 
-it("preserves the Discord account contract and does not enroll other channels", () => {
+it.each(["telegram", "discord", "slack"])("rejects an unbound %s owner", (channel) => {
   expect(
-    resolveReplyCronChannelRequester(
-      {},
-      { channel: "discord", senderId: "123", accountId: "ingress", replyAccountId: "work" },
-    ),
-  ).toEqual({ version: 1, channel: "discord", accountId: "work", senderId: "123" });
-  expect(
-    resolveReplyCronChannelRequester({}, { channel: "webchat", senderId: "123" }),
+    resolveReplyCronChannelRequester({}, { channel, senderId: "123", accountId: "work" }),
   ).toBeUndefined();
+  expect(recordedReason({}, { channel, accountId: "work" })).toBe("ingress-identity-unbound");
 });

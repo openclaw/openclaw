@@ -304,7 +304,7 @@ describe("registered completion source custody", () => {
     },
   );
 
-  it("publishes committed registration when its operator source expires before ACK", async () => {
+  it("publishes committed registration despite operator policy revocation before ACK", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       config.setRuntimeConfigSnapshot({});
       const { context, resolveGatewayContext, client, revoked, source } =
@@ -342,18 +342,16 @@ describe("registered completion source custody", () => {
         expect(subagentRuns.has(params.runId)).toBe(false);
         revoked.abort(new Error("operator source revoked after commit"));
         release.resolve();
-        await expect(outcome).resolves.toMatchObject({
-          error: { outcome: "committed", publication: "published" },
-        });
+        await expect(outcome).resolves.toEqual({ ok: true });
         const entry = expectDefined(subagentRuns.get(params.runId), "committed registration");
         expect(getGatewayContextResolver(entry)).toBe(resolveGatewayContext);
         expect(competingRegistration.assertCurrent).toThrow();
-        expect(source.authority.assertCurrent).toThrow();
+        expect(source.authority.assertCurrent).not.toThrow();
         const ambient = vi.fn();
         subagentRuns.runWithCompletionAuthority(entry, ambient);
         subagentRuns.runWithCompletionBatchAuthority([entry], ambient);
         expect(ambient).toHaveBeenCalledTimes(2);
-        expect(callGateway).not.toHaveBeenCalled();
+        expect(callGateway).toHaveBeenCalledOnce();
         held.mockRestore();
         await updateRun(entry.runId, (draft) => {
           draft.label = "committed metadata";
@@ -667,10 +665,10 @@ describe("registered completion source custody", () => {
         const entered = createDeferredCore();
         const resume = createDeferredCore();
         let active = true;
-        const capture = operatorCapture.captureGatewayOperatorRunAuthority;
-        let captured: Awaited<ReturnType<typeof capture>>;
+        const capture = operatorCapture.prepareGatewayOperatorRunAuthority;
+        let captured: operatorCapture.PreparedGatewayOperatorRunAuthority | undefined;
         const held = vi
-          .spyOn(operatorCapture, "captureGatewayOperatorRunAuthority")
+          .spyOn(operatorCapture, "prepareGatewayOperatorRunAuthority")
           .mockImplementationOnce(async (...args) => {
             captured = await capture(...args);
             entered.resolve();
@@ -740,7 +738,8 @@ describe("registered completion source custody", () => {
           if (
             changed === "store" ||
             changed === "unrelated child" ||
-            changed === "failed child replacement"
+            changed === "failed child replacement" ||
+            changed === "source callback"
           ) {
             await pending;
             expect(subagentRuns.get(runId)).toMatchObject({
@@ -770,7 +769,7 @@ describe("registered completion source custody", () => {
   it.each([
     "settle",
     "non-announcing-settle",
-    "revoke",
+    "policy-revoked",
     "gateway-close",
     "replace",
     "release-rejected",
@@ -879,7 +878,7 @@ describe("registered completion source custody", () => {
           await markCancelled(entry.runId);
           await markCancelled("other");
           if (ending === "cancelled-with-missing-custody") {
-            other.revoked.abort(new Error("other requester revoked"));
+            subagentRuns.releaseCompletionAuthority(subagentRuns.get("other")!);
           }
           const observer = createOperatorClient({
             profileName: "cancellation-owner",
@@ -900,9 +899,10 @@ describe("registered completion source custody", () => {
             scopes: ["operator.write"],
           });
           inGateway({ client: observer, context }, () =>
-            subagentRuns.runWithCompletionAuthority(entry, () =>
-              expect(getPluginRuntimeGatewayRequestScope()?.client).toBe(observer),
-            ),
+            subagentRuns.runWithCompletionAuthority(entry, () => {
+              expect(completionAuthority()?.source).toBe(source.authority.source);
+              expect(completionAuthority()?.scopes).toEqual(["operator.write"]);
+            }),
           );
           await releaseSubagentRun(entry.runId);
         } else if (ending.startsWith("mixed-cancellation") || ending === "stale-batch-member") {
@@ -974,6 +974,11 @@ describe("registered completion source custody", () => {
             childSessionKey: entry.childSessionKey,
             expectsCompletionMessage: true,
           });
+          expect(source.authority.assertCurrent).not.toThrow();
+          subagentRuns.runWithCompletionAuthority(entry, () =>
+            expect(completionAuthority()?.source).toBe(source.authority.source),
+          );
+          await releaseSubagentRun(entry.runId);
         }
         expect(source.authority.assertCurrent).toThrow();
         expect(subagentRuns.runWithCompletionAuthority(entry, () => "baseline")).toBe("baseline");

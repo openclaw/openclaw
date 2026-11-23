@@ -180,6 +180,8 @@ describe("committed human mentions", () => {
 
   async function createGuestMentionFixture() {
     const fixture = await createMentionFixture({ active: false, guest: true });
+    // Mention authority tests do not own background model calls for session naming.
+    await patchSessionEntryCore(fixture.scope, () => ({ displayName: "Guest mentions" }));
     const cfg = getRuntimeConfig();
     setRuntimeConfigSnapshot({
       ...cfg,

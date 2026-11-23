@@ -53,7 +53,6 @@ import { scheduleNodeConnectionNotification } from "../../node-connection-notifi
 import { resolveOpenClawIdClawOrigin } from "../../openclaw-id/claw-origin.js";
 import {
   resolveGatewayOperatorRoleActor,
-  resolveAdministratorMemberRolePolicy,
   resolveOperatorRolePolicy,
   resolveOperatorRolePolicyForProfile,
 } from "../../operator-role-policy.js";
@@ -206,12 +205,9 @@ export async function sendGatewayHello(
           activityClient,
           resolveGatewayOperatorRoleActor(activityClient)?.kind === "system"
             ? undefined
-            : (
-                resolveAdministratorMemberRolePolicy(activityClient, context.configSnapshot) ??
-                resolveOperatorRolePolicyForProfile(
-                  activityClient.authenticatedUserProfile?.profileId,
-                  buildRequestContext().getCommittedRuntimeConfig?.() ?? context.configSnapshot,
-                )
+            : resolveOperatorRolePolicyForProfile(
+                activityClient.authenticatedUserProfile?.profileId,
+                buildRequestContext().getCommittedRuntimeConfig?.() ?? context.configSnapshot,
               )?.scopes,
           activityClient.authenticatedUserProfile?.profileId,
         )
@@ -271,6 +267,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_PREFETCH,
         GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_EXEC_MEMORY_BOUNDARY,
         GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_QUIESCENCE,
         GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_RESULT,
         GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION,
@@ -296,6 +293,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
         GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
         GATEWAY_SERVER_CAPS.TALK_SESSION_CLOSE_DISPOSITION,
+        GATEWAY_SERVER_CAPS.UPDATE_RUN_CONSENT_IDENTITY,
       ],
     },
     snapshot,
@@ -409,6 +407,12 @@ export async function sendGatewayHello(
       }
     }
     snapshot.suspension = { phase: getGatewaySuspendAdmissionPhase() };
+    if (
+      (deviceToken || bootstrapDeviceTokens.length > 0) &&
+      state.isDeviceTokenSubjectCurrent?.() === false
+    ) {
+      throw new Error("Credential delivery requires current profile membership");
+    }
     helloWriteStarted = true;
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
   } catch (err) {

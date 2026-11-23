@@ -167,11 +167,9 @@ it.for([
         expect(nativeEntered).toHaveBeenCalledTimes(older ? 0 : 1);
         expect.soft(enqueued).not.toHaveBeenCalled();
         const errorMessage = expect.stringContaining(
-          boundary === "mailbox"
-            ? "operator source identity changed; start a new request"
-            : change === "profile merge"
-              ? "Selected account changed"
-              : "authority is no longer current",
+          boundary === "mailbox" || change === "profile merge"
+            ? "Authenticated profile verification is unavailable"
+            : "The message input is no longer available",
         );
         const failure = fixture.context.dedupe.get(`chat:${fixture.params.idempotencyKey}`);
         expect.soft(failure).toMatchObject({

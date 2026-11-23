@@ -1,8 +1,13 @@
+import { hasLiveAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
-import { recordRequiredCompletionFailure } from "../completion/subagent-completion-admission.store.js";
+import { recordRequiredCompletionNotice } from "../completion/subagent-completion-admission.store.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
+import { retireSubagentCompletionControllerInput } from "./subagent-controller-inputs.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
+import { resolveAnnounceDeliveryDeadline } from "./subagent-registry-cleanup.js";
 import {
+  ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
   safeRemoveAttachmentsDir,
   shouldRemoveSubagentAttachments,
 } from "./subagent-registry-helpers.js";
@@ -10,6 +15,7 @@ import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
@@ -45,7 +51,7 @@ export function warnSuspendedDeliveryPressure(
   return suspendedCount;
 }
 
-export async function discardSuspendedPendingFinalDelivery(params: {
+export async function discardExpiredSubagentDelivery(params: {
   runId: string;
   entry: SubagentRunRecord;
   now: number;
@@ -62,6 +68,8 @@ export async function discardSuspendedPendingFinalDelivery(params: {
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }): Promise<void> {
   const { runId, entry, now, resumedRuns } = params;
+  const suspended = isSuspendedPendingFinalDelivery(entry);
+  const deferDelete = !suspended && entry.cleanup === "delete";
   const stateContext = captureOpenClawStateWorkerContext();
   const resumeKey = getSubagentRunRuntimeKey(entry);
   const isCurrent = () => {
@@ -70,7 +78,9 @@ export async function discardSuspendedPendingFinalDelivery(params: {
   };
   const assertCurrent = () => {
     if (!isCurrent()) {
-      throw new Error("Subagent suspended delivery cleanup owner changed.");
+      throw new Error(
+        `Subagent ${suspended ? "suspended" : "expired"} delivery cleanup owner changed.`,
+      );
     }
   };
   assertCurrent();
@@ -84,15 +94,23 @@ export async function discardSuspendedPendingFinalDelivery(params: {
     cleanup: entry.cleanup,
     completedAt: now,
     skipRequesterSettleWake: true,
+    retainForCleanup: deferDelete,
     stateContext,
     isCurrent,
-    finalizeDelivery: (draft) => params.discardTerminalDelivery(draft, now),
+    finalizeDelivery: (draft) => {
+      params.discardTerminalDelivery(draft, now);
+      // Idle completion expiry leaves session and attachment deletion to the sweeper.
+      if (deferDelete) {
+        draft.archiveAtMs = now;
+      }
+    },
   });
   assertCurrent();
+  retireSubagentCompletionControllerInput(entry);
   resumedRuns.delete(resumeKey);
   params.clearPendingLifecycleError(runId);
   params.clearPendingLifecycleTimeout(runId);
-  params.warn("subagent suspended delivery discarded", {
+  params.warn(`subagent ${suspended ? "suspended" : "completion"} delivery discarded`, {
     reason: "expired",
     runId: entry.runId,
     childSessionKey: entry.childSessionKey,
@@ -103,30 +121,81 @@ export async function discardSuspendedPendingFinalDelivery(params: {
     recovery:
       "Inspect retained results with /subagents info <runId>; session history depends on cleanup and retention.",
   });
-  if (shouldRemoveSubagentAttachments(entry) && isHookCurrent()) {
-    await safeRemoveAttachmentsDir(entry, isHookCurrent);
+  try {
+    if (
+      !deferDelete &&
+      shouldRemoveSubagentAttachments(entry) &&
+      (suspended ? isHookCurrent() : await prepareHookCurrent())
+    ) {
+      await safeRemoveAttachmentsDir(entry, isHookCurrent);
+    }
+    assertCurrent();
+    if (
+      suspended &&
+      (await prepareHookCurrent()) &&
+      entry.expectsCompletionMessage === true &&
+      params.shouldEmitEndedHookForRun({ entry, reason: completionReason })
+    ) {
+      await params.emitSubagentEndedHookForRun({
+        entry,
+        reason: completionReason,
+        sendFarewell: true,
+        isCurrent: isHookCurrent,
+        prepareCurrent: prepareHookCurrent,
+      });
+    }
+  } finally {
+    // Retiring the obligation is the final failure: the requester sees it, not only the log.
+    // The discard is already committed, so the notice is best-effort and cannot undo it.
+    await recordRequiredCompletionNotice(entry, "expired").catch((error: unknown) => {
+      params.warn("subagent expiry notice could not be recorded", {
+        runId: entry.runId,
+        requesterSessionKey: entry.requesterSessionKey,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
-  assertCurrent();
+}
+
+/** Idle expiry retires the same result obligation as suspended delivery. */
+export async function settleSubagentCompletionReservation(
+  entry: SubagentRunRecord,
+  now: number,
+  lifecycle: Omit<
+    Parameters<typeof discardExpiredSubagentDelivery>[0],
+    "runId" | "entry" | "now" | "isCurrent"
+  > & {
+    isCleanupOwnerCurrent: (entry: SubagentRunRecord) => boolean;
+    isTerminalTailActive: (entry: SubagentRunRecord) => boolean;
+  },
+): Promise<boolean> {
+  if (resolveSubagentChildAuthority(entry).status === "mismatch") {
+    retireSubagentCompletionControllerInput(entry);
+    return true;
+  }
   if (
-    (await prepareHookCurrent()) &&
-    entry.expectsCompletionMessage === true &&
-    params.shouldEmitEndedHookForRun({ entry, reason: completionReason })
+    entry.execution.status !== "terminal" ||
+    typeof entry.execution.endedAt !== "number" ||
+    entry.expectsCompletionMessage !== true ||
+    (entry.delivery?.status !== "pending" && entry.delivery?.status !== "in_progress") ||
+    entry.delivery.queueId ||
+    entry.pauseReason === "sessions_yield" ||
+    entry.requesterSettleWake ||
+    entry.killIntent ||
+    entry.killReconciliation ||
+    subagentRuns.isCompletionAuthorityRetired(entry) ||
+    lifecycle.isTerminalTailActive(entry) ||
+    hasLiveAgentRunContext(entry.runId) ||
+    resolveAnnounceDeliveryDeadline(entry, now, ANNOUNCE_COMPLETION_HARD_EXPIRY_MS) > now
   ) {
-    await params.emitSubagentEndedHookForRun({
-      entry,
-      reason: completionReason,
-      sendFarewell: true,
-      isCurrent: isHookCurrent,
-      prepareCurrent: prepareHookCurrent,
-    });
+    return false;
   }
-  // Retiring the obligation is the final failure: the requester sees it, not only the log.
-  // The discard is already committed, so the notice is best-effort and cannot undo it.
-  await recordRequiredCompletionFailure(entry, "expired").catch((error: unknown) => {
-    params.warn("subagent expiry notice could not be recorded", {
-      runId: entry.runId,
-      requesterSessionKey: entry.requesterSessionKey,
-      error: error instanceof Error ? error.message : String(error),
-    });
+  await discardExpiredSubagentDelivery({
+    ...lifecycle,
+    runId: entry.runId,
+    entry,
+    now,
+    isCurrent: () => lifecycle.isCleanupOwnerCurrent(entry),
   });
+  return true;
 }

@@ -169,9 +169,10 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
   ): FollowupSuccessor {
     const cohort =
       this.cohort ?? (this.execution.runId === runId ? this.execution.admittedCohort : undefined);
+    // The settle wake offers the cohort's last partition; earlier partitions already settled.
     if (
       !cohort ||
-      cohort.entries.length !== entries.length ||
+      entries.length === 0 ||
       !entries.every((entry) =>
         cohort.entries.some((current) => isSameSubagentRunOwner(current, entry)),
       )

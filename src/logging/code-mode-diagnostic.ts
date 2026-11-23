@@ -38,7 +38,12 @@ export function logCodeModeFailure(error: unknown, context: CodeModeFailureConte
     context.failureCode === "store_type"
       ? "warn"
       : "error";
-  failureLog[level]("Code Mode execution failed", {
+  // The guest can catch a bridge rejection and still finish the cell successfully.
+  const message =
+    context.failurePhase === "bridge"
+      ? "Code Mode bridge request failed"
+      : "Code Mode execution failed";
+  failureLog[level](message, {
     ...context,
     errorCode:
       extractErrorCode(cause) === "ERR_WORKER_OUT_OF_MEMORY"

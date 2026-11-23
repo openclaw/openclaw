@@ -37,14 +37,8 @@ function resolveCronJobScheduledMessagePolicy(job: CronStoredJob) {
     : undefined;
 }
 
-/** Snapshots the permissions used by all scheduled message actions. */
-export function resolveCronJobMessageToolAuthorityInputs(job: CronStoredJob) {
-  const policy = resolveCronJobScheduledMessagePolicy(job);
-  return policy ? { policy } : undefined;
-}
-
 /** Snapshots the normalized permissions used by scheduled message access. */
-export function resolveCronJobMessageActionAuthorityInputs(job: CronStoredJob) {
+function resolveCronJobMessageActionAuthorityInputs(job: CronStoredJob) {
   const policy = resolveCronJobScheduledMessagePolicy(job);
   if (!policy) {
     return undefined;
@@ -67,16 +61,6 @@ export function resolveCronJobMessageActionAuthorityInputs(job: CronStoredJob) {
         }
       : {}),
   };
-}
-
-export function cronJobMessageToolAuthorityInputsEqual(
-  previous: CronStoredJob,
-  next: CronStoredJob,
-): boolean {
-  return isDeepStrictEqual(
-    resolveCronJobMessageToolAuthorityInputs(previous),
-    resolveCronJobMessageToolAuthorityInputs(next),
-  );
 }
 
 export function cronJobMessageActionAuthorityInputsEqual(

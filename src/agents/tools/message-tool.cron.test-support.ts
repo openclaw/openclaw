@@ -41,7 +41,7 @@ export async function withCronMessageRun<T>(
     runIsolatedAgentJob: async (execution) => {
       const { preparedRunAdmission, messageActionTurnCapability, close } = prepareCronRunAdmission({
         ...scope,
-        scheduledExecution: execution.occurrence.mint({
+        scheduledExecution: await execution.occurrence.mint({
           cfg,
           agentId: scope.agentId,
           runId: scope.runId,

@@ -1678,14 +1678,14 @@ it("revokes MCP capture at the supervisor deadline before native exit", async ()
     expect(assertCaptureCurrent).toBeTypeOf("function");
     expect(assertCaptureCurrent).not.toThrow();
     adapter.killMock.mockImplementation(() => {
-      expect(assertCaptureCurrent).toThrow("CLI process authority is no longer active");
+      expect(assertCaptureCurrent).toThrow("The CLI process was stopped");
     });
     await vi.advanceTimersByTimeAsync(context.params.timeoutMs); // Deadline decisions wait one timer turn for pending child exit notifications.
     await vi.advanceTimersToNextTimerAsync();
     expect(adapter.killMock).toHaveBeenCalledOnce();
     expect(managed.activity.resultSettled).toBe(false);
     expect(deactivateCapture).not.toHaveBeenCalled();
-    expect(assertCaptureCurrent).toThrow("CLI process authority is no longer active");
+    expect(assertCaptureCurrent).toThrow("The CLI process was stopped");
     adapter.settle(null, "SIGTERM");
     await expect(execution).rejects.toMatchObject({ reason: "timeout" });
     expect(deactivateCapture).toHaveBeenCalledOnce();

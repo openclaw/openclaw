@@ -134,72 +134,159 @@ it("exposes configured and undefined member roles without replacing their opaque
   }
 });
 
-it.each(["docker", "podman"])(
-  "reports fresh %s engine usability even when sandbox mode is off",
-  async (backend) => {
-    setRuntimeConfigSnapshot({ agents: { defaults: { sandbox: { backend, mode: "off" } } } });
-    const claw = await linkedClaw();
-    const { service } = serviceFor(claw.authority);
-    try {
-      expect(await service.linkStatus({ includeSandboxBackend: true })).toMatchObject({
-        sandboxBackend: { backend, available: true },
-      });
-      expect(spawnCommand.mock.calls.every(([argv]) => argv.includes(backend))).toBe(true);
-      expect(spawnCommand.mock.calls.some(([argv]) => argv.includes("info"))).toBe(true);
-      spawnCommand.mockRejectedValue(new Error("synthetic daemon unavailable"));
-      expect(await service.linkStatus({ includeSandboxBackend: true })).toMatchObject({
-        sandboxBackend: { backend, available: false },
-      });
-    } finally {
-      await service.stop();
-    }
+const guestRole = {
+  sessions: { others: "view" as const },
+  agents: "*" as const,
+  scopes: ["operator.sessions.read" as const],
+  sandbox: "required" as const,
+};
+const sandboxConfig = (sandbox: Record<string, unknown>) => ({
+  agents: { defaults: { sandbox } },
+  gateway: {
+    roles: {
+      definitions: {
+        guest: guestRole,
+        operator: { sessions: { others: "write" as const }, agents: "*" as const, scopes: [] },
+      },
+    },
   },
-);
-
-it.each(["missing executable", "daemon permission denied", "daemon stopped"])(
-  "reports the default Docker backend unavailable for %s without probing another engine",
-  async (failure) => {
-    if (failure === "daemon stopped") {
-      spawnCommand.mockResolvedValue({
-        failed: true,
-        isCanceled: false,
-        exitCode: 1,
-        stdout: Buffer.alloc(0),
-        stderr: Buffer.from("Cannot connect to the Docker daemon"),
-      });
-    } else {
-      spawnCommand.mockRejectedValue(
-        Object.assign(new Error(failure), {
-          code: failure === "missing executable" ? "ENOENT" : "EACCES",
-        }),
-      );
-    }
-    const claw = await linkedClaw();
-    const { service } = serviceFor(claw.authority);
-    try {
-      expect(await service.linkStatus({ includeSandboxBackend: true })).toMatchObject({
-        sandboxBackend: { backend: "docker", available: false },
-      });
-      expect(spawnCommand).toHaveBeenCalledOnce();
-      expect(spawnCommand.mock.calls[0]?.[0]).toEqual(["docker", "info"]);
-    } finally {
-      await service.stop();
-    }
-  },
-);
-
-it("leaves non-container backend availability unknown without probing Docker", async () => {
-  setRuntimeConfigSnapshot({ agents: { defaults: { sandbox: { backend: "ssh" } } } });
+});
+const engineReply = (failed: boolean, stderr = "") => ({
+  failed,
+  isCanceled: false,
+  exitCode: failed ? 1 : 0,
+  stdout: Buffer.from("true\tfalse\t\t5.0.0\n"),
+  stderr: Buffer.from(stderr),
+});
+const guestReadiness = async (sandbox: Record<string, unknown>) => {
+  setRuntimeConfigSnapshot(sandboxConfig(sandbox));
   const claw = await linkedClaw();
   const { service } = serviceFor(claw.authority);
   try {
-    expect(await service.linkStatus({ includeSandboxBackend: true })).toMatchObject({
-      sandboxBackend: { backend: "ssh", available: null },
-    });
-    expect(spawnCommand).not.toHaveBeenCalled();
+    const status = await service.linkStatus({ includeSandboxReadiness: true });
+    return status.linked ? status.roles.find((role) => role.name === "guest") : undefined;
   } finally {
     await service.stop();
   }
+};
+
+it.each(["docker", "podman"])(
+  "reports whether the %s sandbox image for a required-sandbox role exists, even with mode off",
+  async (backend) => {
+    expect(await guestReadiness({ backend, mode: "off" })).toMatchObject({
+      requiresSandbox: true,
+      sandbox: { ready: true },
+    });
+    expect(spawnCommand.mock.calls.every(([argv]) => argv.includes(backend))).toBe(true);
+    expect(spawnCommand.mock.calls.some(([argv]) => argv.includes("info"))).toBe(true);
+    expect(
+      spawnCommand.mock.calls.some(([argv]) =>
+        argv.join(" ").includes("image inspect openclaw-sandbox:trixie-slim"),
+      ),
+    ).toBe(true);
+    spawnCommand.mockImplementation(async (argv: string[]) =>
+      argv.includes("inspect")
+        ? engineReply(true, "Error: No such image: openclaw-sandbox:trixie-slim")
+        : engineReply(false),
+    );
+    expect(await guestReadiness({ backend, mode: "off" })).toMatchObject({
+      sandbox: {
+        ready: false,
+        reason: "image_missing",
+        backend,
+        image: "openclaw-sandbox:trixie-slim",
+        doctorBuilds: backend === "docker",
+      },
+    });
+    spawnCommand.mockRejectedValue(new Error("synthetic daemon unavailable"));
+    expect(await guestReadiness({ backend, mode: "off" })).toMatchObject({
+      sandbox: { ready: false, reason: "engine_unavailable", backend },
+    });
+  },
+);
+
+it("checks each agent's own sandbox image and leaves roles without a sandbox unprobed", async () => {
+  spawnCommand.mockImplementation(async (argv: string[]) =>
+    argv.includes("custom/sandbox:1")
+      ? engineReply(true, "Error: No such image: custom/sandbox:1")
+      : engineReply(false),
+  );
+  const config = sandboxConfig({});
+  setRuntimeConfigSnapshot({
+    ...config,
+    agents: {
+      entries: {
+        main: {},
+        research: { sandbox: { docker: { image: "custom/sandbox:1" } } },
+      },
+    },
+  });
+  const claw = await linkedClaw();
+  const { service } = serviceFor(claw.authority);
+  try {
+    const status = await service.linkStatus({ includeSandboxReadiness: true });
+    expect(status).toMatchObject({
+      roles: [
+        {
+          name: "guest",
+          sandbox: {
+            ready: false,
+            reason: "image_missing",
+            image: "custom/sandbox:1",
+            doctorBuilds: false,
+          },
+        },
+        { name: "operator", requiresSandbox: false },
+      ],
+    });
+    expect(status.linked ? status.roles[1]?.sandbox : "unlinked").toBeUndefined();
+  } finally {
+    await service.stop();
+  }
+});
+
+it("names Doctor only for the image Doctor builds", async () => {
+  spawnCommand.mockImplementation(async (argv: string[]) =>
+    argv.includes("openclaw-sandbox:trixie-slim")
+      ? engineReply(true, "Error: No such image: openclaw-sandbox:trixie-slim")
+      : engineReply(false),
+  );
+  setRuntimeConfigSnapshot({
+    ...sandboxConfig({ docker: { image: "custom/sandbox:1" } }),
+    agents: {
+      defaults: { sandbox: { docker: { image: "custom/sandbox:1" } } },
+      entries: {
+        main: { sandbox: { docker: { image: "openclaw-sandbox:trixie-slim" } } },
+      },
+    },
+  });
+  const claw = await linkedClaw();
+  const { service } = serviceFor(claw.authority);
+  try {
+    // Doctor checks the defaults' custom image, so it would not build this agent's image.
+    expect(await service.linkStatus({ includeSandboxReadiness: true })).toMatchObject({
+      roles: [
+        {
+          name: "guest",
+          sandbox: {
+            reason: "image_missing",
+            image: "openclaw-sandbox:trixie-slim",
+            doctorBuilds: false,
+          },
+        },
+        { name: "operator" },
+      ],
+    });
+  } finally {
+    await service.stop();
+  }
+});
+
+it("leaves non-container backend readiness unknown without probing Docker", async () => {
+  expect(await guestReadiness({ backend: "ssh" })).toMatchObject({
+    sandbox: { ready: null, backend: "ssh" },
+  });
+  expect(spawnCommand).not.toHaveBeenCalled();
 });
 
 it("does not probe engines or load authority when OpenClaw ID is disabled", async () => {
@@ -212,7 +299,7 @@ it("does not probe engines or load authority when OpenClaw ID is disabled", asyn
     createAuthority,
     log: { info() {}, warn() {} },
   });
-  expect(await service.linkStatus({ includeSandboxBackend: true })).toEqual({
+  expect(await service.linkStatus({ includeSandboxReadiness: true })).toEqual({
     linked: false,
     publication: undefined,
   });

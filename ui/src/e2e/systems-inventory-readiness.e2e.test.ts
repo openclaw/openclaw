@@ -93,11 +93,29 @@ suite.define(() => {
         });
         await sidebar.getByRole("button", { name: "Recovered fleet", exact: true }).waitFor();
         await search.fill("not-present");
-        await sidebar.getByText("No devices match your search.", { exact: true }).waitFor();
+        const noMatches = sidebar.getByText("No devices match your search.", { exact: true });
+        await noMatches.waitFor();
+        const after = await gateway.deferNext("environments.list");
+        await gateway.emitGatewayEvent("node.runnerInventory.changed", {});
+        await gateway.waitForRequest("environments.list", { after });
+        await sidebar.locator('.systems-sidebar__list[aria-busy="true"]').waitFor();
+        expect(await noMatches.isVisible()).toBe(true);
+        await gateway.resolveDeferred("environments.list", { environments: [] });
+        await sidebar.locator('.systems-sidebar__list[aria-busy="false"]').waitFor();
         await search.fill("");
-        await gateway.setMethodResponse("environments.list", { environments: [] });
+        const empty = sidebar.getByText("No devices yet.", { exact: true });
+        await empty.waitFor();
+        const refresh = await gateway.deferNext("environments.list");
         await sidebar.getByRole("button", { name: "Refresh devices", exact: true }).click();
-        await sidebar.getByText("No devices yet.", { exact: true }).waitFor();
+        await gateway.waitForRequest("environments.list", { after: refresh });
+        expect(await empty.isVisible()).toBe(true);
+        await gateway.resolveDeferred("environments.list", {
+          environments: [
+            { id: "node:new", type: "node", label: "New device", status: "available" },
+          ],
+        });
+        await sidebar.getByRole("button", { name: /New device/ }).waitFor();
+        expect(await empty.count()).toBe(0);
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
       }),

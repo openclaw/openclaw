@@ -87,6 +87,7 @@ async function resolveWsProfileAdmission(request: ReturnType<typeof accessReques
       role: "operator",
     },
     ownerProfileExpected: false,
+    connectionScopes: ["operator.read"],
     authenticatedUserId: request.authResult.user,
     resolveAuthenticatedGitHubIdentity: createAuthenticatedGitHubIdentitySync({
       authResult: request.authResult,

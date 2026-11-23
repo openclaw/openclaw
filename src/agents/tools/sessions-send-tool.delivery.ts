@@ -37,7 +37,6 @@ import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { resolveSenderRestrictedSpawnError } from "../spawn-requester-policy.js";
 import { jsonResult } from "./common.js";
 import {
-  captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
 } from "./gateway-caller-context.js";
@@ -54,7 +53,7 @@ import type { AgentStepSession } from "./sessions-send-tool.types.js";
 // Bind at dispatch: child followup custody installs its context after tool construction.
 export const callSessionsSendGateway: AgentToolGatewayRequestCaller = async <T>(
   request: Parameters<AgentToolGatewayRequestCaller>[0],
-): Promise<T> => await bindAgentToolGatewayRequest({ revalidateOnCompletion: false })<T>(request);
+): Promise<T> => await bindAgentToolGatewayRequest({ forwardAbortSignal: false })<T>(request);
 
 export function buildSessionsSendAgentParams(params: {
   message: string;
@@ -148,7 +147,6 @@ type SessionsSendDeliveryParams = {
   cfg: OpenClawConfig;
   admissionConfig: OpenClawConfig;
   callGateway: AgentToolGatewayRequestCaller;
-  callDurableGateway?: AgentToolGatewayRequestCaller;
   runId: string;
   sendParams: Record<string, unknown> & {
     message: string;
@@ -204,10 +202,8 @@ const FALLBACK_STEER_REJECTIONS = new Set<
 export async function trySessionsSendActiveRunDelivery(
   params: SessionsSendDeliveryParams,
   ownChild: boolean,
-): Promise<
-  SessionsSendStart | { fallbackSessionKey?: string; callGateway?: AgentToolGatewayRequestCaller }
-> {
-  const assertCaller = captureGatewayToolCallerAssertion();
+): Promise<SessionsSendStart | { fallbackSessionKey?: string }> {
+  const admittedCaller = Boolean(getGatewayToolCallerIdentity()?.operationalRunInstance);
   try {
     const selection = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
     selection.assertCurrent();
@@ -261,7 +257,7 @@ export async function trySessionsSendActiveRunDelivery(
           }
         };
         const guarded = Boolean(
-          selection.operatorAuthority || assertCaller || params.assertSendCurrent,
+          selection.operatorAuthority || admittedCaller || params.assertSendCurrent,
         );
         assertInputCurrent();
         const queueOptions: ReplyMessageInjectionOptions = {
@@ -271,8 +267,6 @@ export async function trySessionsSendActiveRunDelivery(
           },
           steeringMode: "all",
           debounceMs: 0,
-          // Reply waiting and durable admission have separate deadlines.
-          deliveryTimeoutMs: undefined,
           ...lifecycle,
           onQueueAccepted: (value) => {
             // Accepted guidance belongs to the receiver, not the sender's later policy.
@@ -280,17 +274,9 @@ export async function trySessionsSendActiveRunDelivery(
             lifecycle.onQueueAccepted?.(value);
           },
           // Source-bound authority admits only guarded (V2) injection.
-          ...(guarded
-            ? {
-                assertCurrent: () => {
-                  assertInputCurrent();
-                  if (!selection.operatorAuthority) {
-                    assertCaller?.("sessions.send");
-                  }
-                },
-              }
-            : {}),
-          waitForTranscriptCommit: true,
+          ...(guarded ? { assertCurrent: assertInputCurrent } : {}),
+          // Admission is the receipt; the receiving run owns commit or withdrawal.
+          waitForTranscriptCommit: false,
           // The receiving runtime owns transcript writes to this exact incarnation.
           userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
             assertOriginalInputCommit: assertInputCurrent,
@@ -356,13 +342,6 @@ export async function trySessionsSendActiveRunDelivery(
           );
         }
         return {};
-      }
-      if (steer.reason === "transcript_commit_wait_unsupported") {
-        if (!params.callDurableGateway) {
-          throw new Error("The target cannot accept restart-durable steering from this caller.");
-        }
-        // Capability rejection precedes injection, so the same input can safely queue once.
-        return { callGateway: params.callDurableGateway };
       }
       // A definite capability refusal leaves ordinary input on its captured
       // conversation. Revocation and uncertain native commitment never retry.
