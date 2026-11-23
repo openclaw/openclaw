@@ -2394,6 +2394,7 @@ src/state/session-metadata-unavailable-error.ts
 src/state/session-repository-workspaces.authority.ts
 src/state/session-repository-workspaces.kernel.ts
 src/state/session-repository-workspaces.receipts.ts
+src/state/session-repository-workspaces.recovery.ts
 src/state/session-watch-cursor-provenance.ts
 src/state/sqlite-table-layout-migration.ts
 src/state/worker-operation-registry.ts
