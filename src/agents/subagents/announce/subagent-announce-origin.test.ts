@@ -10,10 +10,20 @@ describe("resolveCompletionDeliveryOrigins", () => {
       requesterSessionOrigin: stored,
       completionDirectOrigin: stored,
     });
-    expect(origins.directOrigin?.to).toBeUndefined();
-    expect(origins.requesterSessionOrigin?.to).toBeUndefined();
-    expect(origins.effectiveDirectOrigin?.to).toBeUndefined();
-    expect(origins.effectiveDirectOrigin?.threadId).toBeUndefined();
+    expect(origins.directOrigin).toEqual({ channel: "telegram" });
+    expect(origins.requesterSessionOrigin).toEqual({ channel: "telegram" });
+    expect(origins.effectiveDirectOrigin).toEqual({ channel: "telegram" });
+  });
+
+  it("keeps an internal route's own session key", () => {
+    const origin = { channel: "webchat", to: "agent:main:build" };
+    const origins = resolveCompletionDeliveryOrigins({
+      expectsCompletionMessage: false,
+      directOrigin: origin,
+      requesterSessionOrigin: origin,
+    });
+    expect(origins.directOrigin).toEqual(origin);
+    expect(origins.requesterSessionOrigin).toEqual(origin);
   });
 
   it("keeps a real chat target", () => {

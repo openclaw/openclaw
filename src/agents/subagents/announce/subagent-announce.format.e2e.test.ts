@@ -713,6 +713,12 @@ describe("subagent announce formatting", () => {
       false,
     ],
     [
+      "a stored session-key target",
+      undefined,
+      { deliver: false, to: undefined, threadId: undefined },
+      () => setRequesterSession({ lastChannel: "telegram", lastTo: requesterKey }),
+    ],
+    [
       "explicit thread over stored thread",
       { ...telegramRoute, threadId: 99 },
       { ...telegramRoute, threadId: "99" },

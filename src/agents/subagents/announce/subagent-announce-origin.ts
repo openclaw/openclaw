@@ -228,12 +228,18 @@ function stripNonDeliverableChannel(context?: DeliveryContext): DeliveryContext 
 }
 
 /**
- * A session key is an internal address, never a chat target. A stored route can carry one as
- * `to` next to an external channel; trusting it makes the channel reject the completion.
+ * A session key is an internal address (WebChat's own `to`), never an external chat target. A
+ * stored route can carry one next to an external channel; trusting it makes the channel reject
+ * the completion.
  */
 function dropSessionKeyTarget(context?: DeliveryContext): DeliveryContext | undefined {
   const normalized = normalizeDeliveryContext(context);
-  if (!normalized?.to || classifySessionKeyShape(normalized.to) !== "agent") {
+  if (
+    !normalized?.to ||
+    !normalized.channel ||
+    !isDeliverableMessageChannel(normalized.channel) ||
+    classifySessionKeyShape(normalized.to) !== "agent"
+  ) {
     return normalized;
   }
   const { to: _to, threadId: _threadId, ...rest } = normalized;
