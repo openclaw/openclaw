@@ -503,9 +503,16 @@ suite.define(() => {
             expect(response.archivedTranscriptsExcluded).toBe(0);
             expect(response.sessionKeys?.length).toBeLessThanOrEqual(25);
             expect(new Set(response.sessionKeys)).toEqual(new Set(response.resultKeys));
-            // The query owns one bounded metadata lookup. The scoped transcript
-            // request above cannot be limited by any background roster window.
+            // The query owns one bounded live metadata lookup and one archived title lookup.
+            // The scoped transcript request above cannot be limited by any background roster window.
             expect(metadata).toHaveLength(1);
+            expect(archived).toHaveLength(1);
+            expect(archived[0]!.params).toMatchObject({
+              search: query,
+              source: "command-palette",
+              archived: true,
+              searchTitlesOnly: true,
+            });
             const metadataResponse = metadata[0]!;
             const previous = metadataReceipts.get(query);
             const { ifRowsRevision: requestedRevision, ...metadataParams } =
