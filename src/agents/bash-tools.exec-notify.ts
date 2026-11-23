@@ -304,12 +304,18 @@ async function settleOwedExecWake(
     }
     if (outcome.status === "completed") {
       await withhold(owed, "failed", "interrupted");
-    } else if (outcome.status === "failed" && wakeAgain) {
-      // A shared wake's row carries the folded text of every result it answers.
-      wakeAgain(stored);
-    } else {
-      await withhold(owed, outcome.status === "cancelled" ? "user-stop" : "failed");
+      return;
     }
+    if (outcome.status === "failed" && wakeAgain) {
+      try {
+        // A shared wake's row carries the folded text of every result it answers.
+        wakeAgain(stored);
+        return;
+      } catch (error) {
+        logWarn(`exec: completion ${owed.id} retry was refused (${formatErrorMessage(error)}).`);
+      }
+    }
+    await withhold(owed, outcome.status === "cancelled" ? "user-stop" : "failed");
   } catch (error) {
     logWarn(`exec: completion ${owed.id} stays owed (${formatErrorMessage(error)}).`);
   }
@@ -358,18 +364,24 @@ async function notifyOnExit(
       await owe(owed);
       // Admission resolves the chat by key: a deleted chat refuses the wake.
       const wakeOptions = { ...eventOptions, sourceRunId: session.startedByRunId };
-      const receipt = enqueueExecExitNotification(eventText, target, instanceId, wakeOptions);
-      recordNotifyOnExitRemoval(session, receipt.cancel);
       // The retry keeps the captured target, so admission revalidates the requester's authority
       // and store, and the request owners; it takes over the removal handle.
-      void receipt.settled.then((outcome) =>
-        settleOwedExecWake(owed, outcome, (stored) =>
-          recordNotifyOnExitRemoval(
-            session,
-            wakeOwedExec(stored, { ...wakeOptions, expectedTarget: target }).cancel,
-          ),
-        ),
-      );
+      const wakeAgain = (stored: Owed) =>
+        recordNotifyOnExitRemoval(
+          session,
+          wakeOwedExec(stored, { ...wakeOptions, expectedTarget: target }).cancel,
+        );
+      let receipt: ReturnType<typeof enqueueExecExitNotification>;
+      try {
+        receipt = enqueueExecExitNotification(eventText, target, instanceId, wakeOptions);
+      } catch (error) {
+        // A refused enqueue (for example a full wake pool) settles like a wake that never started.
+        const failed = { status: "failed", executionStarted: false, delivered: false } as const;
+        void settleOwedExecWake(owed, { ...failed, error: formatErrorMessage(error) }, wakeAgain);
+        return;
+      }
+      recordNotifyOnExitRemoval(session, receipt.cancel);
+      void receipt.settled.then((outcome) => settleOwedExecWake(owed, outcome, wakeAgain));
     } catch (error) {
       logWarn(
         `exec: completion was not admitted (${formatErrorMessage(error)}); inspect the result with process log.`,
