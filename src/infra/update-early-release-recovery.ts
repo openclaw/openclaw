@@ -119,14 +119,18 @@ function processStart(pid: number): string | null {
   }
 }
 
-/** The nearest ancestor running `openclaw update`: the updater this check reports to. */
+/**
+ * The updater this check reports to: the nearest ancestor running `openclaw update`. The CLI
+ * renames its process to `openclaw`, which on Linux replaces its command line; the Gateway
+ * names itself `openclaw-gateway`.
+ */
 function findDriver(): RecoveryPlan["driver"] | undefined {
   let pid = process.ppid;
   for (let depth = 0; depth < 8 && pid > 1; depth++) {
     try {
       const argv = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
       const start = processStart(pid);
-      if (start && argv.includes("update")) {
+      if (start && (argv.includes("update") || argv[0] === "openclaw")) {
         return { pid, start };
       }
       const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
