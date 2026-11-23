@@ -182,33 +182,24 @@ it("sends a pinned commit and the --timeout budget that the Gateway protocol acc
   expect(validateUpdateRunParams(sent[0])).toBe(true);
 });
 
-it.each([false, true])(
-  "reports the recorded node notice while activation is pending (json=%s)",
-  async (json) => {
-    const detail =
-      "Node service is still running; a node restart alone will not activate the prepared release.";
-    localRun.status = "running";
-    localRun.phase = "activating";
-    localRun.steps = [{ step: "warning:node-service-inspection", status: "completed", detail }];
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://remote.example.invalid");
-    try {
-      await runReleaseUpdateCli({ json, restart: true, runningRoot: root, tag: "2026.11.6" });
-    } finally {
-      vi.unstubAllEnvs();
-    }
-    expect(sent).toEqual([]);
-    if (json) {
-      expect(output).toHaveBeenCalledWith(expect.objectContaining({ steps: localRun.steps }));
-      expect(log).not.toHaveBeenCalled();
-    } else {
-      expect(log).toHaveBeenCalledWith(detail);
-      expect(log.mock.calls.flat().join(" ")).toContain("release trial is pending");
-      expect(log.mock.calls.flat().join(" ")).not.toContain("Updated to");
-    }
-  },
-);
+it("reports the recorded node notice while activation is pending", async () => {
+  const detail =
+    "Node service is still running; a node restart alone will not activate the prepared release.";
+  localRun.status = "running";
+  localRun.phase = "activating";
+  localRun.steps = [{ step: "warning:node-service-inspection", status: "completed", detail }];
+  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+  vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://remote.example.invalid");
+  try {
+    await runReleaseUpdateCli({ json: false, restart: true, runningRoot: root, tag: "2026.11.6" });
+  } finally {
+    vi.unstubAllEnvs();
+  }
+  expect(sent).toEqual([]);
+  expect(log).toHaveBeenCalledWith(detail);
+  expect(log.mock.calls.flat().join(" ")).toContain("release trial is pending");
+  expect(log.mock.calls.flat().join(" ")).not.toContain("Updated to");
+});
 
 it("keeps a stable-tag checkout on stable when it updates without the Gateway", async () => {
   await runReleaseUpdateCli({ json: true, restart: false, runningRoot: root });

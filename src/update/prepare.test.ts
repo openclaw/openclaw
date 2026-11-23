@@ -684,6 +684,14 @@ if (process.argv[2] !== 'install') {
           const result = await exec(node, [path.join(runningRoot, entry), "--version"], { env });
           expect(result.stdout.trim()).toBe("running");
         }
+        // A legacy unit runs this entrypoint directly. A fresh node process must still
+        // select the running package, not consume a trial reserved for Gateway startup.
+        const restartedNode = await exec(
+          node,
+          [path.join(runningRoot, "dist/index.js"), "node", "run"],
+          { env },
+        );
+        expect(restartedNode.stdout.trim()).toBe("running");
         expect((await readTrial(prefix))?.phase).toBe("pending");
         await settleRunFromTrial({
           ...(await readTrial(prefix))!,
