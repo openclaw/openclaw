@@ -571,7 +571,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
         contextSerialization: compactSerialization,
       });
 
-      const carrier = String(result.runtimeContextMessageForCurrentTurn?.content ?? "");
+      const carrier = result.runtimeContextMessageForCurrentTurn?.content ?? "";
       expect(carrier).toContain(compactInbound);
       expect(carrier).not.toContain(verboseInbound);
       expect(carrier).not.toContain("OpenClaw runtime facts");
@@ -594,7 +594,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
         sessionVersion: 4,
       });
 
-      const carrier = String(result.runtimeContextMessageForCurrentTurn?.content ?? "");
+      const carrier = result.runtimeContextMessageForCurrentTurn?.content ?? "";
       expect(result.promptForModel).not.toContain(compactInbound);
       expect(carrier).toContain("Runtime room event");
       expect(carrier).toContain(compactInbound);
@@ -635,7 +635,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
 
         const result = await prepareContext({ ...fixture.input, contextSerialization });
 
-        const carrier = String(result.runtimeContextMessageForCurrentTurn?.content ?? "");
+        const carrier = result.runtimeContextMessageForCurrentTurn?.content ?? "";
         expect(contextSerialization.mode).toBe(mode);
         expect(carrier).toContain(mode === "compact" ? compactInbound : verboseInbound);
         expect(carrier).not.toContain(mode === "compact" ? verboseInbound : compactInbound);
