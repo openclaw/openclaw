@@ -141,6 +141,14 @@ Rules for update changes:
 Add a note here when a change alters a contract. A note about the in-place update
 flow names the shipped-updater contract or unmoved route that it serves.
 
+Shipped in-place updaters leave their running code in an `openclaw-update-runtime-*`
+directory and promise that the next update removes it. Release updates now do: before
+preparing, `src/update/` runs the same retained-runtime maintenance Doctor runs, and
+`openclaw update` runs it in its own process before it asks the Gateway, because the
+Gateway's process census cannot tell that command from an older updater still using a
+runtime without `owner.json`. A runtime still in use stays; what stays is reported,
+never a failed update. Shipped updaters need no change.
+
 Candidate Doctor removes empty snapshot directories left by cancellation between
 private directory creation and native-token acquisition, after its inspection
 workers have settled. Unconfirmed worker cleanup and unowned snapshot payloads
