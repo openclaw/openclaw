@@ -18,10 +18,20 @@ const keyed = (entries: CatalogEntries, ready?: boolean, selected?: string) =>
   ready ? undefined : entries?.find((entry) => entry.id === selected && entry.apiKeyRequired)?.id;
 
 /** The Gateway marks providers whose saved sign-in can't do voice; nothing else implies it. */
-function voiceApiKeyProviders({ realtime, transcription }: TalkCatalogResult) {
+function voiceApiKeyProviders(
+  { realtime, transcription, speech }: TalkCatalogResult,
+  speechMode: boolean,
+) {
+  const dictation = keyed(
+    transcription?.providers,
+    transcription?.ready,
+    transcription?.activeProvider,
+  );
   return {
-    talk: keyed(realtime?.providers, realtime?.ready, realtime?.activeProvider),
-    dictation: keyed(transcription?.providers, transcription?.ready, transcription?.activeProvider),
+    talk: speechMode
+      ? (dictation ?? keyed(speech?.providers, false, speech?.activeProvider))
+      : keyed(realtime?.providers, realtime?.ready, realtime?.activeProvider),
+    dictation,
   };
 }
 
@@ -199,14 +209,14 @@ export class ComposerMicrophoneOwner extends EventTarget {
       if (request !== this.catalogRequest) {
         return;
       }
+      const talk = config?.config?.talk;
       this.dictationStatus = catalog.transcription?.ready === true ? "ready" : "unavailable";
-      this.apiKeyProviders = voiceApiKeyProviders(catalog);
+      this.apiKeyProviders = voiceApiKeyProviders(catalog, talk?.realtime?.mode === "stt-tts");
       this.talkApiKeyNotice &&= this.apiKeyProviders.talk !== undefined;
       if (!config) {
         this.realtimeStatus = "unavailable";
         return;
       }
-      const talk = config.config?.talk;
       if (talk?.realtime?.mode !== "stt-tts") {
         this.realtimeStatus = catalog.realtime?.ready === true ? "ready" : "unavailable";
         return;
