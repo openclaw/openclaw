@@ -29,6 +29,7 @@ export function createCatalogFleetFixture(
       asyncSyntheticAuth?: boolean;
       agentCount?: number;
       publication?: "individual";
+      workspaces?: "distinct";
     } = {},
   ) {
     const broadcastName = receiptBroadcastName?.();
@@ -80,7 +81,10 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     for (const id of agentIds) {
       const entry = (entries[id] = {
         agentDir: path.join(env.OPENCLAW_STATE_DIR!, "agents", id, "agent"),
-        workspace: individual ? workspaceDir : path.join(root, `${id}-workspace`),
+        workspace:
+          individual && options.workspaces !== "distinct"
+            ? workspaceDir
+            : path.join(root, `${id}-workspace`),
       });
       fs.mkdirSync(entry.workspace, { recursive: true });
       const profiles = { [`fleet:${id}`]: apiKey("fleet-proof", `synthetic-${id}`) };
