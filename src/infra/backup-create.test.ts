@@ -1684,6 +1684,7 @@ describe("createBackupArchive", () => {
     "omits reinstallable runtime trees and plugin dependencies while keeping plugin files",
     withState(async (state) => {
       const outputDir = state.path("backups");
+      const managedRoots = ["dev", "git", "npm-runtime", "plugin-runtime-deps", "tmp", "tools"];
       const durablePaths = [
         "developer",
         "dev-backup",
@@ -1707,9 +1708,7 @@ describe("createBackupArchive", () => {
         "dev/openclaw/dist/entry.js",
         "dev/openclaw/invalid.sqlite",
         ...durablePaths.map((durablePath) => `${durablePath}/keep.txt`),
-        ...["dev", "git", "npm-runtime", "tmp", "tools"].map(
-          (root) => `${root}/runtime/fixture.sqlite`,
-        ),
+        ...managedRoots.map((root) => `${root}/runtime/fixture.sqlite`),
       ]) {
         await state.writeText(relativePath, "synthetic runtime fixture\n");
       }
@@ -1724,7 +1723,7 @@ describe("createBackupArchive", () => {
       expect(entrySuffixes).toContain("/state/extensions/demo/src/index.js");
       expect(entrySuffixes).toContain("/state/node_modules/root-dep/index.js");
       expect(entrySuffixes).toContain("/state/node_modules/root-dep/fixture.sqlite");
-      for (const managedRoot of ["dev", "git", "npm", "npm-runtime", "tmp", "tools"]) {
+      for (const managedRoot of ["npm", ...managedRoots]) {
         expect(
           entrySuffixes.some(
             (entry) =>

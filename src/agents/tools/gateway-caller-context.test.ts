@@ -11,6 +11,7 @@ import {
   captureCommandOwnerAssertion,
 } from "../../auto-reply/command-owner-authority.js";
 import {
+  composePreparedOnlySessionSource,
   composeSessionSourceAssertion,
   prepareSessionSourceEffect,
 } from "../../config/sessions/session-source-authority.js";
@@ -34,7 +35,6 @@ import {
 } from "../tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./common.js";
 import {
-  captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity as getCaller,
   prepareGatewayToolCallerAssertion,
   withGatewayToolApprovalOwner,
@@ -108,7 +108,10 @@ describe("gateway caller context wrapper", () => {
     await withCallers(
       [{ operationalRunInstance: runInstance("prepared-owner"), receiptAuthority: receipt }, {}],
       async () => {
-        const assertion = expectDefined(captureGatewayToolCallerAssertion(), "caller assertion");
+        const assertion = expectDefined(
+          composePreparedOnlySessionSource(getCaller()),
+          "caller assertion",
+        );
         const prepared = await prepareSessionSourceEffect(assertion);
         try {
           prepared.assertCurrent();

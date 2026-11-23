@@ -11,6 +11,7 @@ import {
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { composePreparedOnlySessionSource } from "../../config/sessions/session-source-authority.js";
 import * as transcript from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareGitHubPublicationRequesterV2 } from "../../gateway/github-publication-requester.js";
@@ -46,7 +47,6 @@ import { createOperationalRunInstanceRef } from "../operational-run-instance.js"
 import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
 import { clearToolSearchCatalog } from "../tool-search.js";
 import {
-  captureGatewayToolCallerAssertion,
   createAdmittedGatewayToolCallerIdentity,
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
@@ -319,7 +319,7 @@ it.for([
             // The continuation may retain admitted policy, but never the yielded
             // invocation's retired receipt or aborted signal.
             try {
-              captureGatewayToolCallerAssertion()?.();
+              composePreparedOnlySessionSource(getGatewayToolCallerIdentity())?.();
             } catch (error) {
               resumedCallerError = error;
             }
