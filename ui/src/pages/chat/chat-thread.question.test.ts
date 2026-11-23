@@ -1,6 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it } from "vitest";
+import {
+  createQuestionHarness,
+  recordQuestionResolution,
+  requestQuestion,
+} from "../../app/question-prompt.test-support.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { createComposerQuestionPrompt } from "./chat-composer.test-support.ts";
@@ -31,6 +36,25 @@ function items(question: QuestionPrompt, runActive: boolean, messages: unknown[]
 }
 
 afterEach(() => resetChatThreadState());
+
+const questions = createQuestionHarness();
+
+it.each([
+  ["answered", "plain-text"],
+  ["cancelled", "chat-composer-replacement"],
+] as const)("shows the typed reply without a %s question summary", (status, resolvedBy) => {
+  const state = questions.createState();
+  requestQuestion(state);
+  recordQuestionResolution(state, {
+    id: "question-1",
+    status,
+    resolvedBy,
+    ...(status === "answered" ? { answers: { answers: { format: ["orchid-lark-4821"] } } } : {}),
+  });
+  const result = items(state.snapshot[0]!, false, [message("user", "orchid-lark-4821", 2_000)]);
+  expect(result.some((item) => item.kind === "question")).toBe(false);
+  expect(result.filter((item) => item.kind === "group").map((item) => item.role)).toEqual(["user"]);
+});
 
 it("keeps a pending question out of the message stream", () => {
   const result = coalesceStreamRuns(items(prompt("pending"), true));

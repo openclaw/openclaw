@@ -34,7 +34,7 @@ export type QuestionDraft = {
 
 export type QuestionPrompt = Pick<
   QuestionRecord,
-  "id" | "questions" | "createdAtMs" | "expiresAtMs"
+  "id" | "questions" | "createdAtMs" | "expiresAtMs" | "resolvedBy"
 > & {
   agentId?: string;
   sessionKey?: string;
@@ -236,6 +236,7 @@ function applyQuestionResolution(
   resolved: QuestionResolvedEvent,
 ): void {
   prompt.status = resolved.status;
+  prompt.resolvedBy = resolved.resolvedBy;
   clearSecretQuestionDrafts(prompt.questions, prompt.drafts);
   prompt.answers = resolved.status === "answered" ? resolved.answers : undefined;
   const matchesSubmittedAnswer =

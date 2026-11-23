@@ -251,7 +251,7 @@ suite.define(() => {
   });
 
   it.each(["own", "child"] as const)(
-    "supersedes a pending %s question only after a new prompt sends",
+    "leaves a pending %s question with the Gateway after a composer reply",
     async (source) => {
       const childKey = "agent:main:dashboard:superseded-question";
       const { gateway, page } = await openQuestionPage(undefined, false, [
@@ -291,14 +291,24 @@ suite.define(() => {
         question: "Which replacement workflow should I use?",
       });
       await gateway.emitGatewayEvent("question.requested", next);
-      await gateway.setMethodResponse("question.resolve", { status: "cancelled" });
       await gateway.resolveDeferred("chat.send", { status: "started", runId: "replacement-run" });
-      await expectResolution(gateway, { id: request.id, cancel: true });
-      await expectCount(panel, 0);
-      await panelFor(page, next.questions[0]!.question).waitFor();
-      expect(await gateway.getRequests("question.resolve")).toHaveLength(1);
+      await expectCount(
+        page
+          .locator(".chat-group.user")
+          .filter({ hasText: "Use the supported browser workflow instead." }),
+        1,
+      );
+      expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+      await panel.waitFor();
       if (source === "own") {
-        await page.locator(".chat-question-summary").filter({ hasText: "Skipped" }).waitFor();
+        await gateway.emitGatewayEvent("question.resolved", {
+          id: request.id,
+          status: "cancelled",
+          resolvedBy: "chat-composer-replacement",
+        });
+        await expectCount(panel, 0);
+        await panelFor(page, next.questions[0]!.question).waitFor();
+        await expectCount(page.locator(".chat-question-summary"), 0);
       }
     },
   );
