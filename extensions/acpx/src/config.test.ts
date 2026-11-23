@@ -111,43 +111,14 @@ it("propagates pluginToolsMcpBridgeAllow and pluginToolsMcpBridgeDeny into manag
 });
 
 it.each([
-  [
-    "pluginToolsMcpBridgeAllow",
-    [],
-    "pluginToolsMcpBridgeAllow must be a non-empty array of plugin IDs or tool names",
-  ],
-  [
-    "pluginToolsMcpBridgeAllow",
-    "memory-core",
-    "pluginToolsMcpBridgeAllow must be a non-empty array of plugin IDs or tool names",
-  ],
-  [
-    "pluginToolsMcpBridgeAllow",
-    ["   "],
-    "pluginToolsMcpBridgeAllow must be a non-empty array of plugin IDs or tool names",
-  ],
-  [
-    "pluginToolsMcpBridgeAllow",
-    [42],
-    "pluginToolsMcpBridgeAllow must be a non-empty array of plugin IDs or tool names",
-  ],
-  [
-    "pluginToolsMcpBridgeDeny",
-    "diffs",
-    "pluginToolsMcpBridgeDeny must be an array of plugin IDs or tool names",
-  ],
-  [
-    "pluginToolsMcpBridgeDeny",
-    [""],
-    "pluginToolsMcpBridgeDeny must be an array of plugin IDs or tool names",
-  ],
-  [
-    "pluginToolsMcpBridgeDeny",
-    [42],
-    "pluginToolsMcpBridgeDeny must be an array of plugin IDs or tool names",
-  ],
-] as const)("rejects invalid %s %j", (key, value, message) => {
-  expect(() => resolve({ [key]: value })).toThrow(message);
+  ["pluginToolsMcpBridgeAllow", [[], "memory-core", ["   "], [42]], "a non-empty array"],
+  ["pluginToolsMcpBridgeDeny", ["diffs", [""], [42]], "an array"],
+] as const)("rejects invalid %s values", (key, values, requirement) => {
+  for (const value of values) {
+    expect(() => resolve({ [key]: value })).toThrow(
+      `${key} must be ${requirement} of plugin IDs or tool names`,
+    );
+  }
 });
 
 it("launches managed bridges from the host package when acpx is an external package", () => {

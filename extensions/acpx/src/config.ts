@@ -26,8 +26,8 @@ const MANAGED_MCP_BRIDGES = [
   ["openClawToolsMcpBridge", "openclaw-tools", "openclawToolsServe"],
 ] as const;
 
-const OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW_ENV = "OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW";
-const OPENCLAW_PLUGIN_TOOLS_MCP_DENY_ENV = "OPENCLAW_PLUGIN_TOOLS_MCP_DENY";
+const pluginToolsMcpAllowEnv = "OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW";
+const pluginToolsMcpDenyEnv = "OPENCLAW_PLUGIN_TOOLS_MCP_DENY";
 
 function isAcpxPluginRoot(dir: string): boolean {
   return (
@@ -171,10 +171,10 @@ function resolvePluginToolsMcpBridgeEnv(params: {
 }): Record<string, string> | undefined {
   const env: Record<string, string> = {};
   if (params.pluginToolsMcpBridgeAllow && params.pluginToolsMcpBridgeAllow.length > 0) {
-    env[OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW_ENV] = JSON.stringify(params.pluginToolsMcpBridgeAllow);
+    env[pluginToolsMcpAllowEnv] = JSON.stringify(params.pluginToolsMcpBridgeAllow);
   }
   if (params.pluginToolsMcpBridgeDeny && params.pluginToolsMcpBridgeDeny.length > 0) {
-    env[OPENCLAW_PLUGIN_TOOLS_MCP_DENY_ENV] = JSON.stringify(params.pluginToolsMcpBridgeDeny);
+    env[pluginToolsMcpDenyEnv] = JSON.stringify(params.pluginToolsMcpBridgeDeny);
   }
   return Object.keys(env).length > 0 ? env : undefined;
 }

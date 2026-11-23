@@ -16,10 +16,10 @@ function makeTempDir(prefix: string): string {
 function writeFixturePlugin(params: {
   rootDir: string;
   id: string;
-  toolName: string;
   optional?: boolean;
   markerFile?: string;
 }): string {
+  const toolName = `${params.id.replaceAll("-", "_")}_tool`;
   const pluginDir = path.join(params.rootDir, params.id);
   fs.mkdirSync(pluginDir, { recursive: true });
   fs.writeFileSync(
@@ -28,8 +28,8 @@ function writeFixturePlugin(params: {
       id: params.id,
       name: params.id,
       configSchema: { type: "object", additionalProperties: false, properties: {} },
-      contracts: { tools: [params.toolName] },
-      ...(params.optional ? { toolMetadata: { [params.toolName]: { optional: true } } } : {}),
+      contracts: { tools: [toolName] },
+      ...(params.optional ? { toolMetadata: { [toolName]: { optional: true } } } : {}),
     }),
   );
   const markerSnippet = params.markerFile
@@ -38,22 +38,16 @@ function writeFixturePlugin(params: {
   fs.writeFileSync(
     path.join(pluginDir, "index.mjs"),
     `${markerSnippet}export default {
-  id: ${JSON.stringify(params.id)},
-  register(api) {
-    api.registerTool(
-      {
-        name: ${JSON.stringify(params.toolName)},
-        description: "fixture tool",
-        parameters: { type: "object", properties: {} },
-        async execute() {
-          return { content: [{ type: "text", text: "ok" }] };
-        },
+      id: ${JSON.stringify(params.id)},
+      register(api) {
+        api.registerTool({
+          name: ${JSON.stringify(toolName)},
+          description: "fixture tool",
+          parameters: { type: "object", properties: {} },
+          async execute() { return { content: [{ type: "text", text: "ok" }] }; },
+        }, { optional: ${params.optional === true} });
       },
-      ${params.optional ? "{ optional: true }" : "{}"},
-    );
-  },
-};
-`,
+    };`,
   );
   return pluginDir;
 }
@@ -72,12 +66,10 @@ describe("plugin-tools-serve bridge filter real-registry invariants", () => {
     const alphaDir = writeFixturePlugin({
       rootDir: pluginsRoot,
       id: "fixture-alpha",
-      toolName: "fixture_alpha_tool",
     });
     const optDir = writeFixturePlugin({
       rootDir: pluginsRoot,
       id: "fixture-opt",
-      toolName: "fixture_opt_tool",
       optional: true,
     });
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -88,45 +80,25 @@ describe("plugin-tools-serve bridge filter real-registry invariants", () => {
         enabled: true,
         allow: ["fixture-alpha", "fixture-opt"],
         load: { paths: [alphaDir, optDir] },
-        entries: {
-          "fixture-alpha": { enabled: true },
-          "fixture-opt": { enabled: true },
-        },
+        entries: { "fixture-alpha": { enabled: true }, "fixture-opt": { enabled: true } },
       },
     };
 
-    const unfiltered = await acquirePluginToolsForMcp({ config: baseConfig });
-    try {
-      expect(unfiltered.resolveTools().map((tool) => tool.name)).toEqual(["fixture_alpha_tool"]);
-    } finally {
-      await unfiltered.release();
-    }
-
-    const filteredWithoutBaseGrant = await acquirePluginToolsForMcp({
-      config: baseConfig,
-      bridgePolicy: { allow: ["fixture-alpha", "fixture-opt"] },
-    });
-    try {
-      expect(filteredWithoutBaseGrant.resolveTools().map((tool) => tool.name)).toEqual([
-        "fixture_alpha_tool",
-      ]);
-    } finally {
-      await filteredWithoutBaseGrant.release();
-    }
-
-    const filteredWithBaseGrant = await acquirePluginToolsForMcp({
-      config: {
-        ...baseConfig,
-        tools: { alsoAllow: ["fixture-opt"] },
-      },
-      bridgePolicy: { allow: ["fixture-opt"] },
-    });
-    try {
-      expect(filteredWithBaseGrant.resolveTools().map((tool) => tool.name)).toEqual([
+    for (const [config, bridgePolicy, expected] of [
+      [baseConfig, undefined, "fixture_alpha_tool"],
+      [baseConfig, { allow: ["fixture-alpha", "fixture-opt"] }, "fixture_alpha_tool"],
+      [
+        { ...baseConfig, tools: { alsoAllow: ["fixture-opt"] } },
+        { allow: ["fixture-opt"] },
         "fixture_opt_tool",
-      ]);
-    } finally {
-      await filteredWithBaseGrant.release();
+      ],
+    ] satisfies [OpenClawConfig, { allow: string[] } | undefined, string][]) {
+      const acquisition = await acquirePluginToolsForMcp({ config, bridgePolicy });
+      try {
+        expect(acquisition.resolveTools().map((tool) => tool.name)).toEqual([expected]);
+      } finally {
+        await acquisition.release();
+      }
     }
   });
 
@@ -137,12 +109,10 @@ describe("plugin-tools-serve bridge filter real-registry invariants", () => {
     const alphaDir = writeFixturePlugin({
       rootDir: pluginsRoot,
       id: "fixture-alpha",
-      toolName: "fixture_alpha_tool",
     });
     const poisonDir = writeFixturePlugin({
       rootDir: pluginsRoot,
       id: "fixture-poison",
-      toolName: "fixture_poison_tool",
       markerFile: poisonMarker,
     });
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -152,53 +122,29 @@ describe("plugin-tools-serve bridge filter real-registry invariants", () => {
       enabled: true,
       allow: ["fixture-alpha", "fixture-poison"],
       load: { paths: [alphaDir, poisonDir] },
-      entries: {
-        "fixture-alpha": { enabled: true },
-        "fixture-poison": { enabled: true },
-      },
+      entries: { "fixture-alpha": { enabled: true }, "fixture-poison": { enabled: true } },
     };
 
-    // With no base narrowing, the bridge alone must exclude the marker plugin before import.
-    const bridgeOnly = await acquirePluginToolsForMcp({
-      config: { plugins: basePlugins },
-      bridgePolicy: { allow: ["fixture_alpha_tool"] },
-    });
-    try {
-      expect(bridgeOnly.resolveTools().map((tool) => tool.name)).toEqual(["fixture_alpha_tool"]);
-      expect(fs.existsSync(poisonMarker)).toBe(false);
-    } finally {
-      await bridgeOnly.release();
-    }
-
-    // Base allowlist permits only fixture-alpha (by plugin ID), bridge narrows to tool name + fixture-poison.
-    // fixture-poison must NEVER be imported, while cross-representation matching still exposes fixture_alpha_tool.
-    const narrowed = await acquirePluginToolsForMcp({
-      config: {
-        plugins: basePlugins,
-        tools: { allow: ["fixture-alpha"] },
-      },
-      bridgePolicy: { allow: ["fixture_alpha_tool", "fixture-poison"] },
-    });
-    try {
-      expect(narrowed.resolveTools().map((tool) => tool.name)).toEqual(["fixture_alpha_tool"]);
-      expect(fs.existsSync(poisonMarker)).toBe(false);
-    } finally {
-      await narrowed.release();
-    }
-
-    // Restrictive minimal profile exposes no plugin tools; bridgePolicy.allow must not import fixture-poison.
-    const minimal = await acquirePluginToolsForMcp({
-      config: {
-        plugins: basePlugins,
-        tools: { profile: "minimal" },
-      },
-      bridgePolicy: { allow: ["fixture-poison"] },
-    });
-    try {
-      expect(minimal.resolveTools()).toEqual([]);
-      expect(fs.existsSync(poisonMarker)).toBe(false);
-    } finally {
-      await minimal.release();
+    // Bridge narrowing, base allowlist, and minimal profile must all avoid poison imports.
+    for (const [tools, allow, expected] of [
+      [undefined, ["fixture_alpha_tool"], ["fixture_alpha_tool"]],
+      [
+        { allow: ["fixture-alpha"] },
+        ["fixture_alpha_tool", "fixture-poison"],
+        ["fixture_alpha_tool"],
+      ],
+      [{ profile: "minimal" }, ["fixture-poison"], []],
+    ] satisfies [OpenClawConfig["tools"], string[], string[]][]) {
+      const acquisition = await acquirePluginToolsForMcp({
+        config: { plugins: basePlugins, tools },
+        bridgePolicy: { allow },
+      });
+      try {
+        expect(acquisition.resolveTools().map((tool) => tool.name)).toEqual(expected);
+        expect(fs.existsSync(poisonMarker)).toBe(false);
+      } finally {
+        await acquisition.release();
+      }
     }
   });
 });

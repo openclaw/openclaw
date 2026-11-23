@@ -24,8 +24,8 @@ import {
 import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
 import {
   acquirePluginToolsForMcp,
-  OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW_ENV,
-  OPENCLAW_PLUGIN_TOOLS_MCP_DENY_ENV,
+  pluginToolsMcpAllowEnv,
+  pluginToolsMcpDenyEnv,
   resolvePluginToolsMcpBridgePolicy,
   servePluginToolsMcp,
 } from "./plugin-tools-serve.js";
@@ -322,27 +322,27 @@ describe("plugin tools MCP server", () => {
     expect(resolvePluginToolsMcpBridgePolicy({})).toBeUndefined();
     expect(
       resolvePluginToolsMcpBridgePolicy({
-        [OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW_ENV]: '[" github ", "browser", "github", ""]',
-        [OPENCLAW_PLUGIN_TOOLS_MCP_DENY_ENV]: "diffs, codex, diffs",
+        [pluginToolsMcpAllowEnv]: '[" github ", "browser", "github", ""]',
+        [pluginToolsMcpDenyEnv]: "diffs, codex, diffs",
       }),
     ).toEqual({
       allow: ["github", "browser"],
       deny: ["diffs", "codex"],
     });
     expect(() =>
-      resolvePluginToolsMcpBridgePolicy({ [OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW_ENV]: "[bad json" }),
-    ).toThrow(OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW_ENV);
+      resolvePluginToolsMcpBridgePolicy({ [pluginToolsMcpAllowEnv]: "[bad json" }),
+    ).toThrow(pluginToolsMcpAllowEnv);
     expect(() =>
       resolvePluginToolsMcpBridgePolicy({
-        [OPENCLAW_PLUGIN_TOOLS_MCP_DENY_ENV]: '{"deny":"diffs"}',
+        [pluginToolsMcpDenyEnv]: '{"deny":"diffs"}',
       }),
-    ).toThrow(OPENCLAW_PLUGIN_TOOLS_MCP_DENY_ENV);
-    expect(() =>
-      resolvePluginToolsMcpBridgePolicy({ [OPENCLAW_PLUGIN_TOOLS_MCP_DENY_ENV]: "[123]" }),
-    ).toThrow(OPENCLAW_PLUGIN_TOOLS_MCP_DENY_ENV);
+    ).toThrow(pluginToolsMcpDenyEnv);
+    expect(() => resolvePluginToolsMcpBridgePolicy({ [pluginToolsMcpDenyEnv]: "[123]" })).toThrow(
+      pluginToolsMcpDenyEnv,
+    );
 
-    vi.stubEnv(OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW_ENV, JSON.stringify(["browser", "github"]));
-    vi.stubEnv(OPENCLAW_PLUGIN_TOOLS_MCP_DENY_ENV, JSON.stringify(["diffs"]));
+    vi.stubEnv(pluginToolsMcpAllowEnv, JSON.stringify(["browser", "github"]));
+    vi.stubEnv(pluginToolsMcpDenyEnv, JSON.stringify(["diffs"]));
     await servePluginToolsMcp();
     const acquireArgs = acquireStandalonePluginToolRegistryMock.mock.calls[0]?.[0];
     expect(acquireArgs?.toolAllowlist).toBeUndefined();

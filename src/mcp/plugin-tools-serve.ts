@@ -34,8 +34,8 @@ import {
 import { resolveToolsMcpAgentId, resolveToolsMcpSessionContext } from "./agent-session-env.js";
 import { createToolsMcpServer, serveRegisteredToolsMcpServer } from "./tools-stdio-server.js";
 
-export const OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW_ENV = "OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW";
-export const OPENCLAW_PLUGIN_TOOLS_MCP_DENY_ENV = "OPENCLAW_PLUGIN_TOOLS_MCP_DENY";
+export const pluginToolsMcpAllowEnv = "OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW";
+export const pluginToolsMcpDenyEnv = "OPENCLAW_PLUGIN_TOOLS_MCP_DENY";
 
 export type PluginToolsMcpBridgePolicy = {
   allow?: string[];
@@ -58,7 +58,7 @@ function dedupeTrimmedEntries(entries: readonly string[]): string[] {
 
 function parsePluginToolsMcpBridgeEnvList(
   env: NodeJS.ProcessEnv,
-  envName: typeof OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW_ENV | typeof OPENCLAW_PLUGIN_TOOLS_MCP_DENY_ENV,
+  envName: typeof pluginToolsMcpAllowEnv | typeof pluginToolsMcpDenyEnv,
 ): string[] | undefined {
   const raw = env[envName]?.trim();
   if (!raw) {
@@ -84,8 +84,8 @@ function parsePluginToolsMcpBridgeEnvList(
 export function resolvePluginToolsMcpBridgePolicy(
   env: NodeJS.ProcessEnv = process.env,
 ): PluginToolsMcpBridgePolicy | undefined {
-  const allow = parsePluginToolsMcpBridgeEnvList(env, OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW_ENV);
-  const deny = parsePluginToolsMcpBridgeEnvList(env, OPENCLAW_PLUGIN_TOOLS_MCP_DENY_ENV);
+  const allow = parsePluginToolsMcpBridgeEnvList(env, pluginToolsMcpAllowEnv);
+  const deny = parsePluginToolsMcpBridgeEnvList(env, pluginToolsMcpDenyEnv);
   if (allow === undefined && deny === undefined) {
     return undefined;
   }
