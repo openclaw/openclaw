@@ -370,7 +370,7 @@ src/agents/harness/node-execution-authority.ts	8
 src/agents/harness/selection.ts	1
 src/agents/harness/session-runtime-ownership.ts	6
 src/agents/harness/structured-input-execution.ts	1
-src/agents/harness/tool-authority.runtime.ts	17
+src/agents/harness/tool-authority.runtime.ts	13
 src/agents/internal-session-effects.ts	10
 src/agents/mcp-app-model-context.ts	1
 src/agents/mcp-http-transport.ts	2
@@ -487,7 +487,7 @@ src/agents/subagents/registry/subagent-run-generation.ts	7
 src/agents/subagents/registry/subagent-session-cleanup.ts	8
 src/agents/subagents/registry/subagent-session-read-scope.ts	8
 src/agents/subagents/requester-cron-authority-admission.ts	4
-src/agents/subagents/requester-cron-authority.ts	19
+src/agents/subagents/requester-cron-authority.ts	18
 src/agents/subagents/requester-final-attachment.ts	5
 src/agents/subagents/spawn/acp-spawn-parent-stream.ts	2
 src/agents/subagents/spawn/acp-spawn.ts	1
@@ -503,7 +503,7 @@ src/agents/tools/computer-tool-node.ts	4
 src/agents/tools/computer-tool-request.ts	1
 src/agents/tools/cron-tool-write.ts	1
 src/agents/tools/embedded-gateway-stub.ts	2
-src/agents/tools/gateway-caller-context.ts	2
+src/agents/tools/gateway-caller-context.ts	1
 src/agents/tools/image-generate-review-actions.ts	7
 src/agents/tools/media-generate-background-completion.ts	4
 src/agents/tools/media-generate-background-shared.ts	1
@@ -511,7 +511,7 @@ src/agents/tools/media-generate-result-shared.ts	1
 src/agents/tools/message-tool-decision.ts	1
 src/agents/tools/message-tool-execution.ts	3
 src/agents/tools/message-tool-turn-authority.ts	1
-src/agents/tools/presence-tool-authority.ts	3
+src/agents/tools/presence-tool-authority.ts	2
 src/agents/tools/scoped-session-access.ts	8
 src/agents/tools/session-portal-target.ts	13
 src/agents/tools/session-status-model.ts	2
@@ -521,7 +521,6 @@ src/agents/tools/sessions-access.ts	3
 src/agents/tools/sessions-control-authority.ts	12
 src/agents/tools/sessions-history-tool.ts	2
 src/agents/tools/sessions-list-tool.ts	2
-src/agents/tools/sessions-operator-authority.ts	1
 src/agents/tools/sessions-resolution.ts	2
 src/agents/tools/sessions-search-tool.ts	7
 src/agents/tools/sessions-send-communication-endpoint.ts	2
@@ -800,12 +799,12 @@ src/gateway/github-publication-git-index.ts	2
 src/gateway/github-publication-requester.ts	3
 src/gateway/github-publication-shared-read.kernel.ts	10
 src/gateway/github-publication-shared-read.ts	10
-src/gateway/github-publication-store.worker.ts	7
+src/gateway/github-publication-store.worker.ts	6
 src/gateway/github-publication-task-workspace.ts	1
 src/gateway/github-publication-transcript.ts	6
 src/gateway/github-publication-workspace.ts	1
 src/gateway/github-publication-worktree-owner.ts	3
-src/gateway/github-publication.ts	4
+src/gateway/github-publication.ts	3
 src/gateway/github-repository-publication-workspace.ts	1
 src/gateway/github-repository-publication.kernel.ts	2
 src/gateway/github-repository-publication.ts	7
@@ -1214,10 +1213,10 @@ src/gateway/workspace-icon-http.ts	4
 src/hooks/install-record-transaction.ts	1
 src/hooks/loader.ts	1
 src/infra/agent-events.ts	2
-src/infra/agent-run-approval-leases.ts	3
+src/infra/agent-run-approval-leases.ts	2
 src/infra/agent-run-registry-state.ts	4
 src/infra/agent-run-registry.automation.ts	1
-src/infra/agent-run-registry.ts	5
+src/infra/agent-run-registry.ts	4
 src/infra/agent-run-terminal-writes.ts	1
 src/infra/client-credential-migration.ts	3
 src/infra/deferred-plugin-session-empty.ts	4
@@ -1237,9 +1236,7 @@ src/infra/gateway-lock-recovery-postgres.ts	1
 src/infra/gateway-owner-lease.ts	1
 src/infra/install-package-dir.ts	1
 src/infra/legacy-acp-migration-source.ts	4
-src/infra/net/fetch-request-authority.ts	1
 src/infra/node-sqlite.ts	2
-src/infra/operator-authority-error.ts	1
 src/infra/outbound/account-scoped-conversation-bindings.ts	1
 src/infra/outbound/current-conversation-bindings.kernel.ts	1
 src/infra/outbound/delivery-completion.ts	9
@@ -1395,7 +1392,7 @@ src/plugin-sdk/test-helpers/meeting-session-contract.ts	2
 src/plugins/before-agent-reply.ts	2
 src/plugins/capability-lease.ts	1
 src/plugins/conversation-binding-state.ts	2
-src/plugins/hooks.ts	2
+src/plugins/hooks.ts	1
 src/plugins/host-hook-runtime.ts	3
 src/plugins/host-hook-steering.ts	1
 src/plugins/http-registry.ts	2
@@ -1489,7 +1486,7 @@ src/state/agent-deletion-journal.ts	1
 src/state/github-personal-publication-lifecycle.ts	1
 src/state/github-publication-request.worker.ts	7
 src/state/github-publication-source.kernel.ts	4
-src/state/github-publication-worker.ts	2
+src/state/github-publication-worker.ts	1
 src/state/github-publication.worker.ts	3
 src/state/local-onboarding-state.ts	2
 src/state/local-onboarding-state.worker.ts	2

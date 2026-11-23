@@ -324,7 +324,7 @@ it.for(["allowed", "denied"] as const)(
     await withRegisteredChannelIngress(
       { plugin: discordPlugin, config: initialConfig, setRuntime: setDiscordRuntime },
       async () => {
-        const pending = harness.client.handleInteraction(
+        await harness.client.handleInteraction(
           createInternalInteractionPayload({
             ...interactionFor("status", CHANNEL),
             id: `archive-${access}`,
@@ -332,7 +332,6 @@ it.for(["allowed", "denied"] as const)(
             data: { id: "archive-command", name: commandName, type: 1 },
           }),
         );
-        await pending;
       },
     );
     const after = sessionStore.getSessionEntry(source);

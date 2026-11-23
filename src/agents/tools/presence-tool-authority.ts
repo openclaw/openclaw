@@ -46,9 +46,6 @@ export function capturePresenceToolAuthority(options?: {
       inherited?.signal.throwIfAborted();
       inherited?.assertCurrent?.();
       scope?.signal?.throwIfAborted();
-      if (scope?.hasCurrentClientAuthority?.() === false) {
-        throw new Error("Gateway caller authority is no longer active.");
-      }
     }
     if (sourceScopes !== undefined) {
       if (!operatorScopeSatisfied("operator.read", sourceScopes)) {

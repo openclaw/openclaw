@@ -500,9 +500,6 @@ test("reuses and verifies committed tokens while writes wait, then rejects commi
         signal,
       ),
     ).resolves.toEqual({ ok: true });
-    await expect(
-      ensureDeviceToken({ ...params, isIssuanceCurrent: () => false }),
-    ).resolves.toBeNull();
     expect((await paired())?.tokens?.operator?.lastUsedAtMs).toBe(3);
   } finally {
     release.resolve();

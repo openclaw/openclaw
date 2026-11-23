@@ -1,4 +1,5 @@
 import {
+  resolveCommandAuthorization,
   resolveCommandAuthorizationAsync,
   resolveCommandAuthorizedFromAuthorizers,
 } from "openclaw/plugin-sdk/command-auth-native";
@@ -47,7 +48,8 @@ export function resolveDiscordNativePolicyReader(
   );
 }
 
-export async function createDiscordNativeCommandAuthority(params: {
+/** Reads command access once, when the command is admitted. */
+export function resolveDiscordNativeCommandAccess(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
   commandAuthorized: boolean;
@@ -58,15 +60,19 @@ export async function createDiscordNativeCommandAuthority(params: {
   commandName: string;
   pluginCommand: boolean;
 }) {
-  const authorization = await resolveCommandAuthorizationAsync(params);
-  const owners = resolveDiscordCommandOwnerAllowFrom(params.cfg);
+  const cfg = getRuntimeConfigSnapshot() ?? params.cfg;
+  const owners = resolveDiscordCommandOwnerAllowFrom(cfg);
   const senderIsOwner =
     resolveDiscordOwnerAccess({
       allowFrom: owners,
       sender: params.sender,
       allowNameMatching: params.allowNameMatching,
-    }).ownerAllowed || authorization.senderIsOwner;
-  const commands = resolveDiscordNativeCommandAllowlistAccess(params);
+    }).ownerAllowed || resolveCommandAuthorization({ ...params, cfg }).senderIsOwner;
+  const commands = resolveDiscordNativeCommandAllowlistAccess({
+    cfg,
+    sender: params.sender,
+    guildId: params.guildId,
+  });
   return {
     senderIsOwner,
     allowed:

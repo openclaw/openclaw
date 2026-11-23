@@ -25,7 +25,7 @@ export function sourceRolePolicy(role: GatewayOperatorRoleDefinition | undefined
   };
 }
 
-export function sourceRolePolicies(roles: GatewayOperatorRolesConfig | undefined) {
+function sourceRolePolicies(roles: GatewayOperatorRolesConfig | undefined) {
   return roles
     ? {
         ...roles,

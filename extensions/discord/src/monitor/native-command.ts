@@ -37,7 +37,7 @@ import {
   resolveDiscordGuildNativeCommandAuthorized,
   resolveDiscordNativeAutocompleteAuthorized,
   resolveDiscordNativeCommandAccessContext,
-  createDiscordNativeCommandAuthority,
+  resolveDiscordNativeCommandAccess,
   resolveDiscordNativeGroupDmAccess,
   resolveDiscordNativePolicyReader,
 } from "./native-command-auth.js";
@@ -413,7 +413,7 @@ async function dispatchDiscordCommandInteraction(
   if (policy?.isCurrent() === false) {
     return reject("Access policy changed. Try this interaction again.", true);
   }
-  const authority = await createDiscordNativeCommandAuthority({
+  const authority = resolveDiscordNativeCommandAccess({
     cfg,
     ctx: ctxPayload,
     commandAuthorized,
@@ -520,13 +520,12 @@ async function dispatchDiscordCommandInteraction(
       agentId: pluginCommandAgentId,
       sessionKey: effectiveRoute.sessionKey,
     });
-    const senderIsOwner = authority.senderIsOwner;
     const pluginReply = await params.pluginCommandDispatch.execute({
       senderId: sender.id,
       channel: "discord",
       channelId,
       isAuthorizedSender: commandAuthorized,
-      senderIsOwner,
+      senderIsOwner: authority.senderIsOwner,
       agentId: pluginCommandAgentId,
       sessionKey: effectiveRoute.sessionKey,
       authProfileId: targetSessionEntry?.authProfileOverride,
@@ -602,7 +601,7 @@ async function dispatchDiscordCommandInteraction(
     }
   }
 
-  const senderIsOwner = authority.senderIsOwner;
+  const { senderIsOwner } = authority;
   if (!suppressReplies && commandName === "status") {
     const statusReply = await resolveDirectStatusReplyForSession({
       cfg,
