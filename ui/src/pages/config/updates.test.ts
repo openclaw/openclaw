@@ -567,6 +567,54 @@ describe("renderUpdates", () => {
   });
 
   it.each([
+    {
+      version: "2026.11.5",
+      buildId: "new-build",
+      headline: "Earlier update succeeded on 2026.9.5. Gateway now serves 2026.11.5.",
+    },
+    {
+      version: "2026.9.5",
+      buildId: "new-build",
+      headline: "Earlier update succeeded on build old-build. Gateway now serves build new-build.",
+    },
+    {
+      version: "2026.9.5",
+      buildId: "old-build",
+      headline: "✅ OpenClaw updated to 2026.9.5 (from 2026.9.4).",
+    },
+  ])(
+    "labels a successful update against live $version ($buildId)",
+    ({ version, buildId, headline }) => {
+      const recordedReport = "✅ OpenClaw updated to 2026.9.5 (from 2026.9.4).";
+      const props = {
+        gatewayVersion: version,
+        gatewayBuildId: buildId,
+        update: {
+          updateRun: createUpdateRunFixture({
+            phase: "finished",
+            status: "succeeded",
+            before: { version: "2026.9.4" },
+            after: { version: "2026.9.5" },
+            verification: {
+              serviceRunning: true,
+              runningVersion: "2026.9.5",
+              runningBuildId: "old-build",
+            },
+          }),
+        },
+      } satisfies UpdatesViewOverrides;
+      renderUpdates(props);
+      const view = container.querySelector(".update-run-view")!;
+      expect(view.querySelector("h3")?.textContent).toBe(headline);
+      expect(view.querySelector('[aria-label="Update report"]')?.textContent).toContain(
+        recordedReport,
+      );
+      renderUpdates({ ...props, connected: false });
+      expect(view.querySelector("h3")?.textContent).toBe(recordedReport);
+    },
+  );
+
+  it.each([
     { status: "succeeded", reason: null, recovery: false, reconciled: false },
     { status: "failed", reason: "build-failed", recovery: true, reconciled: false },
     { status: "skipped", reason: "dirty", recovery: true, reconciled: false },

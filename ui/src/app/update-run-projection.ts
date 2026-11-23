@@ -2,7 +2,6 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import {
   projectUpdateRunHistory,
-  resolveUpdateRunServingChange,
   type UpdateRunServingIdentity,
 } from "../../../src/infra/update-run-history-projection.ts";
 import {
@@ -69,10 +68,6 @@ export function projectUpdateRun(
   const repairRun = isUpdateRepairRun(run);
   const managedByOcm = run.target.installationMethod === "ocm";
   const historical = connected ? projectUpdateRunHistory(run, serving) : null;
-  const earlierSuccess =
-    connected && run.status === "succeeded"
-      ? resolveUpdateRunServingChange(run.verification, serving)
-      : null;
   const targetNote =
     historical && serving && isServingUpdateTarget(run, serving)
       ? t("updates.run.servingTarget")
@@ -173,9 +168,7 @@ export function projectUpdateRun(
       !terminal &&
       (run.phase === "activating" || run.phase === "restarting" || run.phase === "verifying")
         ? t("updates.run.restarting")
-        : earlierSuccess
-          ? t(`updates.run.earlierSuccess.${earlierSuccess.kind}`, earlierSuccess)
-          : report.headline,
+        : report.headline,
     compactLabel: managedByOcm
       ? ""
       : t("updates.run.progress", { completed: String(completed), total: String(total) }),

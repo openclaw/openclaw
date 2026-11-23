@@ -1,5 +1,8 @@
 import { action, createOptimistic, For, Show } from "solid-js";
-import { projectUpdateRunHistory } from "../../../../src/infra/update-run-history-projection.ts";
+import {
+  projectUpdateRunHistory,
+  resolveUpdateRunServingChange,
+} from "../../../../src/infra/update-run-history-projection.ts";
 import { isAcknowledgedAbandonedUpdateRun } from "../../../../src/infra/update-run-record.ts";
 import {
   classifyUpdateOutcome,
@@ -8,11 +11,13 @@ import {
 import type { UpdateFailureReportNotice } from "../../app/overlays-types.ts";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { UpdateRunView } from "../../components/update-run-view.tsx";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { registerUpdateActionsEnglish } from "../../i18n/locales/en-update-actions.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { UpdatesCommandPresentation, UpdatesViewProps } from "./updates-types.ts";
 
 registerEnglishCatalog(registerUpdateActionsEnglish);
+registerEnglishCatalog(registerSettingsEnglish);
 
 export function RecordedAttempt(
   props: UpdatesViewProps & { confirming: boolean; checking: boolean },
@@ -36,6 +41,14 @@ export function RecordedAttempt(
   const run = () => props.update.updateRun;
   const serving = () =>
     props.connected ? { version: props.gatewayVersion, buildId: props.gatewayBuildId } : undefined;
+  const earlierSuccessHeadline = () => {
+    const currentRun = run();
+    const change =
+      currentRun?.status === "succeeded"
+        ? resolveUpdateRunServingChange(currentRun.verification, serving())
+        : null;
+    return change ? t(`updates.page.earlierSuccess.${change.kind}`, change) : null;
+  };
   const failed = () => {
     const currentRun = run();
     return currentRun
@@ -80,7 +93,12 @@ export function RecordedAttempt(
           }
         >
           <div class="settings-row settings-row--stacked">
-            <UpdateRunView run={run()} connected={props.connected} serving={serving()} />
+            <UpdateRunView
+              run={run()}
+              connected={props.connected}
+              serving={serving()}
+              earlierSuccessHeadline={earlierSuccessHeadline()}
+            />
           </div>
         </Show>
         <Show when={failed() || props.update.updateStatusBanner?.source === "read"}>

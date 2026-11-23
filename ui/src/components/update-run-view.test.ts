@@ -2,7 +2,6 @@
 
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
-import type { UpdateRunServingIdentity } from "../../../src/infra/update-run-history-projection.ts";
 import type { UpdateRunRecord as Run } from "../../../src/infra/update-run-record.ts";
 import { projectUpdateRun } from "../app/update-run-projection.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
@@ -17,7 +16,7 @@ function makeStep(step: string, status: Step["status"] = "completed", detail?: s
 
 const project = (patch: Partial<Run>) => projectUpdateRun(run(patch));
 
-function mount(initial: Partial<Run>, serving?: UpdateRunServingIdentity) {
+function mount(initial: Partial<Run>) {
   const [current, setRecord] = createSignal(run(initial));
   const [connected, setConnected] = createSignal(true);
   const { container } = mountSolid(() =>
@@ -28,7 +27,6 @@ function mount(initial: Partial<Run>, serving?: UpdateRunServingIdentity) {
       get connected() {
         return connected();
       },
-      serving,
     }),
   );
   flush();
@@ -270,45 +268,6 @@ it("keeps the view mounted across a restart and replaces progress with a visible
   expect(element.querySelectorAll('[data-state="pass"]')).toHaveLength(4);
   expect(element.querySelector('[data-step="repairing"]')).toBeNull();
 });
-
-it.each([
-  {
-    serving: { version: "2026.11.5" },
-    headline: "Earlier update succeeded on 2026.9.5. Gateway now serves 2026.11.5.",
-  },
-  {
-    serving: { version: "2026.9.5", buildId: "new-build" },
-    headline: "Earlier update succeeded on build old-build. Gateway now serves build new-build.",
-  },
-  {
-    serving: { version: "2026.9.5", buildId: "old-build" },
-    headline: "✅ OpenClaw updated to 2026.9.5 (from 2026.9.4).",
-  },
-])(
-  "labels successful updates against the live Gateway identity ($serving)",
-  ({ serving, headline }) => {
-    const { setConnected, text } = mount(
-      {
-        phase: "finished",
-        status: "succeeded",
-        before: { version: "2026.9.4" },
-        after: { version: "2026.9.5" },
-        verification: {
-          serviceRunning: true,
-          runningVersion: "2026.9.5",
-          runningBuildId: "old-build",
-        },
-      },
-      serving,
-    );
-    const recordedReport = "✅ OpenClaw updated to 2026.9.5 (from 2026.9.4).";
-    expect(text("h3")).toBe(headline);
-    expect(text('[aria-label="Update report"]')).toContain(recordedReport);
-    setConnected(false);
-    flush();
-    expect(text("h3")).toBe(recordedReport);
-  },
-);
 
 it("preserves early failure phases and renders diagnostic markup as text", () => {
   const failure = '<img src=x onerror="alert(1)"> compilation failed';

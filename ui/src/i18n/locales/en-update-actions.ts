@@ -40,10 +40,6 @@ const enUpdateActions = {
       servingTarget: "The Gateway is now serving the update target.",
       report: "Update report",
       restarting: "Gateway restarting…",
-      earlierSuccess: {
-        version: "Earlier update succeeded on {recorded}. Gateway now serves {current}.",
-        build: "Earlier update succeeded on build {recorded}. Gateway now serves build {current}.",
-      },
       reconnecting: "Reconnecting automatically. Update progress is saved on the gateway.",
       progress: "{completed} of {total} phases complete",
       phase: {

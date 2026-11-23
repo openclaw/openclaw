@@ -7,6 +7,10 @@ export type UpdateRunServingIdentity = {
   buildId?: string | null;
 };
 
+function servingLabel(value: string): string {
+  return sanitizeTerminalText(value).slice(0, 240);
+}
+
 export function resolveUpdateRunServingChange(
   verification: UpdateRunRecord["verification"],
   serving?: UpdateRunServingIdentity,
@@ -19,14 +23,17 @@ export function resolveUpdateRunServingChange(
   const recordedVersion = normalizeOptionalString(verification.runningVersion);
   const build = normalizeOptionalString(serving.buildId);
   const recordedBuild = normalizeOptionalString(verification.runningBuildId);
-  const label = (value: string) => sanitizeTerminalText(value).slice(0, 240);
-  if (version && recordedVersion && version !== recordedVersion) {
-    return { kind: "version", current: label(version), recorded: label(recordedVersion) } as const;
+  const versionChanged = version && recordedVersion && version !== recordedVersion;
+  const current = versionChanged ? version : build;
+  const recorded = versionChanged ? recordedVersion : recordedBuild;
+  if (!current || !recorded || current === recorded) {
+    return null;
   }
-  if (build && recordedBuild && build !== recordedBuild) {
-    return { kind: "build", current: label(build), recorded: label(recordedBuild) } as const;
-  }
-  return null;
+  return {
+    kind: versionChanged ? "version" : "build",
+    current: servingLabel(current),
+    recorded: servingLabel(recorded),
+  } as const;
 }
 
 /** Project saved failures against the serving process, without rewriting history. */
@@ -39,7 +46,7 @@ export function projectUpdateRunHistory(
   if (!change) {
     return null;
   }
-  const reason = sanitizeTerminalText(run.reason?.trim() || "unknown reason").slice(0, 240);
+  const reason = servingLabel(run.reason?.trim() || "unknown reason");
   const current = change.kind === "build" ? `build ${change.current}` : change.current;
   return `Last update run failed (${reason}) — Gateway is serving ${current}; recorded serving ${change.kind} was ${change.recorded}.`;
 }

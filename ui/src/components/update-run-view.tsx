@@ -88,6 +88,7 @@ export function UpdateRunView(props: {
   run: UpdateRunRecord | null;
   connected: boolean;
   serving?: UpdateRunServingIdentity;
+  earlierSuccessHeadline?: string | null;
 }) {
   let details: HTMLPreElement | undefined;
   let steps: HTMLOListElement | undefined;
@@ -120,7 +121,10 @@ export function UpdateRunView(props: {
           >
             <header class="update-run-view__heading">
               <h3 role="status" aria-live="polite">
-                <Show when={current().terminal} fallback={current().headline}>
+                <Show
+                  when={current().terminal && !props.earlierSuccessHeadline}
+                  fallback={props.earlierSuccessHeadline ?? current().headline}
+                >
                   <ReportHeadline headline={current().headline} />
                 </Show>
               </h3>
