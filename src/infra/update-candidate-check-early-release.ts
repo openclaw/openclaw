@@ -13,7 +13,7 @@ import { collectRegisteredPaths } from "./update-candidate-state.shared.js";
 
 /** The one-time rebuild, run from the checkout. It names no path, because the early updater
  * redacts the state and home directories out of this check's output before printing it. */
-export const EARLY_GIT_RELEASE_REBUILD =
+const EARLY_GIT_RELEASE_REBUILD =
   "git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force && openclaw doctor --fix; openclaw gateway start";
 
 /**

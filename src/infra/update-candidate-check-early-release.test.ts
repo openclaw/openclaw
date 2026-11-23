@@ -5,10 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
-import {
-  EARLY_GIT_RELEASE_REBUILD,
-  refuseEarlyGitReleaseSchemaChange,
-} from "./update-candidate-check-early-release.js";
+import { refuseEarlyGitReleaseSchemaChange } from "./update-candidate-check-early-release.js";
 
 const roots: string[] = [];
 afterEach(() => cleanupTempDirs(roots));
@@ -75,8 +72,11 @@ it("refuses a schema change for the early release updater and names the rebuild"
   );
   expect(refusal).toContain("the Gateway was not touched");
   // The early updater redacts state and home paths out of this output; the step names none.
-  expect(refusal?.split("\n").at(-1)).toBe(EARLY_GIT_RELEASE_REBUILD);
-  expect(EARLY_GIT_RELEASE_REBUILD).not.toMatch(/[\s~]\//u);
+  const rebuild = refusal?.split("\n").at(-1);
+  expect(rebuild).toBe(
+    "git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force && openclaw doctor --fix; openclaw gateway start",
+  );
+  expect(rebuild).not.toMatch(/[\s~]\//u);
 });
 
 it("refuses when one agent store is older, registered or not", () => {
