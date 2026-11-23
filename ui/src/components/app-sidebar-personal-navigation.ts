@@ -6,6 +6,7 @@ import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { t } from "../i18n/index.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import type { SessionConnectionScope } from "../lib/sessions/session-capability.ts";
 import { readSessionChangedEvent } from "../lib/sessions/session-row-reconcile.ts";
 import { isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
@@ -17,26 +18,34 @@ import {
 } from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
 import { applySidebarSessionOwnerFilter } from "./app-sidebar-session-ownership.ts";
+import { projectSidebarSessionReference } from "./app-sidebar-agent-session-rows.ts";
+import type { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import {
   setStoredSessionCatalogHidden,
   type SidebarRecentSession,
   type SidebarPinZone,
+  type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataOwner } from "./session-data.ts";
 import type { SessionOwnerFilter } from "./session-owner-filter.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 type PersonalNavigationHost = {
-  readonly sessionData: Pick<SessionDataOwner, "sessionResultsByAgent">;
+  readonly sessionData: SessionDataOwner;
   readonly pinnedSessions: ReturnType<typeof createSidebarPinnedSessions>;
   readonly sidebarSnapshot: SidebarSnapshotModel | null;
   readonly sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null;
   readonly sidebarEntries: readonly string[];
   readonly sessionOwnerFilterId: string | null;
+  readonly sessionsStatusFilter: SidebarSessionStatusFilter;
+  readonly sessionsShowSystem: boolean;
+  readonly sessionInvolvingMeFilterActive: boolean;
   readonly sidebarAgentsMode: "chip" | "roster";
   expandedAgentId(): string;
+  selectedAgentMainSessionKey(agentId?: string): string;
+  readonly resolveSessionAttention: Parameters<typeof projectSessionTree>[0]["resolveAttention"];
   readonly sessionDataContext:
-    | Pick<ApplicationContext, "sessions" | "gateway" | "plugins" | "connectionBootstrap">
+    | Pick<ApplicationContext, "agents" | "sessions" | "gateway" | "plugins" | "connectionBootstrap">
     | undefined;
   sessionNavigationAgentId(row: Pick<GatewaySessionRow, "key" | "agentId">): string;
   getRouteSessionKey(): string;
@@ -302,7 +311,22 @@ function resolvePinnedSession(
     navigationState,
     sessionResultsByAgent: host.sessionData.sessionResultsByAgent,
   });
-  return row ? navigationState.toSidebarSession(row) : host.pinnedSessions.get(key);
+  if (!row) {
+    return host.pinnedSessions.get(key);
+  }
+  const agentId = host.sessionNavigationAgentId(row);
+  if (areUiSessionKeysEquivalent(key, host.selectedAgentMainSessionKey(agentId))) {
+    return navigationState.toSidebarSession(row);
+  }
+  return projectSidebarSessionReference({
+    host,
+    row,
+    agentId,
+    navigationState,
+    resolveAttention: host.resolveSessionAttention,
+    involvingMe: host.sessionInvolvingMeFilterActive,
+    ownerId: host.sessionOwnerFilterId,
+  }).session;
 }
 
 function personalSessionMatchesAgent(host: PersonalNavigationHost, key: string): boolean {

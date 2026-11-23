@@ -143,3 +143,48 @@ it("keeps agent switching available without a Home session", async () => {
   expect(context.agentSelection.state).toEqual({ selectedId: "recent", scopeId: "recent" });
   expect(sidebar.querySelector(".sidebar-agent-card__main")?.textContent).toContain("Scout");
 });
+
+it("shows child sessions for an off-list pinned parent", async () => {
+  const parent = "agent:main:offlist-parent";
+  const child = "agent:main:offlist-child";
+  const filler = Array.from({ length: 30 }, (_, index) => ({
+    key: `agent:main:recent-${index}`,
+    agentId: "main",
+    kind: "direct" as const,
+    updatedAt: 1000 - index,
+    label: `Recent ${index}`,
+  }));
+  const { sidebar } = await mountRoster(undefined, [
+    ...filler,
+    {
+      key: parent,
+      agentId: "main",
+      kind: "direct",
+      updatedAt: 1,
+      label: "Off-list parent",
+      childSessions: [child],
+    },
+    {
+      key: child,
+      agentId: "main",
+      kind: "direct",
+      updatedAt: 2,
+      label: "Off-list child",
+      spawnedBy: parent,
+    },
+  ]);
+  patchSettings({ sidebarAgentsMode: "chip" });
+  sidebar.sidebarEntries = [`session:${parent}`];
+  await settleRoster(sidebar);
+
+  const pins = sidebar.querySelector(".sidebar-recent-sessions--pinned")!;
+  const toggle = pins.querySelector<HTMLButtonElement>(`[data-child-session-toggle="${parent}"]`)!;
+  expect(toggle).not.toBeNull();
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  toggle.click();
+  await settleRoster(sidebar);
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  expect(pins.querySelector(`[data-session-key="${child}"]`)?.textContent).toContain(
+    "Off-list child",
+  );
+});
