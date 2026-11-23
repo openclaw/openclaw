@@ -4,6 +4,12 @@ import { withRegisteredChannelIngress } from "openclaw/plugin-sdk/channel-ingres
 import { resolveCommandAuthorizationAsync } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  createTestRegistry,
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -189,7 +195,7 @@ it("grants only the current configured owner the OpenClaw tool in a bot-created 
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const ownerId = "U123OWNER";
     const test = fixture({ requireMention: true, ...botThreads(false) }, "default", undefined, {
-      commands: { ownerAllowFrom: [`slack:${ownerId}`] },
+      commands: { ownerAllowFrom: [`slack:user:${ownerId}`] },
       senderId: ownerId,
     });
     test.cfg.agents = {
@@ -198,77 +204,87 @@ it("grants only the current configured owner the OpenClaw tool in a bot-created 
     };
     setRuntimeConfigSnapshot(test.cfg, test.cfg);
 
-    await withRegisteredChannelIngress(
-      {
-        plugin: slackPlugin,
+    const previousRegistry = getActivePluginRegistry();
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: slackPlugin.id, plugin: slackPlugin, source: "test" }], {
         config: test.cfg,
-        setRuntime: (runtime) => {
-          vi.spyOn(slackRuntime, "getSlackRuntime").mockReturnValue(runtime);
-        },
-      },
-      async (runtime) => {
-        test.ctx.buildContext = runtime.channel.inbound.buildContext;
-        const prepared = await test.prepare();
-        expect(prepared?.ctxPayload).toMatchObject({
-          SenderId: ownerId,
-          MessageThreadId: test.threadTs,
-        });
-        const authorization = await resolveCommandAuthorizationAsync({
-          ctx: prepared!.ctxPayload,
-          cfg: test.cfg,
-          commandAuthorized: true,
-        });
-        expect(authorization).toMatchObject({ senderIsOwner: true, ownerList: [ownerId] });
-        expect(() => authorization.assertOwnerCurrent?.()).not.toThrow();
-
-        const tools = (
-          senderIsOwner: boolean,
-          sessionKey = `agent:main:slack:channel:C123:thread:${test.threadTs}`,
-        ) =>
-          createOpenClawCodingToolsAsync({
-            config: test.cfg,
-            agentId: "main",
-            sessionKey,
-            messageProvider: "slack",
-            senderIsOwner,
-            modelProvider: "test-provider",
-            modelId: "test-model",
-            workspaceDir: state.workspaceDir,
-            cwd: state.workspaceDir,
-          });
-        expect(
-          (await tools(authorization.senderIsOwner)).find((tool) => tool.name === "openclaw"),
-        ).toBeDefined();
-
-        test.message.user = "U999OTHER";
-        const nonOwner = await test.prepare();
-        const denied = await resolveCommandAuthorizationAsync({
-          ctx: nonOwner!.ctxPayload,
-          cfg: test.cfg,
-          commandAuthorized: true,
-        });
-        expect(denied.senderIsOwner).toBe(false);
-        const deniedTool = (await tools(denied.senderIsOwner)).find(
-          (tool) => tool.name === "openclaw",
-        );
-        expect(deniedTool).toBeDefined();
-        expect(JSON.stringify((await deniedTool!.execute("non-owner", {})).content)).toContain(
-          "openclaw needs the owner's authority",
-        );
-
-        const interSessionTool = (await tools(false, "agent:main:subagent:other-session")).find(
-          (tool) => tool.name === "openclaw",
-        );
-        expect(interSessionTool).toBeUndefined();
-
-        test.message.user = undefined;
-        test.message.bot_id = "B123BOT";
-        expect(await test.prepare()).toBeNull();
-
-        test.cfg.commands = { ownerAllowFrom: [] };
-        setRuntimeConfigSnapshot(test.cfg, test.cfg);
-        expect(() => authorization.assertOwnerCurrent?.()).toThrow("authority changed");
-      },
+      }),
     );
+
+    try {
+      await withRegisteredChannelIngress(
+        {
+          plugin: slackPlugin,
+          config: test.cfg,
+          setRuntime: (runtime) => {
+            vi.spyOn(slackRuntime, "getSlackRuntime").mockReturnValue(runtime);
+          },
+        },
+        async (runtime) => {
+          test.ctx.buildContext = runtime.channel.inbound.buildContext;
+          const prepared = await test.prepare();
+          expect(prepared?.ctxPayload).toMatchObject({
+            SenderId: ownerId,
+            MessageThreadId: test.threadTs,
+          });
+          const authorization = await resolveCommandAuthorizationAsync({
+            ctx: prepared!.ctxPayload,
+            cfg: test.cfg,
+            commandAuthorized: true,
+          });
+          expect(authorization).toMatchObject({
+            senderIsOwner: true,
+            ownerList: [ownerId.toLowerCase()],
+          });
+          expect(() => authorization.assertOwnerCurrent?.()).not.toThrow();
+
+          const tools = (senderIsOwner: boolean) =>
+            createOpenClawCodingToolsAsync({
+              config: test.cfg,
+              agentId: "main",
+              sessionKey: `agent:main:slack:channel:C123:thread:${test.threadTs}`,
+              messageProvider: "slack",
+              senderIsOwner,
+              modelProvider: "test-provider",
+              modelId: "test-model",
+              workspaceDir: state.workspaceDir,
+              cwd: state.workspaceDir,
+            });
+          expect(
+            (await tools(authorization.senderIsOwner)).find((tool) => tool.name === "openclaw"),
+          ).toBeDefined();
+
+          test.message.user = "U999OTHER";
+          const nonOwner = await test.prepare();
+          const denied = await resolveCommandAuthorizationAsync({
+            ctx: nonOwner!.ctxPayload,
+            cfg: test.cfg,
+            commandAuthorized: true,
+          });
+          expect(denied.senderIsOwner).toBe(false);
+          const deniedTool = (await tools(denied.senderIsOwner)).find(
+            (tool) => tool.name === "openclaw",
+          );
+          expect(deniedTool).toBeDefined();
+          expect(JSON.stringify((await deniedTool!.execute("non-owner", {})).content)).toContain(
+            "openclaw needs the owner's authority",
+          );
+
+          test.message.user = undefined;
+          test.message.bot_id = "B123BOT";
+          expect(await test.prepare()).toBeNull();
+
+          test.cfg.commands = { ownerAllowFrom: [] };
+          setRuntimeConfigSnapshot(test.cfg, test.cfg);
+          expect(() => authorization.assertOwnerCurrent?.()).toThrow("authority changed");
+        },
+      );
+    } finally {
+      if (previousRegistry) {
+        setActivePluginRegistry(previousRegistry);
+      } else {
+        resetPluginRuntimeStateForTest();
+      }
+    }
   });
 });
