@@ -1,4 +1,4 @@
-# Native final acceptance adds 1,200 net test/support lines beyond the existing
+# Native final acceptance adds 1,204 net test/support lines beyond the existing
 # Participate allocations. Reuses the synthetic identity/Gateway/provider fixture.
 # Independent runtime boundaries: actual pending-child admission and due timer
 # revocation; separate same-role permission/tool narrowing and retained widening;
@@ -10,5 +10,6 @@
 # No source admission, assertion, timeout, process policy or global cap is exempted.
 # Local maxWorkers=1 complete native/prefix command: 336.40s wall, 50 tests;
 # corrected exact exec-refusal proof: 107.50s wall. CI seconds are pending.
-# Includes the exact nullable access column assertion in the raw SQL handoff fixture.
-1200
+# Includes the exact nullable access column assertion in the raw SQL handoff fixture
+# and construction of the released-v42 Doctor fixture against the current schema.
+1204
