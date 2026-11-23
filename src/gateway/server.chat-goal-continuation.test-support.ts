@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, type MockInstance } from "vitest";
+import { expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveAdmittedRunActiveAssertion } from "../agents/admitted-run-context.js";
 import { addSession, deleteSession, markExited } from "../agents/bash-process-registry.js";
@@ -16,7 +16,9 @@ import {
   withoutGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { createCreateGoalTool, createUpdateGoalTool } from "../agents/tools/goal-tools.js";
+import * as goalContinuation from "../auto-reply/reply/goal-continuation.js";
 import { enqueueSessionEventForHost } from "../auto-reply/reply/session-event-handoff.js";
+import * as sessionEventTarget from "../auto-reply/reply/session-event-target.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createSessionGoal, updateSessionGoalStatus } from "../config/sessions/goals.js";
@@ -301,6 +303,91 @@ export function registerGoalAutomaticContinuationCases(
     expect(seen.slice(1).map(({ owner, delivery }) => ({ owner, delivery }))).toEqual(
       Array.from({ length: 3 }, () => expected),
     );
+  });
+
+  // The completion is still in admission preparation when the first turn ends, and stays there
+  // until the Goal either defers or starts its next turn. Its stored result keeps the Goal behind it.
+  it("lets an exec result in admission preparation take the turn before the Goal advances", async () => {
+    const restore = withOwnerPolicy();
+    const released = createDeferred();
+    const enqueueGoal = goalContinuation.enqueueGoalContinuation;
+    const goalCheck = vi
+      .spyOn(goalContinuation, "enqueueGoalContinuation")
+      .mockImplementationOnce(async (params) => {
+        const enqueued = await enqueueGoal(params);
+        if (!enqueued) {
+          released.resolve();
+        }
+        return enqueued;
+      });
+    const prepareTarget = sessionEventTarget.prepareSessionEventTargetForHost;
+    const heldPreparation = vi
+      .spyOn(sessionEventTarget, "prepareSessionEventTargetForHost")
+      .mockImplementationOnce(async (...args) => {
+        await released.promise;
+        return prepareTarget(...args);
+      });
+    const prompts: string[] = [];
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      prompts.push(params.prompt);
+      if (prompts.length === 1) {
+        await completeRequesterExec("456");
+      } else {
+        // An Advance that overtook the held completion releases it behind itself.
+        released.resolve();
+      }
+      if (prompts.length === 3) {
+        await setGoalStatus("complete");
+      }
+      return result(params.sessionId);
+    });
+    try {
+      await start("Finish after the held transfer");
+      await expectDrained();
+    } finally {
+      goalCheck.mockRestore();
+      heldPreparation.mockRestore();
+      restore();
+    }
+    expect(prompts).toEqual([
+      expect.stringContaining("Finish after the held transfer"),
+      expect.stringContaining("Exec completed"),
+      expect.stringContaining("Advance"),
+    ]);
+  });
+
+  // The live wake fails before it becomes a turn. The stored result wakes the chat again, and
+  // that turn continues the Goal instead of leaving it to the next message.
+  it("runs the Goal after an exec wake fails before it becomes a turn", async () => {
+    const restore = withOwnerPolicy();
+    const refusedPreparation = vi
+      .spyOn(sessionEventTarget, "prepareSessionEventTargetForHost")
+      .mockRejectedValueOnce(new Error("destination refused"));
+    const prompts: string[] = [];
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      prompts.push(params.prompt);
+      if (prompts.length === 1) {
+        await completeRequesterExec("456");
+      } else if (prompts.length === 3) {
+        await setGoalStatus("complete");
+      }
+      return result(params.sessionId);
+    });
+    let refusals = 0;
+    try {
+      await start("Finish after the refused transfer");
+      await expectDrained();
+      refusals = refusedPreparation.mock.calls.length;
+    } finally {
+      refusedPreparation.mockRestore();
+      restore();
+    }
+    expect(refusals).toBeGreaterThan(0);
+    expect(prompts).toEqual([
+      expect.stringContaining("Finish after the refused transfer"),
+      expect.stringContaining("Exec completed"),
+      expect.stringContaining("Advance"),
+    ]);
   });
 
   it("downgrades an owner's Goal successor once ownership is revoked", async () => {

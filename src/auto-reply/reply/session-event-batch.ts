@@ -3,6 +3,8 @@ import { readExecRequestOwners } from "../../infra/exec-request-context.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { consumeSelectedSystemEventEntries } from "../../infra/system-events.js";
 import { channelRouteDedupeKey } from "../../plugin-sdk/channel-route.js";
+import { chatRef } from "../../sessions/chat-ref.js";
+import { fold, type Owed } from "../../sessions/owed.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import {
@@ -184,13 +186,47 @@ function flush(key: string, held: HeldOccurrence[]) {
   }
   held.splice(0, group.length);
   const occurrences = group.map((member) => member.occurrence);
+  const text = occurrences.map((event) => event.text).join("\n");
+  // Each exec result is an owed row keyed by its turn id; the shared turn answers all of them.
+  const owed = group.flatMap(({ options }): Owed[] =>
+    options.source === "exec" && options.sourceTurnId && options.expectedTarget.storePath
+      ? [
+          {
+            id: options.sourceTurnId,
+            to: chatRef({ ...options, storePath: options.expectedTarget.storePath }),
+            kind: "exec",
+            text,
+          },
+        ]
+      : [],
+  );
+  const [head, ...others] = owed;
+  if (head && others.length > 0) {
+    // A failed fold leaves the rows; their settlement ends the ones the shared turn answered.
+    void fold(head, others)
+      .catch(() => {})
+      .finally(() => startSharedTurn(key, held, group, target, occurrences, text));
+    return;
+  }
+  startSharedTurn(key, held, group, target, occurrences, text);
+}
+
+function startSharedTurn(
+  key: string,
+  held: HeldOccurrence[],
+  group: HeldOccurrence[],
+  target: HeldOccurrence["options"]["expectedTarget"],
+  occurrences: HeldOccurrence["occurrence"][],
+  text: string,
+) {
+  const first = group[0]!;
   for (const member of group) {
     // Return custody to the queue so the shared turn claims the exact occurrences.
     member.ownership.release();
   }
   let receipt: SessionEventReceipt;
   try {
-    receipt = enqueueSessionEventForHost(occurrences.map((event) => event.text).join("\n"), {
+    receipt = enqueueSessionEventForHost(text, {
       ...first.options,
       expectedTarget: target,
       occurrences,

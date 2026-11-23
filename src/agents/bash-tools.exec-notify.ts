@@ -1,5 +1,6 @@
 /** Owns captured destinations and cancellation for background exec completion notifications. */
 import { enqueueBatchedSessionEventForHost as enqueueSessionEvent } from "../auto-reply/reply/session-event-batch.js";
+import type { SessionEventOutcome } from "../auto-reply/reply/session-event-contract.js";
 import { captureSessionEventTargetForHost as captureSessionEventTarget } from "../auto-reply/reply/session-event-handoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveEventSessionKeyForPolicy } from "../infra/event-session-routing.js";
@@ -11,7 +12,10 @@ import {
   SystemEventQueueFullError,
 } from "../infra/system-events.js";
 import { logWarn } from "../logger.js";
+import { isGatewayRestartDraining } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { chatRef } from "../sessions/chat-ref.js";
+import { isOwedPending, owe, withhold, type Owed } from "../sessions/owed.js";
 import { isOneShotRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import {
   listFinishedSessions,
@@ -101,8 +105,6 @@ const execYieldResumes = new Map<string, ExecYieldResume>();
 
 /** A chat is its agent plus session key; a raw key such as `global` is shared across agents. */
 type ExecChat = { agentId: string; sessionKey: string };
-// Completion admission can outlive process retention and its start-time routing fields.
-const pendingExitWakes = new Set<ExecChat>();
 const execChatKey = (chat: ExecChat) => `${chat.agentId}\0${chat.sessionKey}`;
 const processChat = (session: ProcessSession) =>
   session.sessionKey && session.agentId
@@ -128,15 +130,10 @@ export function listYieldAwaitableExecs(chat: ExecChat | undefined): ProcessSess
   );
 }
 
-/** The notification owner keeps a wake alive through finalization and receipt settlement. */
+/** The notification owner keeps a wake alive through finalization; the owed row covers the rest. */
 export function hasExecYieldWake(chat: ExecChat): boolean {
   if (listYieldAwaitableExecs(chat).length > 0) {
     return true;
-  }
-  for (const wake of pendingExitWakes) {
-    if (wake.agentId === chat.agentId && wake.sessionKey === chat.sessionKey) {
-      return true;
-    }
   }
   const key = execChatKey(chat);
   return listFinishedSessions().some(
@@ -261,6 +258,45 @@ function prepareExecExitWake(
   return appendExecTimeoutRetryGuidance(summary, session.exitReason);
 }
 
+/** Wakes a chat from its stored exec result; admission captures the chat's current target. */
+export function wakeOwedExec(owed: Owed) {
+  return enqueueSessionEvent(owed.text, {
+    agentId: owed.to.agentId,
+    sessionKey: owed.to.sessionKey,
+    source: "exec",
+    contextKey: owed.id,
+    sourceTurnId: owed.id,
+  });
+}
+
+/**
+ * Settles a wake by the stored row, not by its outcome; a row its turn appended needs nothing.
+ * A completed wake that left the row pending answered it inside a shared turn's input, which
+ * carries every result it answers; the row is hidden. A wake that failed wakes the chat once more
+ * from stored state. A stop, or a stored wake that also fails, withholds the result with that
+ * cause. Restart drains leave the row owed for restart recovery.
+ */
+async function settleOwedExecWake(owed: Owed, outcome: SessionEventOutcome, fromStored = false) {
+  if (outcome.status === "failed") {
+    logWarn(`exec: completion delivery failed (${outcome.error}); inspect the process result.`);
+  }
+  try {
+    if (isGatewayRestartDraining() || !(await isOwedPending(owed))) {
+      return;
+    }
+    if (outcome.status === "completed") {
+      await withhold(owed, "failed", "interrupted");
+    } else if (outcome.status === "failed" && !fromStored) {
+      const receipt = wakeOwedExec(owed);
+      void receipt.settled.then((next) => settleOwedExecWake(owed, next, true));
+    } else {
+      await withhold(owed, outcome.status === "cancelled" ? "user-stop" : "failed");
+    }
+  } catch (error) {
+    logWarn(`exec: completion ${owed.id} stays owed (${formatErrorMessage(error)}).`);
+  }
+}
+
 async function notifyOnExit(
   session: ProcessSession,
   status: "completed" | "failed",
@@ -285,31 +321,30 @@ async function notifyOnExit(
   // A yielded hidden subagent resumes through an ordinary wake turn; otherwise it gets a passive notice.
   if (session.resumesYieldedRun || (!subagentSession && !isSubagentSessionKey(sessionKey))) {
     const agentId = session.agentId ?? parseAgentSessionKey(eventSessionKey)?.agentId;
-    if (!agentId || !session.notifySessionTarget) {
+    const target = session.notifySessionTarget;
+    if (!agentId || !target?.storePath) {
       logWarn(
         `exec: completion ${session.id} has no admitted session destination; inspect its process result.`,
       );
       return;
     }
     try {
+      const instanceId = processSessionInstanceId(session);
+      // The result is stored before any delivery: a Goal check or restart sees it from here on.
+      const owed: Owed = {
+        id: `exec:${instanceId}`,
+        to: chatRef({ agentId, storePath: target.storePath, sessionKey: eventSessionKey }),
+        kind: "exec",
+        text: eventText,
+      };
+      await owe(owed);
       // Admission resolves the chat by key: a deleted chat refuses the wake.
-      const receipt = enqueueExecExitNotification(
-        eventText,
-        session.notifySessionTarget,
-        processSessionInstanceId(session),
-        { ...eventOptions, sourceRunId: session.startedByRunId },
-      );
-      recordNotifyOnExitRemoval(session, receipt.cancel);
-      const wake = { agentId, sessionKey: eventSessionKey };
-      pendingExitWakes.add(wake);
-      void receipt.settled.then((outcome) => {
-        pendingExitWakes.delete(wake);
-        if (outcome.status === "failed") {
-          logWarn(
-            `exec: completion delivery failed (${outcome.error}); inspect the process result.`,
-          );
-        }
+      const receipt = enqueueExecExitNotification(eventText, target, instanceId, {
+        ...eventOptions,
+        sourceRunId: session.startedByRunId,
       });
+      recordNotifyOnExitRemoval(session, receipt.cancel);
+      void receipt.settled.then((outcome) => settleOwedExecWake(owed, outcome));
     } catch (error) {
       logWarn(
         `exec: completion was not admitted (${formatErrorMessage(error)}); inspect the result with process log.`,

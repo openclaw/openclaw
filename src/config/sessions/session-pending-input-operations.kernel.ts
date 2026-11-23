@@ -188,8 +188,10 @@ export function mutatePendingInput(
               getSessionKysely(current.db)
                 .updateTable("session_pending_inputs")
                 // Same-run restages keep run_id; a reclaimed channel source turn rebinds it.
+                // Restages carry the row's own bytes; an adopted owed row takes its turn's bytes.
                 .set({
                   state: "queued",
+                  message_json: input.messageJson,
                   run_id: input.runId,
                   lifecycle_generation: input.lifecycleGeneration,
                   end_cause: null,
