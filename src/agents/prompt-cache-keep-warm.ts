@@ -425,6 +425,11 @@ async function processCandidate(
   const pings = series.pings + 1;
   await applySessionEntryOperation(
     {
+      agentId: candidate.agentId,
+      sessionKey: candidate.sessionKey,
+      storePath: candidate.storePath,
+    },
+    {
       kind: "fields",
       expected: {
         sessionId: entry.sessionId,
