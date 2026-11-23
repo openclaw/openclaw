@@ -21,9 +21,13 @@ import {
   GATEWAY_SHUTDOWN_TIMEOUT_MS,
 } from "../../infra/gateway-shutdown-budget.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
+import { readLinuxProcessStat } from "../../shared/pid-alive.js";
 import { sleep } from "../../utils/sleep.js";
 import { resolveGatewayRestartProbeContext } from "../daemon-cli/restart-health-probe.js";
-import { allListenersOwnedByRuntimePid } from "../daemon-cli/restart-port-ownership.js";
+import {
+  allListenersOwnedByRuntimePid,
+  hasListenerAttributionGap,
+} from "../daemon-cli/restart-port-ownership.js";
 import { resolveUpdatedGatewayRestartPort } from "./update-command-service-plan.js";
 
 /** Keep short-budget residents behind their own admission fence until stop or release. */
@@ -188,9 +192,9 @@ export async function withGatewayMaintenanceDrain<T>(
     assertResidentCurrent();
     return usage.status === "busy" && allListenersOwnedByRuntimePid(usage.listeners, pid);
   };
-  // Runtime recovery reruns a Gateway whose Node fails admission under another
-  // Node; the launcher stays the service's main process and its direct child
-  // serves the port and stops with the service.
+  // The resident launcher (release installs, and runtime recovery of a Gateway
+  // whose Node fails admission) stays the service's main process; its direct
+  // child serves the port and stops with the service.
   const isServiceResident = async (pid: number | undefined) => {
     const runtimePid = params.state.runtime?.pid;
     if (pid === undefined || runtimePid === undefined) {
@@ -204,6 +208,11 @@ export async function withGatewayMaintenanceDrain<T>(
     }
     const usage = await inspectPortUsage(connection.port, { probeHosts: ["127.0.0.1"] });
     assertResidentCurrent();
+    if (hasListenerAttributionGap(usage)) {
+      // The listener is unattributed (for example without lsof or ss). The Gateway
+      // that answered reported its own PID; its kernel parent ties it to the service.
+      return readLinuxProcessStat(pid)?.parentPid === runtimePid;
+    }
     return (
       usage.status === "busy" &&
       usage.listeners.length > 0 &&
