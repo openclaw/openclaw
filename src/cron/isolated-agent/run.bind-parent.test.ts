@@ -13,7 +13,7 @@ import {
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { createOperatorRecoveryFixture } from "../../gateway/operator-run-recovery.test-support.js";
 import type { GatewayCronCreatorAuthorityAdmission } from "../../gateway/server-methods/cron-creator-authority-admission.js";
 import {
@@ -284,7 +284,7 @@ it.each([
   try {
     if (scenario.startsWith("control ui owner binds")) {
       const original = expectDefined(
-        await captureGatewayOperatorRunAuthority({
+        await prepareGatewayOperatorRunAuthority({
           client: recovery.client,
           context,
           sourceAuthority: null,
@@ -341,9 +341,10 @@ it.each([
     expect(job.operatorSource?.source).toMatchObject({
       agentId: "main",
       sessionKey: SESSION,
-      sessionId: SESSION_ID,
       snapshot: { profileId: profile.id, device: { deviceId: DEVICE.deviceId } },
     });
+    // The source links the conversation by key; edits and resets keep it valid.
+    expect(job.operatorSource?.source).not.toHaveProperty("sessionId");
   } else {
     expect(job.operatorSource).toBeUndefined();
   }

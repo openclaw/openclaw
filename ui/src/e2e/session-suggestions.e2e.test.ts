@@ -275,7 +275,10 @@ suite.define(() => {
         const geometry = await caretTextGeometry(preview);
         const line = draft.slice(0, cursor).split("\n").length - 1;
         expect(geometry.height).toBeCloseTo(geometry.textHeight, 1);
-        expect(geometry.top).toBeCloseTo(geometry.textTop + line * geometry.lineHeight, 1);
+        // Each rendered line may round its fractional height to a layout unit.
+        expect(
+          Math.abs(geometry.top - (geometry.textTop + line * geometry.lineHeight)),
+        ).toBeLessThanOrEqual(0.5);
       }
     }
     for (const empty of ["", "\n\n"]) {

@@ -18,7 +18,7 @@ struct LogLocatorTests {
                 "OPENCLAW_STATE_DIR": stateDir.path,
                 "OPENCLAW_LOG_DIR": nil,
             ]) {
-                #expect(LogLocator.bestLogFile() == log)
+                #expect(LogLocator.bestLogFile()?.resolvingSymlinksInPath() == log.resolvingSymlinksInPath())
             }
         }
     }

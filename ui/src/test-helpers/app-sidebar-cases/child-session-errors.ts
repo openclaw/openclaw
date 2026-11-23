@@ -45,7 +45,7 @@ it.each([
     harness.publishList({ result: sessionList([parent]) });
     if (parentKey !== "main") {
       await settleLitElement(sidebar);
-      expect(find("[data-child-session-toggle]")?.getAttribute("aria-expanded")).toBe("true");
+      find<HTMLButtonElement>("[data-child-session-toggle]")!.click();
     } else {
       await waitForFast(() => expect(harness.list).toHaveBeenCalledOnce());
       expect(

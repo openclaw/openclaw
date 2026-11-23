@@ -58,7 +58,7 @@ export function retainSessionPlacementRead(
         change.nativeSettlement ? [change.nativeSettlement] : [],
       );
       if (pending.some((change) => change.indeterminate) || settlements.length !== pending.length) {
-        throw new Error(`Session ${sessionId} placement authority changed`);
+        throw new Error(`Session ${sessionId} placement changed. Retry.`);
       }
       if (settlements.length === 0) {
         return undefined;
@@ -83,7 +83,7 @@ export function retainSessionPlacementRead(
           (change) => change.kind === "claim" && change.sessionId === sessionId,
         )
       ) {
-        throw new Error(`Session ${sessionId} placement authority changed`);
+        throw new Error(`Session ${sessionId} placement changed. Retry.`);
       }
       return freezeJsonSnapshot(published.placement);
     },
@@ -211,8 +211,8 @@ export async function prepareCachedPlacementPreservationRead(
           yield placement;
         }
       }
-      // Replica reads cannot publish beyond the owner's sequence at capture.
-      if (owner.sequence >= sequence) {
+      // Only preservation changes can add a non-local placement outside the baseline.
+      if (observation.revoked) {
         for (const [sessionId, published] of owner.placements) {
           const placement = published.placement;
           if (

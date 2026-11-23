@@ -11,6 +11,7 @@ import { requireGit } from "../../agents/worktrees/git.js";
 import { withWorktreePreparationTiming } from "../../agents/worktrees/preparation-timing.js";
 import * as diagnostics from "../../infra/diagnostic-events.js";
 import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { startChatSendDiagnostics } from "../server-methods/chat-send-diagnostics.js";
 import { prepareSandboxCheckpointFixture } from "./local-workspace-incremental.test-support.js";
@@ -370,18 +371,33 @@ export async function proveWarmWorkspaceReuse(owner: LocalWorkspaceOwner) {
   const canonical = owner.worktree.path;
   const quiescence = await import("../../agents/sandbox/local-workspace-quiescence.js");
   using first = await prepareSandboxCheckpointFixture(owner);
+  expect(
+    (await readLocalWorkspaceProjection(owner.worktree.id))?.projection_fingerprints,
+  ).not.toBeNull();
   const quiesce = vi.spyOn(quiescence, "quiesceLocalWorkspace");
-  using unchanged = await prepareSandboxCheckpointFixture(owner);
-  expect(unchanged.workspaceDir).toBe(first.workspaceDir);
-  expect(quiesce).not.toHaveBeenCalled();
-
+  // The first reuse must detect a same-size edit despite the retained initialization identities.
   const source = path.join(first.workspaceDir, "source.txt");
   const before = await fs.stat(source);
-  await writeText(first.workspaceDir, "source.txt", "modified\n");
+  // An independent writer bypasses command finalization and host-write hooks.
+  const background = await runCommandWithTimeout(
+    [
+      process.execPath,
+      "-e",
+      "require('node:fs').writeFileSync(process.argv[1], 'modified\\n')",
+      source,
+    ],
+    { timeoutMs: 10_000 },
+  );
+  expect(background.code).toBe(0);
   await fs.utimes(source, before.atime, before.mtime);
   using guestEdit = await prepareSandboxCheckpointFixture(owner);
   await expectText(canonical, "source.txt", "modified\n");
   await expectText(guestEdit.workspaceDir, "source.txt", "modified\n");
+
+  quiesce.mockClear();
+  using unchanged = await prepareSandboxCheckpointFixture(owner);
+  expect(unchanged.workspaceDir).toBe(first.workspaceDir);
+  expect(quiesce).not.toHaveBeenCalled();
 
   await writeText(canonical, "source.txt", "host edit\n");
   const events: diagnostics.DiagnosticPhaseSnapshot[] = [];
@@ -421,6 +437,12 @@ export async function proveWarmWorkspaceReuseFailure(
   revoke: () => void,
 ) {
   using first = await prepareSandboxCheckpointFixture(owner);
+  if (failure === "observation") {
+    // An unchanged inode needs no acceptance; replace it without changing the content.
+    const source = path.join(first.workspaceDir, "source.txt");
+    await fs.copyFile(source, `${source}.replacement`);
+    await fs.rename(`${source}.replacement`, source);
+  }
   const stores = await import("./local-workspace-store.js");
   const quiescence = await import("../../agents/sandbox/local-workspace-quiescence.js");
   const quiesce = vi.spyOn(quiescence, "quiesceLocalWorkspace");

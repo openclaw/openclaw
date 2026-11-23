@@ -72,6 +72,7 @@ export type TranscriptAttachmentEntry = {
   /** Timestamp of the message that carried the media, when the transcript recorded one. */
   timestamp?: number;
   options: ImageRenderOptions;
+  onShowMessage?: () => void;
   onOpenSidebar: (content: SidebarContent) => void;
 } & ({ kind: "image"; image: ImageBlock } | { kind: "attachment"; item: AssistantAttachmentItem });
 
@@ -344,6 +345,13 @@ type McpAppSidebarContent = {
 };
 
 export type SidebarContent =
+  | {
+      kind: "mcp-app-preview";
+      title: string;
+      view: import("../../../components/mcp-app-view-types.ts").McpAppViewElement;
+      appIdentity?: import("../../../../../src/shared/mcp-app-extensions.js").McpAppIdentity;
+      rawText?: null;
+    }
   | McpAppSidebarContent
   | ToolOutputSidebarContent
   | MarkdownSidebarContent

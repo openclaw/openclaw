@@ -1434,7 +1434,6 @@ describe("runCopilotAttempt", () => {
       const submitted = requireCreateSessionConfig(sdk) as { tools?: SdkTool[] };
       const content = requireSystemMessage(sdk);
       expect(content).toContain("Permission blocks:");
-      expect(content).toContain("Omit unverified remediation advice");
       await waitForEventLoopTurn();
       expect(llmInput).toHaveBeenCalledWith(
         expect.objectContaining({ systemPrompt: content }),

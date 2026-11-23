@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as hostMemory from "../infra/host-memory.js";
 import {
   resetGatewayWorkAdmission,
   markGatewayRestartDraining,
@@ -226,7 +227,12 @@ it.each([
       await sidecar.stop();
     }
     ready.resolve();
-    await drainPrewarm();
+    if (kind === "handlers") {
+      await drainPrewarm();
+    } else {
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.dynamicImportSettled();
+    }
     expect(observed).toHaveBeenCalledTimes(stopped ? 0 : 1);
     await sidecar.stop();
     expect(warn).not.toHaveBeenCalled();
@@ -339,21 +345,40 @@ function scheduleDependencyPreparation(options: Partial<PrewarmOptions> = {}) {
   return sidecar;
 }
 
-it.each([
-  [0, 0, false],
-  [1000, 201, false],
-  [1000, 200, true],
-] as const)(
-  "reserves constrained memory for requests (limit: %i, available: %i)",
-  async (limit, available, skipped) => {
-    vi.spyOn(process, "constrainedMemory").mockReturnValue(limit);
-    vi.spyOn(process, "availableMemory").mockReturnValue(available);
+it("refreshes dependency templates between sessions without overlapping preparations", async () => {
+  const first = createDeferred();
+  mocks.prewarmLocalWorkspaceTemplates.mockImplementationOnce(() => first.promise);
+  const handle = scheduleDependencyPreparation();
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.dynamicImportSettled();
+    expect(mocks.prewarmLocalWorkspaceTemplates).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mocks.prewarmLocalWorkspaceTemplates).toHaveBeenCalledOnce();
+    first.resolve();
+    const request = foreground();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mocks.prewarmLocalWorkspaceTemplates).toHaveBeenCalledOnce();
+    request.release();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mocks.prewarmLocalWorkspaceTemplates).toHaveBeenCalledTimes(2);
+  } finally {
+    first.resolve();
+    await handle.stop();
+  }
+});
+
+it.each([false, true])(
+  "reserves constrained memory for requests (low memory: %s)",
+  async (skipped) => {
+    vi.spyOn(hostMemory, "isConstrainedProcessLowOnMemory").mockReturnValue(skipped);
     const handles = scheduleGatewayPrewarm(prewarmOptions());
     sidecars.push(...handles);
     expect(handles).toHaveLength(skipped ? 0 : 2);
-    await drainPrewarm();
-    expect(mocks.prewarmLocalWorkspaceTemplates).toHaveBeenCalledTimes(skipped ? 0 : 1);
-    expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledTimes(skipped ? 0 : 1);
+    await vi.waitFor(() => {
+      expect(mocks.prewarmLocalWorkspaceTemplates).toHaveBeenCalledTimes(skipped ? 0 : 1);
+      expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledTimes(skipped ? 0 : 1);
+    });
   },
 );
 
@@ -366,7 +391,6 @@ it.each(["close", "restart"] as const)(
       started.resolve(signal);
       await cleanup.promise;
     });
-    const request = expectDefined(tryBeginGatewayRootWorkAdmission(), "foreground request");
     const handle = scheduleDependencyPreparation();
     let stopping: Promise<void> | undefined;
     try {
@@ -386,7 +410,6 @@ it.each(["close", "restart"] as const)(
       await stopping;
       expect(closed).toBe(true);
     } finally {
-      request.release();
       cleanup.resolve();
       await handle.stop();
       await stopping;

@@ -42,7 +42,7 @@ type ReactionGroup = Parameters<typeof messageReactionOptions>[0];
 export function GroupMessageReactions(props: {
   group: ReactionGroup;
   actionDetails: { reactionMessageId?: string } | null | undefined;
-  isStreaming: boolean;
+  isStreaming?: boolean;
   options: MessageReactionOptions;
 }) {
   const messageId = () => (props.isStreaming ? undefined : props.actionDetails?.reactionMessageId);

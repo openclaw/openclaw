@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
+import { resolvePackageReleaseSlotForRootSync } from "../../infra/package-release-slot-path.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import {
   captureManagedUpdateLeaseDatabaseIdentity,
@@ -209,7 +210,12 @@ export async function withUpdateCommandExecutor<T>(
           return;
         }
         const key = occupiedSlotKey(root);
-        if (key === installLease.key) {
+        // The release the installation's package link selects is that installation by its
+        // real path; any other spelling of it is an occupied slot and takes its own lease.
+        if (
+          key === installLease.key ||
+          resolvePackageReleaseSlotForRootSync(root) === installLease.key
+        ) {
           return;
         }
         if (slotLease) {
@@ -233,6 +239,7 @@ export async function withUpdateCommandExecutor<T>(
         assertCurrent();
       });
       const executor: UpdateCommandExecutor = {
+        exclude: (excluded) => activation.exclude(excluded),
         async enter(root, enterOptions) {
           // Executor closure owns its recovery error unless a deadline already failed.
           if (active || activation.failure) {

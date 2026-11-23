@@ -5,6 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
@@ -35,23 +36,18 @@ import {
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  recordSessionStateEventAsync,
-  registerSessionStateWatch,
-} from "../../sessions/session-state-events.js";
+import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import { readCursor } from "../../sessions/session-state-events.test-support.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as routedReplies from "./route-reply.js";
-import * as sessionEventHandoff from "./session-event-handoff.js";
-import {
-  captureSessionEventTargetForHost,
-  enqueueSessionEventForHost,
-} from "./session-event-handoff.js";
+import * as handoff from "./session-event-handoff.js";
+import { captureSessionEventTargetForHost } from "./session-event-handoff.js";
 import {
   configureEventState,
   openEventToolHost,
+  recordWatchEvents,
   runEventFixture,
   startEmbeddedTurn,
 } from "./session-event.test-support.js";
@@ -73,35 +69,16 @@ await Promise.all([
   ),
 ]);
 
-type EventReceipt = ReturnType<typeof enqueueSessionEventForHost>;
+type EventReceipt = ReturnType<typeof handoff.enqueueSessionEventForHost>;
 function observeEnqueue(source: string | undefined, onReceipt: (receipt: EventReceipt) => void) {
-  const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
-  return vi
-    .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
-    .mockImplementation((text, options) => {
-      const receipt = enqueue(text, options);
-      if (source === undefined || options.source === source) {
-        onReceipt(receipt);
-      }
-      return receipt;
-    });
-}
-
-async function recordWatchEvents(child: string, sessionId: string) {
-  const input = {
-    sessionKey: child,
-    sessionId,
-    agentId: "main",
-    kind: "human_direct_message" as const,
-    actorType: "human" as const,
-    summary: "Other actor changed the watched session",
-    watcherSessionKeys: [],
-  };
-  return {
-    child,
-    frozen: expectDefined(await recordSessionStateEventAsync(input), "frozen event"),
-    newer: expectDefined(await recordSessionStateEventAsync(input), "newer event"),
-  };
+  const enqueue = handoff.enqueueSessionEventForHost;
+  return vi.spyOn(handoff, "enqueueSessionEventForHost").mockImplementation((text, options) => {
+    const receipt = enqueue(text, options);
+    if (source === undefined || options.source === source) {
+      onReceipt(receipt);
+    }
+    return receipt;
+  });
 }
 
 async function enqueueGuardedCliWatchdog(params: {
@@ -145,7 +122,7 @@ async function enqueueGuardedCliWatchdog(params: {
       },
     ],
   });
-  let receipt: ReturnType<typeof enqueueSessionEventForHost> | undefined;
+  let receipt: EventReceipt | undefined;
   const observer = observeEnqueue(undefined, (value) => {
     receipt = value;
   });
@@ -168,6 +145,7 @@ async function enqueueGuardedCliWatchdog(params: {
       }),
     }),
     cancel: () => {},
+    release: async () => undefined,
     cancelScope: () => {},
   });
   try {
@@ -219,7 +197,7 @@ it.for([
       const scope = { agentId: "main", sessionKey: "agent:main:event-refusal" };
       await replaceSessionEntry(scope, { sessionId: "event-refusal", updatedAt: 1, ...entry });
       runEmbeddedAgentMock.mockReset();
-      const receipt = enqueueSessionEventForHost("Resume interrupted work", {
+      const receipt = handoff.enqueueSessionEventForHost("Resume interrupted work", {
         ...scope,
         source: "restart",
         abortSignal: signal,
@@ -250,6 +228,7 @@ it.for([
   "retained-config-downgrade",
   "retained-channel-config-downgrade",
   "unrelated-agent-config",
+  "unrelated-session-maintenance",
   "remapped-workspace",
   "remapped-guarded",
   "remapped-default",
@@ -263,10 +242,11 @@ it.for([
       skip("Windows cannot replace an open database file");
     }
     await runEventFixture("session-event-permissions", onTestFinished, async (state) => {
-      const channelDowngrade = change === "retained-channel-config-downgrade";
+      // Config edits apply to the next turn; session settings still bound a started one.
+      const configDowngrade = change.endsWith("config-downgrade");
       const config = await configureEventState(state, {
         tools: { profile: "coding", codeMode: false, toolSearch: false },
-        ...(channelDowngrade
+        ...(change === "retained-channel-config-downgrade"
           ? { channels: { discord: { enabled: true, actions: { stickers: true } } } }
           : {}),
       });
@@ -291,7 +271,7 @@ it.for([
       }
       const remapped = change.startsWith("remapped-");
       const toolOnly = change === "tool-only-delivery";
-      const unrelatedConfig = change === "unrelated-agent-config";
+      const unrelatedConfig = change.startsWith("unrelated-");
       const producerMode = toolOnly
         ? "full"
         : change === "remapped-workspace"
@@ -339,7 +319,19 @@ it.for([
             if (unrelatedConfig) {
               setRuntimeConfigSnapshot({
                 ...config,
-                agents: { ...config.agents, entries: { ...config.agents?.entries, other: {} } },
+                ...(change === "unrelated-session-maintenance"
+                  ? {
+                      session: {
+                        ...config.session,
+                        maintenance: { coldStorage: { enabled: true } },
+                      },
+                    }
+                  : {
+                      agents: {
+                        ...config.agents,
+                        entries: { ...config.agents?.entries, other: {} },
+                      },
+                    }),
               });
             }
             const write = tools.find((tool) => tool.name === "write");
@@ -370,7 +362,7 @@ it.for([
                   fsSync.renameSync(database.path, foreignPath);
                   fsSync.renameSync(originalPath, database.path);
                 };
-              } else if (channelDowngrade) {
+              } else if (change === "retained-channel-config-downgrade") {
                 setRuntimeConfigSnapshot({
                   ...config,
                   channels: { discord: { enabled: true, actions: { stickers: false } } },
@@ -399,7 +391,13 @@ it.for([
                 if (!retainedDowngrade) {
                   throw error;
                 }
-                expect(String(error)).toMatch(/authority|permission|active|configuration changed/i);
+                if (change === "retained-database-replacement") {
+                  expect(error).toMatchObject({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" });
+                } else {
+                  expect(String(error)).toMatch(
+                    /authority|permission|active|configuration changed/i,
+                  );
+                }
                 retainedWriteRejected = true;
               }
             }
@@ -433,8 +431,8 @@ it.for([
                 return result;
               })
           : undefined;
-      let outcome: Awaited<ReturnType<typeof enqueueSessionEventForHost>["settled"]>;
-      let accepted: Awaited<ReturnType<typeof enqueueSessionEventForHost>["accepted"]>;
+      let outcome: Awaited<EventReceipt["settled"]>;
+      let accepted: Awaited<EventReceipt["accepted"]>;
       const route = toolOnly
         ? vi
             .spyOn(routedReplies, "routePreparedReply")
@@ -458,7 +456,7 @@ it.for([
                 entry: expectDefined(loadSessionEntry(scope), "full-permission destination"),
                 signal,
               })
-            : enqueueSessionEventForHost(text, {
+            : handoff.enqueueSessionEventForHost(text, {
                 ...scope,
                 source: fresh ? "plugin" : "exec",
                 abortSignal: AbortSignal.any([signal, cancellation.signal]),
@@ -523,7 +521,7 @@ it.for([
       expect(accepted).toEqual({ ok: true });
       const evidence = JSON.stringify(outcome);
       expect(await fs.readFile(filePath, "utf8"), evidence).toBe(
-        change === "new-session" || remapped || toolOnly || unrelatedConfig
+        change === "new-session" || remapped || toolOnly || unrelatedConfig || configDowngrade
           ? "completed\n"
           : "original\n",
       );
@@ -542,7 +540,7 @@ it.for([
       expect(attempted, evidence).toBe(
         change === "new-session" || retainedDowngrade || remapped || toolOnly || unrelatedConfig,
       );
-      expect(retainedWriteRejected).toBe(retainedDowngrade);
+      expect(retainedWriteRejected).toBe(retainedDowngrade && !configDowngrade);
       if (change === "new-session") {
         expect(loadSessionEntry(scope)?.sessionId).toBe(target.sessionId);
       } else {
@@ -605,10 +603,16 @@ it.for([
               firstStarted.resolve();
               await releaseFirst.promise;
             }
-            return { payloads: [{ text: "Observed" }], meta: { durationMs: 1 } };
+            const prepared = prepareAgentRunTerminalReply({
+              rawText: starts.length === 2 && watchCount === 1 ? "NO_REPLY" : "Observed",
+            });
+            return {
+              payloads: prepared.text ? [{ text: prepared.text }] : [],
+              meta: { durationMs: 1, terminalReply: prepared.terminalReply },
+            };
           });
         const target = await captureSessionEventTargetForHost(scope.agentId, scope.sessionKey);
-        const first = enqueueSessionEventForHost("First admitted work", {
+        const first = handoff.enqueueSessionEventForHost("First admitted work", {
           ...scope,
           source: "task",
           expectedTarget: target,
@@ -620,9 +624,9 @@ it.for([
         const enqueued = createDeferred();
         const notices: EventReceipt[] = [];
         let captures = 0;
-        const capture = sessionEventHandoff.captureSessionEventTargetForHost;
+        const capture = handoff.captureSessionEventTargetForHost;
         const captureSpy = vi
-          .spyOn(sessionEventHandoff, "captureSessionEventTargetForHost")
+          .spyOn(handoff, "captureSessionEventTargetForHost")
           .mockImplementation(async (...args) => {
             const result = await capture(...args);
             if (++captures === 1) {
@@ -633,7 +637,7 @@ it.for([
             }
             return result;
           });
-        const enqueueSpy = observeEnqueue("session", (receipt) => {
+        const enqueueSpy = observeEnqueue("session_state", (receipt) => {
           notices.push(receipt);
           enqueued.resolve();
         });
@@ -692,7 +696,7 @@ it.for([
               }),
               "retained overflow occurrence",
             );
-            const rejected = enqueueSessionEventForHost(retainedOverflow.text, {
+            const rejected = handoff.enqueueSessionEventForHost(retainedOverflow.text, {
               ...scope,
               source: "hook",
               expectedTarget: target,
@@ -718,10 +722,14 @@ it.for([
             expect(outcome, outcome.error).toMatchObject({
               status: "completed",
               executionStarted: true,
+              ...(watchCount === 1 ? { deliverySuppressionReason: "silent" } : {}),
             });
           }
           expect(starts).toHaveLength(cancelledBatch ? 1 : 2);
           if (!cancelledBatch) {
+            expect(runEmbeddedAgentMock.mock.calls[1]?.[0].terminalReplyExpectation).toBe(
+              "optional",
+            );
             expect(runEmbeddedAgentMock.mock.calls[1]?.[0].permissionMode).toBe(
               watchCount === 2 ? "read-only" : "full",
             );
@@ -833,10 +841,10 @@ const ownerRequesterOutcomes = {
   owner: { owner: true, restart: { ok: true }, requester: "456", scheduled: 1 },
   guest: { owner: false, restart: { gated: true }, requester: undefined, scheduled: 0 },
   "revoked-before-admission": { owner: false, restart: { gated: true }, scheduled: 0 },
-  // Revoking publishes config, which retires the admitted turn's tool host before the call.
   "revoked-after-admission": {
     owner: true,
-    restart: "agent harness host capability is no longer active",
+    requester: "456",
+    restart: "Gateway maintenance requires a current owner principal.",
     scheduled: 0,
   },
 };
@@ -913,7 +921,7 @@ it.for(Object.keys(ownerRequesterOutcomes) as Array<keyof typeof ownerRequesterO
           .finally(close);
         return { payloads: [{ text: "Completion observed" }], meta: { durationMs: 1 } };
       });
-      const receipt = enqueueSessionEventForHost("Background command finished.", {
+      const receipt = handoff.enqueueSessionEventForHost("Background command finished.", {
         ...scope,
         source: "exec",
         expectedTarget: target,
@@ -929,6 +937,85 @@ it.for(Object.keys(ownerRequesterOutcomes) as Array<keyof typeof ownerRequesterO
           ?.requester?.senderId,
         scheduled: scheduled.mock.calls.length,
       }).toEqual(ownerRequesterOutcomes[requester]);
+    });
+  },
+);
+
+it.for([
+  { change: "same-session", writes: true },
+  { change: "restricted-sender", writes: false },
+  { change: "cross-session", writes: false },
+  { change: "revoked-before-write", writes: false },
+] as const)(
+  "bounds a same-session background completion's final effects: $change",
+  async ({ change, writes }, { signal, onTestFinished }) => {
+    await runEventFixture("session-event-scoped-effects", onTestFinished, async (state) => {
+      const config = await configureEventState(state, {
+        tools: { profile: "coding", codeMode: false, toolSearch: false },
+      });
+      await fs.mkdir(state.workspaceDir, { recursive: true });
+      const filePath = path.join(state.workspaceDir, "completion.txt");
+      await fs.writeFile(filePath, "original\n");
+      const scope = { agentId: "main", sessionKey: "agent:main:scoped-effects" };
+      const setMode = async (permissionMode: SessionEntry["permissionMode"]) =>
+        replaceSessionEntry(scope, {
+          sessionId: "scoped-effects",
+          lifecycleRevision: "same-generation",
+          updatedAt: Date.now(),
+          sessionStartedAt: Date.now(),
+          permissionMode,
+        });
+      await setMode("full");
+      // The producer's captured ceiling lists only read; the follow-up may drop it only when the
+      // caller marked it as this session's own policy.
+      const target = await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: change === "cross-session" ? "agent:main:other-owner" : scope.sessionKey,
+          sessionEventToolsAllow: ["read"],
+          ...(change === "restricted-sender" ? {} : { sessionEventToolsAllowSessionScoped: true }),
+          receiptAuthority: () => true,
+        },
+        () => captureSessionEventTargetForHost(scope.agentId, scope.sessionKey),
+      );
+      let writeOffered = false;
+      let writeRejected = false;
+      runEmbeddedAgentMock
+        .mockReset()
+        .mockImplementation(async (params: RunEmbeddedAgentParams) => {
+          const { tools, close } = await openEventToolHost(params, "ordinary reply admission");
+          try {
+            const write = tools.find((tool) => tool.name === "write");
+            writeOffered = write !== undefined;
+            if (change === "revoked-before-write") {
+              await setMode("read-only");
+            }
+            if (write) {
+              await write.execute("write-completion", { path: filePath, content: "completed\n" });
+            }
+          } catch (error) {
+            expect(String(error)).toMatch(/authority|permission|active|configuration changed/i);
+            writeRejected = true;
+          } finally {
+            close();
+          }
+          return { payloads: [{ text: "Completion observed" }], meta: { durationMs: 1 } };
+        });
+      const receipt = handoff.enqueueSessionEventForHost("Process the event; record the result.", {
+        ...scope,
+        source: "exec",
+        abortSignal: signal,
+        expectedTarget: target,
+        deliver: false,
+      });
+      await expect(receipt.accepted).resolves.toEqual({ ok: true });
+      await receipt.settled;
+      expect(config.tools?.profile).toBe("coding");
+      expect({ writeOffered, writeRejected }).toEqual({
+        writeOffered: change === "revoked-before-write" || writes,
+        writeRejected: change === "revoked-before-write",
+      });
+      expect(await fs.readFile(filePath, "utf8")).toBe(writes ? "completed\n" : "original\n");
     });
   },
 );

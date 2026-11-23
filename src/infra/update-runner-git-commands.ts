@@ -3,7 +3,9 @@ import path from "node:path";
 import { parseDocument } from "yaml";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { ignoreMissingPath } from "./errno.js";
+import { resolveExecutablePath } from "./executable-path.js";
 import { isFullGitObjectId } from "./update-dev-target.js";
+import { describeUnavailableMacosSystemGit } from "./update-macos-git.js";
 import { resolvePnpmCandidateEnv } from "./update-package-manager.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
@@ -30,6 +32,39 @@ export type StepFactory = (
 
 export function createGitStepFactory(root: string, step: StepFactory) {
   return (name: string, ...args: string[]) => step(name, ["git", "-C", root, ...args], root);
+}
+
+// `rev-parse --path-format=absolute` (Git 2.31) locates the object directory; older Git
+// echoes the flag back as a revision instead of failing, so the update breaks later.
+const MINIMUM_GIT_VERSION = [2, 31] as const;
+
+/** Explain a Git prerequisite the operator can fix before checkout staging. */
+export async function describeUnsupportedGit(
+  runCommand: CommandRunner,
+  options: Parameters<CommandRunner>[1],
+): Promise<string | null> {
+  const missingDeveloperTools = await describeUnavailableMacosSystemGit(runCommand, options);
+  if (missingDeveloperTools) {
+    return missingDeveloperTools;
+  }
+  const probe = await runCommand(["git", "--version"], options).catch(() => null);
+  const match = probe?.code === 0 ? /^git version (\d+)\.(\d+)\S*/u.exec(probe.stdout) : null;
+  const [major, minor] = [Number(match?.[1]), Number(match?.[2])];
+  if (
+    !match ||
+    major > MINIMUM_GIT_VERSION[0] ||
+    (major === MINIMUM_GIT_VERSION[0] && minor >= MINIMUM_GIT_VERSION[1])
+  ) {
+    return null;
+  }
+  // The updater's PATH puts its Node directory and system directories first, so name the
+  // Git it actually runs rather than the one the operator's shell finds.
+  const found = match[0].replace(/^git version /u, "");
+  const required = `Git ${MINIMUM_GIT_VERSION.join(".")} or newer`;
+  const location = resolveExecutablePath("git", { cwd: options.cwd, useCache: false });
+  return location
+    ? `Update refused: Git ${found} at ${location} is too old for Git-checkout updates. Replace it with ${required}, then retry openclaw update. No changes were made.`
+    : `Update refused: Git ${found} is too old for Git-checkout updates. Install ${required}, then retry openclaw update. No changes were made.`;
 }
 
 /** Older Git may lazily fetch promised objects; that must not block an update. */

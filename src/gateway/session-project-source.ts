@@ -27,6 +27,7 @@ import {
   ProjectCheckoutError,
   resolveProjectCheckout,
   resolveProjectDirectory,
+  resolveRecordedProjectByRoot,
   resolveWorkspaceProject,
   selectStoredProjectRegistry,
 } from "../projects/project-registry.js";
@@ -115,7 +116,7 @@ export async function resolveSessionProjectSkillRoot(params: {
   if (!direct.ok) {
     return undefined;
   }
-  const admitted = prepareSessionCreateFilesystemRoot({
+  const admitted = await prepareSessionCreateFilesystemRoot({
     cfg: params.cfg,
     requestedProjectId: params.projectId,
     targetAgentId: params.targetAgentId,
@@ -123,6 +124,7 @@ export async function resolveSessionProjectSkillRoot(params: {
     enforceSandboxContainment: true,
     sandboxRequired: params.resolveSandboxRequired(),
   });
+  params.assertCurrent();
   const root = admitted.ok ? admitted.value.sessionCwd : undefined;
   return root
     ? {
@@ -154,7 +156,7 @@ export async function resolveSessionProjectCheckoutOptions(params: {
   if (project.source === "cloned") {
     return { current: false, worktree: true };
   }
-  const direct = prepareSessionCreateFilesystemRoot({
+  const direct = await prepareSessionCreateFilesystemRoot({
     cfg: params.cfg,
     requestedProjectId: params.projectId,
     targetAgentId: params.targetAgentId,
@@ -162,6 +164,7 @@ export async function resolveSessionProjectCheckoutOptions(params: {
     enforceSandboxContainment: true,
     sandboxRequired: params.resolveSandboxRequired(),
   });
+  params.assertCurrent();
   const current = direct.ok;
   const root = direct.ok ? direct.value.sessionCwd : undefined;
   // Registered projects already record a committed checkout. Creation validates it
@@ -231,6 +234,9 @@ async function prepareSpawnParentWorktreeSource(
     "archivedAt",
     "projectId",
     "sessionRoot",
+    "spawnedCwd",
+    "execNode",
+    "deviceFolder",
     "worktree",
     "repositoryWorkspaceId",
   ] as const;
@@ -282,7 +288,14 @@ async function prepareSpawnParentWorktreeSource(
     return { kind: "repository", sessionId: parent.entry.sessionId, repository, assertCurrent };
   }
   if (!parent.entry.worktree) {
-    const projectId = normalizeOptionalString(parent.entry.projectId);
+    const { sessionRoot, spawnedCwd, execNode, deviceFolder } = parent.entry;
+    // Older direct-folder sessions did not record the project ID. Reuse only an
+    // exact registered local checkout, not an arbitrary cwd or a remote path.
+    const projectId =
+      normalizeOptionalString(parent.entry.projectId) ??
+      (sessionRoot && sessionRoot === spawnedCwd && !execNode && !deviceFolder
+        ? (await resolveRecordedProjectByRoot(sessionRoot))?.id
+        : undefined);
     if (!projectId) {
       return undefined;
     }

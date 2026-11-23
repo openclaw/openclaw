@@ -22,8 +22,10 @@ Output and exit codes match the offline command. With `gateway.reload.mode: "off
 a routed write is saved without a Gateway restart and prints
 `Restart the gateway to apply.`, as an offline write does. Older Gateways, such as
 2026.10.7, still restart to apply such a write. If the config changed in between,
-the Gateway rejects the write; rerun the command. A failure after the request was
-sent is reported as an uncertain outcome and is never retried locally; check the
+the Gateway rejects the write; rerun the command. If the Gateway saved the edit
+but failed to apply it, the CLI briefly checks whether that exact revision
+became active. The CLI reports success if the Gateway confirms it. If the
+outcome is still uncertain, the CLI reports the original error. Check the
 path with `openclaw config get` before retrying.
 
 Some changes still need the Gateway stopped: `database.*` settings, which
@@ -709,6 +711,23 @@ openclaw config validate
 ```
 
 Direct editor writes are still allowed, but the running Gateway treats them as untrusted until they validate. Startup validates config without rewriting legacy keys. Invalid direct edits stop startup; hot reload skips invalid edits without rewriting `openclaw.json`. Run `openclaw doctor --fix` for legacy-key repair, prefixed/clobbered config, or last-known-good recovery. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config).
+
+### Agent-assisted recovery
+
+The agent's `openclaw` tool accepts exact config commands in its `message`, including
+`config set <path> <value>`, `config unset <path>`, `config get <path>`,
+`config schema <path>`, and `config validate`. These commands use the existing config
+executor and approval checks without requiring a working setup-helper model.
+Natural-language setup requests still require working inference. A permission-policy
+change still requires its exact human approval; a helper outage does not grant it.
+
+If broken config or an unavailable setup tool prevents an explicitly requested local
+repair, an agent may use its available file or exec tools under their existing
+permissions. Prefer validated CLI edits. If the CLI cannot load the config, inspect
+the actual file, preserve a rollback copy, make the narrow repair, then validate and
+read back. This is not a way to override an approval decision, readonly config,
+containment, or disabled tools, or to change access, approval, or ownership policies.
+Gateway updates, restarts, and service control still use supervised maintenance.
 
 Ordinary recovery can restore an eligible, valid current backup verbatim. Backups that need legacy transformations must be recovered through Doctor. Plugin schema changes or `minHostVersion` skew stay loud instead of rolling back unrelated user settings such as models, providers, auth profiles, channels, gateway exposure, tools, memory, browser, or cron config.
 

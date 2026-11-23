@@ -429,6 +429,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       config: attempt.config,
       preparedModelRuntime: attempt.preparedModelRuntime,
       preparedTtsPreferences,
+      prepareSessionProjectGuidance: attempt.prepareSessionProjectGuidance,
       agentId: params.setup.sessionAgentId,
       workspaceDir: params.setup.effectiveWorkspace,
       runtimeCwd: params.setup.effectiveCwd,
@@ -467,6 +468,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       tools: params.effectiveTools,
       contextFiles: params.bootstrap.contextFiles,
       bootstrapMode: params.bootstrap.bootstrapMode,
+      bootstrapCompleted: params.bootstrap.bootstrapCompleted,
       bootstrapTruncationNotice: buildBootstrapPromptWarningNotice(
         params.bootstrap.bootstrapPromptWarning.lines,
       ),

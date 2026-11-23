@@ -1,5 +1,7 @@
+import fs from "node:fs";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isMainThread } from "node:worker_threads";
 import {
   createRuntimeProcessEntrypoints,
   pluginRuntimeProcessManifest,
@@ -47,4 +49,22 @@ export function workerScriptName(filename: string | URL, evalSource = false): st
       scriptBasename(filename instanceof URL ? fileURLToPath(filename) : filename),
     ) ?? "other"
   );
+}
+
+/** Resolve only when emitting a diagnostic; Node thread IDs are not Linux task IDs. */
+export function currentWorkerDiagnosticIdentity() {
+  let nativeThreadId: number | undefined;
+  if (process.platform === "linux") {
+    try {
+      nativeThreadId = Number(basename(fs.readlinkSync("/proc/thread-self")));
+    } catch {
+      // Procfs can be unavailable; attribution must not suppress the original diagnostic.
+    }
+  }
+  return {
+    workerScript: isMainThread ? "main" : workerScriptName(process.argv[1] ?? ""),
+    ...(nativeThreadId !== undefined && Number.isSafeInteger(nativeThreadId) && nativeThreadId > 0
+      ? { nativeThreadId }
+      : {}),
+  };
 }

@@ -41,9 +41,10 @@ const cfg: OpenClawConfig = {
   session: { mainKey: "home" },
 };
 const verified = { ok: true as const, modelRef: "ollama/test-model", latencyMs: 1 };
-function invocation(runtimeConfig: OpenClawConfig = cfg) {
+function invocation(runtimeConfig: OpenClawConfig = cfg, locale?: string) {
   return {
     req: { type: "req", id: "creation", method: "agents.create" },
+    params: { locale },
     context: { getRuntimeConfig: () => runtimeConfig, isConfigReloadSettled: () => true },
     client: { connect: { client: { mode: "ui" }, scopes: ["operator.admin"] } },
     respond: vi.fn(),
@@ -113,7 +114,7 @@ it("persists the ordinary greeting before a detached model turn", async () => {
       ...cfg,
       agents: { entries: { main: { name: "Scout" } } },
     };
-    const options = invocation(runtimeConfig);
+    const options = invocation(runtimeConfig, "pt-BR");
     const recordCreatedSession = vi.fn();
     options.sessionMutationAuthorization = {
       assertCurrent: vi.fn(),
@@ -137,7 +138,10 @@ it("persists the ordinary greeting before a detached model turn", async () => {
       .filter((event) => event.type === "message")
       .map((event) => event.message);
     expect(messages).toMatchObject([
-      { role: "assistant", content: [{ type: "text", text: "Hi, I’m Scout. Happy to help." }] },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Olá, sou Scout. Estou aqui para ajudar." }],
+      },
     ]);
   });
 });
@@ -165,7 +169,7 @@ it("prepares Template chat without a canned assistant greeting or model run", as
 it("asks for one of four roles in plain text without tools", async () => {
   const release = vi.fn();
   const work = new AsyncWorkScope();
-  const options = invocation();
+  const options = invocation(cfg, "pt-BR");
   options.sessionMutationAuthorization = {
     retain: () => release,
   } as unknown as GatewayRequestHandlerOptions["sessionMutationAuthorization"];
@@ -181,6 +185,7 @@ it("asks for one of four roles in plain text without tools", async () => {
   await work.drain();
 
   const [request, , internalOptions] = sendInternalChat.mock.calls[0]!;
+  expect(request.params.message).toContain("pt-BR");
   expect(request.params.message).toContain("Ask the user in plain text");
   expect(request.params.message).toContain("introduction has already been saved");
   expect(request.params.message).not.toContain("Ask User");
@@ -237,14 +242,66 @@ it("starts one normal Template personality greeting without the four-role questi
   expect(release).toHaveBeenCalledOnce();
 });
 
+it("runs a chat-based Template opening hidden, under the agent's own tool policy", async () => {
+  sendInternalChat.mockReset().mockImplementation(async (request: GatewayRequestHandlerOptions) => {
+    request.respond(true, { status: "started" });
+  });
+  await startAgentOnboardingConversation(
+    invocation(),
+    "scout",
+    "agent:scout:home",
+    "template",
+    "Fixture setup prompt",
+  );
+  const [request] = sendInternalChat.mock.calls[0]!;
+  expect(request.params.message).toBe("Fixture setup prompt");
+  // Inherit the selected model's policy: a nonreasoning model cannot accept explicit low effort.
+  expect(request.params).not.toHaveProperty("thinking");
+  expect(request.params.systemInputProvenance).toEqual({
+    kind: "internal_system",
+    sourceTool: "template_add_setup",
+  });
+  expect(request.params.idempotencyKey).toMatch(/^agents.create:scout:template-setup:/);
+  expect(waitForAgentJob).toHaveBeenLastCalledWith({
+    runId: request.params.idempotencyKey,
+    source: "chat",
+    timeoutMs: 172_860_000,
+  });
+  const internal = sendInternalChat.mock.calls[0]![2];
+  // No runtime allowlist: an empty one would remove automations, plugins and message.
+  expect(internal).toEqual({
+    transcript: { display: false },
+    deferWorkspaceBootstrap: true,
+    templateSetup: true,
+  });
+  await startAgentOnboardingConversation(
+    invocation(),
+    "scout",
+    "agent:scout:home",
+    "template",
+    "Fixture setup prompt",
+  );
+  expect(sendInternalChat.mock.calls[1]![0].params).not.toHaveProperty("thinking");
+  expect(sendInternalChat.mock.calls[1]![0].params.idempotencyKey).not.toBe(
+    request.params.idempotencyKey,
+  );
+});
+
 it("reports failed transcript admission without changing the already-created agent receipt", async () => {
-  const options = invocation();
-  options.hasCurrentClientAuthority = () => false;
-  const result = await completeAgentOnboarding(options, "main");
-  expect(result).toEqual({
-    status: "error",
-    sessionKey: "agent:main:home",
-    error: expect.stringContaining("authority changed"),
+  await withOpenClawTestState({ label: "onboarding-commit-refused" }, async () => {
+    const options = invocation();
+    options.sessionMutationCommitGuard = () => {
+      throw new Error("Fixture session commit refused");
+    };
+    const result = await completeAgentOnboarding(options, "main");
+    expect(result).toEqual({
+      status: "error",
+      sessionKey: "agent:main:home",
+      error: expect.stringContaining("Fixture session commit refused"),
+    });
+    expect(
+      loadSessionEntryReadOnly({ agentId: "main", sessionKey: "agent:main:home" }),
+    ).toBeUndefined();
   });
 });
 

@@ -82,6 +82,11 @@ public struct OpenClawIDNodeTrustAssessment: Sendable {
     public let verdict: Result<OpenClawIDNodeTrustTarget, OpenClawIDNodeEnrollmentError>
 }
 
+/// Which list of a verified snapshot must name the dialing key.
+public enum OpenClawIDAdmission: Sendable {
+    case node, owner, member
+}
+
 // periphery:ignore - Verification namespace used through its static members by enrollment and the native trust store.
 /// Strict schema, signature, pin and snapshot verification for the node descriptor response.
 public enum OpenClawIDNodeTrust {
@@ -101,7 +106,7 @@ public enum OpenClawIDNodeTrust {
             hostname: link.hostname,
             pin: (link.clawID, link.rootFingerprint),
             discoveryOrigin: discoveryOrigin,
-            peerKey: peerKey,
+            listed: (peerKey, .node),
             previous: previous,
             now: now)
     }
@@ -121,9 +126,52 @@ public enum OpenClawIDNodeTrust {
             hostname: hostname,
             pin: (previous.clawID, previous.rootFingerprint),
             discoveryOrigin: discoveryOrigin,
-            peerKey: peerKey,
+            listed: (peerKey, .node),
             previous: previous,
             now: now)
+    }
+
+    /// An owner or member device's own peer key, verified against the pin it got at enrollment
+    /// (the root from the sealed handoff or the recovery kit) and the claw's current snapshot.
+    public static func assessDevice(
+        response: Data,
+        hostname: String,
+        pin: (clawID: String, rootFingerprint: String),
+        discoveryOrigin: URL,
+        listed: (peerKey: String, admission: OpenClawIDAdmission),
+        previous: OpenClawIDNodeTrustState?,
+        now: Int64) throws -> OpenClawIDNodeTrustAssessment
+    {
+        try self.assess(
+            response: response,
+            hostname: hostname,
+            pin: pin,
+            discoveryOrigin: discoveryOrigin,
+            listed: (listed.peerKey, listed.admission),
+            previous: previous,
+            now: now)
+    }
+
+    /// Module-only: verifies the descriptor and snapshot against the pin without requiring any key
+    /// to be admitted (kit enrollment reads the snapshot's seq this way). Never a dialing target.
+    static func verifiedSnapshotSequence(
+        response: Data,
+        hostname: String,
+        clawID: String,
+        rootFingerprint: String,
+        discoveryOrigin: URL,
+        previous: OpenClawIDNodeTrustState?,
+        now: Int64) throws -> Int64
+    {
+        try self.assess(
+            response: response,
+            hostname: hostname,
+            pin: (clawID, rootFingerprint),
+            discoveryOrigin: discoveryOrigin,
+            listed: ("", nil),
+            previous: previous,
+            now: now)
+            .verdict.get().state.snapshotSequence
     }
 
     private static func assess(
@@ -131,7 +179,7 @@ public enum OpenClawIDNodeTrust {
         hostname expectedHostname: String,
         pin: (clawID: String, rootFingerprint: String),
         discoveryOrigin: URL,
-        peerKey: String,
+        listed: (peerKey: String, admission: OpenClawIDAdmission?),
         previous: OpenClawIDNodeTrustState?,
         now: Int64) throws -> OpenClawIDNodeTrustAssessment
     {
@@ -218,7 +266,7 @@ public enum OpenClawIDNodeTrust {
                 .rollback
             } else if snapshotBinding < bindingSequence {
                 .rollback
-            } else if try !self.strings(fields["node_peer_keys"]!, prefix: "iroh:").contains(peerKey) {
+            } else if try !self.admits(fields, peerKey: listed.peerKey, as: listed.admission) {
                 .notAdmitted
             } else {
                 nil
@@ -231,12 +279,29 @@ public enum OpenClawIDNodeTrust {
                 discoveryOrigin: discoveryOrigin,
                 relayURL: relay,
                 serverKey: server,
-                peerKey: peerKey,
+                peerKey: listed.peerKey,
                 state: observation ?? candidate,
                 evidence: OpenClawIDCanonicalJSON.object(response).encoded)
             return .init(observation: observation, verdict: .success(target))
         } catch let error as OpenClawIDNodeEnrollmentError {
             return .init(observation: pinned, verdict: .failure(error))
+        }
+    }
+
+    /// Whether the verified snapshot lists the key in the admission's class.
+    private static func admits(
+        _ snapshot: [String: OpenClawIDCanonicalJSON],
+        peerKey: String,
+        as admission: OpenClawIDAdmission?) throws -> Bool
+    {
+        switch admission {
+        case .node: try self.strings(snapshot["node_peer_keys"]!).contains(peerKey)
+        case .owner: try self.strings(snapshot["owner_peer_keys"]!).contains(peerKey)
+        case .member:
+            try snapshot["members"]!.list().contains { member in
+                try self.strings(member.fields(["account_id", "role", "peer_keys"])["peer_keys"]!).contains(peerKey)
+            }
+        case nil: true
         }
     }
 

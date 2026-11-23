@@ -55,6 +55,7 @@ async function authorityRefusal(
     context: {
       openclawIdService: {},
       getRuntimeConfig: () => ({ gateway: { openclawId } }),
+      logGateway: { info: () => {}, warn: () => {} },
     },
   } as unknown as GatewayRequestHandlerOptions);
   return refusal;
@@ -219,12 +220,14 @@ describe("OpenClaw ID sign-in over a personal sign-in", () => {
         );
       }
     }
-    // A personal connection cannot use the loopback popup or get a Discovery link code.
-    for (const action of ["account_begin", "account_complete", "account_link_code"]) {
+    // A personal connection cannot use the loopback popup; without admin it gets no Discovery
+    // link code either (an admin's personal sign-in can, to turn on remote access: OCF-511).
+    for (const action of ["account_begin", "account_complete"]) {
       expect(await authorityRefusal(personal, { action, redirectUri: LOOPBACK_REDIRECT })).toBe(
         "not_local_operator",
       );
     }
+    expect(await authorityRefusal(personal, { action: "account_link_code" })).toBe("not_admin");
   });
 
   test("is unavailable while the OpenClaw ID Labs switch is off", async () => {

@@ -101,6 +101,28 @@ it.each([
   }
 });
 
+it.each([
+  ["token-sharing on subscription", "chatgpt-token-sharing", subscriptionRoute, false, true],
+  ["expired token-sharing on Platform", "chatgpt-token-sharing", platformRoute, true, false],
+  ["identity-only on Platform", "chatgpt-identity", platformRoute, false, true],
+  ["identity-only on subscription", "chatgpt-identity", subscriptionRoute, false, true],
+] as const)(
+  "keeps route denial distinct from readiness: %s",
+  (_name, authFlow, route, expired, authoritative) => {
+    const result = evaluate({
+      store: authStore({
+        "openai:account": createOAuthRefreshCredential({
+          authFlow,
+          ...(expired ? { expires: 1, refresh: "" } : {}),
+        }),
+      }),
+      resolution: { kind: "routes", routes: [route] },
+    });
+    expect(result.availability).toBe(false);
+    expect(result.availabilityAuthoritative === true).toBe(authoritative);
+  },
+);
+
 it("does not substitute another account when SIWC is locked for an unsupported capability", async () => {
   await expect(
     resolveAuth(

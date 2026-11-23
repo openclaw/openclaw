@@ -95,6 +95,30 @@ async function mount(
 }
 
 describe("Picker", () => {
+  it("aligns flat choices on the icon column without indenting a text-only list", async () => {
+    const p = await mount({ searchable: false, options: options.slice(0, 2) });
+    await p.open();
+    const labelStart = (row: HTMLElement) =>
+      row.querySelector(".picker-select__label")!.getBoundingClientRect().left -
+      row.getBoundingClientRect().left;
+    const [first, second] = p.rows();
+    const plain = labelStart(first!);
+    await p.update({
+      renderLeading: (option) => {
+        if (option.value === options[0]!.value) {
+          return undefined;
+        }
+        const icon = document.createElement("span");
+        icon.style.width = "20px";
+        return icon;
+      },
+    });
+    expect(labelStart(second!)).toBeGreaterThan(plain);
+    expect(labelStart(first!)).toBe(labelStart(second!));
+    await p.update({ renderLeading: undefined });
+    expect(p.rows().map(labelStart)).toEqual([plain, plain]);
+  });
+
   it("consumes option clicks inside a native label without reactivating its trigger", async () => {
     const { page } = await import("vitest/browser");
     const p = await mount({ searchable: false, renderLeading: () => "●" }, "label");

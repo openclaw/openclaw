@@ -26,7 +26,7 @@ export class BeamTranscriptCursorError extends Error {
   readonly kind: "invalid" | "stale";
 
   constructor(kind: "invalid" | "stale") {
-    super(`${kind} Beam transcript cursor`);
+    super(`${kind} Beam chat history cursor`);
     this.kind = kind;
   }
 }

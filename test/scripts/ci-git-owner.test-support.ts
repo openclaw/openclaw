@@ -245,6 +245,14 @@ export async function runCiGitStep(options: {
       if (options.performance) {
         performanceFixture = preparePerformanceFixture(root, options.performance);
       }
+      if (publisher) {
+        publisherFixture = prepareGeneratedPublisherFixture(
+          root,
+          options.publisher?.baseChangePath ?? null,
+          options.publisher,
+          "workspace",
+        );
+      }
       env = stepEnvironment(step, {
         ...(step.name === "Prepare Git owner" ? { CHECKOUT_KIND: "prepare" } : {}),
         PUBLISH_ACTION_PATH: path.resolve(".github/actions/publish-generated-pr"),
@@ -264,20 +272,13 @@ export async function runCiGitStep(options: {
         BASE_ACTION_PATH: path.join(actions, "ensure-base-commit"),
         OWNER_ACTION_PATH: path.join(actions, "git-owner"),
         ...performanceFixture?.env,
+        ...publisherFixture?.env,
         ...options.env,
       });
       const workspace = path.join(root, "workspace");
       if (publisher) {
-        publisherFixture = prepareGeneratedPublisherFixture(
-          root,
-          options.publisher?.baseChangePath ?? null,
-          options.publisher,
-          "workspace",
-        );
         env = {
           ...env,
-          ...publisherFixture.env,
-          ...options.env,
           PUBLISH_ACTION_PATH: path.resolve(".github/actions/publish-generated-pr"),
           GITHUB_STEP_SUMMARY: path.join(root, "github-summary"),
           FAKE_REAL_GIT: execFileSync("which", ["git"], { encoding: "utf8" }).trim(),

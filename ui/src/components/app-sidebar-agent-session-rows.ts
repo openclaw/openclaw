@@ -94,6 +94,7 @@ export function projectSidebarAgentSessionRows({
     sourceRows: (grouped ? result : host.sessionData.resultForAgent(selected))?.sessions ?? [],
     selectedAgentId: selected,
     statusFilter: host.sessionsStatusFilter,
+    showSystem: host.sessionsShowSystem,
     now: Date.now(),
     deletionState: (key, agentId) =>
       host.sessionDataContext?.sessions.deletionState(
@@ -285,7 +286,11 @@ export function projectSidebarSessionReference({
 }: {
   host: Pick<
     AgentSessionRowsHost,
-    "sessionDataContext" | "sessionData" | "sessionsStatusFilter" | "selectedAgentMainSessionKey"
+    | "sessionDataContext"
+    | "sessionData"
+    | "sessionsStatusFilter"
+    | "sessionsShowSystem"
+    | "selectedAgentMainSessionKey"
   >;
   row: GatewaySessionRow;
   agentId: string;
@@ -302,6 +307,7 @@ export function projectSidebarSessionReference({
       (result !== undefined ? result : host.sessionData.resultForAgent(agentId))?.sessions ?? [],
     selectedAgentId: agentId,
     statusFilter: host.sessionsStatusFilter,
+    showSystem: host.sessionsShowSystem,
     now: Date.now(),
     deletionState: (key, owner) => host.sessionDataContext?.sessions.deletionState(key, owner),
     archiveVisibility: (key) => host.sessionDataContext?.sessions.archiveVisibility(key),

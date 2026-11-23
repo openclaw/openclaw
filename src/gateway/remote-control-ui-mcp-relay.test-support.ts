@@ -32,6 +32,7 @@ import {
   type GatewayMethodDescriptor,
 } from "./methods/descriptor.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
+import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { createIdRelayMember } from "./remote-control-ui-id-member.test-support.js";
 import {
@@ -186,7 +187,9 @@ export async function expectMcpRelayPrincipalAuthority(params: {
       ...params.config,
       gateway: {
         ...params.config.gateway,
-        roles: profileId ? TEAM_ROLES : undefined,
+        roles: profileId
+          ? { ...TEAM_ROLES, definitions: { ...TEAM_ROLES.definitions, ...MEMBER_ROLE_PRESETS } }
+          : undefined,
         auth,
         ...(member
           ? {
@@ -221,7 +224,15 @@ export async function expectMcpRelayPrincipalAuthority(params: {
             scopes: member ? ["operator.read", "operator.write"] : undefined,
           }),
           member ? "trusted-proxy" : "remote-ingress",
-          member ? ["operator.read", "operator.write"] : ["operator.admin"],
+          member
+            ? [
+                "operator.read",
+                "operator.write",
+                "operator.approvals",
+                "operator.questions",
+                "operator.talk",
+              ]
+            : ["operator.admin"],
         );
         const caller = [...params.clients].find(
           (client) => client.connect.device?.id === identity.deviceId,
@@ -355,7 +366,7 @@ export async function expectMcpRelayPrincipalAuthority(params: {
               ...params.openOptions,
               audienceId: "independent-person-consent",
               principal: { kind: "person", profileId: member.profileId },
-              operatorScopeCeiling: ["operator.admin"],
+              operatorScopeCeiling: ["operator.read", "operator.write"],
             });
             try {
               await usePeer(await params.openRemote(independentUi), async (independentPeer) => {
@@ -365,7 +376,7 @@ export async function expectMcpRelayPrincipalAuthority(params: {
                 expectHello(
                   await connect(independentPeer, { identity: independentIdentity, profileId }),
                   "remote-ingress",
-                  ["operator.admin"],
+                  ["operator.read", "operator.write"],
                 );
                 const independentCaller = [...params.clients].find(
                   (client) => client.connect.device?.id === independentIdentity.deviceId,

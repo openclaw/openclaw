@@ -24,11 +24,9 @@ import {
   captureClientVoiceSessionSettlement,
   prepareClientVoiceSessionClose,
 } from "../../../talk/client-voice-session-lifecycle.js";
+import type { ClientVoiceSessionWriter } from "../../../talk/client-voice-session-source.js";
 import { readVoiceSessionRecord } from "../../../talk/client-voice-session-store.js";
-import {
-  ensureClientVoiceAgentSessionEntry,
-  type ClientVoiceSessionWriter,
-} from "../../../talk/client-voice-session-write.js";
+import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session-write.js";
 import * as voiceSessions from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-contexts.js";

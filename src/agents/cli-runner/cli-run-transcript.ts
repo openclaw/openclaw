@@ -1,10 +1,6 @@
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
-import { getCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import {
-  patchSessionEntryCore,
-  resolveSessionTranscriptDatabasePath,
-} from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import type {
@@ -35,8 +31,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { estimateTranscriptUsageCost } from "../../infra/session-cost-usage-pricing.js";
 import type { StopReason, Usage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveModelCostConfig } from "../../model-catalog/usage-pricing.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
 import { resolveCliTranscriptUsage, type CliTranscriptUsage } from "../cli-transcript-usage.js";
@@ -55,7 +51,7 @@ import type { AgentMessage } from "../runtime/index.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../stream-message-shared.js";
-import { cliAssistantItemId } from "./assistant-identity.js";
+import { cliAssistantItemId, cliInterimAssistantItemId } from "./assistant-identity.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
@@ -194,6 +190,9 @@ export async function persistCliAssistantTranscript(params: {
   yielded?: true;
   /** The native Claude row this message mirrors; the history merge joins them by it. */
   nativeIdentity?: { cliSessionId: string; externalId: string };
+  /** Held answers commit before the final run-owned row and retain their own retry identity. */
+  interim?: true;
+  interimReplies?: CliOutput["interimNativeReplies"];
 }): Promise<{
   owned: boolean;
   idempotencyKey?: string;
@@ -210,7 +209,28 @@ export async function persistCliAssistantTranscript(params: {
   if (!runParams.persistAssistantTranscript || !runParams.sessionKey) {
     return { owned: false };
   }
-  const idempotencyKey = cliAssistantItemId(runParams.runId);
+  // Deduplicate the final answer by its transcript item key, not a session admission pin.
+  const finalNativeItem = params.nativeIdentity
+    ? cliInterimAssistantItemId(runParams.runId, params.nativeIdentity)
+    : undefined;
+  // Completed held answers are separate native rows; narration remains native-only.
+  for (const reply of params.interimReplies ?? []) {
+    if (cliInterimAssistantItemId(runParams.runId, reply) === finalNativeItem) {
+      continue;
+    }
+    await persistCliAssistantTranscript({
+      runParams,
+      text: reply.text,
+      modelId: params.modelId,
+      nativeIdentity: { cliSessionId: reply.cliSessionId, externalId: reply.externalId },
+      interim: true,
+      stopReason: "stop",
+    });
+  }
+  const idempotencyKey =
+    params.interim && params.nativeIdentity
+      ? cliInterimAssistantItemId(runParams.runId, params.nativeIdentity)
+      : cliAssistantItemId(runParams.runId);
   let committed = false;
   try {
     const result = await appendExactAssistantMessageToSessionTranscript({
@@ -320,10 +340,8 @@ async function prepareCliBlockFallbackWrite(
     sessionTarget: identity,
   });
   if (memory) {
-    const cliWriter = getCliHistoryWriter({ ...identity, storePath: memory.path });
     const assertCurrent = () => {
       assertOwnedWrite();
-      cliWriter?.assertCurrent();
       const current = memory.actor.snapshot(memory.authority)?.entry;
       if (
         !current ||
@@ -363,12 +381,10 @@ async function prepareCliBlockFallbackWrite(
       entry: captured,
       matches: (_before, current) => matches(current),
     });
-    const cliWriter = getCliHistoryWriter({ ...identity, storePath: source.path });
     return {
       readScope,
       assertCurrent() {
         assertOwnedWrite();
-        cliWriter?.assertCurrent();
         if (!retained.isCurrent()) {
           throw new SessionTranscriptWriterClaimReboundError();
         }
@@ -543,13 +559,7 @@ export async function persistCliRunBlock(
     }
     const target = sessionManager.getSessionTarget();
     const assertOwnedWrite = target ? captureOwnedTranscriptWriteAssertion(target) : undefined;
-    const cliWriter = target
-      ? getCliHistoryWriter({ ...target, storePath: resolveSessionTranscriptDatabasePath(target) })
-      : undefined;
-    const assertCurrent = () => {
-      assertOwnedWrite?.();
-      cliWriter?.assertCurrent();
-    };
+    const assertCurrent = () => assertOwnedWrite?.();
     const append = () =>
       withSessionManagerWrite(sessionManager, async () => {
         assertCurrent();

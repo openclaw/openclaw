@@ -13,6 +13,7 @@ import {
 
 type AsyncVisibility = (() => Promise<boolean>) | undefined;
 type PublicReplyKey =
+  | "replyExpectation"
   | "assertChannelAuthority"
   | "internalEventExecution"
   | "onReplyOperationAdmitted"
@@ -112,6 +113,7 @@ it("rejects plugin-supplied event custody while retaining public reply options",
   const callback = vi.fn();
   const options = {
     disableTools: true,
+    replyExpectation: "optional" as const,
     onReplyStart: callback,
     internalEventExecution: { assertCurrent: callback, onStarted: callback },
     onReplyOperationAdmitted: callback,
@@ -130,6 +132,7 @@ it("rejects plugin-supplied event custody while retaining public reply options",
     dispatcher,
     replyOptions: options,
     dispatchReplyFromConfig: async ({ replyOptions }) => {
+      expect(replyOptions).not.toHaveProperty("replyExpectation");
       expect(replyOptions).not.toHaveProperty("internalEventExecution");
       expect(replyOptions).not.toHaveProperty("onReplyOperationAdmitted");
       expect(replyOptions).not.toHaveProperty("onReplyOperationOwned");

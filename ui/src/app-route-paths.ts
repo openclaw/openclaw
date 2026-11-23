@@ -25,6 +25,8 @@ export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
 export const INTERNAL_MEMORY_PATH_PARAM = "__openclawMemoryPath";
 export const INTERNAL_PLUGINS_PATH_PARAM = "__openclawPluginsPath";
 export const INTERNAL_PLUGIN_SETTINGS_PATH_PARAM = "__openclawPluginSettingsPath";
+export const INTERNAL_SKILLS_PATH_PARAM = "__openclawSkillsPath";
+export const INTERNAL_SKILL_SETTINGS_PATH_PARAM = "__openclawSkillSettingsPath";
 export const INTERNAL_TEMPLATES_PATH_PARAM = "__openclawTemplatesPath";
 export const INTERNAL_WORKBOARD_PATH_PARAM = "__openclawWorkboardPath";
 export const CONTROL_UI_DOCUMENT_ROUTE_PATHS = {
@@ -125,8 +127,8 @@ for (const routeId of APP_ROUTE_IDS) {
 
 const NATIVE_ROUTE_SEGMENTS = new Set(APP_ROUTE_PATHS.map((path) => path.split("/")[1]));
 
-export const INTERNAL_PLUGIN_PATH_PARAM = "__openclawPluginPath";
-type PluginTab = { pluginId: string; id: string; slug?: string };
+const INTERNAL_PLUGIN_PATH_PARAM = "__openclawPluginPath";
+export type PluginTab = { pluginId: string; id: string; slug?: string; placement?: string };
 const tabsBySlug = new Map<string, PluginTab>();
 const warnedSlugs = new Set<string>();
 
@@ -173,6 +175,36 @@ export function pluginTabSlugFromPath(pathname: string, basePath = ""): PluginTa
   return tabsBySlug.get(pluginSlugCandidate(pathname, basePath) ?? "") ?? null;
 }
 
+export function pluginTabRefFromSearch(
+  search: string,
+  pathname = "",
+  basePath = "",
+): Pick<PluginTab, "pluginId" | "id"> {
+  const params = new URLSearchParams(search);
+  const tab = pluginTabSlugFromPath(params.get(INTERNAL_PLUGIN_PATH_PARAM) ?? pathname, basePath);
+  return {
+    pluginId: tab?.pluginId ?? params.get("plugin")?.trim() ?? "",
+    id: tab?.id ?? params.get("id")?.trim() ?? "",
+  };
+}
+
+/** Stable key for one tab; ids are only unique per plugin, so both parts matter. */
+export function pluginTabKey(ref: Pick<PluginTab, "pluginId" | "id">): string {
+  return `${ref.pluginId}/${ref.id}`;
+}
+
+/** The advertised tab owns navigation placement, including direct sign-in links. */
+export function pluginTabForLocation<T extends PluginTab>(
+  tabs: readonly T[] | undefined,
+  location: Pick<RouteLocation, "pathname" | "search"> | undefined,
+  basePath = "",
+): T | undefined {
+  const key = pluginTabKey(
+    pluginTabRefFromSearch(location?.search ?? "", location?.pathname, basePath),
+  );
+  return tabs?.find((tab) => pluginTabKey(tab) === key);
+}
+
 export function pluginTabLocation(tab: PluginTab, basePath = ""): RouteLocation {
   const slug = pluginTabSlug(tab);
   return {
@@ -215,6 +247,17 @@ export function routePageSpec<Id extends RouteId>(
 }
 
 export { normalizeBasePath };
+
+export function isApplicationEntryPath(pathname: string, basePath: string): boolean {
+  const path = normalizePath(pathname);
+  const base = normalizeBasePath(basePath);
+  // The served index document and mount root share startup ownership. Other
+  // index.html suffixes remain explicit destinations within this configured mount.
+  return (
+    path === (base || "/") ||
+    (path.startsWith(`${base}/`) && path.slice(base.length).toLowerCase() === "/index.html")
+  );
+}
 
 export function pathForRoute(routeId: RouteId, basePath = ""): string {
   return `${normalizeBasePath(basePath)}${APP_ROUTE_DEFINITIONS[routeId].path}`;
@@ -392,6 +435,84 @@ export function pluginSettingsIdFromPath(pathname: string, basePath = ""): strin
   return pluginId && pluginId !== "." && pluginId !== ".." ? pluginId : null;
 }
 
+/** One skill's page: an installed skill by its key, or a ClawHub skill by its registry reference. */
+export type SkillPageRef =
+  | { kind: "installed"; skillKey: string }
+  | { kind: "clawhub"; ref: string };
+
+function encodeSkillSegment(value: string): string {
+  return encodeURIComponent(value).replaceAll(".", "%2E");
+}
+
+function decodeSkillSegment(encoded: string | undefined): string | null {
+  const value = decodeRouteSegment(encoded ?? null);
+  return value?.trim() && value !== "." && value !== ".." ? value : null;
+}
+
+/** An installed skill opens under the list it was opened from: Skills or Settings › Skills. */
+export function pathForInstalledSkill(
+  skillKey: string,
+  surface: "discovery" | "settings",
+  basePath = "",
+): string {
+  if (!skillKey.trim() || skillKey === "." || skillKey === "..") {
+    throw new Error("Invalid skill key for a route path.");
+  }
+  return surface === "settings"
+    ? `${pathForRoute("skill-settings", basePath)}/${encodeSkillSegment(skillKey)}`
+    : `${pathForRoute("skills", basePath)}/installed/${encodeSkillSegment(skillKey)}`;
+}
+
+/** A ClawHub reference keeps its own segments, so `@owner/slug` reads as it is written. */
+export function pathForClawHubSkill(ref: string, basePath = ""): string {
+  const segments = ref.split("/");
+  if (!ref.trim() || segments.some((segment) => !segment || segment === "." || segment === "..")) {
+    throw new Error("Invalid ClawHub skill reference for a route path.");
+  }
+  const encoded = segments.map((segment) =>
+    encodeSkillSegment(segment).replaceAll("%40", "@").replaceAll("%3A", ":"),
+  );
+  return `${pathForRoute("skills", basePath)}/clawhub/${encoded.join("/")}`;
+}
+
+export function skillPageFromPath(pathname: string, basePath = ""): SkillPageRef | null {
+  const settingsKey = routePathSuffix(pathname, "skill-settings", basePath);
+  if (settingsKey) {
+    const skillKey = decodeSkillSegment(settingsKey);
+    return skillKey ? { kind: "installed", skillKey } : null;
+  }
+  const suffix = routePathSuffix(pathname, "skills", basePath);
+  if (!suffix) {
+    return null;
+  }
+  const [namespace, ...rest] = suffix.split("/");
+  if (namespace === "installed" && rest.length === 1) {
+    const skillKey = decodeSkillSegment(rest[0]);
+    return skillKey ? { kind: "installed", skillKey } : null;
+  }
+  if (namespace === "clawhub" && rest.length > 0) {
+    const segments = rest.map(decodeSkillSegment);
+    return segments.every((segment) => segment !== null)
+      ? { kind: "clawhub", ref: segments.join("/") }
+      : null;
+  }
+  return null;
+}
+
+function isSkillsPagePath(pathname: string, basePath = ""): boolean {
+  return (
+    routePathSuffix(pathname, "skill-settings", basePath) === null &&
+    skillPageFromPath(pathname, basePath) !== null
+  );
+}
+
+function isSkillSettingsPagePath(pathname: string, basePath = ""): boolean {
+  return (
+    routePathSuffix(pathname, "skill-settings", basePath) !== null &&
+    skillPageFromPath(pathname, basePath) !== null
+  );
+}
+
 export function isSessionRouteId(routeId: string | null | undefined): routeId is BoardFace {
   return routeId === "chat" || routeId === "dashboard";
 }
@@ -455,6 +576,8 @@ const DYNAMIC_ROUTE_PATH_PARAMS = {
   plugins: INTERNAL_PLUGINS_PATH_PARAM,
   templates: INTERNAL_TEMPLATES_PATH_PARAM,
   "plugin-settings": INTERNAL_PLUGIN_SETTINGS_PATH_PARAM,
+  skills: INTERNAL_SKILLS_PATH_PARAM,
+  "skill-settings": INTERNAL_SKILL_SETTINGS_PATH_PARAM,
   chat: INTERNAL_SESSION_PATH_PARAM,
   dashboard: INTERNAL_SESSION_PATH_PARAM,
 } as const;
@@ -478,6 +601,8 @@ const DYNAMIC_ROUTE_MATCHERS = [
   ["plugins", pluginCatalogIdFromPath],
   ["plugins", isLegacyPluginsDiscoveryPath],
   ["plugin-settings", pluginSettingsIdFromPath],
+  ["skills", isSkillsPagePath],
+  ["skill-settings", isSkillSettingsPagePath],
 ] as const;
 
 function dynamicRouteIdFromPath(

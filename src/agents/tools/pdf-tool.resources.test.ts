@@ -265,6 +265,77 @@ afterEach(async () => {
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
+it("normalizes a captured manifest alias once through PDF execution", async () => {
+  const dir = makePluginLoaderTempDir();
+  const provider = "pdf-captured-model";
+  const baseUrl = "https://pdf-fixture.invalid/v1";
+  const api = "openai-completions";
+  const plugin = writePlugin({
+    dir,
+    id: provider,
+    body: `module.exports = { id: ${JSON.stringify(provider)}, register(api) { api.registerProvider({ id: ${JSON.stringify(provider)}, label: "PDF alias fixture", auth: [] }); } };`,
+  });
+  writeFixtureJson(dir, "openclaw.plugin.json", {
+    id: provider,
+    providers: [provider],
+    configSchema: { type: "object", properties: {}, additionalProperties: false },
+    modelIdNormalization: {
+      providers: { [provider]: { aliases: { entry: "middle", middle: "final" } } },
+    },
+    modelCatalog: {
+      discovery: { [provider]: "static" },
+      providers: {
+        [provider]: {
+          api,
+          baseUrl,
+          models: ["middle", "final"].map((id) => Object.assign(makeModel(id), { api })),
+        },
+      },
+    },
+  });
+  const config: OpenClawConfig = {
+    agents: { defaults: { pdfModel: { primary: `${provider}/entry` } } },
+    models: { providers: { [provider]: { baseUrl, apiKey: "synthetic-fixture", models: [] } } },
+    plugins: { allow: [provider], load: { paths: [plugin.file] }, slots: { memory: "none" } },
+  };
+  const agentDir = path.join(dir, "agent");
+  await withEnvAsync(nativeFixtureEnv(dir, path.join(dir, "state")), async () => {
+    useNoBundledPlugins();
+    stubPdfInput("Captured model fixture");
+    const complete = vi.spyOn(llmStream, "completeSimple").mockResolvedValue(
+      makeAssistantMessageFixture({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [{ type: "text", text: "selected model" }],
+      }),
+    );
+    const lease = await preparedRuntime.acquireAgentRunPreparedModelRuntime(
+      { agentDir, config, workspaceDir: dir },
+      { catalogMode: "static" },
+    );
+    try {
+      const tool = requirePdfTool({
+        config,
+        agentDir,
+        workspaceDir: dir,
+        preparedModelRuntime: lease.snapshot,
+      });
+      const result = await tool.execute("pdf-alias", {
+        pdf: "https://pdf-fixture.invalid/document.pdf",
+      });
+      expect(complete).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ provider, id: "middle", baseUrl }),
+        expect.any(Object),
+        expect.any(Object),
+        expect.any(Function),
+      );
+      expect(result.details).toMatchObject({ model: `${provider}/middle`, native: false });
+    } finally {
+      await lease[Symbol.asyncDispose]();
+    }
+  });
+});
+
 it("does not dispatch a PDF completion retired during transport initialization", async () => {
   const fixture = nativePdfFixture();
   await fixture.run(async () => {

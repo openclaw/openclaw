@@ -11,7 +11,6 @@ import {
   prepareUserChannelIdentityAuthority,
 } from "../state/user-channel-identity-operations.js";
 import type {
-  UserChannelAuthorization,
   UserChannelAuthorizationReference,
   UserChannelIdentity,
   UserChannelIdentityAuthorityFacts,
@@ -20,9 +19,13 @@ import {
   GatewayOperatorAccessDeniedError,
   hasCurrentGatewayOperatorAccess,
   resolvePreparedGatewayOperatorAccessAuthority,
-  resumeGatewayOperatorAccessGrant,
 } from "./operator-access-policy.js";
 import { resolveIdentityOperatorScopes } from "./operator-identity-scopes.js";
+import {
+  isNamedOperatorRoleEnforcementEnabled,
+  isOperatorRoleEnforcedFor,
+  operatorRoleSubject,
+} from "./operator-role-enforcement.js";
 import {
   resolveOperatorRolePolicyForAssignment,
   resolveOperatorRoleSelection,
@@ -55,7 +58,11 @@ function resolveChannelOperatorIdentityFacts(
   identity: UserChannelIdentity,
   stateOptions: OpenClawStateDatabaseOptions,
 ) {
-  if (!cfg.gateway?.roles && !cfg.gateway?.auth?.identityScopes) {
+  if (
+    !isNamedOperatorRoleEnforcementEnabled(cfg) &&
+    !(cfg.gateway?.openclawId?.enabled && cfg.gateway.roles) &&
+    !cfg.gateway?.auth?.identityScopes
+  ) {
     return undefined;
   }
   const capturedIdentity = { ...identity };
@@ -68,12 +75,14 @@ function resolveChannelOperatorIdentityFacts(
     isCurrent: (currentCfg = cfg) => {
       const current = resolveUserChannelIdentity(capturedIdentity, stateOptions);
       const usesGithubAssignment =
+        isOperatorRoleEnforcedFor(currentCfg, operatorRoleSubject(linked)) &&
         Object.keys(currentCfg.gateway?.roles?.assignments?.byGithubLogin ?? {}).length > 0 &&
         resolveOperatorRoleSelection(
           linked.profileId,
           linked.role,
           currentCfg,
           linked.githubLogin ?? null,
+          operatorRoleSubject(linked),
         ).roleSource !== "assigned";
       return (
         current !== undefined &&
@@ -97,6 +106,7 @@ function resolveLinkedOperatorScopes(
       linked.role,
       cfg,
       linked.githubLogin ?? null,
+      operatorRoleSubject(linked),
     )?.scopes ?? [
       ...new Set(
         linked.loginIdentities.flatMap((login) =>
@@ -122,6 +132,7 @@ function captureLinkedOperatorAdminIdentity(
     linked.role,
     cfg,
     linked.githubLogin ?? null,
+    operatorRoleSubject(linked),
   )?.accessPolicyPlugin;
   let current = true;
   const isCurrent = (currentCfg: OpenClawConfig) => {
@@ -137,6 +148,7 @@ function captureLinkedOperatorAdminIdentity(
         linked.role,
         currentCfg,
         linked.githubLogin ?? null,
+        operatorRoleSubject(linked),
       )?.accessPolicyPlugin === requiredPlugin;
     return current;
   };
@@ -147,7 +159,6 @@ function captureLinkedOperatorAdmin(
   cfg: OpenClawConfig,
   linked: UserChannelIdentityAuthorityFacts,
   isIdentityCurrent: (cfg?: OpenClawConfig) => boolean,
-  original?: UserChannelAuthorization,
   requireAdmin = true,
 ) {
   const identity = captureLinkedOperatorAdminIdentity(cfg, linked, isIdentityCurrent, requireAdmin);
@@ -155,33 +166,17 @@ function captureLinkedOperatorAdmin(
     return undefined;
   }
   try {
-    const access = original
-      ? null
-      : resolvePreparedGatewayOperatorAccessAuthority(
-          {
-            ...linked,
-            githubLogin: linked.githubLogin ?? null,
-            isCurrent: () => isIdentityCurrent(cfg),
-          },
-          cfg,
-        );
+    const access = resolvePreparedGatewayOperatorAccessAuthority(
+      {
+        ...linked,
+        githubLogin: linked.githubLogin ?? null,
+        isCurrent: () => isIdentityCurrent(cfg),
+      },
+      cfg,
+    );
     let current = true;
     const isCurrent = (currentCfg: OpenClawConfig) => {
       current &&= identity.isCurrent(currentCfg) && hasCurrentGatewayOperatorAccess(access);
-      if (current && original) {
-        resumeGatewayOperatorAccessGrant(
-          {
-            profileId: linked.profileId,
-            emails: linked.emails,
-            githubAccountIds: linked.githubAccountIds,
-            assignedRole: linked.role,
-            githubLogin: linked.githubLogin ?? null,
-          },
-          currentCfg,
-          original.grant,
-        );
-        current &&= isIdentityCurrent(currentCfg);
-      }
       return current;
     };
     return isCurrent(cfg)
@@ -213,7 +208,11 @@ async function prepareChannelOperatorIdentity(
   stateOptions: OpenClawStateDatabaseOptions,
   requireAdmin: boolean,
 ) {
-  if (!cfg.gateway?.roles && !cfg.gateway?.auth?.identityScopes) {
+  if (
+    !isNamedOperatorRoleEnforcementEnabled(cfg) &&
+    !(cfg.gateway?.openclawId?.enabled && cfg.gateway.roles) &&
+    !cfg.gateway?.auth?.identityScopes
+  ) {
     return undefined;
   }
   const identity = "identity" in input ? input.identity : input;
@@ -238,7 +237,6 @@ async function prepareChannelOperatorIdentity(
     cfg,
     prepared.linked,
     prepared.isCurrent,
-    prepared.linked.authorization,
     requireAdmin,
   );
   if (!captured) {
@@ -270,7 +268,9 @@ async function prepareChannelOperatorIdentity(
     recoveryReference,
     operatorProfile: {
       profileId: prepared.linked.profileId,
+      canonicalIdentity: { profileId: prepared.linked.profileId },
       assignedRole: prepared.linked.role,
+      openclawIdAccountIds: prepared.linked.openclawIdAccountIds,
       githubLogin: prepared.linked.githubLogin ?? null,
       scopes: resolveLinkedOperatorScopes(cfg, prepared.linked),
       gatewayAccessGrant: captured.grant,

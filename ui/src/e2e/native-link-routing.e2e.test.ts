@@ -4,6 +4,7 @@ import type { NativeBrowserMessage, NativeBrowserReply } from "../app/native-bro
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createLightDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installNativeWebChrome } from "./native-nav.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "native link routing",
@@ -29,8 +30,13 @@ const linkMessages = (page: Page) =>
 const nativeBrowserMessages = (page: Page) =>
   page.evaluate(() => (window as LinkTestWindow).openclawNativeBrowserMessages);
 
-async function openChat(context: BrowserContext, text: string) {
+async function openChat(
+  context: BrowserContext,
+  text: string,
+  setup?: (page: Page) => Promise<void>,
+) {
   const page = await context.newPage();
+  await setup?.(page);
   await installMockGateway(page, {
     historyMessages: [
       { role: "assistant", timestamp: Date.now(), content: [{ type: "text", text }] },
@@ -213,5 +219,128 @@ suite.define(() => {
     const popup = await popupPromise;
     await popup.waitForLoadState("domcontentloaded");
     expect(popup.url()).toBe("https://example.com/report");
+  });
+
+  it("keeps the Mac tab visible behind the command palette and restores the live view", async () => {
+    const context = await newBrowserContext();
+    await context.addInitScript(() => {
+      const browserMessages: NativeBrowserMessage[] = [];
+      let resumeShow: (() => void) | undefined;
+      window.addEventListener("test:release-native-show", () => resumeShow?.());
+      Object.assign(window, {
+        openclawNativeBrowserMessages: browserMessages,
+        webkit: {
+          messageHandlers: {
+            openclawBrowser: {
+              postMessage: async (message: NativeBrowserMessage): Promise<NativeBrowserReply> => {
+                browserMessages.push(message);
+                if (message.type === "open") {
+                  const state = {
+                    revision: 1,
+                    tabs: [
+                      {
+                        id: message.tabId,
+                        sessionKey: message.sessionKey,
+                        url: message.url,
+                        title: "Report",
+                        openedBy: "web",
+                        loading: false,
+                        canGoBack: false,
+                        canGoForward: false,
+                      },
+                    ],
+                  };
+                  Object.assign(window, { __OPENCLAW_NATIVE_BROWSER__: state });
+                  window.dispatchEvent(
+                    new CustomEvent("openclaw:native-browser-state", { detail: state }),
+                  );
+                  return { ok: true, tabId: message.tabId };
+                }
+                if (message.type === "snapshot") {
+                  const canvas = document.createElement("canvas");
+                  const paint = canvas.getContext("2d")!;
+                  paint.fillStyle = "#27375c";
+                  paint.fillRect(0, 0, canvas.width, canvas.height);
+                  return {
+                    ok: true,
+                    dataUrl: canvas.toDataURL(),
+                    cssWidth: canvas.width,
+                    cssHeight: canvas.height,
+                  };
+                }
+                if (
+                  message.type === "present" &&
+                  message.visible &&
+                  browserMessages.filter((entry) => entry.type === "present" && entry.visible)
+                    .length === 2
+                ) {
+                  await new Promise<void>((resolve) => {
+                    resumeShow = resolve;
+                  });
+                }
+                return { ok: true };
+              },
+            },
+          },
+        },
+      });
+    });
+    const { page, link } = await openChat(
+      context,
+      "Read the [report](https://example.com/report).",
+      installNativeWebChrome,
+    );
+    await link.click();
+    const lastPresentation = async () =>
+      (await nativeBrowserMessages(page))?.findLast((message) => message.type === "present");
+    await expect.poll(lastPresentation).toMatchObject({ visible: true });
+
+    await page.keyboard.press("ControlOrMeta+K");
+    const input = page.locator(".cmd-palette__input:not([disabled])");
+    const backdrop = page.locator(".bp-native-backdrop");
+    await expect.poll(() => input.evaluate((node) => node === document.activeElement)).toBe(true);
+    await expect.poll(lastPresentation).toMatchObject({ visible: false });
+    await expect.poll(() => backdrop.isVisible(), { timeout: 2_000 }).toBe(true);
+    expect(await backdrop.evaluate((node) => getComputedStyle(node).pointerEvents)).toBe("none");
+
+    const capturedFrame = await backdrop.getAttribute("src");
+    await input.press("Tab");
+    await input.evaluate((element) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 8;
+      const encoded = canvas.toDataURL().split(",")[1]!;
+      const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
+      const clipboard = new DataTransfer();
+      clipboard.items.add(new File([bytes], "report.png", { type: "image/png" }));
+      element.dispatchEvent(
+        new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: clipboard }),
+      );
+    });
+    await page.getByRole("button", { name: "Open image report.png", exact: true }).click();
+    const preview = page.getByRole("dialog", { name: "Image preview: report.png", exact: true });
+    await preview.waitFor({ state: "visible" });
+    await expect.poll(() => backdrop.isVisible()).toBe(false);
+    await page.keyboard.press("Escape");
+    await preview.waitFor({ state: "hidden" });
+    await expect.poll(() => backdrop.isVisible()).toBe(true);
+    expect(await backdrop.getAttribute("src")).toBe(capturedFrame);
+    expect(await lastPresentation()).toMatchObject({ visible: false });
+    expect(
+      (await nativeBrowserMessages(page))?.filter((message) => message.type === "snapshot"),
+    ).toHaveLength(1);
+
+    await page.keyboard.press("Escape");
+    await expect.poll(lastPresentation).toMatchObject({ visible: true });
+    await page.keyboard.press("ControlOrMeta+K");
+    await expect.poll(() => input.evaluate((node) => node === document.activeElement)).toBe(true);
+    await expect.poll(lastPresentation).toMatchObject({ visible: false });
+    await expect.poll(() => backdrop.count()).toBe(1);
+    await page.evaluate(() => window.dispatchEvent(new Event("test:release-native-show")));
+    await page.keyboard.press("Escape");
+    await expect.poll(lastPresentation).toMatchObject({ visible: true });
+    await expect.poll(() => backdrop.count()).toBe(0);
+    expect(
+      (await nativeBrowserMessages(page))?.filter((message) => message.type === "open"),
+    ).toHaveLength(1);
   });
 });

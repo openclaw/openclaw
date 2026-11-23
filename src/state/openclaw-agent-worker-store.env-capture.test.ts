@@ -55,8 +55,10 @@ vi.mock("../infra/sqlite-worker-identity.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/sqlite-worker-identity.js")>()),
   assertExistingDatabaseIdentity() {},
 }));
-vi.mock("./openclaw-agent-execution.js", () => ({
-  captureOpenClawAgentDatabaseExecution: boundary.capture,
+vi.mock("./openclaw-agent-execution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-agent-execution.js")>()),
+  captureOpenClawAgentDatabaseExecutionAsync: async (options: OpenClawAgentDatabaseOptions) =>
+    boundary.capture(options),
 }));
 vi.mock("./openclaw-agent-db-identity.js", () => ({
   readOpenClawAgentDatabaseIdentity: () => ({
@@ -102,16 +104,62 @@ async function withPublication(
     agentId: "main",
     env: { OPENCLAW_STATE_DIR: "/synthetic/captured" },
   },
+  observeWriteExecution?: (elapsedMs: number) => void,
 ) {
   const db = new DatabaseSync(":memory:");
   boundary.current.mockReturnValue({ db });
-  const worker = await openOpenClawAgentSqliteWorkerStore(options, db, workerModule);
+  const worker = await openOpenClawAgentSqliteWorkerStore(options, db, {
+    ...workerModule,
+    observeWriteExecution,
+  });
   try {
     await run(worker);
   } finally {
     await worker.close();
   }
 }
+
+it.each(["success", "failure"] as const)(
+  "preserves publication %s when the timing observer throws",
+  async (outcome) => {
+    const ready = createDeferredCore();
+    boundary.ready = ready.promise;
+    const original = new Error("Publication failed");
+    const committed = { revision: 42 };
+    const observe = vi.fn(() => {
+      throw new Error("Timing observer failed");
+    });
+    boundary.execute.mockImplementation(async ({ type }) => {
+      if (type === "database.domain.execute") {
+        if (outcome === "failure") {
+          throw original;
+        }
+      }
+    });
+    try {
+      await withPublication(
+        async (worker) => {
+          const work = worker.run(async (scope) => {
+            await scope.execute({ type: "append", input: { value: "published" } });
+            return committed;
+          }, allow);
+          ready.resolve();
+          if (outcome === "failure") {
+            await expect(work).rejects.toBe(original);
+          } else {
+            await expect(work).resolves.toBe(committed);
+          }
+          expect(observe).toHaveBeenCalledOnce();
+        },
+        undefined,
+        observe,
+      );
+    } finally {
+      ready.resolve();
+    }
+  },
+);
+
 it.each([
   ["domain close", true, false],
   ["retired executor", false, false],

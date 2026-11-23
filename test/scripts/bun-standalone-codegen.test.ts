@@ -31,7 +31,10 @@ describe("standalone fixed code generation", () => {
       fs.mkdirSync(path.join(dist, "worker"), { recursive: true });
       const sources = [
         ["staged-inputs", "src/media/staged-inputs.ts"],
-        ["workspace-manifest", "src/gateway/worker-environments/workspace-path-exclusions.ts"],
+        [
+          "workspace-path-exclusions",
+          "src/gateway/worker-environments/workspace-path-exclusions.ts",
+        ],
         ["workspace-hash-memo", "src/gateway/worker-environments/workspace-hash-memo.ts"],
         ["workspace-seed-retention", "src/worker/workspace-seed-retention.ts"],
       ].map(([name, owner], index) => {

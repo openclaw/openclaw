@@ -1,6 +1,6 @@
-import fs from "node:fs";
 import path from "node:path";
 import { root as fsRoot } from "../infra/fs-safe.js";
+import { canAccess } from "../infra/path-existence.js";
 import { resolveSkillFileHost } from "../skills/skill-file-host.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import {
@@ -30,6 +30,7 @@ import type { ApplyPatchContainmentSource } from "./apply-patch-containment-hint
 import { createApplyPatchTool } from "./apply-patch.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
+import type { HostFileMutationPreparer } from "./host-file-write.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
 import { createLazyProcessTool } from "./lazy-process-tool.js";
@@ -114,7 +115,7 @@ function wrapWorkspaceSkillRead(
       const physicalMatch =
         physicalMatches.length === 1 &&
         physicalPath &&
-        !fs.existsSync(physicalPath) &&
+        !(await canAccess(physicalPath)) &&
         !localSkills.some(
           (candidate) => relativePathInsideSandboxRoot(candidate.baseDir, physicalPath) !== null,
         )
@@ -192,6 +193,7 @@ type CoreCodingToolsOptions = {
   imageSanitization?: ImageSanitizationLimits;
   modelHasVision?: boolean;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+  prepareHostFileMutation?: HostFileMutationPreparer;
   applyPatchEnabled: boolean;
   applyPatchWorkspaceOnly: boolean;
   applyPatchContainmentSource?: ApplyPatchContainmentSource;
@@ -225,13 +227,14 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     options.shellTools !== "disabled" || (options.includeBaseCodingTools && options.workspaceOnly);
   const readOnlyWorkspaceSkillMounts =
     sandbox && needsReadOnlyWorkspaceSkillMounts
-      ? resolveReadOnlyWorkspaceSkillMounts({
+      ? (sandbox.fsPreparation?.readOnlyWorkspaceSkillMounts ??
+        resolveReadOnlyWorkspaceSkillMounts({
           workspaceDir: sandbox.workspaceDir,
           agentWorkspaceDir: sandbox.agentWorkspaceDir,
           skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
           workdir: sandbox.containerWorkdir,
           workspaceAccess: sandbox.workspaceAccess,
-        })
+        }))
       : [];
 
   // Older external SDK bridges predate pathMappings. Only absence selects
@@ -421,6 +424,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
         workspaceOnly: options.applyPatchWorkspaceOnly,
         containmentSource: options.applyPatchContainmentSource,
         memoryWriteProvenance: options.memoryWriteProvenance,
+        prepareHostFileMutation: options.prepareHostFileMutation,
         abortSignal: options.abortSignal,
       }),
     );
@@ -429,6 +433,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     shell.push(
       createLazyExecTool({
         ...options.execDefaults,
+        scratchRoot: options.containmentRoot,
         ...(sandbox?.required ? { sandboxRequired: true } : {}),
         cwd: options.codingRoot,
         sandbox: sandbox

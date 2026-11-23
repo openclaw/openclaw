@@ -5,100 +5,19 @@ import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createChannelCapability, type ChannelCapability } from "../../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
-import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
 import { emptyPairingSnapshot } from "./pairing.test-support.ts";
 import { channelSnapshot as makeSnapshot } from "./view.test-support.ts";
-
-export async function choosePairingFilter(page: HTMLElement, index: number, value: string) {
-  const settle = async () => {
-    flush();
-    await Promise.resolve();
-    flush();
-  };
-  const picker = page.querySelectorAll<HTMLElement>(
-    ".channels-pairing-filters openclaw-select-picker",
-  )[index]!;
-  picker.querySelector<HTMLButtonElement>(".picker-select__trigger")!.click();
-  await settle();
-  const option = Array.from(picker.querySelectorAll<HTMLElement>("[role=option]")).find(
-    (entry) => entry.dataset.value === value,
-  );
-  expect(option).toBeDefined();
-  option!.click();
-  await settle();
-}
 
 export const channelSnapshot = (
   overrides: Partial<ChannelsStatusSnapshot> = {},
 ): ChannelsStatusSnapshot => makeSnapshot({}, { ts: 0, ...overrides });
 
-export function channelStatus(id: string, label: string, configured = false, description?: string) {
-  return channelSnapshot({
-    channelOrder: [id],
-    channelLabels: { [id]: label },
-    channels: { [id]: { configured } },
-    ...(description ? { channelDetailLabels: { [id]: description } } : {}),
-  });
-}
-
-export const plugin = (id: string, name: string, overrides: Partial<PluginCatalogItem> = {}) => ({
-  id,
-  name,
-  installed: true,
-  enabled: true,
-  state: "enabled",
-  hasIcon: true,
-  ...overrides,
-});
-
-export function mockIcon(url: string) {
-  const fetchMock = vi.fn(
-    async (_input: RequestInfo | URL) =>
-      new Response(new Uint8Array([137, 80, 78, 71]), {
-        status: 200,
-        headers: { "Content-Type": "image/png" },
-      }),
-  );
-  vi.stubGlobal("fetch", fetchMock);
-  vi.spyOn(URL, "createObjectURL").mockReturnValue(url);
-  return fetchMock;
-}
-
-export function iconRequests(fetchMock: ReturnType<typeof mockIcon>) {
-  return fetchMock.mock.calls
-    .map(([input]) =>
-      typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
-    )
-    .filter((url) => url.includes("/__openclaw__/plugin-icon/"));
-}
-
 export const sources: Array<{
   runtimeConfig: ApplicationContext["runtimeConfig"];
   channels: ChannelCapability;
 }> = [];
-
-export function catalogFixture(plugins: object[], initial = channelSnapshot(), scopes?: string[]) {
-  let refreshed: ReturnType<typeof channelSnapshot> | undefined;
-  const gateway = createGateway(scopes, {
-    "plugins.list": () => ({ plugins, diagnostics: [], mutationAllowed: true }),
-    "channels.status": () => refreshed ?? channelSnapshot(),
-  });
-  const source = createContext(gateway);
-  source.channels.state.channelsSnapshot = initial;
-  const request = vi.spyOn(gateway.snapshot.client!, "request");
-  return {
-    gateway,
-    source,
-    request,
-    refresh: async (snapshot: typeof initial) => {
-      refreshed = snapshot;
-      await source.channels.refresh(false);
-    },
-  };
-}
 
 type TestGateway = ApplicationContext["gateway"] & {
   emit: (patch: Partial<ApplicationGatewaySnapshot>) => void;
@@ -136,7 +55,7 @@ export function createGateway(
   return gateway;
 }
 
-export function setGatewayScopes(gateway: TestGateway, scopes: string[]) {
+function setGatewayScopes(gateway: TestGateway, scopes: string[]) {
   gateway.emit({
     hello: { auth: { role: "operator", scopes } } as ApplicationGatewaySnapshot["hello"],
   });

@@ -198,6 +198,27 @@ it("denies an official ClawHub plugin before artifact and record commit, then in
   });
 });
 
+it("plans the conversation-access grant that the install review approves", async () => {
+  await withLocalFixture(async ({ sourceDir, env, install }) => {
+    await writeJson(sourceDir, "openclaw.plugin.json", {
+      ...manifest("claw-audit", ["audit.read"]),
+      contracts: { tools: ["audit.read"], conversationAccess: ["read"] },
+    });
+    const planned = inspectTemplatePluginCapabilities(sourceDir, "claw-audit", env);
+    expect(planned.grants.hooks.allowConversationAccess).toEqual({ effective: true });
+    // Template apply refuses an install whose reviewed grants differ from the plan.
+    await install({
+      onCapabilityConsent: async (review) => {
+        expect(stableStringify(review.grants)).toBe(stableStringify(planned.grants));
+        return { reviewToken: review.reviewToken };
+      },
+    });
+    expect((await readInstalled(env)).record?.acceptedSurface?.contracts).toContain(
+      "conversationAccess: read",
+    );
+  });
+});
+
 it.each([
   { mode: undefined, drift: false },
   { mode: undefined, drift: true },

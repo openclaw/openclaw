@@ -328,7 +328,7 @@ suite.define(() => {
           });
           await atEveryViewport(async (_viewport, label) => {
             await expect(
-              pane.locator(`[data-message-id^="tool:assistant:${toolCallId}"]`),
+              pane.locator(".chat-activity-group__summary", { hasText: "example.txt" }),
               label,
             ).toBeVisible();
             await expectColumn(

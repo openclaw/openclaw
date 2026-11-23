@@ -14,7 +14,12 @@ import {
   resolveContextEngine,
 } from "../../../context-engine/registry.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../../plugins/hook-runner-global.js";
 import { getPluginInstance } from "../../../plugins/plugin-instance-scope.js";
+import { createOwnedTestInstance } from "../../../plugins/plugin-instance.test-support.js";
 import { PluginInvocationScope } from "../../../plugins/plugin-invocation-scope.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../../../plugins/registry-inspection-resources.js";
@@ -94,10 +99,34 @@ describe("subagent registry context cleanup", () => {
     vi.mocked(loadSubagentSessionEntry).mockReset();
   });
 
+  it("loads the post-turn registry outside the finished requester turn's scope", async () => {
+    const instance = createOwnedTestInstance("post-turn-tools");
+    const turn = new PluginInvocationScope(instance.owner!.registry!, [instance], {
+      retained: true,
+    });
+    const { registry, cleanup, warn } = createCleanup({ async onSubagentEnded() {} });
+    // The real loader reads plugin registrations through their instances.
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(() =>
+      instance.run(() => registry),
+    );
+    const resume = createDeferred();
+    const ended = turn.run(async () => {
+      await resume.promise;
+      await cleanup.notifyContextEngineSubagentEnded(
+        { childSessionKey: "agent:main:subagent:after-turn", reason: "completed" },
+        { prepareCurrent: async () => true },
+      );
+    });
+    turn.release();
+    resume.resolve();
+    await ended;
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it.each(["registry", "resolve", "authority", "notify", "dispose"] as const)(
     "reports the first failing context cleanup phase (%s)",
     async (phase) => {
-      const failure = new Error("Plugin invocation scope is closed");
+      const failure = new Error("Plugin fixture was reloaded or disabled");
       const dispose = vi.fn(async () => {
         if (phase === "notify") {
           throw new Error("secondary disposal failure");
@@ -190,6 +219,68 @@ describe("subagent registry context cleanup", () => {
       await instance.dispose();
     }
   });
+
+  it.each(["context engine", "ended hook"] as const)(
+    "delivers the %s after the requesting turn's plugin scope is released",
+    async (boundary) => {
+      const { cleanup, warn } = createCleanup();
+      const builder = createTestPluginRegistry();
+      const record = createPluginRecord({ id: "late-cleanup" });
+      builder.registry.plugins.push(record);
+      const config = {
+        plugins: {
+          entries: { "late-cleanup": { enabled: true } },
+          slots: { contextEngine: "late-cleanup" },
+        },
+      };
+      const api = builder.createApi(record, { config });
+      const events: string[] = [];
+      api.registerContextEngine("late-cleanup", () =>
+        Object.assign(new LegacyContextEngine(), {
+          async onSubagentEnded() {
+            events.push("context engine");
+          },
+        }),
+      );
+      api.on("subagent_ended", async () => {
+        events.push("ended hook");
+      });
+      const instance = getPluginInstance(record)!;
+      vi.mocked(getRuntimeConfig).mockReturnValue(config);
+      // Registry acquisition runs plugin code: the path the finished turn's scope refused.
+      vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(() =>
+        instance.run(() => builder.registry),
+      );
+      vi.mocked(resolveContextEngine).mockImplementation(actualResolveContextEngine);
+      initializeGlobalHookRunner(builder.registry);
+      using persist = vi
+        .spyOn(registryPersistence, "mutateSubagentRuns")
+        .mockResolvedValue(undefined as never);
+      const turn = new PluginInvocationScope(builder.registry, [instance], { retained: true });
+      try {
+        await turn.run(async () => {
+          turn.release();
+          if (boundary === "ended hook") {
+            await cleanup.emitSubagentEndedHookForRun({
+              entry: createSubagentRunRecord({ runId: "late-ended", endedAt: 4_000 }),
+            });
+          } else {
+            await cleanup.notifyContextEngineSubagentEnded({
+              childSessionKey: "agent:main:subagent:late-cleanup",
+              reason: "completed",
+            });
+          }
+        });
+        expect(warn).not.toHaveBeenCalled();
+        expect(events).toEqual([boundary]);
+        expect(persist).toHaveBeenCalledTimes(boundary === "ended hook" ? 1 : 0);
+        expect(instance.ordinaryCallCount).toBe(0);
+      } finally {
+        resetGlobalHookRunner();
+        await instance.dispose();
+      }
+    },
+  );
 
   it.each(["session tail", "inline collector"] as const)(
     "owns swept context cleanup after the timer's caller scope closes (%s)",

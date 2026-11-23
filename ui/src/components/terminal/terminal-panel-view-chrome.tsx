@@ -6,7 +6,6 @@ import { Icon } from "../solid/icon.tsx";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
-import { useScrollState } from "../solid/scroll-state.ts";
 import "../tooltip.ts";
 import "../../styles/session-panel-rail.css";
 import type { TerminalPanelViewState } from "./terminal-panel-view-types.ts";
@@ -81,6 +80,7 @@ export function SessionMenu(props: {
           <Show when={props.inline && props.mobile}>
             <PanelIconButton
               label={t("common.back")}
+              title={false}
               icon={<Icon name="chevronLeft" />}
               class="tp-rail__icon"
               onClick={() => props.state.onDismiss(true)}
@@ -97,7 +97,6 @@ export function SessionMenu(props: {
               ]}
               type="button"
               aria-label={t("terminal.refreshSessions")}
-              title={t("terminal.refreshSessions")}
               onClick={() => props.state.onRefresh()}
             >
               <Show when={props.inline || !props.mobile} fallback={t("terminal.refreshSessions")}>
@@ -163,7 +162,7 @@ export function SessionMenu(props: {
                     </Show>
                     <Show when={props.mobile} fallback={<SessionRows state={props.state} />}>
                       <div class="tp-session-rows">
-                        <SessionRows state={props.state} mobile />
+                        <SessionRows state={props.state} />
                       </div>
                     </Show>
                   </>
@@ -186,16 +185,7 @@ export function SessionMenu(props: {
   );
 }
 
-function MobileSessionName(props: { name: string | undefined }) {
-  const nameScrollState = useScrollState(true, false);
-  return (
-    <span class="tp-session__name" ref={nameScrollState} title={props.name}>
-      {props.name}
-    </span>
-  );
-}
-
-function SessionRows(props: { state: TerminalSessionPickerState; mobile?: boolean }) {
+function SessionRows(props: { state: TerminalSessionPickerState }) {
   return (
     <For each={props.state.sessions()} keyed={(session) => session.sessionId}>
       {(session) => {
@@ -213,22 +203,17 @@ function SessionRows(props: { state: TerminalSessionPickerState; mobile?: boolea
             <span class="tp-session__icon">
               <Icon name="terminal" />
             </span>
-            <span class="tp-session__identity">
-              <Show
-                when={props.mobile}
-                fallback={
-                  <span class="tp-session__name">
-                    {session().title ?? session().shell.split(/[\\/]/).pop()}
-                  </span>
-                }
-              >
-                <MobileSessionName name={session().title ?? session().shell.split(/[\\/]/).pop()} />
-              </Show>
-              <span class="tp-session__cwd">
-                {session().agentId} · {session().cwd}
+            <span class="tp-session__body">
+              <span class="tp-session__identity">
+                <span class="tp-session__name">
+                  {session().title ?? session().shell.split(/[\\/]/).pop()}
+                </span>
+                <span class="tp-session__cwd">
+                  {session().agentId} · {session().cwd}
+                </span>
               </span>
+              <span class="tp-session__state">{label()}</span>
             </span>
-            <span class="tp-session__state">{label()}</span>
             <span class={["tp-session__indicator", { "is-current": current() }]}>
               <Icon name={current() ? "check" : "chevronRight"} />
             </span>
@@ -278,6 +263,7 @@ export function Actions(props: { state: TerminalPanelViewState; dialogId: string
         <PanelIconButton
           class="rail-header__action tp-icon tp-upload"
           label={t("terminal.addFiles")}
+          title={t("terminal.addFilesLabel")}
           icon={<Icon name="paperclip" />}
           disabled={
             !props.state.connected ||
@@ -357,6 +343,7 @@ export function Actions(props: { state: TerminalPanelViewState; dialogId: string
             <PanelIconButton
               class="rail-header__action tp-icon tp-open-fullscreen"
               label={t("terminal.openWindow")}
+              title={t("terminal.openWindowTooltip")}
               icon={<Icon name="maximize" />}
               newTab
               onClick={props.state.onOpenFullscreen}
@@ -365,6 +352,7 @@ export function Actions(props: { state: TerminalPanelViewState; dialogId: string
           <PanelIconButton
             class="rail-header__action tp-icon"
             label={t("terminal.hide")}
+            title={false}
             icon={<Icon name="x" />}
             onClick={props.state.onHide}
           />

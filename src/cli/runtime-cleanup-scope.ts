@@ -4,6 +4,7 @@ import type { AgentHarness } from "../agents/harness/types.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { closePostgresPool } from "../infra/postgres-sync/pool-state.js";
 import { NATIVE_WORKER_LIFETIMES_KEY } from "../infra/worker-native-lifecycle.types.js";
+import { createLegacyPluginSdkReplyDispatch } from "../plugins/legacy-sdk-reply-dispatch.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -14,7 +15,11 @@ import {
 import { SKILLS_DISCOVERY_KEY } from "../skills/types.js";
 import { STATE_DATABASE_LIFECYCLE_KEY } from "../state/openclaw-state-db-contract.js";
 import { CliPluginInvocationResources } from "./plugin-invocation-resources.js";
-import { installCliSignalExitHandlers, registerSignalExitGate } from "./signal-exit-barrier.js";
+import {
+  installCliSignalExitHandlers,
+  registerSignalExitGate,
+  withGatewayStartupSignalOwner,
+} from "./signal-exit-barrier.js";
 
 export type CliHarnessCleanup = {
   scheduler: GatewayScheduler;
@@ -64,7 +69,9 @@ export async function withCliCommandCleanup<T>(
 ): Promise<T> {
   if (gatewayRun) {
     // Gateway owns its process lifetime; borrowed calls must not inherit CLI ownership.
-    return scope.run(undefined, () => run());
+    // The executable still needs a stop owner until its run loop installs one.
+    const executable = scope.getStore() === "process";
+    return scope.run(undefined, () => (executable ? withGatewayStartupSignalOwner(run) : run()));
   }
   if (scope.getStore() !== "process") {
     return run();
@@ -75,7 +82,7 @@ export async function withCliCommandCleanup<T>(
   const pluginResources = new CliPluginInvocationResources();
   const releaseSignals = installCliSignalExitHandlers();
   pluginResources.adopt({ release: async () => releaseSignals() });
-  const sdkResourceHost = new LegacyPluginSdkResourceHost();
+  const sdkResourceHost = new LegacyPluginSdkResourceHost(createLegacyPluginSdkReplyDispatch());
   const scheduler = new GatewayScheduler();
   sdkResourceHost.bindScheduler(scheduler);
   pluginResources.adopt({ release: () => sdkResourceHost.close() });

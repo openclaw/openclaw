@@ -292,7 +292,7 @@ describe.each(profiles)("validateToolArguments (%s)", (profile) => {
     validate.accepts({ text: "[1]", free: "[2]" }, { text: "[1]", free: "[2]" });
   });
 
-  it("keeps invalid and oversized strings out of referenced containers", () => {
+  it("keeps invalid strings out of referenced containers", () => {
     for (const [definition, kind] of [
       [{ type: "array", items: integer }, "array"],
       [requiredObject({ count: integer }), "object"],
@@ -303,10 +303,23 @@ describe.each(profiles)("validateToolArguments (%s)", (profile) => {
         "false",
         "null",
         kind === "array" ? '{"not":"array"}' : "[]",
-        " ".repeat(64 * 1024) + (kind === "array" ? "[1]" : '{"count":1}'),
       ]) {
         validate.rejects(invalid);
       }
     }
+  });
+
+  it("coerces stringified objects larger than 64 KiB", () => {
+    const value = { html: "x".repeat(70_000) };
+    valueValidator({ type: "object" }).accepts(JSON.stringify(value), value);
+  });
+
+  it("reports the JSON parse error for a malformed stringified object", () => {
+    const validate = valueValidator({ type: "object" });
+    validate.rejects(
+      '{"title":"x"}}',
+      /value: must be object \(received a string that is not valid JSON: .+; pass the value itself, not a string\)/,
+    );
+    validate.rejects('["x"]', /must be object \(received a JSON string; pass the value itself/);
   });
 });

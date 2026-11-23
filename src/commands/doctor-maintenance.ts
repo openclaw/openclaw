@@ -245,7 +245,6 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
             ? {
                 expectedVersion: staleReplacement.version,
                 expectedBuildId: staleReplacement.buildId,
-                requirePluginHealth: false,
               }
             : {}),
         }),
@@ -566,6 +565,10 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
                         await assertStaleDoctorGatewayStopped({
                           stale: staleReplacement,
                           env: stopped.serviceEnv,
+                          // A skipped stop is reported as skipped, with the observed liveness.
+                          skipped: stopped.stopped
+                            ? undefined
+                            : (stopped.serviceMutationSkipMessage ?? stopped.blockMessage),
                           assertCurrent: assertUpdateAdmissionCurrent,
                         });
                       }

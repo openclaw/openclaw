@@ -63,8 +63,9 @@ vi.mock("../plugins/tool-metadata.js", () => ({ getPluginToolMeta: mocks.metadat
 vi.mock("./mcp-app-host-files.js", () => ({ resolveMcpAppRequesterId: () => "alice" }));
 // mock-isolation: Approval delivery is external to the runtime owner's authority checks.
 vi.mock("./mcp-app-tool-approval.js", () => ({ requestMcpAppToolApproval: mocks.approval }));
-vi.mock("./operator-run-authority.js", () => ({
-  captureGatewayOperatorRunAuthority: mocks.source,
+vi.mock("./operator-run-authority.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./operator-run-authority.js")>()),
+  prepareGatewayOperatorRunAuthority: mocks.source,
 }));
 vi.mock("./session-resource-tool-policy.js", () => ({ resolveSessionResourceToolPolicy: vi.fn() }));
 vi.mock("./session-row-projection-access.js", () => ({

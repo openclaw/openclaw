@@ -171,38 +171,37 @@ afterEach(() => {
 afterAll(cleanupRuntimeToolFixtureTempRoots);
 
 describe("runtime tool fixture", () => {
-  it("retains both fixture session keys when the failure prompt throws", async () => {
+  it("reports fixture identity without wrapping an infrastructure failure", async () => {
     const env = await makeEnv();
     const infraError = new QaSuiteInfraError("agent_wait_failed", "failure prompt did not settle");
     const runAgentPrompt = vi.fn().mockResolvedValueOnce({}).mockRejectedValueOnce(infraError);
+    const onSessionKeys = vi.fn();
 
-    const result = runLiveFixture(env, { runAgentPrompt });
-    await expect(result).rejects.toBeInstanceOf(QaSuiteInfraError);
-    await expect(result).rejects.toMatchObject({ code: "agent_wait_failed", cause: infraError });
-    await expectRejected(
-      result,
-      [
-        "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:happy",
-        "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:failure",
-        "failure prompt did not settle",
-      ].join("\n"),
-    );
+    await expect(runLiveFixture(env, { runAgentPrompt, onSessionKeys })).rejects.toBe(infraError);
+    expect(onSessionKeys).toHaveBeenCalledExactlyOnceWith([
+      "agent:qa:runtime-tool:read:happy",
+      "agent:qa:runtime-tool:read:failure",
+    ]);
   });
 
   it("skips Codex-native fixtures when only OpenClaw dynamic exposure evidence is absent", async () => {
+    const onSessionKeys = vi.fn();
     await expect(
       runMockFixture({
         forceCodex: true,
+        onSessionKeys,
         tools: [],
         requests: mockToolRequests({ omitHappyOutput: true, omitFailureOutput: true }),
         config: { toolCoverage: { ...nativeCoverage, reason: "Codex owns read natively." } },
       }),
     ).rejects.toMatchObject({
       name: "QaSuiteScenarioSkipError",
-      message: expect.stringMatching(
-        /codex-native-workspace read[\s\S]*RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:happy[\s\S]*RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:failure/u,
-      ),
+      message: expect.stringMatching(/codex-native-workspace read/u),
     });
+    expect(onSessionKeys).toHaveBeenCalledExactlyOnceWith([
+      "agent:qa:runtime-tool:read:happy",
+      "agent:qa:runtime-tool:read:failure",
+    ]);
   });
 
   it("rejects a native patch whose recorded working directory changes its target", async () => {
@@ -431,12 +430,7 @@ it.each([
     }),
   ).rejects.toMatchObject({
     name: "QaSuiteScenarioSkipError",
-    message: [
-      "known-harness-gap read: QA fixture unavailable",
-      "tracking: #80319",
-      "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:happy",
-      "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:failure",
-    ].join("\n"),
+    message: ["known-harness-gap read: QA fixture unavailable", "tracking: #80319"].join("\n"),
   });
 });
 

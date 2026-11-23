@@ -53,6 +53,7 @@ import { SkillLibraryError } from "../skill-library-error.js";
 import type { ExplicitSkillSelection, SkillSnapshot, SkillResourceSourceReader } from "../types.js";
 import { resolveSkillReadPath } from "../workspace-skill-read-path.js";
 import { resolveSkillResourceCandidates } from "./resource-candidates.js";
+import { prepareSkillReadIndex } from "./skill-read-index.js";
 
 const log = createSubsystemLogger("skills/resources");
 
@@ -494,17 +495,19 @@ export async function materializeSkillResources(
         (rewritten, [source, target]) => rewritten.replaceAll(source, target),
         text,
       );
+    const snapshot = {
+      skills: resolvedSkills.map((skill) => ({ name: skill.name, skillKey: skill.name })),
+      resolvedSkills,
+      discoverySkills: resolvedSkills.filter((skill) => !skill.disableModelInvocation),
+      prompt: formatSkillsForPromptBounded({
+        skills: resolvedSkills.filter((skill) => !skill.disableModelInvocation),
+        preserveOrder: true,
+      }),
+    };
+    prepareSkillReadIndex(snapshot);
     return {
       directory,
-      snapshot: {
-        skills: resolvedSkills.map((skill) => ({ name: skill.name, skillKey: skill.name })),
-        resolvedSkills,
-        discoverySkills: resolvedSkills.filter((skill) => !skill.disableModelInvocation),
-        prompt: formatSkillsForPromptBounded({
-          skills: resolvedSkills.filter((skill) => !skill.disableModelInvocation),
-          preserveOrder: true,
-        }),
-      },
+      snapshot,
       rewriteReferences: (text: string) => {
         let cursor = Math.max(0, text.indexOf("<available_skills>\n"));
         const parts = [rewritePaths(text.slice(0, cursor))];

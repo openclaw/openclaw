@@ -8,7 +8,7 @@ import {
   tryResolveDefaultAgentId,
 } from "../../../agents/agent-scope.js";
 import { isCliRuntimeModelBackendForProvider } from "../../../agents/cli-backends.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { parseModelCatalogJson } from "../../../agents/model-catalog-json.js";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import { resolveModelRuntimePolicy } from "../../../agents/model-runtime-policy.js";
@@ -40,8 +40,6 @@ type RepairOptions = {
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   modelReplacements?: readonly import("./model-replacement.js").DoctorModelReplacement[];
 };
-
-const DEFAULT_MODEL_REF = `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`;
 
 function providerFromModelRef(ref: string): string | undefined {
   const trimmed = ref.trim();
@@ -321,7 +319,7 @@ export function repairStaleAgentModelRefs(
   });
   const configuredDefaultPrimary = modelPrimaryRef(defaults?.model);
   let repairedDefaultPrimary =
-    configuredDefaultPrimary ?? (replaceMode ? firstExplicitModelRef(cfg) : DEFAULT_MODEL_REF);
+    configuredDefaultPrimary ?? (replaceMode ? firstExplicitModelRef(cfg) : undefined);
   const repairModel = (
     owner: Record<string, unknown>,
     modelPath: string,
@@ -359,23 +357,21 @@ export function repairStaleAgentModelRefs(
         const configuredReplacement = isDefault
           ? replaceMode
             ? firstExplicitModelRef(cfg)
-            : DEFAULT_MODEL_REF
+            : undefined
           : availableDefault;
         const fallbacks: unknown[] = Array.isArray(selector?.fallbacks) ? selector.fallbacks : [];
+        // No implicit model remains to fall back to, so a live fallback becomes the primary.
         replacement =
-          isDefault && !replaceMode
-            ? configuredReplacement
-            : (fallbacks.find(
-                (fallback): fallback is string =>
-                  typeof fallback === "string" && !isStale(fallback),
-              ) ?? configuredReplacement);
+          fallbacks.find(
+            (fallback): fallback is string => typeof fallback === "string" && !isStale(fallback),
+          ) ?? configuredReplacement;
         if (replacement) {
           container[key] = replacement;
           changed = true;
           changes.push(
             `Replaced stale ${primaryPath} "${primary}" with ${isDefault ? "default " : ""}"${replacement}" (provider "${provider}" is unavailable).`,
           );
-        } else if (isDefault) {
+        } else if (isDefault && replaceMode) {
           delete container[key];
           changed = true;
           changes.push(
@@ -431,8 +427,7 @@ export function repairStaleAgentModelRefs(
       makeStaleChecker(defaultAvailability),
     );
     repairedDefaultPrimary =
-      modelPrimaryRef(defaults.model) ??
-      (replaceMode ? firstExplicitModelRef(cfg) : DEFAULT_MODEL_REF);
+      modelPrimaryRef(defaults.model) ?? (replaceMode ? firstExplicitModelRef(cfg) : undefined);
     const modelMapAvailability = availabilityForDefaults("union", (agent) =>
       isRecord(agent) && typeof agent.id === "string" && !isRecord(agent.models)
         ? agent.id
