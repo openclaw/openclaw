@@ -70,6 +70,17 @@ export class ChatAttachmentReadLifecycle {
     return this.controller.signal;
   }
 
+  get videoPreparationStatus(): { message: string; busy: boolean } | undefined {
+    // A video waiting for consent still blocks Send, but nothing is processing it.
+    if (this.entries.some((entry) => entry.preparation === "offer")) {
+      return { message: t("chat.attachments.compressionRequired"), busy: false };
+    }
+    if (this.entries.some((entry) => entry.preparation === "compressing")) {
+      return { message: t("chat.attachments.compressingVideo"), busy: true };
+    }
+    return undefined;
+  }
+
   pendingBytes(limits: ChatAttachmentLimits | undefined): number {
     return this.entries.reduce(
       (total, entry) =>

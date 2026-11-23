@@ -597,7 +597,10 @@ export function NewSessionComposer(props: {
           <ChatAttachmentInputs {...frame().attachmentProps} inputHandle={inputHandle} />
         </Show>
         <AttachmentPreview {...frame().attachmentProps} readRevision={frame()} />
-        <AttachmentReadStatus pendingReads={options().attachmentDraft.reads.pendingReads} />
+        <AttachmentReadStatus
+          pendingReads={options().attachmentDraft.reads.pendingReads}
+          videoStatus={options().attachmentDraft.reads.videoPreparationStatus?.message}
+        />
         <div class="agent-chat__composer-input-row">
           <div class="agent-chat__composer-combobox">
             <Show when={frame().skillMenuVisible}>
