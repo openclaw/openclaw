@@ -224,7 +224,6 @@ describe("cron ownership access matrix", () => {
           agentId: identity.agentId,
           sessionKey,
           sessionTarget: `session:${sessionKey}`,
-          ownerProfileId: "gateway-owner",
           scheduledToolPolicy: { version: 1, mode: "trusted" },
         }),
         createdActor: { type: "human", source: "profile", id: "gateway-owner" },
