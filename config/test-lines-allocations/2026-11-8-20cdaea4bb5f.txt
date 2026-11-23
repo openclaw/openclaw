@@ -1,0 +1,5 @@
+31
+# LOCAL 2026.11.8: row 141; source 20cdaea4bb5fc2035949a39643ae2df413ed9f3b.
+# Match WhatsApp native mention identity rather than unrelated phone-number digits in message text; preserve self-mention and existing group activation modes. Runtime scope: extensions/whatsapp/src/auto-reply/mentions.ts. Include corresponding focused regression tests only.
+# Retains independently failing regressions at existing owners; measured growth 31 LF lines.
+# Full intake baseline: a28e4379464c4fc22b3b085cd1f8e7c709be9888; no scalar baseline change.

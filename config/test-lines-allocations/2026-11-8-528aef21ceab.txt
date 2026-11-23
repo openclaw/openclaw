@@ -1,0 +1,5 @@
+19
+# LOCAL 2026.11.8: row 155; source 528aef21ceabf96862a75096b9408592db2f1fd6.
+# Map cameras/DeviceId/Name into devices/id/name in nodes camera list without changing native node protocol. Paths: src/cli/nodes-cli/register.ts.
+# Retains independently failing regressions at existing owners; measured growth 19 LF lines.
+# Full intake baseline: a28e4379464c4fc22b3b085cd1f8e7c709be9888; no scalar baseline change.

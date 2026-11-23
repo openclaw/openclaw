@@ -1,0 +1,5 @@
+44
+# LOCAL 2026.11.8: row 118; source 635ade48d4fe984340c3067345b81530e2c3c3a2.
+# Register the selected non-anonymous ClawHub token before request dispatch; retain raw error ownership and exact-value redaction semantics, with explicit/env/config regressions. Paths: src/infra/clawhub-client.ts.
+# Retains independently failing regressions at existing owners; measured growth 44 LF lines.
+# Full intake baseline: a28e4379464c4fc22b3b085cd1f8e7c709be9888; no scalar baseline change.

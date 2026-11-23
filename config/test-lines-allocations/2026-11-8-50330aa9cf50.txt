@@ -1,0 +1,5 @@
+29
+# LOCAL 2026.11.8: row 33; source 50330aa9cf504238392fa697e26029346706d49e.
+# Only configuredMaxTokens forwarding in extensions/ollama/index.ts and optional parameter/use in extensions/ollama/src/setup-model-selection.ts, with focused preservation regression. Exclude versions, generated metadata, terminal changes and other closeout work.
+# Retains independently failing regressions at existing owners; measured growth 29 LF lines.
+# Full intake baseline: a28e4379464c4fc22b3b085cd1f8e7c709be9888; no scalar baseline change.

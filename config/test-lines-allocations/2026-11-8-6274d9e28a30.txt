@@ -1,0 +1,5 @@
+43
+# LOCAL 2026.11.8: row 75; source 6274d9e28a306eaa1c384ec443f841597eac3966.
+# Give the existing Telegram provider-thread-proof scope:none result precedence for non-forum reply-chain messages in the conversation codec. Do not migrate historical rows or add forum behavior. Runtime scope: extensions/telegram/src/provider-thread-proof.ts. Include corresponding focused regression tests only.
+# Retains independently failing regressions at existing owners; measured growth 43 LF lines.
+# Full intake baseline: a28e4379464c4fc22b3b085cd1f8e7c709be9888; no scalar baseline change.

@@ -1,0 +1,5 @@
+39
+# LOCAL 2026.11.8: row 134; source ef60dd054202b29fc88da7b460f0594266faf2ff.
+# Let a newly authenticated earlier quota-reset time replace a stale later reset in usage-reduction, preserving authenticated provenance and unrelated limit state. Runtime scope: src/agents/auth-profiles/usage-reduction.ts. Include corresponding focused regression tests only.
+# Retains independently failing regressions at existing owners; measured growth 39 LF lines.
+# Full intake baseline: a28e4379464c4fc22b3b085cd1f8e7c709be9888; no scalar baseline change.

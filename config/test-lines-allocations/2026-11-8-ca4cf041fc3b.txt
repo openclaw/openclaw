@@ -1,0 +1,5 @@
+18
+# LOCAL 2026.11.8: row 173; source ca4cf041fc3b0f2d2bd6d39ecdfbe8899f9e5754.
+# In findReusableDoctorCapture reject mismatched run/root/state/config/generation and warnings before hashing; still fully verify the selected candidate.
+# Retains independently failing regressions at existing owners; measured growth 18 LF lines.
+# Full intake baseline: a28e4379464c4fc22b3b085cd1f8e7c709be9888; no scalar baseline change.

@@ -1,0 +1,5 @@
+8
+# LOCAL 2026.11.8: row 181; source 5389c2a105cfa1d96b7c65691f5341abb3d2aab8.
+# On Matrix account removal clear that exact account cached credentials using the existing setup lifecycle callback while preserving encryption data. Runtime scope: extensions/matrix/src/channel.setup.ts. Include corresponding focused regression tests only.
+# Retains independently failing regressions at existing owners; measured growth 8 LF lines.
+# Full intake baseline: a28e4379464c4fc22b3b085cd1f8e7c709be9888; no scalar baseline change.

@@ -1,0 +1,6 @@
+65
+# LOCAL 2026.11.8: row 61; source 2f95bd3c3a527b6cd3b87339419cb135f67ab776.
+# src/agents/runtime/proxy.ts streamProxy: replace cumulative stream charging with bounded outstanding-line accounting before decoding; preserve Unicode, cancellation, idle timeout and terminal handling.
+# Retains independently failing regressions at existing owners; measured growth 74 LF lines.
+# Credit reduced by 9 for the -8 OpenAI and -1 BytePlus test consolidation in this intake.
+# Full intake baseline: a28e4379464c4fc22b3b085cd1f8e7c709be9888; no scalar baseline change.

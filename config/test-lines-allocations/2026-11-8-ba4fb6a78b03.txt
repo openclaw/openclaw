@@ -1,0 +1,5 @@
+31
+# LOCAL 2026.11.8: row 142; source ba4fb6a78b0352f97680b0175a168e4a7bf857e5.
+# packages/agent-core/src/harness/session/tool-result-pairing.ts normalizeLegacyToolResultId: retain original isError while repairing the missing result ID.
+# Retains independently failing regressions at existing owners; measured growth 31 LF lines.
+# Full intake baseline: a28e4379464c4fc22b3b085cd1f8e7c709be9888; no scalar baseline change.

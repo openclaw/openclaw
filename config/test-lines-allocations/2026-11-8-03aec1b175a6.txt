@@ -1,0 +1,5 @@
+87
+# LOCAL 2026.11.8: row 151; source 03aec1b175a6b3e6bdbdf4b731f33843ce34e5f4.
+# Use followUp after Discord deferred-update acknowledgement and reply otherwise in agent-components-reply so plugin buttons regain visible feedback. Exclude unrelated fixture changes. Runtime scope: extensions/discord/src/monitor/agent-components-reply.ts. Include corresponding focused regression tests only.
+# Retains independently failing regressions at existing owners; measured growth 87 LF lines.
+# Full intake baseline: a28e4379464c4fc22b3b085cd1f8e7c709be9888; no scalar baseline change.

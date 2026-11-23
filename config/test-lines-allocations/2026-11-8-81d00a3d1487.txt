@@ -1,0 +1,5 @@
+25
+# LOCAL 2026.11.8: row 159; source 81d00a3d1487efaa7ab1deefb587572a86c4ca8b.
+# packages/markdown-core/src/link-spans.ts: include reference links, reference images and definitions in excluded link spans before bare-link discovery; preserve ordinary pasted URLs.
+# Retains independently failing regressions at existing owners; measured growth 25 LF lines.
+# Full intake baseline: a28e4379464c4fc22b3b085cd1f8e7c709be9888; no scalar baseline change.

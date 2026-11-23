@@ -1,0 +1,5 @@
+19
+# LOCAL 2026.11.8: row 166; source 21940b9a8d5a75a8253b0849684c239bb78abed6.
+# extensions/active-memory/escalation.ts: recognize what/which object questions with up to four intervening words before did we/you/I; preserve other escalation gates.
+# Retains independently failing regressions at existing owners; measured growth 19 LF lines.
+# Full intake baseline: a28e4379464c4fc22b3b085cd1f8e7c709be9888; no scalar baseline change.

@@ -1,0 +1,5 @@
+8
+# LOCAL 2026.11.8: row 154; source 8daa1c8399721cf1b9c15bcf7f9fead5f2e27071.
+# extensions/google-meet/src/cli-export.ts around transcriptEntries handling: do not continue past subsequent document-body export when entries are empty; retain transcript and document selection.
+# Retains independently failing regressions at existing owners; measured growth 8 LF lines.
+# Full intake baseline: a28e4379464c4fc22b3b085cd1f8e7c709be9888; no scalar baseline change.

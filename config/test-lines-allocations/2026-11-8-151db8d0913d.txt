@@ -1,0 +1,5 @@
+38
+# LOCAL 2026.11.8: row 18; source 151db8d0913d3a84abfa006da0ae8c55940b2940.
+# extensions/sms/src/webhook.ts: add 16-reader resolved-client cap inside the 64-reader route cap, release the route on client refusal and both in finally; retain proxy identity rules, timeout, authentication and durable acceptance.
+# Retains independently failing regressions at existing owners; measured growth 38 LF lines.
+# Full intake baseline: a28e4379464c4fc22b3b085cd1f8e7c709be9888; no scalar baseline change.
