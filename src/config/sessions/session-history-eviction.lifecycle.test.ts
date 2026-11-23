@@ -223,7 +223,7 @@ describe("SQLite post-commit history maintenance", () => {
           await expect(attempt).rejects.toThrow(
             phase === "rollback"
               ? "Conflicting SQLite transcript archive"
-              : "authority is no longer active",
+              : "This agent run is no longer active",
           );
         }
         if (phase === "rollback") {

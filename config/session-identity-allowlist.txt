@@ -292,12 +292,10 @@ src/agents/cli-runner/cli-run-recovery.ts	2
 src/agents/cli-runner/cli-run-settlement.ts	4
 src/agents/cli-runner/cli-run-transcript.ts	30
 src/agents/cli-runner/execute-plugin.ts	3
-src/agents/cli-runner/execute-process.ts	1
 src/agents/cli-runner/execute.ts	3
 src/agents/cli-runner/history-boundary.ts	6
 src/agents/cli-runner/prepare.ts	3
 src/agents/cli-runner/session-history.ts	10
-src/agents/cli-runner/tool-authority.ts	1
 src/agents/cli-runner/types.ts	1
 src/agents/cli-session-store.ts	19
 src/agents/cli-session.ts	1
@@ -316,7 +314,7 @@ src/agents/command/post-run.ts	9
 src/agents/command/session-store.ts	8
 src/agents/command/session.ts	8
 src/agents/command/transcript-persistence.ts	4
-src/agents/cron-creator-authority-context.ts	39
+src/agents/cron-creator-authority-context.ts	38
 src/agents/embedded-agent-runner/cli-backend-dispatch-transcript.ts	3
 src/agents/embedded-agent-runner/cli-backend-dispatch.ts	3
 src/agents/embedded-agent-runner/compact.queued-execution.ts	8
@@ -335,7 +333,7 @@ src/agents/embedded-agent-runner/run/attempt-nested-tool-activity.ts	1
 src/agents/embedded-agent-runner/run/attempt-normalization.ts	10
 src/agents/embedded-agent-runner/run/attempt-session-projection-recovery.ts	2
 src/agents/embedded-agent-runner/run/attempt-session-runtime-prepare.ts	2
-src/agents/embedded-agent-runner/run/attempt-session-target.ts	3
+src/agents/embedded-agent-runner/run/attempt-session-target.ts	2
 src/agents/embedded-agent-runner/run/attempt-settle.ts	3
 src/agents/embedded-agent-runner/run/attempt-tool-run-context.ts	2
 src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.ts	3
@@ -577,7 +575,7 @@ src/auto-reply/reply/agent-runner-result.ts	5
 src/auto-reply/reply/agent-runner-session-activity.ts	4
 src/auto-reply/reply/agent-runner-utils.ts	4
 src/auto-reply/reply/bash-command.ts	2
-src/auto-reply/reply/channel-run-admission.ts	2
+src/auto-reply/reply/channel-run-admission.ts	1
 src/auto-reply/reply/commands-compact.runtime.ts	12
 src/auto-reply/reply/commands-fork.ts	4
 src/auto-reply/reply/commands-session-abort.ts	2
@@ -1468,7 +1466,7 @@ src/sessions/session-controller.queries.ts	2
 src/sessions/session-controller.rpc-sources.ts	10
 src/sessions/session-controller.session-reader.ts	4
 src/sessions/session-controller.stop-runtime.ts	1
-src/sessions/session-controller.tool-authority.ts	5
+src/sessions/session-controller.tool-authority.ts	4
 src/sessions/session-diff-baseline.ts	9
 src/sessions/session-diff.runtime.ts	2
 src/sessions/session-initialization.ts	4
