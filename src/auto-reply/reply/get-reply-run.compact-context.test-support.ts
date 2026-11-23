@@ -1,7 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { runReplyAgent } from "./agent-runner-run.js";
 import type { runPreparedReply } from "./get-reply-run.js";
-import * as inboundMeta from "./inbound-meta.js";
+import * as compactMeta from "./inbound-meta.compact.js";
 import { buildInboundUserContextPrefix } from "./inbound-meta.js";
 
 /**
@@ -18,7 +18,7 @@ export function registerCompactInboundContextCases({
   requireRunReplyAgentCall: () => Parameters<typeof runReplyAgent>[0];
 }): void {
   beforeEach(() => {
-    vi.spyOn(inboundMeta, "buildCompactInboundUserContextPrefix").mockReset().mockReturnValue({
+    vi.spyOn(compactMeta, "buildCompactInboundUserContextPrefix").mockReset().mockReturnValue({
       text: "",
       removedSessionMessages: 0,
       deduplicatedMessages: 0,
@@ -27,7 +27,7 @@ export function registerCompactInboundContextCases({
 
   it("preserves compact inbound context through reply admission", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValue("default context");
-    vi.mocked(inboundMeta.buildCompactInboundUserContextPrefix).mockReturnValue({
+    vi.mocked(compactMeta.buildCompactInboundUserContextPrefix).mockReturnValue({
       text: "compact context",
       removedSessionMessages: 2,
       deduplicatedMessages: 1,

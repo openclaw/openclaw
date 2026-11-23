@@ -1,11 +1,11 @@
 import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { TemplateContext } from "../templating.js";
-import { projectTelegramCurrentMessageCarrier } from "./inbound-meta.current-message.js";
 import {
   buildCompactInboundUserContextPrefix,
   type CompactInboundContextProjection,
-} from "./inbound-meta.js";
+} from "./inbound-meta.compact.js";
+import { projectTelegramCurrentMessageCarrier } from "./inbound-meta.current-message.js";
 
 const RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES = [
   "Conversation context (chronological, selected for current message):",

@@ -11,10 +11,10 @@ import { prepareReplyRunContext } from "./get-reply-run-context.js";
 import { baseParams } from "./get-reply-run.test-support.js";
 import { INBOUND_CONTEXT_MARKER } from "./inbound-context-marker.js";
 import { finalizeInboundContext } from "./inbound-context.js";
+import { buildCompactInboundUserContextPrefix } from "./inbound-meta.compact.js";
 import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
-  buildCompactInboundUserContextPrefix,
   refreshActiveGoalContext,
 } from "./inbound-meta.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";

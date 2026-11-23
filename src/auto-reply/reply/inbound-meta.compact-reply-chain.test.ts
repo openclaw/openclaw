@@ -1,7 +1,7 @@
 // Tests that the compact inbound context keeps reply facts a channel supplies only as ReplyChain.
 import { describe, expect, it } from "vitest";
 import type { TemplateContext } from "../templating.js";
-import { buildCompactInboundUserContextPrefix } from "./inbound-meta.js";
+import { buildCompactInboundUserContextPrefix } from "./inbound-meta.compact.js";
 
 const base = {
   ChatType: "group",

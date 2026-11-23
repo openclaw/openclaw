@@ -1,7 +1,7 @@
 // Tests that compact inbound history keeps session transcript rows the session does not replay.
 import { describe, expect, it } from "vitest";
 import type { TemplateContext } from "../templating.js";
-import { buildCompactInboundUserContextPrefix } from "./inbound-meta.js";
+import { buildCompactInboundUserContextPrefix } from "./inbound-meta.compact.js";
 
 function buildWithWindow(messages: Array<Record<string, unknown>>) {
   return buildCompactInboundUserContextPrefix({

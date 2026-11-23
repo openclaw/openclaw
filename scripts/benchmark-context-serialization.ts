@@ -1,10 +1,8 @@
 import { createHash } from "node:crypto";
 import { resolveAgentProfile } from "../src/agents/agent-profiles.js";
 import { buildOpenAICompletionsParams } from "../src/agents/openai-transport-stream.js";
-import {
-  buildInboundUserContextPrefix,
-  buildCompactInboundUserContextPrefix,
-} from "../src/auto-reply/reply/inbound-meta.js";
+import { buildCompactInboundUserContextPrefix } from "../src/auto-reply/reply/inbound-meta.compact.js";
+import { buildInboundUserContextPrefix } from "../src/auto-reply/reply/inbound-meta.js";
 import type { TemplateContext } from "../src/auto-reply/templating.js";
 import type { Context, Model } from "../src/llm/types.js";
 

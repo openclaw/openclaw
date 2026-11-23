@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TemplateContext } from "../templating.js";
 import { buildCompactCurrentInboundFields } from "./get-reply-run-context.compact.js";
-import { buildCompactInboundUserContextPrefix } from "./inbound-meta.js";
+import { buildCompactInboundUserContextPrefix } from "./inbound-meta.compact.js";
 
 const compactInboundContext = {
   text: "Context: short facts",
