@@ -199,6 +199,11 @@ describe("personal USER.md self-service", () => {
       scopes,
       openclawIdPrincipal: principal,
       readCurrentRoleFacts: principal ? () => ({ assignedRole: state.role }) : undefined,
+      assertCurrent: () => {
+        if (!active) {
+          throw new Error("requester revoked");
+        }
+      },
     });
     client = {
       ...client,
@@ -433,7 +438,7 @@ describe("personal USER.md self-service", () => {
       const checked =
         boundary === "live"
           ? expect(pending).resolves.toBeUndefined()
-          : expect(pending).rejects.toThrow(/authority|connection|could not start/);
+          : expect(pending).rejects.toThrow(/could not start|connection/);
       try {
         if (boundary !== "live") {
           await Promise.race([entered.promise, pending]);
@@ -510,6 +515,7 @@ describe("personal USER.md self-service", () => {
         client.internal!.operatorRunAuthority = createTestOperatorAuthority({
           profileId: identity.operatorAuthority.profileId,
           scopes: ["operator.read"],
+          assertCurrent: () => {},
         });
       }
       const result =
@@ -524,22 +530,29 @@ describe("personal USER.md self-service", () => {
     },
   );
 
-  it("rechecks the delegated commit guard before filesystem mutation", async () => {
-    const turn = toolTurn();
-    let current = true;
-    state.commitGuard = () => {
-      if (!current) {
-        throw new Error("dispatch revoked");
+  it.each(["source", "commit"])(
+    "rechecks delegated %s authority before filesystem mutation",
+    async (boundary) => {
+      const turn = toolTurn();
+      if (boundary === "commit") {
+        let current = true;
+        state.commitGuard = () => {
+          if (!current) {
+            throw new Error("dispatch revoked");
+          }
+        };
+        state.beforeMutation = () => {
+          current = false;
+        };
+      } else {
+        state.beforeMutation = turn.revoke;
       }
-    };
-    state.beforeMutation = () => {
-      current = false;
-    };
-    expect((await withGatewayToolCallerIdentity(turn.identity, () => save("Retired"))).ok).toBe(
-      false,
-    );
-    await expect(fs.readFile(personalPath(), "utf8")).rejects.toThrow();
-  });
+      expect((await withGatewayToolCallerIdentity(turn.identity, () => save("Retired"))).ok).toBe(
+        false,
+      );
+      await expect(fs.readFile(personalPath(), "utf8")).rejects.toThrow();
+    },
+  );
 
   it("never falls back to the Gateway owner when chat has no authenticated requester", async () => {
     await expect(

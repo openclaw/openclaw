@@ -188,6 +188,7 @@ it("keeps admitted work when its ingress owner changes and refuses new admission
     );
     const captured = await capture({ client, context, sourceAuthority: restored });
     try {
+      expect(captured.authority.assertCurrent).not.toThrow();
       registerIngressPrincipalRecovery(context, "queued-app", { ...owner });
       const next = capture({ client, context, sourceAuthority: restored });
       await expect(next).rejects.toBeInstanceOf(GatewayDispatchUnavailableError);
@@ -196,9 +197,11 @@ it("keeps admitted work when its ingress owner changes and refuses new admission
         message: expect.stringContaining("owner changed"),
       });
       expect(restored.signal.aborted).toBe(false);
-      expect(captured.authority.signal?.aborted).not.toBe(true);
+      expect(captured.authority.signal?.aborted).toBe(false);
+      expect(captured.authority.assertCurrent).not.toThrow();
       source.abort(new Error("ingress grant retired"));
-      expect(captured.authority.signal?.aborted).not.toBe(true);
+      expect(captured.authority.signal?.aborted).toBe(false);
+      expect(captured.authority.assertCurrent).not.toThrow();
     } finally {
       captured.release();
       restored.release();
@@ -215,7 +218,7 @@ it("prepares a warm skill library without DDL after the tool caller's initiating
       const releaseTool = expectDefined(request.authority.retain, "tool retention")();
       client.internal = { operatorRunAuthority: request.authority };
       registerProof(context, "libraryProof.prepare", "operator.write", ({ respond }) => {
-        ensureSkillLibrarySchema({ database }, () => request.authority.signal?.throwIfAborted());
+        ensureSkillLibrarySchema({ database }, () => request.authority.assertCurrent());
         respond(true, { profileId: request.authority.profileId });
       });
       const schemaMutations: string[] = [];
@@ -229,6 +232,7 @@ it("prepares a warm skill library without DDL after the tool caller's initiating
         await expect(
           scoped({ profile, client, context }, () => dispatch("libraryProof.prepare")),
         ).resolves.toEqual({ profileId: profile.id });
+        request.authority.assertCurrent();
         expect(schemaMutations).toEqual([]);
       } finally {
         observation.restore();
@@ -270,9 +274,12 @@ it("keeps gateway and channel role facts immutable while honoring explicit lifec
       Object.assign(facts, { assignedRole: "owner", githubLogin: "changed" });
       expect(read()).toMatchObject({ assignedRole: null, githubLogin: null });
     }
-    source.abort(new Error("Stop requested"));
     for (const authority of authorities) {
-      expect(authority.signal?.aborted).toBe(true);
+      expect(authority.assertCurrent).not.toThrow();
+    }
+    source.abort(new Error("source revoked"));
+    for (const authority of authorities) {
+      expect(authority.assertCurrent).toThrow();
     }
   }));
 
@@ -297,6 +304,7 @@ it("admits channel role and model policy once while retaining explicit cancellat
       agents: ["restricted"],
     });
     publishOperatorRoleConfigChange(context);
+    expect(admitted.assertCurrent).not.toThrow();
     expectModels(admitted, [true, true, false]);
     expect(admitted.rolePolicy).toMatchObject({ sandboxRequired: false, agents: [] });
     expect(admitted.readCurrentRoleFacts?.().policy?.modelPolicy).toEqual({
@@ -306,8 +314,8 @@ it("admits channel role and model policy once while retaining explicit cancellat
     expectModels(next, [false, true, true]);
     expect(next.rolePolicy).toMatchObject({ sandboxRequired: true, agents: ["restricted"] });
     lifecycle.abort(new Error("channel work cancelled"));
-    expect(admitted.signal?.aborted).toBe(true);
-    expect(next.signal?.aborted).toBe(true);
+    expect(admitted.assertCurrent).toThrow("channel work cancelled");
+    expect(next.assertCurrent).toThrow("channel work cancelled");
   }));
 
 it("keeps admitted role authority after access revocation and refuses the next request", () =>
@@ -328,7 +336,7 @@ it("keeps admitted role authority after access revocation and refuses the next r
       config.gateway.roles.definitions.reader,
     );
     source.abort(new Error("access grant ended"));
-    expect(captured.authority.signal?.aborted).not.toBe(true);
+    expect(captured.authority.signal?.aborted).toBe(false);
     expect(resolveOperatorRolePolicy(retained, config)).toEqual(
       config.gateway.roles.definitions.reader,
     );
@@ -352,7 +360,9 @@ it("keeps captured role grants when current grants change and refuses a fresh ca
     using _ = { [Symbol.dispose]: captured.release };
     const role = config.gateway.roles.definitions.reader;
     const grants = role.scopes;
+    expect(captured.authority.assertCurrent).not.toThrow();
     grants[0] = "operator.sessions.read";
+    expect(captured.authority.assertCurrent).not.toThrow();
     await expect(capture({ client, context })).rejects.toThrow("Your operator role changed");
   }));
 
@@ -387,6 +397,7 @@ it.each(["capture", "operator tool"])(
             dispatchedClient?.internal?.operatorRunAuthority,
             "dispatched operator authority",
           );
+          authority.assertCurrent();
           respond(true, { profileId: authority.profileId });
         },
       );
@@ -397,6 +408,7 @@ it.each(["capture", "operator tool"])(
           const { authority } = retained;
           using _ = { [Symbol.dispose]: retained.release };
 
+          authority.assertCurrent();
           expect(authority.modelPolicy?.allows(modelRef("a"))).toBe(true);
           cfg = {
             ...cfg,
@@ -409,16 +421,18 @@ it.each(["capture", "operator tool"])(
             allow: ["fixture/b", "fixture/c"],
           };
           publishOperatorRoleConfigChange(context);
-          expect(authority.signal?.aborted).not.toBe(true);
+          expect(authority.signal?.aborted).toBe(false);
           expectModels(authority, [true, true, false]);
           const release = expectDefined(authority.retain, "operator retention")();
           retained.release();
+          authority.assertCurrent();
           release();
-          expect(authority.retain).toThrow("Operator execution ended.");
+          expect(authority.assertCurrent).toThrow("Operator execution ended.");
         } else {
           await scoped({ profile, client, context }, () =>
             withOperatorToolGatewayAuthority({ scopes: ["operator.read"] }, async () => {
               const authority = toolAuthority();
+              authority.assertCurrent();
               expect(authority.profileId).toBe(profile.id);
               await withOperatorToolGatewayAuthority(
                 { scopes: ["operator.read"], operatorRunAuthority: authority },
@@ -492,7 +506,8 @@ it.each([
 
         if (revocation.startsWith("model policy")) {
           const authority = expectDefined(captured, "prepared model authority").authority;
-          expect(authority.signal?.aborted).not.toBe(true);
+          expect(authority.signal?.aborted).toBe(false);
+          authority.assertCurrent();
           expectModels(authority, [
             revocation !== "model policy narrowed",
             true,
@@ -588,12 +603,15 @@ it("keeps admitted sources across alias additions and source merges", () =>
     );
     try {
       linkEmail("alias-source@example.test", target.id);
+      expect(captures[0]?.authority.assertCurrent).not.toThrow();
       await expect(
         prepareGatewayOperatorRunAuthority({
           client: createOperatorClient({ profileId: source.id, scopes: ["operator.read"] }),
           context,
         }),
       ).rejects.toThrow();
+      expect(captures[1]?.authority.assertCurrent).not.toThrow();
+      expect(captures[2]?.authority.assertCurrent).not.toThrow();
     } finally {
       captures.forEach((captured) => captured?.release());
     }
@@ -640,11 +658,14 @@ it("uses the profile grant independently of membership role labels", async () =>
       try {
         const accepted = await capture({ client, context });
         try {
+          accepted.authority.assertCurrent();
           const retained = { ...client, internal: { operatorRunAuthority: accepted.authority } };
           expect(resolveOperatorRolePolicy(retained, cfg)?.scopes).toContain("operator.write");
           current = { ...admitted, role: "viewer" };
+          expect(() => accepted.authority.assertCurrent()).not.toThrow();
           expect(resolveOperatorRolePolicy(retained, cfg)?.scopes).toContain("operator.write");
           const fresh = await capture({ client, context });
+          fresh.authority.assertCurrent();
           fresh.release();
         } finally {
           accepted.release();

@@ -56,6 +56,7 @@ function fixture(defaultOnly = false) {
   const operatorAuthority = createTestOperatorAuthority({
     profileId: "limited-operator",
     scopes: ["operator.write"],
+    assertCurrent: () => {},
     get modelPolicy() {
       return modelPolicy;
     },
@@ -89,6 +90,7 @@ describe("session model patches under operator policy", () => {
     const operatorAuthority = createTestOperatorAuthority({
       profileId: "limited-operator",
       scopes: ["operator.write"],
+      assertCurrent: () => {},
       modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { allow: ["openai/fixture"] } }),
       rolePolicy: {
         sessionAccessCap: "none",
@@ -147,10 +149,7 @@ describe("session model patches under operator policy", () => {
       expect(result.validateModelSelection?.()).toBeUndefined();
       expect(await value.project(model)).toMatchObject({ ok: false, error: denied });
     } else {
-      expect(result).toMatchObject({
-        ok: false,
-        error: denied,
-      });
+      expect(result).toMatchObject({ ok: false, error: denied });
     }
   });
 
@@ -175,6 +174,7 @@ describe("session model patches under operator policy", () => {
       const operatorAuthority = createTestOperatorAuthority({
         profileId: "limited-operator",
         scopes: ["operator.write"],
+        assertCurrent: () => {},
         modelPolicy,
       });
       const project = (model: string) =>
@@ -194,10 +194,11 @@ describe("session model patches under operator policy", () => {
       });
       const allowed = await project("fixture/allowed");
       assert(allowed.ok);
+      expect(allowed.validateModelSelection?.()).toBeUndefined();
     }
   });
 
-  it("keeps the admitted model selection after model policy changes", async () => {
+  it("keeps the admitted model selection when operator policy tightens before commit", async () => {
     const value = fixture();
     const result = await value.project("chosen");
     expect(result).toMatchObject({

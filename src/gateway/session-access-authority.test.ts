@@ -416,9 +416,7 @@ describe("session resource admission", () => {
       expect(
         thrown instanceof Error ? thrown.message : respond.mock.calls[0]?.[2]?.message,
       ).toMatch(
-        stage === "aliases"
-          ? "Session access changed"
-          : /authority|Session access changed|could not start/,
+        stage === "aliases" ? "Session access changed" : /could not start|Session access changed/,
       );
       expect(mocks.profileLeases.size).toBe(0);
     },
@@ -439,7 +437,7 @@ describe("session resource admission", () => {
     const operatorAuthority = createTestOperatorAuthority({
       profileId: "alice",
       scopes: ["operator.sessions.write"],
-      signal: test.grant.signal,
+      assertCurrent: () => test.grant.signal.throwIfAborted(),
     });
     mocks.ambient = {
       agentId: "main",

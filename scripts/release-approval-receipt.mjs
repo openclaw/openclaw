@@ -360,7 +360,6 @@ async function readReleaseApprovalReceipt({ expected, token, runGhJson = api, fe
     token,
     fetchImpl,
     maxArchiveBytes,
-    retryAttempts: 1,
   });
   const files = inspectActionsArtifactZipWithPolicy(archiveBytes, {
     expectedEntries: ["approval.json"],

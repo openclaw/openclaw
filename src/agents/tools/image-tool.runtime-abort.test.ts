@@ -94,17 +94,14 @@ describe("image tool run abort", () => {
     });
   }
 
-  it.each([
-    { source: "admitted", scenario: "denied override" },
-    { source: "admitted", scenario: "permitted fallback" },
-  ] as const)(
-    "preserves $source requester model policy for $scenario",
-    async ({ source, scenario }) => {
+  it.each(["denied override", "permitted fallback"] as const)(
+    "preserves admitted requester model policy for %s",
+    async (scenario) => {
       let sourceHolds = 0;
       const { cfg, runWithRequester } = createMediaModelPolicyFixture(
         "image",
         "image-reader",
-        source,
+        "admitted",
         (delta) => {
           sourceHolds += delta;
         },
