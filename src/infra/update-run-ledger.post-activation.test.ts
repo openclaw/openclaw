@@ -17,6 +17,7 @@ import {
   getUpdateRun,
   recordUpdateRunStep,
 } from "./update-run-ledger.js";
+import { renderUpdateRunReport } from "./update-run-report.js";
 import { recordUpdateRunStepAsync } from "./update-run-write.async.js";
 
 const tempDirs = createTempDirTracker();
@@ -102,3 +103,61 @@ it("retains post-activation advice from a closed tick scope without reopening th
   expect(retained.steps).not.toContainEqual(expect.objectContaining({ step: "late-non-advisory" }));
   expect(retained.steps.filter(({ detail }) => detail === "Inspection receipt.")).toHaveLength(5);
 });
+
+it.each(["completed", "failed"] as const)(
+  "retains final postcompletion plugin %s without changing the core outcome",
+  (status) => {
+    const stateDir = tempDirs.make("openclaw-update-plugin-receipt-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const run = createUpdateRun({ trigger: "control-ui" }, options);
+    const finished = finishUpdateRun(run.runId, { status: "succeeded" }, options);
+    recordUpdateRunStep(
+      run.runId,
+      { step: "plugins", status: "in_progress", detail: "Updating plugins…" },
+      options,
+    );
+    expect(getUpdateRun(run.runId, options)?.steps).not.toContainEqual(
+      expect.objectContaining({ step: "plugins" }),
+    );
+    const detail =
+      status === "failed"
+        ? "broken: package download failed\nRun `openclaw plugins update` to retry."
+        : "Plugins updated.";
+    recordUpdateRunStep(
+      run.runId,
+      {
+        step: "plugins",
+        status,
+        startedAtMs: 100,
+        endedAtMs: 200,
+        detail,
+      },
+      options,
+    );
+    const retained = getUpdateRun(run.runId, options)!;
+    expect(retained).toMatchObject({
+      status: "succeeded",
+      phase: "finished",
+      reason: null,
+      finishedAtMs: finished.finishedAtMs,
+    });
+    expect(retained.steps).toContainEqual(
+      expect.objectContaining({
+        step: "plugins",
+        status,
+        startedAtMs: 100,
+        endedAtMs: 200,
+        detail,
+      }),
+    );
+    const report = renderUpdateRunReport(retained);
+    if (status === "failed") {
+      expect(report.headline).toMatch(/; 1 warning needs attention\.$/u);
+      expect(report.lines.join("\n")).toContain("broken: package download failed");
+      expect(report.lines.join("\n")).toContain("openclaw plugins update");
+    } else {
+      expect(report.headline).not.toContain("needs attention");
+    }
+  },
+);

@@ -1,5 +1,5 @@
-// `openclaw update plugins`: plugin maintenance for the release this process runs from. The
-// updater runs it from the new release before the restart, so plugins are chosen by the new core.
+// `openclaw update plugins`: maintenance with this release's code. Prepared updates
+// run it after the candidate is serving, before reloading the changed plugins.
 import { preparePostCorePluginConfig } from "../cli/update-cli/update-command-config.js";
 import { updatePluginsAfterCoreUpdate } from "../cli/update-cli/update-command-plugins.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";

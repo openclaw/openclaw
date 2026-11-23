@@ -125,6 +125,10 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    in the background. The same update details receive their results without a page
    reload. Only warning and error findings add advice; inspections do not delay
    completion, fail the update, or trigger rollback.
+8. The serving release updates installed plugins in the background, then reloads
+   changed plugins through the existing runtime lifecycle. Plugin failures appear
+   in the same update details and warning count; they never fail the core update
+   or trigger rollback.
 
 Rules for update changes:
 
@@ -178,6 +182,20 @@ found that earlier receipts did not prove what they claimed.
 
 Add a note here when a change alters a contract. A note about the in-place update
 flow names the shipped-updater contract or unmoved route that it serves.
+
+Prepared-release plugin maintenance runs only after the candidate has migrated
+state and reported ready. The previous Gateway no longer owns the shared state,
+and plugin downloads and installs do not extend the restart outage. Core success
+is recorded first; final plugin results arrive later in the open details. The
+existing trial record carries explicit `--accept-capabilities` consent; an absent
+field does not approve new capabilities. Maintenance has a ten-minute command
+budget. A Gateway stop during that work can leave no plugin result for that
+update. Published compatible plugin versions load at the next Gateway start;
+`openclaw plugins update` finishes the rest. The next core update also retries.
+Core rollback does not wait for plugin maintenance, and a candidate that fails
+before readiness does not update plugins. The candidate must contain the post-ready
+maintenance call; the installed updater must contain the removal of the
+pre-restart call.
 
 Candidate Doctor's retirement-only pass retains deferred advisory inspection
 selectors in its result. Shipped v2026.11.7 and v2026.11.10-beta.1 updaters read
