@@ -9,7 +9,7 @@ import {
   readStandaloneRuntimeManifestForRoot,
 } from "../../cli-invocation.mjs";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { resolveGitReleasePrefix } from "../infra/git-release-paths.js";
+import { resolveServingGitReleasePrefix } from "../infra/git-release-paths.js";
 import { resolveUserPath } from "../infra/home-dir.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { sameFsObject } from "../infra/path-case.js";
@@ -19,7 +19,6 @@ import type { InstalledPluginIndexStoreOptions } from "./installed-plugin-index-
 import { listNpmPackageDirs } from "./npm-package-dirs.js";
 import { safeRealpathSync } from "./path-safety.js";
 import {
-  isReleaseHostPath,
   linkOpenClawPeerDependency,
   readSafePackageManifest,
   safeRealpath,
@@ -323,11 +322,9 @@ async function reconcileRegisteredHostLinks(
         continue;
       }
       const host = resolveOpenClawHostRoot();
-      const [hostRoot, gitReleasePrefix] = await Promise.all([
-        host ? safeRealpath(host) : null,
-        safeRealpath(resolveGitReleasePrefix(gitEnv)),
-      ]);
-      if (!hostRoot || !gitReleasePrefix || !isReleaseHostPath(hostRoot, gitReleasePrefix)) {
+      const hostRoot = host ? await safeRealpath(host) : null;
+      const gitReleasePrefix = hostRoot ? resolveServingGitReleasePrefix(hostRoot) : null;
+      if (!hostRoot || !gitReleasePrefix) {
         continue;
       }
       const result = await linkOpenClawPeerDependency({

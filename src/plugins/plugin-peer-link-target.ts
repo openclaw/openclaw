@@ -201,7 +201,7 @@ async function readPackageName(packageDir: string): Promise<string | undefined> 
   return typeof manifest?.name === "string" ? manifest.name : undefined;
 }
 
-export function isReleaseHostPath(root: string, releasePrefix: string): boolean {
+function isReleaseHostPath(root: string, releasePrefix: string): boolean {
   const [releasesDir, generation, ...packagePath] = path
     .relative(releasePrefix, root)
     .split(path.sep);

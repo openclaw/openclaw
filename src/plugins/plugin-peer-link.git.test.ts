@@ -23,6 +23,9 @@ function writePackage(packageDir: string, manifest: Record<string, unknown>) {
 
 const layouts = [
   "owned",
+  "shared prefix named profile",
+  "legacy release slot",
+  "unselected host",
   "different record",
   "local package copy",
   "other host link",
@@ -31,14 +34,19 @@ const layouts = [
 
 function gitPeerFixture(layout: (typeof layouts)[number] = "owned") {
   const home = fs.realpathSync(makeTempDir());
-  const stateDir = path.join(home, ".openclaw");
-  const prefix = path.join(stateDir, "git-install");
-  const hostA = path.join(prefix, "releases", "host-a", "openclaw");
-  const hostB = path.join(prefix, "releases", "host-b", "openclaw");
-  const otherHost = path.join(home, "other-host");
-  for (const host of [hostA, hostB, otherHost]) {
+  const namedProfile = layout === "shared prefix named profile";
+  const stateDir = path.join(home, namedProfile ? ".openclaw-work" : ".openclaw");
+  const prefix = path.join(home, ".openclaw", "git-install");
+  const packagePath =
+    layout === "legacy release slot" ? path.join("lib", "node_modules", "openclaw") : "openclaw";
+  const hostA = path.join(prefix, "releases", "host-a", packagePath);
+  const hostB = path.join(prefix, "releases", "host-b", packagePath);
+  for (const host of [hostA, hostB]) {
     writePackage(host, { name: "openclaw" });
   }
+  const slot = path.join(prefix, packagePath);
+  fs.mkdirSync(path.dirname(slot), { recursive: true });
+  fs.symlinkSync(layout === "unselected host" ? hostA : hostB, slot, "junction");
   const gitUrl = "https://github.com/acme/peer-plugin.git";
   const gitCommit = "a".repeat(40);
   const spec = `git:${gitUrl}@${gitCommit}`;
@@ -48,7 +56,13 @@ function gitPeerFixture(layout: (typeof layouts)[number] = "owned") {
   fs.mkdirSync(path.join(packageDir, ".git"));
   fs.writeFileSync(path.join(packageDir, ".git", "HEAD"), `${gitCommit}\n`);
   const link = path.join(packageDir, "node_modules", "openclaw");
-  const previous = layout === "other host link" ? otherHost : hostA;
+  let previous = hostA;
+  if (layout === "other host link") {
+    const otherPrefix = path.join(home, ".openclaw-other", "git-install");
+    previous = path.join(otherPrefix, "releases", "host-a", "openclaw");
+    writePackage(previous, { name: "openclaw" });
+    fs.symlinkSync(previous, path.join(otherPrefix, "openclaw"), "junction");
+  }
   if (layout === "local package copy") {
     writePackage(link, { name: "openclaw", version: "1.0.0" });
   } else {
@@ -74,6 +88,7 @@ function gitPeerFixture(layout: (typeof layouts)[number] = "owned") {
     stateDir,
     env: {
       HOME: home,
+      ...(namedProfile ? { OPENCLAW_PROFILE: "work" } : {}),
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
     },
@@ -85,6 +100,10 @@ function gitPeerFixture(layout: (typeof layouts)[number] = "owned") {
 describe("registered Git plugin host links", () => {
   it.each(layouts)("rebinds only the recorded checkout's old release link (%s)", async (layout) => {
     const { options, link, hostB, previous } = gitPeerFixture(layout);
+    const shouldRepair =
+      layout === "owned" ||
+      layout === "shared prefix named profile" ||
+      layout === "legacy release slot";
     const result = await repairInstalledOpenClawHostLinks({
       ...options,
       beforePersistentEffect:
@@ -98,7 +117,7 @@ describe("registered Git plugin host links", () => {
 
     expect(result).toEqual({
       managedRepaired: 0,
-      registeredRepaired: layout === "owned" ? 1 : 0,
+      registeredRepaired: shouldRepair ? 1 : 0,
     });
     if (layout === "local package copy" || layout === "replaced during preparation") {
       expect(fs.lstatSync(link).isDirectory()).toBe(true);
@@ -107,7 +126,7 @@ describe("registered Git plugin host links", () => {
       );
     } else {
       expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
-      expect(fs.realpathSync(link)).toBe(layout === "owned" ? hostB : previous);
+      expect(fs.realpathSync(link)).toBe(shouldRepair ? hostB : previous);
     }
   });
 

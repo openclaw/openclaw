@@ -4,8 +4,11 @@ import { pathToFileURL } from "node:url";
 import { resolveStateDir } from "../config/paths.js";
 import {
   packageReleaseGlobalRoot,
+  packageReleasePrefixOfRoot,
   readPackageReleaseSlotSync,
 } from "./package-release-slot-path.js";
+
+const GIT_RELEASE_DIR = "git-install";
 
 /** Written once beside the release link; the service names it and it never changes. */
 export const GIT_RELEASE_LAUNCHER = "openclaw-launcher.mjs";
@@ -69,7 +72,7 @@ export function prepareGitReleaseLayout(): string | undefined {
  * service path and an update never changes it.
  */
 export function resolveGitReleasePrefix(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), "git-install");
+  return path.join(resolveStateDir(env), GIT_RELEASE_DIR);
 }
 
 export function gitReleaseSlot(prefix: string): string {
@@ -86,6 +89,20 @@ export function servingGitReleaseSlot(prefix: string): string {
   const slot = gitReleaseSlot(prefix);
   const legacy = path.join(packageReleaseGlobalRoot(prefix), "openclaw");
   return !readPackageReleaseSlotSync(slot) && readPackageReleaseSlotSync(legacy) ? legacy : slot;
+}
+
+/** The installation that selects this physical Git release, independent of the active profile. */
+export function resolveServingGitReleasePrefix(root: string): string | null {
+  const releasePrefix = packageReleasePrefixOfRoot(root);
+  if (!releasePrefix) {
+    return null;
+  }
+  const prefix = path.dirname(path.dirname(releasePrefix));
+  if (path.basename(prefix) !== GIT_RELEASE_DIR) {
+    return null;
+  }
+  const slot = readPackageReleaseSlotSync(servingGitReleaseSlot(prefix));
+  return slot?.releaseRoot === root ? slot.prefix : null;
 }
 
 /** The release link's prefix when `entrypoint` starts through it, for the launcher. */
