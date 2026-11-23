@@ -42,16 +42,32 @@ suite.define(() => {
         }, oversized.toString("base64"));
         const compress = button(page, "Compress to fit");
         await compress.waitFor();
+        const inputBounds = await input.boundingBox();
         await input.press("ControlOrMeta+Enter");
         const notice = palette.locator(".cmd-palette__creation-error");
         await notice.waitFor();
-        await palette.locator(".cmd-palette-stack").screenshot({
+        await page.screenshot({
           path: path.join(suite.artifactDir, "video-offer.png"),
           animations: "disabled",
         });
+        const noticeBox = (await notice.boundingBox())!;
+        expect(noticeBox.y).toBeGreaterThanOrEqual(0);
+        expect(noticeBox.y + noticeBox.height).toBeLessThanOrEqual(inputBounds!.y);
+        expect(await input.boundingBox()).toEqual(inputBounds);
+        expect(await input.evaluate((element) => element === document.activeElement)).toBe(true);
         expect(await notice.textContent()).toBe(
           "Video is too large to send. Compress a copy or remove it.",
         );
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "video-offer-mobile.png"),
+          animations: "disabled",
+        });
+        const narrowBox = (await notice.boundingBox())!;
+        expect(narrowBox.x).toBeGreaterThanOrEqual(0);
+        expect(narrowBox.x + narrowBox.width).toBeLessThanOrEqual(390);
+        expect(narrowBox.y).toBeGreaterThanOrEqual(0);
+        expect(narrowBox.y + narrowBox.height).toBeLessThanOrEqual((await input.boundingBox())!.y);
         await Promise.all([
           notice.filter({ hasText: "Compressing video…" }).waitFor(),
           compress.click(),
