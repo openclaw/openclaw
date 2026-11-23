@@ -42,6 +42,10 @@ export function candidatePublicationFixture(
     releaseProfile?: "beta" | "stable";
     candidateVersion?: string;
     qualificationSha?: string;
+    targetContextRef?: string;
+    qualificationBaselines?: { upgradeBaseline: string; upgradeSurvivorBaselines: string[] };
+    publicationArtifactSource?: { runId: string; runAttempt: number };
+    releaseProfile?: "beta" | "stable" | "full" | "extended-stable";
     transportRef?: string;
     runId?: string;
     purpose?: "publish" | "main-qualification" | "diagnostic";
@@ -69,7 +73,19 @@ export function candidatePublicationFixture(
   const purpose = options.purpose ?? "publish";
   const publishing = purpose === "publish";
   const tooling = { fullRef: "refs/heads/" + branch, ref: branch, sha: q };
-  const laneInputs = { qualification_baselines_json: qualificationBaselinesJson };
+  const laneInputs = {
+    ...(options.publicationArtifactSource
+      ? { publication_artifact_source_json: JSON.stringify(options.publicationArtifactSource) }
+      : {}),
+    qualification_baselines_json: options.qualificationBaselines
+      ? JSON.stringify(options.qualificationBaselines)
+      : extended
+        ? JSON.stringify({
+            upgradeBaseline: "openclaw@2026.7.33",
+            upgradeSurvivorBaselines: ["openclaw@2026.7.33", "openclaw@2026.8.28"],
+          })
+        : qualificationBaselinesJson,
+  };
   const selection: PublicationSelection = {
     route: "normal",
     npmDistTag: options.releaseProfile === "stable" ? "latest" : "beta",
@@ -330,6 +346,10 @@ export function candidatePublicationFixture(
     getArtifact() {
       throw new Error("Fresh candidate fixture does not reuse publication artifacts");
     },
+    verifyRetainedPublicationArtifacts() {
+      throw new Error("Fresh candidate fixture does not verify retained publication artifacts");
+    },
+    readWorkloadIdentity: denied,
     compareCommitLineage: denied,
     compareCommits: denied,
     verifyQualificationAdmission: (

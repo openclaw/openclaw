@@ -1296,6 +1296,7 @@ async function planMode() {
     sourceAdmission: planInputs.sourceAdmission,
     publicationAdmissionContract: planInputs.publicationAdmissionContract,
     publicationAdmission: planInputs.publicationAdmission,
+    publicationArtifactSource: planInputs.publicationArtifactSource,
     qualificationCoverage: planInputs.qualificationCoverage,
     qualificationInputs: planInputs.qualificationInputs,
     candidate,

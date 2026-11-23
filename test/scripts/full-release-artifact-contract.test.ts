@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
@@ -61,8 +61,113 @@ it.each([
 
 const SHA = "a".repeat(40);
 const directories = useAutoCleanupTempDirTracker(afterEach);
+it.each([
+  ["2026.11.10-beta.2", "beta", "false", "npm-beta-v1", "npm-beta"],
+  ["2026.11.10", "stable", "true", "npm-stable-v1", "npm-stable"],
+])(
+  "executes the release workflow qualification scope for %s",
+  (version, profile, soak, policy, scope) => {
+    const step = releaseWorkflow().jobs.resolve_target.steps.find((entry: { run?: string }) =>
+      entry.run?.includes('TARGET_VERSION="$target_version"'),
+    );
+    const block = step.run.match(
+      /^TARGET_VERSION="\$target_version"[^\n]*node --input-type=module <<'NODE'\n[\s\S]*?\nNODE/mu,
+    )?.[0];
+    expect(block).toBeDefined();
+    const cwd = directories.make("release-scope-workflow-");
+    symlinkSync(process.cwd(), join(cwd, "workflow"), "dir");
+    const output = join(cwd, "output");
+    const result = spawnSync("bash", ["-euc", block], {
+      cwd,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        target_version: version,
+        identity_kind: "release branch",
+        TARGET_REF: "release/2026.11.10",
+        RELEASE_PROFILE: profile,
+        RUN_RELEASE_SOAK: soak,
+        RERUN_GROUP: "all",
+        CROSS_OS_SUITE_FILTER: "",
+        SKIP_PACKAGE_TELEGRAM_E2E: "false",
+        GITHUB_OUTPUT: output,
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(output, "utf8")).toContain(
+      "coverage_policy=" + policy + "\nci_release_scope=" + scope + "\n",
+    );
+  },
+);
+
 const releaseWorkflow = () =>
   parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"));
+it("emits the admitted publication artifact selection at the workflow entry point", () => {
+  const directory = directories.make("publication-selector-output-");
+  const output = join(directory, "outputs");
+  const selected = JSON.stringify({ runId: "51", runAttempt: 1 });
+  const result = spawnSync(
+    process.execPath,
+    ["scripts/full-release-publication-contract.mjs", "--dispatch"],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GITHUB_OUTPUT: output,
+        PUBLICATION_INPUTS_JSON: JSON.stringify({
+          trusted_workflow_json: JSON.stringify({
+            trustedWorkflow: null,
+            validationPurpose: "diagnostic",
+            publicationSelection: null,
+            laneInputs: { publication_artifact_source_json: selected },
+          }),
+        }),
+      },
+    },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  expect(readFileSync(output, "utf8")).toContain(
+    "publication_artifact_source_json=" + selected + "\n",
+  );
+});
+
+it("selects exact publication artifacts without a reusable whole-parent verdict", () => {
+  const workflow = releaseWorkflow();
+  const context = {
+    env: { PUBLICATION_ARTIFACTS_REUSED: "true" },
+    github: { run_attempt: 1 },
+    steps: { find: { outputs: { reuse: "false" } } },
+    needs: {
+      resolve_target: {
+        outputs: { publication_artifact_source_json: '{"runId":"51","runAttempt":1}' },
+      },
+      evidence_reuse: {
+        outputs: {
+          candidate_binding_json: "original-binding",
+          candidate_artifact_json: "original-artifacts",
+        },
+      },
+    },
+  };
+  const evaluate = (expression: string) =>
+    runInNewContext(expression.replace(/^\s*\$\{\{|\}\}\s*$/gu, "").trim(), context);
+  const selection = workflow.jobs.evidence_reuse.steps.find(
+    (step: { id?: string }) => step.id === "artifacts",
+  );
+  expect(evaluate(selection.if)).toBe(true);
+  const aggregate = workflow.jobs.evidence_reuse.steps.find(
+    (step: { id?: string }) => step.id === "find",
+  );
+  expect(evaluate(aggregate.if)).toBe(false);
+  const candidate = workflow.jobs.candidate_acquisition;
+  expect(evaluate(candidate.outputs.binding_json)).toBe("original-binding");
+  expect(evaluate(candidate.outputs.candidate_artifact_json)).toBe("original-artifacts");
+  for (const id of ["dispatch", "producer", "bundle"]) {
+    const step = candidate.steps.find((entry: { id?: string }) => entry.id === id);
+    expect(evaluate(step.if), id).toBe(false);
+  }
+});
+
 const digest = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
 const artifactSize = (value: Parameters<typeof serializeArtifact>[0]) =>
   Buffer.byteLength(serializeArtifact(value));

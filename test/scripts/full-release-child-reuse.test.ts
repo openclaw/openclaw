@@ -10,6 +10,7 @@ import { releaseChildDispatchInputs } from "../../scripts/lib/full-release-child
 import {
   discoverReusableReleaseChild,
   validateReusableReleaseChild,
+  validateReleaseWorkloadIdentity,
 } from "../../scripts/lib/full-release-child-reuse.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -1212,3 +1213,182 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(archivePath)}));
     }
   });
 });
+
+// Captured from f95261af -> 8aeb0a30 plus the exact publication repair.
+// Blob pairs bind these reviewed bookkeeping edits; they do not exempt the paths.
+// Original Git object identities and the executable beta.2 backport inventory.
+// These expected values are independent of the production compatibility map.
+const originalPublicationRepairBlobs = [
+  [
+    "scripts/full-release-artifacts.mjs",
+    "943086f7044bfb5b2219275081f36069cfe7c1c8",
+    "cdeac9e53c8482821ffbcb911a05a4f7d4e86a7e",
+  ],
+  [
+    "scripts/full-release-publication-contract.d.mts",
+    "e05dac0be97bc8a8662c5879a1243e6f40ca3fa9",
+    "6f8cfcb1f57d4dfc60c27ae777d041effa7c5812",
+  ],
+  [
+    "scripts/full-release-publication-contract.mjs",
+    "8f70c6dea5d0bb5daa79b9b189700108d46e54f5",
+    "d0abcf5d86ac1a746f3796323b1c5c8db8cf8184",
+  ],
+  [
+    "scripts/full-release-validation-at-sha.mts",
+    "c8c9778fa8568b6acff92bb2d76ac28579285a22",
+    "e1fb448ed1833e7d25c2cb47a3bc9ec875e1093c",
+  ],
+  [
+    "scripts/full-release-validation-policy.d.mts",
+    "63ddec2e0f304d0177cbb66c89514a3f98e22619",
+    "14e94cda01794faf60733f36c2d19c14d1d7d1d9",
+  ],
+  [
+    "scripts/full-release-validation-policy.mjs",
+    "87acfd1b4fa49341923822b7171f55ceeb9e4218",
+    "a6a3560c4e548fa89a26b32630cf0576597341d8",
+  ],
+  [
+    "scripts/full-release-validation-state.mjs",
+    "d1d4ff29ef786809ef4ffd8ddb17bebb60d71534",
+    "b446cb2c42fe97e43b5bbe6fd8275c82ce82b44e",
+  ],
+  [
+    "scripts/lib/full-release-manifest.mjs",
+    "d8b69ee25f758d1339a3ada857f68ec0b614d5af",
+    "56335ca0409365dc04f99daccc9363333ba5ecc6",
+  ],
+  [
+    "scripts/lib/full-release-publication-artifacts.mjs",
+    null,
+    "a8e3f0ffa17e0c7343d36690b9b8c4074c1dcd88",
+  ],
+  [
+    "scripts/lib/full-release-publication-inputs.mjs",
+    "d437ca66bde22279dd96bb11537e8b3857ec7165",
+    "6c1b2f2791fad45259a4bc9d539c1c33d524e565",
+  ],
+  [
+    "scripts/lib/release-evidence-identity.mjs",
+    "246f8da5278515ae2a07c8d8e3cc01bb91e1570d",
+    "04ed419ced91ffbc5fb59d15684bd59d46bae3c5",
+  ],
+  [
+    "scripts/npm-preflight-tooling-identity.mjs",
+    "e50b3319e6cacb94fc2b26a5ad3e5a1190c27187",
+    "0ff20cc936e7a0b2c45c315d45476d8e5727e200",
+  ],
+  [
+    "scripts/release-ci-summary.mjs",
+    "8489bc3ede7d77a9b40de444f8dc79fdb64abc38",
+    "3e5a49b8af750b8c4de3acb939113cb49b40f750",
+  ],
+  [
+    "scripts/validate-full-release-validation-evidence.mjs",
+    "12332b5e4e9035fdd437c1e5b49fe5903e2b8ee0",
+    "c25be5b842220a4ea562df5fecaa47e34e642682",
+  ],
+  [
+    "test/scripts/candidate-publication.test-support.ts",
+    "d5a957cd6453cc35c980f447a0f21e4136354a4d",
+    "c966b1fbb8e32e535164f4073d1124a152483f39",
+  ],
+  [
+    "test/scripts/full-release-artifact-contract.test.ts",
+    "3de7b063cfe6765020cdb9fd1c74bce4b2a62a52",
+    "bae2928a25ac7a955941bf9e885dd5e834b4c5f9",
+  ],
+  [
+    "test/scripts/full-release-artifacts.test.ts",
+    "ecfe13974194370d1943d86710b0c748e12695c1",
+    "493c57b4f1d4682f23c201a6fef55256fa68670b",
+  ],
+  [
+    "test/scripts/full-release-validation-at-sha.candidate.test.ts",
+    "1cacf0f07fbd9bfc693cdbdbd5474fa799f2fbbc",
+    "8642e22cab6c0aff3f968e6ae47afe249026c7b4",
+  ],
+  [
+    "test/scripts/release-upgrade-baseline.test.ts",
+    "49389a4ac6b3be039ebd3c62dc1f27b74f207042",
+    "23c00952c86b67d33707a8237cded5a837ef3255",
+  ],
+] as const;
+
+it.each([
+  "normalCi",
+  "pluginPrereleaseIndependent",
+  "pluginPrereleaseCandidate",
+  "releaseChecksIndependent",
+  "releaseChecksCandidate",
+  "productPerformance",
+])(
+  "accepts the original beta.2 bookkeeping delta for %s without exempting workload changes",
+  async (role) => {
+    const previous = "f95261af52cdf1f6abcbd77a459dd5a630e0f3c7";
+    const next = "e".repeat(40);
+    const files = originalPublicationRepairBlobs.map(([filename, before, sha]) => ({
+      filename,
+      sha,
+      status: before === null ? "added" : "modified",
+    }));
+    const comparison = {
+      status: "ahead",
+      merge_base_commit: { sha: previous },
+      files: [
+        ...[
+          ".github/workflows/full-release-validation.yml",
+          "docs/reference/full-release-validation/dispatch.md",
+          "docs/reference/full-release-validation/stages.md",
+          "scripts/lib/full-release-child-reuse.mjs",
+          "scripts/lib/release-validation-waivers.json",
+          "test/scripts/full-release-child-reuse.test.ts",
+        ].map((filename) => ({ filename, status: "modified", sha: "f".repeat(40) })),
+        ...files,
+      ],
+    };
+    const deps = {
+      github: vi.fn(async (route: string) => {
+        if (route.startsWith("compare/")) {
+          return comparison;
+        }
+        throw new Error("unproved workload tree");
+      }),
+    };
+    const request = { workflowSha: next, role, spec: releaseChildSpec(role) };
+    await expect(validateReleaseWorkloadIdentity(previous, request, deps)).resolves.toBeUndefined();
+    for (const filename of [
+      "src/index.ts",
+      "scripts/npm-prepared-bundle.mjs",
+      "scripts/plan-release-workflow-matrix.mjs",
+      "scripts/lib/release-upgrade-baseline.mjs",
+      "test/scripts/upgrade-survivor.test.ts",
+      ".github/workflows/openclaw-release-checks.yml",
+    ]) {
+      comparison.files.push({ filename, status: "modified", sha: "f".repeat(40) });
+      await expect(validateReleaseWorkloadIdentity(previous, request, deps)).rejects.toThrow(
+        "unproved workload tree",
+      );
+      comparison.files.pop();
+    }
+    comparison.files.push({ filename: "scripts/unreviewed.mjs", status: "modified", sha: "" });
+    await expect(validateReleaseWorkloadIdentity(previous, request, deps)).rejects.toThrow(
+      "unproved workload tree",
+    );
+    comparison.files.pop();
+    // The grant is tied to the original tree, not reusable for arbitrary old Q.
+    comparison.merge_base_commit.sha = "d".repeat(40);
+    await expect(validateReleaseWorkloadIdentity("d".repeat(40), request, deps)).rejects.toThrow(
+      "unproved workload tree",
+    );
+    comparison.merge_base_commit.sha = previous;
+    const artifactOwner = comparison.files.find(
+      (file) => file.filename === "scripts/full-release-artifacts.mjs",
+    )!;
+    artifactOwner.sha = "f".repeat(40);
+    await expect(validateReleaseWorkloadIdentity(previous, request, deps)).rejects.toThrow(
+      "unproved workload tree",
+    );
+  },
+);

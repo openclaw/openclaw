@@ -113,6 +113,26 @@ export function retainedPublicationArtifactSource(manifest) {
       },
     };
   }
+  const selected = manifest?.publicationArtifactSource;
+  if (selected !== undefined) {
+    const current = manifest.sourceAdmission;
+    const selector = JSON.parse(current?.coverage?.publication_artifact_source_json ?? "null");
+    if (
+      !selector ||
+      String(selected.runId) !== selector.runId ||
+      selected.candidateSha !== manifest.targetSha ||
+      current?.candidateSha !== manifest.targetSha ||
+      String(current?.runId) !== String(manifest.runId ?? manifest.parentRunId) ||
+      current?.workflow?.sha !== manifest.workflowSha ||
+      !current?.qualificationAdmission ||
+      !selected.qualificationAdmission ||
+      !/^[a-f0-9]{40}$/u.test(selected.workflow?.sha ?? "")
+    ) {
+      throw new Error("Selected publication artifact source differs from its immutable admission");
+    }
+    return selected;
+  }
+
   const reuse = manifest?.evidenceReuse;
   const current = manifest?.sourceAdmission;
   const retained = reuse?.publication?.sourceAdmission;

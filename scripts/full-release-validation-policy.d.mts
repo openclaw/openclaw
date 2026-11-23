@@ -56,6 +56,7 @@ export interface ReleaseExecutionPlan extends ReleaseRecord {
   candidateRequest?: import("./full-release-candidate-contract.mjs").RecordedFullReleaseCandidateRequest;
   qualificationCoverage?: import("./release-qualification-admission.mjs").QualificationCoverage;
   qualificationInputs?: import("./release-qualification-admission.mjs").QualificationInputs;
+  publicationArtifactSource?: import("./full-release-publication-contract.mjs").PublicationSourceFact;
   sourceAdmissionContract?: "1";
   sourceAdmission?: import("./full-release-publication-contract.mjs").PublicationSourceFact | null;
   publicationAdmissionContract?: "1";

@@ -355,6 +355,42 @@ describe("candidate-owned full release dispatch entry point", () => {
     expect(readFileSync(f.fetchCallsPath, "utf8")).toBe("");
   });
 
+  it("admits the explicit original baseline tuple and retains it after npm advances", () => {
+    const f = createDispatchFixture({ candidateOwned: true, stopAfterAccepted: "admission" });
+    const selected = {
+      upgradeBaseline: "openclaw@2026.7.9",
+      upgradeSurvivorBaselines: ["openclaw@2026.6.34", "openclaw@2026.7.8", "openclaw@2026.7.9"],
+    };
+    const result = f.run(["-f", "qualification_baselines_json=" + JSON.stringify(selected)]);
+    expect(result.status, result.stderr).toBe(78);
+    const admitted = JSON.parse(readFileSync(f.admissionReceiptPath, "utf8"));
+    expect(
+      JSON.parse(
+        JSON.parse(admitted.request.inputs.trusted_workflow_json).laneInputs
+          .qualification_baselines_json,
+      ),
+    ).toEqual(selected);
+    writeFileSync(f.publishedVersionsPath, JSON.stringify(["2027.1.1"]));
+    const resumed = f.run(["--resume-request", f.requestPath()], true);
+    expect(resumed.status, resumed.stderr).toBe(0);
+    const envelope = JSON.parse(f.readPayload().body.inputs.trusted_workflow_json!);
+    expect(JSON.parse(envelope.laneInputs.qualification_baselines_json)).toEqual(selected);
+    expect(dispatches(f)).toEqual([P, Q]);
+    expect(f.readCalls(f.npmCallsPath)).toEqual([npmVersionsArgs]);
+  });
+
+  it.each([
+    { upgradeBaseline: "openclaw@2026.7.7", upgradeSurvivorBaselines: ["openclaw@2026.7.7"] },
+    { upgradeBaseline: "openclaw@2026.9.6", upgradeSurvivorBaselines: ["openclaw@2026.9.6"] },
+    { upgradeBaseline: "openclaw@latest", upgradeSurvivorBaselines: ["openclaw@latest"] },
+  ])("rejects an unpublished, future or nonexact baseline before admission: %j", (selected) => {
+    const f = createDispatchFixture({ candidateOwned: true });
+    expect(f.run(["-f", "qualification_baselines_json=" + JSON.stringify(selected)]).status).toBe(
+      1,
+    );
+    expect(dispatches(f)).toEqual([]);
+  });
+
   it("waits for the candidate witness without redispatch or baseline resolution", () => {
     const queued = { conclusion: null, status: "queued" };
     const f = createDispatchFixture({

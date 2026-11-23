@@ -208,7 +208,8 @@ export function validateFullReleaseNpmPreflight({
     String(manifest.runAttempt) !== String(runAttempt) ||
     manifest.targetSha !== sourceSha ||
     (manifest.workflowSha !== toolingSha &&
-      !(manifest.receiptRecovery && retainedSource?.workflow.sha === toolingSha)) ||
+      !((manifest.receiptRecovery || manifest.publicationArtifactSource) &&
+        retainedSource?.workflow.sha === toolingSha)) ||
     qualified?.schema !== "openclaw.qualified-npm-preflight/v1" ||
     qualified.source?.sha !== sourceSha ||
     !/^[a-f0-9]{64}$/u.test(qualified.manifestSha256 ?? "") ||
