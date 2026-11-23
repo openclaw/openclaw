@@ -546,6 +546,17 @@ export async function executeSessionsSend(
           targetSessionEntry,
           targetAcpMeta,
         );
+        if (mode === "notify") {
+          return await notifySessionsSendSession({
+            message,
+            inputProvenance,
+            sessionKey: resolvedKey,
+            targetAgentId,
+            runId,
+            displayKey,
+            assertCurrent: communication.assertCurrent,
+          });
+        }
         const sendParams = buildSessionsSendAgentParams({
           message: dispatchMessage,
           agentId: targetAgentId,
@@ -567,17 +578,6 @@ export async function executeSessionsSend(
             preparedTargetSessionId: targetSessionEntry?.sessionId,
             assertSendCurrent: communication.assertCurrent,
             displayKey,
-          });
-        }
-        if (mode === "notify") {
-          return await notifySessionsSendSession({
-            message,
-            inputProvenance,
-            sessionKey: resolvedKey,
-            targetAgentId,
-            runId,
-            displayKey,
-            assertCurrent: communication.assertCurrent,
           });
         }
         if (
