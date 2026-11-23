@@ -3,6 +3,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import {
   downloadClawHubTransactions,
   readPackedClawHubTransaction,
@@ -20,6 +21,7 @@ import {
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { waitForClawHubPublicVersion } from "./lib/clawhub-publication-state.mjs";
 import { validateClawHubRecoveryManifest } from "./plugin-clawhub-recovery.mjs";
+import { downloadReleaseApprovalReceipt } from "./release-approval-receipt.mjs";
 import { verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
 import { verifyPublishedClawHubPackage } from "./verify-clawhub-published-artifact.mjs";
 
@@ -29,6 +31,10 @@ const CHILD_WORKFLOW = ".github/workflows/plugin-clawhub-release.yml";
 const MAX_RECEIPT_BYTES = 64 * 1024;
 const DISPATCH_JOBS = new Set(["Publish plugins, then OpenClaw", "record_docker_only_scope"]);
 const DISPATCH_UPLOAD_STEP = "Upload exact release child dispatch record";
+const AUTHORIZATION_UPLOAD_STEPS = new Set([
+  "Upload immutable ClawHub parent authorization",
+  "Upload original-byte ClawHub parent authorization",
+]);
 const MAX_DISPATCH_RECORDS = 32;
 
 function positiveId(value, label) {
@@ -206,7 +212,15 @@ async function downloadArtifact(artifact, run, context, maxArchiveBytes, produce
   });
   if (boundProducer) {
     const workflowJobs = structuredProducer?.jobs ?? (await listRunJobs(run, context));
-    validateActionsArtifactProducerJob({ expected, workflowJobs });
+    const activeConsumer =
+      context.activeParent?.id === run.id &&
+      context.activeParent?.run_attempt === run.run_attempt &&
+      expected.producerJobName === "Publish plugins, then OpenClaw" &&
+      (producerStepName === DISPATCH_UPLOAD_STEP ||
+        AUTHORIZATION_UPLOAD_STEPS.has(producerStepName))
+        ? { runId: run.id, runAttempt: run.run_attempt }
+        : undefined;
+    validateActionsArtifactProducerJob({ expected, workflowJobs, activeConsumer });
   }
   await mkdir(context.archiveDir, { recursive: true });
   return await downloadExactActionsArtifactArchive({
@@ -378,6 +392,9 @@ export async function verifyClawHubPostpublish({
   };
   const parent = await githubJson(`actions/runs/${runId}/attempts/${runAttempt}`, context);
   requireRun(parent, expectedParent, parentStatePolicy);
+  if (parentStatePolicy === "sealed-producer" && parent.status === "in_progress") {
+    context.activeParent = parent;
+  }
   const artifacts = await listRunArtifacts(runId, context);
   const dispatchRecord = await resolveDispatchRecord(parent, expectedParent, artifacts, context);
   const dispatchRunAttempt = dispatchRecord.run.run_attempt;
@@ -470,12 +487,32 @@ export async function verifyClawHubPostpublish({
     throw new Error("Expected exactly one ClawHub parent authorization artifact for this attempt.");
   }
   const receiptArtifact = receipts[0];
+  let receiptProducer = dispatchRecord.producer ?? "Upload immutable ClawHub parent authorization";
+  if (!dispatchRecord.producer && parentStatePolicy !== "completed-success") {
+    const jobs = await listRunJobs(dispatchRecord.run, context);
+    const producers = jobs.jobs.filter((job) => job.name === "Publish plugins, then OpenClaw");
+    const uploads =
+      producers.length === 1
+        ? producers[0].steps?.filter(
+            (step) =>
+              AUTHORIZATION_UPLOAD_STEPS.has(step.name) &&
+              step.status === "completed" &&
+              step.conclusion === "success",
+          )
+        : undefined;
+    if (uploads?.length !== 1) {
+      throw new Error("Missing or ambiguous successful ClawHub parent authorization upload.");
+    }
+    // The immutable workflow's mutually exclusive branches share the same receipt
+    // identity; authenticate the exact branch that actually completed its upload.
+    receiptProducer = uploads[0].name;
+  }
   const { archiveBytes } = await downloadArtifact(
     receiptArtifact,
     dispatchRecord.run,
     context,
     MAX_RECEIPT_BYTES + 4096,
-    dispatchRecord.producer ?? "Upload immutable ClawHub parent authorization",
+    receiptProducer,
   );
   const files = inspectActionsArtifactZip(archiveBytes, ["authorization.json"], {
     maxEntryBytes: MAX_RECEIPT_BYTES,
@@ -753,6 +790,435 @@ export async function verifyClawHubPostpublish({
   evidence.complete = true;
   await save();
   return evidence;
+}
+
+// The request is the ordinary workflow_dispatch transport, authenticated by its
+// exact parent artifact, not a second admission or a replacement roster.
+/**
+ * @param {object} options
+ * @param {{ inputs?: Record<string, string> }} options.event
+ * @param {{ inputs?: Record<string, string> }} [options.actualEvent]
+ * @param {NodeJS.ProcessEnv} [options.env]
+ * @param {typeof fetch} [options.fetchImpl]
+ * @param {Parameters<typeof verifyReleaseToolingIdentity>[0]["runGh"]} [options.runGh]
+ * @param {ReturnType<typeof import("./release-ci-summary.mjs").createReleaseEvidenceClient>} [options.evidenceClient]
+ */
+async function authenticateClawHubParentRequest({
+  event,
+  actualEvent,
+  env = process.env,
+  fetchImpl = fetch,
+  runGh,
+  evidenceClient,
+}) {
+  const inputs = event?.inputs;
+  const fields = [
+    "original_child_run_id",
+    "original_child_run_attempt",
+    "reason",
+    "plugins",
+    "release_publish_run_id",
+    "release_publish_run_attempt",
+    "full_release_validation_run_id",
+    "full_release_validation_run_attempt",
+  ];
+  if (!inputs || fields.some((key) => typeof inputs[key] !== "string")) {
+    throw new Error("Parent ClawHub recovery requires every internal dispatch input.");
+  }
+  for (const key of fields.filter((field) => field.endsWith("_id") || field.endsWith("_attempt"))) {
+    positiveId(inputs[key], key);
+  }
+  if (
+    !inputs.reason.trim() ||
+    inputs.reason.trim().length > 500 ||
+    env.GITHUB_REPOSITORY !== REPOSITORY ||
+    env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
+    ![PARENT_WORKFLOW, CHILD_WORKFLOW].some(
+      (workflow) => env.GITHUB_WORKFLOW_REF === `${REPOSITORY}/${workflow}@${env.GITHUB_REF}`,
+    )
+  ) {
+    throw new Error("Invalid parent ClawHub recovery execution.");
+  }
+  if (env.GITHUB_WORKFLOW_REF === `${REPOSITORY}/${CHILD_WORKFLOW}@${env.GITHUB_REF}`) {
+    // A valid descriptor from another active parent is not this child's authority.
+    // Bind the immutable request to the actual dispatch before authenticating it.
+    const dispatch = actualEvent ?? JSON.parse(await readFile(env.GITHUB_EVENT_PATH, "utf8"));
+    if (
+      dispatch?.inputs?.release_publish_run_id !== inputs.release_publish_run_id ||
+      dispatch?.inputs?.release_publish_run_attempt !== inputs.release_publish_run_attempt
+    ) {
+      throw new Error(
+        "Original ClawHub descriptor does not bind the actual child dispatch parent.",
+      );
+    }
+  }
+  const outputDir = join(env.RUNNER_TEMP, "clawhub-postpublish");
+  const context = {
+    token: env.GH_TOKEN,
+    fetchImpl,
+    archiveDir: join(outputDir, "archives"),
+    runJobs: new Map(),
+    retryAttempts: 1,
+  };
+  const current = await githubJson(`actions/runs/${inputs.release_publish_run_id}`, context);
+  requireRun(
+    current,
+    {
+      workflow: PARENT_WORKFLOW,
+      runId: positiveId(inputs.release_publish_run_id, "current parent run"),
+      runAttempt: positiveId(inputs.release_publish_run_attempt, "current parent attempt"),
+      headSha: env.GITHUB_WORKFLOW_SHA,
+      ref: env.GITHUB_REF_NAME,
+    },
+    "sealed-producer",
+  );
+  const currentFullRef = current.path.split("@")[1];
+  if (
+    current.status !== "in_progress" ||
+    current.conclusion !== null ||
+    (currentFullRef !== undefined && currentFullRef !== env.GITHUB_REF)
+  ) {
+    throw new Error("ClawHub recovery requires the executing tooling's active parent.");
+  }
+  if (
+    env.GITHUB_WORKFLOW_REF.startsWith(`${REPOSITORY}/${PARENT_WORKFLOW}@`) &&
+    (String(current.id) !== env.GITHUB_RUN_ID ||
+      String(current.run_attempt) !== env.GITHUB_RUN_ATTEMPT)
+  ) {
+    throw new Error("Original ClawHub source requires the executing current parent attempt.");
+  }
+  const approvalExpected = {
+    repository: REPOSITORY,
+    parentRunId: inputs.release_publish_run_id,
+    parentRunAttempt: inputs.release_publish_run_attempt,
+    toolingRef: current.head_branch,
+    toolingFullRef: env.GITHUB_REF,
+    toolingSha: current.head_sha,
+    parentStatePolicy: "active",
+  };
+  const approval = (expected = {}) =>
+    downloadReleaseApprovalReceipt({
+      expected: { ...approvalExpected, ...expected },
+      token: env.GH_TOKEN,
+      fetchImpl,
+      ...(runGh
+        ? {
+            runGhJson: (path) =>
+              JSON.parse(runGh(["api", `repos/${REPOSITORY}/${path}`, "--method", "GET"])),
+          }
+        : {}),
+    });
+  const { receipt: currentApproval } = await approval();
+  const name = `openclaw-clawhub-recovery-request-${current.id}-${current.run_attempt}`;
+  const artifacts = (await listRunArtifacts(current.id, context)).filter(
+    (item) => item.name === name,
+  );
+  if (artifacts.length !== 1) {
+    throw new Error("Missing or ambiguous exact ClawHub recovery request.");
+  }
+  const [artifact] = artifacts;
+  validateActionsArtifactBinding({
+    artifactMetadata: artifact,
+    workflowRun: { ...current, path: PARENT_WORKFLOW },
+    expected: {
+      artifactId: artifact.id,
+      artifactName: name,
+      artifactDigest: artifact.digest,
+      artifactSizeBytes: artifact.size_in_bytes,
+      repository: REPOSITORY,
+      runId: current.id,
+      runAttempt: current.run_attempt,
+      workflowSha: current.head_sha,
+      workflowHeadBranch: current.head_branch,
+      workflowEvent: "workflow_dispatch",
+      workflowPath: PARENT_WORKFLOW,
+      runStatePolicy: "same-run-producer-success",
+      consumerRunAttempt: current.run_attempt,
+      producerJobName: "Publish plugins, then OpenClaw",
+      producerStepName: "Upload ClawHub recovery request",
+    },
+  });
+  // The parent job is waiting for this child. Authenticate its completed upload
+  // step without requiring the waiting job itself to have finished.
+  const jobs = (await listRunJobs(current, context)).jobs.filter(
+    (job) => job.name === "Publish plugins, then OpenClaw",
+  );
+  const job = jobs[0];
+  const steps = job?.steps?.filter((step) => step.name === "Upload ClawHub recovery request");
+  if (
+    jobs.length !== 1 ||
+    job.run_id !== current.id ||
+    job.run_attempt !== current.run_attempt ||
+    job.head_sha !== current.head_sha ||
+    job.status !== "in_progress" ||
+    job.conclusion !== null ||
+    steps?.length !== 1 ||
+    steps[0].status !== "completed" ||
+    steps[0].conclusion !== "success"
+  ) {
+    throw new Error("ClawHub recovery request upload is not from the active approved parent job.");
+  }
+  const { archiveBytes } = await downloadExactActionsArtifactArchive({
+    retryAttempts: 1,
+    token: env.GH_TOKEN,
+    fetchImpl,
+    maxArchiveBytes: MAX_RECEIPT_BYTES + 4096,
+    expected: {
+      repository: REPOSITORY,
+      artifactId: artifact.id,
+      artifactName: name,
+      artifactDigest: artifact.digest,
+      artifactSizeBytes: artifact.size_in_bytes,
+      artifactExpiresAt: artifact.expires_at,
+      runId: current.id,
+      workflowSha: current.head_sha,
+    },
+  });
+  const files = inspectActionsArtifactZip(archiveBytes, ["dispatch.json"], {
+    maxEntryBytes: MAX_RECEIPT_BYTES,
+    maxExpandedBytes: MAX_RECEIPT_BYTES,
+  });
+  const request = JSON.parse(
+    new TextDecoder("utf-8", { fatal: true }).decode(files.get("dispatch.json")),
+  );
+  if (!isDeepStrictEqual(request, { ref: env.GITHUB_REF_NAME, inputs })) {
+    throw new Error("ClawHub recovery dispatch differs from the authenticated parent request.");
+  }
+  const child = await githubJson(
+    `actions/runs/${inputs.original_child_run_id}/attempts/${inputs.original_child_run_attempt}`,
+    context,
+  );
+  requireRun(
+    child,
+    {
+      workflow: CHILD_WORKFLOW,
+      runId: Number(inputs.original_child_run_id),
+      runAttempt: Number(inputs.original_child_run_attempt),
+      headSha: child.head_sha,
+      ref: child.head_branch,
+    },
+    "recovery-producer",
+  );
+  const sealName = `openclaw-clawhub-recovery-manifest-${child.id}-${child.run_attempt}`;
+  const seals = (await listRunArtifacts(child.id, context)).filter(
+    (item) => item.name === sealName,
+  );
+  if (seals.length !== 1) {
+    throw new Error("Missing or ambiguous original ClawHub seal.");
+  }
+  const { archiveBytes: sealArchive } = await downloadArtifact(
+    seals[0],
+    child,
+    context,
+    MAX_RECEIPT_BYTES + 4096,
+    {
+      jobName: "Seal exact ClawHub recovery manifest",
+      stepName: "Upload sealed recovery manifest",
+      runStatePolicy: "completed-producer-success",
+    },
+  );
+  const sealFiles = inspectActionsArtifactZip(sealArchive, ["recovery-manifest.json"], {
+    maxEntryBytes: MAX_RECEIPT_BYTES,
+    maxExpandedBytes: MAX_RECEIPT_BYTES,
+  });
+  const seal = validateClawHubRecoveryManifest(
+    JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(sealFiles.get("recovery-manifest.json")),
+    ),
+  );
+  validateClawHubWorkflowRun(child, seal.identity, { completedProducer: true });
+  let authenticated;
+  let expectedRelease;
+  const revalidateAuthority = async (selectedManifest) => {
+    if (!authenticated) {
+      const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
+      const { authenticateFullReleaseValidationEvidence } =
+        await import("./validate-full-release-validation-evidence.mjs");
+      const client = evidenceClient ?? createReleaseEvidenceClient(REPOSITORY);
+      const runId = inputs.full_release_validation_run_id;
+      const runAttempt = Number(inputs.full_release_validation_run_attempt);
+      const { manifest } = client.loadManifest(runId, runAttempt);
+      authenticated = await authenticateFullReleaseValidationEvidence(
+        {
+          run: client.getRunAttempt(runId, runAttempt),
+          manifest,
+          expectedRepository: REPOSITORY,
+          expectedRunId: runId,
+          expectedRunAttempt: runAttempt,
+          expectedTargetSha: selectedManifest.identity.candidateSha,
+          expectedReleaseTag: currentApproval.releaseTag,
+          expectedTrustedWorkflowFullRef: approvalExpected.toolingFullRef,
+          expectedTrustedWorkflowSha: current.head_sha,
+          verifierSourceSha: current.head_sha,
+          verifierSourceContent: await readFile(
+            new URL("./release-ci-summary.mjs", import.meta.url),
+          ),
+          expectedPublicationOperation: () => {
+            const source = manifest.sourceAdmission;
+            const selection = source?.publicationSelection;
+            const admittedPackages = source?.projection?.packages.filter((entry) =>
+              entry.targets.includes("clawhub"),
+            );
+            if (
+              !selection ||
+              selectedManifest.packages.length !== admittedPackages.length ||
+              selectedManifest.packages.some(
+                (entry) =>
+                  !admittedPackages.some(
+                    (admitted) =>
+                      admitted.name === entry.name && admitted.version === entry.version,
+                  ),
+              )
+            ) {
+              throw new Error(
+                "ClawHub recovery is outside the original admitted name/version roster.",
+              );
+            }
+            expectedRelease = {
+              targetSha: selectedManifest.identity.candidateSha,
+              releaseTag: currentApproval.releaseTag,
+              npmDistTag: selection.npmDistTag,
+            };
+            return selection;
+          },
+        },
+        client,
+      );
+    }
+    authenticated.revalidateAuthority?.();
+    await approval(expectedRelease);
+  };
+  return { context, child, seal, revalidateAuthority };
+}
+
+// Immutable original bytes are a source, not recovery authority. A partially
+// executed publisher requires an explicit selection with no sealed attempts;
+// the prepared-artifact owner additionally requires authoritative absence.
+/** @param {Parameters<typeof authenticateClawHubParentRequest>[0]} options */
+export async function authenticateOriginalPackedClawHubSource(options) {
+  const { context, child, seal, revalidateAuthority } =
+    await authenticateClawHubParentRequest(options);
+  verifyReleaseToolingIdentity({
+    repository: REPOSITORY,
+    workflowRef: seal.identity.ref,
+    workflowFullRef: seal.identity.fullRef,
+    workflowSha: seal.identity.sha,
+    runGh: options.runGh,
+  });
+  const ancestry = await githubJson(
+    `compare/${child.head_sha}...${(options.env ?? process.env).GITHUB_WORKFLOW_SHA}?per_page=1&page=2`,
+    context,
+  );
+  if (!["ahead", "identical"].includes(ancestry.status)) {
+    throw new Error("Original ClawHub tooling is not an ancestor of the current tooling.");
+  }
+  const jobs = await listRunJobs(child, context);
+  const publishers = jobs.jobs.filter((job) =>
+    /^publish_plugins_clawhub(?:$|[ (/])/u.test(job.name),
+  );
+  if (publishers.length === 0) {
+    throw new Error("Original ClawHub publisher execution is unproven.");
+  }
+  if (
+    publishers.some(
+      (job) =>
+        job.status !== "completed" ||
+        !["skipped", "success", "failure", "cancelled", "timed_out", "action_required"].includes(
+          job.conclusion,
+        ) ||
+        job.run_id !== child.id ||
+        job.run_attempt !== child.run_attempt ||
+        job.head_sha !== child.head_sha,
+    )
+  ) {
+    throw new Error("Original ClawHub publisher execution is unproven.");
+  }
+  const names = options.event.inputs.plugins.split(/[,\s]+/u).filter(Boolean);
+  const attempted = publishers.some((job) => job.steps?.length > 0 || job.conclusion !== "skipped");
+  // Authenticate the full admission before deriving a selected view.
+  await revalidateAuthority(seal);
+  const { transactions } = await downloadClawHubTransactions({
+    identity: seal.identity,
+    ...context,
+    completedProducer: true,
+    runGhJson: options.runGh
+      ? (path) =>
+          JSON.parse(options.runGh(["api", `repos/${REPOSITORY}/${path}`, "--method", "GET"]))
+      : undefined,
+  });
+  const roster = seal.packages.map(
+    ({ name, version, inventoryDigest, artifactName, artifactSha256, artifactSize }) => ({
+      name,
+      version,
+      inventoryDigest,
+      artifactName,
+      artifactSha256,
+      artifactSize,
+    }),
+  );
+  if (!isDeepStrictEqual(transactions.packages, roster)) {
+    throw new Error("Original ClawHub recovery seal changed the transaction roster.");
+  }
+  const packJobs = jobs.jobs.filter((job) => job.name.startsWith("Pack ClawHub package ("));
+  if (packJobs.length !== roster.length) {
+    throw new Error("Original ClawHub pack job inventory does not match its sealed roster.");
+  }
+  const artifacts = await listRunArtifacts(child.id, context);
+  for (const entry of roster) {
+    const matches = artifacts.filter((artifact) => artifact.name === entry.artifactName);
+    if (matches.length !== 1) {
+      throw new Error(`Missing or ambiguous original ClawHub package artifact: ${entry.name}.`);
+    }
+    const artifact = matches[0];
+    const expected = {
+      repository: REPOSITORY,
+      runId: child.id,
+      runAttempt: child.run_attempt,
+      workflowPath: CHILD_WORKFLOW,
+      workflowSha: child.head_sha,
+      workflowHeadBranch: child.head_branch,
+      workflowEvent: "workflow_dispatch",
+      artifactId: artifact.id,
+      artifactName: artifact.name,
+      artifactDigest: artifact.digest,
+      artifactSizeBytes: artifact.size_in_bytes,
+      runStatePolicy: "completed-producer-success",
+      producerJobName: `Pack ClawHub package (${entry.name})`,
+      producerStepName: "Upload ClawHub package artifact",
+    };
+    validateActionsArtifactBinding({
+      expected,
+      artifactMetadata: artifact,
+      workflowRun: { ...child, path: CHILD_WORKFLOW },
+    });
+    validateActionsArtifactProducerJob({ expected, workflowJobs: jobs });
+  }
+  if (
+    new Set(names).size !== names.length ||
+    names.some((name) => !roster.some((entry) => entry.name === name))
+  ) {
+    throw new Error("Original ClawHub selection is outside the authenticated roster.");
+  }
+  if (attempted && names.length === 0) {
+    return null;
+  }
+  const selected = seal.packages.filter(
+    (entry) => names.length === 0 || names.includes(entry.name),
+  );
+  if (
+    selected.some(
+      (entry) => entry.publicationStatus !== "unavailable" || entry.attemptId !== undefined,
+    )
+  ) {
+    return null;
+  }
+  return {
+    identity: seal.identity,
+    child,
+    artifacts,
+    packages: roster.filter((entry) => names.length === 0 || names.includes(entry.name)),
+    revalidateAuthority: () => revalidateAuthority(seal),
+  };
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

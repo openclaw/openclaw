@@ -815,6 +815,17 @@ export function validateActionsArtifactProducerJob(params) {
   ) {
     return expected;
   }
+  const activeConsumer = params.activeConsumer;
+  if (
+    activeConsumer !== undefined &&
+    (expected.runStatePolicy !== "same-run-producer-success" ||
+      !expected.producerStepName ||
+      activeConsumer.runId !== expected.runId ||
+      activeConsumer.runAttempt !== expected.runAttempt ||
+      expected.consumerRunAttempt !== expected.runAttempt)
+  ) {
+    throw new Error("Active producer step must belong to the exact current consumer attempt.");
+  }
   const response = params.workflowJobs;
   if (!response || typeof response !== "object" || Array.isArray(response)) {
     throw new Error("Actions workflow jobs response must be an object.");
@@ -836,11 +847,17 @@ export function validateActionsArtifactProducerJob(params) {
     producerJob.status === "completed" &&
     typeof producerJob.conclusion === "string" &&
     producerJob.conclusion.length > 0;
+  // Only the explicitly bound current consumer may read its own completed upload
+  // before the containing job finishes. All other producer jobs remain terminal.
+  const activeProducer =
+    activeConsumer !== undefined &&
+    producerJob.status === "in_progress" &&
+    producerJob.conclusion === null;
   if (
     producerJob.run_id !== expected.runId ||
     producerJob.run_attempt !== expected.runAttempt ||
     producerJob.head_sha !== expected.workflowSha ||
-    !producerCompleted ||
+    (!producerCompleted && !activeProducer) ||
     (!expected.producerStepName && producerJob.conclusion !== "success")
   ) {
     throw new Error("Actions artifact producer job did not complete successfully.");

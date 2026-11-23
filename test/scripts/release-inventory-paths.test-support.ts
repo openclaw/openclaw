@@ -16,6 +16,7 @@ export const INVENTORY_PRODUCER_PATHS = collectRuntimeImportClosure(process.cwd(
 
 export const PUBLICATION_TRANSPORT_PATHS = collectRuntimeImportClosure(process.cwd(), [
   "scripts/full-release-publication-contract.mjs",
+  "scripts/release-tooling-identity.mjs",
   "scripts/lib/npm-core-release-packages.json",
 ]);
 

@@ -85,6 +85,26 @@ compare actual operands: changing the command cannot turn normal admission into 
 
 ## Recover qualification tooling without changing the candidate
 
+### Reuse original packed ClawHub bytes
+
+For an explicitly selected package that never started a publication attempt, the
+release parent accepts `original_clawhub_run_id` and `original_clawhub_run_attempt`.
+These inputs require full-release-validation evidence and cannot be combined with
+`prepared_plugins`, extended-stable, or Docker-only publication. The current approved parent seals
+its exact request, authenticates the entire original admitted roster and pack
+inventory, then selects only packages whose original seal has no attempt ID and
+reports unavailable publication state. A partially executed original publisher
+requires an explicit package selection; its other sealed packages remain excluded.
+
+This path reuses exact original tarballs through the existing prepared-artifact
+planner and authorization owner. It requires an authoritative HTTP 200 absent
+publication state and the normal trusted publisher, rechecks state and authority
+after transfer, and never falls back to repacking or automatically recovering an
+attempt. The parent dispatches the prepared ClawHub child before plugin npm,
+waits for plugin npm prerequisites, rechecks absence, authorizes the child, and
+joins its verified publication before finishing. If no eligible original source
+exists, reconcile the recorded original transaction before retrying.
+
 Use executable tooling recovery only for diagnosed qualification/orchestration
 defects—not product failures or unexplained red jobs. Local controller updates
 cannot retrofit frozen workflows. For an explicitly authorized failed-job grant,

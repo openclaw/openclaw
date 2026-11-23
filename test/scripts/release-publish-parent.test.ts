@@ -682,3 +682,84 @@ verify_published_release() { echo VERIFIED >> "$GITHUB_STEP_SUMMARY"; }
     }
   },
 );
+
+describe("original-byte ClawHub workflow ordering", () => {
+  it.each([false, true])(
+    "executes the actual dispatch and authorization snippets (original=%s)",
+    (original) => {
+      const root = tempDirs.make("original-clawhub-order-");
+      const dispatchRun = step("Dispatch publish workflows").run!;
+      const dispatchStart = dispatchRun.indexOf('          plugin_npm_run_id=""'.trimStart());
+      const dispatchEnd = dispatchRun.indexOf('plugin_clawhub_bootstrap_run_id=""', dispatchStart);
+      expect(dispatchStart).toBeGreaterThan(0);
+      const dispatchBody = dispatchRun.slice(dispatchStart, dispatchEnd);
+      const authorize = step("Authorize original-byte ClawHub package transactions")
+        .run!.replace(/^source .*$/mu, "")
+        .replace(/\$\{\{[^}]+\}\}/gu, "50");
+      const core = step("Start core npm publication").run!;
+      const coreBody = core
+        .slice(0, core.indexOf("prepared_release_notes_file="))
+        .replace(/^source .*$/mu, "");
+      const script = [
+        "set -euo pipefail",
+        'record() { echo "$*" >> "$ORDER_LOG"; }',
+        'dispatch_workflow() { record "dispatch $1"; echo 40; }',
+        'dispatch_workflow_at_ref() { record "dispatch $3"; echo 50; }',
+        "append_clawhub_dispatch_args() { clawhub_dispatch_args=(fixture); }",
+        'jq() { case "$*" in *shouldDispatch*) echo true;; *workflow*) echo plugin-clawhub-release.yml;; *ref*) echo main;; esac; }',
+        'wait_for_run() { record "wait $1"; }',
+        "verify_release_tag_target() { record tag; }",
+        'node() { record "node $*"; }',
+        "npm_args=(); clawhub_plan_path=fixture; CHILD_PLUGIN_NPM_RUN_ID=40; CHILD_PLUGIN_CLAWHUB_RUN_ID=50",
+        dispatchBody,
+        ...(original ? [authorize] : []),
+        coreBody,
+      ].join("\n");
+      const log = join(root, "order");
+      writeFileSync(log, "");
+      const result = spawnSync("bash", ["-c", script], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ORDER_LOG: log,
+          ORIGINAL_CLAWHUB_RUN_ID: original ? "20" : "",
+          PARENT_WORKFLOW_SHA: sha,
+          RUNNER_TEMP: root,
+          GITHUB_WORKSPACE: root,
+          GITHUB_OUTPUT: join(root, "output"),
+          GITHUB_STEP_SUMMARY: join(root, "summary"),
+          GITHUB_RUN_ID: "30",
+          GITHUB_RUN_ATTEMPT: "1",
+          GITHUB_REF_NAME: "main",
+          GITHUB_WORKFLOW_SHA: sha,
+          PUBLISH_OPENCLAW_NPM: "false",
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const events = readFileSync(log, "utf8").trim().split("\n");
+      expect(events.slice(0, 2)).toEqual(
+        original
+          ? ["dispatch plugin-clawhub-release.yml", "dispatch plugin-npm-release.yml"]
+          : ["dispatch plugin-npm-release.yml", "dispatch plugin-clawhub-release.yml"],
+      );
+      if (original) {
+        const absence = events.findIndex((event) => event.includes("check-absent"));
+        const authorization = events.findIndex((event) =>
+          event.includes("clawhub-parent-authorization.mjs authorize"),
+        );
+        const childWait = events.indexOf("wait plugin-clawhub-release.yml");
+        const verification = events.findIndex((event) => event.includes("clawhub-postpublish.mjs"));
+        expect(events.indexOf("wait plugin-npm-release.yml")).toBeLessThan(absence);
+        expect(absence).toBeLessThan(authorization);
+        expect(authorization).toBeLessThan(childWait);
+        expect(childWait).toBeLessThan(verification);
+      } else {
+        expect(
+          events.some(
+            (event) => event.includes("check-absent") || event.includes("clawhub-postpublish"),
+          ),
+        ).toBe(false);
+      }
+    },
+  );
+});

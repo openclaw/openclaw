@@ -1,3 +1,5 @@
+export function isPreparedClawHubTrustedPublisher(publisher: unknown): boolean;
+
 export type ClawHubPublicationState =
   | { state: "published" | "absent" }
   | { state: "pending"; stage: "staging"; attemptId?: never }
