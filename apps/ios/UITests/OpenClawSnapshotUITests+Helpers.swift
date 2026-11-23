@@ -382,24 +382,33 @@ extension OpenClawSnapshotUITests {
         }
 
         let app = XCUIApplication()
-        addUIInterruptionMonitor(withDescription: "Local network access") { alert in
-            guard alert.buttons["Allow"].exists else { return false }
-            alert.buttons["Allow"].tap()
-            return true
-        }
         app.launchArguments += [
             "--openclaw-reset-onboarding",
             "--openclaw-initial-tab",
             initialTab,
             "--openclaw-initial-destination",
             initialDestination,
+            "-AppleLanguages", "(en)",
+            "-AppleLocale", "en_US",
         ]
         app.launch()
         self.app = app
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
-        app.tap()
+        // Continue deliberately requests Local Network access. Handle the expected
+        // system prompt directly, before the next app interaction can interrupt it.
+        // Later tests on the same simulator retain the authorization and show no prompt.
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let alert = springboard.alerts.firstMatch
+        let localNetwork = alert.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] %@", "local network")).firstMatch
+        if localNetwork.waitForExistence(timeout: 8) {
+            let allow = alert.buttons["Allow"]
+            XCTAssertTrue(allow.wait(for: \.isHittable, toEqual: true, timeout: 5))
+            allow.tap()
+            XCTAssertTrue(alert.waitForNonExistence(timeout: 5))
+        }
         XCTAssertTrue(app.buttons["Connect Manually"].waitForExistence(timeout: 8))
         app.buttons["Connect Manually"].tap()
 
@@ -432,7 +441,7 @@ extension OpenClawSnapshotUITests {
     }
 
     func chatTranscript(in app: XCUIApplication) throws -> XCUIElement {
-        let candidates = app.scrollViews.matching(identifier: "chat-transcript").allElementsBoundByIndex
+        let candidates = app.descendants(matching: .any).matching(identifier: "chat-transcript").allElementsBoundByIndex
         return try XCTUnwrap(
             candidates.count == 1 ? candidates.first : nil,
             "Expected one chat transcript")
@@ -518,28 +527,18 @@ extension OpenClawSnapshotUITests {
         file: StaticString = #filePath,
         line: UInt = #line)
     {
-        guard let app, let image = app.screenshot().image.cgImage else {
-            XCTFail("App screenshot has no CGImage", file: file, line: line)
-            return
-        }
-
-        let appFrame = app.frame
-        let elementFrame = element.frame.intersection(appFrame)
-        guard !elementFrame.isNull, elementFrame.width > 1, elementFrame.height > 1 else {
+        guard element.exists, element.frame.width > 1, element.frame.height > 1 else {
             XCTFail("\(name) has no visible screenshot region", file: file, line: line)
             return
         }
-
-        let scaleX = CGFloat(image.width) / appFrame.width
-        let scaleY = CGFloat(image.height) / appFrame.height
-        let crop = CGRect(
-            x: (elementFrame.minX - appFrame.minX) * scaleX,
-            y: (elementFrame.minY - appFrame.minY) * scaleY,
-            width: elementFrame.width * scaleX,
-            height: elementFrame.height * scaleY).integral
-            .intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
-        guard let cropped = image.cropping(to: crop), crop.width > 1, crop.height > 1 else {
-            XCTFail("Could not crop screenshot for \(name)", file: file, line: line)
+        // Capture the element directly: app-frame coordinates and screenshot orientation
+        // do not share a coordinate space on every simulator orientation.
+        let screenshot = element.screenshot().image
+        let normalized = UIGraphicsImageRenderer(size: screenshot.size).image { _ in
+            screenshot.draw(in: CGRect(origin: .zero, size: screenshot.size))
+        }
+        guard let cropped = normalized.cgImage else {
+            XCTFail("Could not capture screenshot for \(name)", file: file, line: line)
             return
         }
 

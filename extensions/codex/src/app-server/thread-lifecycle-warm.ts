@@ -65,6 +65,7 @@ import {
   CodexIncognitoPolicyChangeError,
   refreshCodexThreadInstructions,
 } from "./thread-policy.js";
+import { buildCodexThreadGenericInstructions } from "./thread-requests.js";
 
 type CodexWarmThreadReuseParams = CodexThreadRequestContext & {
   params: CodexStartOrResumeThreadParams;
@@ -591,7 +592,11 @@ export async function tryReuseCodexLiveThread(
     if (
       incognito &&
       (!ephemeralPolicy ||
-        ephemeralPolicy.developerInstructions !== params.developerInstructions ||
+        ephemeralPolicy.developerInstructions !==
+          buildCodexThreadGenericInstructions(params.params, {
+            ...params,
+            config: resumeParams.config,
+          }) ||
         ephemeralPolicy.baseInstructions !==
           options.resolveOpenClawBaseInstructions(promptBinding) ||
         getCodexInferenceThread(params.client, binding.threadId) !== params.inferenceRoute ||

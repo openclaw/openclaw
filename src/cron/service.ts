@@ -91,6 +91,11 @@ export class CronService implements CronServiceContract {
     lifecycleOps.stop(this.state);
   }
 
+  /** A reload handover stops scheduling; runs already executing finish and publish their results. */
+  handOver() {
+    lifecycleOps.handOver(this.state);
+  }
+
   /** Joins stopped timer generations from outside their callbacks. */
   async waitForIdle(): Promise<void> {
     await this.state.schedulerDrain;

@@ -14,10 +14,8 @@ import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-re
 import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { captureAsyncWorkTracker, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "../admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
 import { createAgentCleanupScope, runOwnedAgentCleanup } from "../run-cleanup-timeout.js";
@@ -216,7 +214,7 @@ it.each([
       const runId = `candidate-cleanup-${mode}`;
       const operatorAuthority =
         mode === "model-denied"
-          ? createAdmittedRunOperatorAuthority({
+          ? createTestOperatorAuthority({
               profileId: "candidate-reader",
               scopes: ["operator.write"],
               assertCurrent: () => {},

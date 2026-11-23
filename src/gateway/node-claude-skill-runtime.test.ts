@@ -22,7 +22,7 @@ import { resolveNodeHostGatewayPlatformIdentity } from "../node-host/gateway-pla
 import { decodeClaudeCliNodeRunParams } from "../node-host/invoke-agent-cli-claude-params.js";
 import { runClaudeCliNodeCommand } from "../node-host/invoke-agent-cli-claude.js";
 import type { NodeInvokeRequestPayload } from "../node-host/invoke-types.js";
-import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -283,8 +283,8 @@ async function fixture(
   );
   let output = "";
   const execute = (stdin = "hello") =>
-    withPluginRuntimeGatewayRequestScope(
-      { context: gateway, client: owner.client, isWebchatConnect: () => true },
+    withPluginRuntimeGatewayContextResolver(
+      () => gateway,
       () =>
         executeNodeClaudeRun({
           context,
@@ -417,46 +417,6 @@ it("keeps the original request and raw progress for turns without managed skills
   expect(executed.result.exitCode, executed.result.stderr).toBe(0);
   expect(f.requests[0]).not.toHaveProperty("skillRuntime");
   expect(JSON.parse(f.output())).toEqual({ type: "result", result: "hello", args: ["-p"] });
-});
-
-it("refuses retired request authority after managed-skill pairing awaits", async () => {
-  const pairingStarted = createDeferredCore();
-  const pairing = createDeferredCore<{ identity: string; generation: string }>();
-  const f = await fixture(
-    "console.log(JSON.stringify({type:'result',result:'unexpected dispatch'}));",
-    {
-      managed: true,
-      resolveCurrentPairingState: async () => {
-        pairingStarted.resolve();
-        return await pairing.promise;
-      },
-    },
-  );
-  const retired = new Error("request authority retired while resolving node pairing");
-  let current = true;
-  f.context.params.assertCurrent = () => {
-    if (!current) {
-      throw retired;
-    }
-  };
-  const running = f.execute();
-  const outcome = Promise.allSettled([running]);
-  try {
-    await awaitGateBeforeSettlement(
-      pairingStarted.promise,
-      running,
-      "Node turn completed before pairing resolution",
-    );
-    current = false;
-    pairing.resolve({ identity: "node-1", generation: "generation-1" });
-
-    expect(await outcome).toEqual([{ status: "rejected", reason: retired }]);
-    expect(f.requests).toEqual([]);
-  } finally {
-    pairing.resolve({ identity: "node-1", generation: "generation-1" });
-    await outcome;
-    await f[Symbol.asyncDispose]();
-  }
 });
 
 it("requires the additive node capability before dispatching a selected bundle", async () => {

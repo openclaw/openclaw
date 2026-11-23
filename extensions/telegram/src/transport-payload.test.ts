@@ -168,27 +168,53 @@ describe("Telegram topic transport payloads", () => {
     expect(requests).toHaveLength(0);
   });
 
-  it("removes business media callbacks before sending their text replacement", async () => {
-    const actions = callbackActions({
-      business_connection_id: "business-media-1",
-      text: undefined,
-      caption: "Choose an action",
-    });
-    vi.spyOn(fixture.bot.api, "editMessageText").mockRejectedValueOnce(mediaEditError);
-    await actions.editCallbackMessageWithButtons("Replacement", []);
+  it.each([false, true])(
+    "only removes a business media callback after its text replacement succeeds (rejected=%s)",
+    async (rejectReplacement) => {
+      const actions = callbackActions({
+        business_connection_id: "business-media-1",
+        text: undefined,
+        caption: "Choose an action",
+      });
+      fixture.handleRequest = (method, _fields, response) => {
+        const description =
+          method === "editMessageText"
+            ? mediaEditError.message
+            : method === "sendMessage" && rejectReplacement
+              ? "Bad Request: replacement rejected"
+              : undefined;
+        if (!description) {
+          return false;
+        }
+        response.writeHead(400);
+        response.end(JSON.stringify({ ok: false, error_code: 400, description }));
+        return true;
+      };
+      const replacement = actions.editCallbackMessageWithButtons("Replacement", []);
+      if (rejectReplacement) {
+        await expect(replacement).rejects.toThrow("replacement rejected");
+        expect(requests.map((request) => request.method)).toEqual([
+          "editMessageText",
+          "sendMessage",
+        ]);
+        return;
+      }
+      await replacement;
 
-    expect(requests.map((request) => request.method)).toEqual([
-      "deleteBusinessMessages",
-      "sendMessage",
-    ]);
-    expect(jsonFor("deleteBusinessMessages")).toEqual({
-      business_connection_id: "business-media-1",
-      message_ids: [41],
-    });
-    expect(jsonFor("sendMessage")).toMatchObject({
-      business_connection_id: "business-media-1",
-      direct_messages_topic_id: DIRECT_TOPIC_ID,
-      text: "Replacement",
-    });
-  });
+      expect(requests.map((request) => request.method)).toEqual([
+        "editMessageText",
+        "sendMessage",
+        "deleteBusinessMessages",
+      ]);
+      expect(jsonFor("deleteBusinessMessages")).toEqual({
+        business_connection_id: "business-media-1",
+        message_ids: [41],
+      });
+      expect(jsonFor("sendMessage")).toMatchObject({
+        business_connection_id: "business-media-1",
+        direct_messages_topic_id: DIRECT_TOPIC_ID,
+        text: "Replacement",
+      });
+    },
+  );
 });

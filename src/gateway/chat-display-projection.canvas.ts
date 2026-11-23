@@ -3,6 +3,7 @@ import {
   asOptionalRecord as readRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readAutomationToolCreation } from "../chat/automation-job-result.js";
 import { extractCanvasFromDetails, extractCanvasFromText } from "../chat/canvas-render.js";
 import { isToolCallContentType, isToolResultContentType } from "../chat/tool-content.js";
 import {
@@ -44,6 +45,11 @@ export function projectToolResultDetails(
     return { details: undefined, truncated: false };
   }
   const projected: Record<string, unknown> = {};
+  const name = invocation.toolName ?? invocation.name;
+  const event = invocation.isError === false ? readAutomationToolCreation(name, record) : undefined;
+  if (event) {
+    projected.automationCreation = event;
+  }
   const inline = projectPluginInlineView(record, invocation);
   if (inline) {
     projected.pluginView = inline;
@@ -198,7 +204,8 @@ export type ChatCanvasBlock = ChatCanvasPreview & { type: "canvas" };
 export function extractChatToolResultCanvasPreview(
   message: unknown,
 ): ChatCanvasPreview | undefined {
-  const entry = readRecord(message);
+  // CLI runtimes report a tool result as its raw content-block array.
+  const entry = Array.isArray(message) ? { content: message } : readRecord(message);
   if (!entry) {
     return undefined;
   }
@@ -281,7 +288,18 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
     const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
     if (role === "assistant") {
       lastAssistantIndex = index;
-      if (!messageContainsToolHistoryContent(entry)) {
+      if (messageContainsToolHistoryContent(entry)) {
+        // Claude CLI history coalesces tool results into the assistant tool-call message.
+        for (const block of Array.isArray(entry.content) ? entry.content : []) {
+          const result = readObjectRecord(block);
+          const preview = isToolResultHistoryBlockType(result?.type)
+            ? extractChatToolResultCanvasPreview(result)
+            : undefined;
+          if (preview) {
+            pending.push(preview);
+          }
+        }
+      } else {
         lastRenderableAssistantIndex = index;
         if (pending.length > 0) {
           next[index] = appendChatCanvasBlocksToMessage(entry, pending);

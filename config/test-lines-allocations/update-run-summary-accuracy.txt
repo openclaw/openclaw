@@ -1,2 +1,0 @@
-# Regressions: warning rows outlast plain steps across the run ledger bounds; the report states total time.
-40

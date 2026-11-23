@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -63,7 +63,7 @@ export async function prepareSessionCreateRequestedCwd(params: {
   return ok(requestedCwd);
 }
 
-export function prepareSessionCreateFilesystemRoot(params: {
+export async function prepareSessionCreateFilesystemRoot(params: {
   cfg: OpenClawConfig;
   requestedExecNode?: string;
   requestedProjectId?: string;
@@ -73,7 +73,7 @@ export function prepareSessionCreateFilesystemRoot(params: {
   sessionCwd?: string;
   sessionKey?: string;
   targetAgentId: string;
-}): Result<PreparedSessionCreateRoot, ErrorShape> {
+}): Promise<Result<PreparedSessionCreateRoot, ErrorShape>> {
   if (params.requestedExecNode) {
     return ok({ sessionCwd: params.sessionCwd });
   }
@@ -81,25 +81,24 @@ export function prepareSessionCreateFilesystemRoot(params: {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.targetAgentId);
     const rootCandidate = params.sessionCwd ?? workspaceDir;
     if (!params.sessionCwd) {
-      fs.mkdirSync(rootCandidate, { recursive: true });
+      await fs.mkdir(rootCandidate, { recursive: true });
     }
-    const sessionRoot = fs.realpathSync(rootCandidate);
-    if (!fs.statSync(sessionRoot).isDirectory()) {
+    const sessionRoot = await fs.realpath(rootCandidate);
+    if (!(await fs.stat(sessionRoot)).isDirectory()) {
       return invalidSessionRequest("sessions.create cwd is not a directory");
     }
     if (params.sessionCwd && params.enforceSandboxContainment) {
-      const targetRuntime = resolveSandboxRuntimeStatus({
-        cfg: params.cfg,
-        agentId: params.targetAgentId,
-        sessionKey: params.sessionKey ?? `agent:${params.targetAgentId}:dashboard:pending`,
-        preparedSessionEntry: null,
-      });
+      const sandboxRequired =
+        params.sandboxRequired ||
+        resolveSandboxRuntimeStatus({
+          cfg: params.cfg,
+          agentId: params.targetAgentId,
+          sessionKey: params.sessionKey ?? `agent:${params.targetAgentId}:dashboard:pending`,
+          preparedSessionEntry: null,
+        }).sandboxed;
       // Canonical paths admit workspace aliases while rejecting links that
       // resolve outside the selected agent's workspace.
-      if (
-        (params.sandboxRequired || targetRuntime.sandboxed) &&
-        !isPathInside(fs.realpathSync(workspaceDir), sessionRoot)
-      ) {
+      if (sandboxRequired && !isPathInside(await fs.realpath(workspaceDir), sessionRoot)) {
         return invalidSessionRequest(
           params.requestedProjectId
             ? "sessions.create project is outside the sandboxed agent workspace"
@@ -135,15 +134,17 @@ export function resolveSessionCreateRootParameters(
 }
 
 /** Reuse local workspace selections without inheriting managed or remote ownership. */
-export function prepareSessionForkFilesystemRoot(params: {
+export async function prepareSessionForkFilesystemRoot(params: {
   cfg: OpenClawConfig;
   parent: InternalSessionEntry;
   targetAgentId: string;
   sessionKey: string;
   sandboxRequired?: boolean;
-}): Result<
-  Pick<InternalSessionEntry, "projectId" | "spawnedCwd" | "spawnedWorkspaceDir" | "sessionRoot">,
-  ErrorShape
+}): Promise<
+  Result<
+    Pick<InternalSessionEntry, "projectId" | "spawnedCwd" | "spawnedWorkspaceDir" | "sessionRoot">,
+    ErrorShape
+  >
 > {
   const parent = params.parent;
   if (
@@ -166,11 +167,11 @@ export function prepareSessionForkFilesystemRoot(params: {
       requestedProjectId: parent.projectId,
       sessionCwd,
     });
-  const cwd = prepareRoot(roots.diffCwd);
+  const cwd = await prepareRoot(roots.diffCwd);
   if (!cwd.ok) {
     return cwd;
   }
-  const root = roots.root === roots.diffCwd ? cwd : prepareRoot(roots.root);
+  const root = roots.root === roots.diffCwd ? cwd : await prepareRoot(roots.root);
   if (!root.ok) {
     return root;
   }

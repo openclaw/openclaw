@@ -1,7 +1,4 @@
-import {
-  isGoogleGemini3ProModel,
-  isGoogleGemini3ThinkingLevelModel,
-} from "@openclaw/ai/internal/google-model-family";
+import { isGoogleGemini3ThinkingLevelModel } from "@openclaw/ai/internal/google-model-family";
 import { googleFlashSupportsMinimalThinking } from "@openclaw/ai/transports";
 import type { ModelThinkingLevel } from "@openclaw/llm-core/types";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -35,12 +32,10 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
   if (typeof params.modelId !== "string") {
     return undefined;
   }
-  const isPro = isGoogleGemini3ProModel(params.modelId);
   if (!isGoogleGemini3ThinkingLevelModel(params.modelId)) {
     return undefined;
   }
-  const minimalLevel =
-    !isPro && googleFlashSupportsMinimalThinking(params.modelId) ? "MINIMAL" : "LOW";
+  const minimalLevel = googleFlashSupportsMinimalThinking(params.modelId) ? "MINIMAL" : "LOW";
   switch (params.thinkingLevel) {
     case "off":
     case "minimal":
@@ -48,7 +43,7 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
     case "low":
       return "LOW";
     case "medium":
-      return isPro ? "HIGH" : "MEDIUM";
+      return "MEDIUM";
     case "high":
     case "max":
     case "xhigh":
@@ -60,9 +55,6 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
   }
   if (typeof params.thinkingBudget !== "number" || params.thinkingBudget < 0) {
     return undefined;
-  }
-  if (isPro) {
-    return params.thinkingBudget <= 2048 ? "LOW" : "HIGH";
   }
   if (params.thinkingBudget <= 0) {
     return minimalLevel;

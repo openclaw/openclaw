@@ -3,36 +3,14 @@ import { en } from "./en.ts";
 
 // Memory views register their English fallback when loaded, keeping this copy off startup.
 const enMemoryImport = {
-  onboarding: {
-    memoryImport: {
-      title: en.onboarding.memoryImport.title,
-      body: "OpenClaw found memory from other coding agents. Import it into your agent’s workspace?",
-      plannedCount: "{count} ready to import",
-      alreadyImported: "Already imported: {count}",
-      sourceUnavailable: "Source path unavailable",
-      import: "Import",
-      skip: "Skip for now",
-      reviewDetails: "Review details",
-      importingProvider: "Importing…",
-      providerResult: "Imported {migrated}, skipped {skipped}",
-      providerIncomplete:
-        "Imported {migrated}, skipped {skipped}, {errors} failed, {conflicts} conflicts",
-      providerError: "Couldn’t import memory. Continue setup, then try importing again.\n{error}",
-      connectionChanged:
-        "Import skipped because the Gateway connection changed. Reconnect and try again.",
-      unknownError: "No error details available.",
-      doneTitle: "Memory import finished",
-      doneBody: "Imported {migrated}, skipped {skipped}. Continue setting up OpenClaw.",
-    },
-  },
   memoryImport: {
     unknownCollection: "Memory collection",
     claudeCode: "Claude Code",
     fileCountOne: "{count} file",
     fileCount: "{count} files",
-    alreadyImported: "{count} existing",
+    alreadyImported: "Conflicts: {count}",
     ready: "Ready",
-    existing: "Existing",
+    existing: "Conflict",
     importComplete: "Import complete",
     importIncomplete: "Import incomplete",
     importedCount: "{count} files imported",
@@ -70,14 +48,14 @@ const enMemoryImport = {
     subtitle:
       "Review Codex consolidated memory and Claude Code auto-memory before copying it into OpenClaw.",
     agent: "Destination agent",
-    replaceExisting: "Replace existing imports",
-    replaceHint: "Preview conflicts again and preserve item backups before replacement.",
+    replaceExisting: "Replace existing files",
+    replaceHint: "Existing destination files are backed up before replacement.",
     backfill: {
       title: "From past sessions",
       subtitle:
         "Stage trusted memories from earlier agent sessions. Dreaming promotes the useful ones into long-term memory.",
       dateRange: "Session date range",
-      dateRangeHint: "Leave either date blank to scan the full available range.",
+      dateRangeHint: "Leave both dates blank to scan the full available range.",
       from: "From",
       to: "To",
       actions: "Backfill",
@@ -86,10 +64,10 @@ const enMemoryImport = {
       apply: "Apply",
       applying: "Applying…",
       rollback: "Rollback",
-      previewSummary: "{candidates} candidates across {days} days",
+      previewSummary: "Candidates: {candidates} · Days: {days}",
       previewTruncated:
         "This preview shows the first bounded batch. Apply continues through the remaining candidates.",
-      candidateCount: "{count} candidates",
+      candidateCount: "Candidates: {count}",
       noCandidates: "No new trusted session candidates were found.",
       progress: "Processed {days} days · {staged} staged",
       processedCandidates: "{count} session candidates processed",
@@ -111,7 +89,6 @@ const enMemoryImport = {
 export const registerMemoryImportEnglish = Object.assign(
   () => {
     en.memoryImport = enMemoryImport.memoryImport;
-    Object.assign(en.onboarding.memoryImport, enMemoryImport.onboarding.memoryImport);
   },
   { catalog: enMemoryImport },
 );

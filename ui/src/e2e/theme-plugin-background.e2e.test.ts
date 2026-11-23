@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import type { ThemeDefinition } from "../../../packages/gateway-protocol/src/theme.ts";
 import { createThemePaletteFixture } from "../../../test/helpers/theme-fixture.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { createThemedChatOpener, themeConfigResponse } from "./theme-typography.test-support.ts";
 
@@ -46,9 +47,17 @@ suite.define(() => {
       artRequests.push(new URL(route.request().url()).pathname);
       return route.fulfill({ contentType: "image/webp", body: darkImage });
     });
-    await page.goto(suite.server.baseUrl + "new");
+    await page.goto(suite.server.baseUrl + "settings/appearance");
+    await expect
+      .poll(() => page.locator('[data-background-source="none"]').getAttribute("aria-pressed"))
+      .toBe("true");
+    expect(
+      await page.locator(".shell").evaluate((element) => getComputedStyle(element).backgroundImage),
+    ).toBe("none");
+    await page.locator('[data-background-source="theme"]').click();
+    await evaluateControlUiContext(page, (app) => app.navigate("new-session"));
     const paint = () =>
-      page.locator(".shell").evaluate((element) => ({
+      page.locator(".session-background__image--theme").evaluate((element) => ({
         image: getComputedStyle(element).backgroundImage,
         overlay: document.documentElement.style.getPropertyValue("--app-background-image"),
         theme: document.documentElement.dataset.theme,

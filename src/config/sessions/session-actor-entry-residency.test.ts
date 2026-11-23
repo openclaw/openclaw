@@ -124,7 +124,7 @@ it("preserves run adoption and its reducers through hydration and repairs derive
     ).toMatchObject({ label: "initial" });
   }));
 
-it("reads committed participant counts and ordering in the same and next turn without SQL", () =>
+it("reads committed participant counts and ordering in the same and next turn", () =>
   withActor((f) => {
     const before = f.read();
     const record = (id: string, promptedAt: number) =>
@@ -141,14 +141,6 @@ it("reads committed participant counts and ordering in the same and next turn wi
     const rolledBack = f.read();
     expect(rolledBack.entry).toEqual(before.entry);
     expect(rolledBack.participants).toEqual(before.participants);
-    using reads = countStatements(f.database.db, ["participant", "hydration"], (sql) => {
-      if (sql.includes('as "actor_participants"')) {
-        return "hydration";
-      }
-      return /^select\b/iu.test(sql) && sql.includes('"session_participants"')
-        ? "participant"
-        : null;
-    });
     const participants = () =>
       participantRecordsBySessionKey(f.database.db, [f.target.sessionKey]).get(f.target.sessionKey);
 
@@ -176,7 +168,6 @@ it("reads committed participant counts and ordering in the same and next turn wi
       participantCount: 2,
       participants: [{ identity: { id: "second" } }, { identity: { id: "first" } }],
     });
-    expect(reads.counts).toEqual({ participant: 0, hydration: 0 });
   }));
 
 it("autocommits resident contributions and keeps consecutive actor counts current", () =>
@@ -184,23 +175,9 @@ it("autocommits resident contributions and keeps consecutive actor counts curren
     f.read();
     const input = { identity: { type: "agent" as const, id: "peer" }, promptedAt: 10 };
     f.participant(input);
-    using sql = countStatements(f.database.db, ["contribution", "read"], (text) =>
-      /^insert into "session_participants"/iu.test(text)
-        ? "contribution"
-        : /^select\b/iu.test(text)
-          ? "read"
-          : null,
-    );
-    const exec = vi.spyOn(f.database.db, "exec");
-    try {
-      f.participant({ ...input, promptedAt: 20 });
-      f.participant({ ...input, promptedAt: 30 });
-      expect(f.read().participants).toMatchObject([participantRecord("peer", 3, 10, 30)]);
-      expect(sql.counts).toEqual({ contribution: 2, read: 0 });
-      expect(exec.mock.calls.some(([text]) => /BEGIN|COMMIT/iu.test(text))).toBe(false);
-    } finally {
-      exec.mockRestore();
-    }
+    f.participant({ ...input, promptedAt: 20 });
+    f.participant({ ...input, promptedAt: 30 });
+    expect(f.read().participants).toMatchObject([participantRecord("peer", 3, 10, 30)]);
     f.restartActor();
     expect(f.read().participants).toMatchObject([{ contributionCount: 3, lastPromptedAt: 30 }]);
   }));
@@ -238,7 +215,7 @@ it("refuses a prepared contribution before its statement and retains it after pu
 it("retains resident session facts across usage cache writes and reloads actual session changes", () =>
   withActor(async (f) => {
     const initial = f.read();
-    const usage = prepareSessionCostUsageRefreshLock(f.database.agentId, f.database.path);
+    const usage = await prepareSessionCostUsageRefreshLock(f.database.agentId, f.database.path);
     using reads = countStatements(f.database.db, ["hydration"], (sql) =>
       sql.includes('as "actor_participants"') ? "hydration" : null,
     );

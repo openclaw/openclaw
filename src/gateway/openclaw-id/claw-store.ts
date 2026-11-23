@@ -8,6 +8,7 @@ import type {
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { prepareCorePluginStateReplacement } from "../../plugin-state/plugin-state-store.js";
 import type { DeviceTokenBinding } from "./device-token-binding.js";
+import type { MemberRecoveryUse } from "./member-recovery-use-contract.js";
 
 /** The signed-in account the Gateway's verified sign-in reports. */
 export type OpenClawIdAccount = {
@@ -43,17 +44,56 @@ export type StoredClaw = {
   token_bindings?: DeviceTokenBinding[];
   /** Gateway approval times, bounded by current membership rather than invite lifetime. */
   member_approved_at?: Record<string, number | null>;
+  /** Members whose profile role was initialized; clearing a role must not rerun migration. */
+  member_profile_roles?: Record<string, boolean>;
+  /** Display-only browser notices and bounded replay/rate receipts for current members. */
+  member_browser_requests?: Record<string, MemberBrowserRequestState>;
+  /** Accepted kit-use evidence; retained after kit, browser, and member removal. */
+  member_recovery_uses?: MemberRecoveryUse[];
+  /**
+   * Unlinks this computer signed that Discovery has not confirmed yet (pending-unlink.ts sends
+   * them when Discovery is reachable). They belong to earlier claw ids, not to `claw_id`.
+   */
+  pending_unlinks?: Array<{
+    statement: SignedStatement<"ClawUnlink">;
+    /** The unlinked claw's address, for status. */
+    hostname: string;
+    /** The Discovery that held the unlinked claw. */
+    discovery_url: string;
+    /** Discovery's refusal code when it refused the unlink for good; it is not sent again. */
+    refused?: string;
+  }>;
   /** Discovery publication state (a mirror; never authority). */
   discovery: {
     owner_account_id: string | null;
     published_binding_seq: number;
     published_snapshot_seq: number;
+    /**
+     * True from linking until a registration is first sent, so Discovery cannot hold the claw and
+     * unlinking it is local only. Absent on records linked before this was kept: unknown.
+     */
+    registration_unsent?: boolean;
     /** A publication was requested and has not succeeded yet (publication-retry.ts). */
     publish_pending?: boolean;
     /** issued_at of the last snapshot Discovery accepted (freshness/v1 re-signs it hourly). */
     published_snapshot_at?: number;
     mailbox_cursor: string | null;
   };
+};
+
+/** Display-only: three accepted-ID receipts, three unseen-ID tombstones and one overflow deadline. */
+export type MemberBrowserRequestState = {
+  notice: {
+    requestId: string;
+    label: string;
+    location: string | null;
+    requestedAt: number;
+    expiresAt: number;
+  } | null;
+  recent: Array<{ requestId: string; until: number }>;
+  terminal?: Array<{ requestId: string; until: number }>;
+  /** Refuse new notices through this deadline when unseen terminal IDs exceed the tombstone cap. */
+  blockedUntil?: number | null;
 };
 
 /** Sender details OpenClaw ID reported for a redemption, and the invite's outcome. */
@@ -65,6 +105,8 @@ export type InviteReport = {
   location_hint: string | null;
   resolution?: "approved" | "denied" | "expired";
   resolved_at?: number;
+  /** Owner-selected local profile; never part of a signed cap or Discovery publication. */
+  existingProfile?: { id: string; displayName: string | null; fallbackReason?: string };
 };
 
 /** Refuses recovery if an awaited lookup belongs to a root or binding that has since changed. */
@@ -78,6 +120,23 @@ export function assertSameClawIdentity(
   ) {
     throw new Error("claw identity changed during registration recovery");
   }
+}
+
+/** A claw record with no authority, binding or Discovery progress yet. */
+export function emptyRecord(clawId: string): StoredClaw {
+  return {
+    v: 1,
+    claw_id: clawId,
+    hostname: null,
+    authority: null,
+    binding: null,
+    discovery: {
+      owner_account_id: null,
+      published_binding_seq: 0,
+      published_snapshot_seq: 0,
+      mailbox_cursor: null,
+    },
+  };
 }
 
 /** Refuses oversized opaque metadata without truncating account identities or mailbox cursors. */
@@ -102,7 +161,13 @@ export function storedOwnerProfile(
 // The persisted core names its format; all sections are installed atomically beside it.
 type StoredClawCore = Omit<
   StoredClaw,
-  "v" | "authority" | "invite_reports" | "token_bindings" | "member_approved_at"
+  | "v"
+  | "authority"
+  | "invite_reports"
+  | "token_bindings"
+  | "member_approved_at"
+  | "member_browser_requests"
+  | "member_recovery_uses"
 > & {
   v: 2;
   authority: Omit<AuthorityState, "owner_devices" | "members" | "invites"> | null;
@@ -112,10 +177,13 @@ type ClawRows = {
   current: StoredClawCore;
   "owner-devices": AuthorityState["owner_devices"];
   members: AuthorityState["members"];
+  [key: `members:${number}`]: AuthorityState["members"];
   invites: AuthorityState["invites"];
   "invite-reports": NonNullable<StoredClaw["invite_reports"]>;
   "member-approvals": NonNullable<StoredClaw["member_approved_at"]>;
+  [key: `member-browser-requests:${number}`]: NonNullable<StoredClaw["member_browser_requests"]>;
   "token-bindings": StoredTokenBindings;
+  [key: `member-recovery-use:${number}`]: MemberRecoveryUse;
 };
 type ClawRow = ClawRows[keyof ClawRows] | StoredClaw;
 
@@ -133,16 +201,47 @@ function openStore() {
 
 /** Partitions current authority into bounded values without changing any signed statement. */
 export function clawStoreRows(record: StoredClaw): ClawRows {
-  const { authority, invite_reports, member_approved_at, token_bindings, ...core } = record;
+  const {
+    authority,
+    invite_reports,
+    member_approved_at,
+    member_browser_requests,
+    token_bindings,
+    member_recovery_uses,
+    ...core
+  } = record;
   let anchor: StoredClawCore["authority"] = null;
   if (authority) {
     const { owner_devices: _owners, members: _members, invites: _invites, ...rest } = authority;
     anchor = rest;
   }
+  // Thirty-two accounts with ten maximum-length device labels fit the 1 MiB row limit.
+  // All chunks keep the same member-record shape and are replaced in one transaction.
+  const memberEntries = Object.entries(authority?.members ?? {});
+  const memberRows: Record<string, AuthorityState["members"]> = {};
+  for (let offset = 32; offset < memberEntries.length; offset += 32) {
+    memberRows[`members:${offset / 32}`] = Object.fromEntries(
+      memberEntries.slice(offset, offset + 32),
+    );
+  }
+  const browserRows: Record<string, NonNullable<StoredClaw["member_browser_requests"]>> = {};
+  if (member_browser_requests) {
+    const entries = Object.entries(member_browser_requests);
+    for (let offset = 0; offset < Math.max(entries.length, 1); offset += 32) {
+      browserRows[`member-browser-requests:${offset / 32}`] = Object.fromEntries(
+        entries.slice(offset, offset + 32),
+      );
+    }
+  }
   return {
     current: { ...core, v: 2, authority: anchor },
     "owner-devices": authority?.owner_devices ?? {},
-    members: authority?.members ?? {},
+    members: Object.fromEntries(memberEntries.slice(0, 32)),
+    ...memberRows,
+    ...browserRows,
+    ...Object.fromEntries(
+      (member_recovery_uses ?? []).map((use) => [`member-recovery-use:${use.seq}`, use]),
+    ),
     invites: authority?.invites ?? {},
     "invite-reports": invite_reports ?? {},
     "member-approvals": member_approved_at ?? {},
@@ -171,6 +270,11 @@ export async function readStoredClaw(): Promise<StoredClaw | undefined> {
     // SAFETY: these fixed keys are written together by clawStoreRows under this module's owner.
     return entries.get(key) as ClawRows[Key];
   };
+  const recoveryUses = [...entries]
+    .filter(([key]) => key.startsWith("member-recovery-use:"))
+    // SAFETY: only clawStoreRows writes these evidence rows, atomically with admission.
+    .map(([, value]) => value as MemberRecoveryUse)
+    .toSorted((a, b) => a.seq - b.seq);
   return {
     ...record,
     v: 1,
@@ -178,17 +282,39 @@ export async function readStoredClaw(): Promise<StoredClaw | undefined> {
       ? {
           ...record.authority,
           owner_devices: section("owner-devices"),
-          members: section("members"),
+          members: Object.assign(
+            {},
+            section("members"),
+            ...[...entries]
+              .filter(([key]) => key.startsWith("members:"))
+              // SAFETY: the claw writer stores member records in every members chunk.
+              .map(([, value]) => value as AuthorityState["members"]),
+          ),
           invites: section("invites"),
         }
       : null,
     invite_reports: section("invite-reports"),
     member_approved_at: section("member-approvals"),
+    ...(entries.has("member-browser-requests:0")
+      ? {
+          member_browser_requests: Object.assign(
+            {},
+            ...[...entries]
+              .filter(([key]) => key.startsWith("member-browser-requests:"))
+              // SAFETY: clawStoreRows writes member request records into every browser-request chunk.
+              .map(([, value]) => value as NonNullable<StoredClaw["member_browser_requests"]>),
+          ),
+        }
+      : {}),
+    ...(recoveryUses.length ? { member_recovery_uses: recoveryUses } : {}),
     token_bindings: section("token-bindings").bindings,
   };
 }
 
 /** Replaces all claw sections in the existing state worker's single write transaction. */
-export async function writeStoredClaw(record: StoredClaw): Promise<void> {
-  await openStore().replace(new Map(Object.entries(clawStoreRows(record))));
+export async function writeStoredClaw(
+  record: StoredClaw,
+  assertCurrent?: () => void,
+): Promise<void> {
+  await openStore().replace(new Map(Object.entries(clawStoreRows(record))), assertCurrent);
 }

@@ -85,6 +85,7 @@ const baselineCli: typeof captureCliRunToolAuthority =
 const route = { provider: "synthetic", model: "synthetic-model" };
 let authorityChecks = 0;
 const authority = createAdmittedRunOperatorAuthority({
+  canonicalIdentity: null,
   profileId: "synthetic-operator",
   scopes: ["operator.read", "operator.write", "operator.admin"],
   assertCurrent() {

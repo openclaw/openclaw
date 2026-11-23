@@ -163,6 +163,25 @@ it("keeps the menu open and retries a failed content load", async () => {
   expect(view.panel.matches(":popover-open")).toBe(true);
 });
 
+it("offers attachment actions while the capability menu is still initializing", async () => {
+  const view = mountMenu();
+  const initialize = vi.fn();
+  const open = vi.fn();
+  view.setMenu((current) => ({
+    ...current,
+    inputHandle: { ...current.inputHandle, open },
+    capabilityMenu: { read: () => undefined, initialize },
+  }));
+  flush();
+  expect(initialize).not.toHaveBeenCalled();
+
+  view.trigger.click();
+  const camera = await view.findByRole("menuitem", { name: "Camera", hidden: true });
+  expect(view.queryByRole("menuitem", { name: "Skills", hidden: true })).toBeNull();
+  camera.click();
+  expect(open).toHaveBeenCalledExactlyOnceWith("camera", expect.any(Function));
+});
+
 it("keeps root actions current after closing a pending capability view", async () => {
   const entered = createDeferred();
   const imported = createDeferred();

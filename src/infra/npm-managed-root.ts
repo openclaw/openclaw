@@ -10,14 +10,14 @@ import { parse as parseYaml } from "yaml";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { ignoreMissingPath } from "./errno.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
-import type { NpmSpecResolution } from "./install-source-utils.js";
 import { JsonFileReadError, readJson, readJsonIfExists, writeJson } from "./json-files.js";
 import { resolveNpmCommand } from "./npm-command.js";
 import {
   filterUnsupportedManagedNpmRootOverrides,
   readOverrideRecord,
+  readRootOverrideSpec,
 } from "./npm-managed-root-overrides.js";
-import type { ParsedRegistryNpmSpec } from "./npm-registry-spec.js";
+import type { NpmSpecResolution, ParsedRegistryNpmSpec } from "./npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { isPackageDependencyName } from "./package-json.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
@@ -132,17 +132,6 @@ function resolveHostOverrideReferences(value: unknown, manifest: HostPackageMani
     resolved[key] = resolveHostOverrideReferences(nested, manifest);
   }
   return resolved;
-}
-
-// For bare package-name keys, object rules override the package itself only via ".".
-function readRootOverrideSpec(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (isRecord(value) && typeof value["."] === "string") {
-    return value["."];
-  }
-  return undefined;
 }
 
 /**
@@ -738,6 +727,7 @@ export async function syncManagedNpmRootPeerDependencies(params: {
   const changed = JSON.stringify(next) !== JSON.stringify(manifest);
   if (changed) {
     await replaceFileAtomic({
+      allowDrvfsRenameRecovery: true,
       filePath: manifestPath,
       assertBeforeMutation: params.beforePersistentApply,
       content: `${JSON.stringify(next, null, 2)}\n`,

@@ -9,6 +9,10 @@ esac
 printf '%s\n' "$0" >> "$root/executables"
 case "$*" in
   *--version*) printf 'OpenClaw 2026.10.1\n' ;;
+  *'setup --terminal-path '*)
+    if test -f "$root/path-reject"; then printf 'terminal fixture refusal\n' >&2; exit 1; fi
+    printf '%s' "$PATH" > "$root/terminal-path"
+    printf 'CLI available in new terminals.\n' ;;
   *'setup --baseline --json'*)
     printf 'setup\n' >> "$root/setup-calls"
     if test -f "$root/setup-reject"; then printf 'baseline setup failed\n' >&2; exit 1; fi

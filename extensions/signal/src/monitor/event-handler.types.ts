@@ -35,6 +35,7 @@ export type SignalDataMessage = {
   timestamp?: number;
   message?: string | null;
   attachments?: Array<SignalAttachment>;
+  viewOnce?: boolean | null;
   mentions?: Array<SignalMention> | null;
   groupInfo?: {
     groupId?: string | null;
@@ -42,6 +43,7 @@ export type SignalDataMessage = {
   } | null;
   quote?: {
     text?: string | null;
+    mentions?: Array<SignalMention> | null;
     author?: string | null;
     authorUuid?: string | null;
   } | null;

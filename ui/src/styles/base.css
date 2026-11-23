@@ -369,14 +369,14 @@
   --radius-full: 9999px;
   --radius: 10px;
 
-  /* Every spinner: a closed ring at 20% with a short round-capped arc on top.
+  /* Every spinner: a closed ring at 20% with a round-capped arc on top.
      A mask paints currentColor, and each stroke stays the same px at any size. */
   --spinner-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='2'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 1.0px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E");
   --spinner-mask-small: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='1.5'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 0.75px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E");
-  --spinner-mask-avatar: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='1.75'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 0.875px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E");
+  --spinner-mask-avatar: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='1.75'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 0.875px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='42 58' stroke-linecap='round'/%3E%3C/svg%3E");
   --spinner-mask-large: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='2.5'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 1.25px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E");
   --spinner-trace-stroke: 1.75px;
-  --spinner-trace-dash: 26 74;
+  --spinner-trace-dash: 42 58;
 
   /* One profile for every scroll surface, thumb only: faint at rest, a step
      stronger while the pointer is over the scroller, clearly visible on the
@@ -397,9 +397,10 @@
      inherit the widened surface treatment (excluded selectors, the tokens
      exported to embedded MCP apps in mcp-app-theme.ts). */
   --openclaw-corner-radius-scale: 1;
-  /* Circular defaults avoid the reported WebKit 27.3 superellipse paint failure.
-     Themes can still override this shared corner family for the input and its notices. */
-  --chat-composer-corner-shape: round;
+  /* The composer draws the same superellipse as the app's other surfaces; engines
+     without corner-shape keep the circular radius. Themes can still override this
+     shared corner family for the input and its notices. */
+  --chat-composer-corner-shape: superellipse(1.5);
 
   /* Menu steps sit on the --radius-* chain so themes keep their corner character;
      near-square themes pin them. Shared knobs keep transient menus from drifting. */
@@ -557,6 +558,7 @@
   .exec-approval-card.exec-approval-card,
   .exec-approval-list.exec-approval-list,
   .login-gate__card.login-gate__card,
+  .code-block-wrapper.code-block-wrapper,
   .card.card,
   .option-card__choice.option-card__choice {
     border-radius: calc(14px * var(--openclaw-corner-radius-scale));
@@ -577,8 +579,7 @@
     corner-shape: superellipse(1.5);
   }
 
-  /* CRT owns its near-square geometry; rounded transcript bubbles share the fence shape. */
-  .code-block-wrapper.code-block-wrapper,
+  /* CRT owns its near-square geometry. */
   :where(:root:not([data-theme="crt"], [data-theme="crt-light"]))
     :is(.chat-thread, .chat-session-rail__thread)
     .chat-group.user
@@ -593,7 +594,7 @@
     .chat-group.user
     :is(.chat-bubble--with-images, .chat-bubble--with-images > .chat-message-avatar-anchor)
     > .chat-message-disclosure {
-    border-radius: calc(14px * var(--openclaw-corner-radius-scale));
+    border-radius: calc(18px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
 
@@ -616,6 +617,15 @@
   .chat-reply-context-menu.chat-reply-context-menu,
   .chat-selection-popup.chat-selection-popup {
     corner-shape: superellipse(1.5);
+  }
+}
+
+/* WebKit 27.3 beta stops painting a superellipse composer in narrow layouts
+   while leaving it clickable (#193621), so only that engine gives the shape
+   up. -webkit-nbsp-mode is a WebKit-only property. Remove once WebKit paints it. */
+@supports (-webkit-nbsp-mode: space) {
+  :root {
+    --chat-composer-corner-shape: round;
   }
 }
 
@@ -705,12 +715,10 @@
   --accent-foreground: #ffffff;
   --accent-glow: rgba(189, 69, 49, 0.12);
   --primary: #bd4531;
-  --primary-foreground: #ffffff;
 
   /* Original lobster artwork reads well on light surfaces. */
   --lobster-icon-body: #ff4d4d;
   --lobster-icon-shade: #991b1b;
-  --lobster-icon-eye: #050810;
 
   --secondary: #f4f1ec;
   --secondary-foreground: #403c35;
@@ -744,7 +752,6 @@
   --ok: #166534;
   --ok-subtle: rgba(22, 101, 52, 0.08);
   --destructive: #dc2626;
-  --destructive-foreground: #fafafa;
   --warn: #92400e;
   --warn-subtle: rgba(146, 64, 14, 0.08);
   --danger: #b91c1c;
@@ -781,7 +788,6 @@
   --shadow-md: 0 4px 12px rgba(60, 42, 24, 0.07);
   --shadow-lg: 0 12px 28px rgba(60, 42, 24, 0.09);
   --shadow-xl: 0 24px 48px rgba(60, 42, 24, 0.11);
-  --overlay-border: color-mix(in srgb, var(--border-strong) 64%, transparent);
   --overlay-shadow: 0 1px 2px rgb(60 42 24 / 0.035), 0 8px 24px rgb(60 42 24 / 0.065);
   --overlay-modal-backdrop: color-mix(in oklab, #101219 50%, transparent);
 
@@ -1087,7 +1093,6 @@ a:where(
     [class=""],
     .activity-entry__run-link,
     .settings-row__value,
-    .memory-page__link,
     .portals-preview__notice-url,
     .transcripts-back,
     .chat-text a,

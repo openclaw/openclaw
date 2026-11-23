@@ -84,9 +84,7 @@ function resolveSandboxDockerConfig(
     agentEnv: agentDocker?.env,
   });
 
-  const ulimits = agentDocker?.ulimits
-    ? { ...globalDocker?.ulimits, ...agentDocker.ulimits }
-    : globalDocker?.ulimits;
+  const ulimits = { core: "0", ...globalDocker?.ulimits, ...agentDocker?.ulimits };
 
   const binds = [...(globalDocker?.binds ?? []), ...(agentDocker?.binds ?? [])];
 
@@ -227,6 +225,10 @@ export function resolveSandboxRuntimeSettings(
       DEFAULT_SANDBOX_SSH_WORKSPACE_ROOT,
     ),
   };
+}
+
+export function isLocalSandboxWorkspaceBackend(backend: SandboxConfig["backend"]): boolean {
+  return backend === "docker" || backend === "podman";
 }
 
 export function resolveSandboxConfigForAgent(

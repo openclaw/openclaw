@@ -136,6 +136,9 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 env:
+  RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+  RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+  RELEASE_TARGET_SHA: ${{ inputs.ref }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.22.1"
   PREPARED_NPM_ARTIFACT: ${{ inputs.prepared_artifact }}
@@ -248,11 +251,21 @@ jobs:
           set -euo pipefail
           exec python3 -I -S "$CI_GIT_OWNER" --policy .release-tooling/scripts/plugin-npm-release-admission.py
 
-      - name: Setup trusted Node for prepared publication
+      - name: Setup qualification verifier dependencies
         if: inputs.prepared_artifact != ''
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        uses: ./.release-tooling/.github/actions/setup-pnpm-store-cache
         with:
+          cache-mode: off
+          package-manager-file: .release-tooling/package.json
+          lockfile-path: .release-tooling/pnpm-lock.yaml
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install qualification verifier dependencies
+        if: inputs.prepared_artifact != ''
+        working-directory: .release-tooling
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Read qualified npm preparation
         id: prepared_plan
@@ -267,11 +280,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .local
-          EVIDENCE_ARGS=()
-          if [[ -n "$PREPARED_NPM_FRV_RUN_ID" && -n "$PREPARED_NPM_PARENT_RUN_ID" ]]; then
-            EVIDENCE_ARGS=(--evidence-output "$RUNNER_TEMP/plugin-npm-evidence.json")
-          fi
           node .release-tooling/scripts/plugin-npm-prepared-release.mjs load \
+            --report-capacity true \
             --artifact "$PREPARED_ARTIFACT" \
             --source-sha "$SOURCE_SHA" \
             --selection-mode "$PUBLISH_SCOPE" \
@@ -279,14 +289,16 @@ jobs:
             --npm-dist-tag "$NPM_DIST_TAG" \
             --policy-file .release-tooling/.github/workflows/plugin-npm-release.yml \
             --archive-path "$RUNNER_TEMP/plugin-npm-prepared.zip" \
-            "${EVIDENCE_ARGS[@]}" \
+            --prune-published true \
+            --cache-dir "$RUNNER_TEMP/plugin-npm-preview-downloads" \
+            --output-dir "$RUNNER_TEMP/plugin-npm-preview-packages" \
+            --evidence-output "$RUNNER_TEMP/plugin-npm-evidence.json" \
             --output .local/plugin-npm-prepared.json \
             --github-output "$GITHUB_OUTPUT"
-          echo "evidence_attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
 
       - name: Upload immutable publication evidence
         id: evidence_upload
-        if: inputs.prepared_artifact != '' && inputs.full_release_validation_run_id != '' && inputs.release_publish_run_id != ''
+        if: steps.prepared_plan.outputs.evidence_attempt != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plugin-npm-evidence-${{ github.run_id }}-${{ github.run_attempt }}
@@ -407,11 +419,13 @@ jobs:
           SOURCE_SHA: ${{ steps.ref.outputs.sha }}
           ALL_PACKAGES: ${{ steps.prepared_plan.outputs.all_matrix || steps.plan.outputs.all_matrix }}
           CANDIDATES: ${{ steps.prepared_plan.outputs.matrix || steps.plan.outputs.matrix }}
+          CORE_DEFERRALS: ${{ steps.prepared_plan.outputs.core_deferrals || '[]' }}
         run: |
-          jq -n --arg sourceSha "$SOURCE_SHA" --argjson all "$ALL_PACKAGES" --argjson candidates "$CANDIDATES" \
+          jq -n --arg sourceSha "$SOURCE_SHA" --argjson all "$ALL_PACKAGES" --argjson candidates "$CANDIDATES" --argjson deferred "$CORE_DEFERRALS" \
             'def identities: map({packageName, packageDir, version});
              {sourceSha: $sourceSha, all: ($all | identities), candidates: ($candidates | identities),
-              skippedPublished: ([$all[] | select(.packageName as $name | $candidates | all(.packageName != $name))] | identities)}' \
+              coreDeferrals: $deferred,
+              skippedPublished: ([$all[] | select(.packageName as $name | ($candidates + $deferred) | all(.packageName != $name))] | identities)}' \
             > "$RUNNER_TEMP/npm-publication-plan.json"
 
       - name: Upload resolved npm publication plan
@@ -859,21 +873,11 @@ jobs:
           exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
           import os
 
-          from ci_git_owner import git_output, run_git
+          from ci_git_owner import fetch, git_output
 
           workspace = os.environ["GITHUB_WORKSPACE"]
           source_sha = os.environ["SOURCE_SHA"]
-          run_git(
-              workspace,
-              "fetch",
-              "--no-tags",
-              "--depth=1",
-              "--filter=blob:none",
-              "origin",
-              source_sha,
-              timeout=120,
-              reclaim_locks=True,
-          )
+          fetch(workspace, source_sha, blobless=True)
           # The partial fetch leaves this one manifest blob for git show to hydrate.
           package_json = git_output(
               workspace,
@@ -1451,6 +1455,7 @@ jobs:
       contents: read
       id-token: write
     env:
+      PREPARED_PACKAGE: ${{ toJson(matrix.plugin) }}
       PREPARED_NPM_EVIDENCE_ID: ${{ needs.preview_plugins_npm.outputs.evidence_attempt == github.run_attempt && needs.preview_plugins_npm.outputs.evidence_id || '' }}
       PREPARED_NPM_EVIDENCE_DIGEST: ${{ needs.preview_plugins_npm.outputs.evidence_attempt == github.run_attempt && needs.preview_plugins_npm.outputs.evidence_digest || '' }}
     strategy:
@@ -1468,15 +1473,28 @@ jobs:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 1
           # Publication consumes attested tarballs and the exact source manifest.
-          # Keep the workflow policy and its dependency-free verifier closure.
-          sparse-checkout: |
-            .github/workflows
-            scripts
+          # Completeness needs the pinned parser dependencies and workspace sources.
 
       - name: Setup trusted Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup qualification verifier dependencies
+        if: inputs.prepared_artifact != ''
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: off
+          package-manager-file: ./package.json
+          lockfile-path: ./pnpm-lock.yaml
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install qualification verifier dependencies
+        if: inputs.prepared_artifact != ''
+        working-directory: .
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Resolve immutable npm publication artifact
         if: inputs.prepared_artifact == ''
@@ -1617,21 +1635,11 @@ jobs:
           exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
           import os
 
-          from ci_git_owner import git_output, run_git
+          from ci_git_owner import fetch, git_output
 
           workspace = os.environ["GITHUB_WORKSPACE"]
           target_sha = os.environ["TARGET_SHA"]
-          run_git(
-              workspace,
-              "fetch",
-              "--no-tags",
-              "--depth=1",
-              "--filter=blob:none",
-              "origin",
-              target_sha,
-              timeout=120,
-              reclaim_locks=True,
-          )
+          fetch(workspace, target_sha, blobless=True)
           # The partial fetch leaves this one manifest blob for git show to hydrate.
           package_json = git_output(
               workspace,
@@ -1816,7 +1824,7 @@ jobs:
           trap 'rm -f "$npmrc" "$publish_log"' EXIT
           # Publish the attested bytes; rebuilding here loses the candidate's patched install.
           if [[ -n "$PREPARED_NPM_ARTIFACT" ]]; then
-            node scripts/plugin-npm-prepared-release.mjs authorize --source-sha "$RELEASE_TARGET_SHA"
+            node scripts/plugin-npm-prepared-release.mjs authorize --source-sha "$RELEASE_TARGET_SHA" --package "$PREPARED_PACKAGE"
           fi
           node scripts/release-tooling-identity.mjs verify \
             --repository "$OPENCLAW_RELEASE_TOOLING_REPOSITORY" \
@@ -2013,7 +2021,7 @@ jobs:
           # A timeout can race a committed publish. On rerun, the preceding check
           # accepts only this tarball's exact integrity and shasum before skipping.
           if [[ -n "$PREPARED_NPM_ARTIFACT" ]]; then
-            node scripts/plugin-npm-prepared-release.mjs authorize --source-sha "$PREPARED_NPM_SOURCE_SHA"
+            node scripts/plugin-npm-prepared-release.mjs authorize --source-sha "$PREPARED_NPM_SOURCE_SHA" --package "$PREPARED_PACKAGE"
           fi
           node scripts/release-tooling-identity.mjs verify \
             --repository "$GITHUB_REPOSITORY" \

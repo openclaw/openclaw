@@ -35,6 +35,12 @@ rechecks current visibility and local session identity. The one-second budget
 covers provider discovery and queueing, not session-projection preparation or
 time spent waiting for the Gateway event loop.
 
+Unchanged transcript or automation notifications preserve local catalog entry order
+and reuse the frozen metadata snapshot. Committed entry changes refresh it. If multiple
+completed, plugin-owned sessions bind the same native source, the adoption helper
+chooses the greatest session key in binary (UTF-8) order, independent of notification
+or enumeration order. Explicit agent ownership still limits eligible sessions.
+
 Paired-node discovery reuses the current committed node inventory while pairing
 writes are queued. Committed pairing receipts refresh that inventory from the
 owner's prepared rows without another database read, including when a node's
@@ -289,7 +295,10 @@ native OpenClaw sessions from a source Gateway to a paired receiver Gateway.
 The source node host runs as the same user with the source Gateway's state
 directory. Enable the plugin on both sides, choose source session groups, and
 connect with only `openclaw.sessions.list.v1` and
-`openclaw.sessions.read.v1` in `--commands`.
+`openclaw.sessions.read.v1` in `--commands`. The optional
+`openclaw.sessions.catalog.list.v1` and `openclaw.sessions.catalog.read.v1` pair
+adds relationship filters and **Open original**; see
+[Session Share](/plugins/session-share#open-original-on-a-paired-node).
 
 The receiver shows read-only rows under the source node in **OpenClaw sessions**.
 Viewers need permission to view others' sessions on role-restricted Gateways.

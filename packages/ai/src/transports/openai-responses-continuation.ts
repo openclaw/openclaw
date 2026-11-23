@@ -1,5 +1,4 @@
 import { createHash, type Hash } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import type { ModelRequestHeaders } from "@openclaw/llm-core";
 import { writeStableStringify } from "@openclaw/normalization-core";
 import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
@@ -9,17 +8,24 @@ import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.j
 import {
   getSessionResourceOwnerId,
   registerSessionResourceCleanup,
+  type ProviderStateScope,
   type SessionResourceOwner,
 } from "../session-resources.js";
-import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { getResponsesCompactionInputIdentity } from "./openai-responses-compaction-window.js";
 import type { OpenAIResponsesRequestParams } from "./openai-responses-contracts.js";
-import { projectJsonObject, projectJsonValue } from "./openai-responses-json-projection.js";
+import {
+  hasSameResponsesInputPrefix,
+  jsonValuesEqual,
+  projectedJsonEqual,
+  projectJsonObject,
+  projectJsonValue,
+} from "./openai-responses-json-projection.js";
 import {
   canReferenceResponsesReasoningHistory,
   replayResponsesReasoningUpdates,
   type ResponsesConfigurationUpdate,
 } from "./openai-responses-reasoning-update.js";
+import { normalizeOpenAIResponsesToolArguments } from "./openai-responses-replay.js";
 import { retainedJsonBytes } from "./openai-responses-retained-bytes.js";
 import {
   normalizeOpenAIResponsesFunctionCallId,
@@ -57,11 +63,6 @@ export type ResponsesContinuationStatus =
   | "history_shorter"
   | "no_previous_response"
   | "request_changed";
-
-function jsonValuesEqual(left: object, right: object): boolean {
-  // Finish the left side before evaluating any right-side hook values.
-  return isDeepStrictEqual(projectJsonObject(left), projectJsonObject(right));
-}
 
 function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesContinuationRequest {
   // Instructions and tools apply to the current response and remain on every wire request.
@@ -196,8 +197,9 @@ function normalizeAssistantReplayInput(
   input: readonly unknown[],
   fromResponse = false,
   ignoreCachedItemIds = false,
+  replayedInput?: readonly unknown[],
 ): unknown[] {
-  return input.map((item) => {
+  return input.map((item, index) => {
     if (!isRecord(item)) {
       return item;
     }
@@ -251,9 +253,11 @@ function normalizeAssistantReplayInput(
       stableItem.call_id = canonicalizeToolCallId(stableItem.call_id, itemId);
     }
     if (fromResponse && item.type === "function_call") {
-      // Only provider output crosses terminal admission; sent arguments must retain real type edits.
-      const args = parseJsonObjectPreservingUnsafeIntegers(stableItem.arguments);
-      stableItem.arguments = args ? JSON.stringify(args) : stableItem.arguments;
+      // Already-sent input stays strict so a real edit cannot reuse an old response.
+      stableItem.arguments = normalizeOpenAIResponsesToolArguments(
+        stableItem.arguments,
+        replayedInput?.[index],
+      );
     }
     if (item.type === "message" && Array.isArray(stableItem.content)) {
       stableItem.content = stableItem.content.map((part) => {
@@ -418,7 +422,7 @@ export function responsesContinuationPrefixFingerprint(
         digest,
         [
           ...normalizeAssistantReplayInput(input.slice(length)),
-          ...normalizeAssistantReplayInput(output, true),
+          ...normalizeAssistantReplayInput(output, true, false, output),
         ],
         length,
       );
@@ -428,7 +432,7 @@ export function responsesContinuationPrefixFingerprint(
   return sha256StableValue(
     projectJsonObject([
       ...normalizeAssistantReplayInput(input),
-      ...normalizeAssistantReplayInput(output, true),
+      ...normalizeAssistantReplayInput(output, true, false, output),
     ]),
   ).digest;
 }
@@ -479,29 +483,18 @@ export function resolveResponsesContinuationRequest(
   const historyToolRoundUnchanged = [false, true].some((ignoreCachedItemIds) =>
     jsonValuesEqual(
       replayedToolRound,
-      normalizeAssistantReplayInput(continuation.lastResponseItems, true, ignoreCachedItemIds),
+      normalizeAssistantReplayInput(
+        continuation.lastResponseItems,
+        true,
+        ignoreCachedItemIds,
+        replayedToolRoundInput,
+      ),
     ),
   );
   if (!historyToolRoundUnchanged) {
     return { request, continuationStatus: "history_changed" };
   }
-  // Conversion already owns these immutable wire items. An identical sent prefix
-  // needs no replay-ID remapping; only the new response and delta need ownership checks.
-  const immutable = getAiTransportHost().immutableData;
-  let samePrefix = true;
-  for (let index = 0; index < previousInput.length; index++) {
-    const item = previousInput[index];
-    if (
-      item !== currentInput[index] ||
-      item === null ||
-      typeof item !== "object" ||
-      !(isSanitizedFrozenResponsesInput(item) || immutable?.isDeeplyFrozenPlainData(item))
-    ) {
-      samePrefix = false;
-      break;
-    }
-  }
-  if (!samePrefix) {
+  if (!hasSameResponsesInputPrefix(previousInput, currentInput)) {
     const historyCurrentInput = currentInput.slice(0, previousInput.length);
     for (const [index, previousItem] of previousInput.entries()) {
       const currentItem = historyCurrentInput[index];
@@ -536,7 +529,7 @@ export function resolveResponsesContinuationRequest(
     if (
       normalizedPrevious === undefined ||
       normalizedCurrent === undefined ||
-      !isDeepStrictEqual(
+      !projectedJsonEqual(
         projectContinuationHistory(normalizedCurrent),
         projectContinuationHistory(normalizedPrevious),
       )
@@ -692,15 +685,17 @@ function connectionIdentity(params: HttpContinuationIdentity): string {
   );
 }
 
+/** Only the conversation writer's scope reaches the slot; every other run sends full input. */
 export function claimOpenAIResponsesHttpContinuation(
   params: HttpContinuationIdentity & {
-    sessionId: string;
+    scope: ProviderStateScope;
     request: ResponsesContinuationRequest;
     restoreRequest?: () => ResponsesContinuationRequest;
   },
 ) {
+  const { sessionId } = params.scope;
   const owner = getAiTransportHost();
-  const key = `${getSessionResourceOwnerId(owner)}\0${params.sessionId}\0${connectionIdentity(params)}`;
+  const key = `${getSessionResourceOwnerId(owner)}\0${sessionId}\0${connectionIdentity(params)}`;
   const previous = httpContinuationEntries.get(key);
   if (previous?.kind === "claimed") {
     return undefined;
@@ -712,7 +707,7 @@ export function claimOpenAIResponsesHttpContinuation(
   const resolved = resolveResponsesContinuationRequest(previous?.state, request);
   const fullRequest = resolved.fullRequest ?? request;
   const continuationRequest = params.request.store === false ? fullRequest : resolved.request;
-  const claimed = { kind: "claimed", sessionId: params.sessionId, owner } as const;
+  const claimed = { kind: "claimed", sessionId, owner } as const;
   httpContinuationEntries.set(key, claimed);
   return {
     // Unstored HTTP responses cannot be referenced, but their prompt prefix can still be cached.

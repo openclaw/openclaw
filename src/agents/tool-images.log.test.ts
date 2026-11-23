@@ -27,14 +27,20 @@ vi.mock("../logging/subsystem.js", () => {
   return { createSubsystemLogger: () => makeLogger() };
 });
 
-vi.mock("../media/media-services.js", () => ({
+// mock-isolation: deterministic encoder sizes isolate logging from native image processing.
+vi.mock("../media/image-ops.js", () => ({
   buildImageResizeSideGrid: () => [2000],
   getImageMetadata: vi.fn(),
   IMAGE_REDUCE_QUALITY_STEPS: [85, 75, 65],
   isImageProcessorUnavailableError: () => false,
   MAX_IMAGE_INPUT_PIXELS: 25_000_000,
-  readImageMetadataFromHeader: () => ({ width: 2001, height: 8 }),
   resizeToJpeg: resizeToJpegMock,
+}));
+
+// mock-isolation: Supply fixed image dimensions for the encoder and logging fixtures.
+vi.mock("../media/image-header-metadata.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../media/image-header-metadata.js")>()),
+  readImageMetadataFromHeader: () => ({ width: 2001, height: 8 }),
 }));
 
 import { sanitizeContentBlocksImages } from "./tool-images.js";

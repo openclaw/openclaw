@@ -1,7 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { CronJob, CronJobsListResult } from "../api/types.ts";
-import { cronListResponseFixture } from "../test-helpers/cron.ts";
+import { createCronRunsResult, cronListResponseFixture } from "../test-helpers/cron.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   chatSessionListResponse,
@@ -59,6 +59,7 @@ async function installSessionFixture(page: Page, jobs: CronJob[]) {
     methodResponses: {
       "progressCard.get": { card: null },
       "cron.list": inventory(jobs),
+      "cron.runs": createCronRunsResult([]),
       "cron.get": { cases: jobs.map((value) => ({ match: { id: value.id }, response: value })) },
       "sessions.list": chatSessionListResponse([
         {

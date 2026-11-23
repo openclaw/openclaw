@@ -10,6 +10,7 @@ import { createTestAdmittedRunContext } from "../../admitted-run-context.test-su
 import { createRequesterTranscriptWriter } from "../../test-helpers/requester-transcript-writer.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import * as sessionEntryRuntime from "../announce/subagent-announce-delivery.runtime.js";
+import { startControlProducer } from "./subagent-control-native.test-support.js";
 import * as ended from "./subagent-lifecycle-events.js";
 import * as cleanupPolicy from "./subagent-registry-cleanup.js";
 import { resolveAnnounceRetryDelayMs } from "./subagent-registry-helpers.js";
@@ -31,6 +32,78 @@ function capturePostimage(entry: SubagentRunRecord) {
     },
     read: () => latest,
   };
+}
+
+export function registerCleanupBurstAuthorityTest({
+  createRunEntry,
+  createLifecycleController,
+  waitForLifecycleState,
+}: fixtures.LifecycleTestDrivers) {
+  it("bounds a cleanup burst while retaining admitted work when admission closes", async () => {
+    rootWork.resetGatewayWorkAdmission();
+    const joinCleanup = observeRootWork();
+    const entries = Array.from({ length: 130 }, (_, index) =>
+      createRunEntry({
+        runId: `bounded-cleanup-${index}`,
+        childSessionKey: `agent:main:subagent:bounded-cleanup-${index}`,
+        endedAt: 4_000,
+        expectsCompletionMessage: true,
+      }),
+    );
+    const runs = new Map(entries.map((entry) => [entry.runId, entry]));
+    const gate = createDeferredCore();
+    const started: string[] = [];
+    const announce = vi.fn(
+      async (_params: Parameters<SubagentLifecycleOptions["runSubagentAnnounceFlow"]>[0]) => {
+        await gate.promise;
+        return "delivered" as const;
+      },
+    );
+    const controller = createLifecycleController({
+      entry: entries[0]!,
+      runs,
+      runSubagentAnnounceFlow: announce,
+    });
+    const runBackgroundWork = controller.runBackgroundWork;
+    using preparation = vi.spyOn(controller, "runBackgroundWork");
+    preparation.mockImplementation((entry, run) =>
+      runBackgroundWork(entry, (release) => {
+        // The first callback starts preparation; later callbacks settle the same run.
+        if (!started.includes(entry.childSessionKey)) {
+          started.push(entry.childSessionKey);
+        }
+        return run(release);
+      }),
+    );
+    try {
+      for (const entry of entries) {
+        expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
+      }
+      await waitForLifecycleState(() => expect(announce).toHaveBeenCalledTimes(2));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(started).toEqual(entries.slice(0, 2).map((entry) => entry.childSessionKey));
+      expect(rootWork.getActiveGatewayRootWorkCount()).toBe(entries.length);
+      rootWork.markGatewayRestartDraining();
+      gate.resolve();
+      await joinCleanup(true);
+      expect(rootWork.getActiveGatewayRootWorkCount()).toBe(0);
+      expect(started).toEqual(entries.map((entry) => entry.childSessionKey));
+      expect(announce).toHaveBeenCalledTimes(entries.length);
+      expect(new Set(announce.mock.calls.map(([params]) => params.childSessionKey))).toEqual(
+        new Set(entries.map((entry) => entry.childSessionKey)),
+      );
+      expect([...runs.values()].every((entry) => entry.cleanupCompletedAt !== undefined)).toBe(
+        true,
+      );
+    } finally {
+      gate.resolve();
+      await joinCleanup();
+      controller.clearRuntimeState();
+      rootWork.resetGatewayWorkAdmission();
+    }
+  });
 }
 
 export function registerDetachedCleanupAuthorityTest({
@@ -87,7 +160,11 @@ export function registerDetachedCleanupAuthorityTest({
         sessionKey,
         operationalRunInstance:
           createTestAdmittedRunContext("cleanup-requester").operationalRunInstance,
-        receiptAuthority: () => !disposed,
+        receiptAuthority: () => {
+          if (disposed) {
+            throw new Error("agent tool caller authority is no longer active");
+          }
+        },
       },
       () =>
         transcripts.withOwnedSessionTranscriptWrites(
@@ -433,6 +510,57 @@ export function registerDeliveryRetryOwnerTests({
       expect(vi.getTimerCount()).toBe(0);
     },
   );
+
+  it("keeps the announce deadline waiting for its live requester, then expires an orphan", async () => {
+    await useRetryTimers();
+    const finished = createDeferredCore<"retryable">();
+    const announce = vi.fn<SubagentLifecycleOptions["runSubagentAnnounceFlow"]>(
+      async () => finished.promise,
+    );
+    using run = fixture(
+      {
+        requesterTurnRunId: "live-expiry-requester",
+        delivery: {
+          status: "pending",
+          requesterDelivery: { state: "waiting", blockingRunId: "live-expiry-requester" },
+        },
+      },
+      { runSubagentAnnounceFlow: announce },
+    );
+    const requester = startControlProducer(
+      run.entry.requesterSessionKey,
+      "expiry-requester",
+      "/synthetic/requester/sessions.json",
+      undefined,
+      "live-expiry-requester",
+    );
+    requester.operation.setPhase("running");
+    const progress = setInterval(
+      () => requester.operation.watchdog.progress("semantic", "requester-work"),
+      60_000,
+    );
+    const join = observeRootWork();
+    try {
+      run.controller.startSubagentAnnounceCleanupFlow(run.entry);
+      await waitForLifecycleState(() => expect(announce).toHaveBeenCalledOnce());
+      expect(run.read().delivery?.requesterDelivery).toMatchObject({
+        state: "waiting",
+        blockingRunId: "live-expiry-requester",
+      });
+      const signal = announce.mock.calls[0]![0].signal!;
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(requester.operation.result).toBeNull();
+      expect(signal.aborted).toBe(false);
+      await requester.finish();
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(signal.aborted).toBe(true);
+    } finally {
+      clearInterval(progress);
+      finished.resolve("retryable");
+      await requester.finish();
+      await join();
+    }
+  });
 
   it.each(["delivered", "expired", "expired during preparation"] as const)(
     "keeps a required final scheduled after detached cleanup failures (%s)",

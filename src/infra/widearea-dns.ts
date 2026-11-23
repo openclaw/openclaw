@@ -59,6 +59,7 @@ export function getWideAreaZonePath(domain: string): string {
 /** Durably replace the CoreDNS zone only after its complete sibling write succeeds. */
 export async function replaceWideAreaZoneFile(zonePath: string, content: string): Promise<void> {
   await replaceFileAtomic({
+    allowDrvfsRenameRecovery: true,
     filePath: zonePath,
     content,
     dirMode: 0o700,

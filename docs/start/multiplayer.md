@@ -120,11 +120,18 @@ For coding work, verified GitHub identity pays off at the commit: with **Git co-
 
 Teammates can add their own provider accounts under **Settings → Profile → Connected accounts**, using the sign-in methods offered by each provider. Their new sessions prefer that account without making it a Gateway-wide default. Collaborators use the session's selected account, and shared same-provider failover can still apply - see [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
 
-To let teammates read selected sessions from a personal Gateway without controlling that machine, use [Session Share](/plugins/session-share). The source operator chooses session groups and pairs a node that advertises only the two read-only session commands. Shared transcripts appear under that node in the team Control UI; viewing requires permission to view others' sessions, and does not allow continuing the source session.
+To let teammates read selected sessions from a personal Gateway without controlling that machine, use [Session Share](/plugins/session-share). The source operator chooses session groups and pairs a node that advertises only the read-only session commands: the two base commands, plus an optional catalog pair for relationship filters and **Open original**. Shared transcripts appear under that node in the team Control UI; viewing requires permission to view others' sessions, and does not allow continuing the source session.
 
 ### Step 5: Bound what each person can do
 
-Named operator roles bind authenticated profiles to a policy: which sessions they can touch, which agents they can use, a maximum set of operator scopes, and whether their new sessions must be sandboxed:
+Configure `gateway.roles.definitions` and `gateway.roles.default` to govern all
+authenticated profiles. The default also supplies a fallback for people without
+a matching assignment. Without a default, explicit assignments govern only
+current OpenClaw ID members through their canonical linked profile, on every
+identified sign-in route. A stored identity link alone is not membership.
+Nonmembers retain their existing access and require a default for named
+`users.setRole` assignments; clearing an assignment remains allowed.
+Each role supplies a policy: which sessions they can touch, which agents they can use, a maximum set of operator scopes, and whether their new sessions must be sandboxed:
 
 ```json5
 {
@@ -151,7 +158,25 @@ Named operator roles bind authenticated profiles to a policy: which sessions the
 
 Give guests the session-only `operator.sessions.write` scope, which also permits reading. `operator.read` and `operator.write` are Gateway-wide: they add channel sends, node and computer control, logs, the user directory, and other shared surfaces that a guest does not need. With `sessions.others: "view"`, guests can still read every shared session, including tool output. Keep sensitive work in draft sessions.
 
-Assign roles with the `users.setRole` Gateway method; see [Named operator roles](/gateway/operator-scopes#named-operator-roles) for the full policy surface and [Permission modes](/gateway/permission-modes) for per-session tool posture. To admit and expire individual outside guests, see [Invite guests](#invite-guests).
+A guest's CLI stays within a session-only device grant. `openclaw gateway call` requests the session scope for session methods such as `sessions.list`, and `openclaw tui` connects with the grant itself. Until the grant is stored, a connection cannot know it: its request is refused with a scope-upgrade request that reports the approved scopes, and the CLI retries within them. The TUI stores the grant with the device token the Gateway returns, and later connections then fit it and file no request. `openclaw gateway call` stores no token, and a trusted-proxy Gateway returns none to the TUI, so behind trusted-proxy auth each connection is refused once before it retries. Set [`gateway.auth.trustedProxy.narrowToDeviceGrant`](/gateway/trusted-proxy-auth#approved-cli-and-tui-grants) to have the Gateway connect such devices within their grant from the first connection, with no request at all. Methods that need a Gateway-wide scope, such as `status`, and the TUI's command list and pending approvals stay unavailable.
+
+For these profile-based connections, assign roles with the `users.setRole` Gateway method; see [Named operator roles](/gateway/operator-scopes#named-operator-roles) for the full policy surface and [Permission modes](/gateway/permission-modes) for per-session tool posture. To admit and expire individual outside guests, see [Invite guests](#invite-guests).
+
+[OpenClaw ID members](/concepts/experimental-features#member-roles) use that same
+profile role on every sign-in route. Invite approval and **Access → Change role**
+assign the role to their linked profile; owners and administrators can also use
+`users.setRole`. Turning on OpenClaw ID installs editable `operator`, `viewer`, and
+`guest` definitions without setting a default. Members with no resolvable role or
+no granted scopes cannot connect. Clearing an assignment exposes any configured
+mapping or default rather than disabling that fallback. Role changes disconnect
+the person's connections and stop their active runs, queued input, and child runs.
+An individual request already admitted may finish; fresh starts use current authority.
+Owner devices retain owner authority.
+
+Use `sessions.others: "invited"` when a person should see only shared sessions they
+are explicitly invited into. A session creator or administrator can select that
+person in an @mention to invite them. The person's actual profile role, agent
+allowlist, and sandbox requirement still apply.
 
 #### Coding as a guest
 
@@ -159,7 +184,10 @@ A sandbox-required guest can work without an administrator role. With the defaul
 `workspaceAccess: "none"`, file and shell tools use a writable private workspace,
 not the shared agent workspace. Managed skill instructions stay read-only.
 Child sessions inherit the parent's sandbox requirement, even when the agent's
-default sandbox mode is off.
+default sandbox mode is off. This contains exec and file tools, not the whole
+Gateway host. Review the [sandbox exclusions](/gateway/operator-scopes#sandbox-exclusions),
+including Code Mode, CLI backends, paired-node commands, worker credentials,
+shared transcripts, and shared GitHub publication.
 
 Local container sandboxes have no network by default. If guests need to clone
 public repositories or install project-local dependencies, explicitly enable
@@ -472,7 +500,7 @@ Visitor Access requires `gateway.roles.default` to be a restricted guest role:
 default: "guest",
 definitions: {
   guest: {
-    sessions: { others: "view" },
+    sessions: { others: "invited" },
     agents: ["assistant"],
     scopes: ["operator.sessions.write"],
     sandbox: "required",
@@ -489,6 +517,13 @@ then asks the agent to call `visitor_invite` with a GitHub login or email and an
 optional note, such as a session link to start from. The result includes short
 invitation text to hand to the guest: who invited them, the sign-in address from
 `gateway.publicOrigin`, the identity to sign in with, the expiry, and the note.
+
+This role sees its own sessions and sessions where it is a member. The session
+creator or an administrator can invite a guest with a selected human @mention.
+Access starts when the message is committed, not when it enters the send queue.
+Remove the guest from session members to revoke access. Explicit public links
+still expose only the sanitized transcript. The session-only scope permits
+changes to the guest's own sessions, not to sessions they were invited to read.
 
 Guests can create sandboxed sessions on the listed agents and publish open or
 explicitly requested draft pull requests from their own sessions through the
@@ -558,9 +593,12 @@ take effect before their normal expiry.
 #### Configure GitHub access for repository work
 
 Install `gh` for the Gateway service account. In **Settings → Profile → GitHub
-connections**, an administrator chooses **For the system** to connect the shared
-publication account. An agent can have an administrative override under
-**Agents → Tools**. Verify the selected account before publishing.
+accounts**, an administrator changes the **Shared agent account**, used by
+every agent without its own account for its commands, dashboard data, and
+**Publish PR** unless you choose My GitHub. To give one agent a different account, such
+as a token limited to a fork, choose **Give its own account** on that agent's row;
+the shared account and other agents stay unchanged. Verify the account before
+publishing.
 
 **My GitHub** is a separate personal connection for explicitly selected
 publication. It does not change the shared shell account or establish verified
@@ -687,7 +725,9 @@ openclaw connect <join-url> --service \
 ```
 
 Approve the intended device on the receiver and confirm the two-command
-allowlist. Move selected source sessions into the **Team** group. Subagents and
+allowlist. For relationship filters and **Open original**, add the optional
+catalog pair as described in [Session Share](/plugins/session-share#open-original-on-a-paired-node).
+Move selected source sessions into the **Team** group. Subagents and
 incognito sessions remain excluded. Removing the group revokes new reads but
 cannot retract text someone already read.
 
@@ -762,17 +802,17 @@ to establish that the service can complete work.
 
 ## Troubleshooting
 
-| Symptom                                                       | Check                                                                                                            |
-| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Browser works; agent cannot provide session links             | Set this server's `gateway.publicOrigin`; prepare a new turn after reload.                                       |
-| Access succeeds but Gateway rejects the connection            | Check loopback trust, forwarded client addresses, required identity headers, and `allowedOrigins`.               |
-| Administrator signs in as an observer                         | Assign the real profile's administrative role and grant the verified identity `operator.admin`, then reconnect.  |
-| OIDC migration creates another person                         | Verify the sign-in email and explicitly link its alias to the existing profile.                                  |
-| GitHub login looks right but publication uses another account | Check the system/agent/personal publication selection and repository Git authentication separately.              |
-| Chat works but widgets fail                                   | Check the distinct sandbox origin, tunnel port, and absence of an interactive Access challenge on that hostname. |
-| Node join receives HTTP 302                                   | Supply machine Access authentication on every required route.                                                    |
-| Shared sessions are missing or names do not link              | Check source group, node account/state, two-command allowlist, receiver role, and verified numeric GitHub IDs.   |
-| Update fails despite free disk                                | Check service temporary-space quota, filesystem metadata, and retained snapshots before retrying.                |
+| Symptom                                                       | Check                                                                                                              |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Browser works; agent cannot provide session links             | Set this server's `gateway.publicOrigin`; prepare a new turn after reload.                                         |
+| Access succeeds but Gateway rejects the connection            | Check loopback trust, forwarded client addresses, required identity headers, and `allowedOrigins`.                 |
+| Administrator signs in as an observer                         | Assign the real profile's administrative role and grant the verified identity `operator.admin`, then reconnect.    |
+| OIDC migration creates another person                         | Verify the sign-in email and explicitly link its alias to the existing profile.                                    |
+| GitHub login looks right but publication uses another account | Check the system/agent/personal publication selection and repository Git authentication separately.                |
+| Chat works but widgets fail                                   | Check the distinct sandbox origin, tunnel port, and absence of an interactive Access challenge on that hostname.   |
+| Node join receives HTTP 302                                   | Supply machine Access authentication on every required route.                                                      |
+| Shared sessions are missing or names do not link              | Check source group, node account/state, session command allowlist, receiver role, and verified numeric GitHub IDs. |
+| Update fails despite free disk                                | Check service temporary-space quota, filesystem metadata, and retained snapshots before retrying.                  |
 
 ## When to split things up
 

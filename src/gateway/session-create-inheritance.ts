@@ -29,40 +29,30 @@ type SessionCreation = NonNullable<CreateGatewaySessionParams["creation"]> &
 /**
  * Classify a create request. A standalone root is a new top-level conversation:
  * no requested parent, fork, plugin owner, incognito boundary, or main target.
- * Durable dashboard roots parent to main for follow-up notices and sidebar threads
- * only under the default DM and session scopes. Incognito roots omit durable
- * lineage so notices cannot cross the storage boundary.
  */
-export function resolveSessionCreateRoot(
-  params: Pick<CreateGatewaySessionParams, "cfg" | "authorizedPluginId" | "fork">,
+export function isStandaloneSessionCreate(
+  params: Pick<CreateGatewaySessionParams, "authorizedPluginId" | "fork">,
   facts: {
     parentSessionKey: string | undefined;
     incognito: boolean;
     targetSessionKey: string;
     mainSessionKey: string;
   },
-): { standalone: boolean; mainParentSessionKey?: string } {
-  const standalone =
+): boolean {
+  return (
     !facts.parentSessionKey &&
     !params.authorizedPluginId &&
     !facts.incognito &&
     params.fork !== true &&
-    facts.targetSessionKey !== facts.mainSessionKey;
-  const groupedUnderMain =
-    standalone &&
-    (params.cfg.session?.dmScope ?? "main") === "main" &&
-    params.cfg.session?.scope !== "global";
-  return {
-    standalone,
-    ...(groupedUnderMain ? { mainParentSessionKey: facts.mainSessionKey } : {}),
-  };
+    facts.targetSessionKey !== facts.mainSessionKey
+  );
 }
 
 /** Inherit parent selection without replacing explicitly requested choices. */
 export function inheritSessionCreateParentFields(params: {
   parent: SessionEntry | undefined;
   newExplicitChild: boolean;
-  newDashboardRoot: boolean;
+  newStandaloneRoot: boolean;
   /** A new standalone root created by an operator, under any DM or session scope. */
   newOperatorRoot: boolean;
   selectedModel?: string;
@@ -91,13 +81,12 @@ export function inheritSessionCreateParentFields(params: {
     // Explicit choices have already been validated by the canonical patch owner.
     delete inherited.fastMode;
   }
-  // Communication inheritance initializes only a new explicit child. Adopting a
-  // key or automatically grouping a dashboard root cannot replace its policy.
+  // Communication inheritance initializes only a new explicit child, never an existing entry.
   if (params.newExplicitChild && overrides.communication === undefined && parent?.communication) {
     inherited.communication = { ...parent.communication };
   }
-  // Main groups dashboard roots; it must not supply their reply-time model.
-  if (params.newDashboardRoot && !params.selectedModel) {
+  // Standalone chats without a selection use the configured default.
+  if (params.newStandaloneRoot && !params.selectedModel) {
     inherited.modelOverrideSource = "default";
   }
   // An operator-created root is a direct chat with its operator, whichever turn
@@ -180,10 +169,15 @@ export function resolveSessionCreateInheritance(params: {
   if (params.request.creation?.via !== "spawn") {
     return { creation: params.request.creation };
   }
+  const initiator = params.request.creation.actor?.delegatedBy;
   const ownerAssignment = inheritSpawnSessionOwner(
     params.parent.entry,
     params.request.creation.actor,
-    params.request.creation.requesterProfileId,
+    initiator
+      ? initiator.type === "human"
+        ? initiator.id
+        : undefined
+      : params.request.creation.requesterProfileId,
     Date.now(),
     resolveResidentProfileId,
   );

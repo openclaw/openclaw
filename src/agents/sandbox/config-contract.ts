@@ -1,6 +1,6 @@
 import type { SandboxDockerConfig, SandboxScope } from "./types.js";
 
-/** pnpm must see the same store identity after cloning a prepared dependency tree. */
+/** Disposable tool state stays outside managed results; pnpm retains its prepared store identity. */
 export function resolveSandboxDependencyStore(docker: SandboxDockerConfig): SandboxDockerConfig {
   const storeDir =
     docker.env?.PNPM_CONFIG_STORE_DIR ??
@@ -10,6 +10,11 @@ export function resolveSandboxDependencyStore(docker: SandboxDockerConfig): Sand
     ...docker,
     tmpfs: [...docker.tmpfs, "/tmp/openclaw-deps:mode=1777"],
     env: {
+      XDG_CACHE_HOME: "/tmp/openclaw-deps/cache",
+      npm_config_cache: "/tmp/openclaw-deps/cache/npm",
+      BUN_INSTALL_CACHE_DIR: "/tmp/openclaw-deps/cache/bun",
+      PIP_CACHE_DIR: "/tmp/openclaw-deps/cache/pip",
+      UV_CACHE_DIR: "/tmp/openclaw-deps/cache/uv",
       ...docker.env,
       // pnpm 12 uses its own prefix; older custom images use npm's spelling.
       npm_config_store_dir: storeDir,

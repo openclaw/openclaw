@@ -110,6 +110,30 @@ async function removalHarness(apiKey: unknown = "__OPENCLAW_REDACTED__", withAcc
   };
 }
 
+it("reloads a conflicting config without replaying the confirmed deletion", async () => {
+  const h = await removalHarness();
+  const original = h.request.getMockImplementation()!;
+  let changed = false;
+  h.request.mockImplementation(async (method) => {
+    if (method === "config.patch") {
+      changed = true;
+      throw new Error("config changed since last load; re-run config.get and retry");
+    }
+    if (method === "config.get" && changed) {
+      return { config: { models: { providers: { replacement: {} } } }, valid: true, hash: "newer" };
+    }
+    return original(method);
+  });
+  const selector = 'button[aria-label="Remove provider: OpenAI"]';
+  h.row.querySelector<HTMLButtonElement>(selector)!.click();
+  const { modal } = await getRenderedModalDialog(document.body);
+  modal.querySelector<HTMLButtonElement>("button.danger")!.click();
+  await waitForSolid(() => expect(h.runtimeConfig.state.configSnapshot?.hash).toBe("newer"));
+  await waitForSolid(() => expect(h.page.querySelector(selector)).toBeNull());
+  expect(requestCount(h.request, "config.patch")).toBe(1);
+  expect(requestCount(h.request, "models.authLogout")).toBe(0);
+});
+
 it.each(["agent", "reconnect", "access"] as const)(
   "does not send another removal after %s changes during the first command",
   async (change) => {

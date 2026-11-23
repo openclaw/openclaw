@@ -8,6 +8,7 @@ import { applyRunHydrationSuppression, readPersistedMediaFacts } from "../../med
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import { createSteerParams } from "./agent-runner-steer-adoption.test-support.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
@@ -161,6 +162,22 @@ it.each(["same", "mixed"] as const)("preserves deferred %s-participant facts", a
     ["b", "second", "/tmp/b.pdf", "application/pdf"],
   ] as const;
   const media = turns.map((turn) => ({ path: turn[2], contentType: turn[3] }));
+  const requesterOrigin = {
+    sessionKey: "agent:main:test:group:shared",
+    messageProvider: "test",
+    accountId: "default",
+    senderId: "ambiguous-transport-sender",
+    senderE164: "+15550000000",
+  };
+  const owner = {
+    channelPrincipal: {
+      channelId: "test",
+      accountId: "default",
+      senderId: requesterOrigin.senderId,
+    },
+    recoveryReference: { version: 2 as const, id: "11111111-1111-4111-8111-111111111111" },
+    isCurrent: () => true,
+  };
   for (const [skillName, label, path, contentType] of turns) {
     const prompt = `[media attached: ${path} (${contentType})]\n${label}`;
     const run = createQueueTestRun({ prompt });
@@ -170,6 +187,8 @@ it.each(["same", "mixed"] as const)("preserves deferred %s-participant facts", a
     );
     run.disableTools = true;
     run.run = { ...run.run, ...structuredClone(carrierRun) };
+    run.run.requesterOrigin = { ...requesterOrigin };
+    bindCommandOwnerAuthority(run.run, owner);
     if (mixed) {
       Object.assign(run, { originatingChannel: "test", originatingTo: "room:shared" });
       Object.assign(run.run, {
@@ -230,6 +249,23 @@ it.each(["same", "mixed"] as const)("preserves deferred %s-participant facts", a
       run.toolsAllow ? policy.readToolAllowlistIntersection(run.toolsAllow) : undefined,
     ).toEqual([["exec"], ["exec", "message"]]);
     expect(run.run).toMatchObject(carrierRun);
+    expect(run.run.requesterOrigin).toEqual({
+      ...requesterOrigin,
+      ...(mixed ? { senderId: undefined, senderE164: undefined } : {}),
+    });
+    if (mixed) {
+      expect(getCommandOwnerAuthority(run.run)).toMatchObject({
+        channelPrincipal: undefined,
+        recoveryReference: undefined,
+      });
+      expect(getCommandOwnerAuthority(run.run)?.isCurrent()).toBe(false);
+    } else {
+      expect(getCommandOwnerAuthority(run.run)).toMatchObject({
+        channelPrincipal: owner.channelPrincipal,
+        recoveryReference: owner.recoveryReference,
+      });
+      expect(getCommandOwnerAuthority(run.run)?.isCurrent()).toBe(true);
+    }
     if (mixed) {
       expect(run.run).toMatchObject({
         senderId: undefined,

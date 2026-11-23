@@ -37,6 +37,23 @@ vi.mock("../../secrets/runtime-state.js", async (importOriginal) => ({
   getActiveSecretsRuntimeSnapshotState: () => secretsMocks.activeSnapshot,
 }));
 
+const billingMocks = vi.hoisted(() => ({
+  collect: vi.fn(
+    async (_params: { before: OpenClawConfig; after: OpenClawConfig }): Promise<string[]> => [],
+  ),
+}));
+
+// The comparator owns its own tests; these cases prove only the Gateway write wiring.
+vi.mock(
+  "../../commands/doctor/shared/model-billing-route-migration.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../commands/doctor/shared/model-billing-route-migration.js")
+    >()),
+    collectModelBillingRouteMigrationWarnings: billingMocks.collect,
+  }),
+);
+
 import {
   commitGatewayConfigWrite,
   didActiveSharedGatewayAuthChange,
@@ -156,5 +173,128 @@ it.each([
   (_name, sourceConfig, config, fallbackPrev, next, fallbackSource, expected) => {
     secretsMocks.activeSnapshot = { sourceConfig, config };
     expect(didActiveSharedGatewayAuthChange({ fallbackPrev, next, fallbackSource })).toBe(expected);
+  },
+);
+
+const writeSnapshot = (sourceConfig: OpenClawConfig) =>
+  ({ path: "/tmp/openclaw.json", exists: true, raw: "{}", hash: "h", sourceConfig }) as never;
+const cliModel = (runtime: string): OpenClawConfig => ({
+  agents: {
+    defaults: {
+      model: "anthropic/claude-opus-4-6",
+      models: { "anthropic/claude-opus-4-6": { agentRuntime: { id: runtime } } },
+    },
+  },
+});
+
+it("returns billing-route warnings for a committed model write without logging them early", async () => {
+  const warning = "Billing route changed for agents.defaults.subagents.model (agent main).";
+  billingMocks.collect.mockReset().mockResolvedValue([warning]);
+  const warn = vi.fn();
+  const result = await commitGatewayConfigWrite({
+    snapshot: writeSnapshot(cliModel("claude-cli")),
+    writeOptions: {},
+    nextConfig: cliModel("openclaw"),
+    context: { logGateway: { warn } } as never,
+  });
+  expect(billingMocks.collect).toHaveBeenCalledWith(
+    expect.objectContaining({ before: cliModel("claude-cli"), after: cliModel("openclaw") }),
+  );
+  expect(result.billingRouteWarnings).toEqual([warning]);
+  // The reply logs with the success response, after application settles.
+  expect(warn).not.toHaveBeenCalled();
+});
+
+it("adds and logs billing-route warnings only on a successful reply", async () => {
+  billingMocks.collect.mockReset().mockResolvedValue(["route moved"]);
+  const warn = vi.fn();
+  const respond = vi.fn();
+  const { reply } = await commitGatewayConfigWrite({
+    snapshot: writeSnapshot(cliModel("claude-cli")),
+    writeOptions: {},
+    nextConfig: cliModel("openclaw"),
+    context: { logGateway: { warn } } as never,
+    respond,
+  });
+  reply(false, undefined, { code: "UNAVAILABLE", message: "not applied" });
+  expect(warn).not.toHaveBeenCalled();
+  reply(true, { ok: true });
+  expect(respond).toHaveBeenLastCalledWith(true, {
+    ok: true,
+    billingRouteWarnings: ["route moved"],
+  });
+  expect(warn).toHaveBeenCalledWith("route moved");
+});
+
+it("keeps the committed write when the billing comparison fails or has nothing to compare", async () => {
+  billingMocks.collect.mockReset().mockRejectedValue(new Error("auth store unavailable"));
+  const warn = vi.fn();
+  const failed = await commitGatewayConfigWrite({
+    snapshot: writeSnapshot(cliModel("claude-cli")),
+    writeOptions: {},
+    nextConfig: cliModel("openclaw"),
+    context: { logGateway: { warn } } as never,
+  });
+  expect(failed).toMatchObject({ hash: "persisted-hash" });
+  expect(failed).not.toHaveProperty("billingRouteWarnings");
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining("billing route comparison skipped"));
+
+  billingMocks.collect.mockClear();
+  await commitGatewayConfigWrite({
+    snapshot: writeSnapshot(transcripts),
+    writeOptions: {},
+    nextConfig: coldStorage,
+  });
+  const workspace = (dir: string): OpenClawConfig => ({
+    ...cliModel("claude-cli"),
+    agents: { ...cliModel("claude-cli").agents, entries: { main: { workspace: dir } } },
+  });
+  await commitGatewayConfigWrite({
+    snapshot: writeSnapshot(workspace("/work/a")),
+    writeOptions: {},
+    nextConfig: workspace("/work/b"),
+  });
+  expect(billingMocks.collect).not.toHaveBeenCalled();
+
+  // A required cloud worker profile forces the embedded runtime, so it alone is compared.
+  await commitGatewayConfigWrite({
+    snapshot: writeSnapshot(cliModel("claude-cli")),
+    writeOptions: {},
+    nextConfig: { ...cliModel("claude-cli"), cloudWorkers: { requiredProfile: "fixture" } },
+  });
+  expect(billingMocks.collect).toHaveBeenCalledOnce();
+});
+
+it.each([
+  { deny: ["openclaw-id-access"] },
+  { entries: { "openclaw-id-access": { enabled: false } } },
+  { enabled: false },
+])(
+  "reports explicit Access plugin opposition without changing plugin policy: %j",
+  async (policy) => {
+    const respond = vi.fn();
+    const plugins = { allow: ["browser"], ...policy };
+    configMocks.replaceConfigFile.mockResolvedValueOnce({
+      nextConfig: { plugins, gateway: { openclawId: { enabled: true } } },
+      persistedHash: "persisted-hash",
+    });
+    const { reply } = await commitGatewayConfigWrite({
+      snapshot: writeSnapshot({ plugins }),
+      writeOptions: {},
+      nextConfig: { plugins, gateway: { openclawId: { enabled: true } } },
+      respond,
+    });
+    reply(true, { ok: true });
+    expect(respond).toHaveBeenLastCalledWith(
+      true,
+      expect.objectContaining({
+        warnings: [expect.stringMatching(/Access page stays off/)],
+      }),
+    );
+    expect(configMocks.replaceConfigFile).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sourceConfig: expect.objectContaining({ plugins }),
+      }),
+    );
   },
 );

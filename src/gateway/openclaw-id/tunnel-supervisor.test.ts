@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import {
   createTunnelSupervisor,
   type TunnelSupervisor,
@@ -172,6 +173,18 @@ describe("tunnel child supervisor", () => {
     expect(starts()).toBe(1);
   });
 
+  it.each([
+    ["key-missing", "keys_missing"],
+    ["key-mismatch", "key_mismatch"],
+  ] as const)("reports a refused bound key (%s) and does not restart", async (mode, reason) => {
+    const { supervisor, starts, log } = setup(mode);
+    supervisor.start();
+    await vi.waitFor(() => expect(supervisor.status()).toEqual({ state: "key_refused", reason }));
+    await sleep(200);
+    expect(starts()).toBe(1);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("the Gateway keeps running"));
+  });
+
   it("recovers to running once the binding becomes available again", async () => {
     const { supervisor, starts } = setup("unavailable-until", { unavailableRetryMs: 100 });
     supervisor.start();
@@ -199,16 +212,33 @@ describe("tunnel child supervisor", () => {
     expect(supervisor.status()).toEqual({ state: "stopped" });
   });
 
-  it("reports unavailable when the child entry is missing", () => {
+  it("reports unavailable when the child entry is missing", async () => {
     const { supervisor, starts } = setup("ok", {
       entry: new URL("./missing-tunnel-child.mjs", import.meta.url),
     });
-    supervisor.start();
-    expect(supervisor.status()).toEqual({
-      state: "unavailable",
-      reason: "tunnel child entry is missing from this install",
-    });
+    {
+      using filesystem = observeMainThreadFs();
+      supervisor.start();
+      await vi.waitFor(() =>
+        expect(supervisor.status()).toEqual({
+          state: "unavailable",
+          reason: "tunnel child entry is missing from this install",
+        }),
+      );
+      expect(filesystem.calls()).toEqual({});
+    }
     expect(starts()).toBe(0);
+  });
+
+  it("settles a pending start before stopping", async () => {
+    const { supervisor, starts } = setup("ok");
+    supervisor.start();
+    await supervisor.stop();
+    expect(supervisor.status()).toEqual({ state: "stopped" });
+    expect(starts()).toBe(0);
+    supervisor.start();
+    await vi.waitFor(() => expect(supervisor.status().state).toBe("running"));
+    expect(starts()).toBe(1);
   });
 
   it("stops with SIGTERM and falls back to SIGKILL after the grace period", async () => {

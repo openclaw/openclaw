@@ -120,7 +120,7 @@ on:
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional baseline list; use supported-lines for latest/previous/extended/floor, last-stable-4, all-since-2026.6.1, release-history, or exact June 2026+ versions
+        description: Optional baseline list; use supported-lines for latest/previous/extended, last-stable-4, all-since-2026.6.1, release-history, or exact June 2026+ versions
         required: false
         default: ""
         type: string
@@ -267,7 +267,7 @@ on:
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional baseline list; use supported-lines for latest/previous/extended/floor, last-stable-4, all-since-2026.6.1, release-history, or exact June 2026+ versions
+        description: Optional baseline list; use supported-lines for latest/previous/extended, last-stable-4, all-since-2026.6.1, release-history, or exact June 2026+ versions
         required: false
         default: ""
         type: string
@@ -388,6 +388,8 @@ on:
       XAI_API_KEY:
         required: false
       ZAI_API_KEY:
+        required: false
+      ZAI_CODING_API_KEY:
         required: false
       Z_AI_API_KEY:
         required: false
@@ -1188,21 +1190,6 @@ jobs:
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 10
     steps:
-      - name: Checkout package workflow ref
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.resolve_package.outputs.tooling_sha }}
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Setup package validation dependencies
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "false"
-          install-deps: "true"
-
       - name: Download package-under-test artifact
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -1211,10 +1198,11 @@ jobs:
           run-id: ${{ needs.resolve_package.outputs.package_artifact_run_id }}
           github-token: ${{ github.token }}
 
-      - name: Enforce public package integrity
+      # The resolver unconditionally validates every source with its captured Q checker.
+      # Verify the canonical download still contains those exact validated bytes.
+      - name: Verify canonical package transfer
         env:
           EXPECTED_PACKAGE_SHA256: ${{ needs.resolve_package.outputs.package_sha256 }}
-          OPENCLAW_PACKAGE_TARBALL_CHECK_TIMINGS: "0"
         shell: bash
         run: |
           set -euo pipefail
@@ -1224,7 +1212,6 @@ jobs:
             echo "Canonical package artifact SHA-256 differs from the resolver output." >&2
             exit 1
           }
-          node scripts/check-openclaw-package-tarball.mjs "$package"
 
   npm_12_install_sh:
     name: npm 12 install.sh acceptance
@@ -1401,7 +1388,7 @@ jobs:
 
       - name: Upload npm 12 installed tree inventory
         if: always() && steps.npm12_install.outcome == 'success'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: npm12-installed-tree-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/npm12-installed-tree.jsonl
@@ -1492,6 +1479,7 @@ jobs:
       VYDRA_API_KEY: ${{ secrets.VYDRA_API_KEY }}
       XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
       ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+      ZAI_CODING_API_KEY: ${{ secrets.ZAI_CODING_API_KEY }}
       Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
       BYTEPLUS_ACCESS_KEY_ID: ${{ secrets.BYTEPLUS_ACCESS_KEY_ID }}
       BYTEPLUS_SECRET_ACCESS_KEY: ${{ secrets.BYTEPLUS_SECRET_ACCESS_KEY }}

@@ -6,12 +6,13 @@ import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 const resolveCleanupPlanForDryRun = vi.fn();
 export const resolveCleanupPlanForRemoval = vi.fn();
 export const removePath = vi.fn();
-const removeAgentSessions = vi.fn();
+const removeConfigCredentialsAndSessions = vi.fn();
 export const removeStateAndLinkedPaths = vi.fn();
 export const removeWorkspaceDirs = vi.fn();
 const gatewayServiceState = vi.hoisted(() => ({
   notLoadedText: "is not installed",
   isLoaded: vi.fn(),
+  isAbsent: vi.fn(),
   stop: vi.fn(),
   uninstall: vi.fn(),
 }));
@@ -34,9 +35,10 @@ vi.mock("./cleanup-plan.js", () => ({
   resolveCleanupPlanForRemoval,
 }));
 
-vi.mock("./cleanup-utils.js", () => ({
+vi.mock("./cleanup-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./cleanup-utils.js")>()),
   removePath,
-  removeAgentSessions,
+  removeConfigCredentialsAndSessions,
   removeStateAndLinkedPaths,
   removeWorkspaceDirs,
 }));
@@ -59,10 +61,11 @@ export function resetCleanupCommandMocks() {
   resolveCleanupPlanForDryRun.mockResolvedValue(cleanupPlan);
   resolveCleanupPlanForRemoval.mockResolvedValue(cleanupPlan);
   removePath.mockResolvedValue({ ok: true });
-  removeAgentSessions.mockReset().mockResolvedValue(undefined);
+  removeConfigCredentialsAndSessions.mockReset().mockResolvedValue(true);
   removeStateAndLinkedPaths.mockResolvedValue(true);
   removeWorkspaceDirs.mockResolvedValue([]);
   gatewayService.isLoaded.mockReset().mockResolvedValue(true);
+  gatewayService.isAbsent.mockReset().mockResolvedValue(false);
   gatewayService.stop.mockReset().mockResolvedValue(undefined);
   gatewayService.uninstall.mockReset().mockResolvedValue(undefined);
   cleanupConfigState.isNixMode = false;

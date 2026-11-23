@@ -655,7 +655,8 @@ private fun VoiceSettingsScreen(
   val voiceWakeLastCommand by viewModel.voiceWakeLastTriggeredCommand.collectAsState()
   val voiceWakeWordsSaving by viewModel.voiceWakeWordsSaving.collectAsState()
   val voiceWakeWordsNoticeText by viewModel.voiceWakeWordsNoticeText.collectAsState()
-  var wakeWordDrafts by remember(voiceWakeWords) {
+  val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
+  var wakeWordDrafts by remember(activeGatewayStableId, voiceWakeWords) {
     mutableStateOf(voiceWakeWords)
   }
   var audioInputDevices by remember { mutableStateOf<List<AudioInputDeviceOption>>(emptyList()) }
@@ -1997,7 +1998,7 @@ internal fun gatewayAccessLabel(
 
 internal fun gatewayLimitedAccessUpgradeText(): String =
   nativeString(
-    "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
+    "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the web app or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
   )
 
 @Composable

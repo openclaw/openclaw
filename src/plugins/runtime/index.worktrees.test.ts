@@ -71,6 +71,7 @@ it("preserves the plugin guard and rejects authority loss after awaited creation
     ownerId: "hosted-owner",
     role: "gateway",
     assertCurrent,
+    prepareAccess: async () => assertCurrent,
     signal: new AbortController().signal,
   });
   effects.create.mockImplementationOnce(async (params: { commitGuard: () => void }) => {

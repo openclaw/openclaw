@@ -35,8 +35,6 @@ import { Menu } from "./solid/menu.tsx";
 import { PanelEmptyState } from "./solid/panel-empty-state.tsx";
 import { PanelIconButton } from "./solid/panel-icon-button.tsx";
 
-const panelStyles = `@scope (openclaw-link-reader-panel) { ${linkReaderViewStyles.map((style) => style.replace(/:host\(([^)]+)\)/gu, ":scope$1").replaceAll(":host", ":scope")).join("\n")} }`;
-
 function NewReaderTabAction(props: { view: () => LinkReaderPanelOwner; internal?: boolean }) {
   const label = () => t("linkReader.newTab");
   return (
@@ -48,7 +46,6 @@ function NewReaderTabAction(props: { view: () => LinkReaderPanelOwner; internal?
       ]}
       type="button"
       aria-label={label()}
-      title={label()}
       disabled={
         props.view().state.tabs.length >= LINK_READER_TAB_LIMIT ||
         !props.view().props.available ||
@@ -127,30 +124,14 @@ function PanelContent(props: {
       ) : props.tab.view.status !== "ready" ? (
         <ReaderLoading url={target()!.href} />
       ) : (
-        <>
-          {(props.tab.view.refreshing || props.tab.view.message) && (
-            <div class="lr-refresh-note" role="status">
-              <span>
-                {props.tab.view.refreshing
-                  ? t("linkReader.refreshingSaved")
-                  : props.tab.view.message}
-                {!props.tab.view.refreshing && (
-                  <button type="button" onClick={() => props.refresh()}>
-                    {t("linkReader.refresh")}
-                  </button>
-                )}
-              </span>
-            </div>
-          )}
-          <LinkReaderContent
-            detail={props.tab.view.detail}
-            target={target()!}
-            loadImage={props.tab.view.images?.load}
-            sections={props.tab.view.sections}
-            onLoadSection={(section) => props.loadSection(section)}
-            onScrollPortRef={props.onScrollPortRef}
-          />
-        </>
+        <LinkReaderContent
+          detail={props.tab.view.detail}
+          target={target()!}
+          loadImage={props.tab.view.images?.load}
+          sections={props.tab.view.sections}
+          onLoadSection={(section) => props.loadSection(section)}
+          onScrollPortRef={props.onScrollPortRef}
+        />
       )}
     </>
   );
@@ -246,6 +227,14 @@ function PanelView(
       current?.status === "loading" || (current?.status === "ready" && current.refreshing === true)
     );
   };
+  const refreshMessage = () => {
+    const current = tab()?.view;
+    return current?.status === "ready"
+      ? current.refreshing
+        ? t("linkReader.refreshingSaved")
+        : current.message
+      : undefined;
+  };
   const tabStripTabs = createMemo(() =>
     view()
       .hostedTabs()
@@ -307,7 +296,7 @@ function PanelView(
     );
   }
   const action = (
-    name: "chevronLeft" | "chevronRight" | "refresh" | "x",
+    name: "chevronLeft" | "chevronRight" | "x",
     label: string,
     click: () => void,
     disabled = false,
@@ -315,6 +304,7 @@ function PanelView(
     <PanelIconButton
       class={["rail-header__action bp-icon", { "session-panel-rail__button": !props.mobile }]}
       label={label}
+      title={false}
       icon={<Icon name={name} />}
       onClick={click}
       disabled={disabled}
@@ -322,7 +312,7 @@ function PanelView(
   );
   return (
     <>
-      <style>{panelStyles}</style>
+      <style>{linkReaderViewStyles}</style>
       {tab() && !props.suppressed && (props.embedded || view().dockLayout.open) ? (
         <section
           class={["bp", props.embedded ? "bp--embedded" : "bp--right", "link-reader-panel"]}
@@ -405,19 +395,28 @@ function PanelView(
                     ]}
                     type="submit"
                     disabled={!props.available || !props.client}
-                    title={t("linkReader.openUrl")}
                     aria-label={t("linkReader.openUrl")}
                   >
                     <Icon name="chevronRight" />
                   </button>
                 )}
-                {!editedUrl() &&
-                  action(
-                    "refresh",
-                    t("linkReader.refresh"),
-                    () => owner.refresh(),
-                    !target() || !props.available || !props.client || loading(),
-                  )}
+                <span class="sr-only" role="status">
+                  {refreshMessage()}
+                </span>
+                {(!editedUrl() || refreshMessage()) && (
+                  <PanelIconButton
+                    class={[
+                      "rail-header__action bp-icon lr-refresh",
+                      { "session-panel-rail__button": !props.mobile },
+                    ]}
+                    label={t("linkReader.refresh")}
+                    title={refreshMessage() ?? false}
+                    icon={<Icon name={loading() ? "loaderCircle" : "refresh"} />}
+                    busy={loading()}
+                    disabled={!target() || !props.available || !props.client || loading()}
+                    onClick={() => owner.refresh()}
+                  />
+                )}
                 <a
                   class="lr-external"
                   href={target()!.href}
@@ -438,7 +437,11 @@ function PanelView(
                 <Menu
                   id={railMenuId}
                   label={t("linkReader.moreActions")}
-                  trigger={<Icon name="moreHorizontal" />}
+                  trigger={
+                    <Icon
+                      name={!loading() && refreshMessage() ? "alertTriangle" : "moreHorizontal"}
+                    />
+                  }
                   triggerClass={
                     props.mobile
                       ? "oc-icon-button oc-icon-button--28 rail-header__action bp-icon lr-menu"
@@ -448,6 +451,13 @@ function PanelView(
                   placement="bottom-end"
                   disabled={!target()}
                   items={[
+                    {
+                      kind: "content",
+                      id: "refresh-status",
+                      content: refreshMessage() && (
+                        <p class="lr-rail-message">{refreshMessage()}</p>
+                      ),
+                    },
                     { id: "copy", label: t("linkReader.copyLink"), icon: <Icon name="copy" /> },
                   ]}
                   onSelect={(item) => {

@@ -17,14 +17,13 @@ import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
-import { captureCommandOwnerAssertion } from "../command-owner-authority.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { resolveReplyScheduledToolPolicy } from "./agent-runner-run-params.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 
 /** Owns reply admission and closes its delivery grant after deferred and terminal writes settle. */
-export function prepareReplyTurnExecution(params: AgentTurnParams, runId: string) {
+export async function prepareReplyTurnExecution(params: AgentTurnParams, runId: string) {
   const admittedRunContext: { current?: AdmittedRunContext } = {};
   const gatewayContextResolver =
     readChannelContextGatewayContextResolver(params.sessionCtx) ??
@@ -38,9 +37,6 @@ export function prepareReplyTurnExecution(params: AgentTurnParams, runId: string
       sessionKey,
       storePath: params.storePath,
     }),
-    params.followupRun.run.senderIsOwner === true
-      ? captureCommandOwnerAssertion(params.followupRun.run)
-      : undefined,
     params.followupRun.run.internalEventExecution?.assertCurrent,
     automation?.assertCurrent,
   ]);
@@ -55,7 +51,7 @@ export function prepareReplyTurnExecution(params: AgentTurnParams, runId: string
   const cronAdmission =
     automation && sessionKey
       ? prepareCronRunAdmission({
-          scheduledExecution: automation.occurrence.mint({
+          scheduledExecution: await automation.occurrence.mint({
             cfg: selectLiveRuntimeConfig(params.followupRun.run.config),
             agentId: params.followupRun.run.agentId,
             runId,
@@ -69,7 +65,9 @@ export function prepareReplyTurnExecution(params: AgentTurnParams, runId: string
           agentId: params.followupRun.run.agentId,
           runId,
           sessionId: params.followupRun.run.sessionId,
-          sessionKey,
+          // Tools redeem the turn capability under the policy key, as for ordinary replies.
+          sessionKey: params.runtimePolicySessionKey ?? sessionKey,
+          sourceReplySessionKey: sessionKey,
           jobId: automation.job.id,
           deliveryAttemptFence: automation.deliveryAttemptFence ?? null,
           operatorAuthority: params.followupRun.operatorAuthority,
@@ -115,8 +113,11 @@ export function prepareReplyTurnExecution(params: AgentTurnParams, runId: string
         standingGrantAuthority: cronAdmission.standingGrantAuthority,
       });
     }
-    const controllerAbortSignal = params.replyOperation?.abortSignal;
-    const callerAbortSignal = params.opts?.abortSignal;
+    const abortSignals = [
+      params.replyOperation?.abortSignal,
+      params.opts?.abortSignal,
+      resolveFollowupAbortSignal(params.followupRun),
+    ].filter((signal): signal is AbortSignal => signal !== undefined);
     const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
       replyOperation: params.replyOperation,
       runId,
@@ -124,13 +125,8 @@ export function prepareReplyTurnExecution(params: AgentTurnParams, runId: string
       sessionId: params.followupRun.run.sessionId,
       sessionKey: params.sessionKey,
       sessionFile: params.followupRun.run.sessionFile,
-      abortSignal: resolveFollowupAbortSignal({
-        abortSignal:
-          controllerAbortSignal && callerAbortSignal
-            ? AbortSignal.any([controllerAbortSignal, callerAbortSignal])
-            : (controllerAbortSignal ?? callerAbortSignal),
-        operatorAuthority: params.followupRun.operatorAuthority,
-      }),
+      // Retained turns keep their own source/controller cancellation, not admission policy.
+      abortSignal: abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0],
     });
     return {
       preparedRunAdmission,

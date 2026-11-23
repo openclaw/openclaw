@@ -27,9 +27,11 @@ import { projectUpdateRun } from "../app/update-run-projection.ts";
 import {
   formatUpdateCampaignLabel,
   formatUpdateTargetLabel,
+  isFinishingUpdateCampaign,
   isUpdateActionable,
 } from "../app/update-schedule-projection.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
+import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { createInterval } from "../lib/reactive/timers.ts";
@@ -42,6 +44,8 @@ import { UpdateGitRevisions } from "./solid/update-git-revisions.tsx";
 import "./tooltip.ts";
 
 registerEnglishCatalog(registerSidebarAttentionEnglish);
+// Update titles and finishing-campaign copy.
+registerEnglishCatalog(registerUpdateActionsEnglish);
 
 export type SidebarUpdateCardProps = {
   compact: boolean;
@@ -161,14 +165,32 @@ export function SidebarUpdateCard(
 
   const openRun = () => props.updateRun && confirmUpdate(props.updateRun);
 
-  const expansionChecksTarget = () =>
-    Boolean(props.onCheckStatus) &&
-    !nativeUpdateAvailable() &&
-    !isUpdateRunAttentionVisible(
+  const visibleRun = createMemo(() =>
+    isUpdateRunAttentionVisible(
       props.updateRun ?? null,
       props.updateRunAcknowledged ?? false,
       props.connected ? props.serving : undefined,
-    );
+    )
+      ? (props.updateRun ?? null)
+      : null,
+  );
+  // A finishing restart completes what the finished run left owed, so its countdown leads
+  // and that outcome stays beside it. Release campaigns keep the recorded run first.
+  const finishedRunBehindRestart = createMemo(() => {
+    const run = visibleRun();
+    return run && run.status !== "running" && isFinishingUpdateCampaign(props.updateSchedule)
+      ? run
+      : null;
+  });
+  const leadingRun = () => (finishedRunBehindRestart() ? null : visibleRun());
+
+  // A finishing restart has no target to refresh, so opening it keeps its countdown in view;
+  // starting the update still checks first.
+  const expansionChecksTarget = () =>
+    Boolean(props.onCheckStatus) &&
+    !nativeUpdateAvailable() &&
+    !leadingRun() &&
+    !isFinishingUpdateCampaign(props.updateSchedule);
 
   const checkStatus = action(async function* (pending: Promise<boolean>) {
     setCheckingTarget(true);
@@ -279,39 +301,31 @@ export function SidebarUpdateCard(
         title: t("chat.sidebar.serverUpdatedTitle"),
       };
     }
-    if (
-      isUpdateRunAttentionVisible(
-        props.updateRun ?? null,
-        props.updateRunAcknowledged ?? false,
-        props.connected ? props.serving : undefined,
-      ) &&
-      props.updateRun
-    ) {
-      const view = projectUpdateRun(props.updateRun, props.connected ?? true);
+    const run = leadingRun();
+    if (run) {
+      const view = projectUpdateRun(run, props.connected ?? true);
       return {
-        title: view.headline,
+        // The Inbox row already renders a status icon. The report keeps its own mark.
+        title: view.headline.replace(/^[✅⚠ℹ↩⬆]\uFE0F? /u, ""),
         detail:
           props.statusBanner?.source === "read"
             ? props.statusBanner.text
             : !latest(targetReady)
               ? t("updates.sidebar.checkFailed")
               : view.compactLabel,
-        timestampMs:
-          props.updateRun.status === "running"
-            ? props.updateRun.createdAtMs
-            : props.updateRun.finishedAtMs,
+        timestampMs: run.status === "running" ? run.createdAtMs : run.finishedAtMs,
         icon: (
           <Icon
             name={
-              props.updateRun.status === "running"
+              run.status === "running"
                 ? "refresh"
-                : props.updateRun.status === "succeeded"
+                : run.status === "succeeded"
                   ? "check"
                   : "alertTriangle"
             }
           />
         ),
-        severity: props.updateRun.status === "failed" ? ("error" as const) : ("warning" as const),
+        severity: run.status === "failed" ? ("error" as const) : ("warning" as const),
       };
     }
     const campaign = props.updateSchedule?.campaign;
@@ -339,12 +353,17 @@ export function SidebarUpdateCard(
             statusBanner?.text ??
             t("updates.sidebar.availableSummary")),
       icon: <Icon name={statusBanner ? "alertTriangle" : busy ? "refresh" : "download"} />,
-      severity: statusBanner?.tone === "danger" ? ("error" as const) : ("warning" as const),
+      severity:
+        statusBanner?.tone === "danger" || finishedRunBehindRestart()?.status === "failed"
+          ? ("error" as const)
+          : ("warning" as const),
       title: blocked
         ? t("updates.sidebar.blockedTitle")
-        : busy
-          ? t("updates.sidebar.updating")
-          : t("updates.sidebar.availableTitle"),
+        : isFinishingUpdateCampaign(props.updateSchedule)
+          ? t("updates.sidebar.finishingTitle")
+          : busy
+            ? t("updates.sidebar.updating")
+            : t("updates.sidebar.availableTitle"),
     };
   }
 
@@ -356,6 +375,11 @@ export function SidebarUpdateCard(
           <SidebarNotificationCard
             title={current().title}
             detail={checkingTarget() ? t("updates.sidebar.checking") : current().detail}
+            detailRole={
+              !props.refreshRequired && leadingRun() && props.statusBanner?.source === "read"
+                ? "alert"
+                : undefined
+            }
             timestampMs={current().timestampMs}
             icon={current().icon}
             severity={current().severity}
@@ -366,7 +390,20 @@ export function SidebarUpdateCard(
               }
             }}
             onDismiss={props.onDismiss}
-            body={<CompactDetails />}
+            body={
+              <Show when={leadingRun() && !props.refreshRequired} fallback={<CompactDetails />}>
+                <div class="sidebar-issues-panel__actions">
+                  <button
+                    ref={sidebarAttentionFocusRef()}
+                    class="sidebar-issues-panel__action"
+                    type="button"
+                    onClick={openRun}
+                  >
+                    {t("updates.run.toast.details")}
+                  </button>
+                </div>
+              </Show>
+            }
             bodyClass="sidebar-update-issue__body"
           />
         )}
@@ -435,6 +472,8 @@ export function SidebarUpdateCard(
 
   function RefreshCard() {
     const problem = () => (refreshInFlight() ? undefined : refreshProblem());
+    const title = () => t("connection.workspace.reload.title");
+    // Progress and problems replace the title; the pill keeps one line.
     const detail = () =>
       refreshInFlight()
         ? t("common.refreshing")
@@ -442,7 +481,7 @@ export function SidebarUpdateCard(
           ? t("updates.refreshUnreachable")
           : problem() === "blocked"
             ? t("updates.refreshBlocked")
-            : t("chat.sidebar.serverUpdatedRefresh");
+            : undefined;
     return (
       <div class="refresh-notice" role="status" aria-live="polite">
         {renderStatus()}
@@ -453,20 +492,26 @@ export function SidebarUpdateCard(
             { "refresh-notice__surface--warn": problem() === "unreachable" },
           ]}
           data-problem={problem() ?? undefined}
-          aria-label={`${t("chat.sidebar.serverUpdatedTitle")}: ${detail()}`}
+          aria-label={`${title()}: ${detail() ?? t("connection.workspace.reload.description")}`}
           type="button"
           disabled={refreshInFlight()}
           aria-busy={refreshInFlight() ? "true" : "false"}
           onClick={() => void refreshControlUi()}
         >
-          {/* Phones replace the title with a following detail. */}
-          <Show when={refreshInFlight() || problem()}>
-            <span class="sidebar-update-card__subtitle refresh-notice__detail">{detail()}</span>
-          </Show>
-          <span class="sidebar-update-card__title">{t("chat.sidebar.serverUpdatedTitle")}</span>
+          <span class="refresh-notice__icon" aria-hidden="true">
+            <Show
+              when={!refreshInFlight()}
+              fallback={<span class="btn__spinner refresh-notice__spinner" />}
+            >
+              <Icon name={problem() === "unreachable" ? "alertTriangle" : "refresh"} />
+            </Show>
+          </span>
+          <span class="refresh-notice__label">{detail() ?? title()}</span>
           <Show when={!refreshInFlight()}>
-            <span class="sidebar-update-card__hold refresh-notice__action" aria-hidden="true">
-              {problem() === "unreachable" ? t("common.retry") : t("common.refresh")}
+            <span class="refresh-notice__action" aria-hidden="true">
+              {problem() === "unreachable"
+                ? t("common.retry")
+                : t("connection.workspace.reloadAction")}
             </span>
           </Show>
         </button>
@@ -474,11 +519,12 @@ export function SidebarUpdateCard(
     );
   }
 
-  function RecordedRunCard(current: { run: UpdateRunRecord }) {
+  function RecordedRunCard(current: { run: UpdateRunRecord; beside?: boolean }) {
     const view = createMemo(() => projectUpdateRun(current.run, props.connected ?? true));
     return (
       <div class="sidebar-update-card" role="status" aria-live="polite">
-        {renderStatus()}
+        {/* Beside a campaign, that campaign's card owns the shared status. */}
+        {current.beside ? null : renderStatus()}
         <button
           ref={sidebarAttentionFocusRef()}
           class="sidebar-update-card__action"
@@ -586,7 +632,7 @@ export function SidebarUpdateCard(
               <Show
                 when={canUpdate()}
                 fallback={
-                  <openclaw-tooltip open-on-click prop:content={t("updates.adminRequired")}>
+                  <openclaw-tooltip open-on-click prop:content={t("updates.adminRequiredTooltip")}>
                     <UpdateAction />
                   </openclaw-tooltip>
                 }
@@ -619,21 +665,22 @@ export function SidebarUpdateCard(
   }
 
   function Card() {
-    const run = createMemo(() =>
-      isUpdateRunAttentionVisible(
-        props.updateRun ?? null,
-        props.updateRunAcknowledged ?? false,
-        props.connected ? props.serving : undefined,
-      )
-        ? props.updateRun
-        : null,
-    );
     // Branch components retain their controls while the current run publishes progress.
     return (
       <Show
         when={props.refreshRequired}
         fallback={
-          <Show when={run()} fallback={<AvailableCard />}>
+          <Show
+            when={leadingRun()}
+            fallback={
+              <>
+                <AvailableCard />
+                <Show when={finishedRunBehindRestart()}>
+                  {(run) => <RecordedRunCard run={run()} beside />}
+                </Show>
+              </>
+            }
+          >
             {(current) => <RecordedRunCard run={current()} />}
           </Show>
         }

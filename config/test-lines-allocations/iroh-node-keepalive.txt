@@ -1,2 +1,0 @@
-7
-# Native keep-alive option rejection and direct-connection coverage.

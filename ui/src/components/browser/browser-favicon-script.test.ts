@@ -3,14 +3,20 @@ import { runInNewContext } from "node:vm";
 import { afterEach, expect, it, vi } from "vitest";
 import { browserFaviconScript } from "./browser-favicon-script.ts";
 
-function readFavicon(fetch: ReturnType<typeof vi.fn>): Promise<string | null> {
-  return runInNewContext(`(${browserFaviconScript})(1, 10_000)`, {
+function readFavicon(
+  fetch: ReturnType<typeof vi.fn>,
+  colorScheme?: "light" | "dark",
+  matchMedia?: (query: string) => EventTarget & { matches: boolean },
+): Promise<string | null> {
+  return runInNewContext(`(${browserFaviconScript})(1, 10_000, colorScheme)`, {
     document,
     location,
     URL,
     fetch,
     FileReader,
     AbortController,
+    matchMedia,
+    colorScheme,
     setTimeout,
     clearTimeout,
   });
@@ -23,6 +29,33 @@ function iconResponse(type = "image/png", content = "x") {
 afterEach(() => {
   document.head.replaceChildren();
   vi.useRealTimers();
+});
+
+it("waits for WebKit and the page to adopt the new color scheme before reading its icon", async () => {
+  const icon = document.createElement("link");
+  icon.rel = "icon";
+  icon.href = "/dark.png";
+  document.head.append(icon);
+  const preference = Object.assign(new EventTarget(), { matches: false });
+  const fetchIcon = vi.fn().mockResolvedValue(iconResponse());
+  const result = readFavicon(fetchIcon, "light", () => preference);
+  expect(fetchIcon).not.toHaveBeenCalled();
+
+  preference.matches = true;
+  preference.dispatchEvent(new Event("change"));
+  icon.href = "/light.png";
+  expect(await result).toBe("data:image/png;base64,eA==");
+  expect(fetchIcon.mock.calls.map(([url]) => new URL(url).pathname)).toEqual(["/light.png"]);
+});
+
+it("uses the matching media-qualified icon instead of the first equally sized link", async () => {
+  document.head.innerHTML = `<link rel="icon" sizes="32x32" media="(prefers-color-scheme: dark)" href="/dark.png">
+    <link rel="icon" sizes="32x32" media="(prefers-color-scheme: light)" href="/light.png">`;
+  const fetchIcon = vi.fn().mockResolvedValue(iconResponse());
+  const media = (query: string) =>
+    Object.assign(new EventTarget(), { matches: query === "(prefers-color-scheme: light)" });
+  expect(await readFavicon(fetchIcon, "light", media)).toBe("data:image/png;base64,eA==");
+  expect(fetchIcon.mock.calls.map(([url]) => new URL(url).pathname)).toEqual(["/light.png"]);
 });
 
 it("reads the preferred 32x32 icon once as a bounded image data URL", async () => {

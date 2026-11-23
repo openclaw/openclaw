@@ -623,7 +623,9 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
                 expect(publishPrompt).not.toHaveBeenCalled();
                 expect(outcome).toMatchObject({
                   status: "rejected",
-                  reason: { message: "admitted run authority is no longer active" },
+                  reason: {
+                    message: "This agent run is no longer active. Start a new turn to retry.",
+                  },
                 });
               } else {
                 expect(outcome.status).toBe("fulfilled");
@@ -840,9 +842,8 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     const sessionCall = hoisted.createAgentSession.mock.calls[0];
     expect(sessionCall?.[0]).toMatchObject({ resourceLoader: fixture.resourceLoader });
     expect(sessionCall?.[0]).toMatchObject({
-      beforeToolBatch: undefined,
+      toolRepeatPolicy: expect.objectContaining({ enabled: true }),
       contextOverflowRecoveryOwner: "caller",
-      cleanupProviderSessionResourcesOnDispose: false,
     });
     expect(fixture.activeSession.agent.state.systemPrompt).toBe("system prompt");
     expect(fixture.input.onSystemPromptChanged).toHaveBeenCalledWith("  system prompt\n");
@@ -1021,7 +1022,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     await prepareEmbeddedAttemptAgentSession(fixture.input);
 
     expect(hoisted.createAgentSession.mock.calls[0]?.[0]).toMatchObject({
-      beforeToolBatch: undefined,
+      toolRepeatPolicy: expect.objectContaining({ enabled: true }),
       contextOverflowRecoveryOwner: "session",
     });
   });

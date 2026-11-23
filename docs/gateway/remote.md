@@ -13,6 +13,29 @@ OpenClaw runs one Gateway (the master) on a host and connects every client to it
 Remote clients can continue the same Gateway-owned conversation by URL or short
 reference. See [Session synchronization and attachment](/concepts/session-attachment).
 
+## OpenClaw ID from a source checkout
+
+Maintainers running from `main` must build the local iroh transport before using
+OpenClaw ID. From the repository root, run:
+
+```bash
+pnpm build:iroh
+```
+
+Install [rustup](https://rustup.rs/) and your platform's native build tools first
+(a C/C++ toolchain and linker; Xcode Command Line Tools on macOS). The crate pins
+Rust 1.99.0, matching its CI builds, without changing your default toolchain.
+If your shell sets `RUSTUP_TOOLCHAIN`, unset it for this command so rustup uses
+the crate pin.
+The command writes the native `.node` file beside
+`crates/openclaw-iroh-node/index.js` and skips compilation when it is newer than
+the crate's sources and build inputs. Run it again after pulling native changes.
+It is opt-in: `pnpm build` does not compile Rust. Restart your source Gateway
+after building to use the binding.
+
+An installed build without the transport cannot enable OpenClaw ID remote access;
+the Gateway keeps running and other access methods remain available.
+
 ## OpenClaw ID nodes (Labs)
 
 With **OpenClaw ID** enabled in Labs, headless nodes can reach a claw through its
@@ -22,19 +45,23 @@ registers a signed, single-use node invitation; the link defaults to 10 minutes
 and cannot last longer than one hour.
 
 From an approved owner browser, open **Access → Nodes → Add node**, enter a
-label, and choose **Create node command**. Copy the command into a POSIX shell on
-the computer you want to add. The default command uses the Gateway's OpenClaw
-version through `npx` and installs the node as a service after approval. Expand
-**Already have OpenClaw installed?** for the installed CLI command.
+label, and choose **Create invite**. The dialog shows the single-use invite link
+with **Copy invite link**. Expand **Use the
+command line** for a POSIX shell command that uses the Gateway's OpenClaw version
+through `npx` and installs the node as a service after approval, and for the
+installed CLI command.
 
 The browser builds the secret-bearing link and both commands locally. Neither the
 link nor the secret is sent to the Gateway, stored by the UI, or logged. Closing
-the dialog discards the command; pending requests remain available under **Nodes**.
-If Discovery is unconfigured, no command is created: configure
+the dialog discards the link; pending requests remain available under **Nodes**.
+When the Gateway has `gateway.openclawId.discoveryUrl` configured, the link carries
+that Discovery origin, so the link alone is enough to join. If Discovery is
+unconfigured, the dialog still shows the link but no command: configure
 `gateway.openclawId.discoveryUrl` on the Gateway first. The relay must be running.
 
-Run the join command supplied by the owner, including the deployment's Discovery
-origin:
+Run the join command supplied by the owner. `--discovery-url` is needed only when
+the link carries no Discovery origin and none is saved, and it overrides the
+link's origin when given:
 
 ```bash
 openclaw node join '<node-join-link>' --discovery-url https://discovery.example.test
@@ -328,6 +355,14 @@ Cloudflare dependency or login flow. Only the generic exec secret provider
 invokes the exact command an operator configures. Resolved edge-auth headers are
 sent only when the target matches the configured `gateway.remote.url` scope,
 only over `wss://`, and never across redirects.
+
+When the Gateway uses [trusted-proxy auth](/gateway/trusted-proxy-auth), the
+proxy identity authenticates these connections, so a CLI or TUI behind it needs
+no Gateway token or password: its first `openclaw tui` connection sends a device
+pairing request for an administrator to approve. The approved device grant
+limits that device; no named operator role (`gateway.roles.default`) is needed.
+A Gateway on token or password auth still requires that credential; edgeAuth
+only gets the connection through the proxy.
 
 ## Credential precedence
 

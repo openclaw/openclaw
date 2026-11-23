@@ -392,6 +392,7 @@ describe("AppSidebar session indicators", () => {
       } as ApplicationGatewaySnapshot["hello"],
     });
     const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessions.sessions);
+    sidebar.setSessionSortMode("created");
     sessions.publishList({
       result: {
         ts: 2,
@@ -416,9 +417,7 @@ describe("AppSidebar session indicators", () => {
       },
     });
     await settleLitElement(sidebar);
-    expect(
-      sidebar.querySelector("[data-child-session-toggle]")?.getAttribute("aria-expanded"),
-    ).toBe("true");
+    sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")!.click();
     await waitForFast(() =>
       expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(4),
     );

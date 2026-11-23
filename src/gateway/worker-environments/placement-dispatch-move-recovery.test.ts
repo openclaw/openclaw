@@ -257,7 +257,7 @@ describe("worker Gateway move recovery", () => {
           )
           .run("replacement-claim", "replacement-run", active.sessionId, claim.claimId);
         await expect(restartedStore.prepareWorkspaceResultClaim(claim)).rejects.toThrow(
-          "workspace result authority changed",
+          "workspace result changed",
         );
         expect(restartedStore.validateWorkspaceResultClaim(claim)).toBe(false);
       });

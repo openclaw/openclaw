@@ -1,0 +1,17 @@
+# OCF-281 (unlink a claw from its own computer): unlinking permanently removes every member and
+# retires the claw's name, so the tests cover the tunnel refusal on every action, binding the
+# unlink to the warned claw, the wipe and teardown with failing follow-up steps, the persisted
+# pending unlink across restarts, Discovery's refusal kept as refused, the sender's stop/start
+# lifecycle, the CLI warning and confirmation, and the Control UI dialog. Review repairs add the
+# signed-out local Unlink entry, a claw that never sent its registration versus one that did
+# (service, CLI exit code and status lines, dialog), an unlink racing a registration in flight or
+# its lookup, a publication without a link code, and the pre-unlink stored-claw upgrade proof.
+# Final review repairs add Unlink staying in the menu when only the endpoint key is refused, and
+# the tunnel child starting unlinked (not pinned to the old K_srv) after a confirmed unlink.
+# The pin is also read after persistence but before acknowledgement, including initial linking.
+# Lifecycle resume joins an active send without extending the committed reply; explicit flush
+# preserves newly queued statements, stop/start cancellation and retry backoff.
+# A newly committed unlink is sent on its own request, so older stalled pending unlinks never
+# hold its reply.
+# A flush that fails during a run, or is cut short by a stop and restart, is retried later.
+639

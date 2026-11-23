@@ -5,11 +5,15 @@
  *
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/scratch-cleanup-measure.ts \
  *   --root /absolute/new/evidence-directory --samples 5 --mode timing
+ * --agent-temp compares inherited system temp with workspace TMPDIR using a real child;
+ * both variants run the same TTL owner. Routing/fork time is recorded outside owner time.
+ * Baseline leaves validation scratch unowned; this is reclamation cost, not a speedup.
  * Repeat with a new root and --mode allocation; --mode profile writes one CPU profile.
  * Acceptance: reclaim every expired entry, preserve fresh/live/outside files, bounded paced
  * deletion. Report added CPU/allocation cost and A/A spread; do not claim a Gateway speedup.
  */
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { Session } from "node:inspector/promises";
@@ -17,7 +21,9 @@ import { availableParallelism, loadavg, totalmem } from "node:os";
 import path from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
-import { parseArgs } from "node:util";
+import { pathToFileURL } from "node:url";
+import { parseArgs, promisify } from "node:util";
+import { prepareAgentExecScratch } from "../../src/agents/exec-scratch.js";
 import {
   cleanScratch,
   closeScratchCleanupCursor,
@@ -33,6 +39,9 @@ const { values } = parseArgs({
     files: { type: "string", default: "62000" },
     "file-bytes": { type: "string", default: "19050" },
     mode: { type: "string", default: "timing" },
+    baseline: { type: "string" },
+    "agent-temp": { type: "boolean", default: false },
+    "nested-clone": { type: "boolean", default: false },
   },
 });
 assert(values.root, "--root must name a new synthetic evidence directory");
@@ -41,6 +50,9 @@ assert(["timing", "allocation", "profile"].includes(values.mode));
 const integer = (key: "samples" | "files" | "file-bytes", min: number) =>
   parseStrictIntegerOption({ raw: values[key], label: `--${key}`, min, fallback: min });
 const samples = values.mode === "profile" ? 1 : integer("samples", 1);
+const baseline: typeof import("../../src/infra/scratch-cleanup.js") | undefined = values.baseline
+  ? await import(pathToFileURL(path.resolve(values.baseline)).href)
+  : undefined;
 const fileCount = integer("files", 100);
 const fileBytes = integer("file-bytes", 1);
 await fs.mkdir(path.resolve(values.root));
@@ -55,7 +67,7 @@ const liveFiles = Math.floor(fileCount * 0.2);
 const freshFiles = Math.floor(fileCount * 0.2);
 const coverageFiles = Math.floor(fileCount / 31);
 const expiredFiles = fileCount - liveFiles - freshFiles - coverageFiles;
-const expired = path.join(checkout, ".openclaw/tmp/expired-proof");
+let expired = path.join(checkout, ".openclaw/tmp/expired-proof");
 const coverage = path.join(runtime, "node-coverage-synthetic");
 const freshProof = path.join(checkout, ".openclaw/tmp/fresh-proof");
 const liveProof = path.join(liveCheckout, ".openclaw/tmp/live-proof");
@@ -67,7 +79,8 @@ for (let offset = 0; offset < payload.length; offset += 32) {
     .copy(payload, offset, 0, Math.min(32, payload.length - offset));
 }
 const fixtureCounts = { expiredFiles, coverageFiles, freshFiles, liveFiles };
-const reclaimedBytes = (expiredFiles + coverageFiles) * fileBytes;
+const reclaimedBytes =
+  (expiredFiles + coverageFiles + (values["nested-clone"] ? 1 : 0)) * fileBytes;
 
 async function populate(directory: string, count: number, mtime: Date) {
   await fs.mkdir(directory, { recursive: true });
@@ -87,6 +100,11 @@ await populate(freshProof, freshFiles, fresh);
 await populate(liveProof, liveFiles, old);
 const outside = path.join(checkout, "keep-source.txt");
 await fs.writeFile(outside, "synthetic source, outside scratch");
+const sharedPack = path.join(root, "shared.pack");
+if (values["nested-clone"]) {
+  await fs.writeFile(sharedPack, payload);
+  await fs.utimes(sharedPack, fresh, fresh);
+}
 const filesystem = await fs.statfs(root);
 const metadata = {
   scope:
@@ -96,6 +114,8 @@ const metadata = {
     files: fileCount,
     logicalBytes: fileCount * fileBytes,
     fileBytes,
+    nestedClone: values["nested-clone"],
+    agentTemp: values["agent-temp"],
     payload: "deterministic SHA-256 blocks; byte removal counts are logical, not allocated extents",
   },
   host: {
@@ -120,9 +140,38 @@ const rows: Record<string, unknown>[] = [];
 try {
   for (let sample = 0; sample < samples; sample++) {
     for (const label of values.mode === "profile" ? ["candidate"] : ["A1", "A2"]) {
-      await populate(expired, expiredFiles, old);
-      await populate(coverage, coverageFiles, old);
       for (const variant of ["baseline", "candidate"]) {
+        let routingMs: number | undefined;
+        if (values["agent-temp"]) {
+          await fs.mkdir(runtime, { recursive: true });
+          const started = performance.now();
+          const environment =
+            variant === "candidate"
+              ? await prepareAgentExecScratch(checkout)
+              : { TMPDIR: runtime, TMP: runtime, TEMP: runtime };
+          const reply = await promisify(execFile)(
+            process.execPath,
+            [
+              "-e",
+              'process.stdout.write(require("node:path").join(require("node:os").tmpdir(),"validation-proof"))',
+            ],
+            { env: { ...process.env, ...environment } },
+          );
+          expired = reply.stdout;
+          routingMs = performance.now() - started;
+        }
+        await fs.rm(expired, { recursive: true, force: true });
+        await populate(expired, expiredFiles, old);
+        await populate(coverage, coverageFiles, old);
+        if (values["nested-clone"]) {
+          const packs = path.join(expired, "native/.git/objects/pack");
+          await fs.mkdir(packs, { recursive: true });
+          await fs.link(sharedPack, path.join(packs, "pack-synthetic.pack"));
+          await fs.utimes(packs, old, old);
+          const link = path.join(expired, "native/dependency");
+          await fs.symlink(outside, link);
+          await fs.lutimes(link, old, old);
+        }
         globalThis.gc();
         const inspector = new Session();
         if (values.mode === "allocation") {
@@ -150,10 +199,14 @@ try {
         const threadCpu = process.threadCpuUsage();
         const started = performance.now();
         let result: ScratchCleanupResult | undefined;
-        if (variant === "candidate") {
+        const owner =
+          variant === "candidate" || values["agent-temp"]
+            ? { cleanScratch, closeScratchCleanupCursor }
+            : baseline;
+        if (owner) {
           const cursor = {};
           try {
-            result = await cleanScratch({
+            result = await owner.cleanScratch({
               targets: [
                 { root: checkout, kind: "checkout", isLive: isIdle },
                 { root: liveCheckout, kind: "checkout", isLive },
@@ -169,7 +222,7 @@ try {
               cursor,
             });
           } finally {
-            await closeScratchCleanupCursor(cursor);
+            await owner.closeScratchCleanupCursor(cursor);
           }
         }
         const elapsedMs = performance.now() - started;
@@ -193,6 +246,7 @@ try {
           label,
           variant,
           elapsedMs,
+          routingMs,
           allocatedBytes,
           cpuMs: (usedCpu.user + usedCpu.system) / 1000,
           mainThreadCpuMs: (usedThreadCpu.user + usedThreadCpu.system) / 1000,
@@ -215,9 +269,16 @@ try {
           await assert.rejects(fs.stat(expired), { code: "ENOENT" });
           await assert.rejects(fs.stat(coverage), { code: "ENOENT" });
         }
+        if (values["agent-temp"] && variant === "baseline") {
+          assert.equal(result?.bytesRemoved, coverageFiles * fileBytes);
+          assert.equal((await fs.readdir(expired)).length, expiredFiles);
+        }
         assert.equal((await fs.readdir(freshProof)).length, freshFiles);
         assert.equal((await fs.readdir(liveProof)).length, liveFiles);
         assert.equal(await fs.readFile(outside, "utf8"), "synthetic source, outside scratch");
+        if (values["nested-clone"]) {
+          assert.deepEqual(await fs.readFile(sharedPack), payload);
+        }
       }
     }
   }

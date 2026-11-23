@@ -19,6 +19,12 @@ main.content:where(.content--logs-page) .content-header {
   flex: 0 0 auto;
 }
 
+/* Export sits level with the 32px Refresh beside it instead of the taller default button. */
+.content--logs-page .page-header-actions .btn {
+  height: var(--settings-control-height);
+  padding-block: 0;
+}
+
 /* The page column stays in the fill-height chain, and the log's blocks keep their
    tight rhythm rather than the page's section gap. */
 .settings-workspace--fill-height > .settings-workspace__body > .settings-page {
@@ -52,6 +58,8 @@ main.content:where(.content--logs-page) .content-header {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* The stream clips its rows; the frame must not clip the stream's keyboard outline. */
+  overflow: visible;
 }
 
 /* Log stream rules load with the logs page; keep them out of the startup sheet. */
@@ -59,6 +67,7 @@ main.content:where(.content--logs-page) .content-header {
   max-height: calc(100vh - 280px);
   min-height: 200px;
   overflow: auto;
+  border-radius: inherit;
   container-type: inline-size;
 }
 
@@ -326,7 +335,6 @@ main.content:where(.content--logs-page) .content-header {
 
   .content.content--logs-page .settings-workspace--fill-height .logs-card {
     padding: 0;
-    overflow: visible;
     border: 0;
     border-radius: 0;
     background: none;

@@ -19,6 +19,7 @@ import {
 } from "./agent-tool-result-middleware.js";
 import {
   resolveConversationAccessAllowed,
+  resolveModelRequestAllowed,
   resolvePromptInjectionAllowed,
 } from "./hook-policy-decisions.js";
 import { PLUGIN_HOOK_METADATA } from "./hook-types.js";
@@ -27,6 +28,7 @@ import { recordPluginLoadDiagnostic } from "./load-diagnostics.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createHostRegistrars } from "./registry-registrars-host.js";
+import { createMemoryRegistrars } from "./registry-registrars-memory.js";
 import { createNetworkRegistrars } from "./registry-registrars-network.js";
 import { createOperationRegistrars } from "./registry-registrars-operations.js";
 import { createProviderRegistrars } from "./registry-registrars-providers.js";
@@ -39,7 +41,7 @@ import type {
   PluginAgentToolResultMiddlewareRegistration,
   PluginRecord,
 } from "./registry-types.js";
-import { defaultSlotIdForKey, hasKind } from "./slots.js";
+import { defaultSlotIdForKey } from "./slots.js";
 import { normalizePluginToolContractNames, normalizePluginToolNames } from "./tool-contracts.js";
 import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
 import { inspectOpenDictionaryToolSchemas } from "./tool-schema-diagnostics.js";
@@ -255,96 +257,6 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       return;
     }
     registry.compactionProviders.push({ provider, ownerPluginId: record.id });
-  };
-
-  const registerMemoryCapability = (
-    record: PluginRecord,
-    capability: Parameters<OpenClawPluginApi["registerMemoryCapability"]>[0],
-  ) => {
-    if (!hasKind(record.kind, "memory")) {
-      throw new Error("only memory plugins can register a memory capability");
-    }
-    if (Array.isArray(record.kind) && record.kind.length > 1 && !record.memorySlotSelected) {
-      reportRegistrationWarning(
-        record,
-        "dual-kind plugin not selected for memory slot; skipping memory capability registration",
-      );
-      return;
-    }
-    // Dreaming keeps an unselected sidecar active for consolidation. Strip its
-    // slot-owner fields so resolution cannot lend its runtime or recall grant.
-    const memorySlotSelected = record.memorySlotSelected === true;
-    const dropsSlotOwnerFacts =
-      !memorySlotSelected &&
-      (capability.runtime !== undefined ||
-        capability.providerRuntime !== undefined ||
-        capability.recallToolNames !== undefined ||
-        capability.deterministicRecallToolName !== undefined ||
-        capability.supportsPrivateTranscriptRecall !== undefined);
-    if (dropsSlotOwnerFacts) {
-      reportRegistrationWarning(
-        record,
-        "memory plugin not selected for the memory slot; skipping its indexing runtime and recall registration (consolidation lifecycle preserved)",
-      );
-    }
-    const {
-      runtime: _droppedRuntime,
-      providerRuntime: _droppedProviderRuntime,
-      recallToolNames: _droppedRecallToolNames,
-      deterministicRecallToolName: _droppedRecallToolName,
-      supportsPrivateTranscriptRecall: _droppedPrivateRecall,
-      ...consolidationCapability
-    } = capability;
-    if (memorySlotSelected && capability.runtime) {
-      // oxlint-disable-next-line typescript/unbound-method -- Record factory identity; executable views bind the original receiver.
-      getPluginInstance(record)?.admitFactory(capability.runtime.getMemorySearchManager);
-    }
-    registry.memoryCapabilities.push({
-      pluginId: record.id,
-      capability: memorySlotSelected ? capability : consolidationCapability,
-      memorySlotSelected,
-    });
-  };
-
-  const registerMemoryPromptSupplement = (
-    record: PluginRecord,
-    builder: Parameters<OpenClawPluginApi["registerMemoryPromptSupplement"]>[0],
-  ) => {
-    if (typeof builder !== "function") {
-      reportRegistrationError(record, "memory prompt supplement registration missing builder");
-      return;
-    }
-    registry.memoryPromptSupplements = registry.memoryPromptSupplements.filter(
-      (entry) => entry.pluginId !== record.id,
-    );
-    registry.memoryPromptSupplements.push({ pluginId: record.id, builder });
-  };
-
-  const registerMemoryPromptPreparation = (
-    record: PluginRecord,
-    prepare: Parameters<OpenClawPluginApi["registerMemoryPromptPreparation"]>[0],
-  ) => {
-    if (typeof prepare !== "function") {
-      reportRegistrationError(
-        record,
-        "memory prompt preparation registration missing prepare function",
-      );
-      return;
-    }
-    registry.memoryPromptPreparations = registry.memoryPromptPreparations.filter(
-      (entry) => entry.pluginId !== record.id,
-    );
-    registry.memoryPromptPreparations.push({ pluginId: record.id, prepare });
-  };
-
-  const registerMemoryCorpusSupplement = (
-    record: PluginRecord,
-    supplement: Parameters<OpenClawPluginApi["registerMemoryCorpusSupplement"]>[0],
-  ) => {
-    registry.memoryCorpusSupplements = registry.memoryCorpusSupplements.filter(
-      (entry) => entry.pluginId !== record.id,
-    );
-    registry.memoryCorpusSupplements.push({ pluginId: record.id, supplement });
   };
 
   const { createRegistration, registryParams, pluginsWithChannelRegistrationConflict } = state;
@@ -642,6 +554,15 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       reportRegistrationWarning(record, `unknown typed hook "${String(hookName)}" ignored`);
       return;
     }
+    if (hookName === "before_model_request" && !resolveModelRequestAllowed(policy)) {
+      // Gateway startup logs registration warnings, so the ignored hook is not silent.
+      reportRegistrationWarning(
+        record,
+        `typed hook "before_model_request" ignored: it is off by default; set ` +
+          `plugins.entries.${record.id}.hooks.allowModelRequest=true to enable it`,
+      );
+      return;
+    }
     if (!resolvePromptInjectionAllowed(policy) && isPromptInjectionHookName(hookName)) {
       reportRegistrationWarning(
         record,
@@ -649,13 +570,18 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       );
       return;
     }
-    const conversationAccessAllowed = resolveConversationAccessAllowed(record.origin, policy);
+    const conversationAccessAllowed = resolveConversationAccessAllowed(
+      record.origin,
+      policy,
+      record.trust?.conversationAccessAccepted,
+    );
     if (PLUGIN_HOOK_METADATA[hookName].conversationAccess && !conversationAccessAllowed) {
       if (record.origin !== "bundled") {
         reportRegistrationWarning(
           record,
-          `typed hook "${hookName}" blocked because non-bundled plugins must set ` +
-            `plugins.entries.${record.id}.hooks.allowConversationAccess=true`,
+          `typed hook "${hookName}" blocked because non-bundled plugins need conversation access: ` +
+            `declare contracts.conversationAccess ["read"] and approve the plugin's capabilities, ` +
+            `or set plugins.entries.${record.id}.hooks.allowConversationAccess=true`,
         );
         return;
       }
@@ -715,10 +641,7 @@ export function createPluginRegistrars(state: PluginRegistryState) {
     ...providers,
     ...createOperationRegistrars(state),
     ...createHostRegistrars(state),
-    registerMemoryCapability,
-    registerMemoryPromptSupplement,
-    registerMemoryPromptPreparation,
-    registerMemoryCorpusSupplement,
+    ...createMemoryRegistrars(state),
     registerModelCatalogProvider: state.registerModelCatalogProvider,
   };
 }

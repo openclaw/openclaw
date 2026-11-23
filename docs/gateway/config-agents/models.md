@@ -17,11 +17,11 @@ title: "Configuration — agent models"
     defaults: {
       models: {
         "anthropic/claude-opus-4-6": { alias: "opus" },
-        "minimax/MiniMax-M2.7": { alias: "minimax" },
+        "minimax/MiniMax-M3": { alias: "minimax" },
       },
       model: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: ["minimax/MiniMax-M2.7"],
+        fallbacks: ["minimax/MiniMax-M3"],
       },
       utilityModel: {
         primary: "openai/gpt-5.4-mini",
@@ -34,7 +34,7 @@ title: "Configuration — agent models"
       mediaModels: {
         image: {
           primary: "openai/gpt-image-2",
-          fallbacks: ["google/gemini-3.1-flash-image"],
+          fallbacks: ["google/gemini-nano-banana-2.1"],
         },
         video: {
           primary: "qwen/wan2.6-t2v",
@@ -118,7 +118,7 @@ Leaving `agents.defaults.timeoutSeconds` unset gives each model attempt the 48-h
 - `toolProgressDetail`: detail mode for `/verbose` tool summaries and progress-draft tool lines. Values: `"explain"` (default, compact human labels) or `"raw"` (append raw command/detail when available). Per-agent `agents.entries.*.toolProgressDetail` overrides this default.
 - `reasoningDefault`: default reasoning visibility for agents. Values: `"off"`, `"on"`, `"stream"`. Per-agent `agents.entries.*.reasoningDefault` overrides this default. Configured reasoning defaults are only applied for owners, authorized senders, or operator-admin gateway contexts when no per-message or session reasoning override is set.
 - `elevatedDefault`: default elevated-output level for agents. Values: `"off"`, `"on"`, `"ask"`, `"full"`. Default: `"on"`.
-- `model.primary`: format `provider/model` (e.g. `openai/gpt-6-astra` for Codex OAuth access). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`). If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
+- `model.primary`: format `provider/model` (e.g. `openai/gpt-6-astra` for Codex OAuth access). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the `openai` provider (deprecated compatibility behavior, so prefer explicit `provider/model`). With no primary, OpenClaw uses the first configured provider/model; if no provider lists a model, the agent has no model and turns ask you to choose one (see [No model configured](/concepts/models#no-model-configured)).
 - To cap active input for one model, set `models.providers.<provider>.models[].contextTokens`; use `contextWindow` on the same entry for its native window. See [OpenAI context window defaults](/providers/openai/setup#context-window-defaults-and-long-context-opt-in).
 - `models`: configured aliases and per-model settings. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `promptCacheTtl`, `context1m`, `anthropicServerCompaction`, `anthropicCompactThreshold`, `responsesServerCompaction`, `responsesCompactThreshold`, OpenRouter `provider` routing, `chat_template_kwargs`, `extra_body`/`extraBody`). Adding entries does not restrict model overrides.
   - Use `provider/*` entries such as `"openai/*": {}` or `"vllm/*": {}` to show all discovered models for selected providers without manually listing every model id.
@@ -132,6 +132,7 @@ Leaving `agents.defaults.timeoutSeconds` unset gives each model attempt the 48-h
 - `params`: global default provider parameters applied to all models. Set at `agents.defaults.params` (e.g. `{ cacheRetention: "long" }`).
 - `params` merge precedence (config): `agents.defaults.params` (global base), then `agents.defaults.models["provider/model"].params` (shared per-model), then `agents.entries.*.models["provider/model"].params` (agent-specific per-model), then `agents.entries.*.params` (agent-wide). Later layers override by key. See [Prompt Caching](/reference/prompt-caching) for details.
 - Nucleus sampling accepts `params.topP` or `params.top_p`. If both are present after config merging, `topP` wins; a per-request `topP` overrides either spelling. Google forwards the value on Interactions, GenerateContent, and Vertex routes. Provider-specific sampling restrictions still apply.
+- `params.seed` requests reproducible sampling where the provider supports it. Google forwards it on Interactions, GenerateContent, and Vertex routes, and Mistral receives it as `random_seed`. Google does not forward `presencePenalty` or `frequencyPenalty`.
 - Model `params.thinking` sets that model's thinking default; an agent-specific model entry overrides the shared entry. Per-message and session choices, followed by the agent's `thinkingDefault`, take precedence over either model setting. See [thinking resolution order](/tools/thinking#resolution-order).
 - `models.providers.openrouter.params.provider`: OpenRouter-wide default provider-routing policy. OpenClaw forwards this to OpenRouter's request `provider` object; per-model `agents.defaults.models["openrouter/<model>"].params.provider` and agent params override by key. See [OpenRouter provider routing](/providers/openrouter#advanced-configuration).
 - `params.extra_body`/`params.extraBody`: advanced pass-through JSON merged into `api: "openai-completions"` request bodies for native OpenAI and OpenAI-compatible proxies. For example, `extraBody: { safety_identifier: "<stable-user-id-hash>" }` sends an explicitly configured [safety identifier](/providers/openai/advanced#native-vs-openai-compatible-routes). If it collides with generated request keys, the extra body wins; non-native completions routes still strip OpenAI-only `store` afterward.

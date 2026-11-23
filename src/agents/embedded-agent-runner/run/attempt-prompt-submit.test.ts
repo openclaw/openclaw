@@ -6,6 +6,7 @@ import {
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
+import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { Context, ImageContent, Model } from "../../../llm/types.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -53,11 +54,16 @@ import {
 } from "../runs.test-support.js";
 import { clearEmbeddedSessionPromptStates } from "../session-prompt-state.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
+import { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
+import { makeAttempt, makeNormalizationInput } from "./attempt-normalization.test-support.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-build.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { createBaseInput, createSession, sessionId } from "./attempt-prompt-submit.test-support.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
+import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
+import { MidTurnPrecheckSignal } from "./midturn-precheck.js";
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
+import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
 registerAgentSessionLoopTestLifecycle();
 
@@ -122,6 +128,100 @@ function toolResult(
 }
 
 describe("submitEmbeddedAttemptPrompt", () => {
+  it("replays mid-turn recovery without adding a continuation or runtime context", async () => {
+    const sessionManager = guardSessionManager(SessionManager.inMemory());
+    const user = {
+      ...userMessage("finish the report", 1, "overflow:user"),
+      __openclaw: { modelPromptProjection: { version: 1, text: "finish the report" } },
+    };
+    await sessionManager.appendMessageAsync(user);
+    const carrier = buildRuntimeContextCustomMessage("synthetic runtime facts ".repeat(120))!;
+    await sessionManager.appendCustomMessageEntryAsync(
+      carrier.customType,
+      carrier.content,
+      carrier.display,
+      carrier.details,
+    );
+    await sessionManager.appendMessageAsync(
+      createAssistant(
+        testModel,
+        [{ type: "toolCall", id: "read-report", name: "read", arguments: {} }],
+        "toolUse",
+      ),
+    );
+    await sessionManager.appendMessageAsync(
+      toolResult("read-report", "read", "completed output", 2),
+    );
+    const recorder = createUserTurnTranscriptRecorder({ message: user, target: () => undefined });
+    recorder.markRuntimePersisted(user);
+    await using state = await createEmbeddedRunSessionPromptState({
+      runParams: {
+        sessionId,
+        sessionFile: sessionId,
+        sessionManager,
+        prompt: user.content,
+        runId: "overflow-retry",
+        timeoutMs: 30_000,
+        workspaceDir: "/tmp",
+        userTurnTranscriptRecorder: recorder,
+        suppressNextUserMessagePersistence: true,
+      },
+      sessionAgentId: "main",
+      resolvedSessionKey: "",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      onInterrupt: () => {},
+    });
+    const { session } = await createTestSession({ sessionManager });
+    const originalMessages = JSON.stringify(session.messages);
+    const requests: Context["messages"][] = [];
+    for (let retry = 0; retry < 3; retry++) {
+      const input = makeNormalizationInput(
+        makeAttempt({
+          pressure: "overflow",
+          route: "truncate_tool_results_only",
+          source: "mid-turn",
+          handled: true,
+          truncatedCount: 1,
+        }),
+      );
+      input.sessionPromptState = state;
+      await normalizeEmbeddedRunAttempt(input);
+      const prompt = state.activePrompt.override ?? user.content;
+      await submitSession(session, {
+        attempt: {
+          sessionId,
+          userTurnTranscriptRecorder: recorder,
+          skipPreparedUserTurnMessage: state.activePrompt.internal,
+          suppressNextUserMessagePersistence: state.suppressNextUserMessagePersistence,
+        },
+        appendOnlyRuntimeContext: true,
+        prependContext: undefined,
+        appendContext: undefined,
+        transcriptPrompt: prompt,
+        modelPrompt: prompt,
+        runtimeContextMessage: carrier,
+        setNextUserMessagePersistence: sessionManager.setNextUserMessagePersistence,
+        onModelRequest: (_model, context) => {
+          requests.push(structuredClone(context.messages));
+          throw new MidTurnPrecheckSignal({
+            pressure: "overflow",
+            route: "compact_only",
+            estimatedPromptTokens: 932_476,
+            promptBudgetBeforeReserve: 922_000,
+            overflowTokens: 10_476,
+            toolResultReducibleChars: 0,
+            effectiveReserveTokens: 78_000,
+          });
+        },
+      });
+      await removeTrailingMidTurnPrecheckAssistantError({ activeSession: session, sessionManager });
+    }
+    expect(requests).toHaveLength(3);
+    expect(requests[1]).toEqual(requests[0]);
+    expect(requests[2]).toEqual(requests[0]);
+    expect(JSON.stringify(session.messages)).toBe(originalMessages);
+  });
+
   it.each(["pending", "blocked", "empty", "persisted-key", "persisted-no-key"] as const)(
     "does not reclassify suppressed canonical user state as a runtime control: %s",
     async (state) => {
@@ -213,7 +313,9 @@ describe("submitEmbeddedAttemptPrompt", () => {
           revision += 1;
           await request();
           active = false;
-          await expect(request()).rejects.toThrow("admitted run authority is no longer active");
+          await expect(request()).rejects.toThrow(
+            "This agent run is no longer active. Start a new turn to retry.",
+          );
         },
       });
       expect(requests).toHaveLength(2);

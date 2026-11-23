@@ -68,7 +68,7 @@ suite.define(() => {
       );
       await pollLocatorText(
         page.locator('.chat-thread .chat-working-indicator[role="status"]'),
-      ).toContain("Provisioning environment…");
+      ).toContain("Provisioning environment");
       expect(await page.locator(".agent-chat__composer-status-band").count()).toBe(0);
       await captureUiProof(suite, page, "cloud-provisioning.png");
     });

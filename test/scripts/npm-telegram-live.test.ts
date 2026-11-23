@@ -545,7 +545,14 @@ function captureDocker(env: NodeJS.ProcessEnv = {}) {
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 if (args[0] === 'run' && args.includes('-i')) fs.readFileSync(0);
+if (args[0] === 'run' && args.includes('-i') && process.env.CHECK_WRITABLE_PREFIX === '1') {
+  const mount = args.find(arg => arg.endsWith(':/npm-global'));
+  const mode = fs.statSync(mount.slice(0, -':/npm-global'.length)).mode & 0o007;
+  if (mode !== 0o007) throw new Error('npm prefix is inaccessible to the container user: ' + mode);
+}
 fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify(args) + '\\n');
+if (args.includes('--cidfile')) process.exit(Number(process.env.SUITE_EXIT_CODE || 0));
+if (args.includes('/output')) process.exit(Number(process.env.ARTIFACT_EXIT_CODE || 0));
 `,
   );
   const result = run({
@@ -571,6 +578,11 @@ fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify(args) + '\\n');
   return { root, candidate, result, runs };
 }
 
+it("makes the disposable npm prefix writable to the container user", () => {
+  const { result } = captureDocker({ CHECK_WRITABLE_PREFIX: "1" });
+  expect(result.status, result.stderr).toBe(0);
+});
+
 it.each([false, true])("isolates install and runtime credentials (upgrade=%s)", (upgrade) => {
   const { root, candidate, result, runs } = captureDocker({
     OPENCLAW_NPM_TELEGRAM_SCENARIOS: upgrade ? scenario : "",
@@ -590,8 +602,10 @@ it.each([false, true])("isolates install and runtime credentials (upgrade=%s)", 
       `${path.join(root, "output")}:/app/.artifacts/qa-e2e/npm-telegram-live-output`,
       `${repoRoot}/node_modules:/trusted-harness/node_modules:ro`,
     ]),
+    expect.arrayContaining(["--network", "none", `${path.join(root, "output")}:/output`]),
   ]);
   expect(runs[0]?.some((arg) => arg.startsWith("OPENCLAW_QA_CONVEX_SECRET_"))).toBe(false);
+  expect(runs[2]?.some((arg) => arg.startsWith("OPENCLAW_QA_CONVEX_SECRET_"))).toBe(false);
   expect(runs[1]?.includes(`${candidate}:${candidatePath}:ro`)).toBe(upgrade);
   expect(runs[0]?.includes("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS")).toBe(false);
   expect(runs[1]?.includes("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS")).toBe(upgrade);
@@ -606,6 +620,19 @@ it.each([false, true])("isolates install and runtime credentials (upgrade=%s)", 
   expect(runs[1]?.some((arg) => arg.startsWith(`${repoRoot}:/app`))).toBe(false);
   expect(readFileSync(path.join(root, "output/run-metadata.txt"), "utf8")).toBe(
     "schema=1\nexit_code=0\nlive_output=job_log\n",
+  );
+});
+
+it.each([0, 7])("reports artifact handoff failure without masking suite exit %s", (suiteExit) => {
+  const { root, result } = captureDocker({
+    SUITE_EXIT_CODE: String(suiteExit),
+    ARTIFACT_EXIT_CODE: "23",
+  });
+  const expectedExit = suiteExit || 1;
+  expect(result.status, result.stderr).toBe(expectedExit);
+  expect(result.stderr).toContain("Could not return Telegram artifacts to the host user.");
+  expect(readFileSync(path.join(root, "output/run-metadata.txt"), "utf8")).toContain(
+    `exit_code=${expectedExit}\n`,
   );
 });
 

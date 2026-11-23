@@ -127,6 +127,10 @@
   margin: 16px 0 18px;
 }
 
+.approval-page__heading h1 {
+  width: fit-content;
+}
+
 .approval-page__heading h1,
 .approval-page__state h1 {
   margin: 0;
@@ -346,12 +350,11 @@
 }
 
 .approval-page__spinner {
+  --spinner-art: var(--spinner-mask-large);
   width: 34px;
   height: 34px;
   margin-bottom: 20px;
   color: var(--accent);
-  background: currentColor;
-  mask: var(--spinner-mask-large);
   border-radius: 50%;
   animation: btn-spinner-spin 800ms linear infinite;
 }

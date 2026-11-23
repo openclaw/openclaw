@@ -40,6 +40,7 @@ type GatewayAgentRequestParams = {
   message?: string;
   inputProvenance?: {
     sourceSessionKey?: string;
+    sourceTool?: string;
   };
   internalEvents?: Array<{ status?: string; statusLabel?: string; result?: string }>;
 };

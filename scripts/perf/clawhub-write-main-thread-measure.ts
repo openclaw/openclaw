@@ -8,12 +8,13 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -106,12 +107,7 @@ try {
   await nextTurn();
   const inspector = new Session();
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const load = loadavg();
   const cpu = process.cpuUsage();
@@ -129,9 +125,7 @@ try {
   let allocationBytes: number | undefined;
   if (values.allocations) {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
-    const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
-      node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
-    allocationBytes = sum(profile.head);
+    allocationBytes = sumSampledHeapBytes(profile.head);
     inspector.disconnect();
   }
   const lock = JSON.parse(await fsp.readFile(path.join(fixture, ".clawhub", "lock.json"), "utf8"));

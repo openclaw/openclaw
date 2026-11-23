@@ -151,6 +151,13 @@ export const ModelChoiceSchema = closedObject({
   agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
   apiKeySupported: Type.Optional(Type.Boolean()),
   runtimeChoices: Type.Optional(Type.Array(ModelRuntimeChoiceSchema, { maxItems: 8 })),
+  /** Global defaults harnesses, evaluated using the requesting agent's credentials. */
+  defaultModelRuntimes: Type.Optional(
+    closedObject({
+      base: ModelRuntimeChoiceSchema,
+      alternatives: Type.Array(ModelRuntimeChoiceSchema, { maxItems: 8 }),
+    }),
+  ),
   /** Hosted-catalog recommendation; picker rows arrive recommended-first within each provider. */
   recommended: Type.Optional(Type.Boolean()),
 });
@@ -244,6 +251,14 @@ export const ModelsListResultSchema = closedObject({
     ]),
   ),
   refreshFailed: Type.Optional(Type.Boolean()),
+  refreshFailures: Type.Optional(
+    Type.Array(
+      closedObject({
+        acquisition: Type.Union([Type.Literal("provider"), Type.Literal("native")]),
+        provider: Type.Optional(NonEmptyString),
+      }),
+    ),
+  ),
   pendingProviders: Type.Optional(Type.Array(NonEmptyString)),
   accountSelection: Type.Optional(ChatAccountSelectionSchema),
   providerOutcomes: Type.Optional(Type.Array(ModelCatalogProviderOutcomeSchema)),

@@ -5,6 +5,7 @@ import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
+import { readDaemonRuntimePinMigrationPending } from "../daemon/runtime-pin-state.js";
 import {
   type DaemonRuntimePinDatabase,
   resolveDaemonRuntimePinStorePath,
@@ -160,6 +161,59 @@ describe("daemon runtime pin owner migration", () => {
     expect((await migrateDaemonRuntimePins(env)).warnings).toEqual([]);
     expectCustody([], [pin], "complete");
   });
+
+  it.each([false, true])(
+    "consumes completed receipts across state-directory aliases without offline custody (alias first: %s)",
+    async (aliasFirst) => {
+      const canonical = fs.realpathSync(env.OPENCLAW_STATE_DIR!);
+      const alias = path.join(tempDirs.make("daemon-pin-alias-"), "profile");
+      fs.symlinkSync(canonical, alias, process.platform === "win32" ? "junction" : "dir");
+      env = { ...env, OPENCLAW_STATE_DIR: aliasFirst ? alias : canonical };
+      seedSource([pin]);
+      expect((await migrateDaemonRuntimePins(env)).warnings).toEqual([]);
+      const completed = receipt();
+      env = { ...env, OPENCLAW_STATE_DIR: aliasFirst ? canonical : alias };
+      await withGatewayOwnership(async (owner) => {
+        const pending = readDaemonRuntimePinMigrationPending(env);
+        const result = await migrateDaemonRuntimePins(env);
+        expect(pending).toBe(false);
+        expect(result).toEqual({ changes: [], warnings: [] });
+        expect(receipt()).toEqual(completed);
+        owner.assertCurrent();
+      });
+      expect(sourceRows()).toEqual([]);
+      expect(targetRows()).toEqual([pin]);
+    },
+  );
+
+  it.each(["different", "missing", "not-directory"])(
+    "does not treat a %s recorded source as a completed migration of the current database",
+    async (kind) => {
+      seedSource([pin]);
+      expect((await migrateDaemonRuntimePins(env)).warnings).toEqual([]);
+      const other = path.join(tempDirs.make("daemon-pin-foreign-"), "source.sqlite");
+      if (kind !== "missing") {
+        fs.copyFileSync(resolveOpenClawStateSqlitePath(env), other);
+      }
+      const recorded = kind === "not-directory" ? path.join(other, "state.sqlite") : other;
+      withDaemonRuntimePinStore(env, true, (db) =>
+        db.prepare("UPDATE daemon_runtime_pin_migration SET source_state = ?").run(recorded),
+      );
+      const completed = receipt();
+      await withGatewayOwnership(async (owner) => {
+        expect(readDaemonRuntimePinMigrationPending(env)).toBe(true);
+        const result = await migrateDaemonRuntimePins(env);
+        expect(result.changes).toEqual([]);
+        expect(result.warnings).toEqual([
+          expect.stringMatching(/Stop the Gateway.*openclaw doctor --fix.*same state\/config/s),
+        ]);
+        expect(receipt()).toEqual(completed);
+        owner.assertCurrent();
+      });
+      expect(sourceRows()).toEqual([]);
+      expect(targetRows()).toEqual([pin]);
+    },
+  );
 
   it("does not write shared state after migration completes", async () => {
     seedSource([]);

@@ -79,6 +79,31 @@ async function recoverCapture(
   await expect.poll(() => surface.getByText("Paused: uncertain", { exact: true }).count()).toBe(0);
 }
 suite.define(() => {
+  it("keeps a long snapshot profile and its actions inside the phone detail card", async () => {
+    const result = snapshot();
+    const first = { ...result.images[0]!, profileId: "regionalengineering".repeat(4) };
+    result.images = [first, { ...first, profileId: "secondary", profileKey: "secondary-key" }];
+    await withSnapshots({ "crabbox.images.list": result }, async (page) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      const group = sheet(page).getByRole("group", { name: first.profileId, exact: true });
+      const actions = button(group, "Environment actions");
+      await actions.waitFor();
+      const fits = await group.evaluate((row) => {
+        const bounds = row.getBoundingClientRect();
+        const range = document.createRange();
+        range.selectNodeContents(row.querySelector("strong")!);
+        return (
+          range.getBoundingClientRect().right <= bounds.right &&
+          row.querySelector("button")!.getBoundingClientRect().right <= bounds.right
+        );
+      });
+      expect(fits).toBe(true);
+      await actions.click();
+      await menuItem(page, "Pin").waitFor();
+      await page.keyboard.press("Escape");
+    });
+  });
+
   it("refreshes snapshots and saved machines after lazy plugin activation without reconnecting", async () => {
     await withSnapshots(
       {
