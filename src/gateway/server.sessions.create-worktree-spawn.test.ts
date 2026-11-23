@@ -223,10 +223,11 @@ beforeEach(async () => {
   testState.agentConfig = { workspace: defaultWorkspace };
   ({ storePath } = await createSessionStoreDir());
   const { getRuntimeConfig } = await getGatewayConfigModule();
-  const { provider, model } = resolveDefaultModelForAgent({
-    cfg: getRuntimeConfig(),
-    agentId: "main",
-  });
+  const defaultModel = resolveDefaultModelForAgent({ cfg: getRuntimeConfig(), agentId: "main" });
+  if (!defaultModel) {
+    throw new Error("gateway test config must configure a model");
+  }
+  const { provider, model } = defaultModel;
   agentDiscoveryMock.models = [
     { provider, id: model, name: "Default fixture model", reasoning: false },
   ];
@@ -728,7 +729,7 @@ test("keyed worktree creation reuses its recorded base after reopening the regis
     });
   const created = await createSession(params);
   const parent = created.entry;
-  expect(created.worktree).toMatchObject({ branch: "openclaw/release-planning" });
+  expect(created.worktree.path).toMatch(/\/release-planning-[\da-f]{6}$/);
   expect(parent).toMatchObject({
     spawnedCwd: created.worktree.path,
     sessionRoot: created.worktree.path,

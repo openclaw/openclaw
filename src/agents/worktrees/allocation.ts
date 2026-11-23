@@ -41,6 +41,7 @@ export type WorktreeAllocationGuard = WorktreeFilesystemOptions & {
 };
 
 type WorktreeLeaseParams = {
+  idleIoPriority?: boolean;
   env: NodeJS.ProcessEnv;
   id?: string;
   waitBudget?: WorktreeWaitBudget;
@@ -265,6 +266,7 @@ async function withWorktreeLease<T>(
             let releaseCapacity = true;
             try {
               const result = await run({
+                idleIoPriority: params.idleIoPriority,
                 signal,
                 waitBudget: params.waitBudget,
                 commitGuard,

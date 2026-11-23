@@ -4,10 +4,15 @@ import { createComposerTasks } from "./composer-tasks.runtime.ts";
 
 function setup(value: string) {
   return createRoot((dispose) => {
-    const tasks = createComposerTasks(() => true);
     const textarea = document.createElement("textarea");
     textarea.value = value;
     document.body.append(textarea);
+    const tasks = createComposerTasks({
+      taskPresenters: 1,
+      composerComposing: false,
+      composerTextarea: textarea,
+      sendDraft: null,
+    });
     return {
       tasks,
       textarea,
@@ -23,7 +28,7 @@ describe("composer tasks", () => {
   it("keeps a proposal and its Undo receipt while the editor is locked", async () => {
     const { tasks, textarea, dispose } = setup("my draft");
     try {
-      const outcome = tasks.offer("rewritten", "Rewrite", new AbortController().signal);
+      const outcome = tasks.offer("rewritten", { title: "Rewrite" }, new AbortController().signal);
       flush();
       textarea.readOnly = true;
       expect(tasks.accept(textarea)).toBe(false);

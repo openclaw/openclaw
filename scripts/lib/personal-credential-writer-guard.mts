@@ -1,6 +1,10 @@
 import * as ts from "typescript/ast";
 import { SymbolFlags, type Symbol } from "typescript/sync";
-import type { NativeTypeScriptProject } from "./native-typescript.mts";
+import {
+  containsTrigger,
+  identifierTokens,
+  type NativeTypeScriptProject,
+} from "./native-typescript.mts";
 
 const accounts = "src/state/user-model-accounts.ts";
 const profileMerge = "src/state/user-profiles-merge.ts";
@@ -1024,7 +1028,7 @@ function operation(node: ts.Node): string {
 
 /** Extend the existing worker-ratchet semantic snapshot; no second compiler or runtime guard. */
 export function inspectPersonalCredentialWriters(
-  sources: readonly { file: string; source: ts.SourceFile }[],
+  sources: readonly { file: string; source: ts.SourceFile; text: string }[],
   checker: NativeTypeScriptProject["project"]["checker"],
   symbolsAt: (nodes: readonly ts.Node[]) => (Symbol | undefined)[],
 ): string[] {
@@ -1038,8 +1042,18 @@ export function inspectPersonalCredentialWriters(
   );
   const aliases: [string, string][] = [];
   const bindingNames: (ts.Identifier | ts.StringLiteral)[] = [];
-  for (const { file, source } of sources) {
-    const visit = (node: ts.Node) => {
+  // Elsewhere only import/export declarations, found through their keywords, add facts.
+  const approvedFiles = new Set(
+    [...approvedCallers.keys()].map((entry) => entry.slice(0, entry.indexOf(":"))),
+  );
+  const moduleKeywords = /\b(?:import|export)\b/g;
+  for (const { file, source, text } of sources) {
+    const descend = approvedFiles.has(file) ? () => true : containsTrigger(text, moduleKeywords);
+    const visit = (node: ts.Node, declaration = false) => {
+      // Type subtrees hold no value declarations or specifiers; skip them before they materialize.
+      if (ts.isTypeNode(node)) {
+        return;
+      }
       if (
         (ts.isFunctionDeclaration(node) ||
           ts.isFunctionExpression(node) ||
@@ -1073,9 +1087,12 @@ export function inspectPersonalCredentialWriters(
       } else if (ts.isImportClause(node) && node.name) {
         bindingNames.push(node.name);
       }
-      node.forEachChild(visit);
+      const whole = declaration || ts.isImportDeclaration(node) || ts.isExportDeclaration(node);
+      if (whole || descend(node)) {
+        node.forEachChild((child) => visit(child, whole));
+      }
     };
-    source.forEachChild(visit);
+    source.forEachChild((child) => visit(child));
   }
   const importedBindings = new Map<Symbol, Symbol>();
   // Compiler aliases are immutable; prepared binding overrides are applied separately.
@@ -1234,8 +1251,14 @@ export function inspectPersonalCredentialWriters(
       }
     }
   };
-  for (const { source } of sources) {
+  // Every bound import spells `import` inside its declaration or `.then` call.
+  const importKeyword = /\bimport\b/g;
+  for (const { source, text } of sources) {
+    const descend = containsTrigger(text, importKeyword);
     const visit = (node: ts.Node) => {
+      if (ts.isTypeNode(node)) {
+        return;
+      }
       if (ts.isVariableDeclaration(node) && node.initializer) {
         bindImports(node.initializer, node.name);
       }
@@ -1253,7 +1276,9 @@ export function inspectPersonalCredentialWriters(
           bindImports(node.expression.expression, callback.parameters[0].name);
         }
       }
-      node.forEachChild(visit);
+      if (descend(node)) {
+        node.forEachChild(visit);
+      }
     };
     source.forEachChild(visit);
   }
@@ -1294,7 +1319,25 @@ export function inspectPersonalCredentialWriters(
   const sinkCounts = new Map<string, number>();
   const rawSinkCounts = new Map<string, number>();
   const edgeCounts = new Map<string, number>();
-  for (const { file, source } of sources) {
+  const queryWriters = new Set(["insertInto", "replaceInto", "updateTable", "deleteFrom"]);
+  // Every inspected node spells a candidate name, one of these tokens, or the SQL verb that
+  // starts a raw authority-table write.
+  const isSinkToken = (token: string) =>
+    names.has(token) ||
+    queryWriters.has(token) ||
+    token === "type" ||
+    token === "import" ||
+    token === "export" ||
+    /^(?:insert|replace|update|delete)$/i.test(token);
+  let tokens = identifierTokens(names);
+  let tokenNames = names.size;
+  for (const { file, source, text } of sources) {
+    // Reference resolution below can add names; later files must spell those too.
+    if (names.size !== tokenNames) {
+      tokens = identifierTokens(names);
+      tokenNames = names.size;
+    }
+    const descend = containsTrigger(text, tokens, isSinkToken);
     const fail = (node: ts.Node, reason: string) => {
       violations.push(
         `${file}:${source.getLineAndCharacterOfPosition(node.getStart()).line + 1}: ${reason}`,
@@ -1326,9 +1369,7 @@ export function inspectPersonalCredentialWriters(
       if (
         ts.isCallExpression(node) &&
         ts.isPropertyAccessExpression(node.expression) &&
-        ["insertInto", "replaceInto", "updateTable", "deleteFrom"].includes(
-          node.expression.name.text,
-        )
+        queryWriters.has(node.expression.name.text)
       ) {
         let table = node.arguments[0];
         const seen = new Set<ts.Node>();
@@ -1443,7 +1484,9 @@ export function inspectPersonalCredentialWriters(
       ) {
         references.push(node);
       }
-      node.forEachChild(visit);
+      if (descend(node)) {
+        node.forEachChild(visit);
+      }
     };
     source.forEachChild(visit);
     // Literal commands need no compiler query; resolve every expression in the

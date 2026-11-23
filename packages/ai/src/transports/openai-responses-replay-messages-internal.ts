@@ -3,7 +3,7 @@ import {
   isRuntimeContextMessage,
   runtimeContextContentToText,
   type Api,
-  type AssistantMessage,
+  type AssistantHistoryMessage,
   type Context,
   type Model,
 } from "@openclaw/llm-core";
@@ -26,6 +26,7 @@ import {
 import { shortHash } from "../utils/hash.js";
 import { prepareSystemPrompt } from "../utils/system-prompt-cache-boundary.js";
 import { parseOpenAIResponsesTextSignature } from "../utils/text-signature.js";
+import { anchorRuntimeContextCarriers } from "./openai-responses-carrier-anchoring.js";
 import {
   buildOpenAIResponsesCompactionReplayPlan,
   readOpenAIResponsesItemRecoveryAnchor,
@@ -144,7 +145,7 @@ function prepareOpenAIResponsesReasoningItemForReplay(
 
 export { encodeTextSignatureV1 } from "../utils/text-signature.js";
 
-function responsesAssistantTurnKey(message: AssistantMessage) {
+function responsesAssistantTurnKey(message: AssistantHistoryMessage) {
   // Early fragments keep this identity when the provider ID arrives at completion.
   const id = message.turnId || message.responseId;
   return id ? `${message.provider}:${message.api}:${message.model}:${id}` : undefined;
@@ -373,27 +374,11 @@ function convertResponsesMessagesWithStyle(
   if (systemPrompt && nativeOpenAI) {
     messages.push(systemPrompt);
   }
-  let replayMessages = transformedMessages;
-  // Responses continuation requires the complete prior input before tool output.
-  // Each carrier stays with its preceding user/checkpoint; moving it past an
-  // appended steering user would rewrite the already admitted request prefix.
-  const isCarrier = (message: (typeof replayMessages)[number]) => hasRuntimeContextMarker(message);
-  if (replayMessages.some(isCarrier)) {
-    const anchored: typeof replayMessages = [];
-    // A checkpoint is already emitted above; it anchors an otherwise userless tail.
-    let insertionIndex = replayPlan.compactedWindow || replayPlan.compaction ? 0 : undefined;
-    for (const message of replayMessages) {
-      if (isCarrier(message) && insertionIndex !== undefined) {
-        anchored.splice(insertionIndex++, 0, message);
-        continue;
-      }
-      anchored.push(message);
-      if (!isCarrier(message) && message.role === "user") {
-        insertionIndex = anchored.length;
-      }
-    }
-    replayMessages = anchored;
-  }
+  // A checkpoint is already emitted above; it anchors an otherwise userless tail.
+  const replayMessages = anchorRuntimeContextCarriers(
+    transformedMessages,
+    Boolean(replayPlan.compactedWindow || replayPlan.compaction),
+  );
   let msgIndex = 0;
   let recoveryAnchor = replayPlan.itemRecovery?.anchor;
   let pastRecoveryBoundary = false;

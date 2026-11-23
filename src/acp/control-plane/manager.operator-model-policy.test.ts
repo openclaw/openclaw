@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "../../agents/admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import {
@@ -56,7 +54,7 @@ describe("ACP operator model ceiling", () => {
       manifestPlugins: [],
     });
     const policyListeners = new Set<() => void>();
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "fixture-person",
       scopes: ["operator.write"],
       assertCurrent: () => {},
@@ -122,16 +120,6 @@ describe("ACP operator model ceiling", () => {
       ["fixture/allowed", undefined, "fixture/denied"],
       false,
     ],
-    [
-      "applied model revoked after admission while the requested model stays allowed",
-      [
-        "fixture/allowed",
-        (changePolicy) => changePolicy({ allow: ["fixture/allowed"] }),
-        "fixture/applied",
-        { allow: ["fixture/allowed", "fixture/applied"] },
-      ],
-      false,
-    ],
   ])("rejects %s without prompting", async (_name, args, beforeBackend) => {
     const { outcome, runtimeState } = await run(...args);
     expect(outcome).toBeInstanceOf(Error);
@@ -142,9 +130,13 @@ describe("ACP operator model ceiling", () => {
     expect(runtimeState.runTurn).not.toHaveBeenCalled();
   });
 
-  it("executes a qualified allowed model and keeps the existing pre-prompt guard", async () => {
-    const before = vi.fn();
-    const { outcome, runtimeState } = await run("fixture/allowed", before);
+  it("keeps the admitted applied-model ceiling through the pre-prompt guard", async () => {
+    const before = vi.fn<NonNullable<Parameters<typeof run>[1]>>((changePolicy) =>
+      changePolicy({ allow: ["fixture/allowed"] }),
+    );
+    const { outcome, runtimeState } = await run("fixture/allowed", before, "fixture/applied", {
+      allow: ["fixture/allowed", "fixture/applied"],
+    });
     expect(outcome).toBeUndefined();
     expect(before).toHaveBeenCalledOnce();
     expect(runtimeState.runTurn).toHaveBeenCalledOnce();

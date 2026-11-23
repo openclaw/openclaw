@@ -33,11 +33,14 @@ export function createCodingToolsGatewayCaller(params: {
 }) {
   const { options, agentId, sessionKey, capabilityProfile } = params;
   // Dispatch controls and their targets share the same admitted ownership snapshot.
-  const toolMetadata = new Map<string, { pluginId: string }>();
+  const toolMetadata = new Map<string, { pluginId: string; ownerUnverified?: true }>();
   for (const tool of params.tools ?? []) {
     const meta = getPluginToolMeta(tool);
     if (meta) {
-      toolMetadata.set(normalizeToolPolicyName(tool.name), { pluginId: meta.pluginId });
+      toolMetadata.set(normalizeToolPolicyName(tool.name), {
+        pluginId: meta.pluginId,
+        ...(meta.ownerUnverified ? { ownerUnverified: true as const } : {}),
+      });
     }
   }
   const activeCaller = getGatewayToolCallerIdentity();
@@ -83,8 +86,6 @@ export function createCodingToolsGatewayCaller(params: {
           ...(options.sourceReplyDeliveryMode === "message_tool_only"
             ? { sessionEventDelivery: false as const }
             : {}),
-          // The existing source fence rechecks this after tool preparation and at final I/O.
-          receiptAuthority: settleBatch?.isCurrent,
           receiptAdmissions: settleBatch?.receiptAdmission
             ? [settleBatch.receiptAdmission]
             : undefined,
@@ -120,13 +121,7 @@ export function createCodingToolsGatewayCaller(params: {
       isToolWrappedWithBeforeToolCallHook(guarded)
         ? rewrapToolWithBeforeToolCallHook(guarded)
         : guarded,
-      {
-        ...identity,
-        receiptAuthority: () => {
-          assertDelegationCurrent();
-          return identity.receiptAuthority?.() ?? true;
-        },
-      },
+      { ...identity, receiptAuthority: assertDelegationCurrent },
     );
   };
 }

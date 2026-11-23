@@ -33,7 +33,10 @@ function TemplateDraftOpening(props: { target: TemplateDraftTarget }) {
 function TemplatesLoading() {
   return (
     <SettingsPage wide carapace>
-      <section class="plugin-catalog-detail plugin-catalog-detail--loading" role="status">
+      <section
+        class="plugin-catalog-detail plugin-catalog-detail--rail plugin-catalog-detail--loading"
+        role="status"
+      >
         <div class="plugin-catalog-detail__back skeleton" />
         <PluginDetailLoadingHero />
       </section>

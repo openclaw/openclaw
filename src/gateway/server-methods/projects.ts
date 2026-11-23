@@ -445,21 +445,12 @@ export const projectsHandlers: GatewayRequestHandlers = {
   "projects.searchRemote": defineValidatedGatewayHandler(
     "projects.searchRemote",
     validateProjectsSearchRemoteParams,
-    async ({ params, respond, context, signal, hasCurrentClientAuthority }) => {
+    async ({ params, respond, context, signal }) => {
       const cfg = context.getRuntimeConfig();
       const host = resolveConfiguredGitHubHost(cfg);
       const apiBaseUrl = resolveConfiguredGitHubApiBaseUrl(cfg);
       const assertCurrent = () => {
         signal?.throwIfAborted();
-        if (hasCurrentClientAuthority?.() === false) {
-          throw new Error("Project requester authority changed during search");
-        }
-        if (context.getRuntimeConfig() !== cfg) {
-          throw new gitHubPublicApi.ControlUiGitHubError(
-            502,
-            "GitHub host changed during project search",
-          );
-        }
       };
       assertCurrent();
       const nativeToken =

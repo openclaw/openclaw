@@ -199,6 +199,31 @@ describe("session activity semantics", () => {
     },
   );
 
+  it("labels the first of two tied busiest days without dropping either count", () => {
+    const input = props({ filters: { personId: null, query: "", time: "30d" } });
+    const buckets = Array<number>(31).fill(0);
+    buckets[2] = buckets[3] = 14;
+    input.result!.activityPulse = {
+      since: new Date(2026, 0, 1).getTime(),
+      until: new Date(2026, 1, 1).getTime(),
+      buckets,
+      sessions: 28,
+      running: 0,
+    };
+    show(input);
+    const bars = all(".activity-pulse__bar");
+    const annotations = all(".activity-pulse__count");
+    expect(annotations).toHaveLength(1);
+    expect(annotations[0]?.parentElement).toBe(bars[2]);
+    const dates = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
+    for (const i of [2, 3]) {
+      const date = dates.format(new Date(2026, 0, 1 + i));
+      expect(bars[i]?.getAttribute("title")).toBe(date + " · 14 sessions");
+      expect(bars[i]?.getAttribute("style")).toContain("100%");
+    }
+    expect(attr('[role="img"]', "aria-label")).toContain(dates.format(new Date(2026, 0, 3)));
+  });
+
   it("shows the list footer when matching sessions exceed the visible rows", () => {
     const input = props({ rows: [row("Visible session", { id: "owner" }, Date.now())] });
     input.result!.totalCount = 885;

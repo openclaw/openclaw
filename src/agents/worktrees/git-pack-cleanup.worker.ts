@@ -1,5 +1,7 @@
 import fs from "node:fs";
+import path from "node:path";
 import { tryAcquireWriteLease } from "@openclaw/fs-safe/file-lock";
+import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 
 // Linux leases check open descriptors across UIDs, unlike an unprivileged fuser census.
 // Keep SIGIO and the leased descriptor in this disposable process, never the Gateway.
@@ -11,6 +13,7 @@ const { files, olderThan } = JSON.parse(fs.readFileSync(0, "utf8")) as {
 };
 let removed = 0;
 let retained = 0;
+let bytesRemoved = 0;
 for (const file of files) {
   if (removed >= 256) {
     break;
@@ -23,6 +26,13 @@ for (const file of files) {
     );
     const original = fs.fstatSync(fd);
     if (!original.isFile() || original.mtimeMs >= olderThan) {
+      continue;
+    }
+    const pid = /^\.tmp-(\d+)-pack-/.exec(path.basename(file))?.[1];
+    // A repacker can close a sidecar before publishing it; the file lease alone
+    // cannot protect that interval. Retain live/unknown PIDs regardless of cwd.
+    if (pid && !isPidDefinitelyDead(Number(pid))) {
+      retained++;
       continue;
     }
     const lease = tryAcquireWriteLease(fd);
@@ -45,6 +55,7 @@ for (const file of files) {
       }
       fs.unlinkSync(file);
       removed++;
+      bytesRemoved += original.size;
     } finally {
       lease.release();
     }
@@ -56,4 +67,4 @@ for (const file of files) {
     }
   }
 }
-process.stdout.write(JSON.stringify({ removed, retained }));
+process.stdout.write(JSON.stringify({ removed, retained, bytesRemoved }));

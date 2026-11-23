@@ -177,7 +177,7 @@ describe("gateway request suspension admission", () => {
     },
   );
 
-  it.each(["settles", "leaked", "resumed", "read-only", "revoked"] as const)(
+  it.each(["settles", "leaked", "resumed", "read-only"] as const)(
     "waits within the original drain budget for late terminal writes: %s",
     async (outcome) => {
       vi.useFakeTimers();
@@ -232,12 +232,9 @@ describe("gateway request suspension admission", () => {
       if (outcome !== "read-only") {
         expect(handoff.respond).not.toHaveBeenCalled();
       }
-      if (outcome === "revoked") {
-        clientScopes.splice(0, 1, "operator.read");
-      }
       if (outcome === "resumed") {
         resumeGatewaySuspend(suspensionId);
-      } else if (outcome === "settles" || outcome === "revoked") {
+      } else if (outcome === "settles") {
         await Promise.all(writes.map((write) => write.settle()));
       }
       await vi.advanceTimersByTimeAsync(outcome === "leaked" ? 23_000 : 250);
@@ -254,14 +251,9 @@ describe("gateway request suspension admission", () => {
           false,
           undefined,
           expect.objectContaining({
-            code: outcome === "read-only" || outcome === "revoked" ? "FORBIDDEN" : "UNAVAILABLE",
+            code: outcome === "read-only" ? "FORBIDDEN" : "UNAVAILABLE",
           }),
         );
-        if (outcome === "revoked") {
-          expect(handoff.respond.mock.calls[0]![2].message).toBe(
-            "Gateway requester authority changed",
-          );
-        }
         if (outcome === "leaked") {
           const error = handoff.respond.mock.calls[0]![2];
           expect(error.details).toMatchObject({

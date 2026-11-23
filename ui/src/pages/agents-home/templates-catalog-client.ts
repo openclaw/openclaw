@@ -13,6 +13,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
 export type TemplateCatalogEntry = ClawHubTemplateCatalogEntry;
 export type TemplateCatalogDetail = ClawHubTemplateCatalogDetail;
+export type TemplateCatalogIntegration = TemplateCatalogDetail["contents"]["integrations"][number];
 export type TemplateCatalogSource = { packageName: string; version: string };
 
 export type TemplateAddApplyResult = {
@@ -54,7 +55,7 @@ export async function readTemplatesOverview(
 ): Promise<ClawHubTemplateCatalogOverview | undefined> {
   const result = await client.request<{ overview?: ClawHubTemplateCatalogOverview }>(
     "templates.catalog.search",
-    { overview: true, limit },
+    { overview: true, limit, includeCategoryEntries: true },
   );
   return result.overview
     ? {
@@ -62,6 +63,7 @@ export async function readTemplatesOverview(
         sections: result.overview.sections.map((section) => ({
           category: section.category,
           entries: section.entries.filter(isPublicEntry),
+          additionalEntries: section.additionalEntries?.filter(isPublicEntry),
         })),
       }
     : undefined;

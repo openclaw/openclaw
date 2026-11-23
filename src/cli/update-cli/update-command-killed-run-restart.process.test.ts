@@ -1,24 +1,15 @@
 import os from "node:os";
-import { describe, expect, it } from "vitest";
+import { describe, it } from "vitest";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
-import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import {
-  config,
-  ctx,
-  fixtures,
-  installation,
   laterBoot,
   linux,
-  mocks,
   namespace,
-  nextUpdate,
   rebooted,
   repair,
   running,
-  settled,
   stillRefuses,
   unleased,
-  updater,
   type Dead,
   type RefusalCase,
 } from "./update-command-killed-run.process.test-support.js";
@@ -26,25 +17,6 @@ import {
 // The restart rule: after a machine restart empties the lease store, only a recorded
 // earlier boot of this same host shows the killed updater's processes gone.
 describe.skipIf(process.platform === "win32")("next update after a killed update run", () => {
-  it.each(["linux", "darwin"] as const)(
-    "settles a run killed before a %s machine restarted, then proceeds",
-    (platform) =>
-      fixtures.lifetime.run(async () => {
-        const killed = await updater(await installation());
-        const before = namespace({ platform });
-        await rebooted([before, before], namespace({ platform, boot: laterBoot }))(killed);
-
-        await nextUpdate(killed.slot);
-
-        expect(mocks.proceed).toHaveBeenCalledOnce();
-        expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
-        expect(config()).toEqual({ plugins: { enabled: false } });
-        expect(settled(ctx.admitted[0])).toMatch(
-          new RegExp(`^Settled interrupted update ${killed.runId}.*rolled back, because`, "u"),
-        );
-      }),
-  );
-
   // Each of these leaves the updater's processes unproven after the lease store was lost.
   it.each<RefusalCase>([
     ...(

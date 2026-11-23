@@ -8,7 +8,7 @@ import {
 } from "../../../infra/agent-run-registry.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { MessagePresentation } from "../../../interactive/payload.js";
-import type { AssistantMessage } from "../../../llm/types.js";
+import type { AssistantHistoryMessage } from "../../../llm/types.js";
 import { closeDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { getModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
@@ -29,7 +29,7 @@ import {
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
 import { log } from "../logger.js";
-import { readPreparedProviderRequest } from "../provider-prompt-state.js";
+import { readSessionForkContext } from "../provider-prompt-state.js";
 import {
   getEmbeddedRunAttachment,
   isCurrentEmbeddedRunAttachment,
@@ -85,7 +85,7 @@ function prepareStream(
   let beforeAgentFinalizeRevisionReason: string | undefined;
   let beforeAgentFinalizeRevisionEntryId: string | undefined;
   let finalPresentationCandidate:
-    | { assistant: AssistantMessage; presentation: MessagePresentation }
+    | { assistant: AssistantHistoryMessage; presentation: MessagePresentation }
     | undefined;
   let activeQueueAdmissions = 0;
   const isSteeringAdmissionOpen = () => {
@@ -123,7 +123,8 @@ function prepareStream(
           ) {
             return;
           }
-          const lastAssistant = event.lastAssistant as AssistantMessage | undefined;
+          const lastAssistant =
+            event.lastAssistant?.role === "assistant" ? event.lastAssistant : undefined;
           const lastAssistantMessage =
             normalizeOptionalString(resolveFinalAssistantVisibleText(lastAssistant)) ??
             normalizeOptionalString(resolveFinalAssistantRawText(lastAssistant)) ??
@@ -628,16 +629,8 @@ function prepareStream(
     messageInjection,
     messageInjectionV2: messageInjection,
     isStreaming: () => activeSession.isStreaming,
-    readSessionForkContext: () => {
-      if (!isCurrentRegistration()) {
-        return undefined;
-      }
-      return {
-        model: attempt.model,
-        promptCacheKey: attempt.promptCacheKey,
-        preparedRequest: readPreparedProviderRequest(attempt.runId),
-      };
-    },
+    readSessionForkContext: () =>
+      isCurrentRegistration() ? readSessionForkContext(attempt) : undefined,
     isAborted: () => input.getRunState().aborted,
     isStopped: () => !isSteeringAdmissionOpen(),
     isCompacting: () => subscription.isCompacting(),
@@ -719,7 +712,7 @@ function prepareStream(
     toolSearchCatalogExecutor,
     getBeforeAgentFinalizeRevisionReason: () => beforeAgentFinalizeRevisionReason,
     getBeforeAgentFinalizeRevisionEntryId: () => beforeAgentFinalizeRevisionEntryId,
-    getFinalPresentation: (assistant: AssistantMessage | undefined) =>
+    getFinalPresentation: (assistant: AssistantHistoryMessage | undefined) =>
       assistant && finalPresentationCandidate?.assistant === assistant
         ? finalPresentationCandidate.presentation
         : undefined,

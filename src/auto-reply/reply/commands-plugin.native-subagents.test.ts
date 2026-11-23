@@ -131,7 +131,7 @@ async function withCommandPlugin(
         }
       } };`,
     );
-    cfg.agents = { defaults: { workspace: state.workspaceDir } };
+    cfg.agents = { defaults: { workspace: state.workspaceDir, model: "openai/gpt-6-astra" } };
     cfg.commands = { ...cfg.commands, text: true };
     const storePath = path.join(state.sessionsDir("main"), "sessions.json");
     cfg.session = { ...cfg.session, store: storePath };

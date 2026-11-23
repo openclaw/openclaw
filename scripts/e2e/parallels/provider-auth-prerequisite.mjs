@@ -2,7 +2,7 @@ const INVALID_ARGUMENTS = new Error("invalid arguments");
 const PLATFORMS = ["macos", "windows", "linux"];
 const DEFAULT_MODELS = {
   anthropic: "anthropic/claude-sonnet-4-6",
-  minimax: "minimax/MiniMax-M2.7",
+  minimax: "minimax/MiniMax-M3",
   openai: "openai/gpt-5.6-luna",
 };
 
