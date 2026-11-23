@@ -858,7 +858,7 @@ suite.define(() => {
         const candidates = Array.from({ length: 10 }, (_, index) => ({
           key: `agent:main:dashboard:12345678-${index}123-4567-89ab-0123456789ab`,
           agentId: "main",
-          displayName: `Review board ${index + 1}`,
+          displayName: `Review board ${index + 1} — November team planning notes and cross-platform milestones for the next scheduled release`,
           boardFace: "dashboard",
         }));
         const gateway = await installMockGateway(page, {
@@ -868,7 +868,20 @@ suite.define(() => {
         await openFocusFromDashboards(page, initialFocusPath);
         const exit = page.getByRole("button", { name: "Close dashboard", exact: true });
         await exit.waitFor();
-        expect(await page.getByRole("link").count()).toBe(10);
+        const links = page.getByRole("link");
+        expect(await links.count()).toBe(10);
+        const first = links.first();
+        expect(await first.getAttribute("title")).toBe(candidates[0].displayName);
+        expect(
+          await first.evaluate((link) => {
+            const style = getComputedStyle(link);
+            return (
+              style.textOverflow === "ellipsis" &&
+              link.scrollWidth > link.clientWidth &&
+              link.getBoundingClientRect().height <= Number.parseFloat(style.lineHeight) + 1
+            );
+          }),
+        ).toBe(true);
         // Locator clicks scroll even clipped ancestors. Test the untouched touch target instead.
         const center = await exit.evaluate((button) => {
           const bounds = button.getBoundingClientRect();

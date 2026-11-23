@@ -76,11 +76,14 @@ export function FocusDashboard(props: FocusDashboardProps): SolidJSX.Element {
                     </p>
                     <For each={data().candidates}>
                       {(candidate) => (
-                        <p>
-                          <a href={candidate.href}>{candidate.displayName}</a>
-                          <br />
+                        <p class="board-document__choice">
+                          <a href={candidate.href} title={candidate.displayName}>
+                            {candidate.displayName}
+                          </a>
                           <small>
-                            {candidate.agentId} · {candidate.idPrefix}
+                            <span title={candidate.agentId}>{candidate.agentId}</span>
+                            <span aria-hidden="true">·</span>
+                            <span>{candidate.idPrefix}</span>
                           </small>
                         </p>
                       )}

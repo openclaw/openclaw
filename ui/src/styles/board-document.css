@@ -68,6 +68,31 @@ openclaw-board-document {
   margin: 0;
 }
 
+.board-document__choice {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.board-document__choice > a,
+.board-document__choice small > span {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.board-document__choice small {
+  display: flex;
+  align-items: baseline;
+  gap: 0.25em;
+}
+
+/* Give the identifying session prefix priority over a long agent name. */
+.board-document__choice small > :last-child {
+  flex-shrink: 0;
+  max-width: 100%;
+}
+
 /* The ghost button's label, not its invisible 14px padding and 1px border, shares the text guide. */
 .board-document__choices > .btn--ghost {
   margin-inline-start: -15px;
