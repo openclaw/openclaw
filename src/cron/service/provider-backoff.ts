@@ -26,7 +26,7 @@ const backoff = resolveGlobalSingleton(
   () => resetCronProviderBackoff(),
 );
 
-export function resetCronProviderBackoff(): void {
+function resetCronProviderBackoff(): void {
   backoff.reductions.clear();
   backoff.charges.clear();
 }

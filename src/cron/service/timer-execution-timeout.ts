@@ -70,7 +70,7 @@ export type ConditionFiredWait = {
   onWait?: (waiting: boolean) => void;
 };
 
-export type CronProviderRunSlot = {
+type CronProviderRunSlot = {
   tryStart: (provider: string) => boolean;
   wait: (provider: string, signal: AbortSignal) => Promise<void>;
 };

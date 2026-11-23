@@ -54,7 +54,7 @@ import { gitTargetSupportsReleaseUpdates, resolveTarget } from "./target.js";
 export const PREPARE_DEADLINE_MS = 45 * 60_000;
 const CHECK_RELEASE_TIMEOUT_MS = 3 * 60_000;
 
-export type InstallKind = { kind: ReleaseKind; checkout?: string };
+type InstallKind = { kind: ReleaseKind; checkout?: string };
 
 export type UpdateRunOutcome =
   | { status: "pending"; target: { version: string }; releaseRoot: string }

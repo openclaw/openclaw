@@ -475,6 +475,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/update-timeout-diagnostics.mjs!",
   "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts!",
   "scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs!",
+  // upgrade-survivor-docker.sh runs the release-update scenario by path.
+  "scripts/e2e/lib/upgrade-survivor/release-update.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
   "scripts/embedded-run-liveness-leak.ts!",
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
@@ -574,6 +576,9 @@ const repositoryScriptEntries = [
   "scripts/run-vitest-child.mts",
   // The isolated Vitest adapter executes this entry by path inside its container.
   "scripts/lib/vitest-isolated-entry.mts",
+  // docs/reference/fast-track-release-approval.md runs this manual-only Vitest config by path.
+  "test/manual-release-approval.config.ts",
+  "test/manual-release-approval.checks.ts",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   // Security Review stages these entrypoints from isolated checkout attempts.
   "scripts/github/security-review-event.mjs!",
@@ -1413,6 +1418,8 @@ const config = {
         "ngrok",
         "open",
         "openclaw",
+        // The release-update upgrade-survivor scenario mints its registry TLS certificate with it.
+        "openssl",
         // Native checkpoint measurements run their synthetic guest through the host engine.
         "podman",
         "sleep",

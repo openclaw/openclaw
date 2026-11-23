@@ -87,7 +87,7 @@ export async function prepareControlUiPluginCookieRequest(
   return authorizeControlUiPluginCookieRequest(req, params);
 }
 
-export function authorizeControlUiPluginCookieRequest(
+function authorizeControlUiPluginCookieRequest(
   req: IncomingMessage,
   params: { requestPath: string; authGeneration: string | undefined; res?: ServerResponse },
 ) {

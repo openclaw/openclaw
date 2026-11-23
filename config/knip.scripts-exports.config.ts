@@ -126,6 +126,8 @@ const config = {
         ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
+        // The manual-only release approval suite keeps its .checks.ts name out of CI discovery.
+        "test/manual-release-approval.checks.ts!",
         // CLI subprocess fixtures consume the shared native-report collector.
         "src/cli/cli-process-child.test-helpers.test.ts!",
         // Core bootstrap packaging and source updates consume shared script owners.
