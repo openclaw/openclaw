@@ -260,7 +260,7 @@ describe("same enrolled node admission recovery", () => {
       platform: "linux",
     });
     expect(() => h.resumeNode.mock.calls[0]![0].assertCurrent()).toThrow(
-      "placement authority changed",
+      "Worker node recovery owner changed",
     );
     expect(h.provision).not.toHaveBeenCalled();
     expect(testState.store.get(h.environment.environmentId)).toEqual(h.environment);
