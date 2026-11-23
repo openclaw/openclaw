@@ -1,4 +1,5 @@
 import { createSignal, createStore, onSettled } from "solid-js";
+import type { ChannelsPairingRequest } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChannelCapability } from "../../lib/channels/index.ts";
@@ -12,6 +13,8 @@ export function createChannelSetup(deps: {
   presentWizard: (pending: Promise<void>) => Promise<void>;
   retire: () => void;
   startWhatsApp: (force: boolean, accountId: string) => Promise<void>;
+  /** Opens the chat where WhatsApp messages continue. */
+  openChat: () => void;
 }) {
   const [fields, setDraft] = createStore<{
     multiselect: unknown[];
@@ -43,6 +46,7 @@ export function createChannelSetup(deps: {
   publish = state.publish;
   onSettled(() => () => {
     deps.retire();
+    deps.channels.stopWhatsAppLogin();
     disposed = true;
     // The Gateway retains an unfinished session, so teardown cancels it.
     void wizard.cancel();
@@ -63,12 +67,15 @@ export function createChannelSetup(deps: {
     setBlockedByDirtyConfig(false);
     deps.retire();
     whatsappAccountId = undefined;
+    // A code or link left from an earlier attempt must not stand in for this one.
+    deps.channels.stopWhatsAppLogin();
     deps.clearSelection();
     void deps.presentWizard(wizard.start(channel));
   }
 
   function close(): void {
     deps.retire();
+    deps.channels.stopWhatsAppLogin();
     const wasActive = wizard.state.phase !== "idle";
     void wizard.cancel();
     if (wasActive) {
@@ -129,6 +136,20 @@ export function createChannelSetup(deps: {
     whatsappAccountId: () => state.read().whatsappAccountId,
     startSetup,
     close,
+    /** Approves the first person who texts a separate number; resolves whether it took. */
+    allowWhatsApp: async (request: ChannelsPairingRequest) =>
+      (await deps.channels.approvePairing({
+        channel: request.channel,
+        accountId: request.accountId,
+        requestId: request.requestId,
+        // The sender learns they can talk to the agent now.
+        notify: request.notifySupported,
+        bootstrapCommandOwner: false,
+      })) !== null,
+    openWhatsAppChat: () => {
+      close();
+      deps.openChat();
+    },
     answer: (value: unknown) => {
       void deps.presentWizard(wizard.answer(value));
     },

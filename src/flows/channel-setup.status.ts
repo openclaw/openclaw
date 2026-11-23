@@ -360,16 +360,16 @@ export async function collectChannelStatus(params: {
 
 export async function noteChannelPrimer(
   prompter: WizardPrompter,
-  channels: Array<{ id: ChannelChoice; blurb: string; label: string }>,
+  channels: ReadonlyArray<{ id: ChannelChoice; meta: { blurb: string; label: string } }>,
 ): Promise<void> {
-  const channelLines = channels.map((channel) =>
+  const channelLines = channels.map(({ id, meta }) =>
     formatChannelPrimerLine(
       formatSetupDisplayMeta({
-        id: channel.id,
-        label: channel.label,
-        selectionLabel: channel.label,
+        id,
+        label: meta.label,
+        selectionLabel: meta.label,
         docsPath: "/",
-        blurb: formatChannelPrimerBlurb(channel),
+        blurb: formatChannelPrimerBlurb({ id, blurb: meta.blurb }),
       }),
     ),
   );

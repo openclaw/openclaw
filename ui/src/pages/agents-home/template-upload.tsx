@@ -1,5 +1,6 @@
 import { createSignal, For, Show } from "solid-js";
 import { MAX_TEMPLATE_UPLOAD_ARCHIVE_BYTES } from "../../../../packages/gateway-protocol/src/template-source-limits.js";
+import { openAgentMainChat } from "../../app/agent-main-chat.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import "../../components/modal-dialog.tsx";
 import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
@@ -13,7 +14,6 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { readTemplatePackagePreview } from "../templates/template-package-preview.ts";
-import { openTemplateAgentChat } from "./template-agent-chat.ts";
 import { TemplateArtwork } from "./template-artwork.tsx";
 import { templateImportFacts } from "./template-import-facts.ts";
 import { TemplateImportReview } from "./template-import-review.tsx";
@@ -128,7 +128,7 @@ export function TemplateUpload() {
         throw new Error(t("templatesCatalog.openChatFailed"));
       }
       reset();
-      openTemplateAgentChat(context, done.agentId);
+      openAgentMainChat(context, done.agentId);
     } catch {
       if (current === generation) {
         setMessage(t("templatesCatalog.openChatFailed"));

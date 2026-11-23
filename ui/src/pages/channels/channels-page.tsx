@@ -1,5 +1,6 @@
 import { action, createMemo, createOptimisticStore, createSignal, onSettled } from "solid-js";
 import type { ChannelsPairingListResult, ChannelsPairingRequest } from "../../api/types.ts";
+import { openDefaultAgentMainChat } from "../../app/agent-main-chat.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
@@ -102,6 +103,7 @@ export function ChannelsPage() {
       retireMutation("whatsapp");
     },
     startWhatsApp,
+    openChat: () => openDefaultAgentMainChat(context),
   });
 
   let schemaLoadStarted = false;

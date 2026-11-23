@@ -17,7 +17,6 @@ import {
   createWhatsAppAllowlistModeInput,
   expectWhatsAppDefaultAccountAccessNote,
   expectWhatsAppAllowlistModeSetup,
-  expectWhatsAppSeparatePhoneDisabledSetup,
   createWhatsAppLinkingHarness,
   createWhatsAppOwnerAllowlistHarness,
   createWhatsAppPersonalPhoneHarness,
@@ -303,21 +302,58 @@ describe("whatsapp setup wizard", () => {
       expectWhatsAppLoginFollowup(harness);
     }
   });
-  it("skips interactive linking when the client defers device linking", async () => {
-    hoisted.hasWebCredsSync.mockReturnValue(true);
-    const harness = createQueuedWizardPrompter({
-      confirmValues: [false],
-      selectValues: ["separate", "disabled"],
-    });
+  // A client links the phone itself after setup, so whose phone it is is the only question.
+  it.each([
+    {
+      name: "personal phone admits only the linked number",
+      phone: "personal",
+      cfg: {},
+      expected: { selfChatMode: true, dmPolicy: "allowlist", allowFrom: undefined },
+    },
+    {
+      name: "personal phone keeps named people but drops everyone",
+      phone: "personal",
+      cfg: whatsappConfig({ dmPolicy: "open", allowFrom: ["*", "15555550123"] }),
+      expected: { selfChatMode: true, dmPolicy: "allowlist", allowFrom: ["15555550123"] },
+    },
+    {
+      name: "separate number pairs new people",
+      phone: "separate",
+      cfg: {},
+      expected: { selfChatMode: false, dmPolicy: "pairing", allowFrom: undefined },
+    },
+    {
+      name: "separate number leaves no owner behind an empty allowlist",
+      phone: "separate",
+      cfg: whatsappConfig({ selfChatMode: true, dmPolicy: "allowlist" }),
+      expected: { selfChatMode: false, dmPolicy: "pairing", allowFrom: undefined },
+    },
+    {
+      name: "separate number keeps an allowlist that names people",
+      phone: "separate",
+      cfg: whatsappConfig({ dmPolicy: "allowlist", allowFrom: ["15555550123"] }),
+      expected: { selfChatMode: false, dmPolicy: "allowlist", allowFrom: ["15555550123"] },
+    },
+  ])("asks a linking client only whose phone it is: $name", async ({ phone, cfg, expected }) => {
+    const harness = createQueuedWizardPrompter({ selectValues: [phone] });
 
     const result = await runFinalizeWithHarness({
       harness,
+      cfg,
       options: { deferDeviceLinkToClient: true },
     });
 
     expect(hoisted.loginWeb).not.toHaveBeenCalled();
-    expect(harness.confirm).not.toHaveBeenCalled();
-    expectWhatsAppSeparatePhoneDisabledSetup(result.cfg, harness);
+    expect(harness.select).toHaveBeenCalledOnce();
+    for (const prompt of [harness.confirm, harness.text, harness.note]) {
+      expect(prompt).not.toHaveBeenCalled();
+    }
+    const whatsapp = result.cfg.channels?.whatsapp;
+    expect([whatsapp?.selfChatMode, whatsapp?.dmPolicy, whatsapp?.allowFrom]).toEqual([
+      expected.selfChatMode,
+      expected.dmPolicy,
+      expected.allowFrom,
+    ]);
   });
 
   it("normalizes allowFrom entries when list mode is selected", async () => {

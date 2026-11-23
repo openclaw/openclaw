@@ -30,14 +30,18 @@ export function createWhatsAppInboundMessageNormalizer(options: {
 }) {
   const { socketSession, groupMetadata } = options;
   const denialLogs = createDedupeCache({ ttlMs: 60_000, maxSize: 32 });
-  const logAccessDenial = (reasonCode: string) => {
+  const logAccessDenial = (reasonCode: string, sender?: string) => {
     // Key only by bounded policy reasons; repeated denials must not refresh the
     // window indefinitely or retain sender identifiers and message content.
     if (denialLogs.peek(reasonCode)) {
       return;
     }
     denialLogs.check(reasonCode);
-    whatsappInboundLog.info(`Inbound message blocked (reason=${reasonCode})`);
+    // A blocked direct sender is named exactly as WhatsApp reported it, which can differ
+    // from the number someone typed into the allowlist.
+    whatsappInboundLog.info(
+      `Inbound message blocked (reason=${reasonCode}${sender ? `, sender=${sender}` : ""})`,
+    );
   };
   const shouldSkipRecentOutboundEcho = (msg: WAMessage): boolean => {
     const id = msg.key?.id ?? undefined;
@@ -151,7 +155,7 @@ export function createWhatsAppInboundMessageNormalizer(options: {
         return null;
       }
       if (senderAccess.decision === "block" && senderAccess.reasonCode === "dm_policy_disabled") {
-        logAccessDenial(senderAccess.reasonCode);
+        logAccessDenial(senderAccess.reasonCode, from);
         return null;
       }
       if (senderAccess.decision === "pairing" && !policy.isSamePhone(from)) {
@@ -196,7 +200,7 @@ export function createWhatsAppInboundMessageNormalizer(options: {
         return null;
       }
       if (senderAccess.decision !== "allow") {
-        logAccessDenial(senderAccess.reasonCode);
+        logAccessDenial(senderAccess.reasonCode, from);
         return null;
       }
     }

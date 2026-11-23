@@ -144,8 +144,10 @@ describe("channels controller WhatsApp wait", () => {
     staleWait.resolve(loginResult("stale", true));
     await stale;
 
-    expect(channels.state.whatsappLoginMessage).toBe("fresh login");
+    // A fresh code replaces the Gateway's words; the stale link never applies.
+    expect(channels.state.whatsappLoginMessage).toBeNull();
     expect(channels.state.whatsappLoginQrDataUrl).toBe("data:image/png;base64,fresh-qr");
+    expect(channels.state.whatsappLoginConnected).toBe(false);
     expect(request.mock.calls.filter(([method]) => method === "channels.status")).toHaveLength(1);
   });
 
@@ -170,8 +172,8 @@ describe("channels controller WhatsApp wait", () => {
     });
     await wait;
 
-    expect(channels.state.whatsappLoginMessage).toBe("login survived scope change");
     expect(channels.state.whatsappLoginQrDataUrl).toBe("data:image/png;base64,scope-change");
+    expect(channels.state.whatsappBusy).toBe(false);
   });
 
   it("rejects an active login result when admin access is revoked", async () => {
@@ -212,6 +214,111 @@ describe("channels controller WhatsApp wait", () => {
 
     await channels.waitWhatsApp();
     expect(request).toHaveBeenCalledOnce();
+  });
+});
+
+describe("channels controller WhatsApp linking", () => {
+  const waitParams = (request: ReturnType<typeof vi.fn>) =>
+    request.mock.calls
+      .filter(([method]) => method === "web.login.wait")
+      .map(([, params]) => params);
+
+  it("watches the shown code, follows a new code and stops once linked", async () => {
+    const waits = [
+      { connected: false, message: "QR refreshed.", qrDataUrl: "data:image/png;base64,second" },
+      { connected: true, message: "Linked!" },
+    ];
+    const request = vi.fn(async (method: string) => {
+      if (method === "web.login.start") {
+        return { message: "Scan", qrDataUrl: "data:image/png;base64,first" };
+      }
+      if (method === "web.login.wait") {
+        return waits.shift();
+      }
+      return createChannelsSnapshot("linked");
+    });
+    const channels = createStaticChannelCapability(request);
+    const shown: Array<string | null> = [];
+    channels.subscribe((state) => shown.push(state.whatsappLoginQrDataUrl));
+
+    await channels.startWhatsApp(false);
+    await vi.waitFor(() => expect(channels.state.whatsappLoginConnected).toBe(true));
+
+    expect(waitParams(request)).toEqual([
+      { channel: "whatsapp", timeoutMs: 180_000, currentQrDataUrl: "data:image/png;base64,first" },
+      { channel: "whatsapp", timeoutMs: 180_000, currentQrDataUrl: "data:image/png;base64,second" },
+    ]);
+    expect(shown).toContain("data:image/png;base64,second");
+    expect(channels.state).toMatchObject({ whatsappLoginQrDataUrl: null, whatsappBusy: false });
+    // Status is probed once for the shown code and once for the link.
+    await vi.waitFor(() =>
+      expect(request.mock.calls.filter(([method]) => method === "channels.status")).toHaveLength(2),
+    );
+  });
+
+  it("keeps Relink and Logout available while it waits for a scan", async () => {
+    const pending = createDeferred<LoginResult>();
+    const request = vi.fn((method: string) =>
+      method === "web.login.start"
+        ? Promise.resolve({ message: "Scan", qrDataUrl: "data:image/png;base64,first" })
+        : method === "web.login.wait"
+          ? pending.promise
+          : Promise.resolve(createChannelsSnapshot("status")),
+    );
+    const channels = createStaticChannelCapability(request);
+
+    await channels.startWhatsApp(false);
+    await vi.waitFor(() => expect(waitParams(request)).toHaveLength(1));
+
+    expect(channels.state).toMatchObject({
+      whatsappBusy: false,
+      whatsappLoginQrDataUrl: "data:image/png;base64,first",
+    });
+    pending.resolve(loginResult("ignored", false));
+  });
+
+  it("stops watching when the code ends without a link and keeps the reason", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "web.login.start"
+        ? { message: "Scan", qrDataUrl: "data:image/png;base64,first" }
+        : method === "web.login.wait"
+          ? { connected: false, message: "The login QR expired." }
+          : createChannelsSnapshot("status"),
+    );
+    const channels = createStaticChannelCapability(request);
+
+    await channels.startWhatsApp(false);
+    await vi.waitFor(() => expect(channels.state.whatsappLoginQrDataUrl).toBeNull());
+
+    expect(waitParams(request)).toHaveLength(1);
+    expect(channels.state).toMatchObject({
+      whatsappLoginConnected: false,
+      whatsappLoginMessage: "The login QR expired.",
+      whatsappBusy: false,
+    });
+  });
+
+  it("forgets a watched code when setup closes", async () => {
+    const pending = createDeferred<LoginResult>();
+    const request = vi.fn((method: string) =>
+      method === "web.login.start"
+        ? Promise.resolve({ message: "Scan", qrDataUrl: "data:image/png;base64,first" })
+        : method === "web.login.wait"
+          ? pending.promise
+          : Promise.resolve(createChannelsSnapshot("status")),
+    );
+    const channels = createStaticChannelCapability(request);
+
+    await channels.startWhatsApp(false);
+    await vi.waitFor(() => expect(waitParams(request)).toHaveLength(1));
+    channels.stopWhatsAppLogin();
+    expect(channels.state).toMatchObject({ whatsappLoginQrDataUrl: null, whatsappBusy: false });
+
+    pending.resolve(loginResult("late", true));
+    await Promise.resolve();
+
+    expect(channels.state.whatsappLoginConnected).toBeNull();
+    expect(waitParams(request)).toHaveLength(1);
   });
 });
 
@@ -303,9 +410,8 @@ describe("channels controller WhatsApp mutation failures", () => {
         request.mock.calls.filter(([requestedMethod]) => requestedMethod === "channels.status"),
       ).toHaveLength(0);
       expect(updates.at(-1)).toEqual({ busy: false, message: "WhatsApp request rejected" });
-      expect(channels.state.whatsappLoginQrDataUrl).toBe(
-        method === "web.login.wait" ? "data:image/png;base64,current-qr" : null,
-      );
+      // Nothing watches the code after a failed request, so it is not left on screen.
+      expect(channels.state.whatsappLoginQrDataUrl).toBeNull();
       expect(channels.state.whatsappLoginConnected).toBeNull();
     },
   );

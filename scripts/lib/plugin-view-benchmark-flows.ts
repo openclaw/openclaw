@@ -11,6 +11,19 @@ type MeasureStep = (
   navigation?: boolean,
 ) => Promise<void>;
 
+const WHATSAPP_WAITING_FOR_SCAN = "Waiting for a scan. The code refreshes on its own.";
+
+/** Lets the fixture answer the view's pending wait as a phone scan would. */
+async function scanWhatsAppCode(page: Page) {
+  await page.waitForFunction(() => Reflect.has(globalThis, "__openclawBenchWhatsAppScan"));
+  await page.evaluate(() => {
+    const scan = Reflect.get(globalThis, "__openclawBenchWhatsAppScan");
+    if (typeof scan === "function") {
+      scan();
+    }
+  });
+}
+
 export async function remainingPluginReady(page: Page, fixture: RemainingFixture) {
   if (fixture.plugin === "x") {
     const view = page.locator(".x-replies");
@@ -456,17 +469,19 @@ export async function exerciseRemainingPlugin(
       force: false,
       timeoutMs: 30_000,
     });
-    await expect(page.getByRole("button", { name: "Wait for scan", exact: true })).toBeEnabled();
-  });
-  await step("complete-login", async () => {
-    await page.getByRole("button", { name: "Wait for scan", exact: true }).click();
-    await expect(page.getByRole("img", { name: "WhatsApp QR" })).toHaveCount(0);
-    await expect(detail.getByRole("button", { name: "Relink", exact: true })).toBeEnabled();
+    // The shown code is watched at once; there is no separate wait action.
+    await gateway.waitForRequest("web.login.wait");
     expect((await gateway.getRequests("web.login.wait")).at(-1)?.params).toEqual({
       channel: "whatsapp",
-      timeoutMs: 120_000,
+      timeoutMs: 180_000,
       currentQrDataUrl: fixture.qrDataUrl,
     });
+    await expect(detail.getByText(WHATSAPP_WAITING_FOR_SCAN, { exact: true })).toBeVisible();
+  });
+  await step("complete-login", async () => {
+    await scanWhatsAppCode(page);
+    await expect(page.getByRole("img", { name: "WhatsApp QR" })).toHaveCount(0);
+    await expect(detail.getByRole("button", { name: "Relink", exact: true })).toBeEnabled();
   });
   const linked = structuredClone(fixture);
   Object.assign(linked.status.channels.whatsapp, {
@@ -535,8 +550,8 @@ async function exerciseWhatsAppLocaleProof(
   const originalFact = await detail.locator(".settings-kv dt").first().elementHandle();
   const originalValue = await detail.locator(".settings-kv dd").first().elementHandle();
   const originalQr = await detail.getByRole("img", { name: "WhatsApp QR" }).elementHandle();
-  const originalWait = await detail
-    .getByRole("button", { name: "Wait for scan", exact: true })
+  const originalWaiting = await detail
+    .getByText(WHATSAPP_WAITING_FOR_SCAN, { exact: true })
     .elementHandle();
   const starts = (await gateway.getRequests("web.login.start")).length;
   const waits = (await gateway.getRequests("web.login.wait")).length;
@@ -562,7 +577,7 @@ async function exerciseWhatsAppLocaleProof(
     await gateway.waitForRequest("config.get", { after: before });
     await expect(page.locator("html")).toHaveAttribute("lang", locale);
   }
-  async function retained(refresh: string, alt: string, wait: string) {
+  async function retained(refresh: string, alt: string) {
     await expect(detail.getByRole("button", { name: refresh, exact: true })).toBeEnabled();
     const qr = detail.getByRole("img", { name: alt, exact: true });
     await expect(qr).toHaveAttribute("src", fixture.qrDataUrl);
@@ -579,30 +594,30 @@ async function exerciseWhatsAppLocaleProof(
         .first()
         .evaluate((node, old) => node === old, originalValue),
     ).toBe(true);
+    // The waiting line has no translation yet, so every locale keeps the English node.
     expect(
       await detail
-        .getByRole("button", { name: wait, exact: true })
-        .evaluate((node, old) => node === old, originalWait),
+        .getByText(WHATSAPP_WAITING_FOR_SCAN, { exact: true })
+        .evaluate((node, old) => node === old, originalWaiting),
     ).toBe(true);
-    await expect(detail).toContainText("Scan this synthetic QR.");
     expect((await gateway.getRequests("web.login.start")).length).toBe(starts);
     expect((await gateway.getRequests("web.login.wait")).length).toBe(waits);
   }
   try {
     await step("locale-german", async () => {
       await publishLocale("de");
-      await retained("Aktualisieren", "WhatsApp-QR", "Auf Scan warten");
+      await retained("Aktualisieren", "WhatsApp-QR");
       await expect(detail.locator(".settings-kv dt").first()).toHaveText("Konfiguriert");
       expect(catalogRequests).toHaveLength(1);
     });
     await step("locale-english", async () => {
       await publishLocale("en");
-      await retained("Refresh", "WhatsApp QR", "Wait for scan");
+      await retained("Refresh", "WhatsApp QR");
       expect(catalogRequests).toHaveLength(1);
     });
     await step("locale-swedish", async () => {
       await publishLocale("sv");
-      await retained("Uppdatera", "QR-kod för WhatsApp", "Vänta på skanning");
+      await retained("Uppdatera", "QR-kod för WhatsApp");
       expect(catalogRequests).toHaveLength(1);
     });
     await publishLocale("de");
@@ -640,9 +655,7 @@ async function exerciseWhatsAppLocaleProof(
           await openDetail("Refresh", "Show QR");
           await detail.getByRole("button", { name: "Show QR", exact: true }).click();
           await expect(detail.getByRole("img", { name: "WhatsApp QR" })).toBeVisible();
-          await expect(
-            detail.getByRole("button", { name: "Wait for scan", exact: true }),
-          ).toBeEnabled();
+          await expect(detail.getByText(WHATSAPP_WAITING_FOR_SCAN, { exact: true })).toBeVisible();
           expect(abortedCatalogs).toBeGreaterThanOrEqual(1);
         },
         true,
@@ -655,7 +668,7 @@ async function exerciseWhatsAppLocaleProof(
         liveCatalogRequests: 1,
         germanNewDocumentCatalogRequests: 1,
         abortedCatalogs,
-        retainedFactsQrAndWaitControl: true,
+        retainedFactsQrAndWaitingStatus: true,
       },
     };
   } finally {

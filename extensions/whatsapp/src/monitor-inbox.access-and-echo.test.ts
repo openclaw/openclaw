@@ -147,9 +147,11 @@ describe("web monitor inbox", () => {
           await waitForInboundWorkDrained();
           expect(log).toHaveBeenCalledTimes(index === 2 ? 2 : 1);
         }
+        // Direct denials name the sender as WhatsApp reported it; message data never appears.
+        const sender = testCase.group ? "" : ", sender=+999";
         expect(log.mock.calls).toEqual([
-          [`Inbound message blocked (reason=${testCase.reason})`],
-          [`Inbound message blocked (reason=${testCase.reason})`],
+          [`Inbound message blocked (reason=${testCase.reason}${sender})`],
+          [`Inbound message blocked (reason=${testCase.reason}${sender})`],
         ]);
         expect(onMessage).not.toHaveBeenCalled();
         expect(sock.sendMessage).not.toHaveBeenCalled();
@@ -196,6 +198,38 @@ describe("web monitor inbox", () => {
       ...(sender === "+999" ? { platform: { senderE164: sender } } : {}),
     });
     await listener.close();
+  });
+
+  // WhatsApp keeps identifying many Brazilian mobiles by their number before the ninth digit.
+  it.each([
+    {
+      name: "admits a sender WhatsApp reports without the ninth digit",
+      allowFrom: ["+55 61 98888-1234"],
+      jid: "556188881234@s.whatsapp.net",
+      admitted: true,
+    },
+    {
+      name: "admits a sender WhatsApp reports with the ninth digit",
+      allowFrom: ["+556188881234"],
+      jid: "5561988881234@s.whatsapp.net",
+      admitted: true,
+    },
+    {
+      name: "keeps a landline apart from a mobile that only differs by a leading nine",
+      allowFrom: ["+5561933334444"],
+      jid: "556133334444@s.whatsapp.net",
+      admitted: false,
+    },
+  ])("$name", async ({ allowFrom, jid, admitted }) => {
+    mockLoadConfig.mockReturnValue(createInboxConfig({ dmPolicy: "allowlist", allowFrom }));
+    const { onMessage, listener, sock } = await openInboxMonitor();
+    try {
+      emitText(sock, "brazil-mobile", jid, "hello");
+      await waitForInboundWorkDrained();
+      expect(onMessage).toHaveBeenCalledTimes(admitted ? 1 : 0);
+    } finally {
+      await listener.close();
+    }
   });
 
   it("blocks allowlisted same-phone fromMe DMs when self-chat mode is disabled", async () => {

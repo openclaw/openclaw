@@ -33,8 +33,11 @@ import {
   resolveChannelHealth,
 } from "./view.shared.tsx";
 import type { ChannelsProps } from "./view.types.ts";
+import { WhatsAppSetup } from "./whatsapp-setup.tsx";
 import type { ChannelWizardState } from "./wizard-runner.ts";
 registerEnglishCatalog(registerSettingsEnglish);
+
+const DEFAULT_ACCOUNT_ID = "default";
 
 const RECOMMENDED_CHANNEL_ORDER: string[] = [
   "whatsapp",
@@ -431,70 +434,14 @@ function WizardStepBody(props: {
   );
 }
 
-function renderWhatsAppLinking(props: ChannelsProps) {
-  const connected = () => props.channels.whatsappLoginConnected === true;
-  const busy = () => props.mutationBusy?.whatsapp || props.channels.whatsappBusy;
-  return (
-    <>
-      <div class="channels-wizard__message" role="status">
-        {connected() ? t("channels.setup.whatsappLinked") : t("channels.setup.whatsappScanTitle")}
-      </div>
-      {props.channels.whatsappLoginMessage ? (
-        <div class="channels-wizard__note" role="status">
-          {props.channels.whatsappLoginMessage}
-        </div>
-      ) : undefined}
-      {connected() ? undefined : (
-        <>
-          <div class="channels-wizard__qr">
-            {props.channels.whatsappLoginQrDataUrl ? (
-              <img
-                src={props.channels.whatsappLoginQrDataUrl}
-                alt={t("channels.setup.whatsappQrAlt")}
-              />
-            ) : busy() ? undefined : (
-              <div class="channels-wizard__spinner">{t("channels.setup.whatsappQrHint")}</div>
-            )}
-          </div>
-          <div class="channels-wizard__note">{t("channels.setup.whatsappScanHelp")}</div>
-        </>
-      )}
-      <openclaw-modal-actions class="channels-wizard__footer">
-        {connected() ? (
-          renderCloseButton(props, "channels.setup.finish", true)
-        ) : (
-          <>
-            {renderCloseButton(props, "channels.setup.linkLater")}
-            {busy() ? (
-              <WizardBusyButton statusLabel={t("channels.setup.whatsappQrLoading")} />
-            ) : (
-              <>
-                <button type="button" class="btn" onClick={() => void props.onWhatsAppStart(true)}>
-                  {props.channels.whatsappLoginQrDataUrl
-                    ? t("channels.setup.regenerateQr")
-                    : t("common.showQr")}
-                </button>
-                {props.channels.whatsappLoginQrDataUrl ? (
-                  <button
-                    type="button"
-                    class="btn primary"
-                    onClick={() => void props.onWhatsAppWait()}
-                  >
-                    {t("common.waitForScan")}
-                  </button>
-                ) : undefined}
-              </>
-            )}
-          </>
-        )}
-      </openclaw-modal-actions>
-    </>
-  );
-}
-
 function renderDoneBody(channels: readonly string[], props: ChannelsProps) {
   if (channels.includes("whatsapp")) {
-    return renderWhatsAppLinking(props);
+    return (
+      <WhatsAppSetup
+        controls={props}
+        accountId={props.wizardHost.whatsappAccountId() ?? DEFAULT_ACCOUNT_ID}
+      />
+    );
   }
   const changed = channels.length > 0;
   return (

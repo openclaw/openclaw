@@ -7,18 +7,31 @@ const sharedCountryCallingCodes = new Set(
     .map(([callingCode]) => callingCode),
 );
 
-export function formatInternationalPhoneNumberForDisplay(
-  raw: string,
-  locale?: string,
-): string | undefined {
+function parseInternationalPhoneNumber(raw: string) {
   const candidate = raw.trim();
   if (!candidate.startsWith("+")) {
     return undefined;
   }
+  const phoneNumber = parsePhoneNumberFromString(candidate, { extract: false });
+  return phoneNumber?.isPossible() ? phoneNumber : undefined;
+}
 
+/** Groups a possible E.164 number for reading inside a sentence, without a country name. */
+export function formatInternationalPhoneNumber(raw: string): string | undefined {
   try {
-    const phoneNumber = parsePhoneNumberFromString(candidate, { extract: false });
-    if (!phoneNumber?.isPossible()) {
+    return parseInternationalPhoneNumber(raw)?.formatInternational();
+  } catch {
+    return undefined;
+  }
+}
+
+export function formatInternationalPhoneNumberForDisplay(
+  raw: string,
+  locale?: string,
+): string | undefined {
+  try {
+    const phoneNumber = parseInternationalPhoneNumber(raw);
+    if (!phoneNumber) {
       return undefined;
     }
 

@@ -102,15 +102,20 @@ it("keeps QR/relink actions and busy state tied to the shared login snapshot", (
   f.button("Show QR").click();
   expect(f.start).toHaveBeenCalledWith(false);
   f.update({ status: { linked: true }, login: qrLogin });
-  expect(f.container.querySelector('[role="status"]')?.textContent).toBe("Scan now");
+  // The shown code is watched by the login owner; no separate wait action remains.
+  expect(
+    [...f.container.querySelectorAll('[role="status"]')].map((node) => node.textContent),
+  ).toEqual(["Scan now", "Waiting for a scan. The code refreshes on its own."]);
+  expect(f.buttons().map((node) => node.textContent?.trim())).toEqual(["Relink", "Logout"]);
   f.button("Relink").click();
   expect(f.start).toHaveBeenLastCalledWith(true);
-  f.button("Wait for scan").click();
-  expect(f.wait).toHaveBeenCalledOnce();
   f.update({ login: { ...qrLogin, message: null, busy: true } });
-  for (const label of ["Relink", "Wait for scan", "Logout"]) {
+  for (const label of ["Relink", "Logout"]) {
     expect(f.button(label).disabled).toBe(true);
   }
+  f.update({ login: { ...emptyLogin, message: "Code expired" } });
+  expect(f.container.querySelector('[role="status"]')?.textContent).toBe("Code expired");
+  expect(f.wait).not.toHaveBeenCalled();
 });
 it("uses the declared default account for configured fallback without inventing status facts", () => {
   const configuredAccount = { accountId: "selected", configured: true };
