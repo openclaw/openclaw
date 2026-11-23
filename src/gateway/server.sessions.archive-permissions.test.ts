@@ -94,10 +94,10 @@ test.each(["sessions.patch", "sessions.patchMany"] as const)(
     }
 
     const pin = await request(method, member, context, [foreignKey], { pinned: true });
-    expect(pin, JSON.stringify(pin)).toMatchObject(
+    expect(pin).toMatchObject(
       method === "sessions.patchMany"
-        ? [true, { outcomes: [{ key: foreignKey, ok: true }] }]
-        : [true, { entry: { pinned: true } }],
+        ? [true, { outcomes: [{ key: foreignKey, ok: true }] }, undefined]
+        : [true, { entry: { pinned: true } }, undefined],
     );
     expect(read(foreignKey)?.pinnedAt).toBeUndefined();
     expect(

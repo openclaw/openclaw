@@ -41,6 +41,20 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
         },
       );
     }
+    const hidden = key("bob-draft");
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: hidden },
+      {
+        sessionId: hidden,
+        updatedAt: 10,
+        visibility: "draft",
+        createdActor: {
+          type: "human",
+          source: "profile",
+          id: bob.authenticatedUserProfile!.profileId,
+        },
+      },
+    );
     await initializeSessionReadContext(context);
     async function rpc(client: GatewayClient, method: string, params: Record<string, unknown>) {
       const respond = vi.fn<RespondFn>();
@@ -65,6 +79,7 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
     }
     const shortcuts = [
       `session-rail:${a}`,
+      `session:${hidden}`,
       `session:${b}`,
       "route:usage",
       `session:${c}`,
@@ -109,9 +124,19 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
     await expect(
       rpc(alice, "sessions.patch", { key: a, pinned: true, expectedSessionId: "replaced" }),
     ).rejects.toThrow(/changed/);
+    await expect(rpc(alice, "sessions.patch", { key: hidden, pinned: true })).rejects.toThrow(
+      /not found|visible|draft/i,
+    );
     await expect(rpc(alice, "sessions.patch", { key: a, pinned: true })).resolves.toMatchObject({
       entry: { sessionId: a, pinned: true },
     });
+    // An earlier sidebar drag cannot overwrite a subsequently committed tool pin.
+    await expect(
+      rpc(alice, "users.prefs.set", {
+        entries: { [PREF]: shortcuts.toReversed() },
+        expectedEntries: { [PREF]: shortcuts },
+      }),
+    ).resolves.toEqual({ status: "conflict" });
     await rpc(alice, "sessions.patchMany", {
       targets: [{ key: b }, { key: c }],
       patch: { pinned: false },
@@ -119,7 +144,13 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
     await expect(rpc(alice, "users.prefs.get", { keys: [PREF] })).resolves.toEqual({
       status: "ok",
       entries: {
-        [PREF]: [`session-rail:${a}`, "route:usage", `session:${nested}`, `session:${a}`],
+        [PREF]: [
+          `session-rail:${a}`,
+          `session:${hidden}`,
+          "route:usage",
+          `session:${nested}`,
+          `session:${a}`,
+        ],
       },
     });
     await expect(rpc(alice, "sessions.patch", { key: nested, pinned: true })).rejects.toThrow(
