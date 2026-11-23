@@ -3,7 +3,9 @@ import * as ts from "typescript/ast";
 import { serverFS } from "typescript/fs";
 import { SymbolFlags, type Symbol, type Type } from "typescript/sync";
 import {
+  containsTrigger,
   createNativeTypeScriptProject,
+  identifierTokens,
   reportNativeTypeScriptPhase,
   type NativeTypeScriptObserver,
 } from "./native-typescript.mts";
@@ -604,7 +606,7 @@ export function inspectDatabaseWorkerBoundaries(
       declarations.set(node, operation);
       declarationNames.add(nameNode);
     }
-    return { file, source };
+    return { file, source, text: sourceTexts.get(file)! };
   });
   session.checkpoint?.("sources-registration");
   if (validateCredentialWriters) {
@@ -839,8 +841,15 @@ export function inspectDatabaseWorkerBoundaries(
   const aliases: [string, string][] = [];
   const namespaces: (ts.Identifier | ts.StringLiteral)[] = [];
   const bindings: ts.VariableDeclaration[] = [];
-  for (const { source } of sources) {
-    const visit = (node: ts.Node) => {
+  // Specifiers sit in import/export declarations; only dynamic-import bindings are consumed.
+  const moduleKeywords = /\b(?:import|export)\b/g;
+  for (const { source, text } of sources) {
+    const descend = containsTrigger(text, moduleKeywords);
+    const visit = (node: ts.Node, declaration = false) => {
+      // Type subtrees hold no specifiers or value bindings; skip them before they materialize.
+      if (ts.isTypeNode(node)) {
+        return;
+      }
       if (ts.isImportSpecifier(node) || ts.isExportSpecifier(node)) {
         aliases.push([node.propertyName?.text ?? node.name.text, node.name.text]);
       } else if (ts.isImportClause(node) && node.name) {
@@ -850,9 +859,12 @@ export function inspectDatabaseWorkerBoundaries(
       } else if (ts.isVariableDeclaration(node) && node.initializer) {
         bindings.push(node);
       }
-      node.forEachChild(visit);
+      const whole = declaration || ts.isImportDeclaration(node) || ts.isExportDeclaration(node);
+      if (whole || descend(node)) {
+        node.forEachChild((child) => visit(child, whole));
+      }
     };
-    source.forEachChild(visit);
+    source.forEachChild((child) => visit(child));
   }
   const contained = new Map<Symbol, Set<BoundaryOperation>>();
   const targets = (rawSymbol: Symbol | undefined): Set<BoundaryOperation> => {
@@ -1019,8 +1031,12 @@ export function inspectDatabaseWorkerBoundaries(
   };
   const bindingMembers = new Map<ts.Node, Symbol>();
   const receiverBindings = new Map<ts.Identifier, ts.ObjectBindingPattern>();
-  const sourceReferences = sources.map(({ file, source }) => {
+  // A reference spells a candidate name; an unhandled dynamic import spells `import`.
+  const referenceTokens = identifierTokens(names);
+  const isReferenceToken = (token: string) => token === "import" || names.has(token);
+  const sourceReferences = sources.map(({ file, source, text }) => {
     const references: ts.Node[] = [];
+    const descend = containsTrigger(text, referenceTokens, isReferenceToken);
     const visit = (node: ts.Node) => {
       // `extends` is a runtime reference even though its AST wrapper is a type.
       if (
@@ -1054,7 +1070,9 @@ export function inspectDatabaseWorkerBoundaries(
       ) {
         references.push(node);
       }
-      node.forEachChild(visit);
+      if (descend(node)) {
+        node.forEachChild(visit);
+      }
     };
     source.forEachChild(visit);
     for (const node of references) {

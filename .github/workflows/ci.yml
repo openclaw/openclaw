@@ -3100,6 +3100,7 @@ jobs:
         uses: ./.ci-harness/.github/actions/setup-ripgrep
 
       - name: Run baseline ratchets
+        timeout-minutes: 12
         env:
           RATCHET_PR_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
         shell: bash

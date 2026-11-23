@@ -2691,6 +2691,10 @@ progress report remains available through that Gateway's restart. The dialog sho
 "Starting update…" until the progress report arrives and "Reconnecting…" during
 a temporary disconnect.
 
+After reconnecting, Settings → Updates reads the saved result and releases checks
+started by the previous connection. Administrators can close the completed report
+and change update settings or start another update.
+
 Ask the agent to update OpenClaw, or send `/update` from Discord or another
 connected chat. For natural-language owner requests on standard installations,
 the agent uses the built-in updater through the `gateway` tool’s `update.run`

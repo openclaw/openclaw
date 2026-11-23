@@ -593,6 +593,8 @@ on:
         required: false
       ZAI_API_KEY:
         required: false
+      ZAI_CODING_API_KEY:
+        required: false
       Z_AI_API_KEY:
         required: false
       BYTEPLUS_ACCESS_KEY_ID:
@@ -4732,6 +4734,17 @@ jobs:
         uses: ./.release-harness/.github/actions/setup-playwright-chromium
         with:
           cache-mode: restore
+
+      - name: Select Z.AI Coding Plan credential
+        if: steps.selection.outputs.run == 'true' && matrix.suite_id == 'native-live-src-agents-zai-coding'
+        shell: bash
+        env:
+          ZAI_CODING_API_KEY: ${{ secrets.ZAI_CODING_API_KEY }}
+        run: |
+          set -euo pipefail
+          : "${ZAI_CODING_API_KEY:?Set the ZAI_CODING_API_KEY Actions secret for Coding Plan tests}"
+          # Select before profile hydration; never fall back to standard API billing.
+          printf 'ZAI_API_KEY=%s\nZ_AI_API_KEY=\n' "$ZAI_CODING_API_KEY" >> "$GITHUB_ENV"
 
       - name: Hydrate live auth/profile inputs
         if: steps.selection.outputs.run == 'true'
