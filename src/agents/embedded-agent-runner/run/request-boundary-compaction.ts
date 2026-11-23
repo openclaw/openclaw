@@ -206,9 +206,17 @@ export function createRequestBoundaryCompaction(params: {
       return fallback("tool calls are still pending");
     }
     if (!native) {
-      // A commit ends this attempt so its retry starts from the compacted transcript;
-      // only a settled tool boundary can stop here.
-      if (!(params.isToolBoundarySafe?.() ?? false)) {
+      // A commit ends this attempt so its retry starts from the compacted transcript.
+      // The shared pressure owner allows that only at a settled tool boundary and
+      // not after this run declined maintenance that could not reduce context.
+      const pressure = decideContextPressure({
+        estimatedPromptTokens: outgoing.estimatedPromptTokens,
+        windowTokens: model.contextWindow ?? params.contextTokenBudget,
+        maintenanceDue: true,
+        boundarySafe: params.isToolBoundarySafe?.() ?? false,
+        runId: params.runId,
+      });
+      if (pressure !== "maintenance") {
         return undefined;
       }
       let failure = "compaction did not complete";

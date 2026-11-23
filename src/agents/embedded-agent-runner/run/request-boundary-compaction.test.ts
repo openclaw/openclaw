@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../../../../packages/ai/src/host.js";
 import { streamSimpleAnthropic } from "../../../../packages/ai/src/providers/anthropic.js";
+import { clearBoundaryMaintenance, declineBoundaryMaintenance } from "../../context-pressure.js";
 import {
   createAssistant,
   createTestSession,
@@ -163,6 +164,7 @@ async function fixture(options: { boundary?: boolean; history?: SessionManager }
           contextTokenBudget: 8_000,
           reserveTokens: 2_000,
           isToolBoundarySafe: () => true,
+          runId: "warm-run",
           timeoutMs: 30_000,
           assertActive: () => {},
           withTranscriptWrite,
@@ -271,6 +273,21 @@ describe("warm text compaction at the request boundary", () => {
     );
     const kept = manager.buildSessionContext().messages;
     expect(kept.filter((message) => message.role === "toolResult")).toHaveLength(1);
+  });
+
+  it("sends the request unchanged after the run declined maintenance", async () => {
+    // Recovery declines maintenance that could not reduce context; repeating it would
+    // stop every later attempt of the run.
+    declineBoundaryMaintenance("warm-run");
+    try {
+      const f = await fixture();
+      await f.submit();
+      expect(requests.map(isSummaryRequest)).toEqual([false]);
+      expect(f.onPrecheck).not.toHaveBeenCalled();
+      expect(completedCompactions(f.events)).toEqual([]);
+    } finally {
+      clearBoundaryMaintenance("warm-run");
+    }
   });
 
   it.each(["tool", "length"] as const)(
