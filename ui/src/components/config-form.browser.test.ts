@@ -713,6 +713,30 @@ describe("config form renderer", () => {
     expect(onPatch).not.toHaveBeenCalled();
   });
 
+  it("keeps the Raw-mode notice when a pattern value shape differs from the map entry", async () => {
+    // Review counterexample (#202730 round 3): a string-valued map with a boolean
+    // pattern refinement would render a string control that the validator rejects.
+    const analysis = analyze({
+      flags: {
+        type: "object",
+        additionalProperties: { type: "string" },
+        patternProperties: { "^flag$": { type: "boolean" } },
+      },
+    });
+    expect(analysis.unsupportedPaths).toEqual(["flags"]);
+    renderForm(analysis, {
+      activeSection: "flags",
+      value: { flags: { flag: true } },
+    });
+    await waitForSolid(() =>
+      expect(container.textContent).toContain(
+        "Edit this setting in the Raw tab of Advanced settings.",
+      ),
+    );
+    expect(container.querySelector(".cfg-map")).toBeNull();
+    expect(onPatch).not.toHaveBeenCalled();
+  });
+
   it("filters by authored metadata tags without rendering field chips", () => {
     renderForm(rootAnalysis, {
       uiHints: {

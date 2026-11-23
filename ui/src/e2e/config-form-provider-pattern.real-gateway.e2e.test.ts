@@ -9,12 +9,22 @@ import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-rea
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { assertServedUi, pairFixture } from "./chat-lifecycle.test-support.ts";
+import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 let owner: OpenClawTestInstance;
+let client: Awaited<ReturnType<typeof connectChatGateway>>;
 const suite = createControlUiE2eSuite({
   name: "Provider-pattern models map in the built Control UI",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(owner, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     owner = await createOpenClawTestInstance({
       name: "provider-pattern-models",
@@ -65,7 +75,7 @@ suite.define(() => {
         // The map must render the editor, not the Raw-mode fallback notice.
         const modelsMap = page.locator(".cfg-map").first();
         await modelsMap.waitFor({ state: "visible" });
-        await expect(page.getByText("Unsupported schema node")).toHaveCount(0);
+        await expect(page.getByText("Unsupported schema node").count()).resolves.toBe(0);
         const editorShot = await takeControlUiScreenshotFrame(page, page.locator("body"), [], {
           animations: "disabled",
         });
@@ -74,22 +84,30 @@ suite.define(() => {
           editorShot.png,
         );
 
-        // Add an entry, save, reload: the entry must persist.
+        // Add an entry and save; wait for the write to land in the Gateway config
+        // before reloading, so the persistence check never races the save.
         await modelsMap.getByRole("button", { name: "Add", exact: true }).click();
-        const keyInput = modelsMap.locator("input").first();
-        await keyInput.fill("vllm/proof-model");
-        const aliasInput = modelsMap.locator("input").nth(1);
-        await aliasInput.fill("proof-alias");
+        await modelsMap.locator("input").first().fill("vllm/proof-model");
+        await modelsMap.locator("input").nth(1).fill("proof-alias");
         await page.getByRole("button", { name: "Save", exact: true }).first().click();
-        await page.waitForFunction(() => !document.querySelector("button[disabled]") || true);
-        await page.waitForTimeout(1500);
+        await expect
+          .poll(
+            async () => {
+              const config = await client.request("config.get", {});
+              return JSON.stringify(config).includes('"vllm/proof-model"');
+            },
+            { timeout: 30_000 },
+          )
+          .toBe(true);
 
         await page.reload();
         await waitForControlUiGatewayReady(page);
         await waitForControlUiRoute(page, { routeId: "ai-agents" });
         const persisted = page.locator(".cfg-map").first();
         await persisted.waitFor({ state: "visible" });
-        await expect(persisted).toContainText("vllm/proof-model");
+        // Map keys render as input values, not descendant text.
+        await expect(persisted.locator("input").first()).toHaveValue("vllm/proof-model");
+        await expect(persisted.locator("input").nth(1)).toHaveValue("proof-alias");
         const reloadedShot = await takeControlUiScreenshotFrame(page, page.locator("body"), [], {
           animations: "disabled",
         });
