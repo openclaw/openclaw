@@ -39,9 +39,39 @@ export function formatAskUserNoAnswerNote(status: "cancelled" | "expired" | "pen
     : "No answer arrived; proceed with best judgment.";
 }
 
+/** Shared model instructions: readiness requires verification; unresolved manual work stays blocked. */
+export function formatAskUserRequiredActionOutcome(
+  outcome: "ready_to_verify" | "cancelled" | "expired" | "declined",
+): string {
+  return outcome === "ready_to_verify"
+    ? "The user is ready for a fresh check of the required step. This is not proof of completion, authentication, or permission. Re-observe the original target through its owning tool. Continue the original task only if the prerequisite is actually satisfied; preserve completed progress and do not repeat completed or uncertain side effects. If still unresolved, report the remaining blocker without claiming success or repeating the handoff."
+    : `The required manual step was ${outcome}. The dependent task remains blocked; do not continue its dependent actions, retry this handoff, or claim success. Preserve completed progress and report this outcome. Wait for a new user instruction before trying this step again.`;
+}
+
 /** Continuation for a question whose waiting tool call ended with the Gateway restart. */
 export function formatRestartedQuestionResult(record: QuestionRecord): string {
   const heading = "ask_user answer (question asked before the Gateway restarted):\n";
+  // requiredAction's saved normalized form is closed-choice; ordinary ask_user always
+  // enables free text, even when the caller happens to choose the same question id.
+  const question = record.questions[0];
+  if (
+    record.questions.length === 1 &&
+    question?.questionId === "required_action" &&
+    question.isOther === false &&
+    question.options.length === 2 &&
+    question.options[0]?.label === REQUIRED_ACTION_READY &&
+    question.options[1]?.label === REQUIRED_ACTION_STOP
+  ) {
+    const outcome =
+      record.status === "answered"
+        ? record.answers?.answers.required_action?.[0] === REQUIRED_ACTION_READY
+          ? "ready_to_verify"
+          : "declined"
+        : record.status === "cancelled"
+          ? "cancelled"
+          : "expired";
+    return heading + formatAskUserRequiredActionOutcome(outcome);
+  }
   return record.status === "answered"
     ? heading + formatAskUserAnswerLines(record.questions, record.answers ?? { answers: {} })
     : heading + formatAskUserNoAnswerNote(record.status === "cancelled" ? "cancelled" : "expired");

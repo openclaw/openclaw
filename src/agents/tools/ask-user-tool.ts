@@ -28,6 +28,7 @@ import {
   DEFAULT_ASK_USER_TIMEOUT_SECONDS,
   formatAskUserAnswerLines,
   formatAskUserNoAnswerNote,
+  formatAskUserRequiredActionOutcome,
   QUESTION_RPC_GRACE_MS,
   REQUIRED_ACTION_READY,
   type NormalizedAskUserParams,
@@ -356,8 +357,7 @@ function answeredResult(
     const refresh = refreshTools();
     return {
       ...textResult(
-        "The user is ready for a fresh check of the required step. This is not proof of completion, authentication, or permission. Re-observe the original target through its owning tool. Continue the original task only if the prerequisite is actually satisfied; preserve completed progress and do not repeat completed or uncertain side effects. If still unresolved, report the remaining blocker without claiming success or repeating the handoff.\n\n" +
-          JSON.stringify(payload),
+        `${formatAskUserRequiredActionOutcome("ready_to_verify")}\n\n${JSON.stringify(payload)}`,
         payload,
       ),
       ...(refresh ? { terminate: true } : {}),
@@ -371,10 +371,7 @@ function answeredResult(
 function unresolvedActionResult(reason: "cancelled" | "expired" | "declined") {
   const payload = { status: "action_unresolved" as const, reason };
   return textResult(
-    "The required manual step was " +
-      reason +
-      ". The dependent task remains blocked; do not continue its dependent actions, retry this handoff, or claim success. Preserve completed progress and report this outcome. Wait for a new user instruction before trying this step again.\n\n" +
-      JSON.stringify(payload),
+    `${formatAskUserRequiredActionOutcome(reason)}\n\n${JSON.stringify(payload)}`,
     payload,
   );
 }
