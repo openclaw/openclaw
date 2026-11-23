@@ -7,9 +7,10 @@ import { templateCatalogPackageNameFromPath } from "../app-route-paths.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import { resolveControlUiPaths } from "../app/browser.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { releasedSessionPath, releasedSessionQuery } from "../app/released-session-query.ts";
 import { currentDisplayRuntimeConfig } from "../lib/config/config-state-model.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
-import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 import {
   markdownInlineChildren,
@@ -62,11 +63,18 @@ function parseMarkdownSessionUrl(raw: string, basePath?: string, mainKey?: strin
   }
   try {
     const url = new URL(raw, globalThis.location.href);
-    const target = sessionRefFromPath(
-      url.pathname,
-      basePath ?? resolveControlUiPaths(globalThis.location.pathname)[0],
-      mainKey,
-    );
+    const mount = basePath ?? resolveControlUiPaths(globalThis.location.pathname)[0];
+    const released = url.search && releasedSessionQuery(url, mount);
+    if (released) {
+      // Unqualified legacy keys require the startup agent selection. Never guess it in Markdown.
+      const pathname = releasedSessionPath(released, mount, "", mainKey);
+      if (!pathname) {
+        return null;
+      }
+      url.pathname = pathname;
+      url.search = released.search;
+    }
+    const target = sessionRefFromPath(url.pathname, mount, mainKey);
     return target && (url.protocol === "http:" || url.protocol === "https:")
       ? { url, target }
       : null;
@@ -198,6 +206,12 @@ export function markdownSessionLinkFromEvent(
   const path = href
     ? parseLocalMarkdownSessionUrl(href, {
         basePath: basePath ?? context?.basePath,
+        mainKey: context
+          ? resolveUiConfiguredMainKey({
+              agentsList: context.agents.state.agentsList,
+              hello: context.gateway.snapshot.hello,
+            })
+          : undefined,
         publicOrigin: markdownSessionPublicOrigin(context),
       })
     : null;

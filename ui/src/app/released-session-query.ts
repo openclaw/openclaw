@@ -1,12 +1,14 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import type { AgentsListResult } from "../api/types.ts";
 import { pathForRoute } from "../app-route-paths.ts";
+import { pathForSession } from "../app-session-path-builder.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 
 type ReleasedSessionQuery = {
   face: BoardFace;
   sessionKey: string;
+  search: string;
 };
 
 export function resolvePersistedAgentId(
@@ -24,7 +26,7 @@ export function resolvePersistedAgentId(
 }
 
 export function releasedSessionQuery(
-  location: RouteLocation,
+  location: Pick<RouteLocation, "pathname" | "search">,
   basePath: string,
 ): ReleasedSessionQuery | null {
   const params = new URLSearchParams(location.search);
@@ -42,8 +44,18 @@ export function releasedSessionQuery(
   if (!pathFace) {
     return null;
   }
-  return {
-    face: params.get("face") === "dashboard" ? "dashboard" : pathFace,
-    sessionKey: params.get("session")?.trim() ?? "",
-  };
+  const face = params.get("face") === "dashboard" ? "dashboard" : pathFace;
+  const sessionKey = params.get("session")?.trim() ?? "";
+  params.delete("session");
+  params.delete("face");
+  return { face, sessionKey, search: params.size ? `?${params}` : "" };
+}
+
+export function releasedSessionPath(
+  released: ReleasedSessionQuery,
+  basePath: string,
+  fallbackAgentId: string,
+  mainKey?: string,
+) {
+  return pathForSession(released.face, fallbackAgentId, released.sessionKey, basePath, { mainKey });
 }

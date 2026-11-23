@@ -13,7 +13,6 @@ import {
   type RouteId,
 } from "../app-route-paths.ts";
 import { routeIdFromPath, type ApplicationRouter } from "../app-routes.ts";
-import { pathForSession } from "../app-session-path-builder.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import { parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
@@ -35,7 +34,11 @@ import type {
   ApplicationNavigationOptions,
 } from "./context.ts";
 import { waitForGatewayClient } from "./gateway-readiness.ts";
-import { releasedSessionQuery, resolvePersistedAgentId } from "./released-session-query.ts";
+import {
+  releasedSessionPath,
+  releasedSessionQuery,
+  resolvePersistedAgentId,
+} from "./released-session-query.ts";
 import { loadGatewaySessionSelection } from "./settings.ts";
 
 // Saved selection only fills an implicit landing. Agent paths and plugin slug
@@ -76,19 +79,11 @@ async function normalizeReleasedSessionQueryLocation(params: {
     (resolvePersistedAgentId(params.selectedAgentId, defaults.agentsList) ||
       resolveUiDefaultAgentId(defaults));
   const mainKey = resolveUiConfiguredMainKey(defaults);
-  const pathname = released.sessionKey
-    ? pathForSession(released.face, agentId, released.sessionKey, params.basePath, {
-        mainKey,
-      })
-    : null;
-  const search = new URLSearchParams(params.location.search);
-  search.delete("session");
-  search.delete("face");
-  const nextSearch = search.toString();
+  const pathname = releasedSessionPath(released, params.basePath, agentId, mainKey);
   return {
     ...params.location,
     pathname: pathname ?? pathForRoute(released.face, params.basePath),
-    search: nextSearch ? `?${nextSearch}` : "",
+    search: released.search,
   };
 }
 
