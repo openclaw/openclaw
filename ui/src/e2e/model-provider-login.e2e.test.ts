@@ -89,8 +89,7 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl + "settings/model-providers?connect=1");
-        await page.locator('[data-models-login-provider="example"]').click();
-        await page.getByRole("button", { name: "Example code sign-in", exact: true }).click();
+        await page.locator('[data-models-catalog-provider="example"] button').click();
         const wizard = page.locator(".model-setup-wizard");
         const input = wizard.getByPlaceholder("Verification code");
         const submit = wizard.getByRole("button", { name: "Submit", exact: true });
@@ -377,10 +376,9 @@ suite.define(() => {
           expect(await page.locator('[data-provider-id="anthropic"]').count()).toBe(0);
           expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
           await captureProviderProof(`provider-settings-${origin}.png`, card);
-          await page.locator("[data-models-connect]").click();
+          await page.locator('[data-models-catalog-provider="openai"] button').click();
           const dialog = page.locator("openclaw-modal-dialog");
           await dialog.getByRole("heading", { name: "Add an account", exact: true }).waitFor();
-          await dialog.locator('[data-models-login-provider="openai"]').waitFor();
           expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
         },
       );
@@ -440,17 +438,7 @@ suite.define(() => {
           },
         });
         await page.goto(`${suite.server.baseUrl}settings/model-providers`);
-        await page.locator("[data-models-connect]").click();
-        await page.locator('[data-models-login-provider="example"]').click();
-        expect(
-          (
-            await page
-              .locator(".model-provider-login .oc-dialog__description p")
-              .first()
-              .textContent()
-          )?.trim(),
-        ).toBe("Add an account for this agent. Choose the model separately.");
-        await page.getByRole("button", { name: "Example browser sign-in", exact: true }).click();
+        await page.locator('[data-models-catalog-provider="example"] button').click();
         const login = await gateway.waitForRequest("models.authLogin");
         const loginParams = login.params;
         assert(loginParams && typeof loginParams === "object" && "sessionId" in loginParams);
@@ -569,15 +557,7 @@ suite.define(() => {
       const primary = page.locator(".model-providers__defaults openclaw-select-picker").first();
       await expect.poll(() => modelPickerValue(primary)).toBe("example/existing");
       await captureProviderProof("login-models-before-native.png", primary);
-      // A working default hides the setup prompt; Provider access owns Connect provider.
-      await page.locator("[data-models-connect]").click();
-      expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
-      await page.locator('[data-models-login-provider="example"]').click();
-      const signIn = page.getByRole("button", { name: "Example device sign-in", exact: true });
-      await signIn.waitFor();
-      expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
-      await captureProviderProof("login-before-choice-native.png", signIn);
-      await signIn.click();
+      await page.locator('[data-models-catalog-provider="example"] button').click();
       const login = await gateway.waitForRequest("models.authLogin");
       const loginParams = login.params;
       assert(loginParams && typeof loginParams === "object" && "sessionId" in loginParams);
@@ -786,8 +766,7 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl + "settings/model-providers");
-        await page.locator("[data-models-connect]").click();
-        await page.locator('[data-models-login-provider="openai"]').click();
+        await page.locator('[data-models-catalog-provider="openai"] button').click();
         const dialog = page.locator(".model-setup-wizard");
         await dialog.getByText("Accounts available to this agent", { exact: true }).waitFor();
         const profiles = dialog.locator("[data-profile-id]");
@@ -814,10 +793,11 @@ suite.define(() => {
           .waitFor();
         expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
         expect(await gateway.getRequests("models.authSetApiKey")).toHaveLength(0);
+        // Opened from the page's catalog, the method step has no footer; the last method stays in view.
         const footerFits = () =>
           dialog.evaluate((element) => {
-            const footer = element.querySelector(".model-setup-wizard__footer")!;
-            return footer.getBoundingClientRect().bottom <= element.getBoundingClientRect().bottom;
+            const methods = element.querySelector(".model-provider-login__methods")!;
+            return methods.getBoundingClientRect().bottom <= element.getBoundingClientRect().bottom;
           });
         expect(await footerFits()).toBe(true);
         await captureProviderProof("login-provider-accounts-and-methods.png", dialog);

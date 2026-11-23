@@ -53,9 +53,6 @@ it.each([
     const page = appendPage(context);
     const text = (selector: string) => page.querySelector(selector)?.textContent?.trim();
     try {
-      await waitForSolid(() =>
-        expect(Boolean(page.querySelector("[data-model-readiness]"))).toBe(selects),
-      );
       await openPicker(page);
       await selectProvider(page, "example");
       await startSelectedLogin(page, "Example browser sign-in");

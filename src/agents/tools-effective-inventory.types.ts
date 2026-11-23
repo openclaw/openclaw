@@ -48,6 +48,7 @@ export type ResolveEffectiveToolInventoryParams = {
   webSearchEnabled?: boolean;
   /** Brokered GitHub tool listing; invocation still checks current authority. */
   githubPublicationAvailable?: boolean;
+  sessionProjectMoveEligible?: boolean;
   modelHasVision?: boolean;
   requireExplicitMessageTarget?: boolean;
   disableMessageTool?: boolean;

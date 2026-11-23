@@ -678,6 +678,16 @@
   justify-content: var(--chat-user-content-align, flex-start);
 }
 
+.chat-group.user .chat-assistant-attachments:not(.chat-assistant-attachments--preview-chips) {
+  align-items: var(--chat-user-content-align);
+}
+
+.chat-group.user:not(.chat-group--peer)
+  openclaw-chat-audio-player
+  > .chat-assistant-attachment-card {
+  margin-inline-start: auto;
+}
+
 .chat-group.user .chat-bubble--with-files {
   width: 100%;
 }
@@ -703,6 +713,100 @@
   border-radius: var(--radius-md);
   background: transparent;
   transition: background-color 120ms ease;
+}
+
+/* Match inline media previews on desktop, without constraining phone layouts. */
+:where(.chat-bubble, .chat-tool-msg-body)
+  .chat-assistant-attachment-card:not(:where(.chat-image-frame *, .chat-video-preview *)) {
+  max-width: min(100%, 400px);
+
+  .chat-assistant-attachment-card__header,
+  .chat-assistant-attachment-card__actions {
+    flex-wrap: wrap;
+  }
+
+  .chat-assistant-attachment-card__identity {
+    /* Give actions a second row before they push the filename out. */
+    min-width: min(100%, 9rem);
+  }
+
+  .chat-assistant-attachment-card__actions {
+    justify-content: flex-end;
+    max-width: 100%;
+    margin-inline-start: auto;
+  }
+
+  @media (max-width: 768px),
+    (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+    max-width: 100%;
+
+    &.chat-assistant-attachment-card--compact {
+      .chat-assistant-attachment-card__header {
+        flex-wrap: nowrap;
+        gap: 4px;
+        padding-block: 8px;
+        padding-inline: 10px 6px;
+      }
+
+      .chat-assistant-attachment-card__identity {
+        min-width: 0;
+        gap: 8px;
+      }
+
+      .chat-assistant-attachment-card__actions {
+        flex-wrap: nowrap;
+        gap: 0;
+      }
+
+      .chat-assistant-attachment-card__mobile-action-icon {
+        display: block;
+      }
+
+      .chat-assistant-attachment-card__expand:dir(rtl) svg {
+        transform: scaleX(-1);
+      }
+    }
+
+    &:where(.chat-assistant-attachment-card--compact, .chat-assistant-attachment-card--blocked)
+      .chat-assistant-attachment-card__title {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+
+    &.chat-assistant-attachment-card--compact .chat-assistant-attachment-card__action,
+    .chat-assistant-attachment-card__retry {
+      --chat-attachment-action-size: 44px;
+
+      width: var(--chat-attachment-action-size);
+      padding: 0;
+      border: 0;
+      color: var(--muted);
+
+      &:is(:focus-visible, :active) {
+        color: var(--text-strong);
+      }
+
+      &:active {
+        background: color-mix(in srgb, var(--media-foreground) 8%, transparent);
+      }
+
+      > svg {
+        width: 18px;
+        height: 18px;
+      }
+
+      > .chat-assistant-attachment-card__action-label {
+        display: none;
+      }
+    }
+  }
+}
+
+.chat-assistant-attachment-card__mobile-action-icon {
+  display: none;
 }
 
 .chat-assistant-attachment-card:hover {

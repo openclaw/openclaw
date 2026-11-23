@@ -400,7 +400,7 @@ div.chat-thread:where(.chat-thread--annotations) {
   container-type: inline-size;
   /* Sidebar, pane actions, and floating controls share the rail centerline. */
   min-height: var(--rail-header-height);
-  padding: var(--pane-trim, 0px) 6px 0 12px;
+  padding: 0 6px 0 12px;
   background: var(--chat-surface);
   /* Chrome row, not content: a selectable title would fight the native
      window drag the macOS app starts from this row. */
@@ -1203,8 +1203,6 @@ openclaw-chat-sidebar-region,
    Keep split allocation behind a side overlay; never move live panel roots. */
 .sidebar-region--desktop {
   --desktop-header-height: calc(var(--rail-header-height) - var(--space-1));
-  /* Keep controls centered in the native toolbar while its painted band is shorter. */
-  --pane-trim: var(--mac-trim);
   --chat-details-motion: 280ms cubic-bezier(0.32, 0.72, 0, 1);
   --desktop-side-reserve: 0px;
   --desktop-divider-reserve: 0px;
@@ -1283,7 +1281,6 @@ openclaw-chat-sidebar-region,
   top: 0;
   right: var(--desktop-toggle-inset, 8px);
   height: var(--desktop-header-height);
-  padding-top: var(--pane-trim, 0px);
   display: flex;
   align-items: center;
 }
@@ -1294,12 +1291,14 @@ openclaw-chat-sidebar-region,
   --icon-button-color: var(--icon-interactive, var(--control-secondary-text, var(--muted)));
 }
 
-.sidebar-region__panels-toggle .chat-pane__panels-toggle[aria-expanded="true"] {
+.sidebar-region__panels-toggle
+  .chat-pane__panels-toggle[aria-expanded="true"]:not(.macos-titlebar-sidebar-toggle) {
   background: var(--session-header-control-surface);
   color: var(--session-header-control-active-color, var(--text));
 }
 
-.sidebar-region__panels-toggle .chat-pane__panels-toggle[aria-expanded="true"]:hover {
+.sidebar-region__panels-toggle
+  .chat-pane__panels-toggle[aria-expanded="true"]:not(.macos-titlebar-sidebar-toggle):hover {
   background: var(--session-header-control-active-hover-bg);
 }
 
@@ -1415,7 +1414,6 @@ openclaw-chat-sidebar-region,
   top: var(--desktop-panel-top);
   height: var(--desktop-header-height);
   min-height: var(--desktop-header-height);
-  padding-top: var(--pane-trim, 0px);
 }
 
 .sidebar-region--desktop:not(.sidebar-region--open) [data-region="side"],
@@ -1527,7 +1525,7 @@ html:not(.openclaw-native-macos, .openclaw-native-desktop, .openclaw-native-web-
 html:is(.openclaw-native-macos, .openclaw-native-desktop)
   .shell:not(.shell--mobile-nav)
   .sidebar-region--desktop {
-  --desktop-header-height: var(--mac-band, var(--openclaw-native-titlebar-height, 50px));
+  --desktop-header-height: var(--openclaw-native-titlebar-height, 50px);
 }
 
 /* Native pane headers share the window controls' centerline. Drawer layouts

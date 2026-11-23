@@ -16,14 +16,22 @@ export async function prepareCronRunContext(
   await using resources = resolved.resources;
   const prepareSession = () =>
     withCronSessionPreparation(resolved.admission, async (signal) => {
-      const operator = await restoreCronOperatorSource({
-        job: params.input.job,
-        target: resolved.admission,
-        signal,
-        deliveryAttemptFence: params.input.deliveryAttemptFence,
+      let operator: Awaited<ReturnType<typeof restoreCronOperatorSource>>;
+      using _ = { [Symbol.dispose]: () => operator?.release() };
+      const prepared = await resolved.prepare(signal, async (wait) => {
+        if (wait) {
+          operator?.release();
+          operator = undefined;
+          await wait();
+        }
+        operator = await restoreCronOperatorSource({
+          job: params.input.job,
+          target: resolved.admission,
+          signal,
+          deliveryAttemptFence: params.input.deliveryAttemptFence,
+        });
+        return operator?.authority;
       });
-      using _ = operator && { [Symbol.dispose]: operator.release };
-      const prepared = await resolved.prepare(signal, operator?.authority);
       const runPrepared = params.runPrepared;
       if (!prepared.ok) {
         return prepared;

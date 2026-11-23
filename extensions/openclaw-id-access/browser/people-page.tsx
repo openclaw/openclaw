@@ -286,7 +286,7 @@ export function PeoplePage(props: {
   return (
     <section class="ocid-access">
       <header class="ocid-access__header">
-        <h1>Remote access</h1>
+        <h1 class="plugin-page-title">Remote access</h1>
         <p class="ocid-access__hint">
           Who can reach this claw from other devices through OpenClaw ID. Devices paired with this
           Gateway are in Settings → Devices.

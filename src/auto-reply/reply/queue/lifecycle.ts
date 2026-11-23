@@ -1,7 +1,10 @@
 import type { OperatorAdmissionContext } from "../../../gateway/operator-admission.js";
 import { decodeGatewayOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.js";
-import { restoreGatewayQueuedOperatorRecovery } from "../../../gateway/operator-run-recovery.js";
+import {
+  restoreGatewayQueuedOperatorRecovery,
+  restoreScheduledAutomationOperator,
+} from "../../../gateway/operator-run-recovery.js";
 import {
   GatewayOperatorAccessUnavailableError,
   isOperatorAuthorityUnavailable,
@@ -167,8 +170,13 @@ export async function prepareFollowupRunOperatorAuthority(
     throw new Error("Input completed before source adoption");
   }
   try {
-    const operatorSource = run.run.scheduledAutomation?.job.operatorSource;
-    const restored = await restoreGatewayQueuedOperatorRecovery({
+    const automation = run.run.scheduledAutomation;
+    const operatorSource = automation?.job.operatorSource;
+    // A cron conversation event starts on the automation grant; queued chat needs write.
+    const restore = automation
+      ? restoreScheduledAutomationOperator
+      : restoreGatewayQueuedOperatorRecovery;
+    const restored = await restore({
       context,
       agentId: run.run.agentId,
       source: captureQueuedOperatorRecoverySource(run.operatorAuthority),

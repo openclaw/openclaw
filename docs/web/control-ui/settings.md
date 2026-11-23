@@ -105,6 +105,8 @@ The choice is saved to your authenticated profile on the connected Gateway and h
 
 The **Community** card at the bottom of the expanded sidebar links to Discord, Reddit, and X in new tabs. On phones, a compact card sits at the bottom of the navigation drawer without covering the session list.
 
+The card stays hidden during setup and throughout the first visit, including after a reload. It can appear on a later visit in a new tab or window.
+
 Select **Dismiss and don't show again** to hide the card in that browser. Existing saved dismissals continue to apply across navigation, reloads, and interface updates. Dismissal is browser-local and does not sync to other browsers. If a dismissal cannot be saved, the card stays hidden for the current page and a message explains that the preference could not be saved.
 
 To hide Community for everyone using a Control UI deployment, run this on the Gateway serving that UI:
@@ -447,6 +449,8 @@ version and restart the Gateway.
 New-update notifications in the Inbox and account menu appear only for the
 `stable` and `beta` channels. The `dev` channel can still check and start updates
 here manually, and active update progress and recovery messages remain visible.
+Expand a recorded update in **Inbox → System** and choose **View update details**
+to open its report without starting another update.
 
 For `dev` git updates, the confirmation, run report, and available-update status
 show the installed → target short commit SHAs on a separate line below the commit

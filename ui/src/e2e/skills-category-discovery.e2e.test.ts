@@ -103,7 +103,8 @@ suite.define(() => {
         }
         await page.getByRole("link", { name: "Skills", exact: true }).click();
         await expectSearch(gateway, { limit: 20 });
-        await page.locator(".skill-installed-shelf").waitFor();
+        const filters = page.locator(".plugin-catalog-chips");
+        await filters.getByRole("button", { name: "Installed", exact: true }).waitFor();
         await page.getByRole("status", { name: "Searching…" }).waitFor();
         expect(await row(page, notebook.displayName).isVisible()).toBe(false);
         const shifts = await observeLayoutShifts(page);
@@ -116,6 +117,15 @@ suite.define(() => {
         const research = button(page, "Research");
         await research.waitFor();
         expect(await research.evaluate((chip) => chip.scrollWidth <= chip.clientWidth)).toBe(true);
+        await page.locator(".skill-installed-shelf").waitFor();
+        const layout = await filters.evaluate((strip) => ({
+          wraps:
+            new Set(Array.from(strip.children, (chip) => chip.getBoundingClientRect().top)).size >
+            1,
+          overflows: strip.scrollWidth > strip.clientWidth,
+        }));
+        const wide = dimensions.width > 640;
+        expect(layout).toEqual({ wraps: wide, overflows: !wide });
         await capture(page, `overview-${size}`, notebook.displayName);
 
         for (const [section, skill] of [

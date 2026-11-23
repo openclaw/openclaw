@@ -58,7 +58,7 @@ import {
   resolveEmbeddedRunLaneTimeoutMs,
   resolveEmbeddedRunSessionLanePolicy,
 } from "./lane-runtime.js";
-import { claimAgentSessionWriter } from "./session-bootstrap.js";
+import { claimAgentSessionWriter, claimRunProviderState } from "./session-bootstrap.js";
 
 export function createEmbeddedRunLaneController<
   TParams extends RunEmbeddedAgentParamsWithSessionFile,
@@ -373,16 +373,21 @@ export function createEmbeddedRunLaneController<
       waitingWatchdog?.progress("transport", "session_writer:admission");
       transitionAdmissionPhase(queueOptions, "writerMs");
       const writerClaim = await claimAgentSessionWriter(params);
+      params = {
+        ...params,
+        ...(writerClaim
+          ? {
+              sessionTarget: {
+                ...params.sessionTarget,
+                expectedLifecycleRevision: writerClaim.expectedLifecycleRevision,
+                expectedWriterRunId: writerClaim.expectedWriterRunId,
+              },
+            }
+          : {}),
+        providerStateScope: claimRunProviderState(params),
+      };
+      options.setParams(params);
       if (writerClaim) {
-        params = {
-          ...params,
-          sessionTarget: {
-            ...params.sessionTarget,
-            expectedLifecycleRevision: writerClaim.expectedLifecycleRevision,
-            expectedWriterRunId: writerClaim.expectedWriterRunId,
-          },
-        };
-        options.setParams(params);
         options.onSessionWriterClaimed?.(writerClaim.entry);
       }
       waitingWatchdog?.progress("transport", "session_placement:admission");

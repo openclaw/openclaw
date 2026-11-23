@@ -5,12 +5,12 @@ import type {
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, For, Loading, Show } from "solid-js";
 import { Icon, type IconName } from "../../components/solid/icon.tsx";
+import { createSessionAutomationSchedule } from "../../lib/cron/session-automation-schedule-loader.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import { TemplateArtwork } from "../agents-home/template-artwork.tsx";
-import { agentDocuments, fileRole } from "../agents-home/template-workspace-file-roles.ts";
 import "../../styles/templates-catalog.css";
-import { createSessionAutomationSchedule } from "../chat/components/session-automation-schedule-loader.ts";
+import { agentDocuments, fileRole } from "../agents-home/template-workspace-file-roles.ts";
 import { TemplateItemDetails } from "./creator-item-details.tsx";
 import type { TemplatePackagePreview } from "./creator-publication.ts";
 import "../../components/tooltip.ts";

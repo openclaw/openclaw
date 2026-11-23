@@ -30,7 +30,7 @@ export class ChatMediaSourceOwner {
     promise: Promise<void>;
   } | null = null;
   private playbackSource = "";
-  private playbackReadiness: "idle" | "preparing" | "ready" | "unavailable" = "idle";
+  private playbackReadiness: "idle" | "checking" | "preparing" | "ready" | "unavailable" = "idle";
 
   private readonly listeners = createChangeListeners();
 
@@ -109,11 +109,19 @@ export class ChatMediaSourceOwner {
     this.abortReadiness();
     const controller = new AbortController();
     const hasUsableSource = () => this.appliedIdentity === nextIdentity && !this.sourceFailed;
-    this.setPlayback(hasUsableSource() ? "ready" : "preparing", "");
+    this.setPlayback(hasUsableSource() ? "ready" : "checking", "");
     const pending = waitForChatMediaPlayback({
       source: nextPlaybackSource,
       authToken: nextAuthToken || null,
       signal: controller.signal,
+      onPending: () => {
+        if (
+          this.readinessRequest?.controller === controller &&
+          this.playbackReadiness === "checking"
+        ) {
+          this.setPlayback("preparing");
+        }
+      },
     }).then((result) => {
       if (this.readinessRequest?.controller !== controller || result === "aborted") {
         return;

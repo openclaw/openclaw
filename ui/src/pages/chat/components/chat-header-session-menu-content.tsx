@@ -191,17 +191,16 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
   const nativeActions = new ChatPaneNativeSessionActions();
   const sessionActions = createMemo(() => {
     const source = props.actionSource;
-    const actions = source
-      ? [
-          ...nativeActions.read(
+    const native =
+      source && presented()
+        ? nativeActions.read(
             source.readOwner().context,
             source.readRow(),
             source.stopDisabledReason,
             onAction,
-          ),
-          ...props.sessionActions,
-        ]
-      : props.sessionActions;
+          )
+        : [];
+    const actions = native.length ? [...native, ...props.sessionActions] : props.sessionActions;
     return props.composeSessionActions?.(actions) ?? actions;
   });
   const quickActions = useChatQuickActionEntries(sessionActions, false, "quick:");

@@ -67,6 +67,7 @@ export type ModelSetupWizardRecovery = {
   sessionId: string;
   authChoice: string;
   authKind?: ProviderLoginOption["kind"];
+  selectModel?: boolean;
 };
 
 type ModelSetupWizardPhase =
@@ -102,7 +103,6 @@ export type ModelSetupState = {
   manualApiKey: string;
   manualError: string | null;
   moreSignInOpen: boolean;
-  nativeSessionCatalogsEnabled: boolean;
   iconUrls: Record<string, string>;
   setupRefreshWarning: string | null;
   detectionRequest: object | null;
@@ -121,7 +121,6 @@ export function createModelSetupState(): ModelSetupState {
     manualApiKey: "",
     manualError: null,
     moreSignInOpen: false,
-    nativeSessionCatalogsEnabled: false,
     iconUrls: {},
     setupRefreshWarning: null,
     detectionRequest: null,
@@ -144,7 +143,7 @@ export function updateModelSetupWizardDraft(
 
 export function activationTimeoutForKind(kind: string): number {
   // Match the Gateway-owned provider-auth wizard lifetime, including user sign-in.
-  if (kind === "provider-auth") {
+  if (kind === "provider-auth" || kind === "provider-login") {
     return 25 * 60 * 1000;
   }
   return MODEL_SETUP_ACTIVATE_TIMEOUT_MS;

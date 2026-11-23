@@ -261,6 +261,7 @@ export async function executeWorkerTurn(
       promptCacheContext: {
         boundaryCount: manager.getBoundaryCount(),
         promptCacheKey: turn.promptCacheKey,
+        providerStateScope: turn.providerStateScope,
         fastMode: turn.fastMode,
         fastModeStartedAtMs: turn.fastModeStartedAtMs,
         fastModeAutoOnSeconds: turn.fastModeAutoOnSeconds,
@@ -659,10 +660,8 @@ export async function executeWorkerTurn(
                     new Error("Cloud worker credential owner changed during process handoff"),
                   );
                 }
-              } catch (error) {
-                handoffAbort.abort(
-                  new Error("Cloud worker credential handoff failed", { cause: error }),
-                );
+              } catch (cause) {
+                handoffAbort.abort(new Error("Cloud worker credential handoff failed", { cause }));
               }
             })();
           },

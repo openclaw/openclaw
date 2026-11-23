@@ -118,6 +118,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         },
         "models.authStatus": {
           ts: NOW,
+          providerCapabilities: keyCapabilities("openai"),
           providers: [
             {
               provider: "openai",
@@ -141,10 +142,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       const response = await page.goto(`${server.baseUrl}settings/model-providers`);
       expect(response?.status()).toBe(200);
       const openaiCard = page.locator('[data-provider-id="openai"]');
-      const readiness = page.locator('[data-model-readiness="model-required"]');
-      await readiness.waitFor();
-      await expect.poll(async () => readiness.textContent()).toContain("Add account");
-      await expect.poll(async () => readiness.textContent()).toContain("Model required");
+      await openaiCard.waitFor();
       const providerReadiness = openaiCard.locator(".model-providers__head");
       const profileStatus = openaiCard.locator(".model-providers__profile-status");
       await expect.poll(async () => providerReadiness.textContent()).not.toContain("Signed in");
@@ -161,6 +159,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         }),
       ]);
       expect(await page.getByRole("heading", { name: "Add provider" }).count()).toBe(0);
+      // A signed-in provider can list models, so the defaults (and any listing error) show.
       expect(await page.locator(".model-providers__defaults").count()).toBe(1);
 
       if (recordVisuals) {
@@ -202,8 +201,8 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       ).toHaveLength(0);
       expect(await gateway.getRequests("models.list")).toHaveLength(2);
 
-      await readiness.getByRole("button", { name: "Add account", exact: true }).click();
-      await page.locator("[data-models-login-search]").waitFor();
+      await page.locator('[data-models-catalog-provider="openai"] button').click();
+      await page.locator(".model-provider-login").waitFor();
       expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
     } finally {
       await context.close();
@@ -386,26 +385,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       const providerSection = page
         .locator(".settings-section")
         .filter({ has: page.locator(".model-providers__provider-list") });
-      // The refresh icon sits centered beside Add account; the update time is its tooltip.
-      const headerMetrics = await providerSection.evaluate((section) => {
-        const connect = section.querySelector<HTMLElement>("[data-models-connect]");
-        const refresh = section.querySelector<HTMLButtonElement>(
-          ".model-providers__refresh-button",
-        );
-        if (!connect || !refresh) {
-          throw new Error("expected configured-provider header controls");
-        }
-        const connectBounds = connect.getBoundingClientRect();
-        const refreshBounds = refresh.getBoundingClientRect();
-        return {
-          centerOffset: Math.abs(
-            connectBounds.top +
-              connectBounds.height / 2 -
-              (refreshBounds.top + refreshBounds.height / 2),
-          ),
-        };
-      });
-      expect(headerMetrics.centerOffset).toBeLessThanOrEqual(1);
+      await providerSection.locator(".model-providers__refresh-button").waitFor();
 
       await page.setViewportSize({ width: 390, height: 844 });
       const mobileMetrics = await providerSection.evaluate((section) => {
@@ -538,7 +518,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         "Add account",
         "Test access",
       ]) {
-        const control = page.getByRole("button", { name: `${action}: OpenAI`, exact: true });
+        const control = openaiCard.getByRole("button", { name: `${action}: OpenAI`, exact: true });
         expect(await control.count()).toBe(1);
         expect((await control.textContent())?.trim()).toBe(action);
       }
@@ -627,8 +607,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       expect(await modelPickerValue(primary)).toBe("anthropic/claude-sonnet-4-5");
       expect(await page.locator(".model-providers__defaults .callout.success").count()).toBe(0);
 
-      await page.locator("[data-models-connect]").click();
-      await page.locator('[data-models-login-provider="google"]').click();
+      await page.locator('[data-models-catalog-provider="google"] button').click();
       const addSection = page.locator("[data-models-key-dialog]");
       await addSection.getByLabel("API key").fill(googleInputValue);
       const savedConfig = {
@@ -707,6 +686,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}settings/model-providers`);
       const defaults = page.locator(".model-providers__defaults");
+      await defaults.locator("[data-models-more-settings]").click();
       const utility = page.locator("openclaw-select-picker:has(#model-providers-utility-model)");
       await expect.poll(() => modelPickerValue(utility)).toBe("__openclaw_automatic_utility__");
       if (recordVisuals) {
@@ -747,6 +727,11 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         });
         await expect.poll(() => modelPickerValue(utility)).toBe(choice.value);
         await page.reload();
+        const moreSettings = defaults.locator("[data-models-more-settings]");
+        await moreSettings.waitFor();
+        if ((await moreSettings.getAttribute("aria-expanded")) !== "true") {
+          await moreSettings.click();
+        }
         await expect.poll(() => modelPickerValue(utility)).toBe(choice.value);
         await expect
           .poll(() => modelPickerValue(defaults.locator("openclaw-select-picker").first()))

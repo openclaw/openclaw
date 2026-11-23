@@ -114,6 +114,33 @@ export function registerGoalChatRestartSettlementCase(fixture: {
   });
 }
 
+export function createGoalChatRunGate(throws: boolean) {
+  const hook = vi.fn(async () => {
+    if (throws) {
+      throw new Error("Synthetic policy failure");
+    }
+    return { outcome: "block" as const, reason: "policy", message: "Request blocked." };
+  });
+  const registration = {
+    pluginId: "goal-worker-policy",
+    hookName: "before_agent_run" as const,
+    handler: hook,
+    source: "test",
+  };
+  const registry = getTestPluginRegistry();
+  return {
+    hook,
+    installHook: () => {
+      registry.typedHooks.push(registration);
+      initializeGlobalHookRunner(registry);
+    },
+    removeHook: () => {
+      registry.typedHooks = registry.typedHooks.filter((entry) => entry !== registration);
+      initializeGlobalHookRunner(registry);
+    },
+  };
+}
+
 export function installReplyDispatchHook(eligibleDispatchKinds?: readonly ["acp"]) {
   const handler = vi.fn(async () => ({
     handled: true,

@@ -16,22 +16,11 @@ export function CatalogDiscoverySearch(props: { children: JSX.Element }): JSX.El
 
 export function CatalogDiscoveryChips(props: {
   label: string;
-  /** One scrollable row at every width, so chips that arrive later never push content down. */
-  singleRow?: boolean;
   children: JSX.Element;
 }): JSX.Element {
   const scrollState = useScrollState(true);
   return (
-    <div
-      class="plugin-catalog-chips"
-      role="group"
-      aria-label={props.label}
-      style={{
-        "flex-wrap": props.singleRow ? "nowrap" : undefined,
-        "overflow-x": props.singleRow ? "auto" : undefined,
-      }}
-      ref={scrollState}
-    >
+    <div class="plugin-catalog-chips" role="group" aria-label={props.label} ref={scrollState}>
       {props.children}
     </div>
   );
@@ -40,8 +29,6 @@ export function CatalogDiscoveryChips(props: {
 export function CatalogDiscoveryChip(props: {
   ref?: (button: HTMLButtonElement) => void;
   active: boolean;
-  /** Keeps the full label in a single-row group instead of shrinking with the row. */
-  fixed?: boolean;
   icon?: JSX.Element;
   onClick: () => void;
   children: JSX.Element;
@@ -51,7 +38,6 @@ export function CatalogDiscoveryChip(props: {
       type="button"
       ref={(button) => props.ref?.(button)}
       class={["plugin-catalog-chip", { "is-active": props.active }]}
-      style={{ flex: props.fixed ? "none" : undefined }}
       aria-pressed={props.active ? "true" : "false"}
       onClick={() => props.onClick()}
     >

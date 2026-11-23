@@ -30,6 +30,7 @@ import {
 } from "../cron-creator-authority-grant.js";
 import { retainCronControlSource } from "../cron-operator-source.js";
 import type { OperatorRunRecoverySnapshot } from "../operator-run-recovery-source.codec.js";
+import { cronAcknowledgeFailureHandler } from "./cron-acknowledge-failure.js";
 import { cronAddHandler } from "./cron-add.js";
 import { cronBindHandler } from "./cron-bind.js";
 import {
@@ -103,6 +104,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       preserveCronGetWireMessage: true,
     },
   ),
+  "cron.acknowledgeFailure": cronAcknowledgeFailureHandler,
   ...cronScratchHandlers,
   "cron.add": cronAddHandler,
   "cron.bind": cronBindHandler,
