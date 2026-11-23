@@ -743,9 +743,10 @@ describe("runtime postbuild static assets", () => {
         const loaded = await load(rootDir, `dist/${chunk.path}`);
         for (const { exported, origin } of chunk.exports) {
           expect(await loaded[exported](), `${release.version}: ${chunk.path}:${exported}`).toBe(
-            // 2026.9.37 deliberately denied leased-handoff authority; its implementation
-            // is inline rather than one of the fixture's named runtime exports.
-            release.version === "2026.9.37" &&
+            // Both immutable 9.36/9.37 updaters denied leased-handoff authority; the
+            // recorded immutable export is inline, not a named runtime export.
+            origin.module === "src/infra/update-managed-service-handoff-current.ts" &&
+              origin.symbol === "isImmutableManagedServiceUpdateHandoffProcess" &&
               chunk.path === "update-managed-service-handoff-current-E5XsvJxw.mjs" &&
               exported === "isCurrentManagedServiceUpdateHandoffProcess"
               ? false
@@ -849,11 +850,11 @@ describe("previous release update compatibility", () => {
         ].join("\n"),
         ...(includePrivateWorker
           ? {
-              "state/openclaw-state-read.worker.js":
-                '//#region src/cli/update-cli/update-command-service-command.ts\nexport async function restart() { return await import("./openclaw-state-read-service-abcdefgh.mjs"); }\n',
-              "state/openclaw-state-read-command.mjs":
-                '//#region src/daemon/inspect.ts\nexport async function inspect() { return await import("./openclaw-state-read-service-abcdefgh.mjs"); }\n',
-              "state/openclaw-state-read-service-abcdefgh.mjs":
+              "infra/shared-worker-host.worker.js":
+                '//#region src/cli/update-cli/update-command-service-command.ts\nexport async function restart() { return await import("./shared-worker-host-service-abcdefgh.mjs"); }\n',
+              "infra/shared-worker-host-command.mjs":
+                '//#region src/daemon/inspect.ts\nexport async function inspect() { return await import("./shared-worker-host-service-abcdefgh.mjs"); }\n',
+              "infra/shared-worker-host-service-abcdefgh.mjs":
                 '//#region src/cli/update-cli/runner.ts\nexport function resolveRunner() { return "private worker"; }\n',
             }
           : {}),

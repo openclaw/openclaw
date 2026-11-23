@@ -315,7 +315,6 @@ it("skips empty-session SQL and refreshes committed profile and library facts", 
     canManageWorkspace: true,
   });
   setUserProfileRole(alice.profileId!, "reader", options);
-  expect(() => before.assertCurrent()).toThrow(SkillLibraryError);
   expect((await prepareSession(admin, options)).presentation).toMatchObject({
     defaultTarget: "personal",
     canManageWorkspace: false,
@@ -338,7 +337,7 @@ it("skips empty-session SQL and refreshes committed profile and library facts", 
   expect(await lib.seed()).toEqual([]);
 });
 
-it.each(["unshare", "disable", "remove", "role", "alias"] as const)(
+it.each(["unshare", "disable", "remove"] as const)(
   "revokes a prepared seed after %s while committed pins keep working",
   async (change) => {
     const { actor, options, lib } = fixture();
@@ -346,11 +345,6 @@ it.each(["unshare", "disable", "remove", "role", "alias"] as const)(
       ...actor(ensureProfileForEmail("bob@example.test", options).id),
       getConfig: () => writerConfig,
     };
-    const mergeTarget =
-      change === "alias" ? ensureProfileForEmail("target@example.test", options) : undefined;
-    if (mergeTarget) {
-      setUserProfileRole(mergeTarget.id, "blocked", options);
-    }
     onTestFinished((await prepareUserProfileCatalog(options)).release);
     const saved = await lib.save();
     await lib.change(saved.entry, "share");
@@ -358,13 +352,7 @@ it.each(["unshare", "disable", "remove", "role", "alias"] as const)(
     const freshSeed = prepared.selections;
     expect(freshSeed).toHaveLength(1);
     const durablePins = structuredClone(freshSeed);
-    if (change === "role") {
-      setUserProfileRole(bob.profileId!, "blocked", options);
-    } else if (change === "alias") {
-      linkEmail("bob@example.test", mergeTarget!.id, options);
-    } else {
-      await lib.change(saved.entry, change);
-    }
+    await lib.change(saved.entry, change);
     expect(() => assertSelection(freshSeed)).toThrow(SkillLibraryError);
     expect(() => prepared.assertCurrent()).toThrow(SkillLibraryError);
     expect(() => assertSelection(durablePins)).not.toThrow();

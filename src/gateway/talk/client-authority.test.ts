@@ -1,5 +1,5 @@
 import { afterEach, assert, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
   registerTestEmbeddedRun as setActiveEmbeddedRun,
@@ -39,7 +39,7 @@ afterEach(() => {
 function clientAuthority(client: ReturnType<typeof sharingPolicyClient>) {
   return {
     ...resolveTalkAgentConsultAuthority(client.connect.scopes, client),
-    operatorAuthority: createAdmittedRunOperatorAuthority({
+    operatorAuthority: createTestOperatorAuthority({
       profileId: "talk-requester",
       scopes: client.connect.scopes ?? [],
       assertCurrent: () => {},

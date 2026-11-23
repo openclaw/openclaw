@@ -1,5 +1,5 @@
+import { createSessionAutomationSchedule } from "../../lib/cron/session-automation-schedule-loader.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { createSessionAutomationSchedule } from "../chat/components/session-automation-schedule-loader.ts";
 import type { TemplateCatalogDetail } from "./templates-catalog-client.ts";
 
 /** A declared automation's schedule in words, its time zone and whether it starts enabled. */

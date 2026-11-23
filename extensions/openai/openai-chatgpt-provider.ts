@@ -1,7 +1,5 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   ProviderAuthContext,
-  ProviderAuthMethod,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
@@ -445,14 +443,16 @@ async function runOpenAICodexOAuth(ctx: OpenAICodexOAuthContext) {
   return buildOpenAICodexAuthResult(buildOauthProviderAuthResult, creds, ctx.existingProfiles);
 }
 
-async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
+/** Codex login: device code first, browser sign-in only when the server has device code disabled. */
+export async function runOpenAICodexLogin(ctx: OpenAICodexOAuthContext) {
+  const [{ loginOpenAICodexDeviceCode }, { buildOauthProviderAuthResult }] = await Promise.all([
+    import("./openai-chatgpt-device-code.js"),
+    import("openclaw/plugin-sdk/provider-auth-result"),
+  ]);
   const spin = ctx.prompter.progress("Starting device code flow…");
+  let creds: Awaited<ReturnType<typeof loginOpenAICodexDeviceCode>>;
   try {
-    const [{ loginOpenAICodexDeviceCode }, { buildOauthProviderAuthResult }] = await Promise.all([
-      import("./openai-chatgpt-device-code.js"),
-      import("openclaw/plugin-sdk/provider-auth-result"),
-    ]);
-    const creds = await loginOpenAICodexDeviceCode({
+    creds = await loginOpenAICodexDeviceCode({
       ...(ctx.signal ? { signal: ctx.signal } : {}),
       assertCurrent: ctx.assertCurrent,
       onProgress: (message) => spin.update(message),
@@ -500,27 +500,18 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
         }
       },
     });
-    spin.stop("OpenAI device code complete");
-
-    return buildOpenAICodexAuthResult(buildOauthProviderAuthResult, creds, ctx.existingProfiles);
   } catch (error) {
-    spin.stop("OpenAI device code failed");
-    ctx.runtime.error(formatErrorMessage(error));
-    await ctx.prompter.note(
-      "Trouble with device code login? See https://docs.openclaw.ai/start/faq",
-      "OAuth help",
-    );
+    spin.stop();
     throw error;
   }
-}
-
-export function buildOpenAIChatGPTAuthMethodRuns(): Readonly<
-  Record<"oauth" | "device-code", ProviderAuthMethod["run"]>
-> {
-  return {
-    oauth: runOpenAICodexOAuth,
-    "device-code": runOpenAICodexDeviceCode,
-  };
+  if (!creds) {
+    // Mirrors Codex `run_login_with_device_code_fallback_to_browser`: only a disabled
+    // device-code endpoint falls back; every other device-code failure ends this sign-in.
+    spin.stop("Device code login is not enabled; falling back to browser login.");
+    return await runOpenAICodexOAuth(ctx);
+  }
+  spin.stop("OpenAI device code complete");
+  return buildOpenAICodexAuthResult(buildOauthProviderAuthResult, creds, ctx.existingProfiles);
 }
 
 export function buildOpenAICodexProviderHooks(): Required<

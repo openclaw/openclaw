@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { appendSessionTranscriptReport } from "../../config/sessions/session-accessor.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readAgentSelfHeldRefusal } from "../../gateway/agent-turn/agent-admission-refusal.js";
 import { runWithInProcessGatewaySessionMutation } from "../../gateway/server-plugin-in-process-dispatch.js";
@@ -37,7 +39,6 @@ import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { resolveSenderRestrictedSpawnError } from "../spawn-requester-policy.js";
 import { jsonResult } from "./common.js";
 import {
-  captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
 } from "./gateway-caller-context.js";
@@ -47,6 +48,7 @@ import {
   hasInProcessGatewayToolContext,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
+import { recordSessionToolActionFact } from "./sessions-access.js";
 import type { SessionSendReplyAdmission } from "./sessions-send-communication.js";
 import { queueSessionsSendSteeringWithCustody } from "./sessions-send-tool.steering.js";
 import type { AgentStepSession } from "./sessions-send-tool.types.js";
@@ -204,7 +206,7 @@ export async function trySessionsSendActiveRunDelivery(
   params: SessionsSendDeliveryParams,
   ownChild: boolean,
 ): Promise<SessionsSendStart | { fallbackSessionKey?: string }> {
-  const assertCaller = captureGatewayToolCallerAssertion();
+  const admittedCaller = Boolean(getGatewayToolCallerIdentity()?.operationalRunInstance);
   try {
     const selection = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
     selection.assertCurrent();
@@ -258,7 +260,7 @@ export async function trySessionsSendActiveRunDelivery(
           }
         };
         const guarded = Boolean(
-          selection.operatorAuthority || assertCaller || params.assertSendCurrent,
+          selection.operatorAuthority || admittedCaller || params.assertSendCurrent,
         );
         assertInputCurrent();
         const queueOptions: ReplyMessageInjectionOptions = {
@@ -275,16 +277,7 @@ export async function trySessionsSendActiveRunDelivery(
             lifecycle.onQueueAccepted?.(value);
           },
           // Source-bound authority admits only guarded (V2) injection.
-          ...(guarded
-            ? {
-                assertCurrent: () => {
-                  assertInputCurrent();
-                  if (!selection.operatorAuthority) {
-                    assertCaller?.("sessions.send");
-                  }
-                },
-              }
-            : {}),
+          ...(guarded ? { assertCurrent: assertInputCurrent } : {}),
           // Admission is the receipt; the receiving run owns commit or withdrawal.
           waitForTranscriptCommit: false,
           // The receiving runtime owns transcript writes to this exact incarnation.
@@ -381,6 +374,59 @@ export async function trySessionsSendActiveRunDelivery(
   } catch (error) {
     return deliveryFailure(params, error);
   }
+}
+
+const REQUESTER_MESSAGE_CUSTOM_TYPE = "sessions-send-child-message";
+
+/**
+ * A child's message to its own requester is data for the parent, never a parent turn: it joins an
+ * active parent run, otherwise it is appended to the parent's history for its next turn. Only the
+ * child's end state wakes the parent.
+ */
+export async function recordSessionsSendForRequester(
+  params: SessionsSendDeliveryParams & { displayKey: string },
+) {
+  const accepted = (targetDisposition: "queued" | "steered") =>
+    jsonResult({
+      runId: params.runId,
+      status: "accepted",
+      sessionKey: params.displayKey,
+      targetDisposition,
+      delivery: { status: "skipped" },
+    });
+  const active = await trySessionsSendActiveRunDelivery(
+    { ...params, mode: undefined, allowActiveRunQueueDelivery: true },
+    true,
+  );
+  if ("ok" in active) {
+    return active.ok ? accepted("steered") : active.result;
+  }
+  params.assertSendCurrent?.();
+  const { agentId, canonicalKey, storePath } = params.sessionStoreTarget;
+  const appended = await runWithoutOwnedSessionTranscriptWrites(() =>
+    appendSessionTranscriptReport(
+      { agentId, sessionKey: canonicalKey, storePath, sessionId: params.preparedTargetSessionId },
+      {
+        kind: "custom",
+        customTypes: [REQUESTER_MESSAGE_CUSTOM_TYPE],
+        selectReport: () => ({
+          customType: REQUESTER_MESSAGE_CUSTOM_TYPE,
+          content: params.sendParams.message,
+          display: false,
+        }),
+      },
+    ),
+  );
+  if (!appended.ok) {
+    return deliveryFailure(params, `Message was not recorded: ${appended.error.code}`).result;
+  }
+  recordSessionToolActionFact({
+    operation: "send",
+    fact: "committed",
+    targetAgentId: agentId,
+    targetSessionKey: canonicalKey,
+  });
+  return accepted("queued");
 }
 
 function resolveSendMutationGuards(

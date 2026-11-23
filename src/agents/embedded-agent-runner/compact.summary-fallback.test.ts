@@ -249,6 +249,7 @@ async function compactSession(
   abortSignal?: AbortSignal,
   trigger: "manual" | "budget" = "budget",
   preflight = false,
+  identity: { runId?: string; diagId?: string } = {},
 ) {
   let preparedSession:
     | import("./run/compaction-accounting-bridge.js").PreparedCompactionSession
@@ -283,6 +284,7 @@ async function compactSession(
       model: "model",
       trigger,
       force: true,
+      ...identity,
       abortSignal,
       enqueue: async (task) => await task(),
     },
@@ -433,6 +435,27 @@ it.each([
   }
   expectFallbackSummary(fixture);
 });
+
+// Both prepared callers announce progress under the runId and diagId they pass in:
+// recovery emits `compaction` events, Gateway `sessions.compact` its operation id.
+it.each([
+  { caller: "recovery", trigger: "budget", preflight: false, diagId: "ovf-progress" },
+  { caller: "sessions.compact", trigger: "manual", preflight: true, diagId: undefined },
+] as const)(
+  "persists the $caller compaction under its progress identity",
+  async ({ trigger, preflight, diagId }) => {
+    const fixture = await createFixture();
+    summaryMode = "ok";
+    const runId = "progress-run";
+
+    expect(
+      await compactSession(fixture, undefined, trigger, preflight, { runId, diagId }),
+    ).toMatchObject({ ok: true, compacted: true });
+    expect(getCompactions(fixture).map((entry) => entry["__openclaw"])).toEqual([
+      { runId, itemId: diagId ?? expect.stringMatching(/^cmp-/) },
+    ]);
+  },
+);
 
 it.each([false, true])(
   "uses the fallback model's runtime only for unlocked native sessions (locked=%s)",

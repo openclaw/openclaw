@@ -202,11 +202,13 @@ export async function withWorktreeGitConfig<T>(
       const env = Object.fromEntries(
         Object.entries(inherited).filter(([key]) => !key.toUpperCase().startsWith("GIT_")),
       );
-      // Only the operation owner may supply a private snapshot index or commit identity.
+      // Only the operation owner may supply an index, optional-lock policy or commit identity.
       for (const [key, value] of Object.entries(options.env ?? {})) {
         if (
           value !== undefined &&
-          /^(?:GIT_INDEX_FILE|GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL|DATE))$/u.test(key)
+          /^(?:GIT_INDEX_FILE|GIT_OPTIONAL_LOCKS|GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL|DATE))$/u.test(
+            key,
+          )
         ) {
           env[key] = value;
         }

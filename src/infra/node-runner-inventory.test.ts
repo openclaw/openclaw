@@ -21,6 +21,7 @@ const workerHost = {
   statusWait: 1,
   preparedWorkspace: 1,
   capturedExecPolicy: true,
+  execMemoryBoundary: true,
   promptContext: 1,
 };
 const declaration = (host: unknown) => ({

@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import {
   buildDefaultTestCliBackend,
@@ -153,7 +153,7 @@ function createQuestionFixture(
   runtime: { port: number; ownerToken: string },
   signal: AbortSignal,
 ) {
-  const operatorAuthority = createAdmittedRunOperatorAuthority({
+  const operatorAuthority = createTestOperatorAuthority({
     profileId: "question-owner",
     scopes: ["operator.admin"],
     gatewayAccessGrant: null,

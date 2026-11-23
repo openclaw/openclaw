@@ -409,15 +409,6 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   onTranscriptStartPreparation: () => diagnostics.scope("snapshot")?.finish,
                   abortSignal: activeRunAbort.controller.signal,
                   getProviderLoginConfig: context.getRuntimeConfig,
-                  assertProviderLoginAuthority: () => {
-                    client?.connectionSignal?.throwIfAborted();
-                    if (
-                      client?.invalidated ||
-                      !client?.connect.scopes?.includes("operator.admin")
-                    ) {
-                      throw new Error("Provider login authority is no longer active.");
-                    }
-                  },
                   // Retain this input identity while followup/collect owns its execution.
                   onFollowupQueueDisposition: queuedFollowup.onQueueDisposition,
                   onQueuedFollowupReplyBatch: queuedFollowup.onQueuedFollowupReplyBatch,

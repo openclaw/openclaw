@@ -45,13 +45,13 @@ export const resolveUpdateInstallSurfaceMock =
   vi.fn<
     typeof import("../../infra/update-runner-install-surface.js").resolveUpdateInstallSurface
   >();
-export const resolveStartupInstallStatusMock =
+const resolveStartupInstallStatusMock =
   vi.fn<typeof import("../../infra/update-install-status.js").resolveStartupInstallStatus>();
 const getLatestUpdateRestartSentinelMock = vi.fn<() => RestartSentinelPayload | null>(() => null);
 const refreshLatestUpdateRestartSentinelMock = vi.fn<() => Promise<RestartSentinelPayload | null>>(
   async () => null,
 );
-export const recordLatestUpdateRestartSentinelMock = vi.fn();
+const recordLatestUpdateRestartSentinelMock = vi.fn();
 export const isRestartEnabledMock = vi.fn(() => true);
 const readPackageVersionMock = vi.fn(async () => "1.0.0");
 const versionMock = vi.hoisted(() => ({ value: "1.0.0" }));
@@ -86,7 +86,7 @@ export const startManagedServiceUpdateHandoffMock = vi.fn<
   handoffId: params?.handoffId ?? "handoff-default",
   installRoot: params?.root ?? "/tmp/openclaw",
 }));
-export const claimManagedServiceUpdateHandoffMock = vi.fn<
+const claimManagedServiceUpdateHandoffMock = vi.fn<
   typeof import("../../infra/update-managed-service-handoff.js").claimManagedServiceUpdateHandoff
 >(async () => true);
 export const transferManagedServiceUpdateHandoffMock = vi.fn<
@@ -491,7 +491,8 @@ beforeEach(() => {
   resolveStartupInstallStatusMock.mockReset();
   resolveStartupInstallStatusMock.mockResolvedValue({
     root: "/tmp/openclaw",
-    status: { root: "/tmp/openclaw", installKind: "git", packageManager: "pnpm" },
+    // Package installs keep the handler these suites cover; Git installs use src/update/.
+    status: { root: "/tmp/openclaw", installKind: "package", packageManager: "pnpm" },
     installReceipt: null,
   });
   getLatestUpdateRestartSentinelMock.mockClear();
@@ -537,9 +538,8 @@ export async function invokeUpdateRun(
     commands: { ownerAllowFrom: ["slack:C0123ABC", "slack:C0456DEF"] },
   },
   contextOverrides: Record<string, unknown> = {},
-  authority: Pick<
-    GatewayRequestHandlerOptions,
-    "sessionMutationCommitGuard" | "hasCurrentClientAuthority"
+  authority: Partial<
+    Pick<GatewayRequestHandlerOptions, "sessionMutationCommitGuard" | "signal" | "client">
   > = {},
 ) {
   setRuntimeConfigSnapshot(runtimeConfig);
@@ -587,8 +587,9 @@ export async function captureUpdateRunPayload(
   return payload;
 }
 
+// update.run reads the install status to route, then the package handler reads it again.
 export function mockGlobalInstallSurface(root = "/tmp/openclaw-global") {
-  resolveStartupInstallStatusMock.mockResolvedValueOnce({
+  resolveStartupInstallStatusMock.mockResolvedValue({
     root,
     status: { root, installKind: "package", packageManager: "npm" },
     installReceipt: null,
@@ -598,13 +599,5 @@ export function mockGlobalInstallSurface(root = "/tmp/openclaw-global") {
     mode: "npm",
     root,
     packageRoot: root,
-  });
-}
-
-export function mockGitInstallSurface(root: string) {
-  resolveStartupInstallStatusMock.mockResolvedValueOnce({
-    root,
-    status: { root, installKind: "git", packageManager: "pnpm" },
-    installReceipt: null,
   });
 }

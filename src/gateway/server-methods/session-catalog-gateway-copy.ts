@@ -10,6 +10,7 @@ import type {
   ErrorShape,
   SessionsCatalogContinueParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import {
@@ -33,7 +34,7 @@ import {
 import { recordSessionStateEventAsync } from "../../sessions/session-state-events.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import {
   createGatewaySession,
   SessionCreationNotCommittedError,
@@ -162,7 +163,7 @@ async function resolveGatewayCopyModel(params: {
       cfg,
       catalog,
       model: sourceModel,
-      defaultProvider: defaultModel.provider,
+      defaultProvider: defaultModel?.provider ?? DEFAULT_PROVIDER,
       agentId: params.agentId,
     });
     const resolved = resolveModelRefFromString({
@@ -181,7 +182,7 @@ async function resolveGatewayCopyModel(params: {
       cfg,
       catalog,
       ref: source,
-      defaultProvider: defaultModel.provider,
+      defaultProvider: defaultModel?.provider ?? DEFAULT_PROVIDER,
       defaultModel,
       agentId: params.agentId,
     });
@@ -202,7 +203,7 @@ async function resolveGatewayCopyModel(params: {
 
 function gatewayCopyNotice(params: {
   catalogLabel: string;
-  selectedModel: string;
+  selectedModel?: string;
   sourceModel?: string;
   usedPreferredModel: boolean;
   continuation: boolean;
@@ -217,11 +218,16 @@ function gatewayCopyNotice(params: {
       ).text.replace(/[\r\n]+/g, " ")
     : undefined;
   if (!sourceModel) {
-    return `${boundary}\n\nThe snapshot did not include a source model, so this session is using the Team agent's configured model, ${params.selectedModel}.`;
+    return params.selectedModel
+      ? `${boundary}\n\nThe snapshot did not include a source model, so this session is using the Team agent's configured model, ${params.selectedModel}.`
+      : `${boundary}\n\nThe snapshot did not include a source model, and the Team agent has no configured model.`;
   }
-  return params.usedPreferredModel
-    ? `${boundary}\n\nThis session is using the source model, ${sourceModel}.`
-    : `${boundary}\n\nThe source model, ${sourceModel}, is not available to this Team agent, so this session is using its configured model, ${params.selectedModel}.`;
+  if (params.usedPreferredModel) {
+    return `${boundary}\n\nThis session is using the source model, ${sourceModel}.`;
+  }
+  return params.selectedModel
+    ? `${boundary}\n\nThe source model, ${sourceModel}, is not available to this Team agent, so this session is using its configured model, ${params.selectedModel}.`
+    : `${boundary}\n\nThe source model, ${sourceModel}, is not available to this Team agent, and it has no configured model.`;
 }
 
 /** Source-authorized plugin routes use the same Gateway adoption and creation owner. */
@@ -300,7 +306,7 @@ export async function copySessionCatalogToGateway(params: {
     throw new Error("catalog cannot copy this session to the Gateway");
   }
   await using operatorCapture = {
-    preparation: captureGatewayOperatorRunAuthority({
+    preparation: prepareGatewayOperatorRunAuthority({
       client: params.client,
       context: params.context,
       hasCurrentClientAuthority: params.hasCurrentClientAuthority,
@@ -495,7 +501,7 @@ export async function copySessionCatalogToGateway(params: {
     commitGuard,
     afterCreate: async (entry) => {
       const selected = resolveSessionModelRef(cfg, entry.entry, entry.agentId);
-      const selectedModel = `${selected.provider}/${selected.model}`;
+      const selectedModel = selected && `${selected.provider}/${selected.model}`;
       await importSessionCatalogHistory({
         catalogId: params.request.catalogId,
         threadId: params.request.threadId,

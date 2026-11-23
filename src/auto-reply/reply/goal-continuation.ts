@@ -186,7 +186,6 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
     undefined,
     params.reader,
   );
-  params.base.operatorAuthority?.assertCurrent();
   if (!eligible() || !entry?.goal) {
     return false;
   }
@@ -209,7 +208,6 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
   ) {
     return false;
   }
-  params.base.operatorAuthority?.assertCurrent();
   if (!eligible()) {
     return false;
   }

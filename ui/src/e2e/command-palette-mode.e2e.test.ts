@@ -16,14 +16,33 @@ import {
 const suite = createControlUiE2eSuite({ name: "command palette mode and submit" });
 
 suite.define(() => {
-  it("remembers explicit mode choices across reloads without saving automatic switches", async () => {
+  it("applies each mode's writing policy and remembers only explicit mode choices", async () => {
     await suite.withPage({}, async ({ page }) => {
       await installMockGateway(page, scenario());
       const { palette, input } = await openFromForeground(page, suite.server.baseUrl);
       const selected = (name: string) =>
         palette.getByRole("tab", { name, exact: true }).getAttribute("aria-selected");
+      const expectWritingPolicy = async (field: typeof input, spellcheck: boolean) => {
+        expect(
+          await field.evaluate((element: HTMLTextAreaElement) => ({
+            autocorrect: element.getAttribute("autocorrect"),
+            autocapitalize: element.getAttribute("autocapitalize"),
+            writingsuggestions: element.getAttribute("writingsuggestions"),
+            spellcheck: element.spellcheck,
+          })),
+        ).toEqual({
+          autocorrect: "off",
+          autocapitalize: "off",
+          writingsuggestions: "false",
+          spellcheck,
+        });
+      };
+      await expectWritingPolicy(input, false);
+      await input.pressSequentially("test");
       await input.press("Tab");
       await expect.poll(() => selected("Compose")).toBe("true");
+      await expectWritingPolicy(input, true);
+      expect(await input.inputValue()).toBe("test");
       await input.press("Escape");
       await page.reload();
       await page.locator(".agent-chat__composer-combobox textarea:visible").waitFor();
@@ -40,10 +59,14 @@ suite.define(() => {
             cold.getByRole("tab", { name: "Compose", exact: true }).getAttribute("aria-selected"),
           )
           .toBe("true");
+        await expectWritingPolicy(cold.locator(".cmd-palette__input"), true);
         held.release();
         await input.waitFor({ state: "visible" });
         await expect.poll(() => selected("Compose")).toBe("true");
+        await expectWritingPolicy(input, true);
         await palette.getByRole("tab", { name: "Search", exact: true }).click();
+        await expect.poll(() => selected("Search")).toBe("true");
+        await expectWritingPolicy(input, false);
         await input.fill(
           "A long prompt that automatically moves into Compose without changing the chosen Search preference.",
         );

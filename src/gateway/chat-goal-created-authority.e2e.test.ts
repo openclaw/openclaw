@@ -414,12 +414,15 @@ it(
         });
         expect(sibling.sessions).toEqual([]);
         expect(scenario.childCalls).toBe(1);
+        // Refusal starts no successor; only an interrupted turn pauses the Goal.
         expect(
           loadSessionEntry({ agentId: "main", sessionKey: scenario.sessionKey })?.goal,
         ).toMatchObject(
-          scenario.stop || scenario.revoke
+          scenario.stop
             ? { status: "paused", continuationTurns: 0 }
-            : { status: "complete", continuationTurns: 1, tokensUsed: 28 },
+            : scenario.revoke
+              ? { status: "active", continuationTurns: 0 }
+              : { status: "complete", continuationTurns: 1, tokensUsed: 28 },
         );
         if (!scenario.revoke && !scenario.stop) {
           await wait(scenario.finalReceived.promise);
@@ -452,10 +455,6 @@ it(
               assistantText(message)?.includes(scenario.settledText),
             ),
           ).toBe(true);
-          expect(
-            loadSessionEntry({ agentId: "main", sessionKey: scenario.sessionKey })?.goal
-              ?.lastStatusNote,
-          ).toContain("Paused after an error. Resume to continue.");
           expect(
             events.slice(beforeRevocation.events).filter((event) => {
               const payload = asOptionalRecord(event.payload);

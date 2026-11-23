@@ -62,6 +62,87 @@ async function deferChildRefresh(
 }
 
 suite.define(() => {
+  it("never paints a gap or overlap below an expanded chat tree", async () => {
+    const parent = "agent:main:dashboard:release";
+    const following = "agent:main:dashboard:publish";
+    const kids = Array.from({ length: 4 }, (_, i) =>
+      sessionRow("agent:main:dashboard:check-" + i, "Review notes " + (i + 1), 20 - i, {
+        spawnedBy: parent,
+        parentSessionKey: parent,
+        createdAt: 20 - i,
+      }),
+    );
+    const roots = [
+      sessionRow(parent, "Release notes", 100, {
+        createdAt: 100,
+        childSessions: kids.map((c) => c.key),
+      }),
+      sessionRow(following, "Publish notes", 90, { createdAt: 90 }),
+    ];
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      await seedStorage(page, {
+        "openclaw:sidebar:sessions:sort-mode": "created",
+        [controlUiBundledSettingsStorageKey(suite.server.baseUrl)]: JSON.stringify({
+          textScale: 140,
+        }),
+      });
+      await installMockGateway(page, {
+        sessions: [...roots, ...kids],
+        sessionKey: following,
+        methodResponses: { "sessions.list": treeList(parent, roots, kids) },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, following));
+      const toggle = page.locator('[data-child-session-toggle="' + parent + '"]');
+      await toggle.waitFor();
+      const next = page.locator('[data-session-key="' + following + '"]');
+      await next.waitFor();
+      const probe = await next.evaluateHandle((el, parentKey) => {
+        const group = document.querySelector('[data-session-tree="' + parentKey + '"]')!;
+        const seen: Array<{ gap: number; children: number }> = [];
+        let frame = 0;
+        const measure = () => {
+          const gap = Number(
+            (el.getBoundingClientRect().top - group.getBoundingClientRect().bottom).toFixed(2),
+          );
+          const children = group.querySelectorAll(".sidebar-recent-session--child").length;
+          const last = seen.at(-1);
+          if (last?.gap !== gap || last.children !== children) {
+            seen.push({ gap, children });
+          }
+          frame = requestAnimationFrame(measure);
+        };
+        measure();
+        return () => {
+          cancelAnimationFrame(frame);
+          return seen;
+        };
+      }, parent);
+      for (let cycle = 0; cycle < 3; cycle++) {
+        await toggle.click();
+        await expectCount(page.locator(".sidebar-recent-session--child"), 4);
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
+        );
+        await toggle.click();
+        await expectCount(page.locator(".sidebar-recent-session--child"), 0);
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
+        );
+      }
+      const samples = await probe.evaluate((stop) => stop());
+      expect(samples.some((s) => s.children === 4)).toBe(true);
+      expect(
+        samples.filter((s) => Math.abs(s.gap) > 1),
+        JSON.stringify(samples),
+      ).toEqual([]);
+    });
+  });
   it.each([
     { colorScheme: "dark", pointer: "fine", textScale: 100, width: 1440 },
     { colorScheme: "light", pointer: "fine", textScale: 100, width: 1440 },

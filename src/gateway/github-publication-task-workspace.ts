@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { ok } from "@openclaw/normalization-core/result";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import {
   captureWorkspaceFilesystemEvidence,
   createWorkspaceFilesystemSource,
@@ -17,8 +18,7 @@ import {
 } from "./github-publication-requester.js";
 import type { PublicationSessionRead } from "./github-publication-session.types.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
-import { resolveRequesterProject } from "./project-access.js";
+import { projectRequesterForProfile, resolveRequesterProject } from "./project-access.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { createGatewaySession } from "./session-create-service.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
@@ -28,6 +28,7 @@ import { prepareSessionWorktree } from "./session-worktree-preparation.js";
 export async function prepareGitHubPublicationTaskWorkspace(params: {
   options: GatewayRequestHandlerOptions;
   parent: PublicationSessionRead & { entry: InternalSessionEntry };
+  operatorAuthority: AdmittedRunOperatorAuthority | undefined;
   requester: GitHubPublicationRequesterV2;
   source: string;
   idempotencyKey: string;
@@ -135,10 +136,16 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
   }
   const gitOptions = { signal: options.signal, beforeRun: assertPreparationCurrent };
   if (parent.entry.projectId) {
+    const { actor } = requester.snapshot;
     const project = await resolveRequesterProject(
       getConfig(),
       parent.entry.projectId,
-      { kind: "operator", scopes: requester.snapshot.scopes },
+      projectRequesterForProfile(
+        getConfig(),
+        requester.snapshot.scopes,
+        actor.kind === "operator" ? actor.profileId : undefined,
+        requester.snapshot.openclawIdPrincipal,
+      ),
       { fresh: true },
     );
     const [projectRoot, repository] = await Promise.all([
@@ -242,7 +249,10 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
     return { agentId: parent.agentId, sessionKey: existing.canonicalKey };
   }
   const checkoutCommit = await requireGit(source, ["rev-parse", "HEAD"], gitOptions);
-  const captured = await captureGatewayOperatorRunAuthority(options);
+  const authority = params.operatorAuthority;
+  const captured = authority
+    ? { authority, release: authority.retain?.() ?? (() => {}) }
+    : undefined;
   using _ = { [Symbol.dispose]: () => captured?.release() };
   assertPreparationCurrent();
   const actor = requester.snapshot.actor;

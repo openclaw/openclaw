@@ -749,7 +749,7 @@ it("prepares an own PR in an ordinary sandboxed chat through the registered hand
   });
 });
 
-it("admits registered PR-base source only for an authorized guest and rejects revocation before materialization or binding", async () => {
+it("admits registered PR-base source for its authorized guest and finishes after a role change", async () => {
   await withOpenClawTestState(
     { scenario: "minimal", prepareProfileCatalog: true },
     async (state) => {
@@ -891,7 +891,7 @@ it("admits registered PR-base source only for an authorized guest and rejects re
         const earlier = await manager.appendMessageAsync(makeUserMessage("Open notes.md", 1));
         assert(earlier, "The earlier message must be persisted");
         await fs.writeFile(path.join(state.workspaceDir, "notes.md"), "original notes\n");
-        const { resolveSandbox, integrate } = stubPullRequestPreparation(target.sessionKey);
+        const { integrate } = stubPullRequestPreparation(target.sessionKey);
         integrate.mockClear();
         const prepare = (client: GatewayClient) =>
           preparePullRequest({
@@ -906,7 +906,6 @@ it("admits registered PR-base source only for an authorized guest and rejects re
           expect(entry?.worktree).toBeUndefined();
           expect(entry?.priorWorkspace).toBeUndefined();
         };
-        const allocateWorkspace = allocation.prepareSessionWorktree;
         const allocate = vi.spyOn(allocation, "prepareSessionWorktree");
         try {
           // Another guest fails the publication requester; an admin passes it but is not the owner.
@@ -917,58 +916,16 @@ it("admits registered PR-base source only for an authorized guest and rejects re
           expect(allocate).not.toHaveBeenCalled();
           unbound();
 
-          // A real role write while GitHub visibility is in flight revokes the source handoff.
+          // A role change affects the next request, not this admitted source handoff.
           visibility.mockImplementationOnce(async () => {
             await setGuestRole("revoked");
             return { visibility: "public" };
           });
-          await expect(prepare(guestClient)).rejects.toThrow("no longer authorized");
-          expect(allocate).not.toHaveBeenCalled();
-          unbound();
-          expect(
-            await managedWorktrees.findLiveByOwner("session", target.sessionKey),
-          ).toBeUndefined();
-          await setGuestRole("guest");
-
-          // Access lost after allocation is refused before the PR workspace is bound.
-          allocate.mockImplementationOnce(async (...args) => {
-            const allocated = await allocateWorkspace(...args);
-            assert(allocated.ok, "The authorized allocation must complete before revocation");
-            expect(allocated.value.worktree?.repoRoot).toBe(project.repoRoot);
-            await setGuestRole("revoked");
-            return allocated;
-          });
-          await expect(prepare(guestClient)).rejects.toThrow("no longer authorized");
-          expect(allocate).toHaveBeenCalledOnce();
-          unbound();
-          expect(
-            await managedWorktrees.findLiveByOwner("session", target.sessionKey),
-          ).toBeUndefined();
-          await setGuestRole("guest");
-
-          // Access lost after binding is refused before PR source import.
-          resolveSandbox.mockImplementationOnce(async (params) => {
-            await setGuestRole("revoked");
-            return {
-              ...createSandboxTestContext({
-                overrides: {
-                  sessionKey: target.sessionKey,
-                  workspaceDir: params.workspaceDir,
-                  workspaceSource: "managed-worktree",
-                },
-              }),
-              [Symbol.dispose]() {},
-            } as never;
-          });
-          await expect(prepare(guestClient)).rejects.toThrow("no longer authorized");
-          expect(integrate).not.toHaveBeenCalled();
-          expect(loadSessionEntryReadOnly(target)?.worktree?.githubPullRequest).toBeUndefined();
-          await setGuestRole("guest");
-
           expect(await prepare(guestClient)).toHaveBeenCalledWith(
             true,
             expect.objectContaining({ status: "prepared" }),
           );
+          await setGuestRole("guest");
           expect(integrate).toHaveBeenCalledOnce();
           const readEarlier = (client: GatewayClient) =>
             requestSessionFile(context, target.sessionKey, { messageEntryId: earlier }, client);

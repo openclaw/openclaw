@@ -808,7 +808,7 @@ async function collectUpdateFailureTriage() {
         [recoveryRun.before, recoveryRun.after, result.before, result.after].every((version) => version.buildId === recovery.buildId)) && recoveryRun.steps.some((step) =>
         step.step === "previous generation restoration" && step.status === "completed");
     if (exit.code === ${MANAGED_SERVICE_UPDATE_UNSAFE_EXIT_CODE} && !previousGeneration) {
-      appendLog((recovery?.dataAtRisk ? "keep the gateway stopped: data at risk (" + recovery.dataAtRisk + ")" : "managed update recovery failed (" + (recovery?.reason || result?.reason || "unverified recovery") + ")") + "; run openclaw update repair and openclaw gateway status --deep");
+      appendLog(recovery?.dataAtRisk ? "gateway left stopped: data at risk (" + recovery.dataAtRisk + ") recorded and not yet verified; run openclaw update repair to verify the state and restart the gateway" : "managed update recovery failed (" + (recovery?.reason || result?.reason || "unverified recovery") + "); run openclaw update repair and openclaw gateway status --deep");
       await recordManagedUpdateOutcome("managed-service-handoff-unsafe-recovery");
       finalExitCode = exit.code;
     } else if (!resultRoot || result?.status !== "ok" ||
@@ -901,7 +901,6 @@ async function spawnManagedServiceUpdateHandoff(
   const handoffNodeExecutable =
     params.execPath ?? (await resolveManagedHandoffNodeExecutable(serviceEnv, params.supervisor));
   const runtimeArgs = resolveRuntimeArgs(handoffNodeExecutable);
-  owner.requesterAuthority?.assertCurrent();
   owner.requesterAuthority?.signal?.throwIfAborted();
   // The helper and its parent retain one database identity through settlement.
   const identityStore = await prepareManagedHandoffParentStore({
@@ -912,7 +911,6 @@ async function spawnManagedServiceUpdateHandoff(
     onProcessIdentityWarning: createUpdateRunProcessIdentityWarning(params.runId, serviceEnv),
   });
   owner.leaseStore = identityStore;
-  owner.requesterAuthority?.assertCurrent();
   owner.requesterAuthority?.signal?.throwIfAborted();
   const updateLeaseDatabaseIdentity = identityStore.databaseIdentity;
   owner.leaseDatabaseIdentity = updateLeaseDatabaseIdentity;
@@ -1099,7 +1097,6 @@ async function spawnManagedServiceUpdateHandoff(
     helperLog = await fs.open(logPath, "a", 0o600).catch(() => undefined);
     // An earlier macOS Gateway's store keeps fencing its unsettled custody.
     await identityStore.assertCurrent();
-    owner.requesterAuthority?.assertCurrent();
     owner.requesterAuthority?.signal?.throwIfAborted();
     if (params.foregroundOrigin && isGatewayRestartDraining()) {
       throw new GatewayDrainingError();
@@ -1258,10 +1255,8 @@ async function spawnManagedServiceUpdateHandoff(
         if (!(await isCurrent())) {
           return;
         }
-        owner.requesterAuthority?.assertCurrent();
         await owner.beforePark?.();
         if (await isCurrent()) {
-          owner.requesterAuthority?.assertCurrent();
           owner.requesterAuthority?.signal?.throwIfAborted();
           if (!requiresAcceptance) {
             owner.parkReady = true;
@@ -1313,7 +1308,6 @@ export async function startManagedServiceUpdateHandoff(
   ) {
     throw new Error("Profile update requires its original Gateway admission and park owner.");
   }
-  params.requesterAuthority?.assertCurrent();
   params.requesterAuthority?.signal?.throwIfAborted();
   if (params.action && params.supervisor !== "systemd") {
     throw new Error(
@@ -1697,7 +1691,6 @@ export async function transferManagedServiceUpdateHandoff(
   ) {
     return false;
   }
-  active.requesterAuthority?.assertCurrent();
   active.requesterAuthority?.signal?.throwIfAborted();
   active.transferred = true;
   if ((await sendManagedServiceUpdateHandoffCommand(identity, "transfer")) !== "transferred") {

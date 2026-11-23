@@ -4,10 +4,9 @@ import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { sessionParticipantIdentityKey } from "../lib/chat/sender-label.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { SidebarPanelFilter, SidebarPanelHeader } from "./app-sidebar-panel-headers.tsx";
-import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
+import { SidebarNewSessionAction, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import { InlineAlert } from "./solid/inline-alert.tsx";
-import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
 import { Picker } from "./solid/select-picker.tsx";
 import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
 
@@ -65,7 +64,6 @@ function SidebarOwnerPicker(props: { host: SessionListHost }) {
         params: {
           id: "sidebar-session-owner-title",
           class: "sidebar-session-owner-filter",
-          triggerIcon: "chevronsUpDown" as const,
           label: t("sessionsView.owners"),
           value: props.host.sessionInvolvingMeFilterActive
             ? "involving-me"
@@ -111,13 +109,8 @@ export function countSidebarSessionFilters(host: Pick<SessionListHost, "sessions
 }
 
 export function renderSessionListToolbar(
-  host: SessionListHost &
-    Pick<
-      AppSidebarRenderHost,
-      "basePath" | "expandedAgentId" | "readNewSessionAccess" | "requestOpenNewSession"
-    > & { onToggleSidebar?: () => void },
+  host: SessionListHost & Pick<AppSidebarRenderHost, "onToggleSidebar">,
 ) {
-  const newSessionAccess = createMemo(() => host.readNewSessionAccess());
   const statusLabel = () =>
     host.sessionsStatusFilter === "active"
       ? t("common.active")
@@ -134,17 +127,9 @@ export function renderSessionListToolbar(
         label={`${t("chat.sidebar.sortSessions")} · ${statusLabel()}`}
         description={`${t("sessionsView.status")}: ${statusLabel()}`}
       />
-      <NewSessionLink
-        basePath={host.basePath}
-        agentId={host.expandedAgentId()}
+      <SidebarNewSessionAction
+        host={host}
         class="sidebar-session-toolbar__button sidebar-new-session"
-        label={t("agentChip.newConversation")}
-        showShortcut
-        disabledReason={(() => {
-          const access = newSessionAccess();
-          return access.allowed ? undefined : access.reason;
-        })()}
-        onOpen={(agentId, target) => host.requestOpenNewSession(agentId, target)}
       />
     </SidebarPanelHeader>
   );

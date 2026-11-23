@@ -8,7 +8,7 @@ import type { WorkerProvider } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createCoreGatewayMethodDescriptors } from "../methods/core-method-policy.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { environmentsHandlers } from "../server-methods/environments.js";
 import { dispatchGatewayMethodInProcess } from "../server-plugin-in-process-dispatch.js";
 import {
@@ -267,7 +267,7 @@ describe("on-demand prepared worker admission", () => {
   });
 
   it.each([false, true])(
-    "enforces the original Gateway source at durable admission with revoked=%s",
+    "finishes an admitted Gateway preparation after source grant revocation=%s",
     async (revoked) => {
       const f = await fixture();
       support.getDevelopmentProfile().readyWorkers = 0;
@@ -283,7 +283,7 @@ describe("on-demand prepared worker admission", () => {
       });
       const controller = new AbortController();
       const source = expectDefined(
-        await captureGatewayOperatorRunAuthority({
+        await prepareGatewayOperatorRunAuthority({
           client,
           context,
           sourceAuthority: {
@@ -309,18 +309,12 @@ describe("on-demand prepared worker admission", () => {
               f.request,
             ),
         );
-        if (revoked) {
-          await expect(request).rejects.toThrow();
-          expect(support.testState.store.list()).toHaveLength(0);
-          expect(f.provision).not.toHaveBeenCalled();
-        } else {
-          const result = await request;
-          expect(result.reused).toBe(false);
-          expect(support.testState.store.get(result.environmentId)?.preparation?.purpose).toBe(
-            "build",
-          );
-          await support.waitForFast(() => expect(f.provision).toHaveBeenCalledOnce());
-        }
+        const result = await request;
+        expect(result.reused).toBe(false);
+        expect(support.testState.store.get(result.environmentId)?.preparation?.purpose).toBe(
+          "build",
+        );
+        await support.waitForFast(() => expect(f.provision).toHaveBeenCalledOnce());
       } finally {
         source.release();
       }

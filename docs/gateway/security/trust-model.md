@@ -22,6 +22,18 @@ sidebarTitle: "Trust model"
 
 Before changing remote access, DM policy, reverse proxy, or public exposure, run through the [Gateway exposure runbook](/gateway/security/exposure-runbook) as a pre-flight/rollback checklist.
 
+Authority is checked when work starts. An admitted request may finish after a role,
+grant, or policy change; Stop and execution-ownership fences still apply. Queued,
+retried, replayed, and scheduled work checks current access when its next request
+starts.
+
+Saved work identifies its original authenticated requester, not the session owner
+or the scheduler. Its saved scopes, model ceiling, browser or plugin ingress
+context, and local/UI/native administration entitlements cap the new admission.
+Agent, sandbox, and session restrictions come from current role policy. A refusal
+is reported through the work's existing lifecycle; unavailable access policy
+leaves the work queued for its existing retry trigger.
+
 ## Trust boundary matrix
 
 Quick model for triaging risk reports:

@@ -19,8 +19,8 @@ import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
 import { isSilentAssistantTranscriptMessage } from "../../shared/chat-message-content.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import {
+  isOpenClawAutomationResultMessage,
   isTranscriptOnlyOpenClawAssistantMessage,
-  OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
 } from "../../shared/transcript-only-openclaw-assistant.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-usage.js";
 import type { sanitizeSessionMessagesImages } from "../embedded-agent-helpers/images.js";
@@ -149,9 +149,8 @@ function normalizeAssistantReplayBlockContent(
 
 export function isBareDeliveryMirrorCandidate(next: AssistantReplayMessage): boolean {
   return (
-    !(
-      next.provider === OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER && next.model === "automation-result"
-    ) &&
+    // The dispatch boundary normalizes before it projects background results to user input.
+    !isOpenClawAutomationResultMessage(next) &&
     next.usage != null &&
     typeof next.usage === "object" &&
     !hasNonzeroUsage(normalizeUsage(next.usage)) &&
@@ -439,8 +438,7 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
     out[i] = {
       ...message,
       // Do not synthesize billing evidence for sparse legacy usage.
-      // SAFETY: Token fields are canonical; replay consumers accept missing cost via normalizeUsage.
-      usage: normalizedUsage as AssistantUsageSnapshot,
+      usage: normalizedUsage,
     };
     touched = true;
   }

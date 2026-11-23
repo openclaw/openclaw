@@ -1,3 +1,4 @@
+import { createRuntimeConfigReader, readRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { prepareModelPricingContext } from "../model-catalog/pricing.js";
@@ -154,6 +155,10 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
     progress?: Parameters<typeof publishPreparedModelRuntimeOwnerBatch>[0]["progress"];
   },
 ): Promise<void> {
+  // Gateway startup may prepare owners before publishing the live config.
+  const readPolicyConfig = context.gatewayLifecycleActive
+    ? readRuntimeConfig
+    : createRuntimeConfigReader(config);
   await prepareSharedAuthStoreOwnership();
   const { owners, agentBuildCompletions, gatewayLifecycleActive, isPublicationCurrent, progress } =
     context;
@@ -176,7 +181,7 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
     }
     knownKeys.add(key);
     const owner = owners.get(key);
-    entries.push({ owner, input });
+    entries.push({ owner, input: { ...input, readPolicyConfig } });
   }
   for (const [key, owner] of owners) {
     if (!isPreparedModelRuntimeOwnerInRefreshScope(owner, options.agentIds)) {

@@ -304,6 +304,55 @@ it.each(["transient-timeout", "mixed"])(
   },
 );
 
+it("clears an earlier process's PID when the running service reports none", async () => {
+  mockProcessPlatform("linux");
+  const service = useService();
+  vi.mocked(service.readRuntime).mockResolvedValue({ status: "running" });
+  busyPort();
+  restart.callGateway.mockImplementation(healthResponse(candidate.version, candidate.buildId));
+  await listen();
+  await verifyGateway({ opts: withRun("pidless-service"), requireRunningService: true });
+  // Observations merge into the run: an omitted PID would keep the previous Gateway's.
+  const facts = vi.mocked(recordUpdateRunVerification).mock.calls.at(-1)?.[1];
+  expect(facts).toMatchObject({ serviceRunning: true, runningVersion: candidate.version });
+  expect(facts).toHaveProperty("pid", undefined);
+});
+
+it.each([
+  { refusal: "none", advice: "Rollback: reinstall OpenClaw 2026.9.1" },
+  { refusal: "restart", advice: "Rollback: unavailable; update state was migrated" },
+  // Final recovery verifies again after rollback settled; the recorded refusal still holds.
+  { refusal: "recorded", advice: "Rollback: unavailable; update state was migrated" },
+  // No pre-activation baseline (PostgreSQL state) proves nothing was migrated.
+  { refusal: "unverified", advice: "Rollback: unavailable; rollback safety could not be verified" },
+])(
+  "offers the previous version only while rollback is allowed (refusal=$refusal)",
+  async ({ refusal, advice }) => {
+    gatewayFixture({
+      server: { version: candidate.version, buildId: candidate.buildId, bootId: "candidate-boot" },
+    });
+    await listen((req, res) => res.writeHead(req.url === "/readyz" ? 503 : 200).end());
+    result.before = { version: "2026.9.1" };
+    if (refusal === "recorded") {
+      result.rollbackOutcome = { status: "not-attempted", reason: "state-migrated-no-rollback" };
+    }
+    const rollbackBlockedReason =
+      refusal === "restart"
+        ? "state-migrated-no-rollback"
+        : refusal === "unverified"
+          ? "rollback-state-unverified"
+          : undefined;
+    const verification = verifyGateway({ waitForStartup: false, rollbackBlockedReason });
+    await expect(verification).resolves.toMatchObject({
+      ok: false,
+      summary: "readyz-unhealthy",
+    });
+    const printed = vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n");
+    expect(printed).toContain(advice);
+    expect(printed.includes("reinstall OpenClaw")).toBe(refusal === "none");
+  },
+);
+
 it("bounds foreground recovery observation with hung readiness", async () => {
   useService({ status: "unknown" });
   busyPort();

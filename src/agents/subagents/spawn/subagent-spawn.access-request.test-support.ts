@@ -41,18 +41,15 @@ import {
 export function registerAccessRequestSpawnCases(
   options: NativePluginSpawnTestOptions & { parentSessionKey: string },
 ) {
-  const nativeCases = [
-    ...(["OpenClaw", "Codex"] as const).flatMap((runtimeName) =>
-      (["explicit", "inherited"] as const).flatMap((selection) =>
-        (["allowed", "unavailable", "revoked", "reassigned"] as const).map((outcome) => ({
-          runtimeName,
-          selection,
-          outcome,
-        })),
-      ),
+  const nativeCases = (["OpenClaw", "Codex"] as const).flatMap((runtimeName) =>
+    (["explicit", "inherited"] as const).flatMap((selection) =>
+      (["allowed", "unavailable", "revoked", "reassigned"] as const).map((outcome) => ({
+        runtimeName,
+        selection,
+        outcome,
+      })),
     ),
-    { runtimeName: "OpenClaw", selection: "explicit", outcome: "requester-revoked" } as const,
-  ];
+  );
   const cases = [
     ...nativeCases.map(({ runtimeName, selection, outcome }) => ({
       runtimeName,
@@ -70,22 +67,15 @@ export function registerAccessRequestSpawnCases(
     })),
     ...(["code-mode", "plugin"] as const).flatMap((adapter) =>
       ([false, true] as const).flatMap((queued) =>
-        (
-          [
-            "allowed",
-            "unavailable",
-            "revoked",
-            "reassigned",
-            "requester-revoked",
-            "role-denied",
-          ] as const
-        ).map((outcome) => ({
-          runtimeName: "OpenClaw" as const,
-          selection: "explicit" as const,
-          outcome,
-          adapter,
-          queued,
-        })),
+        (["allowed", "unavailable", "revoked", "reassigned", "role-denied"] as const).map(
+          (outcome) => ({
+            runtimeName: "OpenClaw" as const,
+            selection: "explicit" as const,
+            outcome,
+            adapter,
+            queued,
+          }),
+        ),
       ),
     ),
     ...(["cron", "cron-session"] as const).flatMap((adapter) =>
@@ -236,7 +226,6 @@ export function registerAccessRequestSpawnCases(
           >[0]
         | undefined;
       let accountChanged = false;
-      let requesterRevoked = false;
       const provider = buildOpenAIProvider();
       const originalWrap = expectDefined(provider.wrapStreamFn, "OpenAI stream wrapper");
       provider.wrapStreamFn = (ctx) => {
@@ -249,16 +238,7 @@ export function registerAccessRequestSpawnCases(
             ...streamOptions,
             onPayload: async (payload, payloadModel) => {
               const transformed = await streamOptions?.onPayload?.(payload, payloadModel);
-              if (outcome === "requester-revoked" && !requesterRevoked) {
-                // The child retains custody after foreground closure; revocation still fences egress.
-                bound.admission.close();
-                bound.parent.cleanup();
-                source.closeRequest();
-                expect(source.holds).toBeGreaterThan(0);
-                expect(source.authority.assertCurrent).not.toThrow();
-                source.revoke();
-                requesterRevoked = true;
-              } else if (outcome === "revoked") {
+              if (outcome === "revoked") {
                 const catalog = expectDefined(
                   capturedAttempt?.preparedModelRuntime?.accountCatalog,
                   "request account catalog",
@@ -525,16 +505,7 @@ export function registerAccessRequestSpawnCases(
           nativeMessages
             ?.filter(({ method }) => method === "turn/start")
             .map(({ params }) => params) ?? writes;
-        if (outcome === "requester-revoked") {
-          expect(requesterRevoked).toBe(true);
-          expect(accountChanged).toBe(false);
-          expect(requests).toHaveLength(0);
-          if (completed instanceof Error) {
-            expect(completed.message).toMatch(/operator source revoked|aborted/i);
-          } else {
-            expect(completed).toMatchObject({ meta: { aborted: true } });
-          }
-        } else if (outcome !== "allowed") {
+        if (outcome !== "allowed") {
           if (!native) {
             expect(accountChanged).toBe(outcome !== "unavailable" && outcome !== "role-denied");
             if (outcome !== "unavailable" && outcome !== "role-denied") {

@@ -160,7 +160,7 @@ it("publishes restored assistant history without rehashing it on later model req
     },
   ];
   fixture.messages.push(restored);
-  const wire = (message: typeof restored) =>
+  const wire = (message: Extract<AgentMessage, { role: "assistant" }>) =>
     JSON.stringify(convertResponsesMessages(model, { messages: [message] }, new Set()));
   const before = wire(restored);
   await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);

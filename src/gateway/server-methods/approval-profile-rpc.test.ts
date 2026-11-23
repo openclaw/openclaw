@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { addSessionMemberInWorker } from "../../config/sessions/session-sharing-store.async.js";
@@ -154,7 +154,7 @@ it("restricts invited members to their own approvals across generic lookup, reso
           const runtime = createSyntheticPluginRuntimeClient({
             scopes: ["operator.approvals"],
             operatorRoleActor: { kind: "operator", profileId: profiles[name]! },
-            operatorRunAuthority: createAdmittedRunOperatorAuthority({
+            operatorRunAuthority: createTestOperatorAuthority({
               profileId: profiles[name]!,
               scopes: ["operator.approvals"],
               assertCurrent() {},
@@ -218,7 +218,6 @@ it("restricts invited members to their own approvals across generic lookup, reso
               body: { id: approval.record.id, decision: "deny" },
               client: reviewer,
               context,
-              transport: "websocket",
             }).invoke();
             expect(outcome).toMatchObject({ ok: true });
             expect(await approval.decision).toBe("deny");

@@ -277,6 +277,7 @@ interface YieldContinuationAttempt {
   acceptedSessionSpawns?: readonly AcceptedSessionSpawn[];
   runtimeContinuationStarted?: boolean;
   yieldMessageWaitRegistered?: boolean;
+  yieldExecWakeArmed?: boolean;
   messagingToolSentTexts?: readonly string[];
   messagingToolSentMediaUrls?: readonly string[];
   messagingToolSentTargets?: readonly MessagingToolSend[];
@@ -294,6 +295,8 @@ export function hasRunContinuationEvidence(attempt: YieldContinuationAttempt): b
     hasCompletionMessageSessionSpawn(attempt.acceptedSessionSpawns) ||
     attempt.runtimeContinuationStarted === true ||
     attempt.yieldMessageWaitRegistered === true ||
+    // Set only when the yield claim armed a command; a "running" exec result alone is not a wake.
+    attempt.yieldExecWakeArmed === true ||
     hasAsyncActivity(attempt.toolMetas)
   );
 }

@@ -47,28 +47,44 @@ function createSetupRequest<Args, Result>(
 
 export function createModelSetupDetectRequest(options: {
   getHello: () => ModelSetupConnection["hello"];
+  /** Known choices from config and manifests, published while discovery continues. */
+  onOptions: (
+    outcome: Extract<ModelSetupDetectTaskResult, { value: SystemAgentSetupDetectResult }>,
+  ) => void;
   onComplete: (outcome: ModelSetupDetectTaskResult) => boolean | void;
 }) {
   return createSetupRequest<
-    readonly [GatewayBrowserClient | null, string | null, object | null],
+    readonly [GatewayBrowserClient | null, string | null, object | null, boolean?],
     ModelSetupDetectTaskResult
-  >(async ([client, agentId, token], signal) => {
+  >(async ([client, agentId, token, withOptions], signal) => {
     if (!client || !token) {
       return undefined;
     }
     const hello = options.getHello();
-    return {
-      ...(await captureModelSetupResult(client, () =>
-        client.request<SystemAgentSetupDetectResult>(
-          "openclaw.setup.detect",
-          agentId ? { agentId } : {},
-          { timeoutMs: MODEL_SETUP_DETECT_TIMEOUT_MS, signal },
-        ),
-      )),
-      agentId,
-      hello,
-      token,
-    };
+    const params = agentId ? { agentId } : {};
+    const detection = captureModelSetupResult(client, () =>
+      client.request<SystemAgentSetupDetectResult>("openclaw.setup.detect", params, {
+        timeoutMs: MODEL_SETUP_DETECT_TIMEOUT_MS,
+        signal,
+      }),
+    );
+    if (withOptions) {
+      // Discovery reports its own failure; this early list only shortens the wait.
+      void client
+        .request<SystemAgentSetupDetectResult>("openclaw.setup.options", params, {
+          timeoutMs: MODEL_SETUP_DETECT_TIMEOUT_MS,
+          signal,
+        })
+        .then(
+          (value) => {
+            if (!signal.aborted) {
+              options.onOptions({ client, value, agentId, hello, token });
+            }
+          },
+          () => undefined,
+        );
+    }
+    return { ...(await detection), agentId, hello, token };
   }, options.onComplete);
 }
 

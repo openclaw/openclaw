@@ -161,9 +161,13 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   const color = createMemo(() => normalizeSessionColorValue(session().color ?? ""));
   const archived = createMemo(() => session().archived === true);
   const pinnable = createMemo(() => session().pinnable);
-  const childCount = createMemo(
-    () => session().snapshot?.childCount ?? session().childSessionKeys.length,
-  );
+  const childCount = createMemo(() => {
+    const row = session();
+    // Flat references (such as pinned Home) can have child keys without a sidebar branch.
+    return row.childLoadParentKeys?.length
+      ? (row.snapshot?.childCount ?? row.childSessionKeys.length)
+      : 0;
+  });
   const groupWriteAccess = createMemo(() =>
     host().readSessionMutationAccess({
       method: "sessions.groups.put",
@@ -474,7 +478,7 @@ export function renderSessionTree(params: {
   listItem?: boolean;
   icon?: JSX.Element;
   listPosition?: { index: number; count: number };
-  window?: Pick<ReturnType<typeof createSidebarSessionWindow>, "rowRef" | "item" | "focus">;
+  window?: Pick<ReturnType<typeof createSidebarSessionWindow>, "rowRef" | "spaceBefore" | "focus">;
 }): JSX.Element {
   const host = createMemo(() => params.host),
     session = createMemo(() => params.session, {
@@ -495,23 +499,13 @@ export function renderSessionTree(params: {
     ),
   );
   const hiddenChildCount = createMemo(() => session().children.length - visibleChildren().length);
-  const windowItem = () => params.window?.item(session().key);
   return (
     <div
       ref={params.window?.rowRef(() => session().key)}
       class="sidebar-session-tree"
       data-session-tree={session().key}
       data-session-window-key={params.window ? session().key : undefined}
-      style={
-        windowItem()
-          ? {
-              position: "absolute",
-              "inset-inline": "0",
-              top: "0",
-              transform: `translateY(${windowItem()?.top ?? 0}px)`,
-            }
-          : undefined
-      }
+      style={{ "margin-block-start": params.window?.spaceBefore(session().key) }}
       onFocusIn={() => params.window?.focus(session().key)}
       role={listItem() ? "listitem" : undefined}
       aria-posinset={params.listPosition ? params.listPosition.index + 1 : undefined}

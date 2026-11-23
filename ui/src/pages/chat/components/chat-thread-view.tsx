@@ -1,4 +1,5 @@
 import { Loading, Show, lazy, createMemo, createSignal, onSettled, useContext } from "solid-js";
+import { routeIdFromPath } from "../../../app-route-paths.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import {
   linkReaderPrefetchRef as createLinkReaderPrefetchRef,
@@ -85,6 +86,29 @@ function navigateCronRunLink(event: Event, props: ChatThreadProps): boolean {
   event.preventDefault();
   props.onNavigate("cron", { search: anchor.search });
   return true;
+}
+
+function navigatePluginLink(event: MouseEvent, props: ChatThreadProps): void {
+  const anchor = anchorFromNavigationEvent(event);
+  if (
+    !props.onNavigate ||
+    !anchor ||
+    anchor.hasAttribute("download") ||
+    (anchor.target && anchor.target !== "_self")
+  ) {
+    return;
+  }
+  const url = URL.parse(anchor.href, window.location.href);
+  if (
+    !url ||
+    url.origin !== window.location.origin ||
+    routeIdFromPath(url.pathname, props.basePath) !== "plugin"
+  ) {
+    return;
+  }
+  // Keep the current document and its Gateway connection when opening a plugin record.
+  event.preventDefault();
+  props.onNavigate("plugin", { pathname: url.pathname, search: url.search, hash: url.hash });
 }
 
 function openManagedArtifactLink(event: Event, props: ChatThreadProps): boolean {
@@ -508,6 +532,8 @@ function ChatThreadContent(
           if (sessionTarget && navigation) {
             event.preventDefault();
             input.props.onOpenSessionLink?.(sessionTarget);
+          } else if (navigation) {
+            navigatePluginLink(event, input.props);
           }
         }}
         onMouseDown={(event) => {

@@ -8,10 +8,7 @@ import {
 } from "../admitted-run-context.js";
 import { classifyToolAgainstSandboxToolPolicy } from "../sandbox/tool-policy.js";
 import { SANDBOX_DEFAULT_TOOL_ALLOW, type SandboxToolPolicy } from "../sandbox/types.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 export function captureSessionControlAuthority(prepared?: AdmittedRunOperatorAuthority) {
   const invocation = readOperatorToolGatewayAuthority();
@@ -30,28 +27,17 @@ export function captureSessionControlAuthority(prepared?: AdmittedRunOperatorAut
   const sources = [
     ...new Set([authority, caller, invocation?.operatorRunAuthority, retained]),
   ].filter((source): source is AdmittedRunOperatorAuthority => source !== undefined);
+  for (const source of sources) {
+    assertAdmittedRunOperatorAuthority(source);
+    if (source.source !== authority.source) {
+      throw new Error("Session control operator source changed.");
+    }
+  }
   const assertCurrent = composeSessionSourceAssertion(
-    [
-      ...sources.map((source) =>
-        composeSessionSourceAssertion([source.assertCurrent], (assertSource) => {
-          assertAdmittedRunOperatorAuthority(source);
-          assertSource();
-          if (source.source !== authority.source) {
-            throw new Error("Session control operator source changed.");
-          }
-        }),
-      ),
-      captureGatewayToolCallerAssertion("sessions.patch"),
-      composeSessionSourceAssertion([invocation?.assertCurrent], (assertSource) => {
-        invocation?.signal.throwIfAborted();
-        assertSource();
-      }),
-    ],
-    (assertSources) => {
-      assertSources();
-      if (retained && scope?.hasCurrentClientAuthority?.() === false) {
-        throw new Error("Session control caller authority is no longer active.");
-      }
+    [invocation?.assertCurrent],
+    (assertSource) => {
+      invocation?.signal.throwIfAborted();
+      assertSource();
     },
   );
   assertCurrent();
@@ -92,7 +78,6 @@ export function prepareSandboxSessionTools(params: {
   const authority = params.authority;
   if (authority) {
     assertAdmittedRunOperatorAuthority(authority);
-    authority.assertCurrent();
   }
   const canWrite =
     authority === undefined

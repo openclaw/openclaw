@@ -119,7 +119,7 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
     ] as const) {
       onTestFinished(
         subscribeNativeOverlayOcclusion(
-          (occluded) => events.push(occluded),
+          (occlusion) => events.push(occlusion !== "live"),
           () => bounds,
         ),
       );
