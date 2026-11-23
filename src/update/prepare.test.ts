@@ -391,12 +391,24 @@ if (args[0] === 'pack') {
 
   it("detects restart interruption from broker errors and signal termination", async () => {
     const { SpawnBrokerError } = await import("../process/spawn-broker/protocol.js");
-    expect(isPrepareInterruptedByRestart(new SpawnBrokerError("broker gone"))).toBe(true);
     expect(
       isPrepareInterruptedByRestart(
-        new Error("wrapped", { cause: new SpawnBrokerError("broker gone") }),
+        new SpawnBrokerError("Spawn broker exited; command outcome is unavailable"),
       ),
     ).toBe(true);
+    expect(
+      isPrepareInterruptedByRestart(
+        new Error("wrapped", {
+          cause: new SpawnBrokerError("Spawn broker exited; command outcome is unavailable"),
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isPrepareInterruptedByRestart(new SpawnBrokerError("Spawn broker startup capacity exceeded")),
+    ).toBe(false);
+    expect(isPrepareInterruptedByRestart(new SpawnBrokerError("Spawn broker is unavailable"))).toBe(
+      false,
+    );
     expect(isPrepareInterruptedByRestart(new Error("npm exited 1"))).toBe(false);
     expect(isPrepareInterruptedByRestart("broker")).toBe(false);
     const base = { stdout: "", stderr: "", pid: undefined };
@@ -413,11 +425,29 @@ if (args[0] === 'pack') {
       isSignalTerminated({
         ...base,
         code: null,
-        signal: "SIGTERM",
+        signal: "SIGINT",
         killed: true,
         termination: "exit",
       }),
     ).toBe(true);
+    expect(
+      isSignalTerminated({
+        ...base,
+        code: null,
+        signal: "SIGABRT",
+        killed: true,
+        termination: "signal",
+      }),
+    ).toBe(false);
+    expect(
+      isSignalTerminated({
+        ...base,
+        code: null,
+        signal: "SIGKILL",
+        killed: true,
+        termination: "signal",
+      }),
+    ).toBe(false);
     expect(
       isSignalTerminated({
         ...base,

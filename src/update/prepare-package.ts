@@ -23,13 +23,15 @@ export const RESTART_INTERRUPTED_MESSAGE =
 
 /**
  * Preparation runs inside the Gateway process, so a Gateway restart kills
- * in-flight prepare commands. A dead spawn broker or a signal-terminated
- * command (not a deadline) means restart, not a broken package.
+ * in-flight prepare commands. Only narrow shapes count as restart evidence:
+ * a broker that died mid-command (not capacity or startup failures), or a
+ * command ended by a graceful-shutdown signal (not installer crashes or
+ * deadlines, which keep their genuine reasons).
  */
 export function isPrepareInterruptedByRestart(error: unknown): boolean {
   let current: unknown = error;
   for (let depth = 0; depth < 10 && current instanceof Error; depth += 1) {
-    if (current instanceof SpawnBrokerError) {
+    if (current instanceof SpawnBrokerError && current.message.startsWith("Spawn broker exited")) {
       return true;
     }
     current = current.cause;
@@ -37,9 +39,12 @@ export function isPrepareInterruptedByRestart(error: unknown): boolean {
   return false;
 }
 
+const RESTART_SIGNALS: ReadonlySet<string> = new Set(["SIGTERM", "SIGINT"]);
+
 export function isSignalTerminated(result: SpawnResult): boolean {
   return (
-    (result.killed || result.signal !== null) &&
+    result.signal !== null &&
+    RESTART_SIGNALS.has(result.signal) &&
     result.termination !== "timeout" &&
     result.termination !== "no-output-timeout"
   );
