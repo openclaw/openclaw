@@ -4,7 +4,6 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { acquireGitSource } from "../infra/git-source.js";
 import { resolveUserFilesystemPath } from "../infra/home-dir.js";
@@ -25,7 +24,11 @@ import {
 } from "../infra/safe-package-install.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveDefaultPluginGitDir } from "./install-paths.js";
+import {
+  formatGitPluginSpec,
+  resolveDefaultPluginGitDir,
+  resolvePluginGitRepoDir,
+} from "./install-paths.js";
 import {
   preflightPluginGitInstallPolicy,
   type InstallSafetyOverrides,
@@ -220,13 +223,11 @@ export function parseGitPluginSpec(raw: string): ParsedGitPluginSpec | null {
   } else {
     return null;
   }
-  // A normalized absolute Windows path can otherwise make a .git-ending ref look like a repository.
-  const refSeparator = localPath && process.platform === "win32" ? "#" : "@";
   return {
     input: trimmed,
     ...normalized,
     ref: split.ref,
-    normalizedSpec: `${GIT_SPEC_PREFIX}${normalized.url}${split.ref ? `${refSeparator}${split.ref}` : ""}`,
+    normalizedSpec: formatGitPluginSpec(normalized.url, split.ref),
   };
 }
 
@@ -275,12 +276,7 @@ export async function installPluginFromGitSpec(
 
   const { workTimeoutMs } = resolveTimedInstallModeOptions(params, {});
   const gitRoot = params.gitDir ? resolveUserPath(params.gitDir) : resolveDefaultPluginGitDir();
-  const redactedSpec = redactSensitiveUrlLikeString(parsed.normalizedSpec);
-  const persistentRepoDir = path.join(
-    gitRoot,
-    `git-${sha256HexPrefixCore(redactedSpec, 16)}`,
-    "repo",
-  );
+  const persistentRepoDir = resolvePluginGitRepoDir(gitRoot, parsed.normalizedSpec);
   const effectiveMode =
     params.mode === "update" && (await pathExists(persistentRepoDir)) ? "update" : "install";
   const availability = await ensureInstallTargetAvailableForMode({
