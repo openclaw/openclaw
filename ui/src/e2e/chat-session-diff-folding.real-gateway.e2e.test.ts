@@ -95,22 +95,25 @@ const suite = createControlUiE2eSuite({
           });
         }),
     });
-    const owner = await createOpenClawTestInstance({
-      name: profile,
-      entrypoint: ["scripts/run-node.mjs", "--profile", profile],
-      env: { OPENCLAW_PROFILE: profile },
-    });
-    instance = owner;
-    workspace = owner.state.path("workspace");
-    const cleanup = () =>
+    const releaseProvider = () =>
       runQaGatewayFixture(
-        () => owner.cleanup(),
         async () => {
           provider.listener.closeAllConnections();
           await provider.releaseListener();
         },
         () => provider.claim.release(),
       );
+    const owner = await createOpenClawTestInstance({
+      name: profile,
+      entrypoint: ["scripts/run-node.mjs", "--profile", profile],
+      env: { OPENCLAW_PROFILE: profile },
+    }).catch(async (error: unknown) => {
+      await releaseProvider();
+      throw error;
+    });
+    instance = owner;
+    workspace = owner.state.path("workspace");
+    const cleanup = () => runQaGatewayFixture(() => owner.cleanup(), releaseProvider);
     try {
       await mkdir(workspace, { recursive: true });
       const git = (...args: string[]) =>
