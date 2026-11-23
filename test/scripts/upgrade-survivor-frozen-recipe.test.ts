@@ -29,7 +29,7 @@ function addSpecimen(target: string) {
   writeFileSync(join(target, specimen), readFileSync(specimen));
 }
 
-function fixture(present: boolean) {
+function fixture(present: boolean, skillSplit = false) {
   const root = temps.make("survivor-frozen-recipe-");
   const target = join(root, "target");
   mkdirSync(target);
@@ -38,6 +38,15 @@ function fixture(present: boolean) {
   io.writeJson(join(target, "package.json"), { version: present ? "2026.9.6" : "2026.9.7" });
   if (present) {
     addSpecimen(target);
+  }
+  if (skillSplit) {
+    for (const path of [
+      "src/config/skill-library-tool-split-migration.ts",
+      "src/commands/doctor/shared/legacy-config-migrations.runtime.tool-names.ts",
+    ]) {
+      mkdirSync(join(target, path, ".."), { recursive: true });
+      writeFileSync(join(target, path), readFileSync(path));
+    }
   }
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", target, ...args], { encoding: "utf8" }).trim();
@@ -85,6 +94,45 @@ function checkSearch(root: string, toolSearch: unknown, stage = "survival") {
 }
 
 describe.skipIf(process.platform === "win32")("frozen survivor Tool Search recipe", () => {
+  it.each([false, true])(
+    "retains skill allowlist coverage for migration=%s with omissions disabled",
+    (split) => {
+      const f = fixture(false, split);
+      const mode = split ? "current" : "preserve";
+      if (!split) {
+        // A dirty addition must not invent a migration for the selected commit.
+        const path = "src/config/skill-library-tool-split-migration.ts";
+        mkdirSync(join(f.target, path, ".."), { recursive: true });
+        writeFileSync(join(f.target, path), readFileSync(path));
+      }
+      const selected = f.select({ OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "0" });
+      expect(selected.status, selected.stderr).toBe(0);
+      expect(selected.stdout).toContain(
+        "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_SKILL_LIBRARY_MODE=" + mode,
+      );
+      const config = join(f.root, "skill-config.json");
+      const coverage = join(f.root, "skill-coverage.json");
+      io.writeJson(coverage, { acceptedIntents: ["skill-library-split"] });
+      const allowed = split
+        ? ["read", "skill_workshop", "skill_library"]
+        : ["read", "skill_workshop"];
+      io.writeJson(config, {
+        tools: { allow: allowed },
+        ...(split ? { meta: { migrations: { skillLibraryToolSplit: true } } } : {}),
+      });
+      const env = {
+        OPENCLAW_CONFIG_PATH: config,
+        OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coverage,
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base",
+        OPENCLAW_FROZEN_UPGRADE_SURVIVOR_SKILL_LIBRARY_MODE: mode,
+      };
+      const args = ["scripts/e2e/lib/upgrade-survivor/assertions.mjs", "assert-config"];
+      const checked = run(f.root, process.execPath, args, env);
+      expect(checked.status, checked.stderr).toBe(0);
+      io.writeJson(config, { tools: { allow: ["read"] } });
+      expect(run(f.root, process.execPath, args, env).status).not.toBe(0);
+    },
+  );
   it("selects committed coverage through the actual host policy, retaining all other recipe steps", () => {
     const old = fixture(false);
     // An uncommitted working-tree addition cannot grant selected coverage.

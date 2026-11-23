@@ -383,17 +383,20 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
     }
     const affected =
       "sessionKey" in change
-        ? [...keyStates].filter(([, state]) => state.target.params.sessionKey === change.sessionKey)
-        : keyStates;
+        ? [...keyStates.values()].filter(
+            (state) => state.target.params.sessionKey === change.sessionKey,
+          )
+        : keyStates.values();
     const invalidated: Array<ControlUiSessionPrTarget["params"]> = [];
-    for (const [key, state] of affected) {
+    for (const state of affected) {
       state.branchSnapshot = undefined;
-      if (state?.prepared) {
+      if (state.prepared) {
+        state.prepared = false;
         state.snapshot = undefined;
-        if (state.connIds.size === 0) {
-          state.cacheLifetime.abort(null);
-          keyStates.delete(key);
-        }
+        preparedTargets.delete(
+          JSON.stringify([state.target.params.agentId, state.target.params.sessionKey]),
+        );
+        retireControlUiSessionPrState(state, keyStates);
         invalidated.push(state.target.params);
       }
     }
@@ -410,6 +413,9 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
     publishSnapshot,
     publishBranchSnapshot,
     settle: () => Promise.allSettled(preparing.values()),
-    stop: unsubscribeFacts,
+    stop: () => {
+      unsubscribeFacts();
+      preparedTargets.clear();
+    },
   };
 }

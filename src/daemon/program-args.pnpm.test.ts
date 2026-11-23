@@ -130,19 +130,24 @@ describe("pnpm Scheduled Task entrypoint", () => {
   );
 });
 
-it.each(["openclaw.mjs", "dist/index.js"])(
-  "keeps the persisted pnpm v11 systemd command usable after project replacement (%s)",
-  async (entry) => {
+// The updater's project-local virtual store is `node_modules/.pnpm` under pnpm 12 and
+// `.pnpm` directly in the group under pnpm 11; both generations are removed on replacement.
+it.each([
+  { entry: "openclaw.mjs", virtualStore: "node_modules/.pnpm" },
+  { entry: "dist/index.js", virtualStore: "node_modules/.pnpm" },
+  { entry: "openclaw.mjs", virtualStore: ".pnpm" },
+  { entry: "dist/index.js", virtualStore: ".pnpm" },
+])(
+  "keeps the persisted pnpm v11 systemd command usable after project replacement ($entry in $virtualStore)",
+  async ({ entry, virtualStore }) => {
     const home = tempDirs.make("openclaw-pnpm-systemd-");
     const globalRoot = path.join(home, "global", "v11");
     const projectLink = path.join(globalRoot, "hash-a1b2");
     const writeProject = async (version: string) => {
       const project = path.join(globalRoot, `${version}-0`);
-      const root = path.join(
-        project,
-        `node_modules/.pnpm/openclaw@${version}/node_modules/openclaw`,
-      );
+      const root = path.join(project, virtualStore, `openclaw@${version}/node_modules/openclaw`);
       await writePackage(root, version);
+      await fs.mkdir(path.join(project, "node_modules"), { recursive: true });
       await fs.writeFile(
         path.join(project, "package.json"),
         JSON.stringify({ dependencies: { openclaw: version } }),

@@ -26,7 +26,6 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type NativeTranslationArtifact = {
-  glossaryHash: string;
   locale: string;
   translations: Record<string, string>;
   version: 2;
@@ -706,7 +705,7 @@ describe("native app i18n inventory", () => {
         "Some channel status checks did not complete.",
         "Use the credential for this destination. Leave both fields empty only if this route already has device pairing or does not require a shared credential. Changing the destination clears this form's saved credentials.",
         "Cron changes require operator.admin. Setup codes intentionally do not grant it. Reconnect with the gateway's shared token or password to request admin access. If this device still lacks it, approve the pending scope upgrade from an existing admin client.",
-        "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. Enable only while actively debugging.",
+        "Local rotating log: ~/Library/Logs/OpenClaw/. Enable only for debugging.",
         "A setup code supplies the address and available certificate information automatically. For token or password authentication, enter the ordinary Gateway credential below.",
         "Approve this device on the gateway.\n1) `%1$@`\n2) `/pair approve` in your OpenClaw chat\n%2$@\nOpenClaw will also retry automatically when you return to this app.",
         "The Gateway can capture your screen and interact with apps on this Mac, including clicking and typing, subject to macOS permissions.",
@@ -882,7 +881,7 @@ describe("native app i18n inventory", () => {
         [
           "Use the credential for this destination. Leave both fields empty only if this route ",
           "Cron changes require operator.admin. Setup codes intentionally do not grant it. ",
-          "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. ",
+          "Local rotating log: ~/Library/Logs/OpenClaw/. ",
           "A setup code supplies the address and available certificate information automatically. ",
         ].includes(entry.source),
       ),
@@ -924,12 +923,6 @@ describe("native app i18n inventory", () => {
     expectSourceAtSite(
       "The watch receives a one-time pairing code and its own device credentials. Voice is included with read and Talk access, without admin access. The microphone starts only when you tap Start on the watch. A reachable secure Gateway URL is required away from the iPhone.",
       (site) => site.path === "apps/ios/Sources/Design/SettingsProTabSections.swift",
-    );
-    expectSourceAtSite(
-      "Include existing %@ conversations in the sidebar. This discovers them in place; it does not copy transcripts.",
-      (site) =>
-        site.path === "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift" &&
-        site.kind === "ui-localized-call-multiline",
     );
     expect(
       entries.some((entry) => hasSite(entry, (site) => site.path.endsWith("Info.plist"))),
@@ -983,7 +976,6 @@ describe("native app i18n inventory", () => {
         {
           version: 1,
           locale: "sv",
-          glossaryHash: "legacy",
           entries: [
             { id: "native.android.open-a", source: "Open", translated: "Öppna" },
             { id: "native.android.open-b", source: "Open", translated: "Öppna" },
@@ -998,7 +990,6 @@ describe("native app i18n inventory", () => {
       )}\n`,
     );
     const migrated = await syncNativeLocale("sv", entries, {
-      glossary: [],
       translationsDir,
       translate: async () => {
         throw new Error("v1 migration must not call the translation provider");
@@ -1018,7 +1009,6 @@ describe("native app i18n inventory", () => {
     const firstModifiedAt = (await stat(artifactPath)).mtimeMs;
     await expect(
       syncNativeLocale("sv", entries, {
-        glossary: [],
         translationsDir,
         translate: async () => {
           throw new Error("no-op refresh must not call the provider");
@@ -1041,7 +1031,6 @@ describe("native app i18n inventory", () => {
       "edited Android source entry",
     );
     await syncNativeLocale("sv", [editedAndroid, appleOpen, newString], {
-      glossary: [],
       translationsDir,
       translate: async (pending) => new Map(pending.map((entry) => [entry.id, entry.source])),
     });
@@ -1059,9 +1048,8 @@ describe("native app i18n inventory", () => {
 
     await expect(
       syncNativeLocale("sv", [entry], {
-        glossary: [],
         translationsDir,
-        translate: async (_pending, locale, _glossary, validateTranslation) => {
+        translate: async (_pending, locale, validateTranslation) => {
           const translated = "Bearbetade %@";
           validateTranslation?.(entry.source, translated, entry.id, locale);
           translatorReturned = true;
@@ -1076,13 +1064,11 @@ describe("native app i18n inventory", () => {
     const translationsDir = tempDirs.make("openclaw-native-i18n-");
     const entry = testEntry("native.apple.open", "apple", "Open");
     await syncNativeLocale("sv", [entry], {
-      glossary: [],
       translationsDir,
       translate: async () => new Map([[entry.id, "Tidigare"]]),
     });
     const refreshed = await syncNativeLocale("sv", [entry], {
       force: true,
-      glossary: [],
       translationsDir,
       translate: async (pending) => new Map(pending.map((item) => [item.id, "Öppna"])),
     });
@@ -1092,7 +1078,7 @@ describe("native app i18n inventory", () => {
     ).toEqual({ [entry.id]: "Öppna" });
   });
 
-  it.each(["clean", "missing", "glossary", "legacy", "legacy-missing", "legacy-glossary"])(
+  it.each(["clean", "missing", "legacy", "legacy-missing"])(
     "adds selected refresh to ordinary %s locale work",
     async (scenario) => {
       const translationsDir = tempDirs.make("openclaw-native-i18n-");
@@ -1100,7 +1086,6 @@ describe("native app i18n inventory", () => {
       const other = testEntry("native.apple.close", "apple", "Close");
       const artifactPath = path.join(translationsDir, "sv.json");
       await syncNativeLocale("sv", [selected, other], {
-        glossary: [],
         translationsDir,
         translate: async () =>
           new Map([
@@ -1127,7 +1112,6 @@ describe("native app i18n inventory", () => {
       const pendingIds: string[] = [];
       await syncNativeLocale("sv", [selected, other], {
         refreshIds: [selected.id, selected.id],
-        glossary: scenario.endsWith("glossary") ? [{ source: "Close", target: "Stäng" }] : [],
         translationsDir,
         translate: async (pending) => {
           pendingIds.push(...pending.map((entry) => entry.id));
@@ -1153,7 +1137,6 @@ describe("native app i18n inventory", () => {
     await expect(
       syncNativeLocale("sv", [testEntry("native.apple.open", "apple", "Open")], {
         refreshIds: ["native.apple.unknown"],
-        glossary: [],
         translationsDir,
         translate: async () => {
           called = true;
@@ -1239,7 +1222,6 @@ describe("native app i18n inventory", () => {
     for (const { entry, translated } of cases) {
       await expect(
         syncNativeLocale("sv", [entry], {
-          glossary: [],
           translationsDir,
           translate: async () => new Map([[entry.id, translated]]),
         }),
@@ -1261,11 +1243,9 @@ describe("native app i18n inventory", () => {
     ];
     const greeting = expectDefined(inventory[0], "native greeting inventory entry");
     const other = expectDefined(inventory[1], "native other inventory entry");
-    const emptyGlossaryHash = createHash("sha256").update(JSON.stringify([])).digest("hex");
     const createArtifact = (): NativeTranslationArtifact => ({
       version: 2,
       locale: "sv",
-      glossaryHash: emptyGlossaryHash,
       translations: {
         [greeting.id]: "Hej ${name}\nNästa",
         [other.id]: "Annat",
@@ -1282,10 +1262,6 @@ describe("native app i18n inventory", () => {
       {
         expected: 'locale must be "sv"',
         mutate: (artifact) => ({ ...artifact, locale: "de" }),
-      },
-      {
-        expected: "glossaryHash must be",
-        mutate: (artifact) => ({ ...artifact, glossaryHash: "stale" }),
       },
       {
         expected: "translations must be a plain object",
@@ -1342,9 +1318,7 @@ describe("native app i18n inventory", () => {
     };
     const warnings: string[] = [];
     expect(
-      validateNativeLocaleArtifact("sv", inventory, obsolete, [], (message) =>
-        warnings.push(message),
-      ),
+      validateNativeLocaleArtifact("sv", inventory, obsolete, (message) => warnings.push(message)),
     ).toEqual([]);
     expect(warnings).toEqual(['native locale sv: unknown translation id "native.apple.unknown"']);
     for (const testCase of cases) {
@@ -1353,7 +1327,7 @@ describe("native app i18n inventory", () => {
       ).toThrow(testCase.expected);
       if (testCase.expected !== 'unknown translation id "native.apple.unknown"') {
         expect(() =>
-          validateNativeLocaleArtifact("sv", inventory, testCase.mutate(obsolete), [], (message) =>
+          validateNativeLocaleArtifact("sv", inventory, testCase.mutate(obsolete), (message) =>
             warnings.push(message),
           ),
         ).toThrow(testCase.expected);
@@ -1386,7 +1360,6 @@ describe("native app i18n inventory", () => {
     const artifact: NativeTranslationArtifact = {
       version: 2,
       locale: "id",
-      glossaryHash: createHash("sha256").update(JSON.stringify([])).digest("hex"),
       translations: {
         [languagePicker.id]: languagePicker.source,
         [androidInspect.id]: androidInspect.source,

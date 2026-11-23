@@ -32,18 +32,23 @@ const subagent = (runId: string) =>
 const noop = () => {};
 
 function fixture() {
+  const cfg = {};
+  let epoch = 0;
   const context = createSessionRowProjectionContext(
     createSubagentSessionListReadView({ env: process.env }),
+    { state: () => ({ cfg, epoch, disposed: false }), prepareRegistry: () => undefined },
   );
   contexts.push(context);
-  const prepare = (epoch: number) =>
+  const prepare = (nextEpoch: number) => {
+    epoch = nextEpoch;
     context.prepare(
       epoch,
-      {},
+      cfg,
       () => [],
       noop,
       () => undefined,
     );
+  };
   prepare(0);
   return { context, prepare };
 }

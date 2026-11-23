@@ -2,7 +2,9 @@ import { vi } from "vitest";
 import type { GatewayServiceInventory } from "../../daemon/inspect.js";
 import type { ForeignLaunchdJob } from "../../daemon/launchd-foreign-jobs.js";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
+import * as gatewayBootLifecycle from "../../infra/gateway-boot-lifecycle.js";
 import type { PortConnections, PortUsage } from "../../infra/ports-types.js";
+import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { probeGatewayStatus } from "./probe.js";
 import { printDaemonStatus } from "./status.print.js";
@@ -81,3 +83,17 @@ export const findForeignLaunchdJobs = vi.fn<
 export const readLastGatewayErrorLine = vi.fn<(_env?: NodeJS.ProcessEnv) => Promise<string | null>>(
   async () => null,
 );
+
+export const originalReadGatewayLastShutdown = gatewayBootLifecycle.readGatewayLastShutdownAsync;
+export const readGatewayLastShutdownAsync = vi.spyOn(
+  gatewayBootLifecycle,
+  "readGatewayLastShutdownAsync",
+);
+export const readGatewayRecentCrashesAsync = vi.spyOn(
+  gatewayBootLifecycle,
+  "readGatewayRecentCrashesAsync",
+);
+
+export const readGatewayRestartHandoffSync = vi.fn<
+  (_env?: NodeJS.ProcessEnv) => GatewayRestartHandoff | null
+>(() => null);

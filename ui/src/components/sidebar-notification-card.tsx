@@ -20,7 +20,6 @@ export function SidebarDismissButton(props: {
         class="sidebar-issues-panel__dismiss"
         aria-label={label()}
         aria-busy={props.dismissing ? "true" : undefined}
-        title={props.dismissing ? t("attention.mentions.dismissing") : label()}
         disabled={props.disabled || props.dismissing}
         onClick={(event: Event) => {
           event.preventDefault();
@@ -51,6 +50,7 @@ export function SidebarRowHeading(props: { title: string; timestampMs?: number |
 export function SidebarNotificationCard(props: {
   title: string;
   detail: string;
+  detailRole?: "alert";
   timestampMs?: number | null;
   icon: JSX.Element;
   severity?: "error" | "warning";
@@ -79,7 +79,7 @@ export function SidebarNotificationCard(props: {
         </span>
         <span class="sidebar-issues-panel__content">
           <SidebarRowHeading title={props.title} timestampMs={props.timestampMs} />
-          <span class="sidebar-issues-panel__state" title={props.detail}>
+          <span class="sidebar-issues-panel__state" title={props.detail} role={props.detailRole}>
             {props.detail}
           </span>
         </span>

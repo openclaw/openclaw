@@ -7,6 +7,7 @@ import type {
   ConfirmDialogChoiceOptions,
   ConfirmDialogOptions,
 } from "./confirm-dialog-types.ts";
+import { Checkbox } from "./solid/checkbox.tsx";
 import { DialogHeader } from "./solid/dialog-header.tsx";
 
 export type ConfirmDialogViewOptions = ConfirmDialogOptions & Partial<ConfirmDialogChoiceOptions>;
@@ -97,6 +98,7 @@ export function ConfirmDialogView(props: {
 
   return (
     <openclaw-modal-dialog
+      class={initialOptions.compact ? "confirm-dialog--compact" : undefined}
       prop:initialFocus={() => cancelButton}
       label={initialOptions.title}
       description={initialOptions.message}
@@ -106,19 +108,20 @@ export function ConfirmDialogView(props: {
         <DialogHeader
           title={initialOptions.title}
           description={<p>{initialOptions.message}</p>}
-          onClose={() => props.finish(null)}
+          onClose={initialOptions.compact ? undefined : () => props.finish(null)}
         />
         {initialOptions.details ||
         initialOptions.requiredAcknowledgement ||
         initialOptions.skipPreference ? (
           <div class="oc-dialog__body">
-            {initialOptions.details ? (
+            {typeof initialOptions.details === "function" ? (
+              initialOptions.details()
+            ) : initialOptions.details ? (
               <div class="exec-approval-command mono">{initialOptions.details}</div>
             ) : undefined}
             {initialOptions.requiredAcknowledgement ? (
               <label class="field checkbox">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={acknowledged()}
                   onChange={(event) => setAcknowledged(event.currentTarget.checked)}
                 />
@@ -127,8 +130,7 @@ export function ConfirmDialogView(props: {
             ) : undefined}
             {initialOptions.skipPreference && !initialOptions.requiredAcknowledgement ? (
               <label class="field checkbox exec-approval-skip">
-                <input
-                  type="checkbox"
+                <Checkbox
                   onChange={(event) => {
                     skipRequested = event.currentTarget.checked;
                   }}

@@ -3,6 +3,13 @@ import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { isUiGlobalSessionKey, parseAgentSessionKey } from "./session-key.ts";
 
+export function homeSessionRequiresConfirmation(
+  snapshot: Pick<ApplicationGatewaySnapshot, "hello">,
+): boolean {
+  const cap = snapshot.hello?.auth?.sessionCap;
+  return cap === "none" || cap === "view";
+}
+
 /** Confirm restricted Home targets before mounting consumers that refresh their descriptor. */
 export async function resolveHomeSession(
   snapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello">,
@@ -10,7 +17,7 @@ export async function resolveHomeSession(
 ): Promise<boolean> {
   const rest = parseAgentSessionKey(target.sessionKey)?.rest ?? target.sessionKey;
   if (
-    snapshot.hello?.auth?.sessionCap !== "none" ||
+    !homeSessionRequiresConfirmation(snapshot) ||
     (!isUiGlobalSessionKey(target.sessionKey) &&
       rest.toLowerCase() !== target.mainKey.toLowerCase())
   ) {

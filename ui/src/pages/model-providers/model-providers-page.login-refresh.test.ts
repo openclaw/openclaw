@@ -5,10 +5,10 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ModelAuthStatusResult } from "../../api/types.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
-  chooseLogin,
   loginHarness,
   openLogin,
   openPicker,
+  selectProvider,
 } from "./model-providers-page.login.test-support.ts";
 import {
   appendPage,
@@ -83,7 +83,9 @@ it("keeps the credential step disabled until its configuration refresh settles",
   });
   const page = appendPage(context);
   try {
-    await chooseLogin(page);
+    // The provider's only way in starts straight from its catalog row.
+    await openPicker(page);
+    await selectProvider(page, "example");
     await waitForSolid(() => expect(refreshing).toBe(true));
     const input = page.querySelector<HTMLInputElement>('input[name="wizard-text"]')!;
     const submit = page.querySelector<HTMLButtonElement>(
@@ -246,6 +248,7 @@ it.each(["close", "cancel", "complete"] as const)(
     const page = appendPage(context);
     if (action === "close") {
       await openPicker(page);
+      await selectProvider(page, "example");
     } else {
       await openLogin(page);
     }
@@ -282,7 +285,15 @@ it("retains search and Retry controls through admitted core error feedback", asy
   const { context, request } = createHarness("main");
   const initialRequest = request.getMockImplementation()!;
   request.mockImplementation(async (method, ...args) =>
-    method === "models.authStatus" ? createAuthStatus() : initialRequest(method, ...args),
+    method === "models.authStatus"
+      ? createAuthStatus([
+          {},
+          ...Array.from({ length: 6 }, (_, index) => ({
+            provider: `fixture-${index}`,
+            displayName: `Fixture ${index}`,
+          })),
+        ])
+      : initialRequest(method, ...args),
   );
   const page = appendPage(context);
   await waitForProviders(page);

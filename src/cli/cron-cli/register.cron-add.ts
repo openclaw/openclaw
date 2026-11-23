@@ -10,6 +10,7 @@ import { defaultRuntime } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { CronCliError } from "./cron-cli-error.js";
+import { parseCronCommandArgv } from "./input-options.js";
 import { listCronJobsFromGateway } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
 import {
@@ -21,10 +22,10 @@ import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
   assertCronCliJobSpec,
   assertCronTimeoutSupported,
+  buildCronCommandShellArgvForGateway,
   coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
   handleCronCliError,
-  parseCronCommandArgv,
   parseCronCommandEnv,
   parseCronIntegerOption,
   parseCronNoOutputTimeoutOption,
@@ -241,7 +242,9 @@ export function registerCronAddCommand(cron: Command) {
                 );
                 return {
                   kind: "command" as const,
-                  argv: commandArgv ?? ["sh", "-lc", commandShell ?? ""],
+                  argv:
+                    commandArgv ??
+                    (await buildCronCommandShellArgvForGateway(commandShell ?? "", opts)),
                   cwd: readNonBlankString(opts.commandCwd),
                   env: parseCronCommandEnv(opts.commandEnv),
                   input: typeof opts.commandInput === "string" ? opts.commandInput : undefined,

@@ -434,7 +434,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
       const copied = await copyToClipboard(url, isCurrent);
       if (isCurrent()) {
         showToast({
-          severity: copied ? undefined : "error",
+          severity: copied ? "success" : "error",
           message: t(copied ? "common.copied" : "common.copyFailed"),
         });
         return copied ? { status: "success" } : { status: "failed", error: t("common.copyFailed") };

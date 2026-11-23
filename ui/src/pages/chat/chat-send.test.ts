@@ -1427,7 +1427,8 @@ describe("handleSendChat", () => {
 
     expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
     expect(host.chatQueue[0]).toMatchObject({
-      sendError: "Chat settings update was interrupted. Review and retry when ready.",
+      sendError:
+        "Couldn’t update session settings. The update was interrupted. Review the settings before trying again.",
       sendState: "failed",
       text,
     });
@@ -3237,7 +3238,7 @@ describe("handleSendChat", () => {
         expect(host.chatAttachments).toStrictEqual(attachments);
         expect(host.lastError).toBe(
           kind === "cold file"
-            ? "Browser attachment storage is unavailable. Allow browser storage and close older dashboard tabs before reconnecting and retrying. No new message was sent."
+            ? "Browser attachment storage is unavailable. Allow browser storage and close older OpenClaw tabs before reconnecting and retrying. No new message was sent."
             : storageError,
         );
       }

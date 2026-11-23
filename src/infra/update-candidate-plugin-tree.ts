@@ -10,7 +10,11 @@ import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { isPackageUpdateRecoveryArtifactName } from "./package-update-backup-paths.js";
 import { hasNodeErrorCode, isPathInside, isPathStrictlyInside } from "./path-guards.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
-import { copyUpdateCandidatePluginFiles } from "./update-candidate-plugin-file.js";
+import { selectUpdateCandidatePluginFileAssets } from "./update-candidate-plugin-file-assets.js";
+import {
+  copyUpdateCandidatePluginFile,
+  copyUpdateCandidatePluginFiles,
+} from "./update-candidate-plugin-file.js";
 import {
   withUpdateCandidatePluginFileHashing,
   type UpdateCandidatePluginFileHasher,
@@ -40,6 +44,7 @@ async function dependencyOwner(
   target: string,
   withinRetainedHost = false,
   retainedHost?: { root: string; moduleOnlyRoots: Set<string> },
+  fileOwnerBoundaries?: readonly string[],
 ): Promise<string> {
   // A pnpm package resolves dependencies beside its package directory. Preserve
   // that Node lookup ancestry, including scoped packages and nested installs.
@@ -56,6 +61,15 @@ async function dependencyOwner(
   let directory = stat.isDirectory() ? target : path.dirname(target);
   const fallback = target;
   for (;;) {
+    // A shared ancestor containing the referring link or snapshot is not an
+    // external package owner. Keep the file edge exact instead of copying it all.
+    if (
+      !withinRetainedHost &&
+      stat.isFile() &&
+      fileOwnerBoundaries?.some((boundary) => isPathInside(directory, boundary))
+    ) {
+      return fallback;
+    }
     if (directory === retainedHost?.root) {
       // A retired workspace can leave only ignored modules behind. Other host
       // contents still belong to the host and must reach the inferred-root refusal.
@@ -511,6 +525,7 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
           real,
           retainedDependency,
           isRetainedDependency(real) ? retainedHost : undefined,
+          [privateRoot, file],
         ).catch((cause: unknown) => {
           throw new Error(`Cannot privately copy plugin dependency ${file} -> ${real}`, { cause });
         }));
@@ -591,7 +606,11 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
     return true;
   });
   // Full lengths and entry metadata bound copies even when sources have sparse extents.
-  const bytes = entries.reduce(
+  const normalizedAssets = selectUpdateCandidatePluginFileAssets({
+    entries,
+    edges: [...edges].map(([source, edge]) => ({ source, target: edge.target, real: edge.real })),
+  });
+  const bytes = [...entries, ...normalizedAssets.values()].reduce(
     (total, entry) => total + Math.max(4096, Math.ceil(entry.size / 4096) * 4096),
     (hostLinks.size + moduleAliases.size) * 4096,
   );
@@ -623,17 +642,24 @@ export async function copyUpdateCandidatePluginTrees(
     targetStateDir: string;
     candidateRoot: string;
     onCodeLink?: (fact: UpdateCandidatePluginCodeLink) => void;
+    /** Repair a subset without losing the complete inventory used for data selection. */
+    onlyPaths?: ReadonlySet<string>;
   },
 ): Promise<void> {
   const targets = resolveUpdateCandidatePluginTreeTargets(plan, params);
   const { privateRoot, candidateRoot, copies, hostLinks, relocations, destinationFor } = targets;
+  const normalizedAssets = selectUpdateCandidatePluginFileAssets(plan);
+  const onlyPaths = params.onlyPaths;
+  const entries = onlyPaths
+    ? plan.entries.filter((entry) => onlyPaths.has(entry.path))
+    : plan.entries;
   await targets.assertBindings();
   await fs.mkdir(privateRoot, { recursive: true, mode: 0o700 });
   const rootIdentity = await readDirectoryIdentity(privateRoot);
   const destinationRoot = await openRoot(privateRoot);
   assertDirectoryIdentitySync(privateRoot, rootIdentity);
   const preparedDirectories = new Set([privateRoot]);
-  for (const entry of plan.entries) {
+  for (const entry of entries) {
     if (entry.kind === "directory") {
       const destination = destinationFor(entry.path);
       await fs.mkdir(destination, { recursive: true, mode: entry.mode | 0o700 });
@@ -642,7 +668,7 @@ export async function copyUpdateCandidatePluginTrees(
   }
   // File roots and missing-entry repairs can omit their parent directory entries.
   // Prepare each parent once before admitting concurrent copies.
-  for (const entry of plan.entries) {
+  for (const entry of entries) {
     if (entry.kind !== "directory") {
       const parent = path.dirname(destinationFor(entry.path));
       if (!preparedDirectories.has(parent)) {
@@ -651,21 +677,30 @@ export async function copyUpdateCandidatePluginTrees(
       }
     }
   }
-  const files = plan.entries.filter((entry) => entry.kind === "file");
+  const files = entries.filter((entry) => entry.kind === "file");
   await copyUpdateCandidatePluginFiles(files, {
     privateRoot,
     rootIdentity,
     destinationRoot,
     destinationFor,
   });
-  for (const entry of plan.entries) {
+  for (const entry of entries) {
     if (entry.kind === "symlink") {
       const destination = destinationFor(entry.path);
-      await fs.symlink(entry.link, destination, entry.linkType);
+      const asset = normalizedAssets.get(entry.path);
+      if (asset) {
+        // Use the inventoried canonical path, never re-follow a late-retargeted alias.
+        await copyUpdateCandidatePluginFile(
+          { entry: asset, destination, privateRoot, rootIdentity },
+          destinationRoot,
+        );
+      } else {
+        await fs.symlink(entry.link, destination, entry.linkType);
+      }
     }
   }
-  for (const entry of plan.entries) {
-    if (entry.kind !== "directory") {
+  for (const entry of entries) {
+    if (entry.kind !== "directory" && !normalizedAssets.has(entry.path)) {
       const target = destinationFor(entry.path);
       const relocate =
         entry.kind === "symlink" ? relocateRuntimeSymlink : resolveRuntimeFileRelocator(target);
@@ -689,12 +724,13 @@ export async function copyUpdateCandidatePluginTrees(
   for (const treeRoot of [...privateAliases, ...copies.map(([, target]) => target)]) {
     await verifyUpdateCandidatePluginTree(treeRoot, verification);
   }
-  for (const entry of plan.entries) {
-    if (entry.kind === "file" && (entry.mode & 0o600) !== 0o600) {
-      await fs.chmod(destinationFor(entry.path), entry.mode);
+  for (const entry of entries) {
+    const file = entry.kind === "file" ? entry : normalizedAssets.get(entry.path);
+    if (file && (file.mode & 0o600) !== 0o600) {
+      await fs.chmod(destinationFor(entry.path), file.mode);
     }
   }
-  for (const entry of plan.entries
+  for (const entry of entries
     .filter((candidate) => candidate.kind === "directory")
     .toSorted((left, right) => right.path.length - left.path.length)) {
     await fs.chmod(destinationFor(entry.path), entry.mode);

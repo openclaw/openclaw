@@ -1,6 +1,8 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
+import * as sessionEventHandoff from "../auto-reply/reply/session-event-handoff.js";
 import { openEventToolHost } from "../auto-reply/reply/session-event.test-support.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -14,8 +16,8 @@ import {
   pairedOperator,
 } from "./operator-run-recovery.test-support.js";
 import { createGatewayCronFailureRepair } from "./server-cron-notifications.js";
+import { createGatewayCronTargetResolver } from "./server-cron-targets.js";
 import {
-  cfg,
   createCronFixture,
   installRequesterCronAuthorityTestHooks,
   SESSION,
@@ -34,25 +36,26 @@ await Promise.all([
 ]);
 installRequesterCronAuthorityTestHooks();
 
-// The stored job after its repair turn tried `automations update`, by the job's requester.
+// Real persisted mutation authority for both scheduler entry points; not channel delivery proof.
 const outcomes = {
   owner: { update: "ok", description: "fixed by repair" },
   "non-owner": { update: "gated", description: "original" },
-  // Revoked after the repair was queued: admission refuses the turn before any tool runs;
-  // the job's next failure alert owns escalation.
-  "revoked-while-queued": { update: "not run", description: "original" },
-  // Revoking publishes config, which retires the admitted turn's tool host before the write.
-  "revoked-after-admission": {
-    update: "agent harness host capability is no longer active",
-    description: "original",
-  },
+  "revoked-before-start": { update: "gated", description: "original" },
+  "revoked-after-admission": { update: "ok", description: "fixed by repair" },
 } as const;
 
-it.for(Object.keys(outcomes) as Array<keyof typeof outcomes>)(
-  "persists a failure repair's job update only for a current owner requester: %s",
-  async (requester) => {
+it.for(
+  (["failure-repair", "auto-disabled"] as const).flatMap((source) =>
+    (Object.keys(outcomes) as Array<keyof typeof outcomes>).map((requester) => ({
+      source,
+      requester,
+    })),
+  ),
+)(
+  "persists the $source job update only for a current owner requester: $requester",
+  async ({ source, requester }) => {
     const config = {
-      ...cfg,
+      agents: { entries: { main: { model: "openai/gpt-4.1" } } },
       plugins: { enabled: false },
       channels: { telegram: {} },
       commands: { ownerAllowFrom: ["456"] },
@@ -105,9 +108,6 @@ it.for(Object.keys(outcomes) as Array<keyof typeof outcomes>)(
       // The turn's tools reach this Gateway's real cron handlers in process.
       const admitted = Object.assign(Object.create(Object.getPrototypeOf(admission)), admission, {
         admit: async (...args: Parameters<typeof admit>) => {
-          if (requester === "revoked-while-queued") {
-            revoke();
-          }
           const run = await admit(...args);
           bindGatewayContextResolver(run, () => context);
           return run;
@@ -136,17 +136,33 @@ it.for(Object.keys(outcomes) as Array<keyof typeof outcomes>)(
       return { payloads: [{ text: "Repaired." }], meta: { durationMs: 1 } };
     });
 
-    const repaired = createGatewayCronFailureRepair(config, () => context).runCronFailureRepair({
-      jobId: job.id,
-      repairId: `repair-${requester}`,
-      timeoutMs: 60_000,
-      agentId: "main",
-      sessionKey: SESSION,
-      message: "Automation repair request from the scheduler, not a user message.",
-    });
-    if (requester === "revoked-while-queued") {
-      await expect(repaired).rejects.toThrow("Cron failure repair did not run");
+    if (requester === "revoked-before-start") {
+      revoke();
+    }
+    const message = "Automation request from the scheduler, not a user message.";
+    if (source === "auto-disabled") {
+      // Observe the receipt without replacing the real Gateway handoff or its admission.
+      const handoff = vi.spyOn(sessionEventHandoff, "enqueueSessionEventForHost");
+      try {
+        await createGatewayCronTargetResolver(
+          process.env,
+          { warn: vi.fn() },
+          () => context,
+        ).enqueueSessionEvent(message, { agentId: "main", sessionKey: SESSION, jobId: job.id });
+        const receipt = expectDefined(handoff.mock.results[0]?.value, "auto-disable receipt");
+        expect(await receipt.settled).toMatchObject({ executionStarted: true });
+      } finally {
+        handoff.mockRestore();
+      }
     } else {
+      const repaired = createGatewayCronFailureRepair(config, () => context).runCronFailureRepair({
+        jobId: job.id,
+        repairId: `repair-${requester}`,
+        timeoutMs: 60_000,
+        agentId: "main",
+        sessionKey: SESSION,
+        message,
+      });
       await repaired;
     }
 
@@ -161,16 +177,17 @@ const operatorOutcomes = {
   "control-ui-admin": { update: "ok", description: "fixed by repair" },
   // A restored source that was not a Control UI administrator is a non-owner requester.
   "non-admin-source": { update: "gated", description: "original" },
-  // A refused restore is still this job's requester: no owner tools, no session fallback.
-  "device-revoked": { update: "gated", description: "original" },
-  // The Gateway's device revocation fences the retained source before the turn starts.
-  "device-revoked-while-queued": { update: "not run", description: "original" },
+  "device-revoked": { update: "not run", description: "original" },
+  "device-revoked-after-admission": { update: "ok", description: "fixed by repair" },
 } as const;
 
 it.for(Object.keys(operatorOutcomes) as Array<keyof typeof operatorOutcomes>)(
   "persists an operator-source repair's job update only while its source stays current: %s",
   async (scenario) => {
-    const config = { ...cfg, plugins: { enabled: false } } as OpenClawConfig;
+    const config = {
+      agents: { entries: { main: { model: "openai/gpt-4.1" } } },
+      plugins: { enabled: false },
+    } as OpenClawConfig;
     setRuntimeConfigSnapshot(config);
     const { context, read } = createCronFixture(undefined, config);
     const recovery = await createOperatorRecoveryFixture({
@@ -236,7 +253,7 @@ it.for(Object.keys(operatorOutcomes) as Array<keyof typeof operatorOutcomes>)(
       const admit = admission.admit.bind(admission);
       const admitted = Object.assign(Object.create(Object.getPrototypeOf(admission)), admission, {
         admit: async (...args: Parameters<typeof admit>) => {
-          if (scenario === "device-revoked-while-queued") {
+          if (scenario === "device-revoked-after-admission") {
             invalidateGatewayDeviceRevocation(context, pairedOperator().deviceId, "operator");
           }
           const run = await admit(...args);
@@ -272,8 +289,8 @@ it.for(Object.keys(operatorOutcomes) as Array<keyof typeof operatorOutcomes>)(
       sessionKey: SESSION,
       message: "Automation repair request from the scheduler, not a user message.",
     });
-    if (scenario === "device-revoked-while-queued") {
-      await expect(repaired).rejects.toThrow("Cron failure repair did not run");
+    if (scenario === "device-revoked") {
+      await expect(repaired).rejects.toThrow();
     } else {
       await repaired;
     }

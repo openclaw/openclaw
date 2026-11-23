@@ -34,6 +34,7 @@ const enChatQuestions = {
       submitting: "Submitting…",
       submitFailed: "Couldn’t submit your answer. Try again. {error}",
       answered: "Answered",
+      leftBlank: "Left blank",
       answeredElsewhere: "Answered elsewhere",
       unavailable: "Unavailable",
       expired: "Expired",

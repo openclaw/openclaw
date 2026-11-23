@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { makeCronJob } from "../../../cron/delivery.test-helpers.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "../../../cron/scheduled-occurrence.test-support.js";
 import {
@@ -14,6 +15,7 @@ import {
 import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import { createQueueTestRun } from "../queue.test-helpers.js";
 import type { ScheduledSessionAutomation } from "../session-event-contract.js";
+import { scheduleFollowupDrain } from "./drain.js";
 import { enqueueFollowupRun } from "./enqueue.js";
 import {
   clearFollowupQueue,
@@ -322,30 +324,46 @@ describe("getFollowupQueue", () => {
     );
   });
 
-  it("settles evicted summary sources and retains surviving delivery correlations", () => {
+  it("closes evicted summary selection while retaining custody and surviving correlations", async () => {
+    const receipt = createDeferred();
+    const execute = vi.fn(async (_run: FollowupRun) => {});
     const sources = Array.from({ length: 4 }, (_, index) => ({
       prompt: `queued message ${index}`,
       enqueuedAt: index,
       run: makeRun(),
       onQueueDisposition: vi.fn(),
+      turnAdoptionLifecycle: {
+        onAdopted: vi.fn(),
+        onDropped: vi.fn(() => receipt.promise),
+        onAbandoned: vi.fn(),
+      },
       deliveryCorrelations: [{ begin: () => undefined }],
     }));
+    const settings = { mode: "followup", debounceMs: 0, cap: 1, dropPolicy: "summarize" } as const;
     for (const source of sources) {
-      expect(
-        enqueueFollowupRun(QUEUE_KEY, source, {
-          mode: "followup",
-          cap: 1,
-          dropPolicy: "summarize",
-        }),
-      ).toBe(true);
+      expect(enqueueFollowupRun(QUEUE_KEY, source, settings)).toBe(true);
     }
-    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup", cap: 1 });
+    const queue = getFollowupQueue(QUEUE_KEY, settings);
     expect(sources[0]?.onQueueDisposition).toHaveBeenCalledExactlyOnceWith("queue-cap-old");
+    expect(sources[0]?.turnAdoptionLifecycle.onDropped).toHaveBeenCalledExactlyOnceWith(
+      "queue-cap-old",
+    );
+    expect(sources[0]?.turnAdoptionLifecycle.onAbandoned).not.toHaveBeenCalled();
     for (const source of sources.slice(1)) {
       expect(source.onQueueDisposition).not.toHaveBeenCalled();
     }
     expect(queue.summaryElisions[0]?.entries[0]?.source.deliveryCorrelations).toBe(
       sources[1]?.deliveryCorrelations,
+    );
+    try {
+      scheduleFollowupDrain(QUEUE_KEY, execute);
+      expect(execute).not.toHaveBeenCalled();
+    } finally {
+      receipt.resolve();
+      await clearOwnedQueues();
+    }
+    expect(execute.mock.calls.flatMap(([run]) => run.prompt).join("\n")).not.toContain(
+      "queued message 0",
     );
   });
 

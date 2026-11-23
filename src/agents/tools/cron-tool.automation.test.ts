@@ -79,6 +79,15 @@ describe("automation invocation tools", () => {
     });
     expect(invocation.result).toEqual({ outcome: "no_change", summary: "Nothing new." });
     await expect(
+      tool.execute("repeat", {
+        action: "record_result",
+        outcome: "no_change",
+        summary: "Nothing new.",
+      }),
+    ).resolves.toMatchObject({
+      details: { ok: true, outcome: "no_change", summary: "Nothing new." },
+    });
+    await expect(
       tool.execute("duplicate", {
         action: "record_result",
         outcome: "done",
@@ -136,10 +145,10 @@ describe("automation invocation tools", () => {
 
   it("carries the exact invocation fence and caller revision to the scratch owner", async () => {
     const { invocation, tool } = createInvocation();
-    let receiptAuthority: (() => boolean | void) | undefined;
+    let receiptAuthority: (() => void) | undefined;
     callGatewayMock.mockImplementationOnce(async () => {
       receiptAuthority = getGatewayToolCallerIdentity()?.receiptAuthority;
-      expect(receiptAuthority?.()).not.toBe(false);
+      expect(receiptAuthority).not.toThrow();
       return { ok: false, reason: "revision-conflict", currentRevision: 4 };
     });
     await expect(
@@ -157,6 +166,6 @@ describe("automation invocation tools", () => {
     });
     expect(receiptAuthority).toBeDefined();
     invocation.closed = true;
-    expect(receiptAuthority?.()).toBe(false);
+    expect(receiptAuthority).toThrow("Automation invocation is no longer active");
   });
 });

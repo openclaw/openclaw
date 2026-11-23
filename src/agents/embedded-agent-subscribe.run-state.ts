@@ -5,7 +5,7 @@ import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import type { AgentItemEventData } from "../infra/agent-activity-events.js";
-import type { AssistantMessage } from "../llm/types.js";
+import type { AssistantHistoryMessage } from "../llm/types.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type { LiveEditDiffProgressState } from "./embedded-agent-live-edit-diff.js";
 import type {
@@ -26,6 +26,7 @@ import { collectAgentInternalEventMedia } from "./internal-events.js";
 import type { McpConnectAction } from "./mcp-connect-action.js";
 import type { McpAppChannelView } from "./mcp-ui-resource.js";
 import type { ReplyDeliveryState } from "./reply-completion.js";
+import { ToolActivityPresentation } from "./tool-activity-presentation.js";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
 
 /** Per-tool metadata tracked between tool start/update/end events. */
@@ -80,7 +81,7 @@ export type StreamBlockState = {
 };
 
 /** A response-ending answer and the message index its reply payload belongs to. */
-export type CompletedAssistantAnswer = { assistant: AssistantMessage; messageIndex: number };
+export type CompletedAssistantAnswer = { assistant: AssistantHistoryMessage; messageIndex: number };
 
 /** Mutable subscription state shared by embedded-agent event handlers. */
 export class EmbeddedAgentSubscribeState {
@@ -89,7 +90,7 @@ export class EmbeddedAgentSubscribeState {
     textEnd: number;
     messageEnd: number;
     finalMessageStart: number;
-    lastAssistant: AssistantMessage;
+    lastAssistant: AssistantHistoryMessage;
     keptAnswer?: CompletedAssistantAnswer;
     sourceReplyDeliveryState?: ReplyDeliveryState;
   }> = [];
@@ -106,6 +107,7 @@ export class EmbeddedAgentSubscribeState {
   acceptedSessionSpawns: AcceptedSessionSpawn[] = [];
   toolMetaById = new Map<string, ToolCallSummary>();
   toolSummaryById = new Set<string>();
+  toolActivityPresentation = new ToolActivityPresentation();
   declare execLiveUpdateStateById?: Map<
     string,
     { lastEmittedAtMs: number; itemMetadata: ExecLiveItemMetadata }
@@ -178,6 +180,8 @@ export class EmbeddedAgentSubscribeState {
   assistantMessageIndex = 0;
   /** Physical message boundary; assistantMessageIndex also advances between content blocks. */
   assistantMessageStartIndex = 0;
+  /** Input snapshot for the physical assistant message, shared by all its blocks. */
+  declare assistantReplyToId?: string;
   lastAssistantStreamContentIndex?: number = undefined;
   lastAssistantStreamItemId?: string = undefined;
   lastAssistantTextMessageIndex = -1;
@@ -235,7 +239,7 @@ export class EmbeddedAgentSubscribeState {
   > & { audioDirectiveStart?: number } = undefined;
   deterministicApprovalPromptPending = false;
   deterministicApprovalPromptSent = false;
-  declare lastAssistant?: AssistantMessage;
+  declare lastAssistant?: AssistantHistoryMessage;
 
   // Terminal results outlive the subscription; retain only its recorded facts.
   setTerminalLifecycleMeta(meta: {

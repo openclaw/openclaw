@@ -1,3 +1,4 @@
+import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeAssistantPhase,
@@ -20,12 +21,15 @@ export function resolveRawAssistantAnswerText(message: unknown): string {
   if (finalBlocks.length > 0) {
     return finalBlocks.map((block) => block.text).join("");
   }
-  // Signed unphased blocks retain their own answer semantics regardless of the message phase.
-  const signedUnphasedParts = readAssistantTextBlocksForPhase({
-    content: lastAssistant.content,
-  }).filter((block) => parseAssistantTextSignature(block)?.id);
-  if (signedUnphasedParts.length > 0) {
-    return signedUnphasedParts.map((block) => block.text).join("");
+  // Signed unphased Responses items retain their own answer semantics regardless of the message
+  // phase. Other providers' signatures, such as Gemini thought signatures, are not item ids.
+  if (typeof lastAssistant.api === "string" && OPENAI_RESPONSES_APIS.has(lastAssistant.api)) {
+    const signedUnphasedParts = readAssistantTextBlocksForPhase({
+      content: lastAssistant.content,
+    }).filter((block) => parseAssistantTextSignature(block)?.id);
+    if (signedUnphasedParts.length > 0) {
+      return signedUnphasedParts.map((block) => block.text).join("");
+    }
   }
   return readAssistantTextBlocksForPhase(lastAssistant)
     .map((block) => block.text)

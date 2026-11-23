@@ -53,7 +53,7 @@ import {
   SetupInferenceCancelledError,
   SetupInferenceOwnerDriftError,
   throwIfSetupInferenceCancelled,
-  validateSetupInferenceOwnerEvidence,
+  validateSetupInferenceEvidence,
   validateSetupModelTarget,
 } from "./setup-inference-core.js";
 import {
@@ -301,13 +301,10 @@ async function activateCandidate(
     },
   };
   const staged = await stageCandidate(ctx);
+  // Each error is a complete sentence; a saved credential adds only that fact.
   const failure = (result: Extract<ActivateSetupInferenceResult, { ok: false }>) => ({
     ...result,
-    ...(ctx.effects.credentialsSaved
-      ? {
-          error: `Credentials saved; default unchanged. ${result.error} Choose the saved sign-in in Model Setup to retry without signing in again.`,
-        }
-      : {}),
+    ...(ctx.effects.credentialsSaved ? { error: `Your sign-in is saved. ${result.error}` } : {}),
     disposition: "rejected-before-promotion" as const,
   });
   if ("error" in staged) {
@@ -448,6 +445,19 @@ async function verifyAndActivateCandidate(
   params.onPreparationComplete?.();
   throwIfSetupInferenceCancelled(params);
   const progress = params.prompter?.progress("Testing your AI connection…");
+  // A silent spinner reads as a hang once a provider is slow; show the wait and the way out.
+  const checkStarted = Date.now();
+  const elapsed = progress
+    ? setInterval(() => {
+        const seconds = Math.round((Date.now() - checkStarted) / 1000);
+        if (seconds >= 3) {
+          progress.update(
+            `Testing your AI connection… ${seconds}s. You can cancel; nothing changes until the check passes.`,
+          );
+        }
+      }, 1000)
+    : undefined;
+  elapsed?.unref?.();
   const verification = await withGeneration(async () => {
     try {
       const native = await verifySetupHarness({
@@ -469,21 +479,22 @@ async function verifyAndActivateCandidate(
     } catch (error) {
       return { ok: false as const, ...describeSetupInferenceError(error, route) };
     }
-  }).finally(() => progress?.stop());
+  }).finally(() => {
+    clearInterval(elapsed);
+    progress?.stop();
+  });
   throwIfSetupInferenceCancelled(params);
   if (!verification.ok) {
     return failure(verification);
   }
-  if ("auth" in verification) {
-    const ownerFailure = validateSetupInferenceOwnerEvidence({
-      runner: route.runner,
-      configuredHarnessId:
-        route.runner === "embedded" ? route.agentHarnessRuntimeOverride : undefined,
-      auth: verification.auth,
-    });
-    if (ownerFailure) {
-      return failure(ownerFailure);
-    }
+  const evidence =
+    "auth" in verification ? validateSetupInferenceEvidence(route, verification, params) : {};
+  if (evidence.failure) {
+    return failure(evidence.failure);
+  }
+  if (evidence.warning && params.prompter) {
+    await params.prompter.note(evidence.warning, "Context window");
+    throwIfSetupInferenceCancelled(params);
   }
   const savedCredential = staged.authProfileId
     ? (await loadAuthProfileStoreWithoutExternalProfilesAsync(ctx.agentDir)).profiles[
@@ -692,6 +703,6 @@ async function verifyAndActivateCandidate(
     ...(modelName ? { modelName } : {}),
     ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
     latencyMs: verification.latencyMs,
-    lines,
+    lines: evidence.warning && !params.prompter ? [...lines, evidence.warning] : lines,
   };
 }

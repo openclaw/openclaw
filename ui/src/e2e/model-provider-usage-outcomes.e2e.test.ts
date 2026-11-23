@@ -169,7 +169,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/model-providers`);
       const openaiCard = page.locator('[data-provider-id="openai"]');
       const scope = () => page.locator(".oc-settings-section").last().textContent();
-      await expect.poll(scope).toContain("Connections for Main");
+      await expect.poll(scope).toContain("Accounts for Main");
       await expandProvider(page, "openai");
       await openaiCard.getByRole("button", { name: "Replace API key" }).click();
       await openaiCard.getByLabel("API key", { exact: true }).fill("synthetic-main-provider-key");
@@ -177,12 +177,11 @@ suite.define(() => {
       const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
       await agentPicker.getByRole("option", { name: "Writer", exact: true }).click();
-      await expect.poll(scope).toContain("Connections for Writer");
+      await expect.poll(scope).toContain("Accounts for Writer");
       await expect.poll(async () => openaiCard.locator('input[type="password"]').count()).toBe(0);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
-      await page.locator("[data-models-connect]").click();
-      await page.locator('[data-models-login-provider="google"]').click();
+      await page.locator('[data-models-catalog-provider="google"] button').click();
       const addSection = page.locator("[data-models-key-dialog]");
       await addSection.getByLabel("API key").fill("synthetic-writer-provider-key");
       // The modal makes the picker inert. Use its selection owner without
@@ -190,7 +189,7 @@ suite.define(() => {
       await evaluateControlUiContext(page, (context) => {
         context.settingsAgentSelection.set("main");
       });
-      await expect.poll(scope).toContain("Connections for Main");
+      await expect.poll(scope).toContain("Accounts for Main");
       await expect.poll(async () => page.locator("[data-models-key-dialog]").count()).toBe(0);
       await expect.poll(async () => openaiCard.locator('input[type="password"]').count()).toBe(0);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);

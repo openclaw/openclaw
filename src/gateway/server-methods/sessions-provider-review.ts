@@ -1,3 +1,4 @@
+import { isNativeAppUiClient } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
   validateSessionsProviderReviewContinueParams,
@@ -28,7 +29,8 @@ export const sessionProviderReviewHandlers: GatewayRequestHandlers = {
       const { params, client, context, respond } = options;
       if (
         !client ||
-        !isOperatorUiClient(client.connect.client) ||
+        (!isOperatorUiClient(client.connect.client) &&
+          !isNativeAppUiClient(client.connect.client)) ||
         client.internal?.syntheticClient ||
         client.internal?.senderAttribution
       ) {
@@ -83,9 +85,6 @@ export const sessionProviderReviewHandlers: GatewayRequestHandlers = {
         // Accepted input retains its original operator authority independently of UI selection.
         const assertCurrent = () => {
           options.signal?.throwIfAborted();
-          if (options.hasCurrentClientAuthority?.() === false) {
-            throw new Error("Provider review caller authority is no longer current");
-          }
           const assertAuthority =
             authorization.authorization?.assertAdmittedInputCurrent ??
             authorization.authorization?.assertCurrent;

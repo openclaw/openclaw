@@ -39,7 +39,8 @@ import { cliBackendLog } from "./log.js";
 import { formatTomlConfigOverride } from "./toml-inline.js";
 
 const CLI_IMAGE_SWEEP_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
-const sweptCliImageRoots = new Set<string>();
+const CLI_IMAGE_SWEEP_RECURRENCE_MS = 24 * 60 * 60 * 1_000;
+const lastCliImageRootSweepMs = new Map<string, number>();
 
 export function isClaudeCliBackendId(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === "claude-cli";
@@ -81,6 +82,7 @@ export function resolveCliRunQueueKey(params: {
 export function buildCliAgentSystemPrompt(params: {
   preparedTtsPreferences?: import("../../tts/tts-preferences.js").PreparedTtsPreferences;
   requesterProfileId?: string;
+  prepareSessionProjectGuidance?: () => Promise<string | undefined>;
   workspaceDir: string;
   cwd?: string;
   config?: OpenClawConfig;
@@ -104,7 +106,7 @@ export function buildCliAgentSystemPrompt(params: {
   sourcePath?: string;
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
-  bootstrapMode?: BootstrapMode;
+  bootstrap?: { bootstrapMode: BootstrapMode; bootstrapCompleted: boolean };
   bootstrapTruncationNotice?: string;
   skillsPrompt?: string;
   modelDisplay: string;
@@ -117,7 +119,8 @@ export function buildCliAgentSystemPrompt(params: {
     cfg: params.config ?? {},
     agentId: params.agentId,
   });
-  const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
+  const defaultModelLabel =
+    defaultModelRef && `${defaultModelRef.provider}/${defaultModelRef.model}`;
   const { runtimeInfo } = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
@@ -146,6 +149,7 @@ export function buildCliAgentSystemPrompt(params: {
   });
   return buildConfiguredAgentSystemPrompt({
     config: params.config,
+    prepareSessionProjectGuidance: params.prepareSessionProjectGuidance,
     preparedModelRuntime: params.preparedModelRuntime,
     preparedTtsPreferences: params.preparedTtsPreferences,
     agentId: params.agentId,
@@ -170,7 +174,8 @@ export function buildCliAgentSystemPrompt(params: {
     messageTool: params.tools.find((tool) => tool.name.trim().toLowerCase() === "message"),
     skillsPrompt: params.skillsPrompt,
     contextFiles: params.contextFiles,
-    bootstrapMode: params.bootstrapMode,
+    bootstrapMode: params.bootstrap?.bootstrapMode,
+    bootstrapCompleted: params.bootstrap?.bootstrapCompleted,
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,
   });
 }
@@ -235,13 +240,16 @@ function resolveCliImageFileName(image: ImageContent): string {
 }
 
 async function sweepCliImageRoot(imageRoot: string): Promise<void> {
-  if (sweptCliImageRoots.has(imageRoot)) {
+  const nowMs = Date.now();
+  const lastSweep = lastCliImageRootSweepMs.get(imageRoot);
+  if (lastSweep !== undefined && nowMs - lastSweep < CLI_IMAGE_SWEEP_RECURRENCE_MS) {
     return;
   }
-  sweptCliImageRoots.add(imageRoot);
+  lastCliImageRootSweepMs.set(imageRoot, nowMs);
   try {
     await fileStore({ rootDir: imageRoot }).pruneExpired({ ttlMs: CLI_IMAGE_SWEEP_TTL_MS });
   } catch (error) {
+    lastCliImageRootSweepMs.delete(imageRoot);
     cliBackendLog.debug(`cli image cache sweep failed: ${String(error)}`);
   }
 }
@@ -304,8 +312,7 @@ export async function writeCliSystemPromptFile(params: {
   };
 }
 
-export async function prepareCliPromptImagePayload(params: {
-  backend: CliBackendConfig;
+type CliPromptImageInput = {
   prompt: string;
   imagePrompt?: string;
   workspaceDir: string;
@@ -314,13 +321,10 @@ export async function prepareCliPromptImagePayload(params: {
   imageOrder?: PromptImageOrderEntry[];
   mediaImageLayout?: MediaImageLayout;
   media?: MediaFact[];
-  imageTurnKey?: string;
-}): Promise<{
-  prompt: string;
-  imagePaths?: string[];
-}> {
-  let prompt = params.prompt;
-  const imagePrompt = params.imagePrompt ?? prompt;
+};
+
+export async function loadCliPromptImages(params: CliPromptImageInput): Promise<ImageContent[]> {
+  const imagePrompt = params.imagePrompt ?? params.prompt;
   const needsHydration =
     params.imagePrompt !== undefined ||
     Boolean(params.media?.length) ||
@@ -344,7 +348,22 @@ export async function prepareCliPromptImagePayload(params: {
       `failed to hydrate ${imageResult.failedMediaCount} structured image attachment(s) for CLI input`,
     );
   }
-  const resolvedImages = imageResult?.images ?? params.images ?? [];
+  return imageResult?.images ?? params.images ?? [];
+}
+
+export async function prepareCliPromptImagePayload(
+  params: CliPromptImageInput & {
+    backend: CliBackendConfig;
+    imageTurnKey?: string;
+    /** Run-owned snapshot already inspected by the input gate; never reload its source paths. */
+    preparedImages?: ImageContent[];
+  },
+): Promise<{
+  prompt: string;
+  imagePaths?: string[];
+}> {
+  let prompt = params.prompt;
+  const resolvedImages = params.preparedImages ?? (await loadCliPromptImages(params));
   if (resolvedImages.length === 0) {
     return { prompt };
   }

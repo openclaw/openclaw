@@ -1,7 +1,7 @@
 import { statSync } from "node:fs";
 import path from "node:path";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/path-existence.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import {

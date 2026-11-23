@@ -13,7 +13,8 @@ import { getTranscriptLibrary, listTranscriptLibrary } from "./library.js";
 import type { TranscriptStartRequest } from "./provider-types.js";
 import { useTranscriptStatusFixture } from "./status.producer.test-harness.js";
 import { TranscriptsStore } from "./store.js";
-import { summarizeTranscripts, type TranscriptsSummary } from "./summary.js";
+import { summarizeTranscripts } from "./summary.js";
+import type { TranscriptsSummary } from "./types.js";
 
 const { complete, select, loadRuntime } = vi.hoisted(() => ({
   complete: vi.fn(),

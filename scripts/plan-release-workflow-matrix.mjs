@@ -7,7 +7,7 @@ import { planTargetedDockerLaneGroups } from "./plan-targeted-docker-lane-groups
 
 export const RELEASE_PACKAGE_ACCEPTANCE_LANES =
   "release-typed-onboarding doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor update-first-hop-compat published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape";
-export const QUALIFIED_PACKAGE_SMOKE_LANES =
+const QUALIFIED_PACKAGE_SMOKE_LANES =
   "npm-onboard-channel-agent published-upgrade-survivor plugins-offline plugin-update";
 
 const DOCKER_E2E_CHUNKS = [
@@ -95,8 +95,8 @@ const LIVE_MODEL_PROVIDERS = [
     providers: "opencode-go",
     // The release workspace does not enable Global regions, so the default high-signal
     // selection includes DeepSeek routes that reject every request. Keep this list aligned
-    // with models proven reachable from the release workspace.
-    models: "opencode-go/glm-5.2,opencode-go/glm-5.3",
+    // with the authenticated catalog; the live lane must still verify real inference.
+    models: "opencode-go/glm-5.3",
     max_models: "2",
     profiles: "full",
   },

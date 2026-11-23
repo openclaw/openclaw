@@ -44,6 +44,12 @@ aborts package-file reads and stops and joins prerequisite subprocesses. Doctor
 closes its owned resources, records the signal exit status, and lets Node exit
 naturally so V8 can finish worker cleanup safely.
 
+If a command-owned handle nobody closed keeps Doctor or `openclaw update repair`
+alive after its work has settled, stderr names the active resources 10 seconds
+later and, on Linux and macOS, the process ends with `SIGTERM` (exit status 143).
+That line means the command's work finished; include it in any bug report. On
+Windows the line is reported and the process keeps waiting.
+
 Before maintenance begins, package-root discovery, source-config loading, and
 Tailscale prerequisite inspection each have a 60-second asynchronous wait limit.
 A timeout names the phase and recommends `OPENCLAW_DEBUG=1 openclaw doctor --lint`
@@ -214,8 +220,9 @@ Update-time Doctor runs startup-required repairs before optional inspections.
 When the installed updater supports post-restart inspections, Doctor moves
 lint-backed, inspection-only checks out of the stopped Gateway window. The
 updater runs them after restart and saves their findings in the
-`post-activation doctor inspections` result step. Findings or an incomplete
-inspection remain advisory and do not fail an otherwise successful update.
+`post-activation doctor inspections` result step. Planned deferrals are progress,
+not warning findings. Findings or an incomplete inspection remain advisory and
+do not fail an otherwise successful update.
 Repairs, migrations, readiness gates, and checks without equivalent lint
 coverage keep their existing ordering. Older installed updaters keep the
 inspections in their original Doctor pass.

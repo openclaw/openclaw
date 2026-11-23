@@ -28,6 +28,7 @@ import {
 import { PluginJsonValueSchema } from "./plugin-json-value.js";
 import { PluginInspectRuntimeRetentionSchema } from "./plugin-retention.js";
 import { NonEmptyString } from "./primitives.js";
+import { RecommendedPromptsSchema } from "./recommended-prompts.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
 
 export {
@@ -238,8 +239,6 @@ export const PluginRuntimeStatusSchema = closedObject({
   error: Type.Optional(Type.String()),
 });
 
-const PluginRecommendedPromptsSchema = Type.Array(NonEmptyString, { maxItems: 3 });
-
 /** Catalog metadata and desired enablement, with optional observed runtime state. */
 export const PluginCatalogEntrySchema = closedObject({
   id: NonEmptyString,
@@ -250,7 +249,7 @@ export const PluginCatalogEntrySchema = closedObject({
   /** Opaque discovery identity for loading local or ClawHub presentation metadata. */
   catalogId: Type.Optional(NonEmptyString),
   description: Type.Optional(Type.String()),
-  recommendedPrompts: Type.Optional(PluginRecommendedPromptsSchema),
+  recommendedPrompts: Type.Optional(RecommendedPromptsSchema),
   version: Type.Optional(NonEmptyString),
   kind: Type.Optional(Type.Array(NonEmptyString)),
   origin: Type.Optional(NonEmptyString),
@@ -260,6 +259,10 @@ export const PluginCatalogEntrySchema = closedObject({
   featured: Type.Optional(Type.Boolean()),
   featuredAt: Type.Optional(Type.Integer({ minimum: 0 })),
   order: Type.Optional(Type.Number()),
+  /** Manifest hint: list this bundled plugin with installed plugins while it is enabled. */
+  sidebar: Type.Optional(Type.Boolean()),
+  /** Install-record time in epoch milliseconds; bundled plugins have none. */
+  installedAt: Type.Optional(Type.Integer({ minimum: 0 })),
   /** Selected installed manifest declares a native Control UI entry; not a sandbox or grant. */
   hasNativeUi: Type.Optional(Type.Boolean()),
   /** True when the gateway can resolve a manifest or catalog icon for this plugin identity. */
@@ -500,7 +503,7 @@ export const PluginDiscoveryDetailSchema = closedObject({
   providers: Type.Optional(Type.Array(NonEmptyString)),
   channels: Type.Optional(Type.Array(NonEmptyString)),
   uiCapabilities: Type.Optional(PluginUiCapabilitiesSchema),
-  recommendedPrompts: Type.Optional(PluginRecommendedPromptsSchema),
+  recommendedPrompts: Type.Optional(RecommendedPromptsSchema),
   configuration: Type.Array(ClawHubPluginConfigFieldSchema),
   mcpServers: Type.Array(NonEmptyString),
   mcpServerDetails: Type.Optional(Type.Array(ClawHubPluginMcpServerSchema)),
@@ -548,6 +551,8 @@ const PluginOverviewCapabilitiesSchema = closedObject({
 /** Consent snapshot plus the installed-version presentation projection used by Control UI. */
 export const PluginsInspectResultSchema = closedObject({
   ok: Type.Literal(true),
+  /** The installed plugin offers a guided provider sign-in in Models. */
+  providerSignIn: Type.Optional(Type.Literal(true)),
   overview: Type.Optional(
     closedObject({
       /** Selected inspected manifest declares native browser code, independently of UI capabilities. */
@@ -556,7 +561,7 @@ export const PluginsInspectResultSchema = closedObject({
       repositoryUrl: Type.Optional(NonEmptyString),
       documentationUrl: Type.Optional(NonEmptyString),
       publisherName: Type.Optional(NonEmptyString),
-      recommendedPrompts: Type.Optional(PluginRecommendedPromptsSchema),
+      recommendedPrompts: Type.Optional(RecommendedPromptsSchema),
       /** Selected plugin metadata; declared below remains the package-wide consent surface. */
       capabilities: Type.Optional(PluginOverviewCapabilitiesSchema),
     }),

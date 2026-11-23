@@ -244,6 +244,7 @@ it.each([
           committed: databaseGenerations,
           physical: databaseGenerations,
           emptyReaderAlternates: {},
+          rebuiltIndexAlternates: {},
         };
       },
     );
@@ -482,7 +483,7 @@ it.each([
       expectCalls(2, "read", "revalidate");
       expectCalls(1, "repair");
       expect(boundary.log).toHaveBeenCalledWith(
-        "Gateway restarted and verified after Doctor repair.",
+        "Gateway restarted and verified after Doctor maintenance.",
       );
       return;
     }
@@ -503,7 +504,7 @@ it.each([
     expectCalls(releases, "release");
     expectCalls(0, "restart", "health");
     expect(boundary.log).not.toHaveBeenCalledWith(
-      "Gateway restarted and verified after Doctor repair.",
+      "Gateway restarted and verified after Doctor maintenance.",
     );
   },
 );
@@ -877,7 +878,7 @@ it.each(["unknown", "unreadable"] as const)(
     const refusal: unknown = await begin().catch((error: unknown) => error);
     if (schema === "unreadable") {
       expect(refusal).toBeInstanceOf(DoctorUnreadableStateDatabaseError);
-      expect(String(refusal)).toContain("restore this file from a verified backup");
+      expect(String(refusal)).toContain("state database inspection was interrupted");
     } else {
       expect(refusal).toBeInstanceOf(DoctorMaintenanceRefusalError);
       expect(refusal).toMatchObject({

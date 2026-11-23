@@ -103,6 +103,7 @@ export function findLocalSessionReference(
 type CachedShortSession = {
   sessionKey: string;
   row?: GatewaySessionRow;
+  fromCurrentNavigation: boolean;
 };
 
 export function findCachedShortSession(
@@ -112,7 +113,10 @@ export function findCachedShortSession(
 ): CachedShortSession | undefined {
   const search = new URLSearchParams(location.search);
   const locationKey = search.get(SESSION_NAVIGATION_KEY_PARAM)?.trim();
-  const handoffKey = consumeSessionNavigationHandoff(context.gateway, location.pathname);
+  const handoffKey = consumeSessionNavigationHandoff(
+    context.gateway,
+    location.pathname,
+  )?.sessionKey;
   const carriedKey = locationKey ?? handoffKey;
   const carriedByCurrentNavigation = Boolean(handoffKey && handoffKey === carriedKey);
   if (carriedKey) {
@@ -126,7 +130,11 @@ export function findCachedShortSession(
     const carried = findUiSessionRow(context, carriedKey, target.agentId);
     if (carried && findLocalSessionReference([carried], target)) {
       preserveHandoffForCanonicalReload();
-      return { sessionKey: carried.key, row: carried };
+      return {
+        sessionKey: carried.key,
+        row: carried,
+        fromCurrentNavigation: carriedByCurrentNavigation,
+      };
     }
     const carriedUuid = sessionKeyUuid(carriedKey);
     const carriedAgentId = parseAgentSessionKey(carriedKey)?.agentId;
@@ -137,7 +145,7 @@ export function findCachedShortSession(
       normalizeAgentId(carriedAgentId) === normalizeAgentId(target.agentId)
     ) {
       preserveHandoffForCanonicalReload();
-      return { sessionKey: carriedKey };
+      return { sessionKey: carriedKey, fromCurrentNavigation: true };
     }
   }
   return undefined;

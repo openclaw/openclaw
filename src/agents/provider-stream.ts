@@ -1,5 +1,4 @@
 import type { ApiRegistry } from "@openclaw/ai";
-import "./ai-transport-runtime-host.js";
 import { createTransportAwareStreamFnForModel } from "@openclaw/ai/transports";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getModelLlmRuntime } from "../llm/model-runtime-binding.js";
@@ -17,6 +16,7 @@ import {
 } from "../plugins/provider-hook-runtime.js";
 import { resolveProviderStreamFn } from "../plugins/provider-runtime.js";
 import type { ProviderPrepareExtraParamsContext } from "../plugins/provider-runtime.types.js";
+import { configureAiTransportRuntimeHost } from "./ai-transport-runtime-host.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import {
   unwrapHeaderSentinelsForProviderEgress,
@@ -36,6 +36,7 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
   auth?: ProviderPrepareExtraParamsContext["auth"];
   apiRegistry?: ApiRegistry;
 }): StreamFn | undefined {
+  configureAiTransportRuntimeHost();
   const apiRegistry = params.apiRegistry ?? getModelLlmRuntime(params.model)?.registry;
   const runtimeHandle =
     getModelProviderRuntimePluginHandle(params.model) ??

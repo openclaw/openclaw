@@ -6,12 +6,12 @@ import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts
 import type { BrowserAnnotationAttachment, ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
+import { isPastedTextAttachment } from "../pasted-text-card.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { removeDraftAttachment } from "./chat-attachment-draft.ts";
 import { AttachmentRemove, CompactAttachmentFile } from "./chat-attachment-file.tsx";
 import type { AttachmentPreviewEntry } from "./chat-attachments.tsx";
 import { ComposerPastedText } from "./chat-composer-pasted-text.tsx";
-import { isPastedTextAttachment } from "./chat-pasted-text.ts";
 import { ChatSelectionAnnotations } from "./chat-selection-annotations.tsx";
 
 registerEnglishCatalog(registerChatComposerEnglish);

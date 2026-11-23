@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
+import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
@@ -41,6 +42,48 @@ function contentOf(message: AgentMessage | undefined) {
 }
 
 describe("normalizeMessagesForLlmBoundary", () => {
+  it.each(["text", "blocks"] as const)(
+    "preserves completion provenance after context-engine reconstruction (%s)",
+    (shape) => {
+      const provenance = {
+        kind: "inter_session" as const,
+        sourceSessionKey: "agent:main:child",
+        sourceChannel: "internal",
+        sourceTool: "subagent_settle",
+      };
+      const text = "Child completion results: finished";
+      const marked = annotateInterSessionPromptText(text, provenance);
+      const content = (value: string) =>
+        shape === "text" ? value : [{ type: "text" as const, text: value }];
+      const current = { ...user(content(marked)), provenance };
+      const replay = { ...user(content(text)), provenance };
+      const boundary = { ...options, includeTimestamp: false };
+      const before = normalizeMessagesForLlmBoundary([current], boundary);
+      const after = normalizeMessagesForLlmBoundary([replay, user("Ok", timestamp + 1)], boundary);
+      expect(after[0]).toEqual(before[0]);
+      expect(contentOf(after[0])).toEqual(marked);
+      expect(normalizeMessagesForLlmBoundary(after, boundary)).toEqual(after);
+    },
+  );
+
+  it("dispatches a placed background result as labelled user input, even when it repeats the reply", () => {
+    const reply = timestampedTextAssistant("Report ready", timestamp + 1);
+    const result = {
+      ...timestampedTextAssistant("Report ready", timestamp + 2),
+      provider: "openclaw",
+      model: "automation-result",
+      openclawAutomation: { kind: "cron", jobId: "job-1", runId: "run-1" },
+    };
+    const out = normalizeMessagesForLlmBoundary([user("report"), reply, result], {
+      ...options,
+      includeTimestamp: false,
+    });
+    expect(out.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
+    expect(contentOf(out[2])).toBe(
+      "[OpenClaw background result] You sent the message below to the user in this chat from a separate background run. It is a record of what they saw, not a new request.\n\nReport ready",
+    );
+  });
+
   it.each(["string", "blocks"] as const)(
     "retains unchanged mutable %s history through delimiter escaping",
     (kind) => {

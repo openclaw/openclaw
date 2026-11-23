@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, type TestContext } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -122,7 +122,7 @@ describe("trusted plugin approval requests", () => {
   it("uses a retained write-only operator for a signed hook after the client scope ends", () =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       const f = fixture();
-      const authority = createAdmittedRunOperatorAuthority({
+      const authority = createTestOperatorAuthority({
         profileId: f.caller.authenticatedUserProfile!.profileId,
         scopes: ["operator.write"],
         assertCurrent: () => undefined,
@@ -199,7 +199,7 @@ describe("trusted plugin approval requests", () => {
           candidate === hookIdentity || candidate === otherRun,
       });
       let revoked = false;
-      const authority = createAdmittedRunOperatorAuthority({
+      const authority = createTestOperatorAuthority({
         profileId: caller.authenticatedUserProfile!.profileId,
         scopes: ["operator.write"],
         assertCurrent: () => {

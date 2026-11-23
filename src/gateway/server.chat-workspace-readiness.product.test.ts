@@ -16,6 +16,8 @@ import {
 import * as embeddedAgent from "../agents/embedded-agent.js";
 import * as workspaceReadiness from "../agents/workspace-readiness.js";
 import { requireGit } from "../agents/worktrees/git.js";
+import { readRegistryWorktrees } from "../agents/worktrees/registry-read.js";
+import { updateRegistryWorktree } from "../agents/worktrees/registry.js";
 import { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import type { CreateManagedWorktreeParams } from "../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -429,8 +431,10 @@ it(
       activeGate = undefined;
       const normal = await createWorktree<{
         key: string;
-        worktree: { path: string; branch: string };
+        worktree: { id: string; path: string; branch: string };
       }>("readiness-normal", { displayName: "Readiness proof" });
+      await updateRegistryWorktree(process.env, normal.worktree.id, { lastActiveAt: 1 });
+      const resumedAt = Date.now();
       nextCall = createDeferred<ProviderCall>();
       const normalRun = await gateway.client.request<{ runId: string }>("chat.send", {
         sessionKey: normal.key,
@@ -448,6 +452,10 @@ it(
       expect(initialPrefix).toBe(preparedPrefix);
       finishText(prepared.response, "Prepared prompt matches.", "normal");
       await expectRun(normalRun.runId);
+      expect(
+        (await readRegistryWorktrees(process.env)).find((row) => row.id === normal.worktree.id)
+          ?.lastActiveAt,
+      ).toBeGreaterThanOrEqual(resumedAt);
 
       for (const toolName of ["write", "message"] as const) {
         for (const revoked of [false, true]) {

@@ -265,9 +265,9 @@ it.each([
 
 it("refuses offline reload without modifying config or dispatching a mutation", async () => {
   resolveGateway.mockResolvedValue(null);
-  await expect(runPluginCli("reload", "alpha")).rejects.toThrow(
-    "The Gateway is not running. Start it before reloading a plugin.",
-  );
+  await expect(runPluginCli("reload", "alpha")).rejects.toMatchObject({
+    humanOutput: "The Gateway is not running. Start it before reloading a plugin.",
+  });
   expectNoCalls(gateway, configWriteMock);
 });
 

@@ -11,10 +11,12 @@ import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-u
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
-  installMockGateway,
-  type ControlUiMockGatewayScenario,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installNativePluginMockGateway,
+  type NativeControlUiMockGatewayScenario,
+} from "../test-helpers/control-ui-plugin-e2e.ts";
 import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import {
@@ -56,8 +58,8 @@ async function createProofContext() {
   return { page, close: () => suite.closeBrowserContext(context) };
 }
 
-async function setupDashboard(page: Page, scenario: ControlUiMockGatewayScenario) {
-  const gateway = await installMockGateway(page, {
+async function setupDashboard(page: Page, scenario: NativeControlUiMockGatewayScenario) {
+  const gateway = await installNativePluginMockGateway(page, {
     ...scenario,
     sessionKey,
     featureMethods: [
@@ -143,17 +145,42 @@ suite.define(() => {
   const canvasView = useCanvasSandboxFixture();
   it("reveals granted widget permissions with the keyboard", async () => {
     const { page, close } = await createProofContext();
-    await setupDashboard(page, {
+    const declaredSummary = [
+      "Network access: https://example.com",
+      "Tool access: sessions.list",
+      'GitHub Actions query main-ci: repository="owner/repo"; workflow="ci.yml"; branch="main"; status=null; created=null; perPage=5; excludePullRequests=true; fields=conclusion, status (uses the agent\'s credentials; shares selected private and future results with session readers)',
+    ];
+    const namedQueryWidget = {
+      ...boardSnapshot.widgets[0]!,
+      sizeH: 8,
+      grantState: "granted",
+      declared: {
+        netOrigins: ["https://example.com"],
+        tools: ["sessions.list"],
+        queries: [
+          {
+            name: "main-ci",
+            bindingId: "github.actions.runs",
+            params: {
+              repository: "owner/repo",
+              workflow: "ci.yml",
+              branch: "main",
+              status: null,
+              created: null,
+              perPage: 5,
+              excludePullRequests: true,
+            },
+            fields: ["conclusion", "status"],
+          },
+        ],
+      },
+      declaredSummary,
+    };
+    const gateway = await setupDashboard(page, {
       methodResponses: {
         "board.get": {
           ...boardSnapshot,
-          widgets: [
-            {
-              ...boardSnapshot.widgets[0]!,
-              grantState: "granted",
-              declared: { netOrigins: ["https://example.com"], tools: ["sessions.list"] },
-            },
-          ],
+          widgets: [namedQueryWidget],
         },
       },
     });
@@ -167,8 +194,13 @@ suite.define(() => {
       await page.keyboard.press("Tab");
       expect(await badge.evaluate((element) => element.matches(":focus"))).toBe(true);
       await tooltip.waitFor({ state: "visible" });
-      expect(await tooltip.textContent()).toContain("https://example.com");
-      expect(await tooltip.textContent()).toContain("sessions.list");
+      for (const summary of [
+        "Network: https://example.com",
+        "Tool: sessions.list",
+        declaredSummary[2],
+      ]) {
+        expect(await tooltip.textContent()).toContain(summary);
+      }
       await page.keyboard.press("Escape");
       await tooltip.waitFor({ state: "hidden" });
       expect(await badge.evaluate((element) => element.matches(":focus"))).toBe(true);
@@ -182,6 +214,25 @@ suite.define(() => {
           .locator(".board-widget__menu-trigger")
           .evaluate((element) => element.matches(":focus")),
       ).toBe(true);
+
+      await gateway.setMethodResponse("board.get", {
+        ...boardSnapshot,
+        revision: 2,
+        widgets: [{ ...namedQueryWidget, grantState: "pending", revision: 2 }],
+      });
+      await gateway.emitGatewayEvent("board.changed", { sessionKey, revision: 2 });
+      const pending = widget.locator('[data-test-id="board-pending"]');
+      await pending.waitFor();
+      for (const summary of [
+        "Network origins",
+        "Host tools and data",
+        "https://example.com",
+        "sessions.list",
+        declaredSummary[2],
+      ]) {
+        expect(await pending.textContent()).toContain(summary);
+      }
+      await pending.getByRole("button", { name: "Allow", exact: true }).waitFor();
     } finally {
       await close();
     }

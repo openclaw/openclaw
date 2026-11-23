@@ -343,7 +343,7 @@ async function runIsolatedCompletionOwned(
                 });
               const dispatch = () =>
                 observeIsolatedCompletionUsage(
-                  { ...usageOwner, runtimeKind: "cli" },
+                  { ...usageOwner, runtimeKind: "cli", assertCurrent },
                   execute,
                   (result) => {
                     const backend = resolveCliBackendConfig(cliOwner, config, { agentId });
@@ -463,6 +463,7 @@ async function runIsolatedCompletionOwned(
             preparedModelRuntime: lease.snapshot,
             signal: request.abortSignal,
             modelResolver: resolveAuthorizedModel,
+            selectedModelStores: true,
           },
           assertCurrent,
         );
@@ -490,7 +491,7 @@ async function runIsolatedCompletionOwned(
             {
               abortSignal: request.abortSignal,
               assertCurrent,
-              ...lease.snapshot.createStores(),
+              selectedModelStores: true,
               preparedModelRuntime: lease.snapshot,
               workspaceDir,
               authProfileId: request.authProfileId,
@@ -598,6 +599,7 @@ async function runIsolatedCompletionOwned(
                       abortSignal: request.abortSignal,
                       assertCurrent,
                       modelIdSource: "selected",
+                      selectedModelStores: true,
                       preparedModelRuntime: lease.snapshot,
                       workspaceDir,
                       authProfileId,
@@ -623,15 +625,17 @@ async function runIsolatedCompletionOwned(
               throw new Error("Prepared runtime auth candidates are temporarily unavailable.");
             }
             assertCurrent();
-            const execution = modelAuthority.bind(modelForAuthorization);
+            const execution = modelAuthority.bind(modelForAuthorization, authorization);
+            execution.assertCurrent();
             const dispatch = () =>
               observeIsolatedCompletionUsage<AgentHarnessIsolatedCompletionResult>(
-                { ...usageOwner, runtimeKind: "harness" },
+                { ...usageOwner, runtimeKind: "harness", assertCurrent: execution.assertCurrent },
                 (onResult) =>
                   harness.runIsolatedCompletionV2!({
                     ...commonParams,
                     ...execution,
                     onResult,
+                    assertCurrent: execution.assertCurrent,
                     timeoutMs: remainingTimeoutMs(),
                     authorization:
                       authorization.owner === "host"
@@ -645,7 +649,7 @@ async function runIsolatedCompletionOwned(
             const pending = diagnostics ? diagnostics.dispatch("harness", dispatch) : dispatch();
             priorProfileAttempted ||= attempt?.kind === "profile";
             const candidate = await pending;
-            execution.assertCurrent?.();
+            execution.assertCurrent();
             assertCurrent();
             if (isRetryableIsolatedQuotaFailure(candidate.assistant)) {
               // Returned quota failures must enter the same core-owned profile loop as throws.
@@ -678,7 +682,7 @@ async function runIsolatedCompletionOwned(
         const execution = modelAuthority.bind(modelForAuthorization);
         const dispatch = () =>
           observeIsolatedCompletionUsage<AgentHarnessIsolatedCompletionResult>(
-            { ...usageOwner, runtimeKind: "harness" },
+            { ...usageOwner, runtimeKind: "harness", assertCurrent: execution.assertCurrent },
             (onResult) =>
               harness.runIsolatedCompletion!(
                 prepareIsolatedHostAuthorization(harness, {

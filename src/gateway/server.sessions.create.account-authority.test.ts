@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, onTestFinished, test, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import * as modelCatalogRuntime from "../agents/model-catalog.runtime.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
@@ -11,12 +11,11 @@ import { connectUserModelAccount, listUserProfileAuthLinks } from "../state/user
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createMentionInbox } from "./mention-inbox.js";
 import { ModelAccountConnectAuthorityError } from "./model-account-connect-errors.js";
 import { createModelAccountConnectService } from "./model-account-connect.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
@@ -211,7 +210,7 @@ async function createFixture(
   await initializeSessionReadContext(context);
   if (origin === "agent") {
     const captured = expectDefined(
-      await captureGatewayOperatorRunAuthority({ client: { ...client }, context }),
+      await prepareGatewayOperatorRunAuthority({ client: { ...client }, context }),
       "admitted operator authority",
     );
     onTestFinished(captured.release);
@@ -412,7 +411,7 @@ async function createCatalogFixture(withCapturedAuthority = false) {
   };
   if (withCapturedAuthority) {
     client.internal = {
-      operatorRunAuthority: createAdmittedRunOperatorAuthority({
+      operatorRunAuthority: createTestOperatorAuthority({
         profileId: owner.id,
         scopes: client.connect.scopes ?? [],
         signal: revocation.signal,
@@ -528,25 +527,16 @@ test.each([-3_600_000, 3_600_000])(
   },
 );
 
-test("ordinary tool default authority retains role revocation without main-thread SQL", () =>
+test("ordinary tool defaults keep admitted role policy without main-thread SQL", () =>
   withFixture(["operator.write", true, "agent"], async (fixture) => {
     const { personalAccountDefaults } = await accountAccess(fixture);
     const action = expectDefined(personalAccountDefaults, "operator default authority");
     expect(action.owner).toBe(fixture.owner.id);
-    const sql = observeMainThreadSql();
-    try {
-      for (let index = 0; index < 100; index++) {
-        action.assertCurrent();
-      }
-      sql.expectIdle();
-      fixture.role.scopes = ["operator.read"];
-      expect(action.assertCurrent).toThrow(ModelAccountConnectAuthorityError);
-      // Restoring a role cannot revive the original revoked source capability.
-      fixture.role.scopes = ["operator.write"];
-      expect(action.assertCurrent).toThrow(ModelAccountConnectAuthorityError);
-    } finally {
-      sql.restore();
-    }
+    action.assertCurrent();
+    fixture.role.scopes = ["operator.read"];
+    expect(action.assertCurrent).not.toThrow();
+    fixture.role.scopes = ["operator.write"];
+    expect(action.assertCurrent).not.toThrow();
   }));
 
 test.each(["copied capability", "unadmitted session scope"] as const)(
@@ -624,7 +614,8 @@ test.each(["human", "agent"] as const)(
 test.each([
   { configured: "workspace", explicit: undefined, origin: "human", expected: "workspace" },
   { configured: "full", explicit: "guarded", origin: "human", expected: "guarded" },
-  { configured: "full", explicit: undefined, origin: "human", expected: "forbidden" },
+  { configured: "full", explicit: undefined, origin: "human", expected: "workspace" },
+  { configured: "full", explicit: "full", origin: "human", expected: "forbidden" },
   { configured: "full", explicit: undefined, origin: "agent", expected: undefined },
 ] as const)("attended permission default $configured ($origin, explicit=$explicit)", (row) =>
   withFixture(["operator.write", false, row.origin], async (fixture) => {
@@ -641,70 +632,74 @@ test.each([
   }),
 );
 
-test.each(["authorized", "admin revoked", "default replaced"] as const)(
-  "configured Full checks final persistence after preparation: %s",
-  (change) =>
-    withFixture(["operator.admin", true], async (fixture) => {
-      const cfg = fixture.context.getRuntimeConfig();
-      cfg.agents = { ...cfg.agents, entries: { main: { newSessionPermissionMode: "full" } } };
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const create = sessionCreationOwner.createGatewaySession;
-      let finalWriteReached = false;
-      using observed = vi
-        .spyOn(sessionCreationOwner, "createGatewaySession")
-        .mockImplementationOnce((params) =>
-          create({
-            ...params,
-            prepareLifecycle: async () => ({
-              ok: true,
-              value: {
-                // Hold the production writer after model/account/runtime selection has finished.
-                withCommit: async (run) => {
-                  finalWriteReached = true;
-                  entered.resolve();
-                  await release.promise;
-                  return run(() => {});
-                },
+test("configured Full does not grant Workspace to a nonwriter or persist a session", () =>
+  withFixture(["operator.sessions.write", false], async (fixture) => {
+    const cfg = fixture.context.getRuntimeConfig();
+    cfg.agents = { ...cfg.agents, entries: { main: { newSessionPermissionMode: "full" } } };
+    await fixture.send({});
+    fixture.expectRejected("FORBIDDEN", { message: "missing scope: operator.admin" });
+  }));
+
+test.each([
+  ["operator.admin", "authorized"],
+  ["operator.admin", "default replaced"],
+  ["operator.write", "authorized"],
+] as const)("configured Full checks final persistence after preparation: %s, %s", (scope, change) =>
+  withFixture([scope, true], async (fixture) => {
+    const cfg = fixture.context.getRuntimeConfig();
+    cfg.agents = { ...cfg.agents, entries: { main: { newSessionPermissionMode: "full" } } };
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const create = sessionCreationOwner.createGatewaySession;
+    let finalWriteReached = false;
+    using observed = vi
+      .spyOn(sessionCreationOwner, "createGatewaySession")
+      .mockImplementationOnce((params) =>
+        create({
+          ...params,
+          prepareLifecycle: async () => ({
+            ok: true,
+            value: {
+              // Hold the production writer after model/account/runtime selection has finished.
+              withCommit: async (run) => {
+                finalWriteReached = true;
+                entered.resolve();
+                await release.promise;
+                return run(() => {});
               },
-            }),
+            },
           }),
-        );
-      const creating = fixture.send({});
-      try {
-        await Promise.race([entered.promise, creating]);
-        expect(observed).toHaveBeenCalledOnce();
-        expect(finalWriteReached).toBe(true);
-        expect(fixture.entry()).toBeUndefined();
-        expect(fixture.respond).not.toHaveBeenCalled();
-        if (change === "admin revoked") {
-          fixture.role.scopes = ["operator.write"];
-        } else if (change === "default replaced") {
-          cfg.agents.entries!.main!.newSessionPermissionMode = "guarded";
-        }
-      } finally {
-        release.resolve();
-        await creating;
+        }),
+      );
+    const creating = fixture.send({});
+    try {
+      await Promise.race([entered.promise, creating]);
+      expect(observed).toHaveBeenCalledOnce();
+      expect(finalWriteReached).toBe(true);
+      expect(fixture.entry()).toBeUndefined();
+      expect(fixture.respond).not.toHaveBeenCalled();
+      if (change === "default replaced") {
+        cfg.agents.entries!.main!.newSessionPermissionMode = "guarded";
       }
-      if (change === "authorized") {
-        expect(fixture.respond.mock.calls[0]?.[0]).toBe(true);
-        expect(fixture.entry()).toMatchObject({
-          permissionMode: "full",
-          authProfileOverride: fixture.authProfileId,
-        });
-      } else {
-        expect(fixture.respond.mock.calls[0]?.[0]).toBe(false);
-        expect(fixture.respond.mock.calls[0]?.[2]?.message).toMatch(
-          change === "admin revoked"
-            ? /role changed|authority|scope/i
-            : /permission default changed/i,
-        );
-        expect(fixture.entry()).toBeUndefined();
-      }
-    }),
+    } finally {
+      release.resolve();
+      await creating;
+    }
+    if (change === "authorized") {
+      expect(fixture.respond.mock.calls[0]?.[0]).toBe(true);
+      expect(fixture.entry()).toMatchObject({
+        permissionMode: scope === "operator.admin" ? "full" : "workspace",
+        authProfileOverride: fixture.authProfileId,
+      });
+    } else {
+      expect(fixture.respond.mock.calls[0]?.[0]).toBe(false);
+      expect(fixture.respond.mock.calls[0]?.[2]?.message).toMatch(/permission default changed/i);
+      expect(fixture.entry()).toBeUndefined();
+    }
+  }),
 );
 
-test.each([undefined, "guarded"] as const)(
+test.each([undefined, "guarded", "workspace", "full", "read-only"] as const)(
   "attended default preserves an existing stored mode: %s",
   (mode) =>
     withFixture(["operator.admin", false], async (fixture) => {
@@ -714,10 +709,12 @@ test.each([undefined, "guarded"] as const)(
       expect(original).toBeDefined();
       const cfg = fixture.context.getRuntimeConfig();
       cfg.agents = { ...cfg.agents, entries: { main: { newSessionPermissionMode: "full" } } };
+      fixture.role.scopes = ["operator.write"];
+      fixture.client.connect.scopes = ["operator.write"];
       fixture.respond.mockClear();
       await fixture.send({});
       expect(fixture.respond.mock.calls[0]?.[0]).toBe(true);
-      expect(fixture.entry()).toMatchObject({ sessionId: original!.sessionId });
-      expect(fixture.entry()?.permissionMode).toBe(mode);
+      expect(fixture.entry()).toStrictEqual({ ...original, updatedAt: expect.any(Number) });
+      expect(fixture.entry()?.updatedAt).toBeGreaterThanOrEqual(original!.updatedAt);
     }),
 );

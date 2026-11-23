@@ -140,7 +140,7 @@ it.each(["standalone", "bound"] as const)(
       }
       vi.setSystemTime(336_000);
       await clock.advanceTo(336_000);
-      expect(operation.watchdog.decide().action).toBe("warn");
+      expect(operation.watchdog.decide().action).toBe("observe");
       expect(recover).not.toHaveBeenCalled();
       vi.setSystemTime(366_000);
       expect(operation.watchdog.decide().action).toBe("stop");

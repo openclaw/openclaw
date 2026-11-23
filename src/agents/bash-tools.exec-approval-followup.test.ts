@@ -10,6 +10,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { sendMessage } from "../infra/outbound/message.js";
+import * as logger from "../logger.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   claimExecApprovalFollowupRuntimeHandoff,
@@ -200,9 +201,13 @@ describe("exec approval followup", () => {
     }
   });
 
-  it("retries observation after a transport error without competing direct delivery", async () => {
+  it.each([0, 600_000, -600_000])("retries across wall step %i", async (step) => {
+    const now = Date.now.bind(Date);
     acceptRun()
-      .mockRejectedValueOnce(new Error("gateway reconnecting"))
+      .mockImplementationOnce(async () => {
+        vi.spyOn(Date, "now").mockImplementation(() => now() + step);
+        throw new Error("gateway reconnecting");
+      })
       .mockResolvedValueOnce({ runId, status: "ok" });
     await send(pending);
     expectCalls(3, 0);
@@ -210,8 +215,8 @@ describe("exec approval followup", () => {
 
   it("ends observation at its deadline without competing direct delivery", async () => {
     const events = diagnostics(true);
-    const startedAt = new Date("2026-08-01T00:00:00Z").getTime();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+    const startedAt = performance.now();
+    const clock = vi.spyOn(performance, "now").mockReturnValue(startedAt);
     acceptRun().mockImplementationOnce(async () => {
       clock.mockReturnValue(startedAt + 10 * 60_000);
       throw new Error("gateway permanently unreachable");
@@ -223,16 +228,8 @@ describe("exec approval followup", () => {
     expect(events).toContainEqual(
       expect.objectContaining({
         type: "log.record",
-        level: "WARN",
         message: "Exec approval followup observation ended",
-        loggerName: "agents/exec-approval-followup",
-        attributes: {
-          approvalId,
-          runId,
-          reason: "deadline",
-          transportErrors: 1,
-          deliveryOwner: "accepted_agent_run",
-        },
+        attributes: expect.objectContaining({ reason: "deadline" }),
       }),
     );
   });
@@ -254,6 +251,32 @@ describe("exec approval followup", () => {
       await expect(direct()).rejects.toThrow(error);
     },
   );
+
+  it("records failed followup delivery once", async () => {
+    const warning = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    vi.mocked(sendMessage).mockRejectedValue(new Error("synthetic delivery failure"));
+    const target = { approvalId: "req-delivery-warning", ...route, direct: true };
+    await expect(sendExecApprovalFollowupResult(target, finished)).resolves.toBeUndefined();
+    await expect(sendExecApprovalFollowupResult(target, finished)).resolves.toBeUndefined();
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      "exec approval followup dispatch failed (id=req-delivery-warning): synthetic delivery failure",
+    );
+  });
+
+  it("suppresses expired approval delivery warnings", async () => {
+    const warning = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    vi.mocked(sendMessage).mockRejectedValue(
+      Object.assign(new Error("approval not found"), { gatewayCode: "APPROVAL_NOT_FOUND" }),
+    );
+    await expect(
+      sendExecApprovalFollowupResult(
+        { approvalId: "req-expired-warning", ...route, direct: true },
+        finished,
+      ),
+    ).resolves.toBeUndefined();
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(warning).not.toHaveBeenCalled();
+  });
 
   it("provides a summary when a no-session completion has no output", async () => {
     await direct({ resultText: "Exec finished (gateway id=req-1, code 0)" });

@@ -97,22 +97,36 @@ it.each(["EAGAIN", "EIO"])("preserves read-time %s handling for workspace memory
   const faultSeen = createDeferred();
   let reading = false;
   let injected = false;
+  let readAttempts = 0;
   const retry = memoryReadRetry.retryTransientMemoryRead;
   vi.spyOn(memoryReadRetry, "retryTransientMemoryRead").mockImplementation((read, label) =>
     retry(async () => {
       reading = true;
+      readAttempts += 1;
       return await read();
     }, label),
   );
-  const lstat = fsSync.lstatSync;
-  vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
-    if (reading && !injected && path.resolve(String(args[0])) === absolutePath) {
+  const injectFailure = (pathname: fsSync.PathLike) => {
+    if (reading && !injected && path.resolve(String(pathname)) === absolutePath) {
       injected = true;
       faultSeen.resolve();
       throw failure;
     }
-    return lstat(...args);
-  });
+  };
+  // POSIX traversal is asynchronous; Windows retains synchronous metadata reads.
+  if (process.platform === "win32") {
+    const lstat = fsSync.lstatSync;
+    vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+      injectFailure(args[0]);
+      return lstat(...args);
+    });
+  } else {
+    const lstat = fs.lstat;
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      injectFailure(args[0]);
+      return await lstat(...args);
+    });
+  }
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const result = readMemoryFile({ workspaceDir, relPath }).then(
     (value) => ({ status: "fulfilled" as const, value }),
@@ -129,6 +143,7 @@ it.each(["EAGAIN", "EIO"])("preserves read-time %s handling for workspace memory
       : { status: "rejected", error: failure },
   );
   expect(injected).toBe(true);
+  expect(readAttempts).toBe(code === "EAGAIN" ? 2 : 1);
 });
 
 it.each(["workspace", "extra directory"])(
@@ -212,14 +227,20 @@ it.each(["EACCES", "EPERM", "EIO"])(
     const healthyDir = path.join(directory, "healthy");
     const blockedTarget = path.join(healthyDir, "blocked.md");
     const scanError = Object.assign(new Error(`${code}: extra path unreadable`), { code });
+    let failedDirectoryScan = false;
     const lstat = fs.lstat;
     vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-      if ([extraDir, blockedTarget].includes(path.resolve(String(args[0])))) {
+      const targetPath = path.resolve(String(args[0]));
+      if (targetPath === extraDir && !failedDirectoryScan) {
+        failedDirectoryScan = true;
+        throw scanError;
+      }
+      if (targetPath === blockedTarget) {
         throw scanError;
       }
       return await lstat(...args);
     });
-    // fs-safe checks children synchronously; configured-root admission remains async.
+    // Windows and older fs-safe versions inspect children synchronously.
     const lstatSync = fsSync.lstatSync;
     vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
       if (path.resolve(String(args[0])) === blockedTarget) {
@@ -230,7 +251,11 @@ it.each(["EACCES", "EPERM", "EIO"])(
     const read = (
       relPath: string,
       extraPaths: Parameters<typeof readMemoryFile>[0]["extraPaths"] = [extraDir, healthyDir],
-    ) => readMemoryFile({ workspaceDir, extraPaths, relPath });
+    ) => {
+      // Fail this configured-entry scan, while leaving later explicit-file admission real.
+      failedDirectoryScan = false;
+      return readMemoryFile({ workspaceDir, extraPaths, relPath });
+    };
     for (const relPath of [target, blockedTarget]) {
       const result = read(relPath);
       await expect(result).rejects.toMatchObject({

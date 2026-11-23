@@ -19,18 +19,24 @@ import type { ChannelsPairingListResult } from "../api/types.ts";
 import type { ControlUiMockPresenceUser } from "./control-ui-e2e-contract.ts";
 
 export const defaultControlUiFeatureMethods = [
+  "agent.identity.get",
   "agents.create",
+  "agents.list",
+  "channels.status",
   "chat.abort",
   "chat.history",
   "chat.send",
+  "chat.steerNow",
   "chat.metadata",
   "chat.startup",
   "config.apply",
+  "config.get",
   "config.patch",
   "config.schema",
   "config.set",
   "device.scopes.requestUpgrade",
   "device.scopes.waitUpgrade",
+  "models.list",
   "session.members.add",
   "session.members.list",
   "session.members.listEvidence",
@@ -115,6 +121,9 @@ export function createControlUiDefaultResponses(scenario: {
     "beam.owned.resolve": null,
     "approval.history": { items: [] } satisfies ApprovalHistoryResult,
     "exec.approval.grants.list": { grants: [] } satisfies ExecApprovalGrantsListResult,
+    "openclaw.setup.options": {
+      __mockError: { code: "UNAVAILABLE", message: "setup options not mocked" },
+    },
     "openclaw.chat.history": { turns: [] } satisfies SystemAgentChatHistoryResult,
     "sessions.usage": {
       updatedAt: now.getTime(),

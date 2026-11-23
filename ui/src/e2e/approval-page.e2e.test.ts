@@ -322,7 +322,9 @@ suite.define(() => {
 
       await Promise.all([
         mobile.page.getByRole("heading", { name: "Approved here", exact: true }).waitFor(),
-        desktop.page.getByRole("heading", { name: "Resolved elsewhere", exact: true }).waitFor(),
+        desktop.page
+          .getByRole("heading", { name: "Decision already recorded", exact: true })
+          .waitFor(),
       ]);
       await Promise.all(surfaces.map(({ page }) => expectNoDecisionButtons(page)));
       const terminalFocus = await mobile.page.evaluate(() => {
@@ -334,6 +336,16 @@ suite.define(() => {
         };
       });
       expect(terminalFocus).toEqual({ id: "approval-page-title", inViewport: true });
+      const focusWidthDelta = await mobile.page
+        .locator("#approval-page-title")
+        .evaluate((title) => {
+          const range = document.createRange();
+          range.selectNodeContents(title);
+          return Math.abs(
+            title.getBoundingClientRect().width - range.getBoundingClientRect().width,
+          );
+        });
+      expect(focusWidthDelta).toBeLessThan(1);
       expect(await mobile.page.title()).toBe("Approved here — OpenClaw");
       await captureProof(mobile.page, "after-competing-answer-terminal.png");
       await captureProof(desktop.page, "after-competing-answer-loser-desktop.png");

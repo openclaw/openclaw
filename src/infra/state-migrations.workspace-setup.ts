@@ -367,6 +367,7 @@ async function migrateOneSource(params: {
     }
     assertConfiguredWorkspaceIdentity(params.source);
     sourceRoot = await root(params.source.rootDir, {
+      allowDrvfsRenameRecovery: true,
       hardlinks: "reject",
       symlinks: "reject",
     });

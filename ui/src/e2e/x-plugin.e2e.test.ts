@@ -5,9 +5,9 @@ import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
-  installMockGateway,
   reconnectMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../test-helpers/control-ui-plugin-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
@@ -48,13 +48,40 @@ function snapshot(accountId = "primary", enabled = false) {
 }
 
 suite.define(() => {
+  it("uses one registered page heading in a native embed without an advertised tab", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, serviceWorkers: "block" },
+      async ({ page }) => {
+        await page.addInitScript(() =>
+          Object.assign(window, {
+            __OPENCLAW_NATIVE_EMBED__: { platform: "ios", formFactor: "phone" },
+          }),
+        );
+        await installNativePluginMockGateway(page, {
+          nativePlugins: [{ pluginId: "x", rootDir: pluginRoot, source: "src/control-ui.tsx" }],
+          controlUiTabs: [],
+          featureMethods: [...defaultControlUiFeatureMethods, "x.allowlist.list"],
+          methodResponses: { "x.allowlist.list": snapshot() },
+        });
+        await page.goto(`${suite.server.baseUrl}plugin?plugin=x&id=replies`);
+        await page.getByText("@example_maint", { exact: true }).waitFor();
+        await page
+          .locator(".native-embed-header")
+          .getByRole("heading", { name: "X replies", level: 1 })
+          .waitFor();
+        expect(await page.getByRole("heading", { name: "X replies", level: 1 }).count()).toBe(1);
+        await page.getByRole("heading", { name: "Guest mode", exact: true }).waitFor();
+      },
+    );
+  });
+
   it("builds and mounts X, manages accounts, and retires pending reads with their authority", async () => {
     await suite.withPage(
       { viewport: desktop, locale: "en-US", serviceWorkers: "block" },
       async ({ page }) => {
         const pageErrors: string[] = [];
         page.on("pageerror", (error) => pageErrors.push(error.message));
-        const gateway = await installMockGateway(page, {
+        const gateway = await installNativePluginMockGateway(page, {
           nativePlugins: [{ pluginId: "x", rootDir: pluginRoot, source: "src/control-ui.tsx" }],
           operatorScopes: ["operator.admin"],
           featureMethods: [
@@ -159,9 +186,11 @@ suite.define(() => {
         await button("Refresh").click();
         await gateway.waitForRequest("x.allowlist.list", { after: retired });
         const pages = await openSidebarPages(page);
-        await pages.getByRole("link", { name: "Plugins", exact: true }).click();
+        await pages.getByRole("link", { name: "Customize", exact: true }).click();
         await surface.waitFor({ state: "detached" });
         await gateway.resolveDeferred("x.allowlist.list", added);
+        // Each choice closes the page menu; wait for that before reopening it.
+        await pages.waitFor({ state: "hidden" });
         await openSidebarPages(page);
         await pages.getByRole("link", { name: "X replies", exact: true }).click();
         await surface.getByText("@example_helper", { exact: true }).waitFor();

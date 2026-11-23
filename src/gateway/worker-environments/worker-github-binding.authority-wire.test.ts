@@ -84,7 +84,7 @@ function preparedIdentity(token: string): PreparedGitHubPublicationIdentity {
 
 support.setupWorkerEnvironmentServiceSuite();
 
-it.each(["original caller revoked", "turn reassigned"] as const)(
+it.each(["role changed then grant released", "turn reassigned"] as const)(
   "delivers launch and heartbeat credentials after request completion, but not after %s",
   async (revocation) => {
     const { claim, store } = await seedClaim("github-authority-worker", "github-authority-session");
@@ -286,8 +286,15 @@ it.each(["original caller revoked", "turn reassigned"] as const)(
       assert(heartbeat.github);
       await installed.refresh(heartbeat.github, () => {});
       expect(await fs.readFile(tokenFile, "utf8")).toContain("synthetic-refreshed-token");
-      if (revocation === "original caller revoked") {
+      if (revocation === "role changed then grant released") {
         await setCanonicalUserProfileRole(profile.id, "revoked");
+        const continued = await connection.rpc.request("heartbeat", {
+          sentAtMs: Date.now(),
+          status: "busy",
+          githubGeneration: 1,
+        });
+        expect(continued.ok).toBe(true);
+        await admitted.grant.revoke();
       } else {
         await store.releaseTurn(claim);
         await replaceClaim(store, claim, "replacement-claim");

@@ -30,7 +30,7 @@ it("loads bundle fallback copy with the file preview without replacing the activ
     "This file exceeds the preview limit. Its contents have not been truncated or loaded.",
   );
   expect(manager.t("filePreview.bundle.unavailable")).toBe(
-    "Couldn’t read this file safely. Close and reopen the skill to try again.",
+    "Couldn’t read this file. Close and reopen the skill to try again.",
   );
   expect(manager.t("filePreview.bundle.incomplete")).toBe(
     "Some bundle content is unavailable. Select a file to see its status.",

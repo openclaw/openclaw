@@ -1,5 +1,6 @@
 import { readAcpSessionMetaForEntryAsync } from "../../acp/runtime/session-meta-readonly.js";
 import { agentHarnessExposesOpenClawTools } from "../../agents/harness/tool-surface.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import {
   resolveEffectiveToolInventory,
@@ -136,6 +137,10 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
   if (rejectUnauthorizedCommand(params, "/tools")) {
     return { shouldContinue: false };
   }
+  const model = params.model;
+  if (!model) {
+    return commandReply(NO_MODEL_CONFIGURED_MESSAGE);
+  }
 
   try {
     const effectiveAccountId = resolveChannelAccountId(params);
@@ -152,7 +157,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       agentDir: sessionBound ? undefined : params.agentDir,
       workspaceDir: params.workspaceDir,
       modelProvider: params.provider,
-      modelId: params.model,
+      modelId: model,
     });
     await using acquired =
       await acquireEffectiveToolInventoryRuntimeModelContext(inventoryModelContext());
@@ -163,7 +168,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       const agentRuntime = resolveEffectiveAgentRuntime({
         cfg: params.cfg,
         provider: params.provider,
-        modelId: params.model,
+        modelId: model,
         modelApi: runtimeModelContext.modelApi,
         modelBaseUrl: runtimeModelContext.runtimeModel?.baseUrl,
         agentScope: { kind: "prepared", agentId: params.agentId },

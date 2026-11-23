@@ -73,13 +73,14 @@ it.for([
       NonNullable<
         NonNullable<GatewayRequestContext["execApprovalIosPushDelivery"]>["handleRequested"]
       >
-    >(async (request, delivery) => {
-      expect(
-        ["requester-device", "other-device"].map((deviceId) =>
-          delivery?.isTargetVisible?.({ deviceId, scopes: ["operator.approvals"] }),
-        ),
-      ).toEqual([true, false]);
-      delivered.resolve(request);
+    >(async (record) => {
+      expect(record).toMatchObject({
+        requestedByConnId: "requester-connection",
+        requestedByDeviceId: "requester-device",
+        requestedByDeviceTokenAuth: true,
+        agentRuntimeDelegatedAuthority: { ...authority, kind: "local" },
+      });
+      delivered.resolve(buildRequestedApprovalEvent(record, "exec"));
       return true;
     });
     const expired = vi.fn(async () => {});
@@ -142,7 +143,11 @@ it.for([
         sessionKey: binding.sessionKey,
         operationalRunInstance: run,
         approvalAuthority: authority,
-        receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+        receiptAuthority: () => {
+          if (!validateAgentRunDelegatedAuthority(authority)) {
+            throw new Error("agent tool caller authority is no longer active");
+          }
+        },
         ...turnSource,
       },
       async () => {

@@ -77,7 +77,7 @@ function captureModelRoutingAssertion(params: ModelRoutingAuthority) {
       source?.preparedRunAdmission?.assertCurrent();
       if (source?.admittedRunContext) {
         if (!assertAdmitted) {
-          throw new Error("admitted run authority is no longer active");
+          throw new Error("This agent run is no longer active. Start a new turn to retry.");
         }
         assertAdmitted();
       }
@@ -89,7 +89,7 @@ function captureModelRoutingAssertion(params: ModelRoutingAuthority) {
           owner !== previousOwner &&
           owner.operationalRunInstance.instanceId !== instance.instanceId
         ) {
-          throw new Error("model routing run authority changed");
+          throw new Error("A newer run took over this session. Start a new turn to retry.");
         }
       }
     } catch (cause) {

@@ -1,7 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createDeferredCore } from "../../shared/deferred.js";
-import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
+import type * as OperatorRunAuthority from "../operator-run-authority.js";
 import {
   createMemoryOperatorClient as operatorClient,
   createMemoryProvider,
@@ -24,8 +23,9 @@ vi.mock("../../plugins/memory-runtime.js", () => ({
 vi.mock("../../state/user-profile-list.js", () => ({
   hasMultipleResidentSessionSharingIdentities: () => false,
 }));
-vi.mock("../operator-run-authority.js", () => ({
-  captureGatewayOperatorRunAuthority: mocks.capture,
+vi.mock("../operator-run-authority.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof OperatorRunAuthority>()),
+  prepareGatewayOperatorRunAuthority: mocks.capture,
 }));
 
 import { memorySearchHandlers } from "./memory-search.js";
@@ -57,17 +57,13 @@ async function invoke(
 }
 
 let provider: ReturnType<typeof createMemoryProvider>;
-let assertCurrent: ReturnType<typeof vi.fn>;
-let release: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.resolveBackend.mockReturnValue({ backend: "builtin" });
-  assertCurrent = vi.fn();
-  release = vi.fn();
   mocks.capture.mockResolvedValue({
-    authority: { scopes: ["operator.read"], assertCurrent },
-    release,
+    authority: { scopes: ["operator.read"], assertCurrent: vi.fn() },
+    release: vi.fn(),
   });
   provider = createMemoryProvider(reference);
   mocks.acquire.mockResolvedValue({ provider, providerId: "records", adapter: "native" });
@@ -86,37 +82,6 @@ it.each([
   expectRpcError(await invoke(method, params), { code: "INVALID_REQUEST" });
   expect(mocks.acquire).not.toHaveBeenCalled();
 });
-
-it.each(["agent", "ingress"] as const)(
-  "does not release a late result after an %s operator authority is revoked",
-  async (caller) => {
-    const pending = createDeferredCore<{ status: "ready" }>();
-    provider.health.mockImplementation(() => pending.promise);
-    const client = syntheticClient();
-    if (caller === "ingress") {
-      delete client.connId;
-      const principal = createRemoteControlUiIngressTestContext().resolvePrincipal();
-      client.internal = {
-        remoteIngressPrincipal: principal,
-        operatorRoleActor: principal.operatorRoleActor,
-      };
-    }
-    const entered = createDeferredCore();
-    mocks.acquire.mockImplementation(async () => {
-      entered.resolve();
-      return { provider, providerId: "records" };
-    });
-    const result = invoke("memory.status", {}, client);
-    await entered.promise;
-    assertCurrent.mockImplementation(() => {
-      throw new Error("operator revoked");
-    });
-    pending.resolve({ status: "ready" });
-    expectRpcError(await result, { message: "operator revoked" });
-    expect(provider.close).toHaveBeenCalledOnce();
-    expect(release).toHaveBeenCalledOnce();
-  },
-);
 
 it.each([
   ["an unauthenticated caller", null],

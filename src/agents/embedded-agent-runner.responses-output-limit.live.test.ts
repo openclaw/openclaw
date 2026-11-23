@@ -134,11 +134,47 @@ describeLive("embedded Responses output-limit recovery live", () => {
             if (requestNumber === 2) {
               // Spend the small cap on function arguments, not a reasoning-only turn.
               request.reasoning = { effort: "none" };
+              // The prompt does not enforce argument length; CI wrote only 40 bytes.
+              // Constrain generation, not the stream: the real provider must exhaust its cap.
+              request.tools = request.tools?.map((tool) =>
+                tool.type === "function" && tool.name === "write"
+                  ? {
+                      ...tool,
+                      strict: true,
+                      parameters: {
+                        type: "object",
+                        properties: {
+                          path: { type: "string", enum: [unfinishedPath] },
+                          content: { type: "string", enum: ["0123456789".repeat(4000)] },
+                        },
+                        required: ["path", "content"],
+                        additionalProperties: false,
+                      },
+                    }
+                  : tool,
+              );
             }
             // Only request policy changes: the provider's stream and terminal facts stay intact.
             requests.push(request);
             const response = await fetchModel(input, { ...init, body: JSON.stringify(request) });
-            return observeTerminalResponse(response, (terminal) => responses.push(terminal));
+            return observeTerminalResponse(response, (terminal) => {
+              responses.push(terminal);
+              // Log metadata before any assertion can hide the provider outcome.
+              logLiveProgress(
+                `Responses terminal facts: ${JSON.stringify({
+                  requestNumber,
+                  status: terminal.status,
+                  incompleteReason: terminal.incomplete_details?.reason,
+                  outputTokens: terminal.usage?.output_tokens,
+                  outputItems: terminal.output.map((item) => ({
+                    type: item.type,
+                    status: "status" in item ? item.status : undefined,
+                    argumentLength:
+                      item.type === "function_call" ? item.arguments.length : undefined,
+                  })),
+                })}`,
+              );
+            });
           };
         },
       });
@@ -189,26 +225,39 @@ describeLive("embedded Responses output-limit recovery live", () => {
           },
         });
 
+        const messages = sessionManager
+          .getBranch()
+          .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
+        // Distinguish a bad prerequisite call from truncation/recovery failures.
+        expect(
+          events.find(
+            (event) =>
+              event.stream === "tool" && event.data.name === "exec" && event.data.phase === "start",
+          )?.data.args,
+        ).toMatchObject({ command, workdir: state.workspaceDir });
+        expect(
+          messages.filter(
+            (message) => message.role === "toolResult" && message.toolName === "exec",
+          ),
+        ).toEqual([
+          expect.objectContaining({
+            isError: false,
+            details: expect.objectContaining({ status: "completed", exitCode: 0 }),
+          }),
+        ]);
         const receipts = (await fs.readFile(receiptPath, "utf8")).trim().split("\n");
         expect(receipts).toHaveLength(1);
         const receipt = receipts[0];
         expect(receipt).toMatch(/^RECEIPT_[0-9a-f-]{36}$/);
         await expect(fs.stat(unfinishedPath)).rejects.toMatchObject({ code: "ENOENT" });
         expect(requests).toHaveLength(3);
-        const terminalFacts = responses.map((response) => ({
-          status: response.status,
-          incompleteReason: response.incomplete_details?.reason,
-          outputItems: response.output.map((item) => ({
-            type: item.type,
-            status: "status" in item ? item.status : undefined,
-          })),
-        }));
-        logLiveProgress(`Responses terminal facts: ${JSON.stringify(terminalFacts)}`);
-        expect(terminalFacts).toHaveLength(3);
-        expect(terminalFacts[1]).toMatchObject({
+        expect(responses).toHaveLength(3);
+        expect(responses[1]).toMatchObject({
           status: "incomplete",
-          incompleteReason: "max_output_tokens",
-          outputItems: expect.arrayContaining([{ type: "function_call", status: "incomplete" }]),
+          incomplete_details: { reason: "max_output_tokens" },
+          output: expect.arrayContaining([
+            expect.objectContaining({ type: "function_call", status: "incomplete" }),
+          ]),
         });
         // Recovery may continue from provider state or replay the committed durable transcript.
         // The latter deliberately omits previous_response_id, so prove the receipt survived instead.
@@ -224,9 +273,6 @@ describeLive("embedded Responses output-limit recovery live", () => {
             (event) => event.stream === "run_status" && event.data.reason === "output_limit",
           ),
         ).toHaveLength(1);
-        const messages = sessionManager
-          .getBranch()
-          .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
         const failures = messages.filter(
           (message) => message.role === "assistant" && message.errorCode === "incomplete_tool_call",
         );
@@ -254,11 +300,6 @@ describeLive("embedded Responses output-limit recovery live", () => {
         }
         expect(failure.usage.output).toBeGreaterThanOrEqual(256);
         expect(failure.usage.output).toBeLessThanOrEqual(256 + 32);
-        expect(
-          messages.filter(
-            (message) => message.role === "toolResult" && message.toolName === "exec",
-          ),
-        ).toHaveLength(1);
         expect(
           messages.filter(
             (message) => message.role === "toolResult" && message.toolName === "write",

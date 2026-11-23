@@ -179,8 +179,9 @@ struct ChatCatalogProjectionTests {
 
         #expect(model.modelSelectionID == OpenClawChatViewModel.defaultModelSelectionID)
         #expect(model.isSelectedModel(OpenClawChatViewModel.defaultModelSelectionID))
-        #expect(model.composerInlineModelLabel == (hasDefault ? "allowed" : "Default"))
-        #expect(model.selectedModelChoice(for: model.sessions.first)?.selectionID == (hasDefault ? "fixture/allowed" : nil))
+        #expect(model.composerInlineModelLabel == (hasDefault ? "Allowed" : "Default"))
+        #expect(model.selectedModelChoice(for: model.sessions.first)?
+            .selectionID == (hasDefault ? "fixture/allowed" : nil))
         #expect(model.sessions.first?.model == "historical")
         #expect(model.sessions.first?.modelProvider == "fixture")
         #expect(model.canSelectModel("fixture/allowed"))
@@ -206,5 +207,19 @@ struct ChatCatalogProjectionTests {
                 .utf8))
         model.syncSelectedModel()
         #expect(model.effectiveThinkingLevelForSend("high", sessionKey: "other") == "high")
+    }
+
+    @Test(arguments: [
+        ("Claude Opus 5.5", "Claude Opus 5.5"),
+        ("Anthropic Claude Opus 5.5", "Claude Opus 5.5"),
+        ("Claude Opus 5.5 (Anthropic)", "Claude Opus 5.5"),
+        ("anthropic/claude-opus-5-5", "claude-opus-5-5"),
+        ("", "claude-opus-5-5"),
+    ])
+    func `composer model label reads the catalog name without the provider`(name: String, expected: String) throws {
+        let model = try self.viewModel(
+            #"{"id":"claude-opus-5-5","name":"\#(name)","provider":"anthropic"}"#)
+        model.sessionDefaults = .init(modelProvider: "anthropic", model: "claude-opus-5-5", contextTokens: nil)
+        #expect(model.composerInlineModelLabel == expected)
     }
 }

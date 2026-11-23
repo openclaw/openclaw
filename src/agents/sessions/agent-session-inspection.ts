@@ -11,7 +11,7 @@ import {
   withSessionMetadataPublication,
   withSessionTranscriptWriteAssertion,
 } from "../../config/sessions/transcript-write-context.js";
-import type { Model, AssistantMessage } from "../../llm/types.js";
+import type { Model, AssistantHistoryMessage } from "../../llm/types.js";
 import { assertionSucceeds } from "../../shared/assertion.js";
 import {
   type ThinkingLevel,
@@ -29,6 +29,7 @@ import type { ExtensionRunner } from "./extensions/runner.js";
 import type { ThinkingLevelSelectEvent } from "./extensions/types.js";
 import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
+import { sessionManagerReadTranscriptBranch } from "./session-manager-view-types.js";
 import { withSessionManagerWriteAssertion } from "./session-manager-write-admission.js";
 import { getLatestCompactionEntry } from "./session-manager.js";
 import { warnSessionPersistenceDeprecation } from "./session-persistence-deprecation.js";
@@ -317,7 +318,7 @@ export abstract class AgentSessionInspection extends AgentSessionPrompting {
     // After compaction, the last assistant usage reflects pre-compaction context size.
     // We can only trust usage from an assistant that responded after the latest compaction.
     // If no such assistant exists, context token count is unknown until the next LLM response.
-    const branchEntries = this.sessionManager.getBranch();
+    const branchEntries = this.sessionManager[sessionManagerReadTranscriptBranch]();
     const latestCompaction = getLatestCompactionEntry(branchEntries);
     const providerCheckpointIndex = branchEntries.findLastIndex(
       (entry) =>
@@ -377,7 +378,7 @@ export abstract class AgentSessionInspection extends AgentSessionPrompting {
 
   getLastAssistantText(): string | undefined {
     const message = this.messages.findLast(
-      (entry): entry is AssistantMessage =>
+      (entry): entry is AssistantHistoryMessage =>
         entry.role === "assistant" &&
         (entry.stopReason !== "aborted" || hasPersistedAssistantContent(entry.content)),
     );

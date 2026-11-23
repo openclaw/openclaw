@@ -351,7 +351,7 @@ it("holds the original batch lease until preparation settles before calling the 
         },
       },
     },
-    1,
+    ["fixture"],
     async (batch) => {
       batch?.retain("fixture");
       return "installed";

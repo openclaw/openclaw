@@ -502,6 +502,7 @@ export function ChannelsPage() {
     const labels = channelIds.map((channelId) => resolveChannelLabel(props, channelId));
     const [only] = channelIds.length === 1 ? channelIds : [];
     showToast({
+      severity: "error",
       actionPrimary: true,
       message:
         only !== undefined

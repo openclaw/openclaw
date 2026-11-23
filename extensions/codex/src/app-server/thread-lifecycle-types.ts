@@ -8,6 +8,7 @@ import type { CodexInferenceProxy } from "./inference-proxy.js";
 import type { CodexInferenceProviderRoutes } from "./inference-routing.js";
 import type { CodexNativeModelInputTools } from "./native-model-input-tools.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
+import type { CodexConfigReadResponse } from "./protocol-control-plane.js";
 import type { CodexDynamicToolSpec, CodexServiceTier, JsonObject, JsonValue } from "./protocol.js";
 import type {
   CodexBindingAuthority,
@@ -35,6 +36,10 @@ export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding &
   clearInheritedServiceTier?: true;
   /** Tier admitted with this attempt's native compaction configuration. */
   preparedServiceTier?: CodexServiceTier | null;
+  /** OpenClaw base this lifecycle rendered for the thread, for reports; never persisted. */
+  preparedOpenClawBaseInstructions?: string;
+  /** This attempt's preflight config/read snapshot; never persisted in the binding. */
+  preparedEffectiveConfig?: CodexConfigReadResponse;
 };
 
 export type CodexThreadFinalConfigPatchDecision = (
@@ -111,6 +116,7 @@ export type CodexStartOrResumeThreadParams = Omit<
 };
 
 export type CodexThreadResumePreparation = {
+  model?: string | null;
   modelProvider?: string | null;
   assertConfigured: () => void;
   assertCurrent: () => void;
