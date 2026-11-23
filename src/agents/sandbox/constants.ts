@@ -34,6 +34,7 @@ export const DEFAULT_TOOL_ALLOW = [
   "sessions_search",
   "sessions_send",
   "sessions_spawn",
+  "session_project",
   "sessions_yield",
   "subagents",
   "session_status",
@@ -61,7 +62,7 @@ export const SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH = "2026-05-12-cdp-relay-auth";
 
 // Bump with shared Docker create-flag changes so existing ordinary and browser
 // sandboxes roll through the hash/recreate path instead of keeping stale flags.
-export const SANDBOX_DOCKER_CREATE_ARGS_EPOCH = "2026-08-25-container-env-file";
+export const SANDBOX_DOCKER_CREATE_ARGS_EPOCH = "2026-11-09-bounded-tmpfs";
 
 export const DEFAULT_SANDBOX_BROWSER_PREFIX = "openclaw-sbx-browser-";
 export const DEFAULT_SANDBOX_BROWSER_CDP_PORT = 9222;

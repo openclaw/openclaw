@@ -5,7 +5,7 @@ import {
   readGatewayDeviceSourceAuthority,
   retainGatewayDeviceRevocation,
 } from "../device-revocation.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 
@@ -13,7 +13,7 @@ import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 export async function retainTalkClientRunAuthority(
   params: Pick<GatewayRequestHandlerOptions, "client" | "context" | "hasCurrentClientAuthority">,
 ) {
-  const captured = await captureGatewayOperatorRunAuthority({
+  const captured = await prepareGatewayOperatorRunAuthority({
     ...params,
     client: params.client ?? null,
   });
@@ -54,23 +54,19 @@ export async function retainTalkClientRunAuthority(
       captured?.authority.assertCurrent();
       acceptGatewayDeviceSourceAuthority(params.hasCurrentClientAuthority);
     },
-    async retainRun(runId: string, spawnedBy?: string) {
-      if (released) {
-        throw new Error("Talk caller source has closed");
+    async retainRun(runId: string) {
+      if (released || sourceCurrent?.() === false) {
+        throw new Error("Talk caller source authority is no longer active");
       }
       const retained = await retainGatewayOperatorRun({
         client: client ?? null,
         context: params.context,
         hasCurrentClientAuthority: committedSource,
         runId,
-        spawnedBy,
         entry: getRpcSourceForGateway(runId, params.context.resolveGatewayContext),
       });
       const assertSourceCurrent = () => {
         retained.authority?.assertCurrent();
-        if (sourceCurrent?.() === false) {
-          throw new Error("Talk caller source authority is no longer active");
-        }
       };
       try {
         assertSourceCurrent();

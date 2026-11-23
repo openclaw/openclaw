@@ -1,5 +1,6 @@
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isClaimedByLiveRequesterTurn } from "./subagent-requester-turn-liveness.js";
 
 export const shouldSuspendPendingFinalDelivery = (entry: SubagentRunRecord) =>
   entry.expectsCompletionMessage === true &&
@@ -29,9 +30,14 @@ export function resolveAnnounceDeliveryDeadline(
   expiryMs: number,
 ): number {
   const delivery = entry.expectsCompletionMessage === true ? entry.delivery : undefined;
-  return (
-    delivery?.deadlineAt ?? (delivery?.windowStartedAt ?? entry.execution.endedAt ?? now) + expiryMs
-  );
+  const deadline =
+    delivery?.deadlineAt ??
+    (delivery?.windowStartedAt ?? entry.execution.endedAt ?? now) + expiryMs;
+  // A live requester owns its wait; only an orphan spends the delivery deadline.
+  return now >= deadline &&
+    isClaimedByLiveRequesterTurn(entry, delivery?.requesterDelivery?.blockingRunId ?? "")
+    ? now + expiryMs
+    : deadline;
 }
 
 export function resolveDeferredCleanupDecision(params: {

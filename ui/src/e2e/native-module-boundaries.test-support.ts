@@ -102,8 +102,10 @@ export function defineNativeModuleBoundaryTests(
       } else if (action === "Escape") {
         await page.keyboard.press("Escape");
       } else {
-        const toggle = page.locator('[data-navigation-view="sessions"]');
-        await toggle.click();
+        await page
+          .locator("openclaw-app-sidebar")
+          .getByRole("button", { name: "Collapse sidebar", exact: true })
+          .click();
         await expect.poll(() => page.locator(".sidebar-shell").isVisible()).toBe(false);
         // The native event does not generate an outside pointer that could
         // accidentally dismiss an Inbox resurrected by the old import.
@@ -158,7 +160,7 @@ export function defineNativeModuleBoundaryTests(
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.locator(".sidebar-identity-card").click();
       const buildLink = sidebar.getByRole("menuitem", {
-        name: "Control UI build details",
+        name: "Web app build details",
         exact: true,
       });
       const hoverCard = sidebar.locator("openclaw-sidebar-build-chip openclaw-tooltip");

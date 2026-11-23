@@ -9,7 +9,6 @@ import {
 import { initializeSessionReadContext } from "../../gateway/server-methods/sessions-read-cache.test-support.js";
 import { sessionSharingHandlers } from "../../gateway/server-methods/sessions-sharing.js";
 import {
-  identifiedClient,
   sessionSharingTestContext as context,
   soloClient,
 } from "../../gateway/server-methods/sessions-sharing.test-support.js";
@@ -219,29 +218,6 @@ async function call(
   return responses;
 }
 
-it("rechecks the current manager after the membership read yields", async () => {
-  await withState(async () => {
-    await captureRuntimeConfigAsyncReader()();
-    const scope = mainScope("member-reader-authority");
-    await upsertSessionEntryCore(scope, {
-      sessionId: "member-reader-authority",
-      updatedAt: 1,
-      createdActor: { type: "human", source: "profile", id: "owner" },
-    });
-    await addSessionMember(scope, memberRow("guest", 2));
-    const client = identifiedClient("owner");
-    const requestContext = await readContext();
-    const pending = call(
-      "session.members.listEvidence",
-      { sessionKey: scope.sessionKey },
-      requestContext,
-      client,
-    );
-    client.authenticatedUserProfile = identifiedClient("other").authenticatedUserProfile;
-    await expect(pending).rejects.toThrow("session ownership changed before sharing read");
-  });
-});
-
 it("commits aliased worker membership and participant facts before publishing, and rejects stale authority", async () => {
   await withState(async (state) => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
@@ -268,7 +244,7 @@ it("commits aliased worker membership and participant facts before publishing, a
       },
     };
     const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
-    let actor: ReturnType<typeof captureDurableSessionActor> | undefined;
+    let actor: Awaited<ReturnType<typeof captureDurableSessionActor>> | undefined;
     const expectedEntry = {
       sessionId: entry.sessionId,
       createdActor: entry.createdActor,
@@ -304,7 +280,7 @@ it("commits aliased worker membership and participant facts before publishing, a
         kind: "participants",
         projection: { participants: [{ identity: peer }], participantCount: 1 },
       });
-      actor = captureDurableSessionActor({
+      actor = await captureDurableSessionActor({
         database: { agentId: "main", path: database.path },
         target: actorTarget,
         lifetime: authority,
@@ -323,7 +299,7 @@ it("commits aliased worker membership and participant facts before publishing, a
       expect(after?.participants).toMatchObject([{ contributionCount: 2, lastPromptedAt: 4 }]);
       expect(after?.version).toEqual({ ...before.version, sequence: before.version.sequence + 1 });
       expect(readSessionActorEntryFacts(actorTarget)?.participants).toEqual(after?.participants);
-      expect(participantLifecycle).toHaveBeenCalledTimes(2);
+      expect(participantLifecycle).toHaveBeenCalledTimes(1);
       await expect(
         addSessionMember(scope, {
           identityId: "stale",
@@ -498,7 +474,9 @@ it.each([
       const sharing = await prepareSessionMutationFacts({ cfg, ...scope });
       const unavailable = "Session access facts are unavailable";
       const expectUnavailable = () =>
-        expect(prepareSessionMutationFacts({ cfg, ...scope })).rejects.toThrow(unavailable);
+        expect(prepareSessionMutationFacts({ cfg, ...scope })).rejects.toThrow(
+          mutation === "category" ? unavailable : "restart the Gateway",
+        );
       const publishedMemberships: boolean[] = [];
       const stopPublic = sessionChanges.subscribe((change) => {
         if (

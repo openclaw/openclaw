@@ -37,6 +37,10 @@ back during capture, summarization, or listing. Default state directory is
 from the session start time; the session directory is a filesystem-safe slug
 derived from the session id.
 
+When `show` or `path` cannot find a session or its summary, the CLI prints the
+specific reason on stderr and exits with status `1`. JSON inspection of an
+existing session without a summary remains available.
+
 ## Read transcripts in the Control UI
 
 In the [Control UI](/web/control-ui/settings#meetings-page), open the sidebar's pencil menu

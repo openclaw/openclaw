@@ -26,9 +26,9 @@ vi.mock("openai", () => ({
   },
 }));
 
-import { createOpenAIResponsesClient } from "../transports/openai-responses-client.js";
 import type { OpenAIResponsesOptions as Options } from "../transports/openai-responses-contracts.js";
 import { buildOpenAIResponsesParams } from "../transports/openai-responses-params-internal.js";
+import { createOpenAIResponsesClient } from "./openai-provider-client.js";
 import { makeOpenAIProviderModel } from "./openai-provider.test-support.js";
 import { streamOpenAIResponses, streamSimpleOpenAIResponses } from "./openai-responses.js";
 

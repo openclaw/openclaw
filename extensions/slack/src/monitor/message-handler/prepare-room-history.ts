@@ -1,4 +1,5 @@
 import { toInboundMediaFactsWithMetadata } from "openclaw/plugin-sdk/channel-inbound";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { ContextVisibilityMode } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -70,14 +71,30 @@ export async function resolveSlackRoomHistory(params: {
         })
       : await resolveSlackChannelHistory(request);
     params.assertCurrent();
+    const history = messages.filter(
+      (message) => !isSlackThreadAuthorCurrentBot({ identity: params.ctx, author: message }),
+    );
+    const userIds = [
+      ...new Set(history.flatMap((message) => (message.userId ? [message.userId] : []))),
+    ];
+    // Keep the thread-history lookup bound and drain admitted readers before omission.
+    const users = await runTasksWithConcurrency({
+      tasks: userIds.map((userId) => async () => {
+        params.assertCurrent();
+        const user = await params.ctx.resolveUserName(userId, params.eventScope);
+        params.assertCurrent();
+        return [userId, user] as const;
+      }),
+      limit: 4,
+      errorMode: "stop",
+    });
+    if (users.hasError) {
+      throw users.firstError;
+    }
+    const userNames = new Map(users.results);
     const permitted: Array<{ message: (typeof messages)[number]; sender: string }> = [];
-    for (const message of messages) {
-      if (isSlackThreadAuthorCurrentBot({ identity: params.ctx, author: message })) {
-        continue;
-      }
-      const user = message.userId
-        ? await params.ctx.resolveUserName(message.userId, params.eventScope)
-        : undefined;
+    for (const message of history) {
+      const user = message.userId ? userNames.get(message.userId) : undefined;
       params.assertCurrent();
       const senderAllowed = resolveSlackUserAllowed({
         allowList: params.allowFromLower,

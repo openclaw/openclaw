@@ -2,12 +2,15 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import type { ModelsProbeResult } from "../../api/types.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   appendPage,
+  createApiKeyProviderData,
   createAuthStatus,
   createHarness,
   drainPageUpdates,
+  expandProvider,
   modelPicker,
   requestCount,
   saveKey,
@@ -18,7 +21,7 @@ import {
 const keyInput = (page: ModelProvidersPageTestElement) =>
   page.querySelector<HTMLInputElement>(".model-providers__inline-form input");
 const keyButton = (page: ModelProvidersPageTestElement) =>
-  page.querySelector<HTMLButtonElement>(".model-providers__inline-form button")!;
+  page.querySelector<HTMLButtonElement>(".model-providers__inline-form .btn.primary")!;
 const primaryButton = (page: ModelProvidersPageTestElement) =>
   modelPicker(page, "primary").querySelector<HTMLButtonElement>(".picker-select__trigger");
 
@@ -63,6 +66,47 @@ describe("ModelProvidersPage mutation presentation", () => {
     expect(requestCount(request, "models.authSetApiKey")).toBe(2);
   });
 
+  it("keeps the newer Test access result when an older saved-key check finishes last", async () => {
+    const { context, request } = createHarness("main");
+    const savedCheck = deferred<ModelsProbeResult>();
+    const originalRequest = request.getMockImplementation()!;
+    let checks = 0;
+    request.mockImplementation(async (method) => {
+      if (method === "models.list") {
+        return {
+          models: [{ id: "test-model", name: "Test model", provider: "openai", available: true }],
+          providerOutcomes: [{ provider: "openai", status: "ready" }],
+        };
+      }
+      if (method === "models.authStatus") {
+        return createApiKeyProviderData().authStatus;
+      }
+      if (method === "models.authSetApiKey") {
+        return { provider: "openai", profileId: "openai:key" };
+      }
+      if (method === "models.probe") {
+        return ++checks === 1
+          ? savedCheck.promise
+          : { provider: "openai", status: "billing", results: [] };
+      }
+      return originalRequest(method);
+    });
+    const page = appendPage(context);
+    await waitForProviders(page);
+    await saveKey(page, "synthetic-replacement");
+    await waitForSolid(() => expect(checks).toBe(1));
+    const row = await expandProvider(page, "openai");
+    row.querySelector<HTMLButtonElement>('button[aria-label="Test access: OpenAI"]')!.click();
+    const badge = () => row.querySelector(".provider-row__status")?.textContent;
+    await waitForSolid(() => expect(badge()).toBe("Billing problem"));
+
+    savedCheck.resolve({ provider: "openai", status: "ok", results: [] });
+    await waitForSolid(() => expect(page.view.props.busy["key:openai"]).toBeUndefined());
+    expect(badge()).toBe("Billing problem");
+    expect(row.textContent).toContain("API key saved.");
+    expect(row.textContent).not.toContain("API key saved and verified.");
+  });
+
   it("retains disabled defaults during a write and restores the saved selection on failure", async () => {
     const { context, runtimeConfig, request } = createHarness("main");
     const original = request.getMockImplementation()!;
@@ -77,6 +121,11 @@ describe("ModelProvidersPage mutation presentation", () => {
     );
     const page = appendPage(context);
     await waitForProviders(page);
+    const moreSettings = page.querySelector<HTMLButtonElement>("[data-models-more-settings]")!;
+    if (moreSettings.getAttribute("aria-expanded") !== "true") {
+      moreSettings.click();
+      await page.updateComplete;
+    }
     const previous = page.view.props.defaultModels.primary;
     const pending = deferred<boolean>();
     runtimeConfig.patch.mockImplementationOnce(() => pending.promise);
@@ -110,6 +159,11 @@ describe("ModelProvidersPage mutation presentation", () => {
       const { context, runtimeConfig } = createHarness("main");
       const page = appendPage(context);
       await waitForProviders(page);
+      const moreSettings = page.querySelector<HTMLButtonElement>("[data-models-more-settings]")!;
+      if (moreSettings.getAttribute("aria-expanded") !== "true") {
+        moreSettings.click();
+        await page.updateComplete;
+      }
       const groups = page.querySelectorAll<HTMLElement>(
         '.model-providers__defaults [role="radiogroup"]',
       );

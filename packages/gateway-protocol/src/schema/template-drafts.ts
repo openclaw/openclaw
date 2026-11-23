@@ -27,6 +27,8 @@ export const TemplateDraftDocumentSchema = closedObject({
     }),
     { maxItems: 64 },
   ),
+  /** Workspace-relative path of the source agent's avatar image; the only non-text draft input. */
+  avatar: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
 });
 export const TemplatesDraftsCreateParamsSchema = closedObject({
   agentId: Target.agentId,
@@ -47,6 +49,10 @@ const ReviewChoices = closedObject({
 export const TemplatesDraftsReviewParamsSchema = closedObject({
   ...Target,
   choices: Type.Optional(ReviewChoices),
+  /** Observe ClawHub only; never submit or retry publication. */
+  checkPublication: Type.Optional(Type.Boolean()),
+  reviewToken: Type.Optional(Revision),
+  attemptId: Type.Optional(Type.String({ pattern: "^[a-zA-Z0-9_-]{1,128}$" })),
 });
 export const TemplatesDraftsPublishParamsSchema = closedObject({
   ...Target,
@@ -67,6 +73,15 @@ export type TemplateDraftReviewItem = {
   label: string;
   detail: string;
   included: boolean;
+  requirement?:
+    | { source: "clawhub"; ref: string; version: string }
+    | { source: "bundled"; path: string };
+  automation?: {
+    message: string;
+    schedule: { cron: string; timezone: string };
+    session: "main" | "isolated";
+    enabled: boolean;
+  };
 };
 export type TemplatesDraftsReadResult = { content: string; revision: string };
 export type TemplatesDraftsCreateResult = { draftId: string; prompt: string };
@@ -79,12 +94,20 @@ export type TemplatesDraftsReviewResult = {
   version: string;
   description: string;
   items: TemplateDraftReviewItem[];
-  files: Array<{ path: string; content: string }>;
+  /** Binary archive files, such as the avatar, are listed without `content`. */
+  files: Array<{ path: string; content?: string; workspacePaths?: string[] }>;
+  /** The packaged avatar as a PNG data URL, when the draft carries one. */
+  iconUrl?: string;
   scope: TemplateDraftDocument["scope"];
+  publicationState?:
+    | { status: "pending" | "published"; publication: TemplatesDraftsPublishResult }
+    | { status: "failed"; reason: "blocked" | "failed" | "expired" }
+    | { status: "unconfirmed" };
 };
 export type TemplatesDraftsPublishResult = {
   name: string;
   version: string;
   url: string;
   publicationStatus: "pending" | "published";
+  attemptId?: string;
 };

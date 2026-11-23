@@ -323,14 +323,24 @@ function irRangeToRichText(
     stack.length = shared;
     for (const item of active.slice(shared)) {
       const container: RichText[] = [];
-      const node: RichText =
-        item.kind === "html"
-          ? item.wrap(container)
-          : item.kind === "link"
-            ? item.target.kind === "url"
+      let node: RichText;
+      switch (item.kind) {
+        case "html":
+          node = item.wrap(container);
+          break;
+        case "link":
+          node =
+            item.target.kind === "url"
               ? richTextLink(container, item.target.href)
-              : { type: "anchor_link", text: container, anchor_name: item.target.name }
-            : { type: item.kind === "annotation" ? "code" : item.style, text: container };
+              : { type: "anchor_link", text: container, anchor_name: item.target.name };
+          break;
+        case "annotation":
+          node = { type: "code", text: container };
+          break;
+        case "style":
+          node = { type: item.style, text: container };
+          break;
+      }
       currentText().push(node);
       stack.push({ span: item, text: container });
     }
@@ -352,7 +362,7 @@ function splitParagraphs(
   }
   const sourceText = ir.text.slice(start, end);
   const paragraphs: InputRichBlockParagraph[] = [];
-  const pushParagraph = (rangeStart: number, rangeEnd: number) => {
+  const pushParagraph = (rangeStart: number, rangeEnd: number, paragraphBreak: string) => {
     // Trim the range so style/link offsets stay aligned with the source.
     const raw = ir.text.slice(rangeStart, rangeEnd);
     const absStart = rangeStart + raw.length - raw.trimStart().length;
@@ -364,17 +374,27 @@ function splitParagraphs(
     // Inline island conversion can normalize a leaf to nothing (e.g. an anchor
     // with empty label); an empty paragraph is invalid wire content.
     if (text !== "") {
-      paragraphs.push({ type: "paragraph", text });
+      // Telegram supplies one line between paragraphs and hides trailing newlines.
+      // Keep additional authored breaks at the start of the following paragraph.
+      paragraphs.push({
+        type: "paragraph",
+        text:
+          paragraphs.length > 0 && paragraphBreak
+            ? normalizeRichText([paragraphBreak, text])
+            : text,
+      });
     }
   };
-  const blankLine = /\n[ \t]*\n+/g;
+  const blankLine = /\n(?:[ \t]*\n)+/g;
   let last = 0;
+  let paragraphBreak = "";
   let match: RegExpExecArray | null;
   while ((match = blankLine.exec(sourceText)) !== null) {
-    pushParagraph(start + last, start + match.index);
+    pushParagraph(start + last, start + match.index, paragraphBreak);
+    paragraphBreak = match[0].replace(/[ \t]/g, "").slice(1);
     last = match.index + match[0].length;
   }
-  pushParagraph(start + last, end);
+  pushParagraph(start + last, end, paragraphBreak);
   return paragraphs;
 }
 
@@ -555,7 +575,9 @@ export function markdownToTelegramRichBlocks(
       return [
         {
           type: "paragraph",
-          text: htmlNodes.length ? nodeText(htmlNodes, true) : ir.text.slice(rangeStart, rangeEnd),
+          text: htmlNodes.length
+            ? nodeText(htmlNodes, { preserveMediaSources: true })
+            : ir.text.slice(rangeStart, rangeEnd),
         },
       ];
     }

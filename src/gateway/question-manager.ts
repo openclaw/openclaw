@@ -64,6 +64,8 @@ type QuestionManagerRequest = {
   authorizeClient?: QuestionClientAuthorization;
   sessionAccess?: QuestionSessionAccess;
   isRequesterActive?: () => boolean;
+  /** Producer authority is independent of optional ordinary-session disclosure access. */
+  requesterLifetime?: { signal?: AbortSignal; release: () => void };
   requesterRun?: OperationalRunInstanceRef;
   /** Trusted handler binds the run; the manager owns expiry and terminal release. */
   registerHumanInputWait?: (isPending: () => boolean) => ((resolved: boolean) => void) | undefined;
@@ -82,9 +84,11 @@ type QuestionEntry = {
   authorizeClient?: QuestionClientAuthorization;
   sessionAccess?: QuestionSessionAccess;
   isRequesterActive?: () => boolean;
+  requesterLifetime?: QuestionManagerRequest["requesterLifetime"];
   requesterRun?: OperationalRunInstanceRef;
   admissionContinuation: GatewayRootWorkAdmissionContinuationScope | null;
   releaseHumanInputWait?: (resolved: boolean) => void;
+  releaseRequesterWatch?: () => void;
   committing?: boolean;
   commitUnknown?: boolean;
   retired?: boolean;
@@ -154,7 +158,10 @@ export class QuestionManager {
     if (this.closed) {
       throw new Error("Question manager is closed");
     }
-    if (params.isRequesterActive && !params.isRequesterActive()) {
+    if (
+      params.requesterLifetime?.signal?.aborted ||
+      (params.isRequesterActive && !params.isRequesterActive())
+    ) {
       throw new QuestionManagerError(
         QuestionManagerErrorCodes.REQUESTER_INACTIVE,
         "the agent run that requested this question is no longer active",
@@ -199,6 +206,7 @@ export class QuestionManager {
       sessionAccess: params.sessionAccess,
       authorizeClient: params.authorizeClient,
       isRequesterActive: params.isRequesterActive,
+      requesterLifetime: params.requesterLifetime,
       requesterRun: params.requesterRun,
       admissionContinuation: retainGatewayRootWorkAdmissionContinuationScope(),
     };
@@ -213,6 +221,15 @@ export class QuestionManager {
     entry.releaseHumanInputWait = params.registerHumanInputWait?.(
       () => this.get(id)?.status === "pending" && this.entries.get(id) === entry,
     );
+    const signal = entry.requesterLifetime?.signal;
+    if (signal) {
+      const refresh = () => this.refreshRequester(entry);
+      signal.addEventListener("abort", refresh, { once: true });
+      entry.releaseRequesterWatch = () => signal.removeEventListener("abort", refresh);
+      if (signal.aborted) {
+        refresh();
+      }
+    }
     return record;
   }
 
@@ -258,7 +275,7 @@ export class QuestionManager {
     ) {
       return;
     }
-    const active = entry.isRequesterActive?.();
+    const active = entry.requesterLifetime?.signal?.aborted ? false : entry.isRequesterActive?.();
     // Liveness can reset/reuse the public id or settle the captured entry reentrantly.
     // A worker-confirmed source loss must retire only this still-pending observation.
     if (
@@ -473,7 +490,10 @@ export class QuestionManager {
     if (this.entries.get(entry.record.id) === entry) {
       this.entries.delete(entry.record.id);
     }
+    entry.releaseRequesterWatch?.();
+    entry.releaseRequesterWatch = undefined;
     entry.sessionAccess?.release();
+    entry.requesterLifetime?.release();
     entry.job.cancel();
     const releaseHumanInputWait = entry.releaseHumanInputWait;
     entry.releaseHumanInputWait = undefined;
@@ -583,6 +603,8 @@ export class QuestionManager {
   }
 
   private finish(entry: QuestionEntry): Promise<void> {
+    entry.releaseRequesterWatch?.();
+    entry.releaseRequesterWatch = undefined;
     entry.job.cancel();
     const continuation = entry.admissionContinuation;
     entry.admissionContinuation = null;
@@ -644,6 +666,7 @@ export class QuestionManager {
                 if (this.entries.get(entry.record.id) === entry) {
                   this.entries.delete(entry.record.id);
                   entry.sessionAccess?.release();
+                  entry.requesterLifetime?.release();
                 }
               },
             });

@@ -2,6 +2,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { activatePluginRegistry } from "../plugins/loader-shared.js";
 import { acquirePluginRegistryForInspection, loadOpenClawPlugins } from "../plugins/loader.js";
@@ -30,6 +34,7 @@ const freshId = "prepared-only";
 
 afterEach(() => {
   resetPluginLoaderTestStateForTest();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
@@ -74,6 +79,7 @@ it.each(["direct-loader-successor", "prepared"] as const)(
         slots: { memory: "none" },
       },
     };
+    setRuntimeConfigSnapshot(config);
     const metadata = loadPluginMetadataSnapshot({ config, workspaceDir });
     const options = {
       config,
@@ -139,6 +145,7 @@ it.each(["direct-loader-successor", "prepared"] as const)(
       };
     });
     cleanup.defer(() => acquired.release());
+    expect(acquired.registry.plugins.find((record) => record.id === channelId)).toBe(liveRecord);
     const resources = getPluginRegistryInspectionResources(acquired.registry)!;
     const scope = resources.createInvocationScope(acquired.registry);
     cleanup.defer(() => scope.release());

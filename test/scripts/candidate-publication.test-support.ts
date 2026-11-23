@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { parse } from "yaml";
 import { dockerReleaseArtifactName } from "../../scripts/docker-release-artifacts.mjs";
+import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
 import {
   createPublicationAdmission,
   createPublicationObservations,
@@ -20,6 +21,7 @@ import {
   revalidateQualificationAdmissionAuthority,
   verifyQualificationAdmission,
 } from "../../scripts/release-qualification-admission.mjs";
+import { fullReleaseCandidateManifestFixture } from "../helpers/full-release-candidate.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 import { trustedMainNpmFixture } from "./release-ci-summary.test-support.js";
 import {
@@ -33,23 +35,48 @@ import {
 
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const time = "2026-08-28T12:00:00.000Z";
-const version = "2026.8.28-beta.1";
 const workflowPath = (name: string) => `.github/workflows/${name}.yml`;
 
 export function candidatePublicationFixture(
   options: {
     candidateSha?: string;
+    qualificationSha?: string;
+    candidateVersion?: string;
+    targetContextRef?: string;
+    qualificationBaselines?: { upgradeBaseline: string; upgradeSurvivorBaselines: string[] };
+    releaseProfile?: "beta" | "stable" | "full" | "extended-stable";
     transportRef?: string;
     runId?: string;
     purpose?: "publish" | "main-qualification" | "diagnostic";
     protectedTag?: boolean;
+    publicationRoute?: PublicationSelection["route"];
   } = {},
 ) {
-  const fixture = trustedMainNpmFixture();
-  const q = options.candidateSha ?? defaultQ;
+  const selectedProfile = options.releaseProfile;
+  const extended =
+    selectedProfile === "extended-stable" || options.publicationRoute === "extended-stable";
+  const version =
+    options.candidateVersion ??
+    (extended
+      ? "2026.8.33"
+      : selectedProfile && selectedProfile !== "beta"
+        ? "2026.8.28"
+        : "2026.8.28-beta.1");
+  const beta = version.includes("-beta.");
+  const profile =
+    selectedProfile === "extended-stable"
+      ? "stable"
+      : (selectedProfile ?? (beta ? "beta" : "stable"));
+  const fixture = trustedMainNpmFixture(beta ? "beta" : "stable", {
+    targetVersion: extended ? "2026.8.28" : version,
+  });
+  const c = options.candidateSha ?? defaultQ;
+  const q = options.qualificationSha ?? c;
   const branch =
     options.transportRef ??
-    (options.candidateSha ? "release-ci/" + q.slice(0, 12) + "-123" : defaultBranch);
+    (options.candidateSha || options.qualificationSha
+      ? "release-ci/" + q.slice(0, 12) + "-123"
+      : defaultBranch);
   const legacyRunId = fixture.runId;
   const runId = options.runId ?? legacyRunId;
   const workflowSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
@@ -62,10 +89,19 @@ export function candidatePublicationFixture(
   const purpose = options.purpose ?? "publish";
   const publishing = purpose === "publish";
   const tooling = { fullRef: "refs/heads/" + branch, ref: branch, sha: q };
-  const laneInputs = { qualification_baselines_json: qualificationBaselinesJson };
+  const laneInputs = {
+    qualification_baselines_json: options.qualificationBaselines
+      ? JSON.stringify(options.qualificationBaselines)
+      : extended
+        ? JSON.stringify({
+            upgradeBaseline: "openclaw@2026.7.33",
+            upgradeSurvivorBaselines: ["openclaw@2026.7.33", "openclaw@2026.8.28"],
+          })
+        : qualificationBaselinesJson,
+  };
   const selection: PublicationSelection = {
-    route: "normal",
-    npmDistTag: "beta",
+    route: options.publicationRoute ?? (extended ? "extended-stable" : "normal"),
+    npmDistTag: extended ? "extended-stable" : beta ? "beta" : "latest",
     publishOpenclawNpm: true,
     pluginPublishScope: "all-publishable",
     plugins: [],
@@ -75,22 +111,26 @@ export function candidatePublicationFixture(
     publicationSelection: publishing ? selection : null,
   };
   Object.assign(inputs, {
-    ref: q,
-    expected_sha: q,
-    target_context_ref: "release/2026.8.28",
-    release_profile: "beta",
+    ref: c,
+    expected_sha: c,
+    target_context_ref:
+      options.targetContextRef ??
+      (extended ? "extended-stable/" : "release/") + version.split("-")[0],
+    release_profile: profile,
     rerun_group: "all",
     mode: "both",
-    run_release_soak: "false",
+    run_release_soak: String(!beta),
     trusted_workflow_json: publicationDispatchEnvelope(tooling, intent, laneInputs),
   });
   const admission = admissionFixture(options.protectedTag ?? true, {
     inputs,
-    candidateSha: q,
+    candidateSha: c,
+    qualificationSha: q,
     transportRef: branch,
     candidateVersion: version,
     policy: JSON.parse(readFileSync("scripts/lib/release-qualification-coverage.json", "utf8")),
     workflowSource,
+    baselinePolicySource: readFileSync("scripts/lib/upgrade-survivor-scenarios.json", "utf8"),
   });
   inputs.trusted_workflow_json = publicationDispatchEnvelope(
     tooling,
@@ -103,7 +143,7 @@ export function candidatePublicationFixture(
     JSON.parse(
       JSON.stringify(value)
         .replaceAll(legacyRunId, runId)
-        .replaceAll(fixture.targetSha, q)
+        .replaceAll(fixture.targetSha, c)
         .replaceAll(fixture.workflowSha, q)
         .replaceAll('"main"', JSON.stringify(branch))
         .replaceAll("refs/heads/main", tooling.fullRef),
@@ -113,9 +153,10 @@ export function candidatePublicationFixture(
       PUBLICATION_INPUTS_JSON: JSON.stringify(inputs),
       PUBLICATION_TOOLING_JSON: JSON.stringify(tooling),
       PUBLICATION_TARGET_CONTEXT: inputs.target_context_ref,
-      PUBLICATION_TARGET_SHA: q,
-      PUBLICATION_COVERAGE_POLICY: "npm-beta-v1",
-      PUBLICATION_SKIP_TELEGRAM: "true",
+      PUBLICATION_TARGET_SHA: c,
+      PUBLICATION_COVERAGE_POLICY:
+        extended || profile === "full" ? "" : beta ? "npm-beta-v1" : "npm-stable-v1",
+      PUBLICATION_SKIP_TELEGRAM: String(beta),
       GITHUB_REPOSITORY: repository,
       GITHUB_REF: tooling.fullRef,
       GITHUB_SHA: q,
@@ -190,38 +231,69 @@ export function candidatePublicationFixture(
     qualificationInputs: inputs,
     trustedWorkflow: tooling,
   };
-  const plan = Object.assign(mapped(fixture.executionPlan), admissionFields);
+  const plan = Object.assign(mapped(fixture.executionPlan), admissionFields, {
+    releaseProfile: profile,
+    targetVersion: version,
+    coveragePolicy: source.coverage.coverage_policy || undefined,
+  });
   plan.children = plan.children.filter((child) => child.selected);
-  const qualificationBaselines = JSON.parse(qualificationBaselinesJson);
+  const qualificationBaselines = JSON.parse(laneInputs.qualification_baselines_json);
   Object.assign(expectDefined(plan.candidateRequest, "candidate request"), {
     upgradeBaseline: qualificationBaselines.upgradeBaseline,
     upgradeSurvivorBaselines: qualificationBaselines.upgradeSurvivorBaselines,
   });
+  const candidate = fullReleaseCandidateManifestFixture({
+    targetSha: c,
+    toolingSha: q,
+    releaseProfile: inputs.release_profile,
+    releaseSoak: inputs.run_release_soak === "true",
+    upgradeSurvivorBaseline: qualificationBaselines.upgradeBaseline,
+    upgradeSurvivorBaselines: qualificationBaselines.upgradeSurvivorBaselines.join(" "),
+    upgradeSurvivorScenarios: "",
+  });
+  candidate.package.version = version;
+  const candidateBinding = buildFullReleaseCandidateBinding({
+    manifest: candidate,
+    artifact: {
+      id: "104",
+      name: "full-release-candidate-v2-" + candidate.requestSha256,
+      digest: "a".repeat(64),
+      expiresAt: "2099-01-01T00:00:00Z",
+      runId: "77",
+      runAttempt: "1",
+    },
+  });
+  plan.candidate = candidateBinding;
+  plan.candidateRequest = candidate.request;
+  const qualificationSources = new Map<string, string>();
+  const qualificationSource = (path: string) => {
+    const bytes = admission.sources.get(q + ":" + path) ?? readFileSync(path, "utf8");
+    qualificationSources.set(path, bytes);
+    return bytes;
+  };
   const jobsFor = (requestedRunId: string) => {
-    const child = plan.children.find((entry) => entry.runId === requestedRunId);
+    const planned = plan.children.find((entry) => entry.runId === requestedRunId);
+    const child = coverage.children.find((entry) => entry.key === planned?.key);
     const names =
       requestedRunId === runId
         ? coverage.requiredParentJobs
-        : expectDefined(
-            coverage.children.find((entry) => entry.key === child?.key),
-            "covered child",
-          ).requiredJobs;
+        : expectDefined(child, "covered child").requiredJobs;
     return names.map((name, index) =>
       Object.assign(mapped(fixture.parentJob), { id: 600 + index, name }),
     );
   };
   const manifest = Object.assign(mapped(fixture.manifest), {
-    // Fresh qualification has no reused evidence or shared candidate artifact.
-    candidateBinding: undefined,
+    releaseProfile: profile,
+    // Fresh qualification uses its own sealed candidate, not reused evidence.
+    candidateBinding,
     evidenceReuse: undefined,
     ...admissionFields,
     qualificationCoverage: structuredClone(coverage),
-    targetRef: q,
-    targetSha: q,
+    targetRef: c,
+    targetSha: c,
     workflowFullRef: tooling.fullRef,
     workflowRef: branch,
   });
-  delete manifest.candidateBinding;
   delete manifest.evidenceReuse;
   Object.assign(
     manifest.validationInputs,
@@ -233,6 +305,12 @@ export function candidatePublicationFixture(
     ),
     publicationIntentInputs(source),
   );
+  if (plan.coveragePolicy) {
+    manifest.validationInputs.coveragePolicy = plan.coveragePolicy;
+  } else {
+    delete manifest.validationInputs.coveragePolicy;
+  }
+  manifest.validationInputs.targetVersion = version;
   manifest.validationInputs.targetContextRef = expectDefined(
     inputs.target_context_ref,
     "normalized target context ref",
@@ -297,6 +375,12 @@ export function candidatePublicationFixture(
   };
   const client = {
     ...fixture.client,
+    downloadArtifactArchive() {
+      throw new Error("Fresh candidate fixture does not download reused artifacts");
+    },
+    getRunArtifacts() {
+      throw new Error("Fresh candidate fixture does not enumerate reused artifacts");
+    },
     validateChildReuse() {
       throw new Error("Fresh candidate fixture does not contain reused children");
     },
@@ -316,9 +400,10 @@ export function candidatePublicationFixture(
     revalidateQualificationAdmissionAuthority: (
       authority: Parameters<typeof revalidateQualificationAdmissionAuthority>[0],
     ) => revalidateQualificationAdmissionAuthority({ ...authority, runGh: admission.runGh }),
-    getWorkflowSource: () => workflowSource,
+    getWorkflowSource: (_sha: string, path = ".github/workflows/full-release-validation.yml") =>
+      qualificationSource(path),
     getRef: (ref: string) => ({ ref, object: { sha: admission.authority.tagSha } }),
-    getRunView: (_id: string) => mapped(fixture.client.getRunView(legacyRunId)),
+    getRunView: async (_id: string) => mapped(fixture.client.getRunView(legacyRunId)),
     getRun: async (id: string) => (id === runId ? parent : mapped(fixture.client.getRun(id))),
     getRunAttempt: (id: string, attempt: number) => {
       if (attempt !== 1) {
@@ -334,7 +419,11 @@ export function candidatePublicationFixture(
         : fixture.client
             .getJobLog(id)
             .replaceAll(legacyRunId, runId)
-            .replaceAll(fixture.targetSha, q),
+            .replaceAll(fixture.targetSha, c)
+            .replace(
+              /CI_RELEASE_SCOPE: \S+/gu,
+              `CI_RELEASE_SCOPE: ${plan.coveragePolicy === "npm-beta-v1" ? "npm-beta" : plan.coveragePolicy === "npm-stable-v1" ? "npm-stable" : "full"}`,
+            ),
     getRunAttemptJobs: async (id: string) =>
       id === runId ? [...originalJobs, sealer] : jobsFor(id),
     loadExecutionPlan: () => plan,
@@ -363,14 +452,14 @@ export function candidatePublicationFixture(
   };
   const npmManifest = {
     version: 3,
-    releaseSha: q,
+    releaseSha: c,
     releaseTag: `v${version}`,
     tarballName: "openclaw.tgz",
     tarballSha256: hash(npmBytes),
     producer: npmProducer,
     preparedBundle: {
       schema: "openclaw.prepared-npm-bundle/v1",
-      source: { sha: q },
+      source: { sha: c },
       package: { sha256: hash(npmBytes) },
       producer: { repository, workflowSha: q },
     },
@@ -394,7 +483,7 @@ export function candidatePublicationFixture(
   };
   const npmQualified = {
     schema: "openclaw.qualified-npm-preflight/v1",
-    source: { sha: q },
+    source: { sha: c },
     producer: npmProducer,
     manifestSha256: hash(npmManifestBytes),
     artifact: {
@@ -406,7 +495,7 @@ export function candidatePublicationFixture(
     },
   };
   const npmJob = completedJob(780, npmProducer.jobName);
-  const artifactName = dockerReleaseArtifactName(q, "1");
+  const artifactName = dockerReleaseArtifactName(c, "1");
   const payloadBytes = ["immutable amd64 OCI payload", "immutable arm64 OCI payload"];
   const architectures = ["amd64", "arm64"];
   const dockerArtifacts = architectures.map((arch, i) =>
@@ -415,7 +504,7 @@ export function candidatePublicationFixture(
   const docker = {
     schemaVersion: 1,
     repository,
-    sourceSha: q,
+    sourceSha: c,
     toolingSha: q,
     tag: `v${version}`,
     version,
@@ -492,12 +581,14 @@ export function candidatePublicationFixture(
     return JSON.stringify(readApi(endpoint));
   };
   return {
+    c,
     q,
     p,
     branch,
     repository,
     runId,
     publisherFullRef: admission.producer.workflowFullRef,
+    qualificationSources,
     admission,
     source,
     plan,

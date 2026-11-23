@@ -553,6 +553,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
     subagent: {
       complete: vi.fn(),
       forkSession: vi.fn(),
+      runForkedTurn: vi.fn(),
       run: vi.fn(),
       waitForRun: vi.fn(),
       getSessionMessages: vi.fn(),
@@ -571,6 +572,10 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
       create: vi.fn(),
       release: vi.fn(),
       removeIfLossless: vi.fn(),
+    },
+    skills: {
+      readUsage: vi.fn(async () => ({ tracked: false, usage: new Map() })),
+      recordUsed: vi.fn(() => false),
     },
     nodes: {
       list: vi.fn(async () => ({ nodes: [] })),

@@ -129,6 +129,8 @@ Notes:
 - Legacy `tools.web.fetch.firecrawl.*` and `tools.web.search.firecrawl.*` config is auto-migrated by `openclaw doctor --fix`.
 - Firecrawl scrape/base URL overrides follow the same hosted/private rule as search: public hosted traffic uses `https://api.firecrawl.dev`; self-hosted overrides must resolve to private/internal endpoints.
 - `firecrawl_scrape` rejects obvious private, loopback, metadata, and non-HTTP(S) target URLs before forwarding them to Firecrawl, matching the `web_fetch` target-safety contract for explicit Firecrawl scrape calls.
+- Fetch results keep the requested `url`; `finalUrl` prefers Firecrawl's resolved
+  `metadata.url`, falling back to `metadata.sourceURL` when it is missing or invalid.
 
 `firecrawl_scrape` reuses the same `plugins.entries.firecrawl.config.webFetch.*` settings and env vars, including its required API key.
 

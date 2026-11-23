@@ -41,7 +41,7 @@ export async function applyMediaUnderstandingIfNeeded(params: {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
-  activeModel: ActiveMediaModel;
+  activeModel?: ActiveMediaModel;
   processingMode?: "audio-only" | "files-only" | "audio-and-files";
   selfServeLocalPaths?: boolean;
 }): Promise<ApplyMediaUnderstandingResult | undefined> {
@@ -108,7 +108,11 @@ export async function resolveReplyAgentScope(params: {
     config: cfg,
     fallbackAgentId: ctx.AgentId,
   });
-  await waitForAgentInputAdmission(agentId, { cfg, signal: params.signal });
+  await waitForAgentInputAdmission(agentId, {
+    cfg,
+    sessionKey: agentSessionKey,
+    signal: params.signal,
+  });
   return { agentSessionKey, agentId };
 }
 

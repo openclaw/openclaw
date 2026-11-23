@@ -187,15 +187,15 @@ describe("MemoryImportPage", () => {
     context.gateway.snapshot.phase = "stopped";
     const page = await mountPage(context);
 
-    expect(page.textContent).toContain("Connect to the gateway to import memory.");
+    expect(page.textContent).toContain("Reconnect to import memory.");
     expect(page.querySelector(".memory-import")).toBeNull();
-    expect(page.textContent).not.toContain("Memory import requires operator.admin access.");
+    expect(page.textContent).not.toContain("You need admin access to import memory.");
     expect(request).not.toHaveBeenCalled();
 
     context.gateway.snapshot.phase = "connected";
     context.notify();
     await waitForButton(page, "import-provider-button");
-    expect(page.textContent).not.toContain("Connect to the gateway to import memory.");
+    expect(page.textContent).not.toContain("Reconnect to import memory.");
     expect(page.textContent).toContain("/tmp/openclaw-research");
   });
 
@@ -322,7 +322,7 @@ describe("MemoryImportPage", () => {
 
     flush();
     expect(request).not.toHaveBeenCalled();
-    expect(page.textContent).toContain("Memory import requires operator.admin access.");
+    expect(page.textContent).toContain("You need admin access to import memory.");
   });
 
   it("keeps a failed plan stable until the operator explicitly refreshes", async () => {
@@ -430,7 +430,7 @@ describe("MemoryImportPage", () => {
     await openImportConfirmation(page);
     findButton(page, "import-confirm")?.click();
     await waitForMemoryImport(() =>
-      expect(page.querySelector(".memory-import__confirm [role='alert']")?.textContent).toBe(
+      expect(page.querySelector(".memory-import__confirm [role='alert']")?.textContent).toContain(
         "response lost",
       ),
     );
@@ -723,7 +723,11 @@ describe("MemoryImportPage", () => {
     },
   );
 
-  it("previews past-session candidates with the selected date range", async () => {
+  it.each([
+    { from: "2026-07-01", to: "2026-07-31" },
+    { from: "2026-07-01", to: "" },
+    { from: "", to: "2026-07-31" },
+  ])("previews past-session candidates from $from to $to", async ({ from, to }) => {
     const request = createRequest({
       "migrations.memory.plan": () => createPlan(),
       "memory.sessionBackfill.preview": () => ({
@@ -741,15 +745,17 @@ describe("MemoryImportPage", () => {
     const dates = page.querySelectorAll<HTMLInputElement>(
       ".memory-import__backfill-dates input[type='date']",
     );
-    setDate(dates[0]!, "2026-07-01");
-    setDate(dates[1]!, "2026-07-31");
+    expect(page.textContent).toContain("Leave both dates blank to scan the full available range.");
+    setDate(dates[0]!, from);
+    setDate(dates[1]!, to);
     findButton(page, "backfill-preview")?.click();
 
     await waitForMemoryImport(() => expect(page.textContent).toContain("First memory"));
     expect(page.textContent).toContain("preview shows the first bounded batch");
+    expect(page.textContent).toContain("Candidates: 2 · Days: 1");
     expect(request.mock.calls.at(-1)).toEqual([
       "memory.sessionBackfill.preview",
-      { agentId: "research", from: "2026-07-01", to: "2026-07-31", limitDays: 14 },
+      { agentId: "research", ...(from ? { from } : {}), ...(to ? { to } : {}), limitDays: 14 },
     ]);
   });
 

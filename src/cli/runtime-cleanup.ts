@@ -119,8 +119,8 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
       }
     },
     "ai-session-resources": async () => {
-      // Keep the provider runtime outside the CLI bootstrap import graph.
-      const { cleanupSessionResources } = await import("@openclaw/ai/internal/runtime");
+      // Cleanup must not initialize an otherwise unused provider runtime.
+      const { cleanupSessionResources } = await import("@openclaw/ai/internal/session-resources");
       cleanupSessionResources();
     },
     "skills-watchers": async () => {
@@ -163,6 +163,14 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
       const { closeOpenClawAgentDatabasesAsync } =
         await import("../state/openclaw-agent-db-lifecycle.js");
       await closeOpenClawAgentDatabasesAsync();
+    },
+    "sqlite-snapshots": async () => {
+      // CLI-owned snapshot workers are asynchronous owners. Signal cleanup is too
+      // late for a successful one-shot command, and the synchronous process exit
+      // hook cannot retire a retained native owner safely.
+      const { cleanupSnapshotOperations } =
+        await import("../infra/sqlite-readonly-location-cleanup.js");
+      await cleanupSnapshotOperations();
     },
   };
   for (const [name, finalize] of Object.entries(finalizers)) {

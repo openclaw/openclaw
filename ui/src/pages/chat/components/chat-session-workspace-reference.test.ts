@@ -55,6 +55,48 @@ function searchListing(search: string, browser: SearchEntries) {
 }
 
 describe("session workspace file reference resolution", () => {
+  it.each(["local", "remote", "reader"])(
+    "binds the selected original to its Gateway (%s)",
+    async (mode) => {
+      const state = createReferenceState(
+        createSessionCapabilityFixture({
+          getFile: async (sessionKey) => ({
+            sessionKey,
+            root: "/workspace",
+            canOpenInSystem: mode !== "remote",
+            file: workspaceFile("report.pdf", {
+              previewKind: "unsupported",
+              mimeType: "application/pdf",
+              size: 64,
+            }),
+          }),
+        }),
+      );
+      state.hello = gatewayHelloForMethods(
+        [],
+        mode === "reader" ? ["operator.read"] : ["operator.admin"],
+      );
+      const reveal = vi.spyOn(state.client!, "request").mockResolvedValue({ ok: true });
+      await openSessionWorkspaceFile(state, { path: "report.pdf" });
+      const content = await loadedSidebarContent(state);
+      expect(content.kind).toBe("attachment");
+      if (mode !== "local") {
+        expect(content.openInSystem).toBeUndefined();
+        return;
+      }
+      await content.openInSystem!();
+      expect(reveal).toHaveBeenCalledExactlyOnceWith("sessions.files.reveal", {
+        key: "agent:main:current",
+        agentId: "main",
+        path: "report.pdf",
+        expectedRoot: "/workspace",
+      });
+      state.connectionEpoch += 1;
+      await expect(content.openInSystem!()).rejects.toThrow("Reconnect and reopen");
+      expect(reveal).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each(["application/pdf", "application/octet-stream"])(
     "previews only detected PDFs and retains message-qualified downloads (%s)",
     async (mimeType) => {
@@ -109,7 +151,7 @@ describe("session workspace file reference resolution", () => {
     await vi.waitFor(() =>
       expect(state.sessionWorkspaceState?.previews.at(-1)?.content).toEqual({
         kind: "unavailable",
-        message: "Failed to load REPORT.md",
+        message: "Couldn’t load REPORT.md. Check that the file still exists.",
       }),
     );
     expect(getFile).toHaveBeenCalledExactlyOnceWith("agent:main:current", "REPORT.md", {
@@ -327,7 +369,7 @@ describe("session workspace file reference resolution", () => {
       await openSessionWorkspaceFile(state, { path: "run.log", relativeTo: document });
 
       if (replaced) {
-        expect(state.sessionWorkspaceState?.error).toContain("The document's workspace changed");
+        expect(state.sessionWorkspaceState?.error).toContain("The document’s workspace changed");
         expect(state.sessionWorkspaceState?.activePreviewId).toBe(documentPreviewId);
         expect(await loadedSidebarContent(state)).toBe(document);
         expect(state.sessionWorkspaceState?.previews).toHaveLength(1);

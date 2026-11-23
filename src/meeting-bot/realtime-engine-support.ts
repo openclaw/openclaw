@@ -142,7 +142,11 @@ export async function resolveMeetingRealtimeTranscriptionProvider(params: {
     : rawConfig;
   if (
     !(provider.isConfiguredAsync
-      ? await provider.isConfiguredAsync({ cfg: params.fullConfig, providerConfig })
+      ? await provider.isConfiguredAsync({
+          cfg: params.fullConfig,
+          providerConfig,
+          selectedExplicitly: configuredProvider !== undefined,
+        })
       : (provider.isConfigured?.({ cfg: params.fullConfig, providerConfig }) ?? false))
   ) {
     throw new Error(`Realtime transcription provider "${provider.id}" is not configured`);

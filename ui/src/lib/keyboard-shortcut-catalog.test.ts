@@ -97,14 +97,14 @@ describe("keyboard shortcut catalog matching", () => {
 describe("keyboard shortcut catalog presentation", () => {
   it.each([
     ["debugOverlay", true, ["⌘", "⇧", "D"]],
-    ["debugOverlay", false, ["Ctrl", "Shift", "D"]],
+    ["debugOverlay", false, ["Ctrl", "⇧", "D"]],
     ["terminalPanel", true, ["⌃", "`"]],
-    ["approveAlways", false, ["Ctrl", "Shift", "Enter"]],
+    ["approveAlways", false, ["Ctrl", "⇧", "Enter"]],
     ["escape", true, ["esc"]],
     ["historyPrevious", true, ["↑"]],
     ["toggleSessionSelect", true, ["⌥", "Click"]],
     ["toggleSessionSelect", false, ["Alt", "Click"]],
-    ["extendSessionSelect", false, ["Shift", "Click"]],
+    ["extendSessionSelect", false, ["⇧", "Click"]],
     ["zoomIn", false, ["+"]],
     ["zoomReset", true, ["0"]],
   ] as const)("formats %s with Apple platform=%s", (id, apple, expected) => {

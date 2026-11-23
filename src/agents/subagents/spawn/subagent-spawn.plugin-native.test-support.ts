@@ -83,6 +83,7 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
           const requested = {
             model: "custom/requested-model",
             thinking: "high",
+            cyberAccessProgram: "standard" as const,
             fastMode: "ultrafast" as const,
           };
           const request = {
@@ -138,10 +139,18 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
             completionMode: "collect",
             selection: {
               requested,
-              resolved: { model: "custom/test-model", thinking: "low", fastMode: false },
+              resolved: {
+                model: "custom/test-model",
+                thinking: "low",
+                cyberAccessProgram: "standard",
+                fastMode: false,
+              },
             },
           });
           expect(await native.spawn(request)).toEqual(accepted);
+          await expect(
+            native.spawn({ ...request, cyberAccessProgram: "daybreak_blue" }),
+          ).rejects.toThrow("replay does not match");
           const unreadableChild = vi
             .spyOn(subagentSessionReconciliation, "loadSubagentSessionEntry")
             .mockRejectedValueOnce(new Error("child metadata unavailable"));
@@ -285,7 +294,7 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
     { name: "default scopes", scopes: undefined },
     { name: "explicit empty scopes", scopes: [] },
   ])(
-    "native plugin facade adopts input and preserves authority after the hook exits ($name)",
+    "native plugin facade adopts input and preserves exact authority after the hook exits ($name)",
     async ({ scopes }) => {
       const source = createSpawnOperatorSource("spawn-operator", scopes);
       const bound = await createBoundParent(source.authority);
@@ -400,12 +409,14 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
         expect(source.holds).toBeGreaterThan(0);
         expect(runEmbeddedAgent).not.toHaveBeenCalled();
         const acceptedRunId = expectDefined(childRunId, "accepted child run");
+        const childSessionKey = expectDefined(
+          subagentRuns.get(acceptedRunId),
+          "queued native child",
+        ).childSessionKey;
         const completion = () => subagentRuns.get(acceptedRunId)?.collectorCompletion?.status;
         releaseSwarmRun("host-capacity");
         if (scopes?.length === 0) {
-          await vi.waitFor(() => expect(completion()).toBe("failed"));
-          expect(runEmbeddedAgent).not.toHaveBeenCalled();
-          // The queued native launch reaches the real Gateway, which must keep [] exact.
+          // Explicit [] reaches Gateway admission unchanged. Refusal is not a failed child run.
           await expect(settleRootWork(true)).rejects.toMatchObject({
             errors: expect.arrayContaining([
               expect.objectContaining({
@@ -417,6 +428,21 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
               }),
             ]),
           });
+          expect(runEmbeddedAgent).not.toHaveBeenCalled();
+          const child = loadSessionEntry({
+            storePath: bound.storePath,
+            sessionKey: childSessionKey,
+          });
+          if (child) {
+            expect(
+              await loadTranscriptEvents({
+                agentId: "main",
+                storePath: bound.storePath,
+                sessionKey: childSessionKey,
+                sessionId: child.sessionId,
+              }),
+            ).toEqual([]);
+          }
           return;
         }
         await waitForEmbeddedRun(bound, acceptedRunId, modelStarted.promise);

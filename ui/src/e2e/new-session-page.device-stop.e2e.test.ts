@@ -91,17 +91,19 @@ suite.define(() => {
       const menuText = (await stop.textContent())?.trim();
       await stop.click();
       const workerStopConfirmation = page.locator("openclaw-modal-dialog").filter({
-        has: page.locator(".session-worker-stop"),
+        has: page.getByRole("dialog", { name: "Stop this session on the device?", exact: true }),
       });
       const dialog = await waitForConfirmModal(page, workerStopConfirmation);
-      expect(menuText).toBe("Stop device worker…");
+      expect(menuText).toBe("Stop session on device…");
       expect(
-        await dialog.getByRole("heading", { name: "Stop worker?", exact: true }).textContent(),
-      ).toBe("Stop worker?");
+        await dialog
+          .getByRole("heading", { name: "Stop this session on the device?", exact: true })
+          .textContent(),
+      ).toBe("Stop this session on the device?");
       expect(await dialog.textContent()).toContain(
-        "This will save workspace changes and stop this session’s worker.",
+        "This session stops working on this device after saving workspace changes.",
       );
-      expect(await dialog.textContent()).toContain("Send a new message to continue.");
+      expect(await dialog.textContent()).toContain("Other sessions on the device keep running.");
       await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
       await dialog.waitFor({ state: "detached" });
       expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(0);
@@ -113,13 +115,13 @@ suite.define(() => {
       await (
         await waitForConfirmModal(page, workerStopConfirmation)
       )
-        .getByRole("button", { name: "Stop worker", exact: true })
+        .getByRole("button", { name: "Stop", exact: true })
         .click();
       const reclaim = await gateway.waitForRequest("sessions.reclaim");
       expect(reclaim.params).toEqual({ key, agentId: "main" });
-      const stopNotice = page.getByRole("alert").filter({ hasText: "Worker stop requested." });
+      const stopNotice = page.getByRole("alert").filter({ hasText: "Device stop requested." });
       await pollText(stopNotice).toContain(
-        "Worker stop requested. Review the initial message before retrying.",
+        "Device stop requested. Review the initial message before retrying.",
       );
       await gateway.resolveDeferred("sessions.dispatch", {
         sessionId: `session:${key}`,
@@ -136,7 +138,7 @@ suite.define(() => {
         },
       });
       await pollText(stopNotice).toContain(
-        "Worker stop requested. Review the initial message before retrying.",
+        "Device stop requested. Review the initial message before retrying.",
       );
       expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);

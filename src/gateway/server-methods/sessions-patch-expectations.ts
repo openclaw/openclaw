@@ -25,6 +25,7 @@ import type {
   MutationTarget,
   PreparedPatchTarget,
 } from "./sessions-patch-types.js";
+import type { SessionMutationAuthorization } from "./types.js";
 
 export function resolveSessionPatchExpectationError(
   patch: SessionsPatchParams,
@@ -100,6 +101,7 @@ export async function prepareSessionPatchTargets(params: {
   placementChecks: ReadonlyMap<number, { validate: () => string | undefined }>;
   outcomes: Array<MutationOutcome | undefined>;
   operatorAuthority?: Promise<{ authority: AdmittedRunOperatorAuthority } | undefined>;
+  followSharingRegistration?: SessionMutationAuthorization["followRegistration"];
   personalModelSelection: UserModelAccountSelection | undefined;
 }) {
   const mutationTargets = params.targets.map((target, index) => ({
@@ -138,22 +140,25 @@ export async function prepareSessionPatchTargets(params: {
         });
         operatorAuthority?.assertCurrent();
       },
+      followRegistration: (change) =>
+        params.followSharingRegistration?.(
+          { agentId: target.targetAgentId, sessionKey: target.canonicalKey },
+          change,
+        ),
     })),
     ready,
   );
   type PreparedStorage = Awaited<(typeof databaseCustody.preparations)[number]>;
   const storage = new Map<number, PreparedStorage>();
   const storagePreparations = new Map(
-    durableTargets.map(
-      (target, index) =>
-        [
-          target.index,
-          databaseCustody.preparations[index]!.then((prepared) => {
-            storage.set(target.index, prepared);
-            return prepared;
-          }),
-        ] as const,
-    ),
+    durableTargets.map((target, index) => {
+      const storageReady = databaseCustody.preparations[index]!.then((prepared) => {
+        storage.set(target.index, prepared);
+        return prepared;
+      });
+      const source = databaseCustody.sources[index];
+      return [target.index, source ? { ...source, ready: storageReady } : storageReady] as const;
+    }),
   );
   let targetCustody: ReturnType<typeof prepareGatewaySessionLifecycleTargets> | undefined;
   const ancestorReads: Array<Awaited<ReturnType<typeof prepareSessionPatchSidebarAncestors>>> = [];

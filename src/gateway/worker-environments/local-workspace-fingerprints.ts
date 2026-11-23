@@ -1,6 +1,7 @@
 import type { BigIntStats } from "node:fs";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
+import type { LocalWorkspaceCapture } from "./local-workspace-store.types.js";
 import { workspaceCtimeIsReusable } from "./workspace-hash-memo.js";
 import { MAX_WORKSPACE_INVENTORY_ENTRIES } from "./workspace-inventory-limits.js";
 
@@ -26,7 +27,10 @@ export function prepareLocalWorkspaceFingerprints(
   treeRef: string,
   blob: Uint8Array | null,
   scanStartedAtMs: number,
+  capture?: LocalWorkspaceCapture,
 ) {
+  const sourceDevice = (dev: bigint) =>
+    capture && dev === capture.snapshotDev ? capture.sourceDev : dev;
   const storedBlob =
     blob === null || Buffer.isBuffer(blob)
       ? blob
@@ -56,16 +60,14 @@ export function prepareLocalWorkspaceFingerprints(
     offsets.set(paths[index]!, HEADER_BYTES + index * FILE_BYTES);
   }
   const device = decoded?.readBigUInt64LE(1);
-  const reused = new Map<string, string>();
-  const changed = new Map<string, string>();
+  const reused = new Set<string>();
+  const changed = new Map<string, { identity: string; reusable?: boolean }>();
   let allReusable = decoded !== undefined;
-  let observedReusable = 0;
 
   return {
     reuseFile(
       this: void,
       entryPath: string,
-      identity: string,
       stats: Pick<BigIntStats, "dev" | "ino" | "size" | "ctimeNs">,
     ) {
       const offset = offsets.get(entryPath);
@@ -74,35 +76,39 @@ export function prepareLocalWorkspaceFingerprints(
         allReusable = false;
         return undefined;
       }
+      // Live non-racy stat fields must match the accepted tree's slot. Content
+      // reuse never skips either traversal or the owner's pending recovery gates.
       if (
-        stats.dev === device &&
+        sourceDevice(stats.dev) === device &&
         stats.ino === decoded.readBigUInt64LE(offset) &&
         stats.ctimeNs === decoded.readBigInt64LE(offset + 8) &&
         previous.size === Number(stats.size) &&
         workspaceCtimeIsReusable(stats.ctimeNs, scanStartedAtMs)
       ) {
-        reused.set(entryPath, identity);
+        reused.add(entryPath);
         return previous;
       }
       allReusable = false;
       return undefined;
     },
-    observe(entryPath: string, identity: string) {
-      if (reused.get(entryPath) === identity) {
-        observedReusable++;
-      } else {
-        // A hashed read can report a newer identity than its initial lstat.
-        allReusable = false;
-        reused.delete(entryPath);
-        changed.set(entryPath, identity);
-      }
+    // A hashed read can establish eligibility after discovery's earlier timestamp.
+    observe(this: void, entryPath: string, identity: string, reusable?: boolean) {
+      // Reused nodes are already observed by reuseFile; only hashed reads need
+      // serialized identities, which may be newer than discovery's initial stat.
+      allReusable = false;
+      reused.delete(entryPath);
+      changed.set(entryPath, { identity, reusable });
     },
     encode(
       currentRecords: ReadonlyMap<string, LocalWorkspaceManifestRecord>,
       currentTreeRef: string,
+      invalidatedPaths?: ReadonlySet<string>,
     ) {
+      if (invalidatedPaths && !decoded) {
+        return null;
+      }
       // Every file matched its exact non-racy slot; the stored blob is already the publication.
-      if (currentTreeRef === treeRef && allReusable && observedReusable === paths.length) {
+      if (currentTreeRef === treeRef && allReusable && reused.size === paths.length) {
         return storedBlob;
       }
       let currentPaths = paths;
@@ -133,11 +139,14 @@ export function prepareLocalWorkspaceFingerprints(
       bytes.writeUInt8(FORMAT_VERSION, 0);
       Buffer.from(currentTreeRef.slice("sha256:".length), "hex").copy(bytes, 9);
       bytes.writeUInt32LE(currentPaths.length, 41);
-      let dev: bigint | undefined;
+      let dev = invalidatedPaths ? device : undefined;
       for (let index = 0; index < currentPaths.length; index++) {
         const entryPath = currentPaths[index]!;
         const targetOffset = HEADER_BYTES + index * FILE_BYTES;
-        if (reused.has(entryPath)) {
+        if (
+          reused.has(entryPath) ||
+          (invalidatedPaths && offsets.has(entryPath) && !invalidatedPaths.has(entryPath))
+        ) {
           const offset = offsets.get(entryPath)!;
           dev ??= device;
           if (dev !== device) {
@@ -146,12 +155,17 @@ export function prepareLocalWorkspaceFingerprints(
           decoded!.copy(bytes, targetOffset, offset, offset + FILE_BYTES);
           continue;
         }
-        const identity = changed.get(entryPath);
-        if (!identity) {
+        const observed = changed.get(entryPath);
+        if (!observed) {
+          if (invalidatedPaths) {
+            // An applied path needs a fresh identity; unchanged target slots keep their own stats.
+            bytes.writeBigInt64LE(RACY_CTIME_NS, targetOffset + 8);
+            continue;
+          }
           return null;
         }
-        const fields = identity.split(":");
-        const statDev = BigInt(fields[1]!);
+        const fields = observed.identity.split(":");
+        const statDev = sourceDevice(BigInt(fields[1]!));
         dev ??= statDev;
         // One header cannot describe files spanning devices. Those scans stay correct by hashing.
         if (statDev !== dev) {
@@ -160,7 +174,9 @@ export function prepareLocalWorkspaceFingerprints(
         const ctimeNs = BigInt(fields[5]!);
         bytes.writeBigUInt64LE(BigInt(fields[2]!), targetOffset);
         bytes.writeBigInt64LE(
-          workspaceCtimeIsReusable(ctimeNs, scanStartedAtMs) ? ctimeNs : RACY_CTIME_NS,
+          (observed.reusable ?? workspaceCtimeIsReusable(ctimeNs, scanStartedAtMs))
+            ? ctimeNs
+            : RACY_CTIME_NS,
           targetOffset + 8,
         );
       }

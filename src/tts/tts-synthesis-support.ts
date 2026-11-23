@@ -36,7 +36,7 @@ import type {
   TtsProviderAttempt,
 } from "./tts-runtime-types.js";
 import {
-  readTtsPrefs,
+  readTtsPrefsAsync,
   resolveTtsPersonaFromPrefs,
   resolveTtsConfig,
   resolveTtsPrefsPathAsync,
@@ -139,7 +139,7 @@ export async function acquireTtsRequest(
       error: `Text too long (${params.text.length} chars, max ${config.maxTextLength})`,
     };
   }
-  const prefs = readTtsPrefs(prefsPath);
+  const prefs = await readTtsPrefsAsync(prefsPath);
   const persona = resolveTtsPersonaFromPrefs(config, prefs);
   const queries = await acquirePluginCapabilityProviders({ key: "speechProviders", cfg });
   try {

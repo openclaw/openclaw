@@ -1,18 +1,10 @@
-import fs from "node:fs/promises";
 import { expect, test, vi } from "vitest";
-import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
-import {
-  getRegistryWorktree,
-  listRegistryWorktrees,
-} from "../agents/worktrees/registry.test-support.js";
-import { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
-  onSessionIdentityMutation,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -22,16 +14,8 @@ import {
 import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
-import {
-  copyGitWorkspace,
-  createGitWorkspace,
-} from "./server.sessions.create.projects.test-support.js";
 import {
   setupSessionCreateHandlerTestHarness,
-  chatSendOwner,
-  sessionCreateRuntimeClient,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
 import * as sessionStoreWorker from "./session-utils-store-worker.js";
@@ -44,10 +28,7 @@ import {
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 
-let gitWorkspaceTemplate: string;
-const { createSessionStoreDir } = setupSessionCreateHandlerTestHarness(async (makeTempDir) => {
-  gitWorkspaceTemplate = await createGitWorkspace(makeTempDir("openclaw-session-git-template-"));
-});
+const { createSessionStoreDir } = setupSessionCreateHandlerTestHarness();
 
 type CreatedSessionPayload = { key?: string; entry?: SessionEntry };
 
@@ -405,46 +386,6 @@ test("sessions.create rejects a replaced required spawn parent before child crea
   }
 });
 
-test("sessions.create commits no session after delegated authority closes", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:dashboard:authority-race";
-  let authorityCurrent = true;
-  const firstGuard = createDeferredCore();
-  const context = {
-    validateAgentRuntimeApprovalAuthority: () => {
-      firstGuard.resolve();
-      return authorityCurrent;
-    },
-  };
-  const listed = await directSessionReq("sessions.list", {}, { context });
-  expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
-  const { releaseWriter, heldWriter } = await holdSessionWriter(storePath);
-
-  const creating = directSessionReq(
-    "sessions.create",
-    { agentId: "main", key: sessionKey },
-    {
-      context,
-      client: sessionCreateRuntimeClient(["operator.write"]) as never,
-    },
-  );
-
-  try {
-    await firstGuard.promise;
-    authorityCurrent = false;
-    releaseWriter.resolve();
-    await heldWriter;
-
-    const created = await creating;
-    expect(created.ok).toBe(false);
-    expect(created.error?.message).toContain("agent runtime authority is no longer active");
-    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
-  } finally {
-    releaseWriter.resolve();
-    await Promise.allSettled([heldWriter, creating]);
-  }
-});
-
 test("sessions.create commits no child after its worker turn closes", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:dashboard:worker-turn-race";
@@ -529,109 +470,6 @@ test("sessions.create commits no child after its worker turn closes", async () =
     releaseWriter.resolve();
     await Promise.allSettled([heldWriter, creating]);
     lookup.mockRestore();
-  }
-});
-
-test("sessions.create starts no initial turn when authority closes after session commit", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:dashboard:authority-post-commit";
-  const chatSend = vi.spyOn(chatSendOwner, "handleDirectExternalChatSend");
-  chatSend.mockImplementation(async ({ respond }) => {
-    respond(true, { runId: "must-not-start", status: "started" });
-  });
-  let authorityCurrent = true;
-  let committedSessionId: string | undefined;
-  const unsubscribe = onSessionIdentityMutation((mutation) => {
-    if (mutation.kind === "create" && mutation.current.sessionKeys.includes(sessionKey)) {
-      committedSessionId = loadSessionEntry({ sessionKey, storePath })?.sessionId;
-      authorityCurrent = false;
-    }
-  });
-
-  try {
-    const created = await directSessionReq<{ sessionId?: string; runStarted?: boolean }>(
-      "sessions.create",
-      { agentId: "main", key: sessionKey, message: "do not launch after closure" },
-      {
-        context: {
-          validateAgentRuntimeApprovalAuthority: () => authorityCurrent,
-        },
-        client: sessionCreateRuntimeClient(["operator.write"]) as never,
-      },
-    );
-
-    expect(created.ok).toBe(true);
-    expect(created.payload?.runStarted).toBe(false);
-    expect(chatSend).not.toHaveBeenCalled();
-    const sessionId = requireNonEmptyString(created.payload?.sessionId, "committed session id");
-    expect(committedSessionId).toBe(sessionId);
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({ sessionId });
-  } finally {
-    unsubscribe();
-    chatSend.mockRestore();
-  }
-});
-
-test("sessions.create removes a provisioned worktree when authority closes before session commit", async () => {
-  const openClawState = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "openclaw-session-authority-worktree-",
-  });
-  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
-  testState.agentConfig = { workspace };
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:dashboard:authority-worktree-cleanup";
-  let authorityCurrent = true;
-  let allocatedWorktree: { id: string; path: string } | undefined;
-  let allocatedDirectoryExists = false;
-  const createWorktree = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
-  const createSpy = vi
-    .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
-    .mockImplementation(async function (this: ManagedWorktreeService, params) {
-      const outcome = await createWorktree(this, params);
-      allocatedWorktree = outcome.record;
-      allocatedDirectoryExists = (await fs.stat(outcome.record.path)).isDirectory();
-      authorityCurrent = false;
-      return outcome;
-    });
-
-  try {
-    const created = await directSessionReq(
-      "sessions.create",
-      {
-        agentId: "main",
-        key: sessionKey,
-        worktree: true,
-        worktreeName: "authority-cleanup",
-      },
-      {
-        context: {
-          validateAgentRuntimeApprovalAuthority: () => authorityCurrent,
-        },
-        client: sessionCreateRuntimeClient(["operator.admin"]) as never,
-      },
-    );
-
-    expect(created.ok).toBe(false);
-    expect(created.error?.message).toContain("agent runtime authority is no longer active");
-    const worktreeId = requireNonEmptyString(allocatedWorktree?.id, "allocated worktree id");
-    const worktreePath = requireNonEmptyString(allocatedWorktree?.path, "allocated worktree path");
-    expect(allocatedDirectoryExists).toBe(true);
-    expect(getRegistryWorktree(process.env, worktreeId)).toMatchObject({
-      removedAt: expect.any(Number),
-    });
-    await expect(fs.stat(worktreePath)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
-    expect(
-      listRegistryWorktrees(process.env).filter(
-        (record) => record.ownerKind === "session" && record.removedAt === undefined,
-      ),
-    ).toEqual([]);
-  } finally {
-    createSpy.mockRestore();
-    await disposeSessionReadContexts();
-    testState.agentConfig = undefined;
-    await openClawState.cleanup();
   }
 });
 

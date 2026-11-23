@@ -152,6 +152,7 @@ it.runIf("__vitest_browser__" in globalThis)("inherits theme colors", async () =
       root.style.setProperty("--bg-elevated", "rgb(32, 45, 38)");
       root.style.setProperty("--bg-hover", "rgb(45, 62, 51)");
     }
+    await userEvent.hover(find("#theme-panel"));
     if (!menu.matches(":popover-open")) {
       find(".oc-menu-trigger").click();
     }

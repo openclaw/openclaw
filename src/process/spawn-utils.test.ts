@@ -122,7 +122,10 @@ describe("child-process spawn diagnostics", () => {
     await Promise.all([
       executeGitCommand(process.cwd(), ["--version"], { operation: "project.clone" }),
       executeGitCommandBuffered(process.cwd(), ["--version"], { operation: "publication" }),
-      executeGitCommand(process.cwd(), ["--version"], { lowerPriority: true }),
+      executeGitCommand(process.cwd(), ["--version"], {
+        lowerPriority: true,
+        idleIoPriority: true,
+      }),
       once(spawnProcess("git", ["--version"], { stdio: "ignore" }), "close"),
       requireWorkspaceResultGit(process.cwd(), ["--version"]),
       withGitProcessOperation("workspace.result-cleanup", () =>
@@ -337,28 +340,35 @@ describe("child-process spawn diagnostics", () => {
     expect(JSON.stringify(events)).not.toContain("private");
   });
 
-  it("attributes owner-prepared OOM shims to their logical targets", () => {
-    for (const [command, args] of [
-      ["git", ["status"]],
-      ["node", ["-e", "private code"]],
-    ] as const) {
-      const prepared = prepareOomScoreAdjustedSpawn(command, args, {
-        platform: "linux",
-        env: {},
-        shellAvailable: () => true,
-      });
-      const child = new EventEmitter() as ChildProcess;
-      recordChildProcessSpawn(prepared.command, child, undefined, prepared.args);
-      child.emit("spawn");
-    }
-    now = 60_000;
-    emitChildProcessSpawnSample();
-    expect(events).toEqual([
-      expect.objectContaining({ family: "git", operation: "unscoped.status", count: 1 }),
-      expect.objectContaining({ family: "node", operation: "unscoped.runtime", count: 1 }),
-    ]);
-    expect(JSON.stringify(events)).not.toContain("private");
-  });
+  it.each([
+    ["git", ["status"]],
+    ["ionice", ["-c", "3", "nice", "-n", "10", "git", "status"]],
+    ["taskpolicy", ["-b", "nice", "-n", "10", "git", "status"]],
+  ] as const)(
+    "attributes owner-prepared OOM shims around %s to their logical targets",
+    (gitCommand, gitArgs) => {
+      for (const [command, args] of [
+        [gitCommand, gitArgs],
+        ["node", ["-e", "private code"]],
+      ] as const) {
+        const prepared = prepareOomScoreAdjustedSpawn(command, args, {
+          platform: "linux",
+          env: {},
+          shellAvailable: () => true,
+        });
+        const child = new EventEmitter() as ChildProcess;
+        recordChildProcessSpawn(prepared.command, child, undefined, prepared.args);
+        child.emit("spawn");
+      }
+      now = 60_000;
+      emitChildProcessSpawnSample();
+      expect(events).toEqual([
+        expect.objectContaining({ family: "git", operation: "unscoped.status", count: 1 }),
+        expect.objectContaining({ family: "node", operation: "unscoped.runtime", count: 1 }),
+      ]);
+      expect(JSON.stringify(events)).not.toContain("private");
+    },
+  );
 
   it.each([
     [

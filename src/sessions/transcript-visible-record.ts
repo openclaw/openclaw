@@ -1,30 +1,18 @@
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isIntermediateAssistantTranscriptMessage } from "../agents/embedded-agent-runner/message-visibility.js";
-import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
 import { extractStoredAssistantText } from "../agents/tools/chat-history-text.js";
 import type { SessionTranscriptEventMatch } from "../config/sessions/session-history-read.types.js";
 import {
   isSilentAssistantTranscriptMessage,
   readTerminalSourceReplyDeliveryMirror,
 } from "../shared/chat-message-content.js";
+import { MODEL_FALLBACK_NOTICE_KIND } from "../shared/model-fallback-notice.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { readNestedToolActivity } from "./nested-tool-activity.js";
 import {
   readSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "./transcript-events.js";
-
-export function isVisibleTranscriptRecord(value: unknown): value is Record<string, unknown> {
-  const record = asOptionalRecord(value);
-  return (
-    Boolean(record?.message) ||
-    record?.type === "compaction" ||
-    record?.type === "reset" ||
-    (record?.type === "custom_message" &&
-      record.display === true &&
-      record.customType !== OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE)
-  );
-}
 
 export function isAssistantResultEventForRun(event: unknown, runId: string): boolean {
   if (
@@ -39,7 +27,11 @@ export function isAssistantResultEventForRun(event: unknown, runId: string): boo
     return false;
   }
   const mirror = event.message.openclawDeliveryMirror;
-  if (isRecord(mirror) && mirror.kind === "message-tool-source-reply" && mirror.final !== true) {
+  if (
+    isRecord(mirror) &&
+    (mirror.kind === MODEL_FALLBACK_NOTICE_KIND ||
+      (mirror.kind === "message-tool-source-reply" && mirror.final !== true))
+  ) {
     return false;
   }
   return true;
@@ -105,6 +97,10 @@ export function matchesTranscriptEvent(
   match: SessionTranscriptEventMatch,
   projection?: "navigation",
 ): boolean {
+  if (match.kind === "custom-entry") {
+    const record = asOptionalRecord(event);
+    return record?.type === "custom" && record.customType === match.customType;
+  }
   if (match.kind === "latest") {
     return true;
   }

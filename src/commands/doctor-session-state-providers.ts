@@ -1,12 +1,16 @@
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntriesLower } from "@openclaw/normalization-core/string-normalization";
-import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
+import {
+  normalizeOptionalAgentRuntimeId,
+  OPENCLAW_AGENT_RUNTIME_ID,
+} from "../agents/agent-runtime-id.js";
 import {
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
 import {
@@ -62,12 +66,13 @@ function resolveConfiguredDoctorSessionStateRoute(params: {
 }) {
   const { agentId } = params;
   const primary = resolveDefaultModelForAgent({ cfg: params.cfg, agentId });
-  const configuredModelRefs = new Set([modelKey(primary.provider, primary.model)]);
+  const defaultProvider = primary?.provider ?? DEFAULT_PROVIDER;
+  const configuredModelRefs = new Set(primary ? [modelKey(primary.provider, primary.model)] : []);
   const fallbacks =
     resolveAgentModelFallbacksOverride(params.cfg, agentId) ??
     resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
   for (const fallback of fallbacks) {
-    const parsed = parseModelRef(fallback, primary.provider, {
+    const parsed = parseModelRef(fallback, defaultProvider, {
       allowManifestNormalization: false,
       allowPluginNormalization: false,
     });
@@ -75,15 +80,18 @@ function resolveConfiguredDoctorSessionStateRoute(params: {
       configuredModelRefs.add(modelKey(parsed.provider, parsed.model));
     }
   }
-  const runtime = resolveAgentHarnessPolicy({
-    provider: primary.provider,
-    modelId: primary.model,
-    config: params.cfg,
-    agentId,
-    sessionKey: params.sessionKey,
-  }).runtime;
+  // No configured model selects no plugin harness.
+  const runtime = primary
+    ? resolveAgentHarnessPolicy({
+        provider: primary.provider,
+        modelId: primary.model,
+        config: params.cfg,
+        agentId,
+        sessionKey: params.sessionKey,
+      }).runtime
+    : OPENCLAW_AGENT_RUNTIME_ID;
   return {
-    defaultProvider: primary.provider,
+    defaultProvider,
     configuredModelRefs: [...configuredModelRefs],
     // An absent policy is not an explicit unrestricted selection policy.
     modelPolicy:
@@ -93,7 +101,7 @@ function resolveConfiguredDoctorSessionStateRoute(params: {
             cfg: params.cfg,
             catalog: [],
             agentId,
-            defaultProvider: primary.provider,
+            defaultProvider,
             defaultModel: primary,
           }),
     runtime,

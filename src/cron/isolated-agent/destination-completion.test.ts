@@ -611,7 +611,7 @@ it("delivers into the current destination after resets before send and between r
     }
   }, "isolated"));
 
-it("rejects implicit current delivery when the creator resets after route resolution", () =>
+it("delivers implicit current delivery to the creator's chat after a reset", () =>
   withCompletionFixture(
     async (fixture) => {
       const { params } = fixture;
@@ -636,41 +636,57 @@ it("rejects implicit current delivery when the creator resets after route resolu
       setReport(fixture, "Stale report");
 
       const result = await dispatchCronDelivery(params);
-      expect(result).toMatchObject({ delivered: false });
-      expect(result.deliveryError).toBeDefined();
-      expect(sendText).not.toHaveBeenCalled();
-      expect(await readConversationMessages(fixture.scope)).toEqual([]);
+      expect(result).toMatchObject({ delivered: true });
+      expect(sendText).toHaveBeenCalledOnce();
     },
     "current",
     "agent:main:telegram:direct:12345",
   ));
 
-it.each(["deleted", "reset"] as const)(
-  "records a delivery failure when the creating conversation is %s",
+// An edit or branch switch rotates the session id; a daily or manual reset rotates the revision.
+it.each(["edited", "reset"] as const)(
+  "delivers into the creating conversation's current transcript after it is %s",
   (change) =>
     withCompletionFixture(async (fixture) => {
       setReport(fixture, "tick");
-      if (change === "deleted") {
-        await deleteSessionEntryLifecycle({
-          archiveTranscript: false,
-          storePath: fixture.scope.storePath,
-          target: {
-            canonicalKey: fixture.scope.sessionKey,
-            storeKeys: [fixture.scope.sessionKey],
-          },
+      if (change === "edited") {
+        await replaceSessionEntry(fixture.scope, {
+          sessionId: "edited-session",
+          lifecycleRevision: "report-generation",
+          updatedAt: 2,
         });
       } else {
         await resetConversation(fixture.scope);
       }
 
-      const delivery = await dispatchCronDelivery(fixture.params);
-      expect(delivery).toMatchObject({
-        delivered: false,
-        deliveryAttempted: true,
-        deliveryError: expect.stringContaining("session rebound"),
-        disposition: { kind: "error", errorKind: "delivery-target" },
+      await expect(dispatchCronDelivery(fixture.params)).resolves.toMatchObject({
+        delivered: true,
+        deliveryError: undefined,
       });
       expect(await fixture.messages()).toEqual([]);
-      expect(fixture.updates()).toBe(0);
+      expect(await readConversationMessages(fixture.scope)).toHaveLength(1);
     }, "isolated"),
 );
+
+it("records a visible delivery failure when the creating conversation is deleted", () =>
+  withCompletionFixture(async (fixture) => {
+    const warn = vi.spyOn(deliveryPolicy, "logCronDeliveryWarn");
+    setReport(fixture, "tick");
+    await deleteSessionEntryLifecycle({
+      archiveTranscript: false,
+      storePath: fixture.scope.storePath,
+      target: { canonicalKey: fixture.scope.sessionKey, storeKeys: [fixture.scope.sessionKey] },
+    });
+
+    const delivery = await dispatchCronDelivery(fixture.params);
+    expect(delivery).toMatchObject({
+      delivered: false,
+      deliveryAttempted: true,
+      deliveryState: { status: "not-delivered" },
+      deliveryError: expect.stringContaining("session deleted"),
+      disposition: { kind: "error", errorKind: "delivery-target" },
+    });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("delivery failed: session deleted"));
+    expect(await fixture.messages()).toEqual([]);
+    expect(fixture.updates()).toBe(0);
+  }, "isolated"));

@@ -4,8 +4,10 @@ import { createServer as createHttpServer } from "node:http";
 import { createServer as createTcpServer, type Server, type Socket } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../src/shared/deferred.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 
 const probePath = path.resolve("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs");
@@ -102,29 +104,66 @@ async function listen(server: Server): Promise<string> {
 
 it("drains stderr after process exit before publishing the probe result", ({ signal }) =>
   lifetime.run(async () => {
-    let exitObserved:
-      | { status: number | null; signal: NodeJS.Signals | null; stderrPaused: boolean }
-      | undefined;
-    const result = await runProbe(
+    const exited = createDeferredCore<{ status: number | null; signal: NodeJS.Signals | null }>();
+    const drainReady = createDeferredCore();
+    const heldDrain: Array<() => void> = [];
+    let releaseDrain = () => {};
+    let published = false;
+    let closed = false;
+    const running = runProbe(
       signal,
       ["--timeout-ms", "1e3"],
       LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
       {},
       [],
       (child) => {
-        child.stderr?.pause();
+        const stderr = child.stderr!;
+        const emit = stderr.emit.bind(stderr);
+        // Hold the real drain events, including close, until the test releases them.
+        const drain = vi.spyOn(stderr, "emit").mockImplementation((event, ...args) => {
+          if (event === "data" || event === "end" || event === "close") {
+            heldDrain.push(() => emit(event, ...args));
+            if (event === "data") {
+              drainReady.resolve();
+            }
+            return true;
+          }
+          return emit(event, ...args);
+        });
+        releaseDrain = () => {
+          drain.mockRestore();
+          for (const deliver of heldDrain) {
+            deliver();
+          }
+        };
         child.once("exit", (status, nativeSignal) => {
-          exitObserved = {
-            status,
-            signal: nativeSignal,
-            stderrPaused: child.stderr?.isPaused() === true,
-          };
-          child.stderr?.resume();
+          exited.resolve({ status, signal: nativeSignal });
+        });
+        child.once("close", () => {
+          closed = true;
         });
       },
-    );
-
-    expect(exitObserved).toEqual({ status: 1, signal: null, stderrPaused: true });
+    ).then((result) => {
+      published = true;
+      return result;
+    });
+    try {
+      const [exitObserved] = await withinTest(
+        awaitGateBeforeSettlement(
+          Promise.all([exited.promise, drainReady.promise]),
+          running,
+          "probe published before stderr drained",
+        ),
+        signal,
+      );
+      expect(exitObserved).toEqual({ status: 1, signal: null });
+      expect(published).toBe(false);
+      expect(closed).toBe(false);
+    } finally {
+      releaseDrain();
+    }
+    const result = await running;
+    expect(closed).toBe(true);
     expect(result).toMatchObject({ status: 1, signal: null, error: undefined });
     expect(result.stderr).toContain("invalid --timeout-ms: 1e3");
   }));

@@ -85,6 +85,12 @@ export type DiagnosticWorkerRequestFields = {
       | "posted"
       | "postFinished"
       | "received"
+      | "backendLoadStarted"
+      | "backendLoadFinished"
+      | "openGrantStarted"
+      | "openGrantFinished"
+      | "factoryStarted"
+      | "factoryFinished"
       | "inputReady"
       | "executeStarted"
       | "executeFinished"
@@ -131,6 +137,24 @@ export type DiagnosticWorkerRetainedData = {
   providers?: number;
   accounts?: number;
   truncated?: boolean;
+};
+
+/** Direct physical workers; unknown external policies and missing heap samples stay explicit. */
+export type DiagnosticWorkerCensus = {
+  kind: string;
+  poolId?: number;
+  workerClass: WorkerPoolClass | "other";
+  count: number;
+  floor: number | null;
+  cap: number | null;
+  pointReadCap?: number;
+  idlePolicy: "timeout" | "retain-one" | "until-close" | "unknown";
+  idleTimeoutMs?: number;
+  burstIdleTimeoutMs?: number;
+  heapUsedBytes: number | null;
+  heapSampledCount: number;
+  /** Logical endpoints inside a shared worker host; they are not additional workers. */
+  hostedEndpoints?: number;
 };
 
 export type DiagnosticMemoryUsage = {
@@ -194,11 +218,12 @@ export type DiagnosticMemoryUsage = {
     started: number;
     retired: { reason: string; count: number }[];
   }[];
-  /** Process-lifetime pool totals; completed workers remain represented after native exit. */
+  /** Process-lifetime worker totals; retired workers remain represented after native exit. */
   workerTaskMetrics?: {
     workerClass: WorkerPoolClass | "other";
     script: string;
-    tasksCompleted: number;
+    /** Absent for broker workers, which do not use the pool task-reply protocol. */
+    tasksCompleted?: number;
     heapUsedHighWaterBytes: number;
     gc: { kind: GcSample["kind"]; count: number; durationMs: number; reclaimedBytes: number }[];
   }[];
@@ -226,9 +251,26 @@ export type DiagnosticMemoryPressureMetrics = Partial<
 export type DiagnosticMemoryPressureFields = DiagnosticMemoryPressureMetrics & {
   type: "diagnostic.memory.pressure";
   level: "warning" | "critical";
-  reason: "rss_threshold" | "heap_threshold" | "worker_heap_threshold" | "rss_growth";
+  reason:
+    | "rss_threshold"
+    | "heap_threshold"
+    | "worker_heap_threshold"
+    | "process_memory_threshold"
+    | "rss_growth";
   memory: DiagnosticMemoryUsage;
 };
+
+export function isMemoryPressureReason(
+  reason: string,
+): reason is DiagnosticMemoryPressureFields["reason"] {
+  return (
+    reason === "rss_threshold" ||
+    reason === "heap_threshold" ||
+    reason === "worker_heap_threshold" ||
+    reason === "process_memory_threshold" ||
+    reason === "rss_growth"
+  );
+}
 
 export type DiagnosticChildProcessSpawnFields = {
   type: "diagnostic.child_process.spawn";

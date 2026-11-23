@@ -1,2 +1,0 @@
-# Exact regression growth: large artifact retention, finite entry ceiling, advertised activation contract.
-40

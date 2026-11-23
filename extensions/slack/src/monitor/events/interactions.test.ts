@@ -114,8 +114,9 @@ function replyButton(value: string, blockId = "exec_actions", label = "Allow onc
 function approvalButton(value: string, blockId = "exec_actions", label = "Allow once") {
   return button("openclaw:approval_button:1:1", blockId, value, label);
 }
+const PRIVATE_REPLY = { response_type: "ephemeral", replace_original: false } as const;
 function expectPrivateReply(text: string) {
-  expect(respond).toHaveBeenCalledWith({ text, response_type: "ephemeral" });
+  expect(respond).toHaveBeenCalledWith({ text, ...PRIVATE_REPLY });
 }
 function expectNotCalled(...mocks: unknown[]) {
   for (const mock of mocks) {
@@ -705,7 +706,7 @@ describe("registerSlackInteractionEvents", () => {
       'openclaw:approval:v1:{"approvalId":"req-123","approvalKind":"exec","decision":"allow-once"}',
     );
     expect(app.client.chat.update).toHaveBeenCalledTimes(updateFails ? 1 : 0);
-    expect(respond).toHaveBeenCalledWith({ text, response_type: "ephemeral" });
+    expectPrivateReply(text);
   });
 
   it("fails closed for malformed Slack approval envelopes", async () => {
@@ -762,14 +763,13 @@ describe("registerSlackInteractionEvents", () => {
       channel: "slack",
       accountId: "default",
     });
-    expectNotCalled(resolveBinding, dispatchPlugin, enqueueEvent);
+    expectNotCalled(resolveBinding, dispatchPlugin, enqueueEvent, respond);
     expectRecordFields(chatUpdateCall(app), {
       channel: "C1",
       ts: "100.200",
       text: "Plugin approval required",
       blocks: [],
     });
-    expect(respond).not.toHaveBeenCalled();
   });
 
   it("keeps exec approval buttons when gateway resolution fails", async () => {

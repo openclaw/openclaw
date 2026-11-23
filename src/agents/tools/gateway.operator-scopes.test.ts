@@ -1,10 +1,10 @@
 import { expect, it } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { readGatewayToolOperatorScopes } from "./gateway.js";
 
 it("does not report revoked source permissions", async () => {
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId: "reviewer",
     scopes: ["operator.admin"],
     assertCurrent: () => {

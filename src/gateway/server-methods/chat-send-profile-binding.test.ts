@@ -110,18 +110,25 @@ it("rejects caller replacement during initial authorization without an expected 
   const { successor: replacement } = bindProfile(fixture);
   const entered = createDeferred();
   const release = createDeferred();
-  const read = sessionSharingFacts.readSessionSharingFactsInWorker;
+  const acquire = sessionSharingFacts.createSessionSharingFactAcquisition;
   let held = false;
   const sharingRead = vi
-    .spyOn(sessionSharingFacts, "readSessionSharingFactsInWorker")
-    .mockImplementation(async (input, prepareSource) => {
-      const result = await read(input, prepareSource);
-      if (!held && input.sessionKeys.includes(fixture.scope.sessionKey)) {
-        held = true;
-        entered.resolve();
-        await release.promise;
-      }
-      return result;
+    .spyOn(sessionSharingFacts, "createSessionSharingFactAcquisition")
+    .mockImplementation((params) => {
+      const acquisition = acquire(params);
+      const read = acquisition.read;
+      return {
+        ...acquisition,
+        async read(input, publishSource) {
+          const result = await read(input, publishSource);
+          if (!held && input.sessionKeys.includes(fixture.scope.sessionKey)) {
+            held = true;
+            entered.resolve();
+            await release.promise;
+          }
+          return result;
+        },
+      };
     });
   const request = fixture.send(undefined, {});
   try {
@@ -243,14 +250,16 @@ it("terminalizes a native command account merge during fresh transcript approval
   expect.soft(fixture.context.dedupe.get(`chat:${runId}`)).toMatchObject({
     ok: false,
     payload: { runId, status: "error" },
-    error: { message: expect.stringContaining("Selected account changed") },
+    error: {
+      message: expect.stringContaining("Authenticated profile verification is unavailable"),
+    },
   });
   expect.soft(fixture.context.broadcast).toHaveBeenCalledWith(
     "chat",
     expect.objectContaining({
       runId,
       state: "error",
-      errorMessage: expect.stringContaining("Selected account changed"),
+      errorMessage: expect.stringContaining("Authenticated profile verification is unavailable"),
     }),
     expect.anything(),
   );
@@ -302,7 +311,7 @@ it("preserves accepted native input across profile merge without adopting the re
   expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
 });
 
-it.each(["host", "session ACL", "lifecycle"] as const)(
+it.each(["host", "lifecycle"] as const)(
   "retains original %s authority after committed browser custody and profile merge",
   async (boundary) => {
     await using fixture = await createFixture({
@@ -312,9 +321,6 @@ it.each(["host", "session ACL", "lifecycle"] as const)(
     const runId = fixture.params.idempotencyKey;
     let hostCurrent = true;
     const { profile, merge } = bindProfile(fixture);
-    if (boundary === "session ACL") {
-      fixture.client.connect.scopes = ["operator.read", "operator.write"];
-    }
     const ack = await fixture.send(undefined, {
       expectedProfileId: profile.id,
       sessionMutationCommitGuard: () => {
@@ -335,8 +341,6 @@ it.each(["host", "session ACL", "lifecycle"] as const)(
     merge();
     if (boundary === "host") {
       hostCurrent = false;
-    } else if (boundary === "session ACL") {
-      await patchSessionEntryCore(fixture.scope, () => ({ visibility: "draft" }));
     } else {
       rotateAgentEventLifecycleGeneration();
     }

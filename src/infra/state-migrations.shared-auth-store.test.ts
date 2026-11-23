@@ -373,8 +373,11 @@ describe("shared auth relocation lifecycle", () => {
 
   it("revokes the source credential authority before relocation and cold-loads the shared credential", async () => {
     sqlite.writePersistedAuthProfileStoreRaw(store, state.agentDir());
+    stateDb.openOpenClawStateDatabase({ env: state.env });
+    await stateDb.closeOpenClawStateDatabaseAsync();
+    const syncPreparation = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
     const { sourcePath } = state;
-    const reader = prepareAgentAuthProfileRowsRead({
+    const reader = await prepareAgentAuthProfileRowsRead({
       databasePath: sourcePath,
       agentId: "main",
       env: state.env,
@@ -389,6 +392,7 @@ describe("shared auth relocation lifecycle", () => {
     });
     const result = await migrate(sourcePath);
     expect(result.warnings).toEqual([]);
+    expect(syncPreparation).not.toHaveBeenCalled();
     expect(deniedBeforeSourceRelease).toBe(true);
     expect(() => authority.readCurrentCredential()).toThrow();
     const context = captureOpenClawStateWorkerContext({ env: state.env });

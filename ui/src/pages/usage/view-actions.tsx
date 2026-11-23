@@ -66,6 +66,7 @@ export function UsagePhoneActions(props: UsageProps) {
       {(loading) => (
         <Menu
           id="usage-phone-actions"
+          pointerFocus="trigger"
           label={t("usage.moreActions")}
           class="usage-phone-actions"
           triggerClass="btn btn--sm usage-phone-actions__trigger"

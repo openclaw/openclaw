@@ -1,8 +1,4 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
-import type {
-  ExecApprovalManagerOptions,
-  ExecApprovalRecord,
-} from "./exec-approval-manager.types.js";
 import { isOperatorApprovalStoreRefusal } from "./operator-approval-store.js";
 import type { OperatorApprovalStoreGuard } from "./operator-approval-store.types.js";
 
@@ -37,22 +33,4 @@ export function createExecApprovalMutationGuard(
       }
     },
   };
-}
-
-export function isExecApprovalRuntimeActive<TPayload>(
-  options: Pick<ExecApprovalManagerOptions<TPayload>, "validateAgentRuntimeDelegatedAuthority">,
-  record: ExecApprovalRecord<TPayload>,
-): boolean {
-  const delegated = record.agentRuntimeDelegatedAuthority;
-  if (
-    (delegated && options.validateAgentRuntimeDelegatedAuthority?.(delegated) !== true) ||
-    record.approvalSignals?.some((signal) => signal.aborted)
-  ) {
-    return false;
-  }
-  try {
-    return record.approvalAuthority?.() !== false;
-  } catch {
-    return false;
-  }
 }

@@ -8,8 +8,10 @@ import type { SessionManagementAction } from "../../components/session-menu-acti
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 export type HeaderMenuAction =
-  | SessionManagementAction
+  | Exclude<SessionManagementAction, { kind: "fork" }>
+  | { kind: "fork"; title?: string }
   | { kind: "continue-in-terminal" }
+  | { kind: "move-to-project" }
   | { kind: "stop-cloud-worker" }
   | { kind: "plugin"; id: string };
 export type HeaderMenuActionKind = HeaderMenuAction["kind"];
@@ -30,6 +32,7 @@ export type HeaderSessionOperation = Exclude<
       | "split-right"
       | "split-below"
       | "continue-in-terminal"
+      | "move-to-project"
       | "toggle-pin"
       | "new-group"
       | "plugin";
@@ -67,4 +70,14 @@ export type ChatHeaderSessionActionSource = {
   readRow: () => GatewaySessionRow | undefined;
   stopDisabledReason: string | undefined;
   workspaceRoot: string | null;
+};
+
+export type ChatHeaderWorkspaceDataOwner = Pick<
+  ChatHeaderSessionActionOwner,
+  "context" | "ownsHeaderOutcome"
+> & {
+  headerPresentation: {
+    worktreePaths: Map<string, { loading?: boolean; path?: string | null }>;
+    branches: Map<string, { loading?: boolean; value?: string | null }>;
+  };
 };

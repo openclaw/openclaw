@@ -17,12 +17,12 @@ import {
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
-  createAdmittedRunOperatorAuthority,
   getAdmittedRunDelegatedAuthority,
   readAdmittedRunOperatorAuthority,
   type AdmittedRunContext,
   type PreparedAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { acceptCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import { modelDefinition, providerConfig } from "../../agents/model-auth.fixtures.test-support.js";
@@ -74,6 +74,7 @@ import {
   createModifiedMemoryFlushPlan,
   createMemoryRunEntryMockImplementation,
   createSessionEntry,
+  registerClaudeCliBackend,
   modelRoutingProvenance,
   runSelectedMemoryModel,
   seedMemoryAccountingTranscript,
@@ -163,20 +164,6 @@ async function runSessionCompactionIfNeeded(params: PreflightCompactionTestParam
 
 function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolver): void {
   registerMemoryCapability("memory-core", { flushPlanResolver: resolver });
-}
-
-function registerClaudeCliBackend(ownsNativeCompaction = false): void {
-  cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        pluginId: "anthropic",
-        config: { command: "claude" },
-        ownsNativeCompaction,
-      },
-    ],
-  });
 }
 
 type TestReplyOperation = ReplyOperation & {
@@ -422,7 +409,7 @@ describe("runMemoryFlushIfNeeded", () => {
       let admission: PreparedAgentRunAdmission | undefined;
       let admittedContext: AdmittedRunContext | undefined;
       const releaseOperatorAuthority = vi.fn();
-      const operatorAuthority = createAdmittedRunOperatorAuthority({
+      const operatorAuthority = createTestOperatorAuthority({
         profileId: "guest",
         scopes: ["operator.write"],
         assertCurrent: vi.fn<() => void>(),
@@ -810,25 +797,23 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();
   });
 
-  it("passes persisted session policy and runtime policy key to preflight compaction", async () => {
-    registerMemoryFlushPlanResolverForTest(() =>
-      createModifiedMemoryFlushPlan({ softThresholdTokens: 1, reserveTokensFloor: 0 }),
-    );
-    const sessionEntry: SessionEntry = createFreshSessionEntry({
-      totalTokens: 120,
+  it("passes persisted session policy, runtime policy key and turn skills to preflight compaction", async () => {
+    // The stored snapshot drops runtime catalogs; compaction must reuse this turn's hydrated one.
+    const persistedSkills = { prompt: "selected", skills: [{ name: "selected" }] };
+    const turnSkills = { ...persistedSkills, resolvedSkills: [] };
+    const { sessionEntry, run } = await createRequiredPreflight({
       permissionMode: "full",
       sessionRoot: "/tmp/workspace",
+      skillsSnapshot: persistedSkills,
     });
-
-    await runDefaultPreflight(sessionEntry, {
+    await run({
       followupRun: createTestFollowupRun({
         sessionId: "session",
         sessionKey: "agent:main:main",
         cwd: "/tmp/task-repo",
         runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
+        skillsSnapshot: turnSkills,
       }),
-      modelContextTokens: 100,
-      sessionKey: "agent:main:main",
       runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
     });
 
@@ -838,6 +823,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.cwd).toBe("/tmp/task-repo");
     expect(compactCall.sandboxSessionKey).toBe("agent:main:telegram:default:direct:12345");
     expect(compactCall.sessionEntry).toBe(sessionEntry);
+    expect(compactCall.skillsSnapshot).toBe(turnSkills);
   });
 
   it("applies session compaction at reported pressure after a runtime fallback with memory flush disabled", async () => {
@@ -1038,7 +1024,6 @@ describe("runMemoryFlushIfNeeded", () => {
     { stage: "after start notice", invalidation: "authorization" },
     { stage: "after awaited compactor", invalidation: "authorization" },
     { stage: "after awaited compactor", invalidation: "abort" },
-    { stage: "after awaited compactor", invalidation: "operator" },
   ] as const)(
     "rejects $invalidation invalidation $stage without accounting or adopting compaction",
     async ({ stage, invalidation }) => {
@@ -1047,23 +1032,9 @@ describe("runMemoryFlushIfNeeded", () => {
       const followupRun = createTestFollowupRun({ workspaceDir: rootDir });
       const controller = new AbortController();
       let authorized = true;
-      let operatorCurrent = true;
-      if (invalidation === "operator") {
-        followupRun.operatorAuthority = createAdmittedRunOperatorAuthority({
-          profileId: "guest",
-          scopes: ["operator.write"],
-          assertCurrent: () => {
-            if (!operatorCurrent) {
-              throw new Error("operator authority revoked");
-            }
-          },
-        });
-      }
       const invalidate = () => {
         if (invalidation === "authorization") {
           authorized = false;
-        } else if (invalidation === "operator") {
-          operatorCurrent = false;
         } else {
           controller.abort(new Error("caller aborted"));
         }
@@ -1107,9 +1078,7 @@ describe("runMemoryFlushIfNeeded", () => {
       await expect(pending).rejects.toThrow(
         invalidation === "authorization"
           ? "Session compaction maintenance is no longer active"
-          : invalidation === "abort"
-            ? "caller aborted"
-            : "operator authority revoked",
+          : "caller aborted",
       );
 
       expect(onCompactionStart).toHaveBeenCalledTimes(stage === "before start" ? 0 : 1);

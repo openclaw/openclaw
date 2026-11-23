@@ -23,10 +23,7 @@ import {
   DEFAULT_APPROVAL_TIMEOUT_MS,
 } from "./bash-tools.exec-runtime.js";
 import type { ExecApprovalRegistration, ExecApprovalTransport } from "./exec-approval-transport.js";
-import {
-  getGatewayToolCallerIdentity,
-  captureGatewayToolCallerAssertion,
-} from "./tools/gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const loadExecApprovalCommandSpansRuntime = createLazyPromise(
@@ -139,17 +136,13 @@ export async function resolveRegisteredExecApprovalDecision(params: {
   if (params.preResolvedDecision !== undefined) {
     return params.preResolvedDecision ?? null;
   }
-  const assertCurrent = captureGatewayToolCallerAssertion();
   const wait =
     params.expiresAtMs === undefined
       ? undefined
       : getGatewayToolCallerIdentity()?.watchdogAttempt?.beginWait({
           kind: "approval",
           deadlineAtMs: params.expiresAtMs,
-          isCurrent: () => {
-            assertCurrent?.();
-            return true;
-          },
+          isCurrent: () => true,
         });
   try {
     const decisionResult = params.approvalTransport

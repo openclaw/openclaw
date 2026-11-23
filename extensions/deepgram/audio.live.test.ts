@@ -78,8 +78,11 @@ describeLive("deepgram live", () => {
   }, 30000);
 
   it("streams realtime STT through the registered transcription provider", async () => {
+    // The live key comes from the environment; no saved key is consulted.
     const provider = buildDeepgramRealtimeTranscriptionProvider({
       createRealtimeTranscriptionWebSocketSession,
+      isProviderAuthProfileConfiguredAsync: async () => false,
+      resolveProviderAuthProfileApiKey: async () => undefined,
     });
     const speech = convertWavToMulaw8k(await fetchSampleBuffer(SAMPLE_URL, 15_000));
     expect(speech.byteLength).toBeGreaterThan(0);

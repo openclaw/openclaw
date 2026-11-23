@@ -49,5 +49,8 @@ export function installConnectedSessionStoreGatewaySuite(
     get ws() {
       return requireValue(started, "gateway client").ws;
     },
+    get port() {
+      return requireValue(started, "gateway client").port;
+    },
   };
 }

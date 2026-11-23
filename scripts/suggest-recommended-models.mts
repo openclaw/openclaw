@@ -301,6 +301,27 @@ export async function suggestRecommendedModels(args: string[]): Promise<void> {
   }
   const newestOf = (keys: string[]) =>
     keys.reduce((newest, key) => (compareModelRecency(key, newest, releasedAt) > 0 ? key : newest));
+  const known = [...new Set([...candidates, ...curated])];
+  const successors = new Map<string, string>();
+  for (const [family, keys] of families) {
+    // Unversioned ids may alias the same release (muse-wonder and muse-wonder-1).
+    // Only compare explicit versions; different tiers keep distinct families.
+    const versioned = keys.filter((key) => canonicalModelFamily(key).version.length > 0);
+    if (versioned.length === 0) {
+      continue;
+    }
+    const latest = newestOf(versioned);
+    for (const key of known) {
+      const identity = canonicalModelFamily(key);
+      if (
+        identity.name === family &&
+        identity.version.length > 0 &&
+        compareModelRecency(latest, key, releasedAt) > 0
+      ) {
+        successors.set(key, latest);
+      }
+    }
+  }
   const inherits = new Map<string, string>();
   const effectiveUsage = new Map(usage);
   for (const keys of families.values()) {
@@ -312,7 +333,8 @@ export async function suggestRecommendedModels(args: string[]): Promise<void> {
     if (arena.has(latest) || ranked.length === 0) {
       continue;
     }
-    const sibling = newestOf(ranked);
+    const arenaRanked = ranked.filter((key) => arena.has(key));
+    const sibling = newestOf(arenaRanked.length > 0 ? arenaRanked : ranked);
     // A successor with no Arena row of its own takes an Arena-ranked sibling's
     // slot; with no usage yet, it also takes a usage-ranked sibling's slot. It
     // counts the sibling's usage too, so it ties at least level and sorts first.
@@ -336,8 +358,10 @@ export async function suggestRecommendedModels(args: string[]): Promise<void> {
     ? [...candidates]
         .filter((key) => !scoredKeys.has(key) && effectiveUsage.get(key))
         .toSorted(byUsage)
-    : curated.filter((key) => candidates.has(key) && !scoredKeys.has(key));
-  const suggested = [...scored, ...unscored];
+    : [...new Set(curated.map((key) => successors.get(key) ?? key))].filter(
+        (key) => candidates.has(key) && !scoredKeys.has(key),
+      );
+  const suggested = [...scored, ...unscored].filter((key) => !successors.has(key));
 
   const signalOf = (key: string) => {
     const via = inherits.has(key) ? ` via ${inherits.get(key)}` : "";
@@ -388,7 +412,6 @@ export async function suggestRecommendedModels(args: string[]): Promise<void> {
       "| --- | --- | --- | --- | --- | --- | --- |",
     );
   }
-  const known = [...new Set([...candidates, ...curated])];
   for (const key of newModels) {
     const family = canonicalModelFamily(key).name;
     const older = known.filter(
@@ -467,16 +490,18 @@ export async function suggestRecommendedModels(args: string[]): Promise<void> {
   }
 
   const dropped = curated.filter((key) => !suggestedKeys.has(key));
-  lines.push("", "## Gone or deprecated", "");
+  lines.push("", "## Superseded, gone, or deprecated", "");
   if (dropped.length === 0) {
     lines.push("None.");
   }
   for (const key of dropped) {
-    const reason = retired.has(key)
-      ? `retired by its first-party provider${retired.get(key) ? `; replaced by ${retired.get(key)}` : ""}`
-      : candidates.has(key)
-        ? "no Arena score and no OpenRouter usage in the window"
-        : "no host serves it";
+    const reason = successors.has(key)
+      ? `superseded by ${successors.get(key)}; retain only with a specific independent recommendation reason`
+      : retired.has(key)
+        ? `retired by its first-party provider${retired.get(key) ? `; replaced by ${retired.get(key)}` : ""}`
+        : candidates.has(key)
+          ? "no Arena score and no OpenRouter usage in the window"
+          : "no host serves it";
     lines.push(`- ${key}: ${reason}`);
   }
 

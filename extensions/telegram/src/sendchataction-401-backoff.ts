@@ -81,8 +81,11 @@ export function createTelegramSendChatActionHandler({
   let consecutive401Failures = 0;
   let consecutiveTransientFailures = 0;
   let transientCooldownUntilMs = 0;
-  const blockedUntilByKey = new Map<string, number>();
+  const blockedUntilByScope = new Map<string, Map<ChatAction, number>>();
   const isSuspended = () => consecutive401Failures >= 10;
+
+  const resolveScopeKey = (chatId: number | string, threadId?: number) =>
+    JSON.stringify([String(chatId), threadId ?? null]);
 
   const clearTransientCooldown = () => {
     consecutiveTransientFailures = 0;
@@ -117,17 +120,24 @@ export function createTelegramSendChatActionHandler({
     assertNotCoolingDown();
 
     const threadId = threadParams?.message_thread_id;
-    const key = `${String(chatId)}:${action}${threadId === undefined ? "" : `:${threadId}`}`;
-    const blockedUntil = blockedUntilByKey.get(key);
+    const scopeKey = resolveScopeKey(chatId, threadId);
+    let blockedActions = blockedUntilByScope.get(scopeKey);
+    const blockedUntil = blockedActions?.get(action);
     if (blockedUntil !== undefined && attemptedAt < blockedUntil) {
       return;
     }
-    blockedUntilByKey.set(key, Number.POSITIVE_INFINITY);
+    if (!blockedActions) {
+      blockedActions = new Map();
+      blockedUntilByScope.set(scopeKey, blockedActions);
+    }
+    blockedActions.set(action, Number.POSITIVE_INFINITY);
 
     try {
       await send();
     } finally {
-      blockedUntilByKey.set(key, attemptedAt + TELEGRAM_CHAT_ACTION_INTERVAL_MS);
+      if (blockedUntilByScope.get(scopeKey) === blockedActions) {
+        blockedActions.set(action, attemptedAt + TELEGRAM_CHAT_ACTION_INTERVAL_MS);
+      }
     }
   };
 
@@ -241,11 +251,17 @@ export function createTelegramSendChatActionHandler({
   return {
     apiTransformer,
     sendChatAction,
+    // Telegram clients clear chat actions when a bot message arrives. Mirror
+    // that provider state so the next turn's first cue is not mistaken for a
+    // same-task keepalive.
+    noteMessageDelivered: (chatId: number | string, threadId?: number) => {
+      blockedUntilByScope.delete(resolveScopeKey(chatId, threadId));
+    },
     isSuspended,
     reset: () => {
       consecutive401Failures = 0;
       clearTransientCooldown();
-      blockedUntilByKey.clear();
+      blockedUntilByScope.clear();
     },
   };
 }

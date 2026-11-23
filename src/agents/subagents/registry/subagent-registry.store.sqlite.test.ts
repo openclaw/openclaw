@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync, constants } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as sqliteQueries from "../../../infra/kysely-sync.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import {
@@ -21,7 +20,6 @@ import {
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
 import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
-import * as subagentCodec from "./subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
 import {
   isReleasedSubagentRunRecord,
@@ -78,6 +76,54 @@ describe("subagent registry sqlite store", () => {
       await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       tempStateDir = null;
     }
+  });
+
+  it("commits terminal removal facts with deletion and rolls both back on failure", () => {
+    const runs = (
+      [
+        { status: "delivered", deliveredAt: 300 },
+        { status: "suspended", suspendedAt: 300, suspendedReason: "permanent_failure" },
+        { status: "discarded", discardedAt: 300, discardReason: "expired" },
+        { status: "failed", disposition: "permanent_failure", lastError: "requester deleted" },
+      ] as const
+    ).map((delivery) =>
+      createRun({ runId: `removal-${delivery.status}`, requesterAgentId: "main", delivery }),
+    );
+    const extras = Array.from({ length: 32 }, (_, i) => createRun({ runId: `extra-${i}` }));
+    saveRuns(...runs, ...extras);
+    const ids = [...runs, ...extras].map((run) => run.runId);
+    const readFacts = () =>
+      openOpenClawStateDatabase()
+        .db.prepare(
+          "SELECT run_id, payload_json FROM session_state_events WHERE kind = 'child_delivery_removed' ORDER BY run_id",
+        )
+        .all();
+    expect(() =>
+      runOpenClawStateWriteTransaction((database) => {
+        writeSubagentRunValuesInDatabase(database, [], ids);
+        throw new Error("rollback removal");
+      }),
+    ).toThrow("rollback removal");
+    expect(readFacts()).toEqual([]);
+    expect(loadSubagentRegistryFromSqlite().size).toBe(36);
+    runOpenClawStateWriteTransaction((database) =>
+      writeSubagentRunValuesInDatabase(database, [], ids),
+    );
+    reopen();
+    expect(loadSubagentRegistryFromSqlite().size).toBe(0);
+    expect(readFacts()).toHaveLength(36);
+    expect(
+      readFacts()
+        .filter((row) => String(row.run_id).startsWith("removal-"))
+        .map((row) => Object.assign({ runId: row.run_id }, JSON.parse(String(row.payload_json)))),
+    ).toEqual(
+      [
+        { runId: "removal-delivered", outcome: "delivered", deliveredAt: 300 },
+        { runId: "removal-discarded", outcome: "discarded", reason: "expired" },
+        { runId: "removal-failed", outcome: "discarded", lastError: "requester deleted" },
+        { runId: "removal-suspended", outcome: "suspended", reason: "permanent_failure" },
+      ].map((fact) => expect.objectContaining(fact)),
+    );
   });
 
   it("reads unbound old-schema rows and rolls back first-use parent-store columns with registration", async () => {
@@ -301,8 +347,17 @@ describe("subagent registry sqlite store", () => {
     }
   });
 
-  it("decodes owned compact rows without copying while preserving stored identities", () => {
-    const run = createRun();
+  it("trims compact identities without changing stored identities", () => {
+    const run = createRun({
+      delivery: {
+        status: "pending",
+        requesterDelivery: {
+          state: "consumed",
+          runId: "requester-continuation",
+          at: 300,
+        },
+      },
+    });
     saveRuns(run);
     const database = openOpenClawStateDatabase();
     database.db
@@ -311,23 +366,15 @@ describe("subagent registry sqlite store", () => {
       )
       .run(` ${run.runId} `, ` ${run.childSessionKey} `, ` ${run.requesterSessionKey} `, run.runId);
     const storedBefore = database.db.prepare("SELECT * FROM subagent_runs").get();
-    const queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
-    const decode = vi.spyOn(subagentCodec, "rowToSubagentRunRecord");
-    try {
-      const compact = loadSubagentSessionListRunsFromSqlite(undefined, database);
-      expect([...compact.keys()]).toEqual([run.runId]);
-      expect(compact.get(run.runId)).toMatchObject({
-        runId: run.runId,
-        childSessionKey: run.childSessionKey,
-        requesterSessionKey: run.requesterSessionKey,
-      });
-      // A compact query owns its rows; a second row allocation adds no isolation.
-      expect(decode.mock.calls[0]?.[0]).toBe(queries.mock.results.at(-1)?.value.rows[0]);
-      expect(database.db.prepare("SELECT * FROM subagent_runs").get()).toEqual(storedBefore);
-    } finally {
-      decode.mockRestore();
-      queries.mockRestore();
-    }
+    const compact = loadSubagentSessionListRunsFromSqlite(undefined, database);
+    expect([...compact.keys()]).toEqual([run.runId]);
+    expect(compact.get(run.runId)).toMatchObject({
+      runId: run.runId,
+      childSessionKey: run.childSessionKey,
+      requesterSessionKey: run.requesterSessionKey,
+      delivery: run.delivery,
+    });
+    expect(database.db.prepare("SELECT * FROM subagent_runs").get()).toEqual(storedBefore);
   });
 
   it.each([
@@ -442,18 +489,14 @@ describe("subagent registry sqlite store", () => {
       execution: { status: "terminal" },
       delivery: { status: "pending" },
     });
-    const parse = vi.spyOn(JSON, "parse");
-    try {
-      expect(readCompact().get(run.runId)).toMatchObject({
-        execution: { status: "terminal" },
-        delivery: { status: "pending" },
-      });
-      expect(parse.mock.calls.some(([text]) => text.includes("retained-duplicate-body:"))).toBe(
-        false,
-      );
-    } finally {
-      parse.mockRestore();
-    }
+    using parse = vi.spyOn(JSON, "parse");
+    expect(readCompact().get(run.runId)).toMatchObject({
+      execution: { status: "terminal" },
+      delivery: { status: "pending" },
+    });
+    expect(parse.mock.calls.some(([text]) => text.includes("retained-duplicate-body:"))).toBe(
+      false,
+    );
     expect(readPayload(run.runId)?.payload_json).toBe(payload);
   });
 

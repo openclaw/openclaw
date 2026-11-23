@@ -136,7 +136,7 @@ describe("plugin session forks", () => {
           model: "research-model",
           sessionKey,
           sessionEntry: { sessionId: "parent-session" },
-          toolCalls: "deny",
+          sessionFork: expect.any(Function),
           isNewSession: false,
         });
         expect(params.opts).not.toHaveProperty("onBlockReply");

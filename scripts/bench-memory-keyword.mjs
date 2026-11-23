@@ -58,7 +58,7 @@ const { searchPostgresMemoryKeyword } = await load(
   "extensions/memory-core/src/memory/manager-search-postgres.ts",
 );
 const { searchKeywordWithFallback } = await load(
-  "extensions/memory-core/src/memory/manager-search.ts",
+  "extensions/memory-core/src/memory/manager-search-keyword.ts",
 );
 installDatabaseProcessRole("cli-oneshot");
 const ddl = fs.readFileSync(

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { bindWorkerToolPreparation } from "../agents/harness/host-private-capabilities.js";
 import { bindPreparedToolAuthority } from "../agents/harness/tool-authority-preparation.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
@@ -112,7 +112,7 @@ it.each([
     const scopes = ["operator.admin", "operator.read", "operator.write"];
     const modelPolicy = prepareOperatorModelPolicy({ cfg: config, policy: {} });
     const authority = (incoming = false) =>
-      createAdmittedRunOperatorAuthority({
+      createTestOperatorAuthority({
         profileId: incoming && scenario === "other-profile" ? "synthetic-other" : "synthetic-owner",
         scopes: incoming && scenario === "lower-scopes" ? ["operator.read"] : scopes,
         gatewayAccessGrant: null,

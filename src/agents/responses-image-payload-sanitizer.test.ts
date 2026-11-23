@@ -3,7 +3,6 @@ import "../llm/ai-transport-host.js";
 import type { Context, Model } from "@openclaw/llm-core";
 // Verifies Responses image payloads are canonicalized or replaced before send.
 import { describe, expect, it, vi } from "vitest";
-import { createResponsesV2CompactionCollector } from "../../packages/ai/src/transports/openai-responses-compaction-v2.js";
 import { RESPONSES_RETAINED_USER } from "../../packages/ai/src/transports/openai-responses-contracts.js";
 import { convertResponsesMessages } from "../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
@@ -42,9 +41,8 @@ describe("Responses image payload sanitizer", () => {
       stream: true as const,
       input: [text, mutable, image],
     };
-    const collector = createResponsesV2CompactionCollector();
-    const first = collector.sanitizeImages(request);
-    const second = collector.sanitizeImages(request);
+    const first = sanitizeResponsesImagePayload(request);
+    const second = sanitizeResponsesImagePayload(request);
     expect(first.input).not.toBe(request.input);
     expect(first.input?.[0]).toBe(text);
     expect(second.input?.[0]).toBe(text);
@@ -57,7 +55,7 @@ describe("Responses image payload sanitizer", () => {
     );
     mutable.content[0]!.text = "edited question";
     expect(JSON.stringify(first.input?.[1])).toContain("current question");
-    expect(JSON.stringify(collector.sanitizeImages(request).input?.[1])).toContain(
+    expect(JSON.stringify(sanitizeResponsesImagePayload(request).input?.[1])).toContain(
       "edited question",
     );
   });
@@ -143,7 +141,7 @@ it.each([
   { name: "canonical", mimeType: "image/png", data: PNG_1X1 },
   { name: "MIME normalization", mimeType: "image/jpeg", data: PNG_1X1 },
   { name: "whitespace normalization", mimeType: "image/png", data: `\n${PNG_1X1}\n` },
-  { name: "padding normalization", mimeType: "image/png", data: PNG_1X1.replace(/=+$/, "") },
+  { name: "padding normalization", mimeType: "image/png", data: PNG_1X1.replace(/[=]+$/, "") },
 ])("reuses $name image work without sharing mutable request items", ({ mimeType, data }) => {
   const image = { type: "image" as const, mimeType, data };
   const model: Model = {

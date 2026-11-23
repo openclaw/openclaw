@@ -3,6 +3,8 @@ import {
   buildGogWatchServeArgs,
   buildGogWatchServeLogArgs,
   buildTopicPath,
+  GMAIL_WATCH_PUSH_TOKEN_ENV,
+  GMAIL_WATCH_HOOK_TOKEN_ENV,
   parseTopicPath,
   resolveGmailHookRuntimeConfig,
 } from "./gmail.js";
@@ -26,12 +28,30 @@ it("builds watch serve log args without secrets", () => {
   expect(serveArgs).toContain("--exclude-labels");
   expect(serveArgs[serveArgs.indexOf("--exclude-labels") + 1]).toBe("SPAM,TRASH,DRAFT,SENT");
 
+  expect(serveArgs).toContain(GMAIL_WATCH_PUSH_TOKEN_ENV);
+  expect(serveArgs).toContain(GMAIL_WATCH_HOOK_TOKEN_ENV);
+  expect(serveArgs).not.toContain(result.value.pushToken);
+  expect(serveArgs).not.toContain(result.value.hookToken);
+  expect(buildGogWatchServeArgs(result.value, "legacy-argv")).toEqual(
+    expect.arrayContaining([
+      "--token",
+      result.value.pushToken,
+      "--hook-token",
+      result.value.hookToken,
+    ]),
+  );
   const args = buildGogWatchServeLogArgs(result.value);
-  // --token, --hook-url, and --hook-token are stripped from the log args.
+  for (const mode of ["env", "legacy-argv"] as const) {
+    const logged = buildGogWatchServeLogArgs(result.value, mode);
+    for (const secret of [result.value.pushToken, result.value.hookToken, result.value.hookUrl]) {
+      expect(logged).not.toContain(secret);
+    }
+  }
   expect(args).toEqual(
     (
       "gmail watch serve --account openclaw@gmail.com --bind 127.0.0.1 --port 8788 " +
-      "--path /gmail-pubsub --include-body --exclude-labels SPAM,TRASH,DRAFT,SENT " +
+      "--path /gmail-pubsub --token-env OPENCLAW_GOG_WATCH_PUSH_TOKEN " +
+      "--hook-token-env OPENCLAW_GOG_WATCH_HOOK_TOKEN --include-body --exclude-labels SPAM,TRASH,DRAFT,SENT " +
       "--max-bytes 20000"
     ).split(" "),
   );

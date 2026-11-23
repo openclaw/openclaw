@@ -1,6 +1,7 @@
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type {
   SessionCatalogHost,
+  SessionCatalogProfileRelation,
   SessionCatalogSession,
   SessionSharingRole,
   MessageReactionSummary,
@@ -55,6 +56,7 @@ import { SessionParticipationTracker } from "./chat-pane-state.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import type {
   ChatTypingActorState,
   ChatTypingActorView,
@@ -78,6 +80,7 @@ import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { SidebarLayout } from "./sidebar-layout-types.ts";
 
 export type ChatPaneInputChanges = {
+  catalogProfileRelation?: boolean;
   sessionKey?: boolean;
   inputRegion?: boolean;
   draft?: boolean;
@@ -226,6 +229,7 @@ export abstract class ChatPaneStateOwner {
   // Empty means unresolved route data: boot on the page state's default session
   // without canonicalizing until the container supplies a real key.
   sessionKey = "";
+  catalogProfileRelation: SessionCatalogProfileRelation | undefined = undefined;
   // This session-keyed pane retains its initial skeleton through URL canonicalization.
   routeLoadingSkeleton = false;
   routeResolutionPending = false;
@@ -445,6 +449,8 @@ export abstract class ChatPaneStateOwner {
     hasPendingScrollCommand: () =>
       this.state !== undefined && hasPendingManualChatScroll(this.state),
     onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
+    onRequestEnd: () => this.state?.scrollToBottom({ smooth: true }),
+    onNativeScroll: (event) => this.handleTranscriptScroll(event),
   });
   protected get progressCards() {
     return sessionProgressCardsForGateway(this.context.gateway);
@@ -514,10 +520,18 @@ export abstract class ChatPaneStateOwner {
   protected isCurrentSessionArchived(state: ChatPageHost): boolean {
     return (
       state.selectedChatSessionArchived ||
+      this.isCurrentSessionArchivePending(state) ||
       state.sessionsResult?.sessions.some(
         (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
       ) === true
     );
+  }
+
+  /** Inside the Undo window the session presents as archived, but its draft is kept
+   * until the archive commits, so Undo returns the conversation untouched. */
+  protected isCurrentSessionArchivePending(state: ChatPageHost): boolean {
+    const key = selectedChatSessionRow(state)?.key ?? state.sessionKey;
+    return this.context.sessions.archiveVisibility(key) === "pending";
   }
   /* Infinity until the first ResizeObserver tick so an unmeasured pane keeps
    * the wide side-by-side layout instead of flashing the stacked one. */
@@ -744,5 +758,6 @@ export abstract class ChatPaneStateOwner {
   protected abstract cancelHeaderRename(): void;
   protected abstract handleArchiveSessionShortcut(event: KeyboardEvent): boolean;
   protected abstract resetOlderMessagesViewport(): void;
+  protected abstract handleTranscriptScroll(event: Event): void;
   protected abstract syncQueuedEditRetention(): void;
 }

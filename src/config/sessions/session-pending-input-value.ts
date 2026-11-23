@@ -1,8 +1,9 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import type { SessionPendingInputReceipt } from "./session-history-read.types.js";
+import type { SessionPendingInputEndCause } from "./session-pending-input-end-cause.types.js";
 import type { SessionPendingInput, SessionPendingInputRow } from "./session-pending-input.types.js";
 
 export function parseSessionPendingInputMessage(messageJson: string): PersistedUserTurnMessage {
@@ -16,21 +17,52 @@ export function parseSessionPendingInputMessage(messageJson: string): PersistedU
 
 export function isFinalInputCompletion(outcome: AgentRunTerminalOutcome): boolean {
   return (
+    outcome.activeSteer !== undefined ||
     outcome.reason === "completed" ||
     (outcome.reason === "cancelled" && outcome.stopReason !== "restart")
   );
+}
+
+/** Endings a channel redelivery or Doctor merge may treat as not deliberately retired. */
+export function isRetryableSessionPendingInputEndCause(
+  cause: SessionPendingInputRow["end_cause"],
+): boolean {
+  return cause == null || cause === "failed" || cause === "restart-unrecoverable";
+}
+
+export function readSessionPendingInputEndCause(
+  row: Pick<SessionPendingInputRow, "end_cause">,
+): SessionPendingInputEndCause | undefined {
+  switch (row.end_cause) {
+    case null:
+    case undefined:
+      return undefined;
+    case "user-stop":
+    case "delete":
+    case "reset":
+    case "revoked":
+    case "restart-unrecoverable":
+    case "overflow":
+    case "policy-refused":
+    case "failed":
+      return row.end_cause;
+    default:
+      throw new Error("Pending input has an invalid end cause");
+  }
 }
 
 export function projectSessionPendingInput(row: SessionPendingInputRow): SessionPendingInput {
   if (row.state !== "queued" && row.state !== "interrupted" && row.state !== "cancelled") {
     throw new Error("Pending input has an invalid disposition");
   }
+  const endCause = readSessionPendingInputEndCause(row);
   return {
     id: row.input_id,
     runId: row.run_id,
     message: parseSessionPendingInputMessage(row.message_json),
     acceptedAt: row.accepted_at,
     state: row.state,
+    ...(endCause ? { endCause } : {}),
   };
 }
 

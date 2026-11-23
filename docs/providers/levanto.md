@@ -87,7 +87,9 @@ envelope, including batch partial errors, call-level usage, reported model ident
 and reasoning metadata. A failed batch question becomes an explicit error answer,
 not a negative decision. Successful questions are retained.
 
-The selectable catalog ID is `levanto-sage`. A response may report
+The selectable catalog ID is `levanto-sage`. The Decision picker reads it from the
+hosted model catalog, falling back to the installed manifest row; Sage has no live
+model listing. A response may report
 `levanto-sage-v1.3`; neither is a request-level version pin. Sage documents no model
 selector in these request bodies.
 

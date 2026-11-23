@@ -35,8 +35,8 @@ import {
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import { prepareClientVoiceSessionClose } from "../../../talk/client-voice-session-lifecycle.js";
+import * as voiceWriters from "../../../talk/client-voice-session-source.js";
 import { readVoiceSessionRecordInTransaction } from "../../../talk/client-voice-session-store.js";
-import * as voiceWriters from "../../../talk/client-voice-session-write.js";
 import * as voiceSessions from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
@@ -48,12 +48,8 @@ import { useUserProfileCatalogForTest } from "../../../test-utils/user-profile-c
 import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
 import { makeClient } from "../../server-broadcast.test-helpers.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
-import {
-  bindGatewayRequestHandlerMutationAuthority,
-  bindWebSocketRequestMutationAuthority,
-} from "../../server-methods/session-mutation-guards.js";
+import { bindGatewayRequestHandlerMutationAuthority } from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "../../server-methods/types.js";
-import { SharedGatewaySessionGenerationState } from "../../server-shared-auth-generation.js";
 import { resolveSessionMutationAuthorizationAsync } from "../../session-sharing-authorization-async.js";
 import { closeTalkClientGatewayControlSession } from "../client-gateway-control.js";
 import { cleanupTalkConnection, prepareTalkConnectionClose } from "../session-registry.js";
@@ -390,14 +386,9 @@ describe("voice creation authority", () => {
               return { ...lifetime, [Symbol.dispose]: lifetime.release };
             })()
           : undefined;
-      const generation = new SharedGatewaySessionGenerationState({
-        current: undefined,
-        required: undefined,
-      });
       const bindAuthority = (options: GatewayRequestHandlerOptions) => {
         if (deviceAuthority && workerClient) {
           options.hasCurrentClientAuthority = deviceAuthority.isCurrent;
-          bindWebSocketRequestMutationAuthority(options, workerClient, generation.reader);
         }
         return options;
       };
@@ -586,11 +577,6 @@ describe("voice creation authority", () => {
           const lifetime = captureGatewayDeviceRevocation(fixture.context, {}, () => true);
           releaseAuthority = lifetime.release;
           options.hasCurrentClientAuthority = lifetime.isCurrent;
-          const generation = new SharedGatewaySessionGenerationState({
-            current: undefined,
-            required: undefined,
-          });
-          bindWebSocketRequestMutationAuthority(options, client, generation.reader);
           const admitted = await resolveSessionMutationAuthorizationAsync({
             method: options.req.method,
             requestParams: options.params,

@@ -375,7 +375,6 @@ it("refreshes cached profile aliases without rewriting non-profile or unresolved
           kind: "resolved" as const,
           profileId: "canonical-id",
           avatarUrl: "/api/users/canonical-id/avatar?v=20",
-          hasUploadedAvatar: false,
         },
   );
   const projected = projectStable(messages, { resolveCurrentUserProfileDisplay });
@@ -494,6 +493,19 @@ it.each(["next-renderable", "last-renderable", "last-assistant"] as const)(
     expect(JSON.stringify(messages)).toBe(original);
   },
 );
+
+it("restores widgets from Claude CLI results coalesced into the tool-call message", () => {
+  const widget = { kind: "canvas", presentation: { target: "assistant_message" } };
+  const result = JSON.stringify({ ...widget, view: { id: "cv_cli", url: "/cv_cli" } });
+  const call = { type: "toolcall", id: "toolu_1", name: "mcp__openclaw__show_widget" };
+  const messages = [
+    assistant([call, { type: "tool_result", tool_use_id: "toolu_1", content: [text(result)] }], {}),
+    assistant([text("Done.")], {}),
+  ];
+  expect(augmentChatHistoryWithCanvasBlocks(messages)[1]).toMatchObject({
+    content: [text("Done."), { type: "canvas", preview: { viewId: "cv_cli", url: "/cv_cli" } }],
+  });
+});
 
 const hostTab = { targetId: "tab-1", target: "host", profile: "work" };
 const nodeTab = { ...hostTab, target: "node", node: "node-1" };
@@ -623,6 +635,32 @@ const terminal = (runId = "run-a") => ({
   details: { runId },
   __openclaw: { id: "terminal-" + runId, seq: 10, runId },
 });
+it.each([undefined, "", "   ", "Desktop-specific failure details"])(
+  "preserves shared failure text while projecting desktop notice %j",
+  (desktopNotice) => {
+    const receipt = {
+      ...terminal(),
+      details: { runId: "run-a", desktopNotice },
+    };
+    const [projected] = projectChatDisplayMessages([receipt]);
+    if (!projected) {
+      throw new Error("Expected the failure receipt to remain in chat history");
+    }
+    expect(projected).toMatchObject({
+      content: "Recovery exhausted.",
+      openclawRunError: {
+        runId: "run-a",
+        summary: "Recovery exhausted.",
+      },
+    });
+    if (desktopNotice?.trim()) {
+      expect(projected.openclawRunError).toHaveProperty("desktopSummary", desktopNotice);
+    } else {
+      expect(projected.openclawRunError).not.toHaveProperty("desktopSummary");
+    }
+  },
+);
+
 const projectedIds = (messages: unknown[]) =>
   projectChatDisplayMessages(messages).map((message) => message["__openclaw"]);
 
@@ -822,7 +860,7 @@ it("shows one settled notice while preserving each attempt's partial output", ()
   };
   const raw = [user, partial, empty, receipt];
   const projected = projectStable(raw);
-  expect(projected.map(readRunFailureNotice).filter(Boolean)).toEqual([
+  expect(projected.map((message) => readRunFailureNotice(message)).filter(Boolean)).toEqual([
     { runId: "run-a", summary: "The request failed after retries." },
   ]);
   expect(projected.filter((message) => message.role === "assistant")).toEqual([

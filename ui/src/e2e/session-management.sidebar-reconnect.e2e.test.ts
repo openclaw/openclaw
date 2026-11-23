@@ -18,6 +18,7 @@ import {
   installMockGateway,
   captureUiProof,
 } from "./session-management.test-support.ts";
+import { seedSidebarOwnerFilter } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -51,7 +52,7 @@ suite.define(() => {
       await dialog.waitFor({ state: "detached" });
       await expect.poll(() => row.textContent()).toContain("Renamed offline");
       const connectionStatus = footer.locator(".gateway-status");
-      await connectionStatus.getByText("Reconnecting… · 1 queued", { exact: true }).waitFor();
+      await connectionStatus.getByText("Reconnecting · 1 queued", { exact: true }).waitFor();
       expect(await connectionStatus.getByRole("button").count()).toBe(0);
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
       const queued = await takeControlUiScreenshotFrame(page, footer, [row, connectionStatus], {
@@ -82,6 +83,7 @@ suite.define(() => {
     const page = await context.newPage();
     const sessionKey = "agent:main:owned-reconnect";
     const ownKeys = [sessionKey, "agent:main:owned-other"];
+    await seedSidebarOwnerFilter(page, suite.server.baseUrl, "reader", "owner:reader");
     const gateway = await installMockGateway(page, {
       hasMultipleSessionSharingIdentities: true,
       sessionKey,

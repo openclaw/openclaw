@@ -105,6 +105,7 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
     fixture.announce.mockImplementation(async (params) => {
       const retained =
         getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
+      // Admitted result custody keeps its original ceiling despite later policy revocation.
       expect(retained).toMatchObject({
         source: source.authority.source,
         scopes: ["operator.write"],
@@ -181,17 +182,9 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
         ...rejectedRun,
         requesterSessionKey: "agent:main:main",
       });
-      if (ownerState !== "revoked") {
-        expect(fixture.announce).toHaveBeenCalledOnce();
-        if (ownerState !== "replaced Gateway") {
-          expect(loadSubagentRegistryFromSqlite().get(runId)?.delivery?.status).toBe("delivered");
-        }
-      } else {
-        expect(fixture.announce).not.toHaveBeenCalled();
-        const entry = expectDefined(subagentRuns.get(runId), "failed registration");
-        expect(() => subagentRuns.runWithCompletionAuthority(entry, () => "stale")).toThrow(
-          /authority/,
-        );
+      expect(fixture.announce).toHaveBeenCalledOnce();
+      if (ownerState !== "replaced Gateway") {
+        expect(loadSubagentRegistryFromSqlite().get(runId)?.delivery?.status).toBe("delivered");
       }
       if (ownerState === "replaced child") {
         expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.suppressSessionEffects).toBe(

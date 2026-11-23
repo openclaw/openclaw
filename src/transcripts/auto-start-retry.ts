@@ -5,9 +5,9 @@ import {
   type TranscriptStartRetry,
 } from "./capture-startup.js";
 import { isTranscriptSessionStarting } from "./capture.js";
-import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import { TranscriptsSummaryChangedError } from "./store-errors.js";
 import { transcriptSessionSelector, type TranscriptsStore } from "./store.js";
+import type { TranscriptSessionDescriptor } from "./types.js";
 
 /** Own one configured entry's failed admission through retry and abandonment. */
 export function createTranscriptAutoStartRetry(params: {

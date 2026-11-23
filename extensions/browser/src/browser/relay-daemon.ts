@@ -129,8 +129,7 @@ export async function runExtensionRelayDaemon(params: {
       log.info("relay daemon idle (no extension, no CDP clients); exiting");
       finish("idle");
     }
-  }, IDLE_POLL_MS);
-  idleTimer.unref?.();
+  }, IDLE_POLL_MS).unref();
 
   return {
     done: completion.promise,

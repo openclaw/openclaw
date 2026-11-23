@@ -322,14 +322,14 @@ function classifyPending(
   finalize = false,
 ): PendingClassification {
   const candidate = { text: pending.buffer, parts: pending.parts };
-  const view = createCandidateScanView(candidate);
+  const view = createCandidateScanView(candidate, resolveProtectedRanges);
   const terminalScan = scanPlainTextToolCall(view.text, skipLineIndentation(view.text, 0), {
     matcher,
     maxPayloadBytes: MAX_PAYLOAD_BYTES,
     structuralLineBreaks: view.structuralLineBreaks,
   });
   const hasNamedCandidate = scanHasNamedCandidate(terminalScan);
-  const sequences = findCandidateCallSequences(candidate, matcher, resolveProtectedRanges);
+  const sequences = findCandidateCallSequences(view, matcher);
   const overCapRanges = sequences.filter(({ overCap }) => overCap);
   const leading = sequences[0]?.start === 0 ? sequences[0] : undefined;
   if (leading?.activeStart !== undefined && (pending.sequenceOverCap || overCapRanges.length > 0)) {
@@ -357,8 +357,7 @@ function classifyPending(
     skipWhitespace(candidate.text, leading.end) < candidate.text.length
   ) {
     const activeStart =
-      sequences.at(-1)?.activeStart ??
-      findTrailingCallPrefix(candidate, matcher, resolveProtectedRanges, leading.end)?.start;
+      sequences.at(-1)?.activeStart ?? findTrailingCallPrefix(view, matcher, leading.end)?.start;
     if (!finalize && activeStart !== undefined) {
       // Retain only the undecided tail; completed calls and prose must not grow its buffer.
       return {
@@ -405,7 +404,7 @@ function classifyPending(
       replayedText: candidate.text.slice(0, firstSequence.start),
     };
   }
-  const trailingPrefix = findTrailingCallPrefix(candidate, matcher, resolveProtectedRanges);
+  const trailingPrefix = findTrailingCallPrefix(view, matcher);
   if (trailingPrefix && trailingPrefix.start > 0 && (!finalize || trailingPrefix.named)) {
     // A line-start tail can still complete into a call on a later chunk ("<funct" plus
     // "ion=read>"). Keep only that tail private and re-surface the prefix, so the call
@@ -898,7 +897,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
               const untrackedPrecedingContext = !(protectionBlockPrefixVerdict?.trusted ?? true);
               let isProtectedAt: ((offset: number) => boolean) | undefined =
                 !untrackedPrecedingContext && options.protectedRangesFenceCompatible
-                  ? resolveProtectionFastPath(carriedScan, incoming)
+                  ? resolveProtectionFastPath(carriedScan, incoming, callStart)
                   : undefined;
               if (!isProtectedAt) {
                 // Prefer a matching provider snapshot when carried state cannot prove
@@ -1183,9 +1182,8 @@ export async function* normalizePlainTextToolCallStreamEvents(
       const terminalHasIncompleteCandidate =
         terminalCandidate &&
         findCandidateCallSequences(
-          terminalCandidate,
+          createCandidateScanView(terminalCandidate, options.resolveProtectedRanges),
           options.matcher,
-          options.resolveProtectedRanges,
         ).some((sequence) => sequence.activeStart !== undefined);
       const terminalCandidateProjection = terminalHasIncompleteCandidate
         ? scrubSnapshot(record.message, preserveTerminalContentIndexes, true)

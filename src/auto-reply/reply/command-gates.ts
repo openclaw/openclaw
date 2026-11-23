@@ -100,7 +100,12 @@ export function rejectUnauthorizedCommand(
   commandLabel: string,
 ): CommandHandlerResult | null {
   if (params.command.isAuthorizedSender) {
-    return null;
+    try {
+      params.command.assertAuthorizedCurrent?.();
+      return null;
+    } catch {
+      // Preserve native refusals and silent text-command denial below.
+    }
   }
   logVerbose(
     `Ignoring ${commandLabel} from unauthorized sender: ${redactIdentifier(params.command.senderId)}`,
@@ -116,11 +121,6 @@ export function rejectNonOwnerCommand(
   commandLabel: string,
 ): CommandHandlerResult | null {
   if (params.command.senderIsOwner) {
-    try {
-      params.command.assertOwnerCurrent?.();
-    } catch {
-      return commandReply("Your owner authority changed; send a new request.");
-    }
     return null;
   }
   logVerbose(

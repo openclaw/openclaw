@@ -113,29 +113,30 @@ function normalizePlanningPlatform(platform?: string | null): NodeJS.Platform | 
   }
 }
 
-function commandSegmentFromStep(step: CommandStep, context: PlanningContext): ExecCommandSegment {
-  return {
-    raw: step.text,
-    argv: step.argv,
-    resolution: resolveCommandResolutionFromArgv(
-      step.argv,
-      context.cwd,
-      context.env,
-      context.platform,
-    ),
-  };
+async function commandSegmentFromStep(
+  step: CommandStep,
+  context: PlanningContext,
+): Promise<ExecCommandSegment> {
+  const segment = await commandSegmentFromArgv(step.argv, context);
+  segment.raw = step.text;
+  return segment;
 }
 
-function commandSegmentFromArgv(
+async function commandSegmentFromArgv(
   argv: string[],
   context: PlanningContext,
   sourceArgv?: string[],
-): ExecCommandSegment {
+): Promise<ExecCommandSegment> {
   return {
     raw: argv.join(" "),
     argv,
     sourceArgv,
-    resolution: resolveCommandResolutionFromArgv(argv, context.cwd, context.env, context.platform),
+    resolution: await resolveCommandResolutionFromArgv(
+      argv,
+      context.cwd,
+      context.env,
+      context.platform,
+    ),
   };
 }
 
@@ -204,10 +205,10 @@ function hasCommandPrelude(step: CommandStep): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*\+?=/u.test(wrapperPrefixForStep(step).trimStart());
 }
 
-function positionalCarrierSteps(params: {
+async function positionalCarrierSteps(params: {
   wrapper: CommandStepWithSegment;
   context: PlanningContext;
-}): CommandStepWithSegment[] | null {
+}): Promise<CommandStepWithSegment[] | null> {
   const inlineMatch = resolveInlineCommandMatch(
     params.wrapper.segment.argv,
     POSIX_INLINE_COMMAND_FLAGS,
@@ -255,7 +256,7 @@ function positionalCarrierSteps(params: {
   return [
     {
       step,
-      segment: commandSegmentFromArgv(
+      segment: await commandSegmentFromArgv(
         carriedArgv,
         params.context,
         params.wrapper.segment.sourceArgv,
@@ -379,14 +380,14 @@ function shellWrapperRiskForStep(
   return risk ?? null;
 }
 
-function wrapperPayloadPlan(params: {
+async function wrapperPayloadPlan(params: {
   context: PlanningContext;
   allowNestedPayload: boolean;
   topLevelSteps: CommandStepWithSegment[];
   nestedSteps: CommandStepWithSegment[];
   operators: readonly CommandOperator[];
   risks: readonly CommandRisk[];
-}): ExecAuthorizationGroup[] | null {
+}): Promise<ExecAuthorizationGroup[] | null> {
   const wrapper = params.topLevelSteps[0];
   if (!wrapper) {
     return null;
@@ -404,7 +405,7 @@ function wrapperPayloadPlan(params: {
   if (!params.allowNestedPayload) {
     return null;
   }
-  const carriedSteps = positionalCarrierSteps({ wrapper, context: params.context });
+  const carriedSteps = await positionalCarrierSteps({ wrapper, context: params.context });
   const nestedStepsForWrapper = wrapper.step.id
     ? params.nestedSteps.filter((entry) => entry.step.parentCommandId === wrapper.step.id)
     : params.nestedSteps;
@@ -459,21 +460,21 @@ function unanalyzablePlan(params: {
   };
 }
 
-function planFromExplanation(params: {
+async function planFromExplanation(params: {
   command: string;
   explanation: CommandExplanation;
   context: PlanningContext;
-}): ExecAuthorizationPlan {
-  const topLevelSteps = params.explanation.topLevelCommands.map((step) => ({
-    step,
-    segment: commandSegmentFromStep(step, params.context),
-  }));
-  const nestedSteps = params.explanation.nestedCommands
-    .filter((step) => step.context === "wrapper-payload")
-    .map((step) => ({
-      step,
-      segment: commandSegmentFromStep(step, params.context),
-    }));
+}): Promise<ExecAuthorizationPlan> {
+  const topLevelSteps: CommandStepWithSegment[] = [];
+  for (const step of params.explanation.topLevelCommands) {
+    topLevelSteps.push({ step, segment: await commandSegmentFromStep(step, params.context) });
+  }
+  const nestedSteps: CommandStepWithSegment[] = [];
+  for (const step of params.explanation.nestedCommands) {
+    if (step.context === "wrapper-payload") {
+      nestedSteps.push({ step, segment: await commandSegmentFromStep(step, params.context) });
+    }
+  }
   const blockingRisk = hasBlockingRisk(params.explanation);
   const unanalyzableRisk = findUnanalyzableRisk(params.explanation);
   const topLevelStep = topLevelSteps[0]?.step;
@@ -492,7 +493,7 @@ function planFromExplanation(params: {
     });
   }
 
-  const payloadPlan = wrapperPayloadPlan({
+  const payloadPlan = await wrapperPayloadPlan({
     context: params.context,
     allowNestedPayload: !blockingRisk,
     topLevelSteps,
@@ -541,7 +542,7 @@ export async function planShellAuthorization(params: {
   }
   try {
     const explanation = await explainShellCommand(params.command);
-    return planFromExplanation({
+    return await planFromExplanation({
       command: params.command,
       explanation,
       context: {
@@ -631,37 +632,40 @@ export async function planExecAuthorization(params: {
     }
   }
 
-  const steps = params.analysis.segments.map((segment, index) => ({
-    step: {
-      context: "top-level" as const,
-      executable: segment.argv[0] ?? "",
-      argv: segment.argv,
-      text: segment.raw,
-      span: {
-        startIndex: index,
-        endIndex: index + segment.raw.length,
-        startPosition: { row: 0, column: index },
-        endPosition: { row: 0, column: index + segment.raw.length },
+  const steps: CommandStepWithSegment[] = [];
+  for (const [index, segment] of params.analysis.segments.entries()) {
+    steps.push({
+      step: {
+        context: "top-level" as const,
+        executable: segment.argv[0] ?? "",
+        argv: segment.argv,
+        text: segment.raw,
+        span: {
+          startIndex: index,
+          endIndex: index + segment.raw.length,
+          startPosition: { row: 0, column: index },
+          endPosition: { row: 0, column: index + segment.raw.length },
+        },
+        executableSpan: {
+          startIndex: index,
+          endIndex: index + (segment.argv[0]?.length ?? 0),
+          startPosition: { row: 0, column: index },
+          endPosition: { row: 0, column: index + (segment.argv[0]?.length ?? 0) },
+        },
       },
-      executableSpan: {
-        startIndex: index,
-        endIndex: index + (segment.argv[0]?.length ?? 0),
-        startPosition: { row: 0, column: index },
-        endPosition: { row: 0, column: index + (segment.argv[0]?.length ?? 0) },
-      },
-    },
-    segment:
-      segment.resolution === null
-        ? commandSegmentFromArgv(
-            segment.argv,
-            {
-              cwd: params.cwd,
-              env: params.env,
-            },
-            segment.sourceArgv,
-          )
-        : segment,
-  }));
+      segment:
+        segment.resolution === null
+          ? await commandSegmentFromArgv(
+              segment.argv,
+              {
+                cwd: params.cwd,
+                env: params.env,
+              },
+              segment.sourceArgv,
+            )
+          : segment,
+    });
+  }
   const groups = groupsFromSteps({
     steps,
     transport: { kind: "direct" },

@@ -44,7 +44,6 @@ it("allows elapsed cooldown without disturbing more recent circuits", () => {
 
   expect(isCircuitBreakerOpen("old", 1, cooldownMs)).toBe(false);
   expect(isCircuitBreakerOpen("recent", 1, cooldownMs)).toBe(true);
-  expect(isCircuitBreakerOpen("new", 1, cooldownMs)).toBe(true);
 });
 
 it("counts spaced timeouts even when another key times out between them", () => {
@@ -64,6 +63,7 @@ it("retains the timeout streak through a cooldown probe until reset", () => {
   recordCircuitBreakerTimeout("probe");
   expect(isCircuitBreakerOpen("probe", 2, cooldownMs)).toBe(true);
 
+  vi.setSystemTime(0); // A wall-clock step back must not extend the elapsed cooldown.
   vi.advanceTimersByTime(cooldownMs);
   expect(isCircuitBreakerOpen("probe", 2, cooldownMs)).toBe(false);
   recordCircuitBreakerTimeout("probe");

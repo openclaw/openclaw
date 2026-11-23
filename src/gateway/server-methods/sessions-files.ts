@@ -16,18 +16,17 @@ import {
   validateSessionsFilesDownloadParams,
   validateSessionsFilesListParams,
   validateSessionsFilesSetParams,
+  validateSessionsFilesStatParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { loadAgentIdentityFromWorkspaceAsync } from "../../agents/identity-file.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../../agents/workspace-bootstrap-policy.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   releaseSessionFilePreviewGrant,
   sessionFilePreviewBinding,
 } from "../artifact-download-grants.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { hasSessionReadAccessChanged } from "../session-sharing-policy.js";
 import { readSessionWorkerPlacementAsync } from "../worker-environments/session-placement-lifecycle.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
@@ -41,7 +40,11 @@ import {
   respondSessionFileTooLarge,
   sessionFilesError,
 } from "./session-files-errors.js";
-import { loadSessionFiles, withSessionFileRoot } from "./session-files-root.js";
+import {
+  loadSessionFiles,
+  requireSessionFilesAgentId,
+  withSessionFileRoot,
+} from "./session-files-root.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import {
   getRepositoryArtifact,
@@ -53,31 +56,14 @@ import { retainSessionScopedRead } from "./session-scoped-read.js";
 import { getSessionWorkspaceAssets } from "./sessions-file-assets.js";
 import { respondSessionFileDownload } from "./sessions-file-download.js";
 import { revealSessionFile } from "./sessions-file-reveal.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
+import { handleSessionFilesStat } from "./sessions-files-stat.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 import {
   getSessionWorkspaceFile,
   listSessionWorkspaceFiles,
   setSessionWorkspaceFile,
 } from "./workspace-files.js";
-
-function requireSessionFilesAgentId(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  agentId?: string;
-  respond: RespondFn;
-}): string | undefined {
-  const requestedAgent = resolveRequestedSessionAgentId(
-    params.cfg,
-    params.sessionKey,
-    params.agentId,
-  );
-  if (!requestedAgent.ok) {
-    params.respond(false, undefined, requestedAgent.error);
-    return undefined;
-  }
-  return requestedAgent.agentId;
-}
 
 async function handleSessionFilesRead(
   options: GatewayRequestHandlerOptions,
@@ -445,6 +431,11 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
     validateSessionsFilesGetParams,
     (options) => handleSessionFilesRead(options, { kind: "get", params: options.params }),
   ),
+  "sessions.files.stat": defineValidatedGatewayHandler(
+    "sessions.files.stat",
+    validateSessionsFilesStatParams,
+    handleSessionFilesStat,
+  ),
   "sessions.files.set": async ({ params, respond, context, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsFilesSetParams, "sessions.files.set", respond)) {
       return;
@@ -494,18 +485,41 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
         if (repository?.kind === "stored") {
           throw new Error("Start this cloud session before editing its repository files.");
         }
+        const worktreeId = loaded.entry.worktree?.id;
+        const writeLocalFile = async () => {
+          const write = (assertCurrent = authorize) =>
+            setSessionWorkspaceFile({
+              ...params,
+              root: loaded.root,
+              fileRoot: loaded.fileRoot,
+              assertCurrent,
+            });
+          if (!worktreeId || !loaded.root) {
+            return await write();
+          }
+          const { withSettledLocalWorkspacePath } =
+            await import("../worker-environments/local-workspace-projection.js");
+          return await withSettledLocalWorkspacePath(
+            { cwd: loaded.root, assertCurrent: authorize },
+            async (custody) => {
+              const update = await write(() => {
+                authorize();
+                custody?.assertCurrent();
+              });
+              if (update.status === "updated") {
+                await custody?.synchronizeProjection?.();
+              }
+              return update;
+            },
+          );
+        };
         const update = repository
           ? await repository.inspect(
               "set",
               { path: params.path, content: params.content, expectedHash: params.expectedHash },
               authorize,
             )
-          : await setSessionWorkspaceFile({
-              ...params,
-              root: loaded.root,
-              fileRoot: loaded.fileRoot,
-              assertCurrent: authorize,
-            });
+          : await writeLocalFile();
         assertSourceCurrent();
         if (update.status === "missing") {
           respondSessionFileNotFound(respond, params.path);

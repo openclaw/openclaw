@@ -30,6 +30,7 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
   let stderr = "";
   let managed: ManagedRun | null = null;
   let cancelled = false;
+  let crashRestarts = 0;
   let terminalExitCode: number | undefined;
   const cancel = () => {
     cancelled = true;
@@ -46,9 +47,9 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
       bindWindowsTaskLauncher(launcher);
     }
     while (true) {
+      const startedAt = performance.now();
       stderr = "";
-      // A fresh high-entropy outcome correlates this child-to-supervisor handoff.
-      // Common dependency exit codes must terminate the task instead of respawning forever.
+      // A private outcome distinguishes planned handoffs from bounded crash recovery.
       const restartExitCode = randomInt(
         WINDOWS_TASK_SUPERVISOR_RESTART_EXIT_CODE_MIN,
         WINDOWS_TASK_SUPERVISOR_RESTART_EXIT_CODE_MAX + 1,
@@ -64,8 +65,15 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
       if (childArgs.length === 0) {
         throw new Error("Windows task supervisor could not resolve the Gateway command");
       }
+      // A Git release install starts each child through its launcher, which counts trial
+      // starts and matches the installed task command.
+      const releaseLauncher: unknown = Reflect.get(
+        globalThis,
+        Symbol.for("openclaw.gitReleaseLauncher"),
+      );
       const invocation = resolveOpenClawCliInvocation({
         args: [...childArgs, formatWindowsTaskSupervisorChildArgument(restartExitCode)],
+        entryPath: typeof releaseLauncher === "string" ? releaseLauncher : undefined,
       });
       const command = [invocation.command, ...invocation.args]
         .map((argument) => quoteCmdScriptArg(argument))
@@ -106,6 +114,28 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
       }
       await managed.waitForExtinction?.();
       managed = null;
+      // Startup-folder installs have no Task Scheduler retry. Preserve EX_CONFIG
+      // as terminal; all other unexpected outcomes get bounded recovery.
+      const crashed =
+        !restartRequested &&
+        (result.exitSignal != null || (result.exitCode !== 0 && result.exitCode !== 78));
+      if (crashed && !cancelled) {
+        if (performance.now() - startedAt >= 60_000) {
+          crashRestarts = 0;
+        }
+        if (crashRestarts < 3) {
+          terminalExitCode = undefined;
+          const delayMs = 1_000 * 2 ** crashRestarts++;
+          log.info("Restarting crashed Gateway child", { delayMs });
+          await new Promise((resolve) => {
+            setTimeout(resolve, delayMs);
+          });
+          if (cancelled) {
+            return;
+          }
+          continue;
+        }
+      }
       if (restartRequested && !cancelled) {
         // The child has released its Gateway lock and extinguished descendants.
         // Recheck cancellation after the asynchronous extinction join so shutdown

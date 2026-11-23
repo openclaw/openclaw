@@ -13,7 +13,6 @@ import {
   includeContributionOwnsBindings,
 } from "./agent-roster-provenance.js";
 import { captureConfigReadEnvMutation, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
-import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
 import { applyImplicitAgentRosterDefaults } from "./implicit-agent-roster.js";
 import { ConfigIncludeError, ConfigIncludeReadError } from "./includes.js";
 import { createConfigIoContext, type ConfigIoContext } from "./io.context.js";
@@ -459,6 +458,7 @@ async function readConfigSnapshot(
 export async function prepareConfigRecoveryFromContext(
   context: ConfigIoContext,
   current: ConfigFileSnapshot,
+  intent?: "doctor-repair",
 ): Promise<PreparedConfigRecovery | null> {
   return await withArtifactPreservingStateReads(async () => {
     if (
@@ -484,12 +484,14 @@ export async function prepareConfigRecoveryFromContext(
       context.transformRecoveryCandidate,
     );
     const plan = await prepareSuspiciousConfigRead({
+      intent,
       deps: previewContext.deps,
       measure: previewContext.deps.measure,
       configPath: context.configPath,
       raw: current.raw,
       parsed: current.parsed,
       prepareBackup: previewContext.prepareRecoveryBackupCandidate,
+      prepareBackupAsync: previewContext.prepareRecoveryBackupCandidateAsync,
     });
     if (!plan) {
       return null;
@@ -608,7 +610,6 @@ export async function readConfigFileSnapshotForWriteFromContext(
       ownedConfigPathForWrite: context.configPath,
       includeFileHashesForWrite: result.includeFileHashesForWrite,
       includeFileTargetsForWrite: result.includeFileTargetsForWrite,
-      unsetPaths: resolveManagedUnsetPathsForWrite(undefined),
     },
   };
 }

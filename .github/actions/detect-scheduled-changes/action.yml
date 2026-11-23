@@ -6,11 +6,23 @@ inputs:
     required: true
   proof-jobs:
     description: Newline-separated job names that must have completed successfully in the previous run.
-    required: true
+    default: ""
+  proofs:
+    description: Optional JSON object of named proofs with jobs and codeqlConfig, sharing this lookup.
+    default: ""
+  codeql-config:
+    description: Optional CodeQL profile whose extraction paths are additional inputs (requires yq).
+    default: ""
+  git-diff:
+    description: Recover capped comparisons using the exact checked-out event SHA and a shallow baseline fetch.
+    default: "false"
 outputs:
   changed:
     description: Whether fresh validation is needed.
     value: ${{ steps.scope.outputs.changed }}
+  proofs:
+    description: JSON object mapping proof names to whether fresh validation is needed.
+    value: ${{ steps.scope.outputs.proofs }}
 runs:
   using: composite
   steps:
@@ -18,59 +30,154 @@ runs:
       id: scope
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
       env:
+        SCHEDULED_PROOFS: ${{ inputs.proofs }}
         SCHEDULED_PATHS: ${{ inputs.paths }}
         SCHEDULED_PROOF_JOBS: ${{ inputs.proof-jobs }}
         SCHEDULED_WORKFLOW_REF: ${{ github.workflow_ref }}
+        SCHEDULED_CODEQL_CONFIG: ${{ inputs.codeql-config }}
+        SCHEDULED_GIT_DIFF: ${{ inputs.git-diff }}
       with:
         script: |
           const { matchesGlob } = require('node:path');
           const lines = value => value.split('\n').map(line => line.trim()).filter(Boolean);
           const paths = lines(process.env.SCHEDULED_PATHS);
-          const proofJobs = lines(process.env.SCHEDULED_PROOF_JOBS);
           const workflow = process.env.SCHEDULED_WORKFLOW_REF.split('@')[0].split('/').at(-1);
           const report = (changed, reason) => {
-            core.setOutput('changed', changed);
             core.notice(`${changed ? 'Run' : 'Skip'} scheduled validation: ${reason}`);
+            return changed;
           };
-          try {
-            const { data } = await github.rest.actions.listWorkflowRuns({
-              ...context.repo, workflow_id: workflow, branch: context.ref.replace('refs/heads/', ''),
-              status: 'success', per_page: 30,
-            });
-            for (const run of data.workflow_runs) {
-              if (run.id === context.runId || !['schedule', 'push'].includes(run.event) ||
-                  run.head_repository?.full_name !== `${context.repo.owner}/${context.repo.repo}`) continue;
-              // A skip-only run is not proof and must never advance the comparison base.
-              const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRunAttempt, {
-                ...context.repo, run_id: run.id, attempt_number: run.run_attempt, per_page: 100,
-              });
-              const completed = proofJobs.map(name => jobs.find(job => job.name === name &&
-                job.head_sha === run.head_sha && job.conclusion === 'success'));
-              if (!completed.length || completed.some(job => !job)) continue;
-              const oldest = Math.min(...completed.map(job => Date.parse(job.completed_at)));
-              if (!Number.isFinite(oldest) || Date.now() - oldest >= 24 * 60 * 60 * 1000) {
-                report(true, `daily external-dependency refresh is due; previous proof ${run.head_sha} in run ${run.id}`);
-                return;
-              }
-              if (run.head_sha === context.sha) {
-                report(false, `unchanged SHA ${run.head_sha}; jobs ${proofJobs.join(', ')} passed in run ${run.id}`);
-                return;
-              }
-              const { data: diff } = await github.rest.repos.compareCommitsWithBasehead({
-                ...context.repo, basehead: `${run.head_sha}...${context.sha}`,
-              });
-              // GitHub returns at most 300 files. Divergence or a partial diff cannot authorize reuse.
-              const complete = ['ahead', 'identical'].includes(diff.status) &&
-                Array.isArray(diff.files) && diff.files.length < 300;
-              const changed = !complete || diff.files.some(file =>
-                [file.filename, file.previous_filename].filter(Boolean).some(name =>
-                  paths.some(pattern => matchesGlob(name, pattern))));
-              report(changed, `${complete ? 'input comparison' : 'incomplete comparison'} against ` +
-                `${run.head_sha}; jobs ${proofJobs.join(', ')} passed in run ${run.id}`);
-              return;
+          const now = Date.now();
+          // Share raw observations, never category decisions. Each proof keeps its own baseline.
+          const observations = new Map();
+          const observe = (key, read) => {
+            if (!observations.has(key)) observations.set(key, read());
+            return observations.get(key);
+          };
+          const baseline = sha => observe(`baseline:${sha}`, async () => {
+            if (![sha, context.sha].every(value => /^[a-f0-9]{40}$/.test(value))) throw new Error('invalid comparison SHA');
+            const checkedOut = await exec.getExecOutput('git', ['rev-parse', 'HEAD'], { silent: true });
+            if (checkedOut.stdout.trim() !== context.sha) throw new Error('event checkout mismatch');
+            await exec.getExecOutput('git', ['-c', 'gc.auto=0', 'fetch', '--no-tags', '--no-write-fetch-head', '--depth=1', '--filter=blob:none', 'origin', sha], { silent: true });
+          });
+          const attributes = name => name === '.gitattributes' || name.endsWith('/.gitattributes');
+          const extractionNeutral = (sha, path) => observe(`attributes:${sha}:${context.sha}:${path}`, async () => {
+            await baseline(sha);
+            const contents = [];
+            for (const ref of [sha, context.sha]) {
+              const entry = await exec.getExecOutput('git', ['--literal-pathspecs', 'ls-tree', '-z', ref, '--', path], { silent: true });
+              const blob = /^(100644|100755) blob ([a-f0-9]{40})\t[^\0]+\0$/.exec(entry.stdout);
+              if (!blob) return false;
+              const result = await exec.getExecOutput('git', ['cat-file', 'blob', blob[2]], { silent: true });
+              // Only standalone -whitespace rules affect diff/apply diagnostics alone.
+              // Keep every substantive rule byte-for-byte; reject macros and undecodable blobs.
+              if (/[\0\uFFFD]/.test(result.stdout) || /^\s*\[attr\]/m.test(result.stdout)) return false;
+              contents.push(blob[1] + result.stdout.split('\n').filter(line =>
+                !/^(?:#.*|[ \t\r]*|[\w./*-]+[ \t]+-whitespace[ \t]*\r?)$/.test(line)).join('\n'));
             }
-            report(true, 'no completed proof in the bounded recent history');
-          } catch (error) {
-            core.warning(`Scheduled proof lookup unavailable: ${error.message}`);
-            report(true, 'could not establish unchanged inputs');
+            return contents[0] === contents[1];
+          });
+          async function inspect(proofJobs, codeqlConfig) {
+            try {
+              let extractionPaths = [];
+              let excludedPaths = [];
+              if (codeqlConfig) {
+                const result = await exec.getExecOutput('yq', ['-o=json', '.', codeqlConfig], { silent: true });
+                const profile = JSON.parse(result.stdout);
+                // Only built-in queries have no additional repository inputs outside the profile.
+                if (!Array.isArray(profile.paths) || !profile.paths.length ||
+                    Object.keys(profile).some(key => !['name', 'disable-default-queries', 'queries', 'query-filters', 'paths', 'paths-ignore'].includes(key)) ||
+                    JSON.stringify(profile.queries) !== JSON.stringify([{ uses: 'security-extended' }])) {
+                  throw new Error('unsupported CodeQL input configuration');
+                }
+                const compile = (pattern, exclude = false) => {
+                  if (typeof pattern !== 'string' || !pattern || /[^\w./*-]/.test(pattern) ||
+                      pattern.split('/').some(part => ['', '.', '..'].includes(part) ||
+                        (exclude && part.includes('**') && part !== '**'))) {
+                    throw new Error('unsupported CodeQL path pattern');
+                  }
+                  // Include matching can overmatch; exclusions must never cross a directory
+                  // for a single star or they could hide extracted source changes.
+                  const source = pattern.split(/(\*\*\/|\*+)/).map(part =>
+                    part === '**/' ? '(?:.*/)?' : part.startsWith('*') ?
+                      (exclude && part === '*' ? '[^/]*' : '.*') : part.replace(/\./g, '\\.')).join('');
+                  return new RegExp(`^${source}(?:/|(?![\\s\\S]))`);
+                };
+                extractionPaths = profile.paths.map(pattern => compile(pattern));
+                excludedPaths = (profile['paths-ignore'] ?? []).map(pattern => compile(pattern, true));
+              }
+              const relevant = name => (codeqlConfig && attributes(name)) || paths.some(pattern => matchesGlob(name, pattern)) ||
+                (extractionPaths.some(pattern => pattern.test(name)) &&
+                  !excludedPaths.some(pattern => pattern.test(name)));
+              const { data } = await observe('runs', () => github.rest.actions.listWorkflowRuns({
+                ...context.repo, workflow_id: workflow, branch: context.ref.replace('refs/heads/', ''),
+                status: 'success', per_page: 30,
+              }));
+              for (const run of data.workflow_runs) {
+                if (run.id === context.runId || !['schedule', 'push'].includes(run.event) ||
+                    run.head_repository?.full_name !== `${context.repo.owner}/${context.repo.repo}`) continue;
+                // A skip-only run is not proof and must never advance the comparison base.
+                const jobs = await observe(`jobs:${run.id}:${run.run_attempt}`, () => github.paginate(github.rest.actions.listJobsForWorkflowRunAttempt, {
+                  ...context.repo, run_id: run.id, attempt_number: run.run_attempt, per_page: 100,
+                }));
+                const completed = proofJobs.map(name => jobs.find(job => job.name === name &&
+                  job.head_sha === run.head_sha && job.conclusion === 'success'));
+                if (!completed.length || completed.some(job => !job)) continue;
+                const oldest = Math.min(...completed.map(job => Date.parse(job.completed_at)));
+                if (!Number.isFinite(oldest) || now - oldest >= 24 * 60 * 60 * 1000) {
+                  return report(true, `daily external-dependency refresh is due; previous proof ${run.head_sha} in run ${run.id}`);
+                }
+                if (run.head_sha === context.sha) {
+                  return report(false, `unchanged SHA ${run.head_sha}; jobs ${proofJobs.join(', ')} passed in run ${run.id}`);
+                }
+                const { data: diff } = await observe(`compare:${run.head_sha}:${context.sha}`, () => github.rest.repos.compareCommitsWithBasehead({
+                  ...context.repo, basehead: `${run.head_sha}...${context.sha}`,
+                }));
+                // GitHub returns at most 300 files. Divergence or a partial diff cannot authorize reuse.
+                let complete = ['ahead', 'identical'].includes(diff.status) &&
+                  Array.isArray(diff.files) && diff.files.length < 300;
+                let names = (diff.files ?? []).flatMap(file => [file.filename, file.previous_filename].filter(Boolean));
+                const extractionInputs = async names => {
+                  if (!codeqlConfig || process.env.SCHEDULED_GIT_DIFF !== 'true') return names;
+                  const inputs = [];
+                  for (const name of names) {
+                    if (attributes(name) &&
+                        await extractionNeutral(run.head_sha, name)) continue;
+                    inputs.push(name);
+                  }
+                  return inputs;
+                };
+                names = await extractionInputs(names);
+                if (!complete && diff.status === 'ahead' && process.env.SCHEDULED_GIT_DIFF === 'true' && !names.some(relevant)) {
+                  names = await observe(`git:${run.head_sha}:${context.sha}`, async () => {
+                    await baseline(run.head_sha);
+                    const result = await exec.getExecOutput('git', ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', run.head_sha, context.sha, '--'], { silent: true });
+                    if (result.stdout && !result.stdout.endsWith('\0')) throw new Error('incomplete Git path output');
+                    return result.stdout.split('\0').filter(Boolean);
+                  });
+                  complete = true;
+                }
+                names = await extractionInputs(names);
+                const changed = !complete || names.some(relevant);
+                return report(changed, `${complete ? 'input comparison' : 'incomplete comparison'} against ` +
+                  `${run.head_sha}; jobs ${proofJobs.join(', ')} passed in run ${run.id}`);
+              }
+              return report(true, 'no completed proof in the bounded recent history');
+            } catch (error) {
+              core.warning(`Scheduled proof lookup unavailable: ${error.message}`);
+              return report(true, 'could not establish unchanged inputs');
+            }
+          }
+          if (process.env.SCHEDULED_PROOFS) {
+            const results = {};
+            try {
+              for (const [name, proof] of Object.entries(JSON.parse(process.env.SCHEDULED_PROOFS))) {
+                results[name] = await inspect(lines(proof.jobs), proof.codeqlConfig);
+              }
+            } catch (error) {
+              core.warning(`Scheduled proof configuration unavailable: ${error.message}`);
+            }
+            // Missing results are deliberately not false: callers must retain those scans.
+            core.setOutput('proofs', JSON.stringify(results));
+          } else {
+            core.setOutput('changed', await inspect(lines(process.env.SCHEDULED_PROOF_JOBS), process.env.SCHEDULED_CODEQL_CONFIG));
           }

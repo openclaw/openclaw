@@ -10,6 +10,8 @@ type OAuthLoopbackCallbackResult =
   | { type: "oauth_error"; error: string; errorDescription?: string };
 
 export type OAuthLoopbackCallbackServer = {
+  /** Bound redirect; differs from the requested one only when it asked for port 0. */
+  redirectUrl: string;
   waitForCallback: () => Promise<OAuthLoopbackCallbackResult>;
   complete: (response: RenderedResponse & { status: number }) => Promise<void>;
   close: () => Promise<void>;
@@ -76,14 +78,6 @@ function resolveBindAddresses(
   ]);
 }
 
-function resolveOAuthLoopbackPort(redirectUrl: URL): number {
-  const port = redirectUrl.port ? Number(redirectUrl.port) : 80;
-  if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
-    throw new Error("OAuth callback redirect must use a valid TCP port");
-  }
-  return port;
-}
-
 function prepareResponse(
   request: IncomingMessage,
   response: ServerResponse,
@@ -126,6 +120,11 @@ export async function startOAuthLoopbackCallbackServer(params: {
   resolveCorsOrigin?: CorsOriginResolver;
   renderSuccess?: () => RenderedResponse;
   renderError?: (message: string) => RenderedResponse;
+  /**
+   * When set, a provider refusal (`error=`) keeps the listener open so the user can go back
+   * and allow access; the refusal is reported here instead of settling the wait.
+   */
+  onRefusal?: (error: string) => void;
 }): Promise<OAuthLoopbackCallbackServer> {
   const redirectUrl = new URL(params.redirectUrl);
   const redirectHostname = unbracket(redirectUrl.hostname);
@@ -161,7 +160,8 @@ export async function startOAuthLoopbackCallbackServer(params: {
         params.signal,
         () => new Error("OAuth callback cancelled"),
       );
-  const port = resolveOAuthLoopbackPort(redirectUrl);
+  // URL parsing bounds the port; 0 asks the first bind for a free one.
+  let port = redirectUrl.port ? Number(redirectUrl.port) : 80;
   const callbackPath = redirectUrl.pathname || "/";
   const { createServer } = await import("node:http");
   const servers: Server[] = [];
@@ -223,7 +223,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
       body: renderOAuthPage({
         title: "Authorization received",
         heading: "Authorization received",
-        message: "Return to the terminal while OpenClaw finishes.",
+        message: "Return to OpenClaw while it finishes signing in.",
       }),
       contentType: "text/html; charset=utf-8",
     }));
@@ -283,6 +283,13 @@ export async function startOAuthLoopbackCallbackServer(params: {
           url.searchParams.get("state") !== params.expectedState
         ) {
           respond(response, 400, renderError("Invalid OAuth state."));
+        } else if (url.searchParams.has("error") && params.onRefusal) {
+          respond(
+            response,
+            400,
+            renderError("Sign-in was not allowed. Go back to the sign-in page and allow access."),
+          );
+          params.onRefusal(url.searchParams.get("error")!);
         } else if (url.searchParams.has("error")) {
           const error = url.searchParams.get("error")!;
           const errorDescription = url.searchParams.get("error_description") ?? undefined;
@@ -335,6 +342,15 @@ export async function startOAuthLoopbackCallbackServer(params: {
         server.once("error", reject);
         server.listen(port, address, resolve);
       });
+      if (port === 0) {
+        const bound = server.address();
+        if (!bound || typeof bound === "string") {
+          throw new Error("OAuth callback failed to bind a TCP port");
+        }
+        // Later loopback families must serve the same redirect as the first bind.
+        port = bound.port;
+        redirectUrl.port = String(port);
+      }
       server.removeAllListeners("error");
       server.on("error", settleError);
       if (settled) {
@@ -352,6 +368,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
     timeout = setTimeout(() => settleError(new Error("OAuth callback timeout")), params.timeoutMs);
   }
   return {
+    redirectUrl: redirectUrl.toString(),
     waitForCallback: () => callback.promise,
     complete,
     close: async () => {

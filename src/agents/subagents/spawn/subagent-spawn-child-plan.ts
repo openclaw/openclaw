@@ -5,6 +5,7 @@ import {
 } from "../../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolveRunProjectRequester } from "../../../gateway/project-access.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveAgentDir } from "../../agent-scope-config.js";
@@ -19,6 +20,7 @@ import {
   resolveSpawnedWorkspaceInheritance,
 } from "../../spawned-context.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
+import { resolveSpawnBillingRoute } from "./subagent-spawn-billing-route.js";
 import {
   rejectSubagentSpawnRequest,
   type SpawnSubagentContext,
@@ -52,7 +54,11 @@ export async function resolveSubagentChildPlan(params: {
    * status so durable-lineage key substitution does not weaken sandbox admission. */
   requesterSandboxed?: boolean;
   /** Captured by the trusted caller before any spawn preparation awaits. */
-  creatorProfileId?: string;
+  spawnedBy?: {
+    profileId?: string;
+    /** Effective scopes of the admitted operator run, including membership caps. */
+    operatorScopes?: readonly string[];
+  };
 }) {
   const requestedCwd = normalizeOptionalString(params.request.cwd);
   const senderRestricted = params.ctx.inheritedToolPolicySource === "sender";
@@ -117,7 +123,7 @@ export async function resolveSubagentChildPlan(params: {
   );
   creationPolicy.actor = attributeDelegatedSessionCreator(
     creationPolicy.actor,
-    params.creatorProfileId,
+    params.spawnedBy?.profileId,
     params.requesterAgentId,
   );
   // A fresh child has no stored row yet; admission must include its inherited isolation.
@@ -244,6 +250,15 @@ export async function resolveSubagentChildPlan(params: {
     modelPlan.initialSessionPatch.cyberAccessProgram = cyberAccessProgram;
   }
   const resolvedModelMetadata = { resolvedModel, resolvedProvider: modelPlan.modelRef.provider };
+  const billingRoute = await resolveSpawnBillingRoute({
+    cfg: params.cfg,
+    agentId: params.targetAgentId,
+    workspaceDir: spawnedWorkspaceDir,
+    provider: modelPlan.modelRef.provider,
+    model: modelPlan.modelRef.model,
+    authProfileId: modelPlan.initialSessionPatch.authProfileOverride,
+  });
+  params.ctx.assertActive?.();
   const launchAuthorization: SubagentLaunchAuthorization | undefined = params.request.model?.trim()
     ? { modelOverride: modelPlan.modelRef }
     : undefined;
@@ -269,12 +284,15 @@ export async function resolveSubagentChildPlan(params: {
       childRuntimeSandboxed,
       creationPolicy,
       targetAgentDir,
+      // projectId and inherited checkouts are bounded by the creator's live role.
+      projectRequester: resolveRunProjectRequester(params.cfg, params.spawnedBy ?? {}),
       modelPlan,
       launchAuthorization,
       resolvedModelMetadata,
       // Model facts echoed on the accepted spawn result.
       acceptedModelFields: {
         ...resolvedModelMetadata,
+        ...billingRoute,
         modelApplied: modelPlan.modelApplied || undefined,
         cyberAccessProgram,
       },

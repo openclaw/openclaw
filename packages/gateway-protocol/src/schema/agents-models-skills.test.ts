@@ -8,6 +8,19 @@ const deleted = { ok: true, agentId: "ops", removedBindings: 1 };
 const auth = (overrides: object = {}) => ({ provider: "openai", ...overrides });
 it.each([
   [
+    "optional agent welcome metadata",
+    S.AgentSummarySchema,
+    [
+      { id: "briefing" },
+      { id: "briefing", description: "Follows repositories.", recommendedPrompts: ["Brief me"] },
+      { id: "briefing", recommendedPrompts: [] },
+    ],
+    [
+      { id: "briefing", recommendedPrompts: "Brief me" },
+      { id: "briefing", recommendedPrompts: [""] },
+    ],
+  ],
+  [
     "per-path agent cleanup",
     S.AgentsDeleteResultSchema,
     [
@@ -222,5 +235,29 @@ it("ModelsListResultSchema: accepts only a canonical lowercase model family toke
     withFamily("Anthropic"),
     withFamily("a".repeat(65)),
     withFamily(7),
+  );
+});
+
+it("publishes only resolved provider presentation metadata", () => {
+  const model = { id: "local-model", name: "Local model", provider: "workstation" };
+  for (const providerIcon of [
+    { source: "builtin", name: "server" },
+    { source: "asset", url: "/__openclaw__/provider-icon/workstation?v=example" },
+  ]) {
+    const presentation = { providerName: "Workstation", providerIcon };
+    accepts(S.ModelsListResultSchema, {
+      models: [{ ...model, ...presentation }],
+      providerPresentations: { workstation: presentation },
+    });
+  }
+  rejects(
+    S.ModelsListResultSchema,
+    { models: [{ ...model, providerIcon: { source: "file", path: "/private/icon.png" } }] },
+    {
+      models: [],
+      providerPresentations: {
+        workstation: { providerIcon: { source: "url", url: "https://example.com/icon.png" } },
+      },
+    },
   );
 });

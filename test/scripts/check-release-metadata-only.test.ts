@@ -57,19 +57,33 @@ describe("check-release-metadata-only", () => {
         env: { ...process.env, TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json") },
         encoding: "utf8",
       });
-    const manifestPath = at("apps/android/version.json");
+    const manifestPath = at("apps/macos/Sources/OpenClaw/Resources/Info.plist");
     const writeVersion = (version: string, channel?: string) =>
-      fs.writeFileSync(manifestPath, JSON.stringify({ version, ...(channel ? { channel } : {}) }));
+      fs.writeFileSync(
+        manifestPath,
+        "<plist><dict><key>CFBundleShortVersionString</key><string>" +
+          version +
+          "</string>" +
+          (channel ? "<key>Channel</key><string>" + channel + "</string>" : "") +
+          "</dict></plist>",
+      );
     const git = (...args: string[]) =>
       execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
     const compareHead = (head = "HEAD") =>
-      runMetadata(["--base", head, "--head", head, "--", "apps/android/version.json"]);
+      runMetadata([
+        "--base",
+        head,
+        "--head",
+        head,
+        "--",
+        "apps/macos/Sources/OpenClaw/Resources/Info.plist",
+      ]);
     fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
     writeVersion("2026.8.1");
     git("init", "-q");
     git("config", "user.name", "OpenClaw Test");
     git("config", "user.email", "test@openclaw.invalid");
-    git("add", "apps/android/version.json");
+    git("add", "apps/macos/Sources/OpenClaw/Resources/Info.plist");
     git("commit", "-qm", "baseline");
 
     writeVersion("2026.8.2");
@@ -77,7 +91,7 @@ describe("check-release-metadata-only", () => {
     expect(accepted.status, accepted.stderr).toBe(0);
     expect(accepted.stderr).toContain("[release-metadata] ok (1 files)");
 
-    git("add", "apps/android/version.json");
+    git("add", "apps/macos/Sources/OpenClaw/Resources/Info.plist");
     writeVersion("2026.8.2", "stable");
     const staged = runMetadata(["--staged"]);
     expect(staged.status, staged.stderr).toBe(0);
@@ -87,16 +101,16 @@ describe("check-release-metadata-only", () => {
     const rejected = compareHead();
     expect(rejected.status).toBe(1);
     expect(rejected.stderr).toContain(
-      "apps/android/version.json: changed outside recognized version/build literals",
+      "apps/macos/Sources/OpenClaw/Resources/Info.plist: changed outside recognized version/build literals",
     );
 
     // Incoming metadata may legitimately differ from the feature branch's HEAD.
-    git("add", "apps/android/version.json");
+    git("add", "apps/macos/Sources/OpenClaw/Resources/Info.plist");
     git("commit", "-qm", "incoming metadata");
     const incoming = git("rev-parse", "HEAD");
     git("switch", "--detach", head);
     writeVersion("2026.8.3", "stable");
-    git("add", "apps/android/version.json");
+    git("add", "apps/macos/Sources/OpenClaw/Resources/Info.plist");
     const based = runMetadata(["--staged", "--base", incoming]);
     expect(based.status, based.stderr).toBe(0);
     expect(based.stderr).toContain("[release-metadata] ok (1 files)");

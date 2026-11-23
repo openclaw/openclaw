@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { compactSubagentRunForMemory, subagentRuns } from "../registry/subagent-registry-memory.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import * as announceDelivery from "./subagent-announce-delivery.js";
+import { sourceOwnerChangedResult } from "./subagent-announce-dispatch.js";
 import { privateRequesterRouteCases } from "./subagent-announce-fixtures.test-support.js";
 import * as announceOutput from "./subagent-announce-output.js";
 
@@ -37,10 +38,16 @@ const subagentRegistryRuntimeMock = vi.hoisted(() => ({
   resolveRequesterForChildSession: vi.fn(() => null),
 }));
 
-vi.mock("./subagent-announce-delivery.runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./subagent-announce-delivery.runtime.js")>()),
+vi.mock("../../../plugins/hook-runner-global.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/hook-runner-global.js")>()),
   getGlobalHookRunner: () => ({ hasHooks: () => false }),
+}));
+vi.mock("../../../infra/outbound/bound-delivery-router.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/outbound/bound-delivery-router.js")>()),
   resolveBoundDeliveryDestination: async () => null,
+}));
+vi.mock("../../../infra/outbound/conversation-id.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/outbound/conversation-id.js")>()),
   resolveConversationIdFromTargets: () => "",
 }));
 
@@ -48,13 +55,7 @@ vi.mock("./subagent-announce-delivery.runtime.js", async (importOriginal) => ({
 vi.mock("./subagent-announce-delivery.js", () => ({
   deliverSubagentAnnouncement: async (params: DeliveryParams) => {
     if (params.isSourceSessionEffectsAllowed?.() === false) {
-      return {
-        delivered: false,
-        path: "none",
-        reason: "source_owner_changed",
-        terminal: true,
-        disposition: "intentional_non_delivery",
-      };
+      return sourceOwnerChangedResult();
     }
     const response = await agentSpy(params);
     if (response.status === "error") {
@@ -301,14 +302,14 @@ describe("subagent announce seam flow", () => {
     },
   );
 
-  it("drops requester delivery after the cleanup owner changes", async () => {
+  it("reports permanent refusal after the cleanup owner changes", async () => {
     const didAnnounce = await runAnnounceFlow({
       ...retiredResult(),
       suppressChildSessionEffects: true,
       isCompletionDeliveryAllowed: () => false,
     });
 
-    expect(didAnnounce).toBe("intentional_non_delivery");
+    expect(didAnnounce).toBe("permanent_failure");
     expect(agentSpy).not.toHaveBeenCalled();
   });
 

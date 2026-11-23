@@ -1,8 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  nextEventLoopTurn,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { recordDeliveredCommandExchange } from "../../plugin-sdk/session-transcript-runtime.js";
@@ -15,7 +20,8 @@ import {
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
-import { resolveSessionTranscriptPathInDir } from "./paths.js";
+import { recordCommittedCommandExchange } from "./command-transcript.js";
+import { resolveSessionFilePathCore } from "./paths.js";
 import {
   loadTranscriptEvents,
   appendTranscriptEvent,
@@ -92,6 +98,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   beforeEach(() => setRuntimeConfigSnapshot({}));
   const sessionId = "test-session-id";
   const sessionKey = "agent:main:test-session";
+  const transcriptFile = (id = sessionId) =>
+    resolveSessionFilePathCore(id, undefined, { sessionsDir: fixture.sessionsDir() });
   function transcriptScope() {
     return { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() };
   }
@@ -149,7 +157,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       ...params,
     });
   }
-  async function startEntryChange(patch: Partial<InternalSessionEntry>) {
+  function startEntryChange(patch: Partial<InternalSessionEntry>) {
     const gate = createDeferred();
     const started = createDeferred();
     const change = updateSessionEntry(transcriptScope(), async () => {
@@ -157,10 +165,17 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       await gate.promise;
       return patch;
     });
-    await started.promise;
-    return async () => {
-      gate.resolve();
-      await change;
+    // Return retirement ownership before waiting: a missing entry never calls the updater.
+    return {
+      started: awaitGateBeforeSettlement(
+        started.promise,
+        change,
+        "session entry change settled before its updater started",
+      ),
+      finish: () => {
+        gate.resolve();
+        return change;
+      },
     };
   }
   type BeforeMessageWriteParams = Parameters<
@@ -216,7 +231,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   }
   const latestText = () => readLatestAssistantTextFromSessionTranscript(transcriptScope());
 
-  it("appends replayable, redacted command exchanges exactly once without changing prior rows", async () => {
+  it("appends replayable, redacted committed and delivered command exchanges once without changing prior rows", async () => {
     await writeTranscriptStore();
     await appendMirror("Earlier reply");
     const before = await loadFixtureMessages();
@@ -228,7 +243,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       replyText: "Sign in at https://example.test/device?state=secret-state\nCode: EXAMPLE-CODE",
       replyId: "device-code",
     };
-    assertOk(await recordDeliveredCommandExchange(params));
+    assertOk(await recordCommittedCommandExchange(params));
     expect((await recordDeliveredCommandExchange(params)).ok).toBe(true);
     assertOk(
       await recordDeliveredCommandExchange({
@@ -430,7 +445,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   it.each(["file", "store", "agent", "bound"] as const)(
     "keeps owned write tracking scoped to the matching %s target",
     async (kind) => {
-      const file = (id: string) => resolveSessionTranscriptPathInDir(id, fixture.sessionsDir());
       const ownerTarget = {
         agentId: "main",
         sessionKey: "global",
@@ -444,10 +458,13 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       const scoped = kind === "store" || kind === "agent";
       const owner = scoped
         ? { sessionFile: "global", sessionKey: "global", sessionTarget: ownerTarget }
-        : { sessionFile: file("old-session"), sessionKey };
+        : { sessionFile: transcriptFile("old-session"), sessionKey };
       const request = scoped
         ? { sessionFile: "global", sessionKey: "global", sessionTarget: otherTarget }
-        : { sessionFile: kind === "bound" ? owner.sessionFile : file("next-session"), sessionKey };
+        : {
+            sessionFile: kind === "bound" ? owner.sessionFile : transcriptFile("next-session"),
+            sessionKey,
+          };
       const events: string[] = [];
       const context = {
         ...owner,
@@ -621,9 +638,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     await writeTranscriptStore({
       sessionFile: `sqlite:main:${sessionId}:${fixture.storePath()}`,
     });
-    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
     writeLegacyTranscriptFixture({
-      transcriptPath: sessionFile,
+      transcriptPath: transcriptFile(),
       message: { role: "user", content: "stale jsonl context", timestamp: 1_000 },
     });
     await expect(recentText({ beforeTimestampMs: 5_000 })).resolves.toEqual([]);
@@ -638,9 +654,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         transcriptPath: outsideFile,
         message: { role: "user", content: "outside text", timestamp: 1_000 },
       });
-      const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
       writeLegacyTranscriptFixture({
-        transcriptPath: sessionFile,
+        transcriptPath: transcriptFile(),
         message: { role: "user", content: "contained text", timestamp: 2_000 },
       });
       await persistMessages([
@@ -883,50 +898,101 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(result).toMatchObject({ ok: false, code: "blocked" });
   });
 
-  it.each(["session", "lifecycle", "writer"] as const)(
-    "rejects concurrent %s replacement",
-    async (kind) => {
-      const replacementSessionFile = resolveSessionTranscriptPathInDir(
-        "replacement-session",
-        fixture.sessionsDir(),
-      );
-      const lifecycleRevision = kind === "writer" ? "owned-revision" : "original-revision";
-      await writeTranscriptStore(
-        kind === "session"
-          ? {}
-          : {
-              lifecycleRevision,
-              ...(kind === "writer" ? { activeWriterRunId: "run-a" } : {}),
-            },
-      );
-      const patch =
-        kind === "session"
-          ? { sessionId: "replacement-session", sessionFile: replacementSessionFile }
-          : kind === "lifecycle"
-            ? { lifecycleRevision: "replacement-revision" }
-            : { activeWriterRunId: "run-b" };
-      const finishChange = await startEntryChange(patch);
-      const admission = {
-        expectedSessionId: sessionId,
-        ...(kind !== "session" ? { expectedLifecycleRevision: lifecycleRevision } : {}),
-        ...(kind === "writer" ? { expectedWriterRunId: "run-a" } : {}),
-      };
-      const append = appendText("late output", admission);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      await finishChange();
-      await expect(append).resolves.toMatchObject({ ok: false, code: "session-rebound" });
-      if (kind === "session") {
-        expect(fs.existsSync(replacementSessionFile)).toBe(false);
-      }
-      if (kind === "writer") {
-        await expect(
-          appendText("current output", { ...admission, expectedWriterRunId: "run-b" }),
-        ).resolves.toMatchObject({ ok: true });
-      }
-    },
-  );
+  describe("entry-change lifecycle", () => {
+    let retire: (() => Promise<void>) | undefined;
+    // Vitest may start teardown before a cancelled body unwinds; join it before fixture drain.
+    afterEach(async () => {
+      const finish = retire;
+      retire = undefined;
+      await finish?.();
+    });
+    it.for(["session", "lifecycle", "writer"] as const)(
+      "rejects concurrent %s replacement",
+      (kind, { signal }) => {
+        let change: ReturnType<typeof startEntryChange> | undefined;
+        let retirement: Promise<void> | undefined;
+        const appends: Promise<PromiseSettledResult<unknown>[]>[] = [];
+        retire = () => {
+          retirement ??= (async () => {
+            void change?.finish();
+            const [primary] = await Promise.allSettled([scenario]);
+            // Setup can finish after cancellation; retire any change it acquired before joining.
+            const outcomes = [
+              ...(await Promise.allSettled([change?.finish()])),
+              ...(await Promise.all(appends)).flat(),
+            ];
+            const failures = outcomes.flatMap((outcome) =>
+              outcome.status === "rejected" &&
+              !(primary?.status === "rejected" && outcome.reason === primary.reason)
+                ? [outcome.reason]
+                : [],
+            );
+            if (failures.length) {
+              throw new AggregateError(
+                [
+                  ...new Set([
+                    ...(primary?.status === "rejected" ? [primary.reason] : []),
+                    ...failures,
+                  ]),
+                ],
+                "transcript entry-change cleanup failed",
+              );
+            }
+          })();
+          return retirement;
+        };
+        const scenario = (async () => {
+          try {
+            const replacementSessionFile = transcriptFile("replacement-session");
+            const lifecycleRevision = kind === "writer" ? "owned-revision" : "original-revision";
+            await writeTranscriptStore(
+              kind === "session"
+                ? {}
+                : {
+                    lifecycleRevision,
+                    ...(kind === "writer" ? { activeWriterRunId: "run-a" } : {}),
+                  },
+            );
+            const patch =
+              kind === "session"
+                ? { sessionId: "replacement-session", sessionFile: replacementSessionFile }
+                : kind === "lifecycle"
+                  ? { lifecycleRevision: "replacement-revision" }
+                  : { activeWriterRunId: "run-b" };
+            change = startEntryChange(patch);
+            await withinTest(change.started, signal);
+            const admission = {
+              expectedSessionId: sessionId,
+              ...(kind !== "session" ? { expectedLifecycleRevision: lifecycleRevision } : {}),
+              ...(kind === "writer" ? { expectedWriterRunId: "run-a" } : {}),
+            };
+            const append = appendText("late output", admission);
+            appends.push(Promise.allSettled([append]));
+            await withinTest(nextEventLoopTurn(), signal);
+            await withinTest(change.finish(), signal);
+            expect(await withinTest(append, signal)).toMatchObject({
+              ok: false,
+              code: "session-rebound",
+            });
+            if (kind === "session") {
+              expect(fs.existsSync(replacementSessionFile)).toBe(false);
+            }
+            if (kind === "writer") {
+              const currentAppend = appendText("current output", {
+                ...admission,
+                expectedWriterRunId: "run-b",
+              });
+              appends.push(Promise.allSettled([currentAppend]));
+              expect(await withinTest(currentAppend, signal)).toMatchObject({ ok: true });
+            }
+          } finally {
+            void change?.finish();
+          }
+        })();
+        return scenario;
+      },
+    );
+  });
 
   it("rejects revision materialization between the initial check and SQLite append", async () => {
     await writeTranscriptStore({ lifecycleRevision: undefined });

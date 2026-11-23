@@ -664,7 +664,7 @@ describe("OpenClawTerminalPanel", () => {
       } else {
         await waitForFast(() => {
           expect(panel.querySelector('.tp-error[role="alert"]')?.textContent).toContain(
-            "Could not attach terminal session",
+            "Couldn’t connect to this terminal session. Try again.",
           );
         });
         expect(panel.querySelector(".tabstrip-tab__status")?.textContent).not.toBe("exited");
@@ -848,7 +848,7 @@ describe("OpenClawTerminalPanel", () => {
     await waitForFast(() => expect(panel.querySelector(".tp-session")).not.toBeNull());
     panel.querySelector<HTMLButtonElement>(".tp-session")!.click();
     await waitForFast(() =>
-      expect(panel.textContent).toContain("Could not attach terminal session"),
+      expect(panel.textContent).toContain("Couldn’t connect to this terminal session. Try again."),
     );
     expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
       JSON.stringify(["current-1"]),

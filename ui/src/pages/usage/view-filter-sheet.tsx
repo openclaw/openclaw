@@ -10,10 +10,10 @@ export function UsageFilterSheet(props: { active: boolean; children: JSX.Element
       label={t("usage.filters.title")}
       class="usage-filter-sheet"
       triggerClass={["btn btn--sm usage-filter-sheet__trigger", { active: props.active }]}
-      triggerTitle={t("usage.filters.title")}
       trigger={<Icon name="listFilter" />}
+      triggerTitle={t("usage.filters.title")}
     >
-      {props.children}
+      <div class="usage-filter-sheet__body">{props.children}</div>
     </PhoneSheet>
   );
 }

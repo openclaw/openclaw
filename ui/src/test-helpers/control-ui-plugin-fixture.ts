@@ -51,6 +51,7 @@ export async function prepareNativeControlUiPluginFixtures(
       revision,
       entryUrl: `${prefix}${path.basename(declaration.entry)}`,
       styles: (declaration.styles ?? []).map((file) => `${prefix}${path.basename(file)}`),
+      ...(generation.panelIcon ? { panelIcon: generation.panelIcon.dataUrl } : {}),
     });
   }
   return {

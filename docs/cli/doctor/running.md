@@ -44,6 +44,12 @@ aborts package-file reads and stops and joins prerequisite subprocesses. Doctor
 closes its owned resources, records the signal exit status, and lets Node exit
 naturally so V8 can finish worker cleanup safely.
 
+If a command-owned handle nobody closed keeps Doctor or `openclaw update repair`
+alive after its work has settled, stderr names the active resources 10 seconds
+later and, on Linux and macOS, the process ends with `SIGTERM` (exit status 143).
+That line means the command's work finished; include it in any bug report. On
+Windows the line is reported and the process keeps waiting.
+
 Before maintenance begins, package-root discovery, source-config loading, and
 Tailscale prerequisite inspection each have a 60-second asynchronous wait limit.
 A timeout names the phase and recommends `OPENCLAW_DEBUG=1 openclaw doctor --lint`
@@ -171,8 +177,11 @@ including profiles that were offline during the update. Preparation keeps existi
 identities and pairing tokens and captures a backup before retiring their old storage.
 Native clients can invoke the same operation with
 `openclaw doctor --client-credentials --repair --non-interactive`. This command only
-prepares the selected root's client credentials and required source schema. It does not
-run health checks or control services. Add `--json` for a completion report.
+prepares the selected root's client credentials, required source schema, and pending
+local service-runtime intent migration. Runtime pins retain their exact stored values;
+conflicting migration inputs stop preparation before the native app can select an old
+Gateway runtime against newer state. It does not run health checks or control
+services. Add `--json` for a completion report.
 
 If a replacement host retains PostgreSQL state but loses `client/credentials.sqlite`,
 restore the matching credential backup when available. Without a backup, run:
@@ -211,8 +220,9 @@ Update-time Doctor runs startup-required repairs before optional inspections.
 When the installed updater supports post-restart inspections, Doctor moves
 lint-backed, inspection-only checks out of the stopped Gateway window. The
 updater runs them after restart and saves their findings in the
-`post-activation doctor inspections` result step. Findings or an incomplete
-inspection remain advisory and do not fail an otherwise successful update.
+`post-activation doctor inspections` result step. Planned deferrals are progress,
+not warning findings. Findings or an incomplete inspection remain advisory and
+do not fail an otherwise successful update.
 Repairs, migrations, readiness gates, and checks without equivalent lint
 coverage keep their existing ordering. Older installed updaters keep the
 inspections in their original Doctor pass.
@@ -343,7 +353,7 @@ openclaw channels status --probe
 | `--replace-model <json>`        | With `--fix` or `--repair`, explicitly replace a retiring Daybreak alias with a specific OpenAI model and Access program. Repeat for both aliases; see below.                                                                                         |
 | `--force`                       | Allow aggressive repair choices. Alone, remains guided; with `--fix`, `--repair`, or `--yes`, uses the same policy-refresh and installation-drift rules.                                                                                              |
 | `--non-interactive`             | Run without prompts; safe automatic migrations still apply. Combine with `--fix`, `--repair`, or `--yes` to enter repair maintenance.                                                                                                                 |
-| `--client-credentials`          | Prepare only client credentials and their required source schema. Requires `--repair` or `--fix` with `--non-interactive`; optionally accepts `--json`.                                                                                               |
+| `--client-credentials`          | Prepare client credentials, their required source schema, and pending local service-runtime intent migration. Requires `--repair` or `--fix` with `--non-interactive`; optionally accepts `--json`.                                                   |
 | `--generate-gateway-token`      | Generate and configure a gateway token.                                                                                                                                                                                                               |
 | `--allow-exec`                  | Allow doctor to execute configured `exec` SecretRefs while verifying secrets.                                                                                                                                                                         |
 | `--deep`                        | Scan system services for extra gateway installs; report recent Gateway supervisor restart handoffs.                                                                                                                                                   |

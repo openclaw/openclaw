@@ -33,19 +33,19 @@ describe("shouldAttemptTtsPayload", () => {
   const writePrefs = (tts: Record<string, unknown>) =>
     writeFileSync(prefsPath, JSON.stringify({ tts }));
 
-  it("warns for malformed optional preferences but keeps missing files quiet", () => {
+  it("warns for malformed optional preferences but keeps missing files quiet", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(readTtsPrefs(prefsPath)).toEqual({});
     expect(warn).not.toHaveBeenCalled();
 
     writeFileSync(prefsPath, '{"tts":');
-    expect(attempt({ cfg: { tts: { auto: "always" } } })).toBe(true);
+    expect(await attempt({ cfg: { tts: { auto: "always" } } })).toBe(true);
     expect(warn).toHaveBeenCalledOnce();
     expect(warn.mock.calls[0]?.[0]).toContain(prefsPath);
     expect(warn.mock.calls[0]?.[0]).toContain("Repair the file or its permissions");
   });
 
-  it("refuses a preference update without overwriting unread existing settings", () => {
+  it("refuses a preference update without overwriting unread existing settings", async () => {
     const malformed = '{"tts":{"provider":"custom",';
     writeFileSync(prefsPath, malformed);
 
@@ -53,7 +53,7 @@ describe("shouldAttemptTtsPayload", () => {
     expect(readFileSync(prefsPath, "utf8")).toBe(malformed);
   });
 
-  it("creates missing preferences and preserves settings during ordinary updates", () => {
+  it("creates missing preferences and preserves settings during ordinary updates", async () => {
     setTtsMaxLength(prefsPath, 1800);
     expect(JSON.parse(readFileSync(prefsPath, "utf8"))).toEqual({ tts: { maxLength: 1800 } });
 
@@ -64,9 +64,9 @@ describe("shouldAttemptTtsPayload", () => {
     });
   });
 
-  it("does not infer automatic TTS from a dashboard text turn without opt-in state", () => {
+  it("does not infer automatic TTS from a dashboard text turn without opt-in state", async () => {
     expect(
-      attempt({
+      await attempt({
         cfg: {} as OpenClawConfig,
         agentId: "main",
         channelId: "webchat",
@@ -75,37 +75,37 @@ describe("shouldAttemptTtsPayload", () => {
     ).toBe(false);
   });
 
-  it("honors session auto state before prefs and config", () => {
+  it("honors session auto state before prefs and config", async () => {
     writePrefs({ auto: "off" });
     const cfg = { tts: { auto: "off" } } as OpenClawConfig;
 
-    expect(attempt({ cfg, ttsAuto: "always" })).toBe(true);
-    expect(attempt({ cfg, ttsAuto: "off" })).toBe(false);
+    expect(await attempt({ cfg, ttsAuto: "always" })).toBe(true);
+    expect(await attempt({ cfg, ttsAuto: "off" })).toBe(false);
   });
 
-  it("uses local prefs before config auto mode", () => {
+  it("uses local prefs before config auto mode", async () => {
     const cfg = { tts: { auto: "off" } } as OpenClawConfig;
 
     writePrefs({ enabled: true });
-    expect(attempt({ cfg })).toBe(true);
+    expect(await attempt({ cfg })).toBe(true);
 
     writePrefs({ auto: "off" });
-    expect(attempt({ cfg: { tts: { enabled: true } } })).toBe(false);
+    expect(await attempt({ cfg: { tts: { enabled: true } } })).toBe(false);
   });
 
-  it("uses per-agent TTS auto and mode overrides", () => {
+  it("uses per-agent TTS auto and mode overrides", async () => {
     const cfg = {
       tts: { auto: "off", mode: "final" },
       agents: { entries: { voice: { tts: { auto: "always", mode: "all" } } } },
     } as OpenClawConfig;
 
-    expect(attempt({ cfg, agentId: "voice" })).toBe(true);
+    expect(await attempt({ cfg, agentId: "voice" })).toBe(true);
     expect(resolveConfiguredTtsMode(cfg, "voice")).toBe("all");
-    expect(attempt({ cfg, agentId: "main" })).toBe(false);
+    expect(await attempt({ cfg, agentId: "main" })).toBe(false);
     expect(resolveConfiguredTtsMode(cfg, "main")).toBe("final");
   });
 
-  it("merges channel and account TTS overrides after agent overrides", () => {
+  it("merges channel and account TTS overrides after agent overrides", async () => {
     const cfg = {
       tts: {
         auto: "off",
@@ -143,7 +143,7 @@ describe("shouldAttemptTtsPayload", () => {
     });
   });
 
-  it("preserves null and array override semantics while blocking prototype keys", () => {
+  it("preserves null and array override semantics while blocking prototype keys", async () => {
     const agentTts = JSON.parse(
       '{"providers":{"custom":{"nullable":null,"voices":["override"],"__proto__":{"polluted":true},"constructor":{"polluted":true},"prototype":{"polluted":true}}}}',
     );

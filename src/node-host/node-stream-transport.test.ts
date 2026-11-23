@@ -1,4 +1,4 @@
-import { createHash, X509Certificate } from "node:crypto";
+import { createHash, randomBytes, X509Certificate } from "node:crypto";
 import { once } from "node:events";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
@@ -14,6 +14,7 @@ import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixt
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
+import { NODE_STREAM_MAX_FRAME_BYTES } from "../shared/node-desktop-stream.js";
 import { runNodeStreamTransport } from "./node-stream-transport.js";
 
 type StreamOptions = Parameters<typeof runNodeStreamTransport>[0];
@@ -73,7 +74,7 @@ async function streamHarness(
 }
 async function websocketHarness(onConnection?: (ws: WebSocket) => void, target?: Duplex) {
   const server = createHttpServer();
-  const wss = new WebSocketServer({ server });
+  const wss = new WebSocketServer({ server, maxPayload: NODE_STREAM_MAX_FRAME_BYTES });
   if (onConnection) {
     wss.on("connection", onConnection);
   }
@@ -520,6 +521,30 @@ describe("node stream close acknowledgement", () => {
       }
     },
   );
+
+  it("splits one large target read into ordered Gateway-sized messages", async () => {
+    const payload = randomBytes(200 * 1024);
+    const frames: Buffer[] = [];
+    const settled = createDeferred();
+    await using harness = await websocketHarness((ws) => {
+      ws.once("message", () => {
+        ws.on("message", (data) => {
+          frames.push(data as Buffer);
+          if (Buffer.concat(frames).length === payload.length) {
+            settled.resolve();
+          }
+        });
+      });
+      // An oversized message fails the server socket (1009) like the Gateway attach server.
+      ws.on("error", () => settled.resolve());
+      ws.once("close", () => settled.resolve());
+    });
+    void harness.run().catch(() => undefined);
+    harness.target.push(payload);
+    await settled.promise;
+    expect(Buffer.concat(frames).equals(payload)).toBe(true);
+    expect(frames.every((frame) => frame.length <= NODE_STREAM_MAX_FRAME_BYTES)).toBe(true);
+  });
 
   it("rejects non-binary gateway data and closes the stream", async () => {
     const gatewayClosed = createDeferred();

@@ -147,7 +147,7 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       .spyOn(runWait, "waitForAgentRunReply")
       .mockImplementation((params) => {
         const pending = waitForReply(params);
-        if (params.timeoutMs === 1_000) {
+        if (params.timeoutMs <= 1_000) {
           inlineWaitStarted.resolve();
         }
         return pending;
@@ -324,7 +324,11 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
             sessionKey: parent,
             operationalRunInstance,
             approvalAuthority: authority,
-            receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+            receiptAuthority: () => {
+              if (!validateAgentRunDelegatedAuthority(authority)) {
+                throw new Error("agent tool caller authority is no longer active");
+              }
+            },
             gatewayContextResolver: () => kernel.gatewayRequestContext,
           },
           () =>

@@ -18,7 +18,6 @@ import {
   registerActiveCronTaskRun,
   trackActiveCronTaskRunSettlement,
 } from "./active-run-cancellation.js";
-import { isDeferredCronAdmission } from "./admission-deferred.js";
 import {
   createCronAgentWatchdog,
   CRON_AGENT_SETUP_WATCHDOG_MS,
@@ -52,6 +51,9 @@ type CronCoreRunOptions = {
   streamBatch?: string;
   streamScheduleKey?: string;
   streamSourceIdentity?: string;
+  onConditionFired?: ExecuteJobCoreOptions["onConditionFired"];
+  providerRunSlot?: ExecuteJobCoreOptions["providerRunSlot"];
+  onProviderAttempt?: (provider: string) => void;
   executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
 } & (
   | { runReceipt: CronRunReceiptHandle; runReceiptContext: OpenClawStateWorkerContext }
@@ -78,7 +80,8 @@ async function deliverPrimaryWebhook(
   if (
     plan.mode !== "webhook" ||
     result.triggerEval?.fired === false ||
-    isDeferredCronAdmission(job, result)
+    // A run that never started has status text, not output, even after a fired trigger.
+    (result.status !== "error" && result.executionStarted === false)
   ) {
     return result;
   }
@@ -377,6 +380,9 @@ async function executeJobCoreWithTimeoutUnfinalized(
       watchdog?.noteLaneWait();
     };
     const noteRunnerStarted = (info?: CronAgentExecutionStarted) => {
+      if (info?.provider) {
+        opts?.onProviderAttempt?.(info.provider);
+      }
       if (watchdog) {
         watchdog.noteRunnerStarted(info);
       } else {
@@ -385,6 +391,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
     };
     const trackExecution = !watchdog || deferTimeoutUntilExecutionStart;
     const executionIdentity = opts?.executionIdentity;
+    const providerRunSlot = opts?.providerRunSlot;
     const coreOptions: ExecuteJobCoreOptions = {
       migrationPending: opts?.migrationPending,
       idleAdmission: opts?.idleAdmission,
@@ -397,6 +404,18 @@ async function executeJobCoreWithTimeoutUnfinalized(
       onExecutionPhase: trackExecution ? (watchdog?.notePhase ?? accumulateExecution) : undefined,
       onLaneWait: watchdog && deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
       assertRunCurrent,
+      onConditionFired: opts?.onConditionFired,
+      providerRunSlot: providerRunSlot && {
+        tryStart: providerRunSlot.tryStart,
+        wait: async (provider, signal) => {
+          noteLaneState({ waiting: true });
+          try {
+            await providerRunSlot.wait(provider, signal);
+          } finally {
+            noteLaneState({ waiting: false });
+          }
+        },
+      },
       executionIdentity: executionIdentity && {
         ...executionIdentity,
         onPostAdmission: (context) => {

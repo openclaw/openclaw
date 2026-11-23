@@ -9,8 +9,8 @@ import {
   type SessionTranscriptUsageSnapshot,
 } from "./session-transcript-accounting.types.js";
 import {
-  isSessionTranscriptLeafControl,
-  selectSessionTranscriptLeafControlledPath,
+  scanSessionTranscriptTree,
+  selectSessionTranscriptActiveEntries,
 } from "./transcript-tree.js";
 
 function isUnavailableContextBarrier(
@@ -46,12 +46,10 @@ function deriveTranscriptUsageSnapshot(
 }
 
 function readTranscriptAccountingSnapshot(
-  visit: (visitor: (event: unknown) => void) => void,
+  events: Iterable<unknown>,
   options: { includeUsage: boolean; includeTurnTaint?: boolean },
 ): {
   boundaryFound: boolean;
-  eventCount: number;
-  hasLeafControl: boolean;
   tainted: boolean;
   usage?: SessionTranscriptUsageSnapshot;
 } {
@@ -61,14 +59,10 @@ function readTranscriptAccountingSnapshot(
   const trailingMessages: AgentMessage[] = [];
   let boundaryFound = false;
   let tainted = false;
-  let eventCount = 0;
-  let hasLeafControl = false;
-  visit((event) => {
-    eventCount += 1;
-    hasLeafControl ||= isSessionTranscriptLeafControl(event);
+  for (const event of events) {
     const record = asOptionalRecord(event);
     if (!record) {
-      return;
+      continue;
     }
     const messageRecord = asOptionalRecord(record.message);
     // SAFETY: Stored message payloads use the AgentMessage serialization contract.
@@ -108,11 +102,12 @@ function readTranscriptAccountingSnapshot(
         }
       }
     }
-  });
+    if (!scanUsage && !scanTaint) {
+      break;
+    }
+  }
   return {
     boundaryFound,
-    eventCount,
-    hasLeafControl,
     tainted,
     usage: latestUsage
       ? deriveTranscriptUsageSnapshot(latestUsage, trailingMessages.toReversed())
@@ -120,34 +115,31 @@ function readTranscriptAccountingSnapshot(
   };
 }
 
-/** Both backends visit the bounded active tail newest first. */
+/** Select navigation before reading bodies: an older control can change the apparent tail. */
+export function selectSessionTranscriptAccountingTail<T>(
+  entries: readonly T[],
+  recordOf: (entry: T) => unknown,
+): readonly T[] {
+  const tree = scanSessionTranscriptTree(entries.map(recordOf));
+  return tree.hasLeafControl
+    ? selectSessionTranscriptActiveEntries({ entries, recordOf, tree })
+    : entries;
+}
+
+/** Consume only the required newest-first suffix of an already selected bounded path. */
 export function readSessionTranscriptAccountingTail(
-  visit: (visitor: (event: unknown) => void) => void,
+  events: Iterable<unknown>,
   options: SessionTranscriptAccountingOptions,
+  candidateCount: number,
 ): SessionTranscriptAccountingSnapshot {
-  let accounting = readTranscriptAccountingSnapshot(visit, options);
-  if (accounting.hasLeafControl) {
-    // Imported flat transcripts can still contain serialized navigation controls.
-    const events: unknown[] = [];
-    visit((event) => events.push(event));
-    events.reverse();
-    const active = selectSessionTranscriptLeafControlledPath(events) ?? events;
-    accounting = {
-      ...readTranscriptAccountingSnapshot((visitor) => {
-        for (let index = active.length - 1; index >= 0; index -= 1) {
-          visitor(active[index]);
-        }
-      }, options),
-      eventCount: accounting.eventCount,
-    };
-  }
+  const accounting = readTranscriptAccountingSnapshot(events, options);
   return {
     ...(options.includeUsage ? { usage: accounting.usage } : {}),
     ...(options.includeTurnTaint
       ? {
           turnTainted:
             accounting.tainted ||
-            (!accounting.boundaryFound && accounting.eventCount >= SQLITE_USAGE_TAIL_MAX_EVENTS),
+            (!accounting.boundaryFound && candidateCount >= SQLITE_USAGE_TAIL_MAX_EVENTS),
         }
       : {}),
   };

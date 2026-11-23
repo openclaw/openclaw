@@ -4,6 +4,7 @@ import {
   ciTestTimingsSchema,
   isRuntimePlacementIncludePatterns,
   type CiTestTimings,
+  type CiTimingProfile,
   type RuntimePlacementTiming,
 } from "./ci-test-timings-schema.mts";
 import { parseCompactSplitTimingKey } from "./vitest-shard-metadata.mts";
@@ -48,7 +49,15 @@ export function readUiE2eFileTimings(): {
 
 function selectedTimingPrefix(): string {
   const policy = process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY;
-  return policy === "bun-all" || policy === "dual-all" ? `${policy}:` : "";
+  const runtime = process.env.OPENCLAW_CI_TEST_RUNTIME;
+  if (policy !== "bun-all" && policy !== "dual-all") {
+    return "";
+  }
+  // The complete dual-all Node pass deliberately shares ordinary Node history.
+  if (policy === "dual-all" && runtime === "node") {
+    return "";
+  }
+  return runtime === "node" || runtime === "bun" ? `${policy}:${runtime}:` : `${policy}:`;
 }
 
 function runtimeSeconds(
@@ -66,7 +75,10 @@ function runtimeSeconds(
   const selected = Object.fromEntries([
     ...entries.filter(([key]) => !/^(?:bun-all|bun-native|node-subset|dual-all|bun):/u.test(key)),
     ...entries
-      .filter(([key]) => prefix && key.startsWith(prefix))
+      .filter(
+        ([key]) =>
+          prefix && key.startsWith(prefix) && !/^(?:node|bun):/u.test(key.slice(prefix.length)),
+      )
       .map(([key, seconds]) => [key.slice(prefix.length), seconds]),
   ]);
   cached.set(prefix, selected);
@@ -74,14 +86,12 @@ function runtimeSeconds(
   return selected;
 }
 
-export function readToolingFileTimings(
-  profile: "blacksmith" | "github",
-): Readonly<Record<string, number>> {
+export function readToolingFileTimings(profile: CiTimingProfile): Readonly<Record<string, number>> {
   return runtimeSeconds(readTestTimings()?.toolingFileSeconds[profile] ?? emptyGroupTimings);
 }
 
 export function readCompactGroupTimings(
-  profile: "blacksmith" | "github",
+  profile: CiTimingProfile,
 ): Readonly<Record<string, number>> {
   return runtimeSeconds(readTestTimings()?.compactGroupSeconds[profile] ?? emptyGroupTimings);
 }
@@ -91,20 +101,27 @@ export function readRepoE2eFileTimings(): Readonly<Record<string, number>> {
 }
 
 export function readRuntimePlacementTimings(
-  profile: "blacksmith" | "github",
+  profile: CiTimingProfile,
 ): readonly RuntimePlacementTiming[] {
-  const runtime = selectedTimingPrefix().slice(0, -1);
+  const prefix = selectedTimingPrefix();
+  const [policy = "", runtime = ""] = prefix.split(":");
   const observations = readTestTimings()?.runtimePlacementTimings[profile] ?? emptyRuntimeTimings;
   const cached =
     runtimePlacementCache.get(observations) ?? new Map<string, readonly RuntimePlacementTiming[]>();
-  if (cached.has(runtime)) {
-    return cached.get(runtime)!;
+  if (cached.has(prefix)) {
+    return cached.get(prefix)!;
   }
   const selected = observations.flatMap((observation) => {
-    const { OPENCLAW_CI_TEST_RUNTIME_POLICY: measuredRuntime = "", ...env } = observation.env;
-    return measuredRuntime === runtime ? [{ ...observation, env }] : [];
+    const {
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: measuredPolicy = "",
+      OPENCLAW_CI_TEST_RUNTIME: measuredRuntime = "",
+      ...env
+    } = observation.env;
+    return measuredPolicy === policy && measuredRuntime === runtime
+      ? [{ ...observation, env }]
+      : [];
   });
-  cached.set(runtime, selected);
+  cached.set(prefix, selected);
   runtimePlacementCache.set(observations, cached);
   return selected;
 }

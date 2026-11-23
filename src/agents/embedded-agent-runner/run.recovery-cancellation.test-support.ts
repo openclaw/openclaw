@@ -154,7 +154,9 @@ describe("recovery cancellation through the public run owner", () => {
   beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
     const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
-    setRuntimeConfigSnapshot({});
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { model: { primary: "anthropic/test-model" } } },
+    });
     contextEngine.info.ownsCompaction = true;
     mockedGlobalHookRunner.hasHooks.mockImplementation(
       (name) => name === "before_compaction" || name === "after_compaction",
@@ -371,16 +373,22 @@ describe("recovery cancellation through the public run owner", () => {
       });
 
       expect(result.payloads).toEqual([{ text: "Done." }]);
-      expect(facts).toHaveBeenCalledExactlyOnceWith({
-        kind: "durable",
-        count: 1,
-        currentContextSnapshot: { tokens: currentContextTokens },
-        target: {
-          ...runParams.sessionTarget,
-          lifecycleRevision: undefined,
-          activeWriterRunId: runParams.runId,
-        },
-      });
+      const target = {
+        ...runParams.sessionTarget,
+        lifecycleRevision: undefined,
+        activeWriterRunId: runParams.runId,
+      };
+      expect(facts.mock.calls).toEqual([
+        [{ kind: "durable", count: 0, target }],
+        [
+          {
+            kind: "durable",
+            count: 1,
+            currentContextSnapshot: { tokens: currentContextTokens },
+            target,
+          },
+        ],
+      ]);
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
       expect(mockedCompactDirect).not.toHaveBeenCalled();
     },
@@ -517,7 +525,9 @@ describe("recovery cancellation through the public run owner", () => {
       await import("../sessions/session-manager.js");
     const state = await createOpenClawTestState({ label: "fresh-persistent-recovery" });
     const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
-    setRuntimeConfigSnapshot({});
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { model: { primary: "anthropic/test-model" } } },
+    });
     let manager: Awaited<ReturnType<typeof PersistentSessionManager.openAsync>> | undefined;
     let firstKeptEntryId: string | undefined;
     const runParams = {
