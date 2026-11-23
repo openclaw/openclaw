@@ -17,10 +17,52 @@ import { normalizeToolPolicyName } from "./tool-policy.js";
 import { isToolResultError, readToolResultDetails } from "./tool-result-error.js";
 
 const EXPLICIT_MESSAGE_ROUTE_KEYS = ["channel", "target", "to", "channelId", "provider"];
-/** Resolves whether a delivered source send ends the turn; an omitted `final` takes the run's default. */
-export function resolveMessageToolSourceReplyFinal(args: unknown, finalByDefault = true): boolean {
+type ToolCallSiblingScope = {
+  /** The assistant message that issued the send. */
+  assistantMessage?: { content?: readonly unknown[] } | null;
+  /** The send's own tool call id within that message. */
+  toolCallId?: string;
+};
+
+/**
+ * True when the assistant message that issued `toolCallId` also called a tool other
+ * than `message`. Such a send cannot be the completed reply: the model asked for work
+ * whose results it has not seen yet.
+ */
+function hasNonMessageSiblingToolCall(scope: ToolCallSiblingScope | undefined): boolean {
+  const content = scope?.assistantMessage?.content;
+  if (!content || !scope?.toolCallId) {
+    return false;
+  }
+  const calls = content
+    .map((block) => asOptionalRecord(block))
+    .filter((call) => call?.type === "toolCall");
+  return (
+    calls.some((call) => call?.id === scope.toolCallId) &&
+    calls.some(
+      (call) =>
+        call?.id !== scope.toolCallId &&
+        typeof call?.name === "string" &&
+        normalizeToolPolicyName(call.name) !== "message",
+    )
+  );
+}
+
+/**
+ * Resolves whether a delivered source send ends the turn. An omitted `final` takes the
+ * run's default, except when the same assistant message also called another tool: then
+ * the send is progress, so the turn continues and those results reach the model.
+ */
+export function resolveMessageToolSourceReplyFinal(
+  args: unknown,
+  finalByDefault = true,
+  siblings?: ToolCallSiblingScope,
+): boolean {
   const final = (asOptionalRecord(args) ?? {}).final;
-  return final === undefined ? finalByDefault : final !== false;
+  if (final !== undefined) {
+    return final !== false;
+  }
+  return finalByDefault && !hasNonMessageSiblingToolCall(siblings);
 }
 
 function resultConfirmsCurrentSourceRoute(value: unknown): boolean {

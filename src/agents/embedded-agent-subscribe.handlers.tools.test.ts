@@ -2012,6 +2012,47 @@ describe("messaging tool media URL tracking", () => {
     },
   );
 
+  it("keeps a send batched with other work as progress after a steer clears the last assistant", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "message_tool_only";
+    ctx.consumeToolSendReceipt = () => ({
+      details: {
+        messageDelivery: { status: "settled", partialDelivery: false, createdThreadIds: [] },
+      },
+    });
+    ctx.state.lastAssistant = {
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "tool-ack", name: "message", arguments: {} },
+        { type: "toolCall", id: "tool-read", name: "read", arguments: {} },
+      ],
+    } as unknown as ToolHandlerContext["state"]["lastAssistant"];
+
+    await startTool(ctx, {
+      toolName: "message",
+      toolCallId: "tool-ack",
+      args: { action: "send", message: "checking now" },
+    });
+    ctx.state.lastAssistant = undefined;
+    await endTool(ctx, {
+      toolName: "message",
+      toolCallId: "tool-ack",
+      isError: false,
+      result: resultWithDetails({
+        status: "ok",
+        deliveryStatus: "sent",
+        sourceReplySink: "internal-ui",
+        idempotencyKey: "batched-ack",
+        sourceReply: { text: "checking now" },
+      }),
+    });
+
+    expect(ctx.state.messagingToolSourceReplyPayloads).toEqual([
+      expect.objectContaining({ text: "checking now", sourceReplyFinal: false }),
+    ]);
+    expect(ctx.state.sourceReplyDeliveryState).not.toBe("delivered");
+  });
+
   it("commits internal-ui source replies from successful message sends", async () => {
     const { ctx } = createTestContext();
     ctx.params.sourceReplyDeliveryMode = "message_tool_only";

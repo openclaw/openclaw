@@ -61,6 +61,7 @@ type ToolStartRecord = {
   hideFromChannelProgress?: boolean;
   parentToolCallId?: string;
   hasRepliedRef?: { value: boolean };
+  issuingAssistant?: ToolHandlerContext["state"]["lastAssistant"];
 };
 
 /** Track tool execution start data for after_tool_call hook. */
@@ -289,6 +290,7 @@ export function handleToolExecutionStart(
       args,
       hideFromChannelProgress: evt.hideFromChannelProgress,
       parentToolCallId: evt.parentToolCallId,
+      issuingAssistant: ctx.state.lastAssistant,
       ...(ctx.params.hasRepliedRef
         ? { hasRepliedRef: { value: ctx.params.hasRepliedRef.value } }
         : {}),
