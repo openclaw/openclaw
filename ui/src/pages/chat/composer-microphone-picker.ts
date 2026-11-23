@@ -18,10 +18,7 @@ const keyed = (entries: CatalogEntries, ready?: boolean, selected?: string) =>
   ready ? undefined : entries?.find((entry) => entry.id === selected && entry.apiKeyRequired)?.id;
 
 /** The Gateway marks providers whose saved sign-in can't do voice; nothing else implies it. */
-function voiceApiKeyProviders(
-  { realtime, transcription, speech }: TalkCatalogResult,
-  speechMode: boolean,
-) {
+function voiceApiKeyProviders({ realtime, transcription }: TalkCatalogResult, speechMode: boolean) {
   const dictation = keyed(
     transcription?.providers,
     transcription?.ready,
@@ -29,7 +26,7 @@ function voiceApiKeyProviders(
   );
   return {
     talk: speechMode
-      ? (dictation ?? keyed(speech?.providers, false, speech?.activeProvider))
+      ? dictation
       : keyed(realtime?.providers, realtime?.ready, realtime?.activeProvider),
     dictation,
   };
@@ -212,7 +209,6 @@ export class ComposerMicrophoneOwner extends EventTarget {
       const talk = config?.config?.talk;
       this.dictationStatus = catalog.transcription?.ready === true ? "ready" : "unavailable";
       this.apiKeyProviders = voiceApiKeyProviders(catalog, talk?.realtime?.mode === "stt-tts");
-      this.talkApiKeyNotice &&= this.apiKeyProviders.talk !== undefined;
       if (!config) {
         this.realtimeStatus = "unavailable";
         return;
@@ -221,10 +217,11 @@ export class ComposerMicrophoneOwner extends EventTarget {
         this.realtimeStatus = catalog.realtime?.ready === true ? "ready" : "unavailable";
         return;
       }
+      let speechProvider = catalog.speech.activeProvider;
       let speechReady: boolean;
       if (talk.provider || talk.resolved?.provider) {
         speechReady = catalog.speech.providers.some(
-          (provider) => provider.id === catalog.speech.activeProvider && provider.configured,
+          (provider) => provider.id === speechProvider && provider.configured,
         );
       } else {
         const status = await client.request<{
@@ -232,12 +229,14 @@ export class ComposerMicrophoneOwner extends EventTarget {
           providerStates: Array<{ id: string; configured: boolean }>;
           fallbackProviders: string[];
         }>("tts.status", {});
+        speechProvider = status.provider;
         speechReady =
           status.providerStates.some(
             (provider) => provider.id === status.provider && provider.configured,
           ) || status.fallbackProviders.length > 0;
       }
       if (request === this.catalogRequest) {
+        this.apiKeyProviders.talk ??= keyed(catalog.speech.providers, speechReady, speechProvider);
         this.realtimeStatus =
           this.dictationStatus === "ready" && speechReady ? "ready" : "unavailable";
       }
@@ -247,6 +246,7 @@ export class ComposerMicrophoneOwner extends EventTarget {
       }
     } finally {
       if (request === this.catalogRequest) {
+        this.talkApiKeyNotice &&= this.apiKeyProviders.talk !== undefined;
         this.dispatchEvent(new Event("change"));
       }
     }
