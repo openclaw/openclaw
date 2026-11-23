@@ -4,6 +4,7 @@ import { SettingsSectionHeader } from "../../components/solid/settings-ui.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { renderModelSetupCandidatesLoading } from "./loading-view.tsx";
 import { renderProviderIcon } from "./model-setup-icon-loader.tsx";
 import { activationTargetId } from "./state.ts";
 import type { ModelSetupViewProps } from "./view-types.ts";
@@ -47,7 +48,15 @@ export function CandidateRows(
       .toSorted((a, b) => a.label.localeCompare(b.label));
   });
   return (
-    <Show when={candidates().length > 0}>
+    <Show
+      when={candidates().length > 0}
+      fallback={
+        // Known choices are usable before discovery ends; keep its slot until results arrive.
+        <Show when={props.detecting && props.result.candidates.length === 0}>
+          <div role="status">{renderModelSetupCandidatesLoading(t("modelSetup.loading"))}</div>
+        </Show>
+      }
+    >
       <section class="settings-section">
         <SettingsSectionHeader title={t("modelSetup.candidates.title")} />
         <div class="model-setup__rows">

@@ -864,3 +864,39 @@ it("keeps stored header bytes, event limits and admitted-turn fences in the cove
     });
   });
 });
+
+it("charges conversation, not the saved system-prompt checkpoint, as active transcript bytes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    // Issue #202172: a large tool surface made the checkpoint most of the measured size.
+    const checkpoint = {
+      type: "custom",
+      id: "sp",
+      parentId: "assistant",
+      customType: "openclaw.system-prompt",
+      data: { prefix: "x".repeat(150_000), routeKey: "r", historyId: "h" },
+    };
+    const conversationBytes = [user, assistant].reduce(
+      (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1,
+      0,
+    );
+    const expected = { kind: "value", value: { byteSize: conversationBytes, eventCount: 2 } };
+    const options = { includeByteSize: true, includeUsage: false };
+    const f = fixture([user, assistant, checkpoint as TranscriptEvent]);
+    const accounting = () =>
+      readProjection(f.database, f.scope, (projection) =>
+        readSessionTranscriptAccountingFromProjection(projection, options),
+      );
+    // SQLite counter.
+    expect(accounting()).toEqual(expected);
+    // Actor counter seeded at hydration.
+    expect(withReceipt(f.receipt(), accounting)).toEqual(expected);
+    // Actor counter advanced by an append: a new checkpoint after compaction adds nothing.
+    const state = f.hydrate();
+    f.write(() =>
+      withActorTransaction(f.database, state, () =>
+        f.append([{ ...checkpoint, id: "sp-2", parentId: "sp" } as TranscriptEvent]),
+      ),
+    );
+    expect(withReceipt(f.receipt(state), accounting)).toEqual(expected);
+  });
+});

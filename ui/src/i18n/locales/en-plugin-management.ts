@@ -480,6 +480,13 @@ const enPluginManagement = {
     detailEnable: "Enable",
     detailDisable: "Disable",
     detailTools: "Tools",
+    toolBlockUnavailable: "The global tool block list is unavailable.",
+    toolBlockHint:
+      "Turn off a tool to block it for all agents. Turning it on does not override other tool rules.",
+    allowTool: "Allow {name}",
+    toolBlockedByRule: "Blocked by a global rule",
+    toolDetails: "Details",
+    toolDetailsFor: "Details for {name}",
     detailToolInputs: "Inputs",
     detailType: "Type",
     detailSecurity: "Security audit",

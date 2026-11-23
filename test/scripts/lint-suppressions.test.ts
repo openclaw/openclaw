@@ -276,6 +276,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/transcript-maintenance-measure.worker.ts|typescript/unbound-method|1",
         // The browser probe forwards IndexedDB writes with each store receiver and restores both methods.
         "scripts/perf/ui-streaming-render-measure.ts|typescript/unbound-method|2",
+        // The contention probe forwards the native SQLite receiver and restores both methods.
+        "scripts/perf/update-bookkeeping-contention.ts|typescript/unbound-method|2",
         // The pager probe forwards native prepare with its original receiver and restores it.
         "scripts/perf/usage-refresh-stats-measure.ts|typescript/unbound-method|1",
         // Node worker ports have no browser target origin.

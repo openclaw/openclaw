@@ -184,6 +184,7 @@ export function buildChatItems(
     ? `divider:compaction:live:${compaction.runId}:${compaction.itemId ?? "manual"}`
     : undefined;
   let hasPersistedCompaction = false;
+  let latestResetAt: number | undefined;
   const projectSubmittedModel = createSubmittedModelNoticeProjector();
   for (const [i, item] of historyItems.entries()) {
     const msg = item.message;
@@ -260,6 +261,7 @@ export function buildChatItems(
       continue;
     }
     if (marker && marker.kind === "reset") {
+      latestResetAt = normalized.timestamp ?? latestResetAt;
       if (typeof marker.id !== "string") {
         facts?.indexedDividers.push(msg);
       }
@@ -499,8 +501,9 @@ export function buildChatItems(
     }
     for (const notice of props.guardianNotices ?? []) {
       if (
-        notice.permissionMissing &&
-        recordedPermissions.has(JSON.stringify(notice.permissionMissing))
+        (latestResetAt !== undefined && notice.timestamp < latestResetAt) ||
+        (notice.permissionMissing &&
+          recordedPermissions.has(JSON.stringify(notice.permissionMissing)))
       ) {
         continue;
       }
@@ -573,9 +576,14 @@ export function buildChatItems(
     }
   }
 
-  projections.push(
-    ...projectResolvedQuestionPrompts(props.questionPrompts, resolveProjectionBounds),
-  );
+  // Resolved questions and live notices arrive outside chat.history. Use its reset
+  // marker to keep them scoped to the current transcript, including on recovery.
+  const resetAt = latestResetAt;
+  const questionPrompts =
+    resetAt === undefined
+      ? props.questionPrompts
+      : props.questionPrompts?.filter((prompt) => prompt.createdAtMs >= resetAt);
+  projections.push(...projectResolvedQuestionPrompts(questionPrompts, resolveProjectionBounds));
 
   const visibleText = trimAccumulatedStreamPrefix(
     sanitizeStreamText(props.stream ?? ""),

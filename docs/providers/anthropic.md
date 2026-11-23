@@ -226,10 +226,10 @@ OpenClaw release:
         models available in the picker without a native `claude auth login`;
         switching models preserves the configured Claude CLI runtime.
         Existing sessions keep their account until you select another
-        or remove its saved profile. Native-tool approvals remain under OpenClaw
-        control. Schema-valid native calls pass through OpenClaw's shared
-        tool policy before native approval. Isolated side-question completions
-        and paired-node execution retain the supervised CLI path.
+        or remove its saved profile. Schema-valid native calls pass through
+        OpenClaw's `before_tool_call` policy; OpenClaw's exec approvals do not
+        gate Claude's own tools. Isolated side-question completions and
+        paired-node execution retain the supervised CLI path.
 
         Consecutive agent turns reuse the same warm Claude Code subprocess
         when their authenticated session and execution policy

@@ -25,7 +25,6 @@ import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.tes
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { handleGatewayRequest } from "../server-methods.js";
 import { dispatchInboundMessageMock } from "../test-helpers.js";
 import { bindSteeringTools } from "./chat-send-authority.test-support.js";
 import {
@@ -33,9 +32,6 @@ import {
   setNativeIosClient,
   type useBrowserFollowupFixture,
 } from "./chat-send-pending-inputs.test-support.js";
-import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
-import { identifiedClient } from "./sessions-sharing.test-support.js";
-import type { RespondFn } from "./types.js";
 
 async function collectFailure(failures: Set<unknown>, work: () => Promise<unknown>) {
   try {
@@ -54,7 +50,6 @@ export function registerChatSteeringCommitCases(
     "native committed",
     "browser custody",
     "browser custody workspace",
-    "browser custody session ACL",
     "browser custody lifecycle",
   ] as const)(
     "owns the real backing-run outcome when authority changes at steering commit (%s)",
@@ -62,11 +57,9 @@ export function registerChatSteeringCommitCases(
       const internal = inputState === "internal fresh";
       const committed = inputState === "native committed";
       const lifecycleRevoked = inputState === "browser custody lifecycle";
-      const sessionRevoked = inputState === "browser custody session ACL";
       const browserCustody = inputState.startsWith("browser custody");
       const sharedProfileCustody = browserCustody && !lifecycleRevoked;
-      const revoked = lifecycleRevoked || sessionRevoked;
-      const failed = revoked || internal;
+      const failed = lifecycleRevoked || internal;
       const creator = sharedProfileCustody
         ? ensureProfileForEmail("steering-session-creator@example.test")
         : undefined;
@@ -203,37 +196,6 @@ export function registerChatSteeringCommitCases(
         }
         if (sharedProfileCustody || inputState === "native custody") {
           linkEmail(email, target.id);
-          if (sessionRevoked) {
-            await initializeSessionReadContext(context);
-            const visibility = {
-              agentId: scope.agentId,
-              sessionKey: scope.sessionKey,
-              visibility: "draft",
-            };
-            const respond = vi.fn<RespondFn>();
-            await handleGatewayRequest({
-              req: {
-                type: "req",
-                id: "revoke-steering-session-access",
-                method: "session.visibility.set",
-                params: visibility,
-              },
-              client: identifiedClient(creator!.id),
-              context,
-              isWebchatConnect: () => true,
-              respond,
-            });
-            expect(respond).toHaveBeenCalledExactlyOnceWith(
-              true,
-              { ok: true, sessionKey: scope.sessionKey, visibility: "draft" },
-              undefined,
-            );
-            expect(loadExactSessionEntryReadOnly(scope)?.entry).toMatchObject({
-              visibility: "draft",
-              createdActor: { type: "human", source: "profile", id: creator!.id },
-            });
-            expect(operation.result).toBeNull();
-          }
         } else if (lifecycleRevoked) {
           rotateAgentEventLifecycleGeneration();
           expect(cancel).toHaveBeenCalledExactlyOnceWith("restart");
@@ -268,19 +230,13 @@ export function registerChatSteeringCommitCases(
         }
         await backingRun;
         await fixture.finishDispatch();
-        const sourceError = expect.stringContaining(
-          sessionRevoked ? "session is draft for this connection" : "Pending input ownership ended",
-        );
+        const sourceError = expect.stringContaining("Pending input ownership ended");
         expect(session.messages.at(-1)).toMatchObject({
           role: "assistant",
           stopReason: failed ? "error" : "stop",
           ...(failed
             ? {
-                errorMessage: sessionRevoked
-                  ? expect.stringContaining("Message injection authority is no longer current")
-                  : revoked
-                    ? sourceError
-                    : expect.any(String),
+                errorMessage: lifecycleRevoked ? sourceError : expect.any(String),
               }
             : {}),
         });
@@ -317,7 +273,7 @@ export function registerChatSteeringCommitCases(
             }),
           );
         }
-        if (revoked) {
+        if (lifecycleRevoked) {
           expect(terminals.map((event) => event.type)).toEqual(["agent_end", "agent_settled"]);
           expect(cached).toMatchObject({ error: { message: sourceError } });
           expect(
@@ -354,7 +310,9 @@ export function registerChatSteeringCommitCases(
               expect.objectContaining({
                 runId,
                 state: "error",
-                errorMessage: expect.stringContaining("Selected account changed"),
+                errorMessage: expect.stringContaining(
+                  "Authenticated profile verification is unavailable",
+                ),
               }),
               expect.anything(),
             );

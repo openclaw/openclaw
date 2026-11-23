@@ -4,6 +4,10 @@ import {
   type AttachmentClassification,
 } from "@openclaw/media-core/attachment-classify";
 import { mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
+import {
+  applyAttachmentMarkerBudget,
+  type AttachmentContextBlock,
+} from "../../packages/media-understanding-common/src/format.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
@@ -24,10 +28,6 @@ import {
   type FileExtractionLimits,
   resolveFileExtractionLimits,
 } from "./file-extraction-limits.js";
-import {
-  applyAttachmentMarkerBudget,
-  type AttachmentContextBlock,
-} from "./media-attachment-outcomes.js";
 import {
   createMediaAttachmentCache,
   createScopedMediaAttachmentCache,

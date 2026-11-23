@@ -35,6 +35,7 @@ import {
   isDerivedWorkspacePath,
   isIgnoredWorkspaceBuildOutput,
   buildCacheInputPaths,
+  type LegacyDerivedEligibilitySubset,
 } from "./workspace-path-exclusions.js";
 
 type WorkspaceFileSnapshot =
@@ -206,8 +207,8 @@ type ActualWorkspaceNode = WorkerWorkspaceManifestEntry | { path: string; type: 
 export async function scanActualWorkspaceManifest(
   params: ActualWorkspaceManifestOptions & {
     onEntry: (entry: ActualWorkspaceNode, identity?: string, reusable?: boolean) => void;
-    // Only repair candidates authenticated against a saved root may retain this former input.
-    includeLegacyPnpmStore?: boolean;
+    // Only repair candidates authenticated against a saved root may retain former inputs.
+    legacyDerivedEligibilitySubset?: LegacyDerivedEligibilitySubset;
     unchangedProbe?: boolean;
     btrfsSnapshot?: boolean;
     // The caller proves content reuse through file identity or immutable template custody.
@@ -240,7 +241,7 @@ export async function scanActualWorkspaceManifest(
         relative,
         retainedInput,
         params.buildCacheInputs !== undefined,
-        params.includeLegacyPnpmStore,
+        params.legacyDerivedEligibilitySubset,
       )
     ) {
       return true;

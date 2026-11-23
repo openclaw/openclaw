@@ -16,7 +16,6 @@ import {
   SIDEBAR_SESSION_SORT_OPTIONS,
   SIDEBAR_SESSION_STATUS_OPTIONS,
 } from "./app-sidebar-session-types.ts";
-import { createPersonalSessionGroupActions } from "./personal-session-group-actions.ts";
 import type { PickerFocusHandle } from "./select-picker-types.ts";
 import {
   archiveSessionGroupFromMenu,
@@ -495,24 +494,6 @@ export function renderSidebarSessionSortMenuForMenus(
             )}
           </section>
           <footer class="sidebar-session-menu-footer">
-            <button
-              ref={(element) => controls.set("new-collection", element)}
-              type="button"
-              class="sidebar-session-filter-footer"
-              disabled={!host.connected}
-              onClick={() => {
-                const context = host.sessionDataContext;
-                if (context && host.connected) {
-                  menus.closePositionedMenu("sessionSort");
-                  void createPersonalSessionGroupActions(context).edit();
-                }
-              }}
-            >
-              <span aria-hidden="true">
-                <Icon name="plus" />
-              </span>
-              {t("sessionsView.personalGroupNew")}
-            </button>
             <a
               ref={(element) => controls.set("all-sessions", element)}
               class="sidebar-session-filter-footer"

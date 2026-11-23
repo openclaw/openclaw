@@ -237,7 +237,7 @@ describe("buildAgentSystemPrompt", () => {
     [
       "sanitizes runtime cwd before rendering directory roles",
       { runtimeCwd: "/tmp/repo\n\u2028\u202e-injected" },
-      ["Working directory: /tmp/repo-injected (tools and deliverables)."],
+      ["Working directory: /tmp/repo-injected (tools, deliverables, and relative reply"],
     ],
   ])("%s", expectPromptCase);
   it("does not inspect owner identities when minimal prompts omit owner guidance", () => {

@@ -3,10 +3,12 @@ import os from "node:os";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GatewayConfigSchema } from "../config/zod-schema.gateway.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
+import { getResourceProfile, onResourceProfileChange } from "../plugin-sdk/resource-profile.js";
 import { resetGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
   getGatewayResourceProfile,
   initializeGatewayResourceProfile,
+  predictGatewayResourceProfile,
 } from "./gateway-resource-profile.js";
 
 vi.mock("node:fs", async (importOriginal) => ({
@@ -33,6 +35,34 @@ beforeEach(() => {
 afterEach(async () => {
   vi.restoreAllMocks();
   await resetGlobalSingletonLifecycleState(Symbol.for("openclaw.gatewayResourceProfile"));
+});
+
+it("publishes the owner's profile through the SDK and releases listeners", async () => {
+  expect(getResourceProfile()).toBe("standard");
+  const observed: string[] = [];
+  const stopFailing = onResourceProfileChange(() => {
+    throw new Error("plugin listener failed");
+  });
+  const stop = onResourceProfileChange((profile) => {
+    expect(getResourceProfile()).toBe(profile);
+    observed.push(profile);
+  });
+  expect(observed).toEqual([]);
+  initializeGatewayResourceProfile({ profile: "lean" });
+  initializeGatewayResourceProfile({ profile: "lean" });
+  initializeGatewayResourceProfile({ profile: "standard" });
+  expect(observed).toEqual(["lean", "standard"]);
+  stop();
+  stop();
+  stopFailing();
+  initializeGatewayResourceProfile({ profile: "lean" });
+  expect(observed).toEqual(["lean", "standard"]);
+  const disposed = vi.fn();
+  onResourceProfileChange(disposed);
+  await resetGlobalSingletonLifecycleState(Symbol.for("openclaw.gatewayResourceProfile"));
+  expect(getResourceProfile()).toBe("standard");
+  initializeGatewayResourceProfile({ profile: "lean" });
+  expect(disposed).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -111,6 +141,24 @@ it("explicit profiles win and readers retain the startup decision until restart"
   await resetGlobalSingletonLifecycleState(Symbol.for("openclaw.gatewayResourceProfile"));
   expect(getGatewayResourceProfile()).toBeUndefined();
 });
+
+it.each([
+  [undefined, 1.5 * GiB, "lean"],
+  ["auto", 4 * GiB, "lean"],
+  ["auto", 8 * GiB, "standard"],
+  ["lean", 16 * GiB, "lean"],
+  ["standard", 1.5 * GiB, "standard"],
+] as const)(
+  "predicts %s at %i bytes as startup will resolve it (%s)",
+  (configured, memory, profile) => {
+    files.set("/sys/fs/cgroup/service/gateway/memory.max", String(memory));
+    expect(predictGatewayResourceProfile(configured)).toBe(profile);
+    expect(getGatewayResourceProfile()).toBeUndefined();
+    expect(
+      initializeGatewayResourceProfile(configured ? { profile: configured } : undefined).profile,
+    ).toBe(profile);
+  },
+);
 
 it("uses host RAM off Linux and accepts only the documented config values", () => {
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");

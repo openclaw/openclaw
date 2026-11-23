@@ -29,31 +29,37 @@ export async function resolveSlackCommandMenuModelContext(params: {
     let provider: string | undefined;
     let model: string | undefined;
     if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
-      provider = defaultModel.provider;
-      model = defaultModel.model;
+      provider = defaultModel?.provider;
+      model = defaultModel?.model;
     } else {
       const override = await resolveStoredModelOverrideAsync({
         sessionEntry: entry,
         sessionKey: params.sessionKey,
-        defaultProvider: defaultModel.provider,
+        defaultProvider: defaultModel?.provider,
         loadSessionEntry: (sessionKey) =>
           getSessionEntryAsync({ agentId: params.agentId, storePath, sessionKey }),
       });
       provider = override?.model
-        ? override.provider || defaultModel.provider
+        ? override.provider || defaultModel?.provider
         : (normalizeOptionalString(entry?.providerOverride) ??
           normalizeOptionalString(entry?.modelProvider));
       model = override?.model
         ? override.model
         : (normalizeOptionalString(entry?.modelOverride) ?? normalizeOptionalString(entry?.model));
     }
+    const runtimeProvider = provider ?? defaultModel?.provider;
+    const runtimeModel = model ?? defaultModel?.model;
+    if (!runtimeProvider || !runtimeModel) {
+      // No model selected or configured: the runtime is unknown until one is chosen.
+      return { ...(provider ? { provider } : {}), ...(model ? { model } : {}) };
+    }
     return {
       ...(provider ? { provider } : {}),
       ...(model ? { model } : {}),
       agentRuntime: resolveEffectiveAgentRuntime({
         cfg: params.cfg,
-        provider: provider ?? defaultModel.provider,
-        modelId: model ?? defaultModel.model,
+        provider: runtimeProvider,
+        modelId: runtimeModel,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         sessionEntry: entry,

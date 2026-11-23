@@ -1,3 +1,8 @@
+openclaw-debug-page .code-block {
+  inline-size: 100%;
+  margin-block: 0;
+}
+
 .debug-refresh {
   display: inline-grid;
   grid-template-areas: "label";

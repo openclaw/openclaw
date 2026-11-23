@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
@@ -135,6 +136,7 @@ function holdReplay() {
 }
 
 describe("operator approval session events", () => {
+  beforeEach(() => setRuntimeConfigSnapshot({}));
   afterEach(async () => {
     for (const unsubscribe of subscriptions.splice(0)) {
       unsubscribe();

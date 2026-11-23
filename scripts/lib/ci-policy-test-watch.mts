@@ -261,6 +261,23 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     sourceOnly: true,
   },
   {
+    // Late shutdown imports fail only after an in-place update; the preload sees them first.
+    testFile: "test/scripts/gateway-shutdown-late-imports.built-cli.e2e.test.ts",
+    watchGlobs: [
+      "src/gateway/server{,-close,-close.runtime,-lifecycle,-shutdown,-shutdown.runtime}.ts",
+      "src/cli/gateway-cli/run-loop*.ts",
+      "src/cli/one-shot-exit.ts",
+      "src/infra/sqlite-worker-store.ts",
+      "src/state/openclaw-state.worker.ts",
+      "src/plugins/plugin-source-capture-directory.ts",
+      "src/process/supervisor/{supervisor,released-processes}.ts",
+      "extensions/memory-core/{index,src/memory/manager-runtime-loader,src/memory/search-manager}.ts",
+      "src/cron/store/dispatch.worker.ts",
+      "test/helpers/gateway-late-import-probe.mjs",
+    ],
+    sourceOnly: true,
+  },
+  {
     testFile: "src/agents/agent-bundle-mcp-reload.test.ts",
     watchGlobs: ["src/agents/agent-bundle-mcp-manager.ts"],
   },

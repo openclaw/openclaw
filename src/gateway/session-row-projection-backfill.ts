@@ -19,7 +19,7 @@ function transcriptParams(row: Row, entry: EntryRow["entry"]) {
     sessionKey: row.key,
     sessionId: entry.sessionId,
     sessionEntry: entry,
-    model: row.materialized && {
+    model: row.materialized?.source.selectedModel && {
       selectedProvider: row.materialized.source.selectedModel.provider,
       selectedModel: row.materialized.source.selectedModel.model,
       config: row.materialized.source.cfg,

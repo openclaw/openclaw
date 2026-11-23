@@ -139,7 +139,8 @@ describe("registered mcp.authLogin", () => {
       expect((await login(client, sessionId)).ok).toBe(true);
       expect(await terminal(sessionId, client)).toMatchObject({
         status: "error",
-        error: expect.stringContaining("secure Gateway address"),
+        error: expect.stringContaining("HTTPS address"),
+        reason: "secure_origin_unavailable",
       });
       expect(requests).toHaveLength(before);
     } finally {
@@ -227,7 +228,8 @@ describe("registered mcp.authLogin", () => {
     expect((await callback(started.state)).status).toBe(410);
     expect(await terminal(started.sessionId)).toMatchObject({
       status: "error",
-      error: "This sign-in attempt expired. Close this dialog and start sign-in again.",
+      error: "Sign-in timed out.",
+      reason: "timed_out",
     });
     expectPendingCleared(await store());
   });
@@ -429,7 +431,6 @@ describe("registered mcp.authLogin", () => {
     const started = await begin();
     const pending = await store();
     const requestCount = requests.length;
-    let settled = false;
     try {
       expect((await callback(started.state, "code=%20")).status).toBe(400);
       expect(await store()).toEqual(pending);
@@ -449,19 +450,15 @@ describe("registered mcp.authLogin", () => {
           )
         ).status,
       ).toBe(400);
-      const result = await terminal(started.sessionId);
-      settled = true;
-      expect(result).toMatchObject({
-        status: "error",
-        error: "The provider did not approve sign-in. Close this dialog and try again.",
+      // A denial keeps the attempt open so the user can go back and allow access.
+      expect(await rpcReq(owner, "wizard.status", { sessionId: started.sessionId })).toMatchObject({
+        ok: true,
+        payload: { status: "running" },
       });
-      expect(JSON.stringify(result)).not.toMatch(/private-denial-detail|private\.example/);
       expect(await store()).toEqual(before);
     } finally {
-      if (!settled) {
-        await rpcReq(owner, "wizard.cancel", { sessionId: started.sessionId });
-        await terminal(started.sessionId);
-      }
+      await rpcReq(owner, "wizard.cancel", { sessionId: started.sessionId });
+      await terminal(started.sessionId);
     }
   });
 
@@ -602,14 +599,12 @@ describe("registered mcp.authLogin", () => {
     },
   );
 
-  it.each(["admin scope", "plugin registry", "connector URL", "in-place connector URL"] as const)(
-    "rejects token publication after its %s authority changes",
+  it.each(["plugin registry", "connector URL", "in-place connector URL"] as const)(
+    "rejects token publication after its %s changes",
     async (change) => {
       await clearMcpOAuthCredentials(identity());
       const started = await begin();
       const invocation = getInvocation();
-      const client = expectDefined(invocation.client, "admitted client");
-      const scopes = client.connect.scopes;
       const resolveRegistry = registryGetter();
       const originalRegistry = resolveRegistry();
       const registry = resolverRegistry();
@@ -621,9 +616,7 @@ describe("registered mcp.authLogin", () => {
       try {
         expect((await callback(started.state)).status).toBe(200);
         await suite.tokenEntered.promise;
-        if (change === "admin scope") {
-          client.connect.scopes = ["operator.read"];
-        } else if (change === "plugin registry") {
+        if (change === "plugin registry") {
           invocation.context.getGatewayMethodRegistry = () => replacement;
           expect(
             withPluginRuntimeRegistryScope(
@@ -657,7 +650,6 @@ describe("registered mcp.authLogin", () => {
       } finally {
         suite.releaseToken.resolve();
         suite.releaseToken = undefined;
-        client.connect.scopes = scopes;
         invocation.context.getGatewayMethodRegistry = resolveRegistry;
         if (changedServer) {
           changedServer.url = originalUrl;

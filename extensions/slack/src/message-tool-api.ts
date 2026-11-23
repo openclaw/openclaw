@@ -132,6 +132,7 @@ export function describeSlackMessageTool({
   if (readAsActions.length > 0) {
     schema.push({
       actions: readAsActions,
+      visibility: "all-configured",
       properties: {
         readAs: Type.Optional(
           stringEnum(["bot", "user"] as const, {

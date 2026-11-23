@@ -5,6 +5,7 @@ import { createQueuedDiagnosticPhaseEmitter } from "../../infra/diagnostic-event
 import { recordDiagnosticsTimelineDuration } from "../../infra/diagnostics-timeline.js";
 import type { ProvisionCopyDetails } from "../../infra/fs-safe-copy-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { SpawnResult } from "../../process/exec-result.js";
 import type { LocalWorkspacePausePhase } from "../sandbox/types.js";
 
 type PreparationPhase =
@@ -74,6 +75,24 @@ type TemplateDetails = {
     | "invalid";
   priorSourceCommit?: string;
   requestedSourceCommit?: string;
+  refreshRejectReason?:
+    | "template-missing"
+    | "validation-failed"
+    | "attributes-changed"
+    | "checkout-policy-mismatch"
+    | "diff-probe-failed";
+  validationFailure?:
+    | "checkout-policy"
+    | "status-probe"
+    | "status-malformed"
+    | "dirty"
+    | "head-mismatch";
+  refreshErrorClass?:
+    | "exit-nonzero"
+    | "timeout"
+    | "no-output-timeout"
+    | "signal"
+    | "output-truncated";
   backend?: string;
   cloneBytes?: number;
   nativeCloneCount?: number;
@@ -124,6 +143,23 @@ export function recordWorktreePreparationFailure(phase: PreparationPhase, error:
   ) {
     current.failure = { error, phase };
   }
+}
+
+/** Record only the completed probe's bounded outcome, never its repository output. */
+export function recordWorktreeTemplateProbeFailure(
+  reason: "validation-failed" | "diff-probe-failed",
+  result: Pick<SpawnResult, "termination" | "code" | "stdoutTruncatedBytes">,
+) {
+  setWorktreePreparationTemplate(undefined, {
+    refreshRejectReason: reason,
+    validationFailure: reason === "validation-failed" ? "status-probe" : undefined,
+    refreshErrorClass:
+      result.termination !== "exit"
+        ? result.termination
+        : result.code !== 0
+          ? "exit-nonzero"
+          : "output-truncated",
+  });
 }
 
 export function setWorktreePreparationCopyDetails(details: ProvisionCopyDetails) {

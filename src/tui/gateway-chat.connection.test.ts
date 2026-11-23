@@ -188,6 +188,27 @@ it("connects an edgeAuth remote without shared or paired credentials so it can p
   await expectConnection({ url }, expected);
 });
 
+const defaultTuiScopes = [
+  "operator.admin",
+  "operator.read",
+  "operator.write",
+  "operator.approvals",
+];
+it.each([
+  [["operator.sessions.write"], {}, ["operator.sessions.write"]],
+  [["operator.read"], {}, defaultTuiScopes],
+  [["operator.pairing"], {}, defaultTuiScopes],
+  [["operator.sessions.write"], { token: "explicit-token" }, defaultTuiScopes],
+])("requests scopes a stored %j origin grant covers (%j)", async (grantedScopes, auth, scopes) => {
+  setGateway(remote("wss://remote.example/rpc"));
+  loadDeviceIdentityIfPresentMock.mockReturnValue({ deviceId: "device-1" });
+  loadOriginDeviceTokenMock.mockReturnValue({
+    token: "stored-origin-token",
+    scopes: grantedScopes,
+  });
+  await expectConnection(auth, { url: "wss://remote.example/rpc", scopes });
+});
+
 it("points to local chat instead of a token when no local Gateway is running", async () => {
   loadConfig.mockReturnValue({});
   await expect(connect({})).rejects.toThrow(

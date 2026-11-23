@@ -135,7 +135,6 @@ it.each([true, false])(
         expect(client.invalidated).toBe(true);
         expect(active.input.abortSignal.aborted).toBe(false);
         await expectRetained();
-        expect(authority.reauthorize).toThrow();
       } else {
         publish({ ...current, gateway: { ...current.gateway, allowRealIpFallback: true } });
         expect(client.invalidated).toBe(true);

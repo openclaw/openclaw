@@ -11,14 +11,13 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { formatChildRuntimeSpawnWarning } from "../../infra/child-runtime-viability.js";
 import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { watchHostExecMemory } from "../child-memory.js";
-import { applyAgentExecMemoryBudget, releaseAgentExecCgroupScope } from "../linux-exec-cgroup.js";
+import * as execCgroup from "../linux-exec-cgroup.js";
 import { setProcessTimeout } from "../process-deadline.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS, isTimeoutReason } from "./cancellation-policy.js";
-import { stopReleasedProcesses } from "./released-processes.js";
+import { loadSupervisorLogRuntime, stopReleasedProcesses } from "./released-processes.js";
 import {
   appendSupervisorCapturedOutput,
   DEFAULT_MAX_CAPTURED_OUTPUT_CHARS,
@@ -43,10 +42,6 @@ import type {
   StartingScope,
   TerminationReason,
 } from "./types.js";
-
-const loadSupervisorLogRuntime = createLazyRuntimeModule(
-  () => import("./supervisor-log.runtime.js"),
-);
 
 export function createProcessSupervisor(): ProcessSupervisor & {
   shutdown: () => Promise<void>;
@@ -152,8 +147,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
 
   const startRun = async (input: SpawnInput, owner: OwnedRun): Promise<ManagedRun> => {
     const external = input.cleanupOwnership === "external";
-    const hostExec =
-      process.platform === "linux" && input.executionIntent === "agent-tool" && !external;
+    const hostExec = execCgroup.usesAgentExecHostMemoryBudget(input);
     const treeCleanupOwners = owner.cleanupOwners.filter((scope) =>
       requiresProcessTree(scope, external),
     );
@@ -232,7 +226,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       await input.prepareSpawn();
     }
     if (hostExec && !owner.terminationReason) {
-      await applyAgentExecMemoryBudget();
+      await execCgroup.applyAgentExecMemoryBudget();
     }
     if (owner.terminationReason) {
       return settleConstructionResult(owner.terminationReason);
@@ -438,7 +432,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         })
         .then((outcome) => {
           if (hostExec) {
-            void releaseAgentExecCgroupScope(input.executionScopeKey ?? scopeKey);
+            void execCgroup.releaseAgentExecCgroupScope(input.executionScopeKey ?? scopeKey);
           }
           return outcome;
         });

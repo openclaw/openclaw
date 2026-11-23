@@ -234,8 +234,9 @@ describe("device pairing setup state", () => {
     closeDevicePairSetup(state);
   });
 
-  it("keeps the selected access when setup creation fails", async () => {
-    const request = vi.fn().mockRejectedValue(new Error("setup unavailable"));
+  it("keeps the selected access and the failure when setup creation fails", async () => {
+    const failure = new Error("setup unavailable");
+    const request = vi.fn().mockRejectedValue(failure);
     const state = stateWithClient({ request } as unknown as DevicePairSetupState["client"]);
 
     await refreshDevicePairSetup(state);
@@ -244,7 +245,7 @@ describe("device pairing setup state", () => {
       phase: "error",
       source: "create",
       access: "full",
-      message: "setup unavailable",
+      error: failure,
     });
     expect(state.devicePairSetupExpiryTimer).toBeNull();
   });
@@ -264,7 +265,7 @@ describe("device pairing setup state", () => {
       phase: "error",
       source: "create",
       access: "full",
-      message: "Couldn’t track this connection. Update the Gateway and try again.",
+      error: new Error("Couldn’t track this connection. Update the Gateway and try again."),
     });
     expect(state.devicePairSetupExpiryTimer).toBeNull();
   });

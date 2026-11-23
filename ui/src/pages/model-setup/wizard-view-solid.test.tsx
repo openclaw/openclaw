@@ -238,3 +238,76 @@ it("shows device-code expiry only near the end and retires an expired code", asy
   );
   expect(container.querySelector(".wizard-sign-in__ring")).toBeNull();
 });
+
+it.each([
+  ["device_code_expired", "Start sign-in again", "retry"],
+  ["consent_denied", "Retry this step", "retry"],
+  ["callback_port_busy", "Open settings", "settings"],
+  ["rate_limited", undefined, "Wait a few minutes, then start sign-in again."],
+  ["admin_blocked", undefined, "Ask your administrator to allow this sign-in."],
+] as const)("offers the one recovery core owns for %s", async (reason, button, outcome) => {
+  const recovery = { onRetry: vi.fn(), onOpenSettings: vi.fn() };
+  const { container } = mountSolid(() => (
+    <ModelSetupWizard
+      {...wizardDefaults}
+      state={{ phase: "error", message: "The provider said no.", reason }}
+      busy={false}
+      value={undefined}
+      recovery={recovery}
+    />
+  ));
+  flush();
+  await container.querySelector("openclaw-modal-dialog")!.updateComplete;
+  const actions = [...container.querySelectorAll(".model-setup-wizard__footer button")];
+  if (!button) {
+    expect(actions).toHaveLength(0);
+    expect(container.textContent).toContain(outcome);
+    return;
+  }
+  expect(actions.map((action) => action.textContent?.trim())).toEqual(["Close", button]);
+  (actions[1] as HTMLButtonElement).click();
+  expect(
+    outcome === "settings" ? recovery.onOpenSettings : recovery.onRetry,
+  ).toHaveBeenCalledOnce();
+  // The failure shows only its own sentence: no CLI command and no earlier notes.
+  expect(container.textContent).not.toMatch(/openclaw models auth login/);
+});
+
+it.each([
+  ["waiting browser sign-in", "progress", false],
+  ["pasted-address sign-in", "text", true],
+] as const)("shows why an open %s has not finished", async (_name, type, externalAuthInput) => {
+  const message = "Sign-in was not allowed. Go back to the sign-in page and allow access.";
+  const { container } = mountSolid(() => (
+    <ModelSetupWizard
+      {...wizardDefaults}
+      state={{
+        ...stepState({
+          id: "sign-in",
+          type,
+          executor: type === "progress" ? "gateway" : "client",
+          externalUrl: "https://provider.example/sign-in",
+          progressMessage: message,
+          reason: "consent_denied",
+        }),
+        externalAuthInput,
+      }}
+      busy={false}
+      value={undefined}
+    />
+  ));
+  flush();
+  await container.querySelector("openclaw-modal-dialog")!.updateComplete;
+  const alert = container.querySelector("[role=alert]");
+  expect(alert?.textContent).toBe(message);
+  // The waiting dialog keeps its way back to the provider; the paste field shows it beneath.
+  expect(container.querySelector(".wizard-sign-in, .wizard-sign-in--paste")?.contains(alert!)).toBe(
+    !externalAuthInput,
+  );
+  if (externalAuthInput) {
+    const input = container.querySelector("#model-setup-wizard-text-input")!;
+    expect(input.compareDocumentPosition(alert!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  } else {
+    expect(container.querySelector(".wizard-step__external-link.primary")).not.toBeNull();
+  }
+});

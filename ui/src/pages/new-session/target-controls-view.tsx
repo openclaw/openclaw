@@ -125,7 +125,6 @@ export function NewSessionPlaceControls(props: {
   let terminal: HTMLElement | undefined;
   let where: PopoverHandle | undefined;
   let workspace: HTMLDivElement | undefined;
-  let deviceFolder: HTMLLabelElement | undefined;
   onSettled(() => {
     props.ref?.(() =>
       [
@@ -134,12 +133,10 @@ export function NewSessionPlaceControls(props: {
         where?.overlay.trigger?.parentElement ?? undefined,
         where?.overlay.surface,
         workspace,
-        deviceFolder,
       ].filter((element): element is HTMLElement => element?.isConnected === true),
     );
   });
   const folderValue = liveValue(() => props.params.place.folder);
-  const deviceFolderValue = liveValue(() => props.params.place.deviceFolder?.path ?? "");
   const view = createMemo(() => {
     const { context, data, gateway, place } = props.params;
     const browser = place.browser;
@@ -262,29 +259,6 @@ export function NewSessionPlaceControls(props: {
               )
             ) : undefined}
           </div>
-          {props.params.place.deviceFolder ? (
-            <label
-              class="new-session-page__select new-session-page__menu-field new-session-page__device-folder"
-              ref={(element) => {
-                deviceFolder = element;
-              }}
-            >
-              <span>{t("newSession.deviceFolderPath")}</span>
-              <input
-                aria-label={t("newSession.deviceFolderPath")}
-                placeholder={t("newSession.deviceFolderPathPlaceholder")}
-                ref={deviceFolderValue}
-                disabled={props.params.submitting || props.params.pendingPlacement}
-                onInput={(event) =>
-                  props.params.place.setDeviceFolderPath(event.currentTarget.value)
-                }
-              />
-              <span class="muted">
-                {props.params.place.deviceFolderRuntimeUnsupportedReason ??
-                  t("newSession.deviceFolderDescription")}
-              </span>
-            </label>
-          ) : undefined}
         </>
       )}{" "}
     </>

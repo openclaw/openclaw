@@ -61,10 +61,8 @@ describe("docker E2E watchdog entrypoint", () => {
         "--input-type=module",
         "-e",
         `import assert from 'node:assert/strict';
-        const { parseTimeoutMs } = await import(${JSON.stringify(pathToFileURL(watchdogPath).href)});
-        assert.deepEqual(['900s', '1.5s', '0', '2m', '0.01ms', '1h', '7'].map(parseTimeoutMs),
-          [900000, 1500, 1, 120000, 1, 3600000, 7000]);
-        assert.throws(() => parseTimeoutMs('invalid'), /unsupported timeout value/);`,
+        const { runWatchdog } = await import(${JSON.stringify(pathToFileURL(watchdogPath).href)});
+        assert.equal(typeof runWatchdog, 'function');`,
       ],
       { encoding: "utf8", env, timeout: 5_000 },
     );

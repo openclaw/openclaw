@@ -140,6 +140,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
             : undefined;
       const failure = classifyAnnounceDeliveryError(directAnnounceResult?.meta?.error, {
         interruption,
+        restartInterrupted: terminal?.stopReason === "restart",
         replaySafe: directAnnounceRecord?.replaySafe === true && !automaticEvidence.mayHaveSent,
       });
       if (failure.reason) {

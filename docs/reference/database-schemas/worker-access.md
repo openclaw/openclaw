@@ -300,7 +300,7 @@ before caller SQL. A lost active transaction or uncertain statement outcome stil
 fails; reconnect never replays caller SQL or claims an uncertain commit rolled back.
 
 If PostgreSQL schema publication invalidates admission, connection opening,
-shared-state reads before their callback, and standalone feature-schema ensures
+shared-state reads and writes before their callback, and standalone feature-schema ensures
 share a brief backoff retry for at most one second, bounded by the caller's
 deadline and cancellation. Transaction retries require a completed rollback;
 feature-schema ensures only replay their own schema work. Each retry asks the
@@ -311,6 +311,11 @@ the retry deadline. Cancellation and earlier transport failures remain distinct.
 Readers never replay caller work or refresh an imported
 snapshot, and fragment checks inside a caller's transaction do not retry.
 Schema validation and live ownership checks remain in force.
+First-use fragment creation checks the committed catalog under the writer lock
+when admitted facts say the fragment is absent. A peer-created fragment must
+pass schema-seal validation before adoption. During migrations or publication
+gaps, schema helpers inspect the transaction's catalog instead of treating
+unavailable facts as an absent table, column, or primary key.
 
 Startup client credential preparation uses the existing credential worker and
 its native custody admission. The admission's receipt postimage also decides

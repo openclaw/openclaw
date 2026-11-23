@@ -714,7 +714,8 @@ is unchanged; Stop, cancellation, archive, and reset keep their normal meanings.
 Graceful shutdown marks the root requester of a running child, then cancels the
 child through the ordinary abort path. The child settles terminally without a
 shutdown completion announcement or a "subagent failed" notice to its parent.
-Children are not adopted or independently resumed at startup.
+Children are not adopted or independently resumed at startup. If a graceful
+restart interrupts a user’s request, the Gateway resumes it automatically.
 
 Collector children retain their captured results. If shutdown recorded a terminal
 child before its collector result finished publishing, startup completes that

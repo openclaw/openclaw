@@ -97,12 +97,12 @@ function resolveReadOnlyWorkspaceSkillMountCandidates(params: WorkspaceSkillMoun
   return mounts;
 }
 
-/** Materialize protected sources and report whether preparation created a directory. */
+/** Materialize protected sources and return the directories created by this producer. */
 export async function ensureReadOnlyWorkspaceSkillMountSources(
   params: WorkspaceSkillMountParams,
   assertCurrent?: () => void,
-): Promise<boolean> {
-  let created = false;
+): Promise<string[]> {
+  const created: string[] = [];
   for (const mount of resolveReadOnlyWorkspaceSkillMountCandidates(params)) {
     const canonicalRoot = resolveSandboxHostPathViaExistingAncestor(path.resolve(mount.rootDir));
     const canonicalSource = resolveSandboxHostPathViaExistingAncestor(path.resolve(mount.hostPath));
@@ -144,7 +144,13 @@ export async function ensureReadOnlyWorkspaceSkillMountSources(
     });
     await directory.mkdir(path.relative(ancestor, canonicalSource));
     assertCurrent?.();
-    created = true;
+    for (
+      let createdDirectory = canonicalSource;
+      createdDirectory !== ancestor;
+      createdDirectory = path.dirname(createdDirectory)
+    ) {
+      created.push(createdDirectory);
+    }
   }
   return created;
 }

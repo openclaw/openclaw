@@ -440,6 +440,17 @@ describe("scheduled account discovery", () => {
       });
 
       expect(scoped.actions).toContain("read");
+      expect(
+        Value.Check(scoped.schema, {
+          action: "read",
+          channel: "slack",
+          target: "channel:C123",
+          readAs: "bot",
+        }),
+      ).toBe(true);
+      if (currentChannelProvider === "telegram") {
+        expect(scoped.actions).not.toContain("channel-list");
+      }
       expect(baseline.actions).not.toContain("read");
       expect(scoped.actions).toContain("poll");
       expect(baseline.properties).toHaveProperty("foreignHint");

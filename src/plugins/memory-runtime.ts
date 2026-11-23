@@ -375,6 +375,7 @@ export async function getActiveMemoryProviderCore(
       params.context,
       (owner.providerRuntime ?? owner.runtime)!,
       phases,
+      { readOnly: params.purpose === "status" },
     );
   } catch (error) {
     await backendAccess?.end();

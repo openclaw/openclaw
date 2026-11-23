@@ -282,6 +282,55 @@ it("does not apply one profile rejection to a different selected profile", () =>
   });
 });
 
+it("keeps a routed model's reset time off sibling ClawRouter models", async () => {
+  const limited = "anthropic/limited";
+  const sibling = "openai/healthy";
+  const catalog = [limited, sibling].map((id) => ({ id, name: id, provider: "clawrouter" }));
+  const now = Date.now();
+  const until = now + 15 * 60 * 60_000;
+  const keyUntil = now + 60_000;
+  for (const disabledUntil of [keyUntil, now - 1]) {
+    const context = createModelsListTestContext({
+      catalog,
+      metadataSnapshot,
+      preparedAuthStore: {
+        version: 1,
+        profiles: { shared: { provider: "clawrouter", type: "api_key", key: "fixture" } },
+        usageStats: {
+          shared: {
+            cooldownReason: "rate_limit",
+            cooldownModel: limited,
+            cooldownUntil: until,
+            disabledReason: "billing",
+            disabledUntil,
+          },
+        },
+      },
+    });
+    const respond = await requestModelsList(context, { view: "all" });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        models: expect.arrayContaining([
+          expect.objectContaining({
+            id: limited,
+            available: false,
+            unavailableReason: "cooldown",
+            unavailableUntil: until,
+          }),
+          expect.objectContaining({
+            id: sibling,
+            ...(disabledUntil === keyUntil
+              ? { available: false, unavailableReason: "cooldown", unavailableUntil: keyUntil }
+              : { available: true }),
+          }),
+        ]),
+      }),
+      undefined,
+    );
+  }
+});
+
 it.each([false, true])("projects cooldown only when unavailable (%s)", async (available) => {
   const cooldown = {
     unavailableReason: "cooldown" as const,

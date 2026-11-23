@@ -556,6 +556,47 @@ describe("prepareEmbeddedRunTerminal", () => {
         }
       },
     );
+    it.each([true, false])(
+      "treats a yield-armed background exec wake as its continuation (%s)",
+      async (yieldExecWakeArmed) => {
+        const assistant = {
+          ...assistantMessage("aborted"),
+          content: [
+            { type: "toolCall" as const, id: "yield-call", name: "sessions_yield", arguments: {} },
+          ],
+        };
+        // A background exec that only reported "running" is not a wake source by itself.
+        const attempt = attemptResult({
+          terminal: { kind: "aborted", source: "yield_cleanup" },
+          assistantTexts: [],
+          lastAssistant: assistant,
+          currentAttemptAssistant: undefined,
+          currentAttemptCompletedAssistant: assistant,
+          yieldDetected: true,
+          yieldExecWakeArmed,
+          runtimeContinuationStarted: false,
+          toolMetas: [{ toolName: "exec" }, { toolName: "process" }],
+        });
+        const terminal = makeTerminalInput({
+          attempt,
+          runParams: { authProfileStateMode: "read-only" },
+        });
+        const prepared = await prepareAttempt({
+          runParams: terminal.runParams,
+          attempt,
+          model: "mock-1",
+          activeErrorContext: { provider: "openai", model: "mock-1" },
+          terminalState: terminal.terminalState,
+        });
+        expect(hasRunContinuationEvidence(attempt)).toBe(yieldExecWakeArmed);
+        const result = await resolveEmbeddedRunTerminal({ ...terminal, prepared });
+        expectComplete(result);
+        expect(result.result.meta).toMatchObject({ yielded: true });
+        expect(result.result.payloads ?? []).toEqual(
+          yieldExecWakeArmed ? [] : [{ text: YIELD_DIAGNOSTIC_TEXT }],
+        );
+      },
+    );
     it.each([
       {
         errorCode: "SYSTEM_RUN_DENIED",

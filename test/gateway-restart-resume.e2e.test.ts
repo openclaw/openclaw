@@ -689,6 +689,22 @@ it.skipIf(process.platform === "win32")(
       config: {
         ...restartResumeConfig(model),
         gateway: {
+          // A role assignment narrows recovery only when named-role enforcement is enabled.
+          roles: {
+            default: "operator",
+            definitions: {
+              operator: {
+                scopes: ["operator.admin"],
+                agents: "*",
+                sessions: { others: "write" },
+              },
+              reader: {
+                scopes: ["operator.read"],
+                agents: "*",
+                sessions: { others: "view" },
+              },
+            },
+          },
           mode: "local",
           bind: "loopback",
           trustedProxies: ["127.0.0.1", "::1"],
@@ -797,7 +813,9 @@ it.skipIf(process.platform === "win32")(
           [1],
         );
         expect(instance.logs()).toContain(key(0, "stream"));
-        expect(instance.logs()).toContain("Restart recovery operator identity changed");
+        expect(instance.logs()).toContain(
+          "Your operator role no longer allows sending messages; ask an administrator to restore access.",
+        );
         assert(deniedRunId);
         expect(instance.logs()).toContain(deniedRunId);
         expect(instance.logs()).toContain('"admissionStage":"principal"');

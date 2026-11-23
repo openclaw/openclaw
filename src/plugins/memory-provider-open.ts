@@ -26,7 +26,8 @@ function isValidMemoryProviderCapabilities(
     typeof capabilities.pagination === "boolean" &&
     Array.isArray(capabilities.candidates) &&
     capabilities.candidates.every((kind) => kind === "trigger" || kind === "project") &&
-    typeof capabilities.projectFilter === "boolean"
+    typeof capabilities.projectFilter === "boolean" &&
+    (capabilities.store === undefined || typeof capabilities.store === "boolean")
   );
 }
 
@@ -46,6 +47,7 @@ export async function settleMemoryProviderOpen(
   callerContext: MemoryCallerContext,
   runtimeOwner: object,
   phases?: { mark(phase: string): void },
+  options?: { readOnly?: boolean },
 ): Promise<MemoryProviderOpenResult> {
   try {
     phases?.mark("memory.provider-open.revalidate");
@@ -58,10 +60,12 @@ export async function settleMemoryProviderOpen(
         typeof result.provider.close !== "function" ||
         !isValidMemoryProviderCapabilities(result.provider.capabilities) ||
         result.provider.capabilities.candidates.length > 0 !==
-          (typeof result.provider.candidates === "function"))
+          (typeof result.provider.candidates === "function") ||
+        (result.provider.capabilities.store === true) !==
+          (typeof result.provider.store === "function"))
     ) {
       throw new Error(
-        "memory provider must implement search, get, health, close, and valid capabilities with matching candidates",
+        "memory provider must implement search, get, health, close, and valid capabilities with matching candidates and store",
       );
     }
   } catch (error) {
@@ -75,7 +79,7 @@ export async function settleMemoryProviderOpen(
   return {
     ...result,
     provider: result.provider
-      ? bindMemoryProvider(result.provider, providerId, callerContext, runtimeOwner)
+      ? bindMemoryProvider(result.provider, providerId, callerContext, runtimeOwner, options)
       : null,
   };
 }
@@ -136,7 +140,9 @@ export function createMemoryBackendAccess(
         backendId,
         context,
         callerContext,
-        backend.providerRuntime,
+        backend.instanceOwner ?? backend.providerRuntime,
+        undefined,
+        { readOnly: purpose === "status" },
       );
       if (result.provider) {
         if (!open) {
@@ -145,7 +151,7 @@ export function createMemoryBackendAccess(
         }
         leases.add(result.provider);
       }
-      return { ...result, providerId: backendId, adapter: "native" };
+      return { ...result, providerId: backendId, adapter: backend.adapter ?? "native" };
     },
   };
   const end = async () => {

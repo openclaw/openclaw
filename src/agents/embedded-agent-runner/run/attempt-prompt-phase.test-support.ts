@@ -229,6 +229,7 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
     },
     diagnostics: { diagnosticTrace: {}, runTrace: {} },
     prepared: {
+      bundleTools: {},
       sessionRuntime: {
         agentSession: {
           activeSession,

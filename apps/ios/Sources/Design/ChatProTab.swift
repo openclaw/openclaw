@@ -299,9 +299,7 @@ struct ChatProTab: View {
     }
 
     private var gatewayStatusIsHealthy: Bool {
-        Self.gatewayStatusTone(
-            state: self.gatewayDisplayState,
-            isGatewayUsable: self.gatewayConnected) == .success
+        Self.gatewayStatusTone(state: self.gatewayDisplayState) == .success
     }
 
     private var headerAgentAccessibilityLabel: String {
@@ -321,7 +319,7 @@ struct ChatProTab: View {
     }
 
     private var expandedGatewayStatusLabel: some View {
-        Text(Self.gatewayStatusTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected))
+        Text(Self.gatewayStatusTitle(state: self.gatewayDisplayState))
             .font(OpenClawType.subheadMedium)
             .foregroundStyle(.primary)
             .lineLimit(1)
@@ -338,7 +336,6 @@ struct ChatProTab: View {
     private var showsExpandedGatewayStatus: Bool {
         Self.gatewayStatusShouldExpand(
             state: self.gatewayDisplayState,
-            isGatewayUsable: self.gatewayConnected,
             isManuallyExpanded: self.isGatewayStatusManuallyExpanded)
     }
 
@@ -603,14 +600,11 @@ struct ChatProTab: View {
     }
 
     private var gatewayAccessibilityLabel: String {
-        "Gateway: \(Self.gatewayStatusTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected))"
+        "Gateway: \(Self.gatewayStatusTitle(state: self.gatewayDisplayState))"
     }
 
     private var gatewayStatusColor: Color {
-        switch Self.gatewayStatusTone(
-            state: self.gatewayDisplayState,
-            isGatewayUsable: self.gatewayConnected)
-        {
+        switch Self.gatewayStatusTone(state: self.gatewayDisplayState) {
         case .success:
             OpenClawBrand.statusSuccess
         case .warning:
@@ -620,13 +614,10 @@ struct ChatProTab: View {
         }
     }
 
-    nonisolated static func gatewayStatusTone(
-        state: GatewayDisplayState,
-        isGatewayUsable: Bool) -> GatewayStatusTone
-    {
+    nonisolated static func gatewayStatusTone(state: GatewayDisplayState) -> GatewayStatusTone {
         switch state {
         case .connected:
-            isGatewayUsable ? .success : .warning
+            .success
         case .connecting, .error:
             .warning
         case .disconnected:
@@ -636,18 +627,15 @@ struct ChatProTab: View {
 
     nonisolated static func gatewayStatusShouldExpand(
         state: GatewayDisplayState,
-        isGatewayUsable: Bool,
         isManuallyExpanded: Bool) -> Bool
     {
-        isManuallyExpanded || self.gatewayStatusTone(
-            state: state,
-            isGatewayUsable: isGatewayUsable) != .success
+        isManuallyExpanded || self.gatewayStatusTone(state: state) != .success
     }
 
-    nonisolated static func gatewayStatusTitle(state: GatewayDisplayState, isGatewayUsable: Bool) -> String {
+    nonisolated static func gatewayStatusTitle(state: GatewayDisplayState) -> String {
         switch state {
         case .connected:
-            isGatewayUsable ? "Connected" : "Unavailable"
+            "Connected"
         case .connecting:
             "Connecting"
         case .error:
@@ -704,7 +692,7 @@ struct ChatProTab: View {
 
     private var activeAgentModelReference: String? {
         guard let activeAgent else { return nil }
-        let modelID = RootSidebar.agentModelLabel(activeAgent)
+        let modelID = AgentIdentityPresentation.modelLabel(for: activeAgent)
         let providerID = activeAgent.model?["provider"]?.value as? String
         return ChatModelMenuPresentation.qualifiedModelReference(modelID: modelID, providerID: providerID)
     }

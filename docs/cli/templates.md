@@ -22,9 +22,12 @@ export commands. To use a newer release, Add it as another agent. Agents enrolle
 by the earlier installed-Template lifecycle can be
 [released to ordinary agents](#agents-from-the-earlier-lifecycle).
 
-Enable **Templates** in **Settings → Labs** before adding one. On a headless installation, set
-`gateway.controlUi.experimental.templates` to `true` in OpenClaw config.
-Authoring and inspecting local Template packages do not require the Labs toggle.
+Templates are available by default, with no Labs or replacement settings switch.
+Open **Customize → Templates** to browse and review them. The historical
+`gateway.controlUi.experimental.templates` setting remains an advanced opt-out:
+an explicit `false` stays off on upgrade; unset or `true` permits discovery and Add.
+Set it to `true` or remove an existing `false` to enable Templates again.
+Authoring and inspecting local Template packages are independent of this setting.
 
 `templates add` accepts a ClawHub Template reference (`@publisher/slug`), a canonical
 local package directory, or `CLAW.md` with YAML frontmatter. The reference uses the
@@ -38,8 +41,8 @@ path whose filename is `CLAW.md`, such as `CLAW.md` or `nested/CLAW.md`. Local
 If inspection reports an encoding error, re-encode the source file as UTF-8 and retry;
 Add refuses it before creating an agent or workspace.
 Publishing and searching Templates through ClawHub use the separate registry
-surface. The Control UI can browse official and community Templates from **Pages → Templates** at `/templates`
-when **Templates** is enabled in **Settings → Labs**.
+surface. The Control UI can browse official and community Templates from **Customize → Templates** at `/templates`
+without a Labs opt-in.
 
 ## Add an unpublished local project to a running Gateway
 
@@ -70,7 +73,7 @@ apply. Paths refer to directories on the Gateway host, not the caller's machine.
 
 ## Import a Template archive in the Control UI
 
-With Templates enabled, open **Pages → Templates**, click **+ Import** (the Import
+With Templates enabled, open **Customize → Templates**, click **+ Import** (the Import
 icon in the header on mobile), and select a `.tgz` built with
 `openclaw templates build`. The file is read from your
 browser's computer, not from a path on the Gateway. Uploads are limited to 1 MiB
@@ -104,7 +107,7 @@ Ask the agent, “create a new template from this agent.” The bundled
 review in that same conversation. No sidebar setup or special command is
 required. The agent proposes portable behavior with an input, job, output, and
 authority boundary; it does not publish, return a review link, or create or
-fork a session. Review requires Templates enabled in Labs, an active administrator
+fork a session. Review requires Templates availability, an active administrator
 Control UI connection, and a workspace on the Gateway host. If review is unavailable,
 the proposal stays private.
 
@@ -183,7 +186,7 @@ its result into later helper turns; users do not need to paste the review JSON.
 The host uses the requesting session's existing setup-change approval policy;
 an agent-supplied `approved: true` does not authorize installation. Trust warnings require exact human approval even under Full Access. Review and
 installation retain the original administrator connection, cancellation, and
-revocation checks and use the same installer as **Pages → Templates**. Templates
+revocation checks and use the same installer as **Customize → Templates**. Templates
 must already be enabled in **Settings → Labs**. The helper does not enable Labs,
 install local paths, publish Templates, or gain shell access.
 

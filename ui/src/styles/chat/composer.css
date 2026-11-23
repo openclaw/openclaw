@@ -119,10 +119,9 @@
 }
 
 .agent-chat__composer-status-icon {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  color: inherit;
+  display: grid;
+  flex: 0 0 var(--chat-composer-footer-icon-size, 16px);
+  place-items: center;
 }
 
 .agent-chat__composer-status-icon svg {
@@ -250,8 +249,12 @@
 
 .agent-chat__capability-menu-scroll {
   flex: 1 1 auto;
-  min-height: 0;
   overflow-y: auto;
+}
+
+/* Plugin lists shrink to their rows when drilling in, but still scroll at the panel limit. */
+.chat-plugin-menu-scroll {
+  overflow: auto;
 }
 
 .agent-chat__attachment-sources {
@@ -342,9 +345,10 @@
   font-weight: 400;
 }
 
-.agent-chat__capability-menu-item svg {
+.agent-chat__capability-menu-item :is(svg, img) {
   width: 18px;
   height: 18px;
+  object-fit: contain;
   stroke-width: 1.75px;
 }
 

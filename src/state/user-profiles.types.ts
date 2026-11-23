@@ -85,6 +85,7 @@ export type UserChannelIdentitySelector =
   | { authorizationId: string; policy: UserChannelAuthorizationPolicy };
 export type UserChannelIdentityLink = { profileId: string; identity: UserChannelIdentity };
 export type UserChannelIdentityAuthorityFacts = {
+  identity: UserChannelIdentity;
   openclawIdAccountIds?: readonly string[];
   authorization?: UserChannelAuthorization;
   profileId: string;

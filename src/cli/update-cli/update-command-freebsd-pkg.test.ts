@@ -9,7 +9,7 @@ import {
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
-import * as updateRunner from "../../infra/update-runner-git.js";
+import * as updateRunner from "../../infra/update-runner-git-release.js";
 import { createSystemPackageOwnershipInspection } from "../../infra/update-system-package-ownership.js";
 import * as exec from "../../process/exec.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
@@ -48,8 +48,6 @@ function gitUpdateParams(root: string): Parameters<typeof updateGitInstall>[0] {
     inspectGitTarget: refuseMutation,
     validateCandidate: refuseMutation,
     beforeGitMutation: refuseMutation,
-    getManagedServiceEnv: () => undefined,
-    getSnapshotSource: async () => ({ config: {}, env: process.env }),
   };
 }
 
@@ -144,7 +142,7 @@ describe("FreeBSD pkg update admission", () => {
         pkgQueryResult(claimed ? `${root}/package.json\n` : ""),
       );
       const publish = vi.fn();
-      vi.spyOn(updateRunner, "updateGitCheckout").mockImplementation(async ({ opts }) => {
+      vi.spyOn(updateRunner, "updateGitRelease").mockImplementation(async ({ opts }) => {
         await opts.beforeGitMutation({});
         publish();
         return { status: "ok", mode: "git", root, steps: [], durationMs: 0 };
@@ -170,19 +168,16 @@ describe("FreeBSD pkg update admission", () => {
       const checkout = vi
         .spyOn(shared, "ensureGitCheckout")
         .mockRejectedValue(new Error("unexpected checkout mutation"));
-      const getSnapshotSource = vi.fn(async () => ({ config: {}, env: process.env }));
       mockOwnership(selected);
       await expect(
         updateGitInstall({
           ...gitUpdateParams(requested),
           switchToGit: true,
           installKind: "package",
-          getSnapshotSource,
         }),
       ).rejects.toMatchObject({ reason: "pkg-owned-install" });
       expect(manager).not.toHaveBeenCalled();
       expect(checkout).not.toHaveBeenCalled();
-      expect(getSnapshotSource).not.toHaveBeenCalled();
     });
   });
 

@@ -14,6 +14,9 @@ export function createRemoteControlUiIngressTestContext(
         context.principal.kind === "person" ? context.principal.profileId : "gateway-owner";
       return {
         bindingId: context.audienceId,
+        pluginId: context.pluginId,
+        audienceId: context.audienceId,
+        principal: context.principal,
         authenticatedUserProfile: {
           profileId,
           displayName: "Synthetic ingress user",

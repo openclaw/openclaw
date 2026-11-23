@@ -25,7 +25,7 @@ import {
   invalidateGatewayDeviceRevocation,
 } from "./device-revocation.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { dispatchProfile } from "./server/client-fixtures.test-support.js";
@@ -35,7 +35,7 @@ import {
 } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
-type Capture = NonNullable<Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>>;
+type Capture = NonNullable<Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>>;
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -132,7 +132,7 @@ function fixture(profileId: string, initialConfig: OpenClawConfig = {}) {
   const handler = async (options: GatewayRequestHandlerOptions) => {
     const client = expectDefined(options.client, "authenticated client");
     const captured = expectDefined(
-      await captureGatewayOperatorRunAuthority({
+      await prepareGatewayOperatorRunAuthority({
         client:
           projection === "principal"
             ? captureAgentTurnPrincipal(client)
@@ -246,7 +246,7 @@ it.each([
   "openclaw-linux",
   "openclaw-ios",
   "openclaw-android",
-] as const)("keeps retained source comparison across an authenticated %s reconnect", (clientId) =>
+] as const)("keeps retained source identity across an authenticated %s reconnect", (clientId) =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const profile = ensureProfileForEmail("reconnect-owner@example.test");
     using proof = fixture(profile.id);
@@ -310,44 +310,54 @@ it("keeps unproven, reduced, foreign and rotated reconnect sources separate", ()
     const accessBound = await proof.capture(scoped.client);
     expect(accessBound.authority.source).not.toBe(original.authority.source);
     access.abort(new Error("synthetic access grant retired"));
-    expect(() => accessBound.authority.assertCurrent()).toThrow();
+    expect(accessBound.authority.signal?.aborted).toBe(false);
+    expect(() => accessBound.authority.assertCurrent()).not.toThrow();
     original.authority.assertCurrent();
   }));
 
-it("does not merge changed model membership or expand the retained source ceiling", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const profile = ensureProfileForEmail("reconnect-policy@example.test");
-    setUserProfileRole(profile.id, "reconnect");
-    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    const initial: OpenClawConfig = {
-      agents: { defaults: { model: "fixture/a" } },
-      gateway: {
-        roles: {
-          default: "reconnect",
-          definitions: {
-            reconnect: {
-              agents: "*",
-              scopes: ["operator.admin"],
-              sessions: { others: "none" },
-              modelPolicy: { allow: ["fixture/a"] },
+it.each(["widened", "narrowed"] as const)(
+  "keeps admitted model policy fixed when reconnect policy is %s",
+  (change) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const profile = ensureProfileForEmail("reconnect-policy@example.test");
+      setUserProfileRole(profile.id, "reconnect");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const initial: OpenClawConfig = {
+        agents: { defaults: { model: "fixture/a" } },
+        gateway: {
+          roles: {
+            default: "reconnect",
+            definitions: {
+              reconnect: {
+                agents: "*",
+                scopes: ["operator.admin"],
+                sessions: { others: "none" },
+                modelPolicy: { allow: ["fixture/a"] },
+              },
             },
           },
         },
-      },
-    };
-    using proof = fixture(profile.id, initial);
-    const original = await proof.capture(proof.connect().client);
-    const updated = structuredClone(initial);
-    expectDefined(updated.gateway?.roles?.definitions.reconnect, "role").modelPolicy = {
-      allow: ["fixture/a", "fixture/b"],
-    };
-    proof.setConfig(updated);
-    const replacement = await proof.capture(proof.connect().client);
-    expect(replacement.authority.source).not.toBe(original.authority.source);
-    expect(() =>
-      assertOperatorModelAllowed(original.authority, { provider: "fixture", model: "b" }),
-    ).toThrow();
-    expect(() =>
-      assertOperatorModelAllowed(replacement.authority, { provider: "fixture", model: "b" }),
-    ).not.toThrow();
-  }));
+      };
+      using proof = fixture(profile.id, initial);
+      const original = await proof.capture(proof.connect().client);
+      const updated = structuredClone(initial);
+      expectDefined(updated.gateway?.roles?.definitions.reconnect, "role").modelPolicy = {
+        allow: change === "widened" ? ["fixture/a", "fixture/b"] : ["fixture/b"],
+      };
+      proof.setConfig(updated);
+      const replacement = await proof.capture(proof.connect().client);
+      expect(replacement.authority.source).not.toBe(original.authority.source);
+      expect(() =>
+        assertOperatorModelAllowed(original.authority, { provider: "fixture", model: "b" }),
+      ).toThrow();
+      expect(() =>
+        assertOperatorModelAllowed(replacement.authority, { provider: "fixture", model: "b" }),
+      ).not.toThrow();
+      expect(replacement.authority.modelPolicy?.allows({ provider: "fixture", model: "a" })).toBe(
+        change === "widened",
+      );
+      expect(() =>
+        assertOperatorModelAllowed(original.authority, { provider: "fixture", model: "a" }),
+      ).not.toThrow();
+    }),
+);
