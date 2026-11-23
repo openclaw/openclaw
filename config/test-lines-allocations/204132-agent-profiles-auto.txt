@@ -1,12 +1,13 @@
-# #204132 Agent Profiles automatic selection: 786 net test/helper lines on top of
-# #202517, which this change is stacked on (stacked total 2851 against 1601f86def0;
+# #204132 Agent Profiles automatic selection: 882 net test/helper lines on top of
+# #202517, which this change is stacked on (stacked total 2853 against 1601f86def0;
 # the 400-line allowance is already used by the core record, so this record covers
 # the whole slice growth).
 # Size selection reaches the profile through several independent routes, each with its
 # own regression test: embedded attempt (primary, fallback, catalog row), CLI runner
-# capabilities, worker turn prompt, workspace routes and catalog projections, and the
-# llama-server discovery that reports the total parameter count.
-# The class resolver has its own table test (config class beats count, invalid class
-# falls back to the count, nothing trusted gives no class).
+# capabilities, the prompt a worker turn receives, direct compaction, prompt inspection
+# (/context), workspace routes and catalog projections, and the llama-server discovery
+# that reports the total parameter count.
+# The class resolver has its own table test (config class beats count, nothing trusted
+# gives no class) and the models schema rejects an unknown class.
 # No test restates another: each pins one route or one precedence rule.
-786
+882
