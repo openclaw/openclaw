@@ -23,6 +23,7 @@ import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
 import { readWorkspaceSkillSources } from "../loading/workspace-skill-source-reader.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import type { SkillSnapshot } from "../types.js";
+import { resolveCronSkillsSnapshot } from "./cron-snapshot.js";
 import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "./refresh-state.js";
 import * as skillsRefresh from "./refresh.js";
 import {
@@ -38,6 +39,7 @@ const missingTool = { metadata: '{"openclaw":{"requires":{"bins":["fixture-missi
 const temps = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     try {
+      await skillsRefresh.closeSkillsWatchers(true);
       // Reclamation workers retain the original shared database until lease cleanup settles.
       await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
@@ -114,6 +116,62 @@ let params: Awaited<ReturnType<typeof fixture>>;
 beforeEach(async () => {
   params = await fixture();
 });
+it("restores configured agent skills in cron snapshots without losing execution-only skills", async () => {
+  const executionWorkspaceDir = path.join(params.workspaceDir, "execution");
+  const executionSkills = path.join(executionWorkspaceDir, "skills");
+  await params.write("configured-only", "Configured agent instructions");
+  await params.write("visible", "Execution override must lose", {}, executionSkills);
+  await params.write("execution-only", "Execution instructions", {}, executionSkills);
+  params.config.agents = { entries: { main: { workspace: params.workspaceDir } } };
+  // Persisted cron snapshots previously scanned only the execution workspace.
+  const { snapshot: existingSnapshot } = await params.resolve({
+    workspaceDir: executionWorkspaceDir,
+  });
+  const snapshot = await resolveCronSkillsSnapshot({
+    workspaceDir: executionWorkspaceDir,
+    config: params.config,
+    agentId: "main",
+    existingSnapshot: persist(existingSnapshot),
+    isFastTestEnv: false,
+  });
+  expect(names(snapshot.skills)).toEqual(["configured-only", "visible", "execution-only"]);
+  expect(snapshot.prompt).toContain("Original instructions");
+  expect(snapshot.prompt).not.toContain("Execution override must lose");
+  expect(snapshot.skillRoots).toEqual({
+    agentWorkspaceDir: params.workspaceDir,
+    executionWorkspaceDir,
+  });
+  expect(params.source(snapshot, "visible")).toBe(params.visibleFile);
+  expect(params.source(snapshot, "execution-only")).toBe(
+    path.join(executionSkills, "execution-only", "SKILL.md"),
+  );
+  expect(
+    await resolveCronSkillsSnapshot({
+      workspaceDir: executionWorkspaceDir,
+      config: params.config,
+      agentId: "main",
+      existingSnapshot: snapshot,
+      isFastTestEnv: false,
+    }),
+  ).toBe(snapshot);
+});
+
+it("keeps same-workspace cron skills filtered without duplicate roots", async () => {
+  await params.write("filtered-out", "Not allowed");
+  params.config.agents = {
+    entries: { main: { workspace: params.workspaceDir, skills: ["visible"] } },
+  };
+  const snapshot = await resolveCronSkillsSnapshot({
+    workspaceDir: params.workspaceDir,
+    config: params.config,
+    agentId: "main",
+    isFastTestEnv: false,
+  });
+  expect(names(snapshot.skills)).toEqual(["visible"]);
+  expect(snapshot.skillRoots).toBeUndefined();
+  expect(params.source(snapshot, "visible")).toBe(params.visibleFile);
+});
+
 it.each([
   { name: "deploy", savedName: "deploy", reservedName: undefined },
   { name: "probe", savedName: "snapshot-node-probe", reservedName: undefined },
