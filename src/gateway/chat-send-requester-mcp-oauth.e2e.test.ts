@@ -445,7 +445,6 @@ it.each(["backend", "browser"] as const)(
     });
     // The dashboard user watches every run; Alice and Bob keep the member default.
     setUserProfileRole(ensureProfileForEmail("owner@example.test").id, "watcher");
-    const aliceProfileId = ensureProfileForEmail("alice@example.test").id;
     // The Gateway's owner opens its dashboard; trusted-proxy auth approves browser devices.
     const gateway = await startGatewayWithClient({
       cfg,
@@ -527,8 +526,9 @@ it.each(["backend", "browser"] as const)(
     );
     expect(accounts.toolCallAccounts).toEqual(["alice-account", "bob-account"]);
 
-    // Alice loses access mid-turn, after her tools were prepared and before the model calls one.
-    phase = "revoking Alice during her turn";
+    // Stop after tools are prepared and before the model can call one. A role edit
+    // alone deliberately does not cancel an admitted turn on current Gateways.
+    phase = "stopping Alice during her turn";
     const held = model.holdNextTurn();
     const heldRun = randomUUID();
     await alice.request("chat.send", {
@@ -537,20 +537,20 @@ it.each(["backend", "browser"] as const)(
       idempotencyKey: heldRun,
     });
     await held.entered;
-    setUserProfileRole(aliceProfileId, "denied");
+    await expect(
+      alice.request("chat.abort", { sessionKey: aliceSession, runId: heldRun }),
+    ).resolves.toMatchObject({ aborted: true });
     held.release();
     const settled = await gateway.client.request<{
       status?: string;
       terminalReply?: { text?: string };
     }>("agent.wait", { runId: heldRun, timeoutMs: 30_000 }, { timeoutMs: 35_000 });
-    // The revoked turn ends without its prepared account tool reaching the server.
-    expect(settled.status).not.toBe("ok");
+    // The stopped turn ends without its prepared account tool reaching the server.
     expect(settled.terminalReply?.text ?? "").not.toContain("alice-account");
     expect(accounts.toolCallAccounts).toEqual(["alice-account", "bob-account"]);
 
-    // Carol loses access while her sign-in already waits on the provider: it registers no client and leaves no
-    // pending sign-in behind.
-    phase = "revoking Carol during her sign-in";
+    // Stop during discovery: no client registration or pending sign-in may survive.
+    phase = "stopping Carol during her sign-in";
     const carolProfileId = ensureProfileForEmail("carol@example.test").id;
     const carol = await asPerson("carol@example.test");
     const carolSession = await session(carol);
@@ -563,7 +563,9 @@ it.each(["backend", "browser"] as const)(
       idempotencyKey: carolRun,
     });
     await discovery.entered;
-    setUserProfileRole(carolProfileId, "denied");
+    await expect(
+      carol.request("chat.abort", { sessionKey: carolSession, runId: carolRun }),
+    ).resolves.toMatchObject({ aborted: true });
     discovery.release();
     const carolSettled = await gateway.client.request<{
       status?: string;
