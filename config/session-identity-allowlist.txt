@@ -373,7 +373,7 @@ src/agents/harness/node-execution-authority.ts	8
 src/agents/harness/selection.ts	1
 src/agents/harness/session-runtime-ownership.ts	6
 src/agents/harness/structured-input-execution.ts	1
-src/agents/harness/tool-authority.runtime.ts	17
+src/agents/harness/tool-authority.runtime.ts	13
 src/agents/internal-session-effects.ts	10
 src/agents/mcp-app-model-context.ts	1
 src/agents/mcp-http-transport.ts	2
@@ -490,7 +490,7 @@ src/agents/subagents/registry/subagent-run-generation.ts	7
 src/agents/subagents/registry/subagent-session-cleanup.ts	8
 src/agents/subagents/registry/subagent-session-read-scope.ts	8
 src/agents/subagents/requester-cron-authority-admission.ts	4
-src/agents/subagents/requester-cron-authority.ts	19
+src/agents/subagents/requester-cron-authority.ts	18
 src/agents/subagents/requester-final-attachment.ts	5
 src/agents/subagents/spawn/acp-spawn-parent-stream.ts	2
 src/agents/subagents/spawn/acp-spawn.ts	1
@@ -506,7 +506,7 @@ src/agents/tools/computer-tool-node.ts	4
 src/agents/tools/computer-tool-request.ts	1
 src/agents/tools/cron-tool-write.ts	1
 src/agents/tools/embedded-gateway-stub.ts	2
-src/agents/tools/gateway-caller-context.ts	2
+src/agents/tools/gateway-caller-context.ts	1
 src/agents/tools/image-generate-review-actions.ts	7
 src/agents/tools/media-generate-background-completion.ts	4
 src/agents/tools/media-generate-background-shared.ts	1
@@ -514,7 +514,7 @@ src/agents/tools/media-generate-result-shared.ts	1
 src/agents/tools/message-tool-decision.ts	1
 src/agents/tools/message-tool-execution.ts	3
 src/agents/tools/message-tool-turn-authority.ts	1
-src/agents/tools/presence-tool-authority.ts	3
+src/agents/tools/presence-tool-authority.ts	2
 src/agents/tools/scoped-session-access.ts	8
 src/agents/tools/session-portal-target.ts	13
 src/agents/tools/session-status-model.ts	2
@@ -524,7 +524,6 @@ src/agents/tools/sessions-access.ts	3
 src/agents/tools/sessions-control-authority.ts	12
 src/agents/tools/sessions-history-tool.ts	2
 src/agents/tools/sessions-list-tool.ts	2
-src/agents/tools/sessions-operator-authority.ts	1
 src/agents/tools/sessions-resolution.ts	2
 src/agents/tools/sessions-search-tool.ts	7
 src/agents/tools/sessions-send-communication-endpoint.ts	2
