@@ -166,18 +166,24 @@ suite.define(() => {
     });
   });
 
-  it.each([820, 1180])(
+  it.each([390, 820, 1180, 1440])(
     "keeps an environment value readable beside its updater at %i px",
     async (width) => {
       await suite.withPage(
-        { viewport: { width, height: width === 820 ? 1180 : 820 }, hasTouch: true },
+        {
+          viewport: {
+            width,
+            height: width === 390 ? 844 : width === 820 ? 1180 : width === 1180 ? 820 : 900,
+          },
+          hasTouch: true,
+        },
         async ({ page }) => {
           await page.addInitScript(
             (key) => localStorage.setItem(key, JSON.stringify({ textScale: 140 })),
             controlUiBundledSettingsStorageKey(suite.server.baseUrl),
           );
           const region = {
-            ...entry("EXAMPLE_REGION", "eu-central-1"),
+            ...entry("ATLAS_WORKSPACE_AUTOMATION_REGION", "eu-central-1"),
             updatedBy: "atlas.workspace.automation.service.account@example.invalid",
           };
           await openStore(page, { list: { entries: [region] } }, ["secrets.store.set"]);
@@ -189,11 +195,23 @@ suite.define(() => {
             (el) => el.clientWidth > 0 && el.scrollWidth <= el.clientWidth + 1,
           );
           expect(fits, "the full short environment value is painted").toBe(true);
-          const [byline, indicator] = await Promise.all([
-            row.locator("time").boundingBox(),
-            row.locator(".settings-status").boundingBox(),
-          ]);
-          expect(byline!.x + byline!.width).toBeLessThanOrEqual(indicator!.x);
+          const name = row.locator(".secrets-store__env-name");
+          expect(await name.textContent()).toBe(region.name);
+          expect(await name.locator("span").last().textContent()).toBe("_REGION");
+          const attribution = row.locator(".secrets-store__attribution");
+          expect(
+            await attribution.locator("time").evaluate((el) => {
+              const range = document.createRange();
+              range.selectNodeContents(el);
+              return new Set(Array.from(range.getClientRects(), (rect) => Math.round(rect.top)))
+                .size;
+            }),
+          ).toBe(1);
+          await attribution.locator("summary").press("Enter");
+          expect(await attribution.locator(":scope > span").innerText()).toContain(
+            region.updatedBy,
+          );
+          await attribution.locator("summary").press("Enter");
           await button(row, "Actions: " + region.name).tap();
           await row.locator('.oc-menu-item[data-value="edit"]').click();
           expect(await field(modal(page, "Edit secret"), "Value").inputValue()).toBe(
