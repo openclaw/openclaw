@@ -140,6 +140,12 @@ On Windows, the task supervisor starts without the Gateway's config or state
 bootstrap. Only its child opens the state databases; the waiting supervisor must
 not retain a connection or admission descriptor across a release switch.
 
+The Gateway's launcher IPC listener does not keep the child process alive. Once
+Gateway cleanup settles, the child exits naturally so the resident launcher can
+start the pending release, including after a rollback. Stop and readiness messages
+still use the same channel while the Gateway is running. The serving release must
+contain this fix; a newer candidate cannot release an older Gateway's IPC reference.
+
 Rules for update changes:
 
 - Change update behavior in `src/update/`. Do no update work while the Gateway is

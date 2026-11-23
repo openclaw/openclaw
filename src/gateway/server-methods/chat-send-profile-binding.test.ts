@@ -144,7 +144,7 @@ it("rejects caller replacement during initial authorization without an expected 
     const respond = await request;
     expectRejected(respond, {
       code: "FORBIDDEN",
-      message: "Gateway requester authority changed",
+      message: "Gateway requester identity changed. Retry the request.",
     });
     expect(fixture.context.dedupe.size).toBe(0);
     expect(getRpcSource(fixture.params.idempotencyKey)).toBeUndefined();

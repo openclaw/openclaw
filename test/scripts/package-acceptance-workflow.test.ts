@@ -9322,12 +9322,13 @@ test "$package_manager" = "pnpm@12.1.0"
         expect.arrayContaining([
           `target_ref=${"b".repeat(40)}`,
           `release_scope=${scope}`,
-          `include_android=${scope === "full"}`,
+          "dispatch_id=full-release-validation-77-2-ci",
         ]),
       );
       expect(
         args.filter((arg) => /^(historical_target_tag|target_context_ref)=/u.test(arg)),
       ).toEqual([contextInput]);
+      expect(args.some((arg) => /^(include_android|include_mobile)=/u.test(arg))).toBe(false);
       expect(args.some((arg) => arg.startsWith("release_candidate_ref="))).toBe(false);
     },
   );

@@ -160,6 +160,26 @@ Notes:
 
 See [Session Pruning](/concepts/session-pruning) for behavior details.
 
+## `agents.defaults.promptCacheKeepWarm`
+
+Keeps the prompt cache of an idle interactive session warm. Shortly before the
+provider's known cache lifetime ends, the Gateway sends one read-only prewarm
+request that reads the session's cached prefix and generates no output, so the
+next turn reads the cache instead of rewriting the whole prompt. On by default.
+
+```json5
+{
+  agents: {
+    defaults: {
+      promptCacheKeepWarm: false, // default true
+    },
+  },
+}
+```
+
+See [Prompt caching](/reference/prompt-caching#idle-keep-warm) for which routes
+and sessions it covers and what each prewarm costs.
+
 ## Block streaming
 
 ```json5
