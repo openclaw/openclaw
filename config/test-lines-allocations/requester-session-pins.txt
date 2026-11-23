@@ -1,0 +1,2 @@
+# Covers distinct requester isolation, CAS conflict preservation, mixed-version writes, partial batches, visibility before pagination, and private event boundaries.
+253
