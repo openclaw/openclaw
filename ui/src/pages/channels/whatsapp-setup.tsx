@@ -46,7 +46,7 @@ function WhatsAppLink(props: { controls: ChannelsProps }) {
             fallback={
               <div class="whatsapp-link__placeholder" aria-hidden="true">
                 <Show when={!ended()}>
-                  <span class="whatsapp-link__spinner" />
+                  <span class="wizard-step__spinner" />
                 </Show>
               </div>
             }
@@ -97,8 +97,7 @@ function WhatsAppLink(props: { controls: ChannelsProps }) {
 function WaitingStatus(props: { label: string; children?: string }) {
   return (
     <div class="whatsapp-setup__status" role="status" aria-live="polite">
-      <span class="whatsapp-setup__pulse" aria-hidden="true" />
-      <span>{props.label}</span>
+      <span class="text-shimmer">{props.label}</span>
       <Show when={props.children}>
         <span class="whatsapp-setup__detail">{props.children}</span>
       </Show>
@@ -214,7 +213,7 @@ function WhatsAppFirstMessage(props: { controls: ChannelsProps; accountId: strin
       <openclaw-modal-actions class="channels-wizard__footer">
         <button
           type="button"
-          class={["btn", { primary: !received() || !sharesMainChat() }]}
+          class={["btn", { primary: received() && !sharesMainChat() }]}
           onClick={() => props.controls.wizardHost.close()}
         >
           {t("channels.setup.done")}
