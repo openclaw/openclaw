@@ -155,7 +155,7 @@ describe("unified skill discovery", () => {
     const categories = vi
       .fn()
       .mockRejectedValueOnce(new Error("Directory unavailable"))
-      .mockResolvedValue({ categories: [research] });
+      .mockResolvedValue({ categories: [{ ...research, preview: [remoteSkill()] }] });
     const feed = vi.fn(() => ({ results: [{ ...remoteSkill(), categories: [research.slug] }] }));
     const sources: Record<string, () => unknown> = {
       "skills.categories": categories,
@@ -226,7 +226,7 @@ describe("unified skill discovery", () => {
     );
   });
 
-  it("previews only advertised memberships in taxonomy order, with a flat remainder", () => {
+  it("renders Featured and every advertised category from its own preview without depending on the feed", () => {
     const alpha = { slug: "lab-a", label: "Field work" };
     const beta = { slug: "lab-b", label: "On call" };
     const tagged = Array.from({ length: 6 }, (_, index) => ({
@@ -251,30 +251,45 @@ describe("unified skill discovery", () => {
     onCategoryChange.mockClear();
     renderDiscovery({ ...props, connected: false, readCategories: () => null }, container);
     expect(shelfText(container)).not.toBe("");
-    const categories = [beta, alpha, { slug: "empty", label: "Empty" }];
-    renderDiscovery({ ...props, readCategories: () => ({ categories }) }, container);
+    const featured = remoteSkill("alice", "curated");
+    const categories = [
+      { ...beta, preview: [] }, // A bounded empty preview still shows matching feed rows.
+      { ...alpha, preview: tagged.slice(0, 4) },
+      { slug: "empty", label: "Empty", preview: [] },
+    ];
+    renderDiscovery(
+      {
+        ...props,
+        readCategories: () => ({ categories, featured: [featured], previewsUnavailable: true }),
+      },
+      container,
+    );
     expect(shelfText(container)).not.toBe("");
     const sections = [...container.querySelectorAll("[data-catalog-section]")];
     expect(sections.map((section) => section.querySelector("h2")?.textContent)).toEqual([
+      "Featured",
       "On call",
       "Field work",
+      "Empty",
       "ClawHub",
     ]);
     const ids = (section: Element) =>
       [...section.querySelectorAll("[data-skill-id]")].map((el) =>
         el.getAttribute("data-skill-id"),
       );
-    expect(ids(sections[0]!)).toEqual(["remote:@alice/row-0"]);
-    expect(ids(sections[1]!)).toEqual(tagged.slice(0, 4).map((row) => "remote:" + row.installRef));
-    expect(ids(sections[2]!)).toEqual(uncategorized.map((row) => "remote:" + row.installRef));
+    expect(ids(sections[0]!)).toEqual(["remote:@alice/curated"]);
+    expect(ids(sections[1]!)).toEqual(["remote:@alice/row-0"]);
+    expect(ids(sections[2]!)).toEqual(tagged.slice(0, 4).map((row) => "remote:" + row.installRef));
+    expect(ids(sections[3]!)).toEqual([]);
+    expect(ids(sections[4]!)).toEqual(uncategorized.map((row) => "remote:" + row.installRef));
     const chip = [...container.querySelectorAll<HTMLButtonElement>(".plugin-catalog-chip")].find(
       (button) => button.textContent === alpha.label,
     )!;
     const focus = vi.spyOn(chip, "focus");
-    sections[1]!.querySelector<HTMLButtonElement>(".plugin-catalog-section__view-all")!.click();
+    sections[2]!.querySelector<HTMLButtonElement>(".plugin-catalog-section__view-all")!.click();
     expect(focus).toHaveBeenCalledOnce();
-    expect(onCategoryChange).toHaveBeenCalledExactlyOnceWith(alpha);
-    expect(sections[2]!.querySelector(".plugin-catalog-section__view-all")).toBeNull();
+    expect(onCategoryChange).toHaveBeenCalledExactlyOnceWith(categories[1]);
+    expect(sections[4]!.querySelector(".plugin-catalog-section__view-all")).toBeNull();
   });
 
   it("does not mistake an invalid namesake for a ClawHub install", () => {

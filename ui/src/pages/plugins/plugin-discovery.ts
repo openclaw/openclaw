@@ -1,6 +1,7 @@
 import { onCleanup } from "solid-js";
 import { comparePluginCatalogEntries } from "../../../../packages/plugin-package-contract/src/catalog-order.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { CATALOG_INITIAL_PAGE_SIZE, CATALOG_NEXT_PAGE_SIZE } from "../../lib/catalog-page-size.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createPageRequest, type PageReadResult } from "../../lib/page-request.ts";
 import type {
@@ -15,6 +16,7 @@ export type PluginDiscoveryIntent = "all" | "bundled" | "trending" | "official" 
 export type PluginDiscoveryState = {
   result: PluginDiscoveryResult | null;
   readonly hasCurrentResult: boolean;
+  readonly browsePending: boolean;
   error: string | null;
   remoteError: string | null;
   categories: readonly PluginDiscoveryCategory[];
@@ -33,7 +35,7 @@ export type PluginDiscoveryState = {
   };
 };
 
-const CATALOG_PAGE_SIZE = 100;
+const OVERVIEW_PAGE_SIZE = 100;
 
 type CatalogPageArgs = readonly [
   client: GatewayBrowserClient,
@@ -111,6 +113,9 @@ export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange:
     intent: "all",
     category: null,
     query: "",
+    get browsePending() {
+      return search !== null || browseTask.pending;
+    },
     get reads() {
       return {
         browse: search?.read.promise ?? browseTask.read,
@@ -189,7 +194,15 @@ export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange:
           inventory: () => gateway.inventory?.(),
           presented: () => resultSelection === page.selection && state.hasCurrentResult,
           load: (category, cursor, signal) =>
-            fetchAvailablePage({ client, intent: "all", category, cursor, query: "", signal }),
+            fetchAvailablePage({
+              client,
+              intent: "all",
+              category,
+              cursor,
+              query: "",
+              signal,
+              preview: true,
+            }),
           publish: (items) => {
             state.result = { items };
             onChange();
@@ -226,6 +239,7 @@ export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange:
     category: string | null;
     query: string;
     manual?: boolean;
+    preview?: boolean;
     cursor?: string;
     signal: AbortSignal;
   }): Promise<CatalogPageLoad & { requestedCursor?: string }> {
@@ -239,7 +253,12 @@ export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange:
         ...(params.query ? { query: params.query } : {}),
         ...(params.manual ? { searchSource: "openclaw-control-ui" } : {}),
         ...(params.cursor ? { cursor: params.cursor } : {}),
-        pageSize: CATALOG_PAGE_SIZE,
+        pageSize:
+          params.preview || groupedOverview
+            ? OVERVIEW_PAGE_SIZE
+            : params.cursor
+              ? CATALOG_NEXT_PAGE_SIZE
+              : CATALOG_INITIAL_PAGE_SIZE,
       },
       { signal: params.signal },
     );

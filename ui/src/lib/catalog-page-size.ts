@@ -1,0 +1,2 @@
+export const CATALOG_INITIAL_PAGE_SIZE = 80;
+export const CATALOG_NEXT_PAGE_SIZE = 40;

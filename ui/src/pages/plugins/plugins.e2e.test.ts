@@ -295,7 +295,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     expect(searchRequest.params).toEqual({
       intent: "all",
       query: "matrix",
-      pageSize: 100,
+      pageSize: 80,
       searchSource: "openclaw-control-ui",
     });
     expect(await loading.isVisible()).toBe(true);
@@ -406,7 +406,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
 
       await search.fill("matrix");
       await gateway.waitForRequest("plugins.catalog.browse", {
-        match: { intent: "all", query: "matrix", pageSize: 100 },
+        match: { intent: "all", query: "matrix", pageSize: 80 },
       });
       expect(await catalog.locator(".plugin-catalog-section").count()).toBe(0);
       expect(
@@ -838,12 +838,15 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     expect(await matrixCard.getByLabel("Official", { exact: true }).count()).toBe(1);
     expect(await matrixCard.getByText(/downloads/u).count()).toBe(0);
     expect(await matrixCard.getByRole("button", { name: "Install Matrix" }).count()).toBe(1);
+    await gateway.deferNext("plugins.catalog.browse");
     await role(explore, "button", "Documents & files").click();
     await expectBrowse(gateway, {
       intent: "all",
       category: "documents-files",
-      pageSize: 100,
+      pageSize: 80,
     });
+    await expect.poll(() => explore.locator(".plugin-catalog-card--skeleton").count()).toBe(80);
+    await gateway.resolveDeferred("plugins.catalog.browse");
     // Seeing the request does not mean its response has replaced the overview yet.
     await expect.poll(() => sections.count()).toBe(0);
     await role(explore, "link", "Matrix").waitFor();
@@ -852,7 +855,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     await expectBrowse(gateway, {
       intent: "all",
       query: "matrix",
-      pageSize: 100,
+      pageSize: 80,
       searchSource: "openclaw-control-ui",
     });
     await expect.poll(() => sections.count()).toBe(0);
@@ -869,7 +872,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     await expectBrowse(gateway, {
       intent: "all",
       category: "scheduling",
-      pageSize: 100,
+      pageSize: 80,
     });
     const grid = page.locator(".plugin-catalog-grid").first();
     const columns = () =>

@@ -17,6 +17,8 @@ const catalog = {
     searchClawHub: "Search ClawHub skills…",
     searching: "Searching…",
     categories: "Skill categories",
+    featured: "Featured",
+    previewsUnavailable: "Some skill previews couldn’t load.",
     loadMore: "Load more",
     viewAll: "View all",
     loadingMore: "Loading more…",

@@ -312,7 +312,7 @@ it("counts only settled manual searches across refresh, filters and connection i
   expect(request.mock.lastCall?.[1]).toEqual({
     intent: "all",
     query: "memory",
-    pageSize: 100,
+    pageSize: 80,
     searchSource: "openclaw-control-ui",
   });
   expect(read().result).toEqual({ items: [entry(1)] });
@@ -343,7 +343,7 @@ it("counts only settled manual searches across refresh, filters and connection i
   expect(request).not.toHaveBeenCalled();
   await discovery.refresh();
   await vi.advanceTimersByTimeAsync(0);
-  expect(request.mock.lastCall?.[1]).toEqual({ intent: "all", query: "calendar", pageSize: 100 });
+  expect(request.mock.lastCall?.[1]).toEqual({ intent: "all", query: "calendar", pageSize: 80 });
   request.mockClear();
   discovery.updateQuery("notion");
   discovery.disconnect();
@@ -469,27 +469,27 @@ it("loads bounded pages only on expansion and preserves category pin ordering", 
     official,
     pinned,
     popular,
-    ...Array.from({ length: 97 }, (_, i) => entry(i + 3)),
+    ...Array.from({ length: 77 }, (_, i) => entry(i + 3)),
   ];
   const { discovery, request, read } = setup([
     { items: firstPage, nextCursor: "catalog-page-2" },
     { items: [promoted] },
   ]);
   await discovery.selectCategory("tools");
-  expect(read().result?.items).toHaveLength(100);
+  expect(read().result?.items).toHaveLength(80);
   expect(read().result?.items.slice(0, 3)).toEqual([pinned, popular, official]);
   expect(request).toHaveBeenCalledExactlyOnceWith(
     "plugins.catalog.browse",
-    { intent: "all", category: "tools", pageSize: 100 },
+    { intent: "all", category: "tools", pageSize: 80 },
     expect.anything(),
   );
   await discovery.loadMore();
-  expect(read().result?.items).toHaveLength(101);
+  expect(read().result?.items).toHaveLength(81);
   expect(read().result?.items.slice(0, 4)).toEqual([pinned, promoted, popular, official]);
   expect(request).toHaveBeenCalledTimes(2);
   expect(request).toHaveBeenLastCalledWith(
     "plugins.catalog.browse",
-    { intent: "all", category: "tools", cursor: "catalog-page-2", pageSize: 100 },
+    { intent: "all", category: "tools", cursor: "catalog-page-2", pageSize: 40 },
     expect.anything(),
   );
 });

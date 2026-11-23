@@ -171,11 +171,27 @@ export function SkillsPage(props: SkillsPageProps) {
       : null,
   );
   const categoryDirectory = createMemo(() => {
-    detailEpoch();
+    const epoch = detailEpoch();
     const client = categoryClient();
-    // Each registry starts with unknown grouping, without holding route and search admission.
+    // The catalog is optional: its first read does not hold route and search admission.
     return createDeferred<SkillCategoryDirectory | null>(
-      () => (client ? loadSkillCategories(client) : { categories: [] }),
+      () =>
+        client
+          ? loadSkillCategories(client).then((directory) => {
+              if (
+                active &&
+                gateway.readEpoch() === epoch &&
+                context.gateway.snapshot.client === client
+              ) {
+                directoryIcons = [
+                  ...(directory.featured ?? []),
+                  ...directory.categories.flatMap(({ preview }) => preview ?? []),
+                ].flatMap(({ icon }) => (icon ? [icon] : []));
+                syncIcons(true);
+              }
+              return directory;
+            })
+          : { categories: [] },
       { loadingValue: null },
     );
   });
@@ -242,6 +258,30 @@ export function SkillsPage(props: SkillsPageProps) {
       data.clawhubIconUrls = urls;
     },
   });
+  let directoryIcons: string[] = [];
+  let previousResults: SkillsState["clawhubSearchResults"] | undefined;
+  let previousDetail: SkillsState["clawhubDetail"] | undefined;
+  const syncIcons = (force = false) => {
+    if (!active) {
+      return;
+    }
+    const results = data.clawhubSearchResults;
+    const detail = data.clawhubDetail;
+    if (!force && results === previousResults && detail === previousDetail) {
+      return;
+    }
+    previousResults = results;
+    previousDetail = detail;
+    clawhubIcons.syncCatalog(
+      [],
+      [
+        ...directoryIcons,
+        ...(results ?? []).flatMap((result) => (result.icon ? [result.icon] : [])),
+        ...(detail?.skill?.icon ? [detail.skill.icon] : []),
+        ...(detail?.owner?.image ? [detail.owner.image] : []),
+      ],
+    );
+  };
   const agents = projectAgents(context.agents);
   const syncSelection = () => {
     if (!admittedSurface) {
@@ -325,33 +365,11 @@ export function SkillsPage(props: SkillsPageProps) {
         }
       }),
     );
-    let previousResults: SkillsState["clawhubSearchResults"] | undefined;
-    let previousDetail: SkillsState["clawhubDetail"] | undefined;
-    const syncIcons = () => {
-      if (!active) {
-        return;
-      }
-      const results = data.clawhubSearchResults;
-      const detail = data.clawhubDetail;
-      if (results === previousResults && detail === previousDetail) {
-        return;
-      }
-      previousResults = results;
-      previousDetail = detail;
-      clawhubIcons.syncCatalog(
-        [],
-        [
-          ...(results ?? []).flatMap((result) => (result.icon ? [result.icon] : [])),
-          ...(detail?.skill?.icon ? [detail.skill.icon] : []),
-          ...(detail?.owner?.image ? [detail.owner.image] : []),
-        ],
-      );
-    };
     const changes = createSkillsChangeReloader(data);
     const stopChanges = context.gateway.subscribeEvents(changes.onEvent);
     // Icon reconciliation waits for result/detail publication to settle.
     const stopState = skills.subscribe(() => {
-      onSettled(syncIcons);
+      onSettled(() => syncIcons());
       changes.onStateChange();
     });
     const stopSkills = () => [stopChanges, stopState].forEach((stop) => stop());
@@ -439,6 +457,7 @@ export function SkillsPage(props: SkillsPageProps) {
     Object.assign(data, createSkillsData(), {
       skillsAgentRevision: data.skillsAgentRevision + 1,
     });
+    directoryIcons = [];
     clawhubIcons.reset();
   }
 
@@ -515,26 +534,42 @@ export function SkillsPage(props: SkillsPageProps) {
       state.clawhubSearchQuery = query;
     });
     data.clawhubInstallMessage = null;
-    performSearch({ query, category: local.clawhubCategory?.slug }, Boolean(query.trim()));
+    const category = local.clawhubCategory;
+    const featured = category && "featured" in category;
+    if (featured && query.trim()) {
+      setLocal((state) => void (state.clawhubCategory = null));
+    }
+    performSearch(
+      featured && !query.trim()
+        ? { featured: true }
+        : { query, category: featured ? undefined : category?.slug },
+      Boolean(query.trim()),
+    );
   }
 
   function selectCategory(category: SkillsPresentation["clawhubCategory"]) {
     if (local.clawhubCategory?.slug === category?.slug) {
       return;
     }
-    setLocal((state) => void (state.clawhubCategory = category));
+    const featured = category && "featured" in category;
+    const query = featured ? "" : local.clawhubSearchQuery;
+    setLocal((state) => {
+      state.clawhubCategory = category;
+      state.clawhubSearchQuery = query;
+    });
     data.clawhubInstallMessage = null;
-    performSearch({ query: local.clawhubSearchQuery, category: category?.slug });
+    performSearch(featured ? { featured: true } : { query, category: category?.slug });
   }
 
   function loadNextPage() {
     const cursor = search.nextCursor();
     if (cursor) {
-      performSearch({
-        query: local.clawhubSearchQuery,
-        category: local.clawhubCategory?.slug,
-        cursor,
-      });
+      const category = local.clawhubCategory;
+      performSearch(
+        category && "featured" in category
+          ? { featured: true, cursor }
+          : { query: local.clawhubSearchQuery, category: category?.slug, cursor },
+      );
     }
   }
 

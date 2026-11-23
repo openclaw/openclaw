@@ -314,7 +314,7 @@ it("requests the discovery feed when the query is empty", async () => {
   await expect(searchClawHub(state.client!, { query: "   " })).resolves.toEqual({ results: [] });
   expect(request).toHaveBeenCalledWith(
     "skills.search",
-    { query: undefined, limit: 20 },
+    { query: undefined, limit: 80 },
     { signal: undefined },
   );
 });

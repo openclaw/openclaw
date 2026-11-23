@@ -100,7 +100,7 @@ function ScopedTemplateReferenceView(props: {
           const entry = createMemo(async () => {
             const packageName = value.anchor.dataset.templatePackage;
             return packageName
-              ? ((await searchTemplates(value.client, packageName, 100)).find(
+              ? ((await searchTemplates(value.client, packageName, 100)).entries.find(
                   (item) => item.packageName === packageName,
                 ) ?? null)
               : null;

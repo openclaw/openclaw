@@ -51,6 +51,7 @@ vi.mock("./reader.js", () => ({
 }));
 
 import {
+  browseClawHubTemplates,
   listClawHubTemplates,
   prefetchClawHubSource,
   readClawHubTemplateDetail,
@@ -286,6 +287,30 @@ afterEach(async () => {
 });
 
 describe("public ClawHub Template catalog", () => {
+  it("fills a ranked page across short registry pages and returns the continuation cursor", async () => {
+    mocks.list
+      .mockResolvedValueOnce(
+        listPage([officialPackage(), { ...communityPackage(), channel: "private" }], "partial"),
+      )
+      .mockResolvedValueOnce(listPage([communityPackage()], "following"));
+    const page = await browseClawHubTemplates({ category: "research", limit: 2 });
+    expect(page.entries.map(({ packageName }) => packageName)).toEqual([
+      packageName,
+      personalPackageName,
+    ]);
+    expect(page.nextCursor).toBe("following");
+    expect(
+      mocks.list.mock.calls.map(([params]) => ({
+        limit: params.limit,
+        cursor: params.cursor,
+        sort: params.sort,
+      })),
+    ).toEqual([
+      { limit: 2, cursor: undefined, sort: "installs" },
+      { limit: 1, cursor: "partial", sort: "installs" },
+    ]);
+  });
+
   it.each([
     { optIn: undefined, marker: true }, // A plain overview ignores an unsolicited certificate.
     { optIn: false, marker: true },

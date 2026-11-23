@@ -33,20 +33,21 @@ function isPublicEntry(entry: TemplateCatalogEntry): boolean {
 export async function searchTemplates(
   client: GatewayBrowserClient,
   query: string,
-  limit?: number,
-  options: { category?: string; featured?: boolean } = {},
-): Promise<TemplateCatalogEntry[]> {
+  limit: number,
+  options: { category?: string; featured?: boolean; paged?: boolean; cursor?: string } = {},
+  signal?: AbortSignal,
+): Promise<{ entries: TemplateCatalogEntry[]; nextCursor?: string }> {
   const trimmed = query.trim();
-  const result = await client.request<{ entries: TemplateCatalogEntry[] }>(
+  const result = await client.request<{ entries: TemplateCatalogEntry[]; nextCursor?: string }>(
     "templates.catalog.search",
     {
       ...(trimmed ? { query: trimmed } : {}),
-      ...(limit ? { limit } : {}),
-      ...(options.category ? { category: options.category } : {}),
-      ...(options.featured ? { featured: true } : {}),
+      limit,
+      ...options,
     },
+    { signal },
   );
-  return result.entries.filter(isPublicEntry);
+  return { ...result, entries: result.entries.filter(isPublicEntry) };
 }
 
 export async function readTemplatesOverview(

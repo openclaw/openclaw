@@ -10,6 +10,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { assertTemplatesEnabled, TemplatesDisabledError } from "../../templates/availability.js";
 import {
   ClawHubSourceError,
+  browseClawHubTemplates,
   listClawHubTemplates,
   readClawHubTemplateDetail,
   readClawHubTemplatePreview,
@@ -45,6 +46,14 @@ export const templatesHandlers: GatewayRequestHandlers = {
     validateTemplatesCatalogSearchParams,
     async ({ params, respond, context }) => {
       assertTemplatesEnabled(context.getRuntimeConfig());
+      if (params.cursor && (!params.paged || params.query?.trim() || params.overview)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "Template cursors require paged browsing."),
+        );
+        return;
+      }
       if (params.overview && !params.query?.trim() && !params.category && !params.featured) {
         const overview = await readClawHubTemplatesOverview({
           limit: params.limit ?? 8,
@@ -52,6 +61,17 @@ export const templatesHandlers: GatewayRequestHandlers = {
         });
         assertTemplatesEnabled(context.getRuntimeConfig());
         respond(true, { entries: [], ...(overview ? { overview } : {}) });
+        return;
+      }
+      if (params.paged && !params.query?.trim()) {
+        const page = await browseClawHubTemplates({
+          category: params.category,
+          featured: params.featured,
+          limit: params.limit ?? 80,
+          cursor: params.cursor,
+        });
+        assertTemplatesEnabled(context.getRuntimeConfig());
+        respond(true, page);
         return;
       }
       const entries = params.query?.trim()

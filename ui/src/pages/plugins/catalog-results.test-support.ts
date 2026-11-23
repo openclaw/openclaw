@@ -38,6 +38,7 @@ export function baseProps(
     connected: true,
     result: { items: [plugin("tool")] },
     hasCurrentResult: overrides.result !== null,
+    browsePending: false,
     reads: { browse: null, categories: null, more: null },
     error: null,
     remoteError: null,

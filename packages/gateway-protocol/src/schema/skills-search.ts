@@ -13,22 +13,11 @@ const SkillCategorySlug = Type.String({
 });
 const BrowseCursor = Type.String({ minLength: 1, maxLength: 4096 });
 
-export const SkillsCategoriesParamsSchema = closedObject({});
-export const SkillsCategoriesResultSchema = closedObject({
-  categories: Type.Array(
-    closedObject({
-      slug: SkillCategorySlug,
-      label: NonEmptyString,
-      description: Type.Optional(NonEmptyString),
-      icon: Type.Optional(NonEmptyString),
-    }),
-  ),
-});
-
 /** Searches the skill registry, or browses a page when query is omitted. */
 export const SkillsSearchParamsSchema = closedObject({
   query: Type.Optional(NonEmptyString),
   category: Type.Optional(SkillCategorySlug),
+  featured: Type.Optional(Type.Boolean()),
   cursor: Type.Optional(BrowseCursor),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
 });
@@ -68,6 +57,23 @@ export const SkillsSearchResultSchema = closedObject({
       updatedAt: Type.Optional(Type.Integer()),
     }),
   ),
+});
+
+export const SkillsCategoriesParamsSchema = closedObject({
+  includePreviews: Type.Optional(Type.Boolean()),
+});
+export const SkillsCategoriesResultSchema = closedObject({
+  categories: Type.Array(
+    closedObject({
+      slug: SkillCategorySlug,
+      label: NonEmptyString,
+      description: Type.Optional(NonEmptyString),
+      icon: Type.Optional(NonEmptyString),
+      preview: Type.Optional(SkillsSearchResultSchema.properties.results),
+    }),
+  ),
+  featured: Type.Optional(SkillsSearchResultSchema.properties.results),
+  previewsUnavailable: Type.Optional(Type.Boolean()),
 });
 
 export type SkillsCategoriesParams = Static<typeof SkillsCategoriesParamsSchema>;

@@ -413,6 +413,7 @@ export async function listClawHubPackages(
     isOfficial?: boolean;
     category?: string;
     featured?: boolean;
+    sort?: "installs";
     limit?: number;
     cursor?: string;
   },
@@ -428,6 +429,7 @@ export async function listClawHubPackages(
       isOfficial: params.isOfficial === undefined ? undefined : String(params.isOfficial),
       category: params.category,
       featured: params.featured ? "true" : undefined,
+      sort: params.sort,
       limit: params.limit === undefined ? undefined : String(params.limit),
       cursor: params.cursor,
     },

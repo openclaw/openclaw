@@ -12,6 +12,7 @@ import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { registryCategoryIcon } from "../../components/solid/registry-category-icon.tsx";
 import { SettingsEmpty, SettingsGroup } from "../../components/solid/settings-ui.tsx";
 import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
+import { CATALOG_INITIAL_PAGE_SIZE } from "../../lib/catalog-page-size.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatNumber } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -43,36 +44,6 @@ type SkillDiscoveryEntry = {
 };
 
 type SkillCategory = NonNullable<SkillsPresentation["clawhubCategory"]>;
-const OVERVIEW_PREVIEW_SIZE = 4;
-
-/** A shelf previews this page in feed order. Its action starts a separate category browse. */
-function groupOverview(rows: SkillDiscoveryEntry[], taxonomy: SkillCategory[]) {
-  if (!taxonomy.length || !rows.length) {
-    return { shelves: [], ungrouped: rows };
-  }
-  const buckets = new Map<string, { category: SkillCategory; rows: SkillDiscoveryEntry[] }>();
-  for (const category of taxonomy) {
-    buckets.set(category.slug, { category, rows: [] });
-  }
-  const ungrouped: SkillDiscoveryEntry[] = [];
-  for (const row of rows) {
-    let matched = false;
-    for (const slug of new Set(row.remote?.categories)) {
-      const bucket = buckets.get(slug);
-      if (bucket) {
-        matched = true;
-        if (bucket.rows.length < OVERVIEW_PREVIEW_SIZE) {
-          bucket.rows.push(row);
-        }
-      }
-    }
-    if (!matched) {
-      ungrouped.push(row);
-    }
-  }
-  return { shelves: [...buckets.values()].filter((bucket) => bucket.rows.length), ungrouped };
-}
-
 function linkedOwner(skill: SkillStatusEntry): string | null {
   const link = skill.clawhub;
   return link?.valid && link.ownerHandle ? `@${link.ownerHandle}` : null;
@@ -234,37 +205,43 @@ export function SkillDiscovery(props: SkillsProps) {
         skill,
       });
     }
-    const remoteRows: SkillDiscoveryEntry[] = [];
-    const remoteIds = new Set<string>();
-    for (const remote of results) {
-      const reference = remote.installRef;
-      const identity = `${remote.registry}\n${reference}`;
-      if (remoteIds.has(identity)) {
-        continue;
+    const installedByRef = new Map(
+      items.flatMap((entry) => {
+        const link = entry.skill?.clawhub;
+        return entry.skill && link?.valid
+          ? [[link.registry + "\n" + installedReference(entry.skill), entry] as const]
+          : [];
+      }),
+    );
+    const projectRemote = (entries: ClawHubSearchResult[], linkInstalled = false) => {
+      const rows = new Map<string, SkillDiscoveryEntry>();
+      for (const remote of entries) {
+        const reference = remote.installRef;
+        const id = remote.registry + "\n" + reference;
+        if (rows.has(id)) {
+          continue;
+        }
+        // A name match is never installation proof; match the registry and verified source.
+        const installed = installedByRef.get(id);
+        if (installed) {
+          if (linkInstalled) {
+            installed.remote = remote;
+          }
+          rows.set(id, { ...installed, remote });
+        } else {
+          rows.set(id, {
+            id: "remote:" + reference,
+            name: remote.displayName,
+            description: remote.summary ?? "",
+            attribution: reference,
+            byline: remote.ownerHandle ? "@" + remote.ownerHandle : reference,
+            remote,
+          });
+        }
       }
-      remoteIds.add(identity);
-      // A name match is never installation proof. Match the registry and verified publisher/source.
-      const installed = items.find(
-        (entry) =>
-          entry.skill?.clawhub?.valid &&
-          entry.skill.clawhub.registry === remote.registry &&
-          installedReference(entry.skill) === reference,
-      );
-      if (installed) {
-        installed.remote = remote;
-        remoteRows.push(installed);
-      } else {
-        remoteRows.push({
-          id: `remote:${reference}`,
-          name: remote.displayName,
-          description: remote.summary ?? "",
-          attribution: reference,
-          byline: remote.ownerHandle ? `@${remote.ownerHandle}` : reference,
-          remote,
-        });
-      }
-    }
-    return { installed: items, remote: remoteRows };
+      return [...rows.values()];
+    };
+    return { installed: items, remote: projectRemote(results, true), projectRemote };
   });
   const installed = createMemo(() => {
     // Canonical-form comparison: a composed (NFC) query must match decomposed (NFD) copy.
@@ -304,25 +281,58 @@ export function SkillDiscovery(props: SkillsProps) {
     setScope("all");
     props.onCategoryChange(next);
   };
+  const featured = createMemo<SkillCategory>(() => ({
+    slug: "featured",
+    featured: true,
+    label: t("skillsPage.featured"),
+  }));
+  const overview = () => !category() && !query().trim() && scope() === "all";
   const sections = createMemo(() => {
-    if (category() || query().trim() || scope() !== "all") {
+    if (!overview()) {
       return { shelves: [], ungrouped: remoteRows() };
     }
-    // An unavailable directory is empty; a pending directory has not placed any rows yet.
     const directory = props.readCategories();
-    return directory && groupOverview(remoteRows(), directory.categories);
+    if (!directory) {
+      return null;
+    }
+    const { projectRemote } = catalog();
+    const shelves: { category: SkillCategory; rows: SkillDiscoveryEntry[] }[] =
+      directory.categories.map((item) => ({
+        category: item,
+        rows: item.preview?.length
+          ? projectRemote(item.preview)
+          : remoteRows()
+              .filter(({ remote }) => remote?.categories?.includes(item.slug))
+              .slice(0, 4),
+      }));
+    if (directory.featured?.length) {
+      shelves.unshift({ category: featured(), rows: projectRemote(directory.featured) });
+    }
+    const slugs = new Set(directory.categories.map((item) => item.slug));
+    return {
+      shelves,
+      ungrouped: remoteRows().filter(
+        ({ remote }) => !remote?.categories?.some((slug) => slugs.has(slug)),
+      ),
+    };
   });
   const remoteTitle = () => category()?.label ?? t("skillsPage.clawHub");
-  const groupingPending = () =>
-    props.state.connected &&
-    scope() === "all" &&
-    !category() &&
-    !query().trim() &&
-    !props.readCategories();
+  const groupingPending = () => props.state.connected && overview() && !props.readCategories();
   const loadingResults = () => (
-    <CatalogDiscoverySection id="clawhub" title={remoteTitle()}>
-      {renderCatalogGridSkeleton({ label: t("skillsPage.searching"), cards: 6 })}
-    </CatalogDiscoverySection>
+    <section class="plugin-catalog-section">
+      <header class="plugin-catalog-section__header">
+        <Show
+          when={category()}
+          fallback={<span class="skeleton skill-discovery__skeleton-heading" aria-hidden="true" />}
+        >
+          {(selection) => <h2>{selection().label}</h2>}
+        </Show>
+      </header>
+      {renderCatalogGridSkeleton({
+        label: t("skillsPage.searching"),
+        cards: overview() ? 4 : CATALOG_INITIAL_PAGE_SIZE,
+      })}
+    </section>
   );
   const inventoryReady = () =>
     props.libraryEntries !== undefined &&
@@ -413,18 +423,30 @@ export function SkillDiscovery(props: SkillsProps) {
           fallback={<span class="skeleton plugin-catalog-chip--skeleton" aria-hidden="true" />}
         >
           {(directory) => (
-            <For each={directory().categories} keyed={(item) => item.slug}>
-              {(item) => (
+            <>
+              <Show when={directory().featured?.length}>
                 <CatalogDiscoveryChip
-                  ref={(button) => categoryChips.set(item().slug, button)}
-                  icon={registryCategoryIcon(item().icon)}
-                  active={category()?.slug === item().slug}
-                  onClick={() => selectCategory(item())}
+                  ref={(button) => categoryChips.set("featured", button)}
+                  icon={<Icon name="star" />}
+                  active={category()?.slug === "featured"}
+                  onClick={() => selectCategory(featured())}
                 >
-                  {item().label}
+                  {featured().label}
                 </CatalogDiscoveryChip>
-              )}
-            </For>
+              </Show>
+              <For each={directory().categories} keyed={(item) => item.slug}>
+                {(item) => (
+                  <CatalogDiscoveryChip
+                    ref={(button) => categoryChips.set(item().slug, button)}
+                    icon={registryCategoryIcon(item().icon)}
+                    active={category()?.slug === item().slug}
+                    onClick={() => selectCategory(item())}
+                  >
+                    {item().label}
+                  </CatalogDiscoveryChip>
+                )}
+              </For>
+            </>
           )}
         </Show>
       </CatalogDiscoveryChips>
@@ -437,6 +459,14 @@ export function SkillDiscovery(props: SkillsProps) {
             </button>
           </InlineAlert>
         )}
+      </Show>
+      <Show when={overview() && props.readCategories()?.previewsUnavailable}>
+        <InlineAlert tone="warning" role="alert">
+          {t("skillsPage.previewsUnavailable")}{" "}
+          <button type="button" class="btn btn--sm" onClick={() => props.onRetryCategories()}>
+            {t("common.retry")}
+          </button>
+        </InlineAlert>
       </Show>
       {/* Place the grouped overview after the wrapping strip settles. Installed and search stay independent. */}
       <Show
@@ -461,7 +491,7 @@ export function SkillDiscovery(props: SkillsProps) {
             </CatalogDiscoverySection>
           </Show>
           <Show
-            when={remoteRows().length > 0 && sections()}
+            when={sections() && (remoteRows().length > 0 || Boolean(sections()?.shelves.length))}
             fallback={
               <Show when={scope() === "all" && pending() && props.state.connected}>
                 {loadingResults()}
@@ -471,13 +501,15 @@ export function SkillDiscovery(props: SkillsProps) {
             <For each={sections()?.shelves} keyed={(section) => section.category.slug}>
               {(section) => (
                 <CatalogDiscoverySection
-                  id={"category-" + section().category.slug}
+                  id={
+                    "featured" in section().category
+                      ? "featured"
+                      : "category-" + section().category.slug
+                  }
                   title={section().category.label}
                   viewAllLabel={t("skillsPage.viewAll")}
-                  // Previews have at most four rows; the next section must not paint below a provisional shelf.
                   eager
                   onViewAll={() => {
-                    // The shelf button leaves the DOM; keep keyboard navigation on its matching chip.
                     const next = section().category;
                     categoryChips.get(next.slug)?.focus();
                     selectCategory(next);
@@ -525,6 +557,7 @@ export function SkillDiscovery(props: SkillsProps) {
             (category() || inventoryReady()) &&
             !props.hasNextPage &&
             installedSection().length + remoteRows().length === 0 &&
+            !sections()?.shelves.length &&
             !shelf() &&
             props.state.connected && (
               <SettingsGroup>
