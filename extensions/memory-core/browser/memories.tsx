@@ -232,7 +232,10 @@ function MemoryMemories(props: MemoryMemoriesProps) {
           <span class="settings-row__text">
             <span class="memory-memories__snippet">{rowProps.result.snippet}</span>
             <span class="settings-row__desc memory-memories__meta">
-              <code>{rowProps.result.path}</code> · {details()}
+              <code title={rowProps.result.path}>
+                <bdi>{rowProps.result.path}</bdi>
+              </code>
+              <span>{details()}</span>
             </span>
           </span>
           {expandable() ? (

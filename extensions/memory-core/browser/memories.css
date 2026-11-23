@@ -65,14 +65,36 @@
   overflow-wrap: anywhere;
 }
 
+.memory-memories__results {
+  contain: inline-size;
+}
+
 .memory-memories__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--space-2);
+  min-width: 0;
   margin-top: 2px;
 }
 
 .memory-memories__meta code {
-  overflow-wrap: anywhere;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  direction: rtl;
+  text-align: match-parent;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
+}
+
+[aria-expanded="true"] .memory-memories__meta code {
+  overflow: visible;
+  direction: inherit;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .memory-memories__chevron svg {
