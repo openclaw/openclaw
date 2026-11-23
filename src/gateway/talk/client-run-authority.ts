@@ -5,7 +5,7 @@ import {
   readGatewayDeviceSourceAuthority,
   retainGatewayDeviceRevocation,
 } from "../device-revocation.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 
@@ -13,7 +13,7 @@ import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 export async function retainTalkClientRunAuthority(
   params: Pick<GatewayRequestHandlerOptions, "client" | "context" | "hasCurrentClientAuthority">,
 ) {
-  const captured = await captureGatewayOperatorRunAuthority({
+  const captured = await prepareGatewayOperatorRunAuthority({
     ...params,
     client: params.client ?? null,
   });

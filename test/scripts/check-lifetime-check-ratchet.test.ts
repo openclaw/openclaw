@@ -14,11 +14,11 @@ it("counts calls and refusal literals, not comments, declarations or references"
   const source = parser.parseSourceFile(
     "fixture.ts",
     [
-      "// captureHttpRequestAuthority(); authority changed",
-      "function captureHttpRequestAuthority() {}",
-      "const reference = captureHttpRequestAuthority;",
-      "captureHttpRequestAuthority(); owner.captureHttpRequestAuthority();",
-      'owner["captureHttpRequestAuthority"]();',
+      "// captureAdmittedRunActiveAssertion(); authority changed",
+      "function captureAdmittedRunActiveAssertion() {}",
+      "const reference = captureAdmittedRunActiveAssertion;",
+      "captureAdmittedRunActiveAssertion(); owner.captureAdmittedRunActiveAssertion();",
+      'owner["captureAdmittedRunActiveAssertion"]();',
       'const refusal = "AUTHORITY CHANGED and no longer current";',
       "const template = `caller ${name} authority is no longer active`;",
       'const unrelated = "safe"; const fence = "pending question is no longer current";',
@@ -47,7 +47,7 @@ it("rejects a per-file gain even when another file loses one, and accepts reduct
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.writeFileSync(path.join(root, file), text);
   };
-  const call = "captureHttpRequestAuthority();\n";
+  const call = "captureAdmittedRunActiveAssertion();\n";
   git("init", "-q");
   write("src/a.ts", call);
   write("src/b.ts", call.repeat(2));

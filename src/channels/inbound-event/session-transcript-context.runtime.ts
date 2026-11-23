@@ -137,6 +137,16 @@ export async function mergeSessionTranscriptContext(params: {
     throw new Error("Session transcript context requires an agent owner.");
   }
   const windows = mergeableChatWindowEntries(params.ctx);
+  // The session that runs this turn already replays these user and assistant
+  // turns (bounded by the same history limits). Copying them into the flat
+  // inbound history would send each one twice on every later turn.
+  if (
+    windows.length === 0 &&
+    !options?.chatWindow &&
+    (params.ctx.SessionKey ?? params.sessionKey) === params.sessionKey
+  ) {
+    return;
+  }
   const turns = await readRecentUserAssistantTextForSession({
     agentId,
     sessionKey: params.sessionKey,

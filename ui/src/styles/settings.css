@@ -559,6 +559,22 @@ openclaw-appearance-background .settings-background-preview .session-background_
   flex: 0 0 auto;
 }
 
+/* Schema section help is a row action: keep its touch box inside the scrolling panel. */
+@media (pointer: coarse), (max-width: 640px) {
+  #config-section-panel
+    .settings-section__header:has(
+      > .settings-section__actions > .settings-section__docs:only-child
+    ) {
+    > .settings-section__copy {
+      align-self: center;
+    }
+
+    > .settings-section__copy + .settings-section__actions .settings-section__help-button {
+      margin-block: 0;
+    }
+  }
+}
+
 .settings-section__docs {
   display: inline-flex;
   align-items: center;
@@ -1959,9 +1975,22 @@ openclaw-approvals-page .data-table-pagination__info {
   color: var(--muted);
 }
 
+/* The translated pending label must not narrow the command or move the history below it. */
 .standing-grants__revoke {
+  display: inline-grid;
   grid-area: 1 / 2 / span 3;
   align-self: start;
+  place-items: center;
+}
+
+.standing-grants__revoke::before,
+.standing-grants__revoke > span {
+  grid-area: 1 / 1;
+}
+
+.standing-grants__revoke::before {
+  content: attr(data-alternate-label);
+  visibility: hidden;
 }
 
 /* Quiet-hours details stay connected to their toggle without changing row controls. */
@@ -1970,25 +1999,6 @@ openclaw-approvals-page .data-table-pagination__info {
 }
 
 /* Full Settings navigation loads with the sidebar; fallback geometry stays in layout.css. */
-.settings-sidebar__esc {
-  margin-left: auto;
-  padding: 2px 6px;
-  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--card) 70%, transparent);
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: calc(10px * var(--control-ui-text-scale));
-  font-weight: 550;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-/* Inside the drawer there is no Escape key to hint at. */
-.shell--mobile-nav .settings-sidebar__esc {
-  display: none;
-}
-
 .settings-sidebar__agent openclaw-agent-select {
   display: block;
   min-width: 0;
@@ -2019,6 +2029,31 @@ openclaw-approvals-page .data-table-pagination__info {
   .settings-sidebar__agent
   .agent-select__trigger[aria-expanded="true"] {
   background: var(--bg-hover);
+}
+
+/* In the header the picker is the agent's avatar alone; the trigger keeps the name
+   in its accessible label and the menu lists every agent by name. */
+.settings-sidebar__agent--header .agent-select__trigger {
+  gap: 4px;
+  width: auto;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 6px 0 4px;
+  border-radius: var(--radius-full);
+}
+
+.settings-sidebar__agent--header .agent-select__trigger .agent-select__avatar {
+  width: 24px;
+  height: 24px;
+}
+
+.settings-sidebar__agent--header .agent-select__trigger .agent-select__label {
+  display: none;
+}
+
+.settings-sidebar__agent--header .agent-select__trigger .agent-select__chevron {
+  margin-inline-start: 0;
+  color: var(--muted);
 }
 
 .settings-sidebar__search::after {

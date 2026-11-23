@@ -83,7 +83,7 @@ it.each(["refused", "blocked"] as const)("reports %s once", async (status) => {
 });
 
 const stopFirst =
-  "Error: Stop the Gateway first (openclaw --profile work gateway stop), then retry.";
+  "Error: Stop the Gateway first (openclaw --profile work gateway stop --force), then retry.";
 it.each([
   [new Error("inventory unavailable"), "Error: inventory unavailable"],
   [new GatewayStateOwnerContentionError("/fixture/state/openclaw.sqlite"), stopFirst],

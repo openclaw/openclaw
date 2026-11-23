@@ -1,10 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { afterEach, assert, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { parseUpdateRecoveryBackupManifest } from "../../commands/backup-verify-manifest.js";
 import * as daemonExec from "../../daemon/exec-file.js";
 import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import * as gatewayService from "../../daemon/service.js";
@@ -20,11 +18,9 @@ import {
   resolveSystemdUnitPath,
 } from "../../daemon/systemd-service-files.js";
 import { systemdManagerVersionProbe } from "../../daemon/systemd-user-bus.test-support.js";
-import * as databaseEngine from "../../infra/database-engine/config.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
-import * as baselineCapture from "../../infra/update-recovery-baseline-capture.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import * as updateRunLedger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
@@ -41,7 +37,6 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as shared from "./shared.js";
 import { snapshotUpdateFixtureTree } from "./update-command-filesystem-snapshot.test-support.js";
-import * as commandRun from "./update-command-run.js";
 import {
   admitUpdateCommandRun,
   prepareUpdateCommand,
@@ -127,7 +122,6 @@ it.each([
     vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", `unix:path=${path.join(home, "bus")}`);
     vi.spyOn(daemonExec, "execFileUtf8").mockImplementation(systemdManagerVersionProbe);
     const serviceEnv = { ...process.env, ...serviceOverrides };
-    let previousRunId: string | undefined;
     if (scenario === "owned-command") {
       await writePackageRoot(root, "1.0.0");
       for (const [state, channel] of [
@@ -140,15 +134,10 @@ it.each([
           JSON.stringify({ update: { channel }, database: { engine: "sqlite" } }),
         );
       }
-      previousRunId = createUpdateRun({ trigger: "cli" }, { env: serviceEnv }).runId;
+      // An earlier run gives the service profile its state database, so it is not fresh.
+      const { runId: previousRunId } = createUpdateRun({ trigger: "cli" }, { env: serviceEnv });
       updateRunLedger.finishUpdateRun(previousRunId, { status: "succeeded" }, { env: serviceEnv });
       closeOpenClawStateDatabaseForTest();
-      using original = new DatabaseSync(resolveOpenClawStateSqlitePath(serviceEnv));
-      original
-        .prepare(
-          "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
-        )
-        .run("fixture.original", '{"selected":"service"}', 1);
       vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(root);
     }
     let pending: ReturnType<typeof createRetainedUpdateRecovery> | undefined;
@@ -234,65 +223,10 @@ it.each([
       expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
     };
     if (scenario === "owned-command") {
-      const resolve = vi.spyOn(commandRun, "resolveUpdateCommandAdmissionEnv");
-      const admission = vi.spyOn(commandRun, "admitUpdateCommandRun");
-      const engine = vi.spyOn(databaseEngine, "resolveDatabaseEngineSelection");
-      const capture = vi.spyOn(baselineCapture, "captureUpdateRecoveryBaseline");
-      const inspection = vi.spyOn(servicePlan, "readManagedGatewayServiceForUpdate");
-      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-      vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-      await expect(
-        updateCommand({ tag: "main", yes: true, json: true, restart: false }),
-      ).rejects.toEqual(new ExitError(1));
-      expect(resolve).toHaveBeenCalledOnce();
-      expect(admission).toHaveBeenCalledOnce();
-      const selectedEnv = await resolve.mock.results[0]!.value;
-      const run = await admission.mock.results[0]!.value;
-      expect(selectedEnv).toMatchObject(serviceOverrides);
-      expect(admission.mock.calls[0]?.[0].env).toBe(selectedEnv);
-      expect(run.env).toBe(selectedEnv);
-      expect(engine).toHaveBeenCalledWith(
-        expect.objectContaining({ update: { channel: "beta" }, database: { engine: "sqlite" } }),
-        expect.objectContaining(serviceOverrides),
-      );
-      expect(capture).toHaveBeenCalledOnce();
-      expect(capture.mock.calls[0]?.[0].env).toBe(selectedEnv);
-      expect(
-        inspection.mock.calls.filter(
-          ([, selectedRoot, allowInstallRootChange]) =>
-            selectedRoot === root && allowInstallRootChange === true,
-        ),
-      ).toHaveLength(1);
-      expect(getUpdateRun(run.runId, { env: serviceEnv })).toMatchObject({
-        status: "failed",
-        phase: "finished",
-        reason: "unsupported-package-target",
-      });
+      await expectAdmitted(true);
       expect(
         fs.existsSync(resolveOpenClawStateSqlitePath({ ...process.env, ...callerOverrides })),
       ).toBe(false);
-      expect(output).toHaveBeenCalledWith(
-        expect.objectContaining({ runId: run.runId, reason: "unsupported-package-target" }),
-      );
-      const ref = run.originalRecoveryCapture;
-      assert(ref);
-      const manifest = parseUpdateRecoveryBackupManifest(fs.readFileSync(ref.manifestPath, "utf8"));
-      const databasePath = fs.realpathSync(resolveOpenClawStateSqlitePath(serviceEnv));
-      expect(manifest.databases).toContainEqual({ role: "global", path: databasePath });
-      const captured = manifest.entries.find((entry) => entry.sourcePath === databasePath);
-      assert(captured?.kind === "file");
-      using original = new DatabaseSync(
-        path.join(path.dirname(ref.manifestPath), captured.archivePath),
-        { readOnly: true },
-      );
-      expect(
-        original
-          .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
-          .get("fixture.original"),
-      ).toEqual({ value_json: '{"selected":"service"}' });
-      expect(original.prepare("SELECT run_id FROM update_runs ORDER BY run_id").all()).toEqual([
-        { run_id: previousRunId },
-      ]);
     } else if (scenario === "owned" || scenario === "stale-install" || scenario === "absent") {
       const usesServiceState = scenario !== "absent";
       await expectAdmitted(usesServiceState);

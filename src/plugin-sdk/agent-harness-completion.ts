@@ -27,6 +27,7 @@ import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
 } from "../agents/subagents/announce/subagent-announce-origin.js";
+import { runWithOperatorToolGatewayContinuationContext } from "../gateway/server-plugin-in-process-authority.js";
 import {
   getGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
@@ -89,7 +90,9 @@ export async function deliverAgentHarnessCompletion(params: {
           : deliverAgentHarnessCompletionBound(params),
     );
   return params.completionCustody
-    ? runWithAgentHarnessCompletionCustody(params.completionCustody, scope, run)
+    ? runWithAgentHarnessCompletionCustody(params.completionCustody, scope, () =>
+        runWithOperatorToolGatewayContinuationContext(run, scope.requesterAgentId),
+      )
     : run();
 }
 

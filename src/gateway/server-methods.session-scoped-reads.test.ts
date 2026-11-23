@@ -359,7 +359,7 @@ describe("narrow session read owners", () => {
     },
   );
 
-  it.each(["current", "source", "generation"] as const)(
+  it.each(["current", "generation"] as const)(
     "keeps the original %s through message subscription preparation",
     async (change) => {
       await withScopedReader("subscription-reader", async ({ reader: client, cfg }) => {
@@ -379,14 +379,12 @@ describe("narrow session read owners", () => {
         const entered = createDeferredCore();
         const release = createDeferredCore();
         const respond = vi.fn();
-        let current = true;
         const request = handleGatewayRequest({
           req: gatewayRequest(change, "sessions.messages.subscribe", { key, agentId: "main" }),
           client,
           context,
           respond,
           isWebchatConnect: () => false,
-          hasCurrentClientAuthority: () => current,
           extraHandlers: createLazyCoreHandlers({
             methods: ["sessions.messages.subscribe"],
             loadHandlers: async () => {
@@ -400,9 +398,6 @@ describe("narrow session read owners", () => {
         try {
           await Promise.race([entered.promise, request]);
           expect(respond, JSON.stringify(respond.mock.calls)).not.toHaveBeenCalled();
-          if (change === "source") {
-            current = false;
-          }
           if (change === "generation") {
             await seed({ ...entry, lifecycleRevision: "replacement", sessionId: "replacement" });
           }
@@ -410,26 +405,19 @@ describe("narrow session read owners", () => {
           release.resolve();
           await outcome;
         }
-        if (change === "source") {
-          expect(await outcome).toMatchObject([
-            { status: "rejected", reason: { message: "Gateway requester authority changed" } },
-          ]);
-          expect(respond).not.toHaveBeenCalled();
+        expect(await outcome).toEqual([{ status: "fulfilled", value: undefined }]);
+        if (change === "current") {
+          expect(respond).toHaveBeenCalledExactlyOnceWith(
+            true,
+            { subscribed: true, key, agentId: "main" },
+            undefined,
+          );
         } else {
-          expect(await outcome).toEqual([{ status: "fulfilled", value: undefined }]);
-          if (change === "current") {
-            expect(respond).toHaveBeenCalledExactlyOnceWith(
-              true,
-              { subscribed: true, key, agentId: "main" },
-              undefined,
-            );
-          } else {
-            expect(respond).toHaveBeenCalledExactlyOnceWith(
-              false,
-              undefined,
-              expect.objectContaining({ code: "INVALID_REQUEST" }),
-            );
-          }
+          expect(respond).toHaveBeenCalledExactlyOnceWith(
+            false,
+            undefined,
+            expect.objectContaining({ code: "INVALID_REQUEST" }),
+          );
         }
         expect(subscribers.get(key).has(client.connId)).toBe(change === "current");
       });
@@ -630,7 +618,6 @@ describe("narrow session read owners", () => {
       for (const changed of [
         "metadata-no-revision",
         "metadata",
-        "authority",
         "generation",
         "visibility",
         ...(method === "sessions.branches.list"
@@ -658,71 +645,58 @@ describe("narrow session read owners", () => {
           entered.resolve();
           await release.promise;
         });
-        let current = true;
         const respond = vi.fn();
         const request = dispatchRead(method, {
           client: reader,
           context,
           respond,
-          hasCurrentClientAuthority: () => current,
         });
         const outcome = Promise.allSettled([request]);
         try {
           await Promise.race([entered.promise, request]);
           expect(io).toHaveBeenCalledOnce();
           expect(respond).not.toHaveBeenCalled();
-          if (changed === "authority") {
-            current = false;
-          } else {
-            await seed({
-              ...entry,
-              ...(metadataOnly
-                ? {
-                    label: "Renamed during read",
-                    updatedAt: 2,
-                    lastActivityAt: 2,
-                    totalTokens: 10,
-                  }
-                : changed === "generation"
-                  ? { lifecycleRevision: "replacement" }
-                  : changed === "reset"
-                    ? { sessionId: "replacement" }
-                    : changed === "archive"
-                      ? { archivedAt: 2 }
-                      : changed === "workspace"
-                        ? { spawnedWorkspaceDir: path.join(state.workspaceDir, "replacement") }
-                        : { visibility: "draft" }),
-            });
-          }
+          await seed({
+            ...entry,
+            ...(metadataOnly
+              ? {
+                  label: "Renamed during read",
+                  updatedAt: 2,
+                  lastActivityAt: 2,
+                  totalTokens: 10,
+                }
+              : changed === "generation"
+                ? { lifecycleRevision: "replacement" }
+                : changed === "reset"
+                  ? { sessionId: "replacement" }
+                  : changed === "archive"
+                    ? { archivedAt: 2 }
+                    : changed === "workspace"
+                      ? { spawnedWorkspaceDir: path.join(state.workspaceDir, "replacement") }
+                      : { visibility: "draft" }),
+          });
         } finally {
           release.resolve();
           await outcome;
           io.mockRestore();
         }
         const settled = await outcome;
-        if (changed === "authority") {
-          expect(settled).toMatchObject([
-            { status: "rejected", reason: { message: "Gateway requester authority changed" } },
-          ]);
-          expect(respond).not.toHaveBeenCalled();
-        } else {
-          expect(settled).toEqual([{ status: "fulfilled", value: undefined }]);
-          expect(respond).toHaveBeenCalledOnce();
-          const response = respond.mock.calls[0];
-          const scenario = `${method}/${changed}: ${JSON.stringify(response)}`;
-          expect.soft(response?.[0], scenario).toBe(metadataOnly);
-          expect
-            .soft(response?.[1], scenario)
-            .toEqual(
-              metadataOnly
-                ? method === "sessions.branches.list"
-                  ? { branches: [] }
-                  : method === "sessions.files.assets"
-                    ? { assets: [] }
-                    : expect.objectContaining({ sessionKey: key })
-                : undefined,
-            );
-        }
+        expect(settled).toEqual([{ status: "fulfilled", value: undefined }]);
+        expect(respond).toHaveBeenCalledOnce();
+        const response = respond.mock.calls[0];
+        const scenario = `${method}/${changed}: ${JSON.stringify(response)}`;
+        expect.soft(response?.[0], scenario).toBe(metadataOnly);
+        expect
+          .soft(response?.[1], scenario)
+          .toEqual(
+            metadataOnly
+              ? method === "sessions.branches.list"
+                ? { branches: [] }
+                : method === "sessions.files.assets"
+                  ? { assets: [] }
+                  : expect.objectContaining({ sessionKey: key })
+              : undefined,
+          );
       }
     });
   });

@@ -21,7 +21,7 @@ it("journals complete records without rewriting the array until completion", asy
     },
   ];
   for (const observation of observations) {
-    await writer.record(observation);
+    await writer.record(structuredClone(observation));
     expect(await readFile(destination, "utf8")).toBe("[]");
     expect(
       JSON.parse(
@@ -37,7 +37,7 @@ it("journals complete records without rewriting the array until completion", asy
       .split("\n")
       .map((line) => JSON.parse(line)),
   ).toEqual(observations);
-  await writer.finish(observations);
+  await writer.finish(structuredClone(observations));
   expect(JSON.parse(await readFile(destination, "utf8"))).toEqual(observations);
 });
 
