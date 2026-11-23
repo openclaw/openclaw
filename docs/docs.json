@@ -2249,6 +2249,7 @@
                       "providers/baseten",
                       "providers/bedrock",
                       "providers/bedrock-mantle",
+                      "providers/bf16",
                       "providers/cerebras",
                       "providers/chutes",
                       "providers/cohere",

@@ -315,6 +315,7 @@
     "!dist/extensions/*/node_modules/**",
     "!dist/extensions/arcee/**",
     "!dist/extensions/baseten/**",
+    "!dist/extensions/bf16/**",
     "!dist/extensions/brave/**",
     "!dist/extensions/byteplus/**",
     "!dist/extensions/buzz/**",

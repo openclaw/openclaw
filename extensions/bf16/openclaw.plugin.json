@@ -1,0 +1,245 @@
+{
+  "id": "bf16",
+  "categories": ["models"],
+  "name": "bf16.ai",
+  "description": "OpenClaw bf16.ai provider plugin.",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["bf16"],
+  "setup": {
+    "providers": [
+      {
+        "id": "bf16",
+        "envVars": ["BF16_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "bf16",
+      "method": "api-key",
+      "choiceId": "bf16-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "bf16.ai API key",
+      "choiceHint": "OpenAI-compatible uncensored open-weight models",
+      "groupId": "bf16",
+      "groupLabel": "bf16.ai",
+      "groupHint": "OpenAI-compatible uncensored open-weight models",
+      "optionKey": "bf16ApiKey",
+      "cliFlag": "--bf16-api-key",
+      "cliOption": "--bf16-api-key <key>",
+      "cliDescription": "bf16.ai API key"
+    }
+  ],
+  "modelCatalog": {
+    "providers": {
+      "bf16": {
+        "baseUrl": "https://api.bf16.ai/v1",
+        "api": "openai-completions",
+        "defaultModel": "deepseek/deepseek-v4.1-flash-uncensored",
+        "models": [
+          {
+            "id": "deepseek/deepseek-v4.1-flash-uncensored",
+            "name": "DeepSeek V4.1 Flash (Uncensored)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 130000,
+            "cost": {
+              "input": 0.26,
+              "output": 1,
+              "cacheRead": 0.045,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsUsageInStreaming": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "deepseek/deepseek-v4.1-flash-uncensored-fast",
+            "name": "DeepSeek V4.1 Flash (Uncensored Fast)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 130000,
+            "cost": {
+              "input": 0.28,
+              "output": 1.12,
+              "cacheRead": 0.055,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsUsageInStreaming": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "bf16/deepseek-v4.1-flash-1017-exl3-2.5bpw",
+            "name": "DeepSeek V4.1 Flash 1017 EXL3 2.5bpw (bf16)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 524288,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0.2548,
+              "output": 0.98,
+              "cacheRead": 0.0441,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsUsageInStreaming": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "zai-org/glm-5.3-flash-uncensored",
+            "name": "GLM-5.3 Flash Vision (Uncensored)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 0.3,
+              "output": 1.12,
+              "cacheRead": 0.065,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsUsageInStreaming": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "zai-org/glm-5.3-uncensored",
+            "name": "GLM-5.3 Flagship (Uncensored)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1048576,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 1.35,
+              "output": 4.2,
+              "cacheRead": 0.25,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsUsageInStreaming": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "moonshotai/kimi-k3.1-pro-uncensored",
+            "name": "Kimi K3.1 Pro (Uncensored)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 1.95,
+              "output": 6.9,
+              "cacheRead": 0.28,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsUsageInStreaming": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "bf16/auto",
+            "name": "bf16 Auto (Balanced Router)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 130000,
+            "cost": {
+              "input": 0.26,
+              "output": 1,
+              "cacheRead": 0.045,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsUsageInStreaming": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "bf16/auto:fast",
+            "name": "bf16 Auto Fast (Low-Latency Router)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 130000,
+            "cost": {
+              "input": 0.28,
+              "output": 1.12,
+              "cacheRead": 0.055,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsUsageInStreaming": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "bf16/auto:coding",
+            "name": "bf16 Auto Coding (Code & Tool Router)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 130000,
+            "cost": {
+              "input": 0.26,
+              "output": 1,
+              "cacheRead": 0.045,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsUsageInStreaming": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "bf16/auto:reasoning",
+            "name": "bf16 Auto Reasoning (Reasoning Router)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 130000,
+            "cost": {
+              "input": 0.26,
+              "output": 1,
+              "cacheRead": 0.045,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsUsageInStreaming": true,
+              "maxTokensField": "max_tokens"
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "bf16": "refreshable"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

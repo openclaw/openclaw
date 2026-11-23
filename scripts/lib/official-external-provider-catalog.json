@@ -235,6 +235,50 @@
       }
     },
     {
+      "name": "@openclaw/bf16-provider",
+      "description": "OpenClaw bf16.ai provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "bf16",
+          "label": "bf16.ai"
+        },
+        "providers": [
+          {
+            "id": "bf16",
+            "name": "bf16.ai",
+            "docs": "/providers/bf16",
+            "categories": ["cloud", "llm"],
+            "envVars": ["BF16_API_KEY"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "bf16-api-key",
+                "appGuidedSecret": true,
+                "choiceLabel": "bf16.ai API key",
+                "choiceHint": "OpenAI-compatible uncensored open-weight models",
+                "groupId": "bf16",
+                "groupLabel": "bf16.ai",
+                "groupHint": "OpenAI-compatible uncensored open-weight models",
+                "optionKey": "bf16ApiKey",
+                "cliFlag": "--bf16-api-key",
+                "cliOption": "--bf16-api-key <key>",
+                "cliDescription": "bf16.ai API key",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/bf16-provider",
+          "npmSpec": "@openclaw/bf16-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.10.6"
+        }
+      }
+    },
+    {
       "name": "@openclaw/byteplus-provider",
       "description": "OpenClaw BytePlus provider plugin.",
       "source": "official",

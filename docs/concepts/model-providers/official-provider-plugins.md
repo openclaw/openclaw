@@ -198,6 +198,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 | --------------------------------------- | -------------------------------- | ---------------------------------------------- | ---------------------------------------------------------- |
 | [Abliteration](/providers/abliteration) | `abliteration`                   | `ABLITERATION_API_KEY` or `ABLIT_KEY`          | `abliteration/abliterated-model-large-flash`               |
 | [Arcee](/providers/arcee)               | `arcee`                          | `ARCEEAI_API_KEY` or `OPENROUTER_API_KEY`      | `arcee/trinity-large-thinking`                             |
+| [bf16.ai](/providers/bf16)              | `bf16`                           | `BF16_API_KEY`                                 | `bf16/deepseek/deepseek-v4.1-flash-uncensored`             |
 | BytePlus                                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                             | `byteplus-plan/ark-code-latest`                            |
 | Cerebras                                | `cerebras`                       | `CEREBRAS_API_KEY`                             | `cerebras/gpt-oss-120b`                                    |
 | Chutes                                  | `chutes`                         | `CHUTES_API_KEY` or `CHUTES_OAUTH_TOKEN`       | `chutes/zai-org/GLM-5-TEE`                                 |

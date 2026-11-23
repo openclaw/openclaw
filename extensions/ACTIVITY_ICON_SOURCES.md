@@ -19,6 +19,7 @@ The following defaults reuse the corresponding files in [`ui/public/provider-ico
 | `arcee`                 | `ProviderIcon-arcee.svg`        |
 | `azure-speech`          | `ProviderIcon-microsoft.svg`    |
 | `baseten`               | `ProviderIcon-baseten.svg`      |
+| `bf16`                  | `ProviderIcon-bf16.svg`         |
 | `byteplus`              | `ProviderIcon-byteplus.svg`     |
 | `cerebras`              | `ProviderIcon-cerebras.svg`     |
 | `chutes`                | `ProviderIcon-chutes.svg`       |

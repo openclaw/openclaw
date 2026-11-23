@@ -214,7 +214,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-106 plugins
+107 plugins
 
 - **[abliteration](/plugins/reference/abliteration)** (`@openclaw/abliteration-provider`) - npm or ClawHub: `@openclaw/abliteration-provider`. OpenClaw Abliteration provider plugin.
 
@@ -229,6 +229,8 @@ Each entry lists the package, distribution route, and description.
 - **[arcee](/plugins/reference/arcee)** (`@openclaw/arcee-provider`) - npm or ClawHub: `@openclaw/arcee-provider`. Adds Arcee model provider support to OpenClaw.
 
 - **[baseten](/plugins/reference/baseten)** (`@openclaw/baseten-provider`) - npm or ClawHub: `@openclaw/baseten-provider`. OpenClaw Baseten provider plugin.
+
+- **[bf16](/plugins/reference/bf16)** (`@openclaw/bf16-provider`) - npm or ClawHub: `@openclaw/bf16-provider`. OpenClaw bf16.ai provider plugin.
 
 - **[brave](/plugins/reference/brave)** (`@openclaw/brave-plugin`) - npm or ClawHub: `@openclaw/brave-plugin`. OpenClaw Brave Search provider plugin for web search.
 
