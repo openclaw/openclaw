@@ -302,7 +302,9 @@ it("does not drop bounded reader families while total capacity is unused", () =>
     "openclaw_sqlite_reader_read_bytes_total",
     "openclaw_webhook_received_total",
   ] as const) {
-    for (let i = 0; i < 121; i++) store.counter(name, "bounded", { operation: String(i) }, 1);
+    for (let i = 0; i < 121; i++) {
+      store.counter(name, "bounded", { operation: String(i) }, 1);
+    }
   }
   expect(store.render().toString()).not.toContain("openclaw_prometheus_series_dropped_total");
 });
