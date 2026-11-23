@@ -421,7 +421,7 @@ describe("worker creation source recovery", () => {
           context: caller.context,
           assertCurrent: () => {},
         }),
-      ).rejects.toThrow("Restart recovery operator authority changed; start a new user turn.");
+      ).rejects.toThrow("Restart recovery could not admit this input. Start a new user turn.");
     } finally {
       held.release();
     }

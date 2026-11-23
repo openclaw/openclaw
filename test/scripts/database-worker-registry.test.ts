@@ -20,7 +20,6 @@ describe("database-worker test routing registry", () => {
     "src/wizard/setup.inference-recovery.integration.test.ts",
     "src/auto-reply/reply/commands-acp.owner.test.ts",
     "src/auto-reply/reply/commands-config.owner.test.ts",
-    "src/auto-reply/reply/commands-plugins.owner.test.ts",
     "src/auto-reply/reply/commands-session-restart.test.ts",
     "src/auto-reply/reply/dispatch-from-config.reply-dispatch-scope.test.ts",
     "src/auto-reply/reply/directive-handling.mixed-inline.test.ts",

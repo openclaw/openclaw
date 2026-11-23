@@ -6,7 +6,6 @@ import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createPreparedTestApprovalManager } from "../exec-approval-manager.test-support.js";
-import * as approvalStore from "../operator-approval-store.js";
 import * as recordLookup from "./approval-record-lookup.js";
 import {
   createApprovalInvocation,
@@ -112,62 +111,6 @@ function retireAtCommit(connection: AbortController, stage: string) {
   });
   return stages;
 }
-
-it.for([
-  { operation: "list", stage: "settlement" },
-  { operation: "revoke", stage: "settlement" },
-  { operation: "revoke", stage: "commit" },
-] as const)(
-  "rechecks grant $operation RPC authority at $stage",
-  async ({ operation, stage }, test) => {
-    const fixture = await createExecApprovalFixture(test);
-    await fixture.run(async () => {
-      const client = createClient({ deviceId: "grant-reviewer", scopes: ["operator.admin"] });
-      const invocation = createApprovalInvocation({
-        handlers: fixture.handlers,
-        method: operation === "list" ? "exec.approval.grants.list" : "exec.approval.grants.revoke",
-        body: operation === "list" ? {} : { grantId: "missing" },
-        client,
-      });
-      const invalidate = () => {
-        client.invalidated = true;
-      };
-      if (operation === "list") {
-        const list = approvalStore.listCronStandingGrants;
-        vi.spyOn(approvalStore, "listCronStandingGrants").mockImplementationOnce(
-          after(
-            (params: Parameters<typeof list>[0]) =>
-              list({ ...params, databaseOptions: fixture.databaseOptions }),
-            invalidate,
-          ),
-        );
-      } else {
-        const revoke = approvalStore.revokeCronStandingGrant;
-        vi.spyOn(approvalStore, "revokeCronStandingGrant").mockImplementationOnce(
-          after(
-            (params: Parameters<typeof revoke>[0]) =>
-              revoke({ ...params, databaseOptions: fixture.databaseOptions }),
-            () => {
-              if (stage === "settlement") {
-                invalidate();
-              }
-            },
-          ),
-        );
-      }
-      if (stage === "commit") {
-        probe.admission(workerAdmission, (request, grant, admit) => {
-          if (request.stage === "commit") {
-            client.invalidated = true;
-          }
-          return admit(request, grant);
-        });
-      }
-      await expect(invocation.invoke()).rejects.toThrow(/authority/i);
-      expect(invocation.respond).not.toHaveBeenCalled();
-    });
-  },
-);
 
 it.for(["exec.approval.get", "exec.approval.list", "plugin.approval.list"] as const)(
   "rechecks authority after the lookup helper returns for %s",

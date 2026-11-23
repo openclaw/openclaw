@@ -54,10 +54,11 @@ vi.mock("../flows/doctor-health-contributions.js", async (importOriginal) => ({
 }));
 vi.mock("../gateway/update-run-watcher.js", async (importOriginal) => ({
   ...(await importOriginal<typeof UpdateRunWatcher>()),
-  wakeUpdateRunWatcher: async (_runId?: string, advisoryWork?: () => Promise<void>) => {
+  wakeUpdateRunWatcher: (_runId?: string, advisoryWork?: () => Promise<void>) => {
     if (advisoryWork) {
-      await trackAsyncWork(advisoryWork);
+      void trackAsyncWork(advisoryWork);
     }
+    return true;
   },
 }));
 

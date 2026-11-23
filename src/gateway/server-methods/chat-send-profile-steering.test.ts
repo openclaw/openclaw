@@ -312,7 +312,9 @@ it.each(["backend", "question dispatcher"] as const)(
     });
     expectUntouched(fixture, operation, cancel);
     await fixture.finishDispatch();
-    expect(authority.assertCurrent).toThrow("operator execution authority is no longer active");
+    expect(authority.assertCurrent).toThrow(
+      "Operator execution ended. Reconnect to the Gateway, then resend your message.",
+    );
   },
 );
 

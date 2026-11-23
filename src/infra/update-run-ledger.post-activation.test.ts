@@ -65,7 +65,7 @@ it("retains post-activation advice from a closed tick scope without reopening th
   try {
     const job = tick.run(async () => {
       await closed.promise;
-      await wakeUpdateRunWatcher(run.runId, async () => {
+      const accepted = wakeUpdateRunWatcher(run.runId, async () => {
         await recordUpdateRunStepAsync(
           run.runId,
           {
@@ -76,10 +76,13 @@ it("retains post-activation advice from a closed tick scope without reopening th
           options,
         );
       });
+      expect(accepted).toBe(true);
     });
     await tick.drain();
     closed.resolve();
     await job;
+    // The watcher owns the advisory job; stopping it joins that work.
+    await watcher.stop();
     expect(getUpdateRun(run.runId, options)?.steps).toContainEqual(
       expect.objectContaining({ detail: "Closed tick inspection receipt." }),
     );

@@ -192,7 +192,7 @@ export async function uploadGitHubPublicationEvidence(params: {
         throw error;
       }
       throw new Error(
-        "Upload authority changed after the request started. GitHub may have created the attachment; reconcile the original upload before retrying.",
+        "The upload ended after dispatch. GitHub may have created the attachment; reconcile the original upload before retrying.",
         { cause: error },
       );
     }

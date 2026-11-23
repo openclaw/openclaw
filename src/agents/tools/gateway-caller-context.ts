@@ -205,7 +205,7 @@ export function createAdmittedGatewayToolCallerIdentity(
     receiptAuthority: composeReceiptAuthority(
       resolveAdmittedRunActiveAssertion(params.admittedRunContext) ??
         (() => {
-          throw new Error("agent tool caller authority is no longer active");
+          throw new Error("The agent run ended. Start a new turn to retry.");
         }),
       params.receiptAuthority,
     ),

@@ -82,8 +82,8 @@ export async function settleRunFromTrial(
   );
   if (outcome.status === "succeeded") {
     const step = "post-activation doctor inspections";
-    // Advisory work never holds the committed trial handshake open.
-    void wakeUpdateRunWatcher(trial.runId, async () => {
+    // Advisory work never holds the committed trial handshake open; the watcher logs its failures.
+    const accepted = wakeUpdateRunWatcher(trial.runId, async () => {
       try {
         const [{ runPostActivationInspections }, { resolvePostActivationInspectionCheckIds }] =
           await Promise.all([
@@ -120,11 +120,10 @@ export async function settleRunFromTrial(
           detail,
         });
       }
-    }).catch((error: unknown) => {
-      log.warn(
-        `update run ${trial.runId} inspection result could not be recorded: ${String(error)}`,
-      );
     });
+    if (!accepted) {
+      log.warn(`update run ${trial.runId} inspections skipped: no Gateway update watcher`);
+    }
   }
   trial.reported = true;
   await writeTrial(trial, prefix);
