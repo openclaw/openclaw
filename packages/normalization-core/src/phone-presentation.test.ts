@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { formatInternationalPhoneNumberForDisplay } from "./phone-presentation.js";
+import {
+  formatInternationalPhoneNumber,
+  formatInternationalPhoneNumberForDisplay,
+} from "./phone-presentation.js";
 
 describe("formatInternationalPhoneNumberForDisplay", () => {
   it.each([
@@ -30,5 +33,16 @@ describe("formatInternationalPhoneNumberForDisplay", () => {
 
   it("returns undefined for a malformed locale", () => {
     expect(formatInternationalPhoneNumberForDisplay("+4930123456", "not_a_locale")).toBeUndefined();
+  });
+});
+
+describe("formatInternationalPhoneNumber", () => {
+  it.each([
+    ["+4930123456", "+49 30 123456"],
+    ["+5561988881234", "+55 61 98888 1234"],
+    ["+not-a-number", undefined],
+    ["020 7946 0018", undefined],
+  ])("groups %s for a sentence without a country name", (raw, expected) => {
+    expect(formatInternationalPhoneNumber(raw)).toBe(expected);
   });
 });

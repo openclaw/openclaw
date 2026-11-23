@@ -1,20 +1,21 @@
-import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalization-core/phone-presentation";
+import { formatInternationalPhoneNumber } from "@openclaw/normalization-core/phone-presentation";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 import type { ChannelsPairingRequest } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { resolveChannelConfigValue } from "../../lib/channels/index.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
-import { getLocale, t } from "../../lib/reactive/i18n.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import type { ChannelsProps } from "./view.types.ts";
 
 // Fast enough that the first message shows up while the phone is still in hand.
 const FIRST_MESSAGE_POLL_MS = 2_000;
 
+// Numbers sit inside sentences here, so they carry no country name.
 function formatPhone(value: unknown): string | null {
   return typeof value === "string" && value
-    ? (formatInternationalPhoneNumberForDisplay(value, getLocale()) ?? value)
+    ? (formatInternationalPhoneNumber(value) ?? value)
     : null;
 }
 
