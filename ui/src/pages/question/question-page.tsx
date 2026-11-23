@@ -234,10 +234,7 @@ function QuestionPageContent(
       {
         answered: "chat.questions.answered",
         cancelled: "chat.questions.skipped",
-        expired:
-          value.resolvedBy === "gateway-restart"
-            ? "chat.questions.expiredRestart"
-            : "chat.questions.expired",
+        expired: "chat.questions.expired",
         pending: "chat.questions.unavailable",
         unavailable: "chat.questions.unavailable",
       }[value.status],

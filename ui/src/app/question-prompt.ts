@@ -34,7 +34,7 @@ export type QuestionDraft = {
 
 export type QuestionPrompt = Pick<
   QuestionRecord,
-  "id" | "questions" | "createdAtMs" | "expiresAtMs" | "resolvedBy"
+  "id" | "questions" | "createdAtMs" | "expiresAtMs"
 > & {
   agentId?: string;
   sessionKey?: string;
@@ -60,9 +60,6 @@ type QuestionPromptState = QuestionClientResolutionOwner & {
   revision: number;
   expiryTimer: ReturnType<typeof globalThis.setTimeout> | null;
   refreshRetryTimer: ReturnType<typeof globalThis.setTimeout> | null;
-  /** Boot id from the connected Gateway's hello; a change proves it restarted. */
-  bootId?: string;
-  restarted?: boolean;
   onChange: () => void;
   subscribe: (listener: () => void) => () => void;
 };
@@ -90,11 +87,13 @@ function questionAnswersEqual(
   if (!left || !right) {
     return false;
   }
-  const leftIds = Object.keys(left.answers);
+  const leftIds = Object.keys(left.answers).toSorted();
+  const rightIds = Object.keys(right.answers).toSorted();
   return (
-    leftIds.length === Object.keys(right.answers).length &&
+    leftIds.length === rightIds.length &&
     leftIds.every(
-      (id) =>
+      (id, index) =>
+        id === rightIds[index] &&
         left.answers[id]?.length === right.answers[id]?.length &&
         left.answers[id]?.every((answer, answerIndex) =>
           Object.is(answer, right.answers[id]?.[answerIndex]),
@@ -290,9 +289,8 @@ export function handleQuestionPromptEvent(
       invalidateQuestionList(state.client);
     }
     const previous = state.prompts.get(record.id);
-    // A reconnect can land before the Gateway restores a question it carried across the
-    // restart; its restore announcement revives the prompt this client presumed dropped.
-    if (previous && previous.status !== "pending" && previous.resolvedBy !== "gateway-restart") {
+    // A reconnect can precede restoration; only an authoritative request revives it.
+    if (previous && previous.status !== "pending" && previous.status !== "unavailable") {
       return true;
     }
     storeQuestionRecord(state, record.id, record, previous);
@@ -320,11 +318,7 @@ export function isQuestionNotFoundError(error: unknown): boolean {
 function markRecoveryUnavailable(state: QuestionPromptState, prompt: QuestionPrompt): void {
   // QUESTION_NOT_FOUND means the gateway tombstone aged out. It proves the prompt is
   // no longer actionable, but not whether it was answered, cancelled, or expired.
-  // Only a Gateway restart drops a still-live pending prompt with no tombstone; after an
-  // ordinary disconnect the tombstone simply aged out, so the outcome stays unknown.
-  prompt.resolvedBy =
-    state.restarted && prompt.status === "pending" ? "gateway-restart" : undefined;
-  prompt.status = prompt.resolvedBy ? "expired" : "unavailable";
+  prompt.status = "unavailable";
   clearSecretQuestionDrafts(prompt.questions, prompt.drafts);
   prompt.answers = undefined;
   prompt.answeredElsewhere = false;
@@ -469,11 +463,6 @@ export function setQuestionPromptClient(
   client: QuestionClient | null,
 ): void {
   clearQuestionPromptTimer(state, "refreshRetryTimer");
-  const bootId = client?.hello?.server?.bootId;
-  if (bootId) {
-    state.restarted = Boolean(state.bootId && state.bootId !== bootId);
-    state.bootId = bootId;
-  }
   if (state.client === client) {
     return;
   }

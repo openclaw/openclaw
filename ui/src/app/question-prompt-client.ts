@@ -32,7 +32,6 @@ export function canUseQuestionPrompts(
 }
 
 export type QuestionClient = {
-  readonly hello?: ApplicationGatewaySnapshot["hello"];
   request: (
     method: string,
     params?: unknown,

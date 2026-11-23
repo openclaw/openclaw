@@ -38,7 +38,6 @@ const enChatQuestions = {
       answeredElsewhere: "Answered elsewhere",
       unavailable: "Unavailable",
       expired: "Expired",
-      expiredRestart: "Expired — Gateway restarted",
       disconnected: "Reconnect to try again.",
       loadFailed: "Couldn’t load this question. Try again.",
     },

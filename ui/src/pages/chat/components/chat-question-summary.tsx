@@ -11,12 +11,7 @@ export function terminalAnswer(prompt: QuestionPrompt, question: QuestionPanelQu
     return t("chat.questions.skipped");
   }
   if (prompt.status === "expired") {
-    // A Gateway restart dropped it (see markRecoveryUnavailable); name that cause.
-    return t(
-      prompt.resolvedBy === "gateway-restart"
-        ? "chat.questions.expiredRestart"
-        : "chat.questions.expired",
-    );
+    return t("chat.questions.expired");
   }
   if (prompt.status === "unavailable") {
     return t("chat.questions.unavailable");
