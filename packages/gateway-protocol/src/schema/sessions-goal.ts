@@ -21,6 +21,8 @@ export const SessionGoalSchema = closedObject({
   tokenStart: Type.Number(),
   tokenStartFresh: Type.Optional(Type.Boolean()),
   tokensUsed: Type.Number(),
+  /** Settled run billing accumulated since the goal's baseline; budgets use it directly. */
+  billedTokensUsed: Type.Optional(Type.Number()),
   tokenBudget: Type.Optional(Type.Number()),
   continuationTurns: Type.Number(),
   lastStatusNote: Type.Optional(Type.String()),
