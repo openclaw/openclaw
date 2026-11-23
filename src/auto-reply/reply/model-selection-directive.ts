@@ -247,17 +247,27 @@ export function resolveModelDirectiveSelection(params: {
     return { selection: explicitSelection };
   }
 
+  // A denied provider/model may only map to an exact allowed model (a namespaced id),
+  // never a near-match: xai/grok-4.7 must not become xai/grok-4.3.
+  const deniedExplicit = rawTrimmed.includes("/") && !permitted;
+
   if (rawTrimmed.includes("/")) {
     const slash = rawTrimmed.indexOf("/");
     const provider = normalizeProviderId(rawTrimmed.slice(0, slash).trim());
     const fragment = rawTrimmed.slice(slash + 1).trim();
     const fuzzy = resolveFuzzy({ provider, fragment });
-    if (fuzzy) {
+    const fuzzyKey = fuzzy && modelKey(fuzzy.provider, fuzzy.model).toLowerCase();
+    if (
+      fuzzy &&
+      (!deniedExplicit ||
+        fuzzy.model.toLowerCase() === fragment.toLowerCase() ||
+        fuzzyKey === fragment.toLowerCase())
+    ) {
       return { selection: fuzzy };
     }
   }
 
-  const selection = resolveFuzzy({ fragment: rawTrimmed });
+  const selection = deniedExplicit ? undefined : resolveFuzzy({ fragment: rawTrimmed });
   if (selection) {
     return { selection };
   }
