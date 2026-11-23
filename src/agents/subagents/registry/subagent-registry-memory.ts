@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { revokeGoalContinuationReturn } from "../../../auto-reply/reply/goal-continuation-return.js";
-import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
 import { prepareGatewayContextBindingOwner } from "../../../plugins/runtime/gateway-context-binding-owner.js";
 import {
   bindGatewayContextResolver,
@@ -34,6 +33,8 @@ import {
   subagentSweepAt,
   SubagentRunWorkIndex,
 } from "./subagent-registry-work-index.js";
+import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import type { SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentRunRuntimeKey,
@@ -65,6 +66,7 @@ const immutableRunFacts = new WeakMap<
   {
     sessionList: SubagentRunReadRecord;
     childAuthority: ReturnType<typeof resolveSubagentChildAuthority>;
+    binding?: WeakRef<SubagentRunSqliteRow>;
   }
 >();
 /** Finished rows retain topology and ownership; selected readers load their durable payload. */
@@ -151,6 +153,19 @@ export function getRecordedSubagentChildAuthority(entry: SubagentRunRecord) {
 export function immutableSubagentRun(entry: SubagentRunRecord): SubagentRunRecord {
   immutableSubagentRunSessionList(entry);
   return entry;
+}
+
+/** Reuse immutable bindings without retaining a second full payload across GC. */
+export function bindImmutableSubagentRun(entry: SubagentRunRecord): SubagentRunSqliteRow {
+  immutableSubagentRun(entry);
+  const facts = immutableRunFacts.get(entry)!;
+  const retained = facts.binding?.deref();
+  if (retained) {
+    return retained;
+  }
+  const binding = bindSubagentRunRecord(entry);
+  facts.binding = new WeakRef(binding);
+  return binding;
 }
 
 /** Registry projections contain only canonical JSON fields and owner-created containers. */
@@ -363,7 +378,8 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     try {
       custody?.authority.assertCurrent();
     } catch (error) {
-      if (isOperatorAuthorityUnavailable(error)) {
+      // A cancellation notice belongs to the independently admitted cancelling caller.
+      if (!isSubagentCancellationNotice(entry)) {
         throw error;
       }
       return run();

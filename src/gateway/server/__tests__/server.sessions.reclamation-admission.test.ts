@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { WorkerOptions } from "node:worker_threads";
 import { afterEach, expect, onTestFinished, test, vi } from "vitest";
+import { withWorkerPreload } from "../../../../test/helpers/runtime-preload.js";
 import * as sessions from "../../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target.js";
 import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
@@ -87,21 +88,12 @@ vi.mock("node:worker_threads", async (importOriginal) => {
               return statement;
             };
           `;
-          options = {
-            ...options,
-            workerData: {
-              ...options.workerData,
-              reclamationTestGate: gate,
-              reclamationTestObserved: observed.buffer,
-              reclamationTestDatabasePath:
-                reclamation.databasePath ?? options.workerData.databaseOptions.path,
-            },
-            execArgv: [
-              ...(options.execArgv ?? []),
-              "--import",
-              `data:text/javascript,${encodeURIComponent(preload)}`,
-            ],
-          };
+          options = withWorkerPreload(options, preload, {
+            reclamationTestGate: gate,
+            reclamationTestObserved: observed.buffer,
+            reclamationTestDatabasePath:
+              reclamation.databasePath ?? options.workerData.databaseOptions.path,
+          });
         }
         super(filename, options);
         if (gate) {

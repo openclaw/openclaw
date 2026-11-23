@@ -310,7 +310,7 @@ def enable_auto_merge(published_commit, published_pr_url):
     if method:
         fail(f"Generated pull request already uses incompatible {method} auto-merge.")
     gh("merge_pr", published_pr_url, published_commit)
-    summary(f"Enabled squash auto-merge for exact generated head: {published_pr_url}")
+    summary(f"Requested squash merge for exact generated head: {published_pr_url}")
 
 
 def publish():
@@ -385,7 +385,7 @@ if not generated_paths:
 source_commit = git("rev-parse", "HEAD", capture=True).rstrip("\n")
 git("config", "user.name", "github-actions[bot]")
 git("config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
-# Branch transport and PR mutations retain their separate least-privilege identities.
+# Branch transport and PR mutations retain separately scoped credentials.
 git_auth = base64.b64encode(f"x-access-token:{os.environ['CONTENTS_TOKEN']}".encode()).decode()
 print(f"::add-mask::{git_auth}", flush=True)
 git("config", "--local", auth_key, f"AUTHORIZATION: basic {git_auth}")

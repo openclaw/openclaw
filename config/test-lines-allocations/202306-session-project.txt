@@ -1,0 +1,9 @@
+# Prompt eligibility and menu selection cover empty, registered and already-bound conversations.
+# Checkout carry covers diverged history on the host and sandbox, and rejects an unrelated branch.
+# The sandbox case runs the real tool handoff after the initiating turn's backend has expired.
+# Tool and prompt tests cover the default-workspace gate and the registered project catalog.
+# The SSH regression verifies that refusing a move leaves session and worktree state intact.
+# Handoff regressions cover trusted completion, first resumed history, native provider replay,
+# sibling and user messages, and the refusal path through the existing Gateway handoff.
+# The checkout carry test checks admin and writer setup at move completion.
+445

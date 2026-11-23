@@ -456,7 +456,9 @@ const mountPool: ControlUiView = (container, initialContext) => {
       >
         <header class="clawrouter-pool__header">
           <div>
-            <h1 id="clawrouter-pool-title">ClawRouter</h1>
+            <h1 id="clawrouter-pool-title" class="plugin-page-title">
+              ClawRouter
+            </h1>
             <p>Subscription headroom, model access, and traffic for your configured policy.</p>
           </div>
           <button

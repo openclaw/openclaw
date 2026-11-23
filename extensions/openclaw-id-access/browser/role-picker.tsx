@@ -3,7 +3,7 @@ import type { MemberRole } from "@openclaw/openclaw-id-protocol";
 import type { ControlUiComponentHandle, ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { createEffect, onSettled } from "solid-js";
 import { roleText } from "./i18n.js";
-import { definedRoles, roleOptions } from "./people-roles.js";
+import { grantableRoles, roleOptions } from "./people-roles.js";
 import type { Role } from "./types.js";
 
 type RolePickerProps = Parameters<ControlUiHost["components"]["mountSelectPicker"]>[1];
@@ -26,7 +26,7 @@ export function RolePicker(props: {
       searchable: false,
       disabled: props.disabled,
       onSelect: (value: string) => {
-        if (definedRoles(props.roles).some((role) => role.name === value)) {
+        if (grantableRoles(props.roles).some((role) => role.name === value)) {
           props.onSelect(value);
         }
       },

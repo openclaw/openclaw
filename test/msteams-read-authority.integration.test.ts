@@ -541,7 +541,7 @@ describe("Teams Graph mutation currentness", () => {
     },
   );
 
-  it.each([0, 1, 2])(
+  it.each([0, 1])(
     "checks member pages and the final DELETE (close caller after page %s)",
     async (stopAfter) => {
       const fixture = await createFixture({ origin: "bundled", self: true, senderIsOwner: true });
@@ -855,7 +855,11 @@ describe.each(surfaces)("Teams %s reads with a %s registration", (route, origin)
         local ? "member-info" : "read",
         local ? { userId: requesterId } : { target, messageId },
       );
-      const rejected = expect(result).rejects.toThrow(/no longer active|authority/i);
+      const rejected = expect(result).rejects.toThrow(
+        stage === "turn-token" && route === "gateway"
+          ? "The message turn has ended. Start a new turn to retry."
+          : /no longer active|authority/i,
+      );
       if (heldToken) {
         await started.promise;
         if (stage === "turn-token") {

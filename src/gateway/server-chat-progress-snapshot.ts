@@ -5,6 +5,11 @@ import {
   ChatRunStartupPhaseSchema,
 } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isCompleteAgentPreamble } from "../agents/agent-activity-presentation.js";
+import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
+import {
+  automationCreationCall,
+  automationCreationFromToolDetails,
+} from "../chat/automation-job-result.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { boundedJsonUtf8Bytes, jsonStringByteLengthUpToLimit } from "../infra/json-utf8-bytes.js";
 import { freezeTrustedJsonSnapshot, isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
@@ -129,14 +134,14 @@ function isCanonicalImmutableOutput(value: unknown): boolean {
 
 function captureProgressEvent(
   event: AgentEventPayload,
-  deferOutput: boolean,
+  mode: "scalars" | "output" | undefined,
 ): CapturedProgressEvent | undefined {
   try {
-    // Only the fresh tool-output envelope has fully controlled predicate facts.
-    // Inherited JSON transforms can reshape those facts and keep eager capture.
-    const serializedOutput = deferOutput && !("toJSON" in event) && !("toJSON" in event.data);
+    // The owner built this envelope; scalar fields and canonical frozen output
+    // already have their JSON representation. Other producer values need capture.
+    const plainEnvelope = mode !== undefined && !("toJSON" in event) && !("toJSON" in event.data);
     if (
-      serializedOutput &&
+      plainEnvelope &&
       typeof event.runId === "string" &&
       Number.isFinite(event.seq) &&
       !Object.is(event.seq, -0) &&
@@ -144,7 +149,15 @@ function captureProgressEvent(
       !Object.is(event.ts, -0) &&
       (event.sessionKey === undefined || typeof event.sessionKey === "string") &&
       (event.agentId === undefined || typeof event.agentId === "string") &&
-      isCanonicalImmutableOutput(event.data.partialResult)
+      Object.getOwnPropertySymbols(event.data).length === 0 &&
+      Object.values(event.data).every(
+        (value) =>
+          value === null ||
+          typeof value === "string" ||
+          typeof value === "boolean" ||
+          (typeof value === "number" && Number.isFinite(value) && !Object.is(value, -0)) ||
+          (mode === "output" && isCanonicalImmutableOutput(value)),
+      )
     ) {
       // Canonical immutable facts need no JSON copy. Keep the existing byte
       // budget and generic native capture for mutable/custom producer values.
@@ -160,7 +173,7 @@ function captureProgressEvent(
     if (byteLength > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES) {
       return undefined;
     }
-    if (serializedOutput) {
+    if (mode === "output" && plainEnvelope) {
       // Capture producer getters/toJSON now, but decode only the retained receipt
       // when recovery reads it. Output bodies are not used by owner predicates.
       const { partialResult: _partialResult, ...data } = event.data;
@@ -222,6 +235,7 @@ export function updateChatRunProgressSnapshot(
           ({ facts: candidate }) =>
             candidate.stream === "run_status" && candidate.data.phase === "waiting_for_model",
         )));
+  const isToolPreparation = event.stream === "run_status" && phase === "preparing_tool";
   const isRetryStatus = event.stream === "run_status" && phase === "retrying";
   const isFallbackStatus = event.stream === "lifecycle" && phase === "fallback_step";
   const isFinishing = event.stream === "lifecycle" && phase === "finishing";
@@ -279,6 +293,7 @@ export function updateChatRunProgressSnapshot(
     );
   const isSummaryProgress =
     isModelWait ||
+    isToolPreparation ||
     isTool ||
     isItem ||
     isUsage ||
@@ -354,6 +369,7 @@ export function updateChatRunProgressSnapshot(
     removeWhere((candidate) => candidate.stream === "usage");
   } else if (
     isStartupStatus ||
+    isToolPreparation ||
     isRetryStatus ||
     isFallbackStatus ||
     isFinishing ||
@@ -447,14 +463,44 @@ export function updateChatRunProgressSnapshot(
     ...(event.sessionKey ? { sessionKey: event.sessionKey } : {}),
     ...(event.agentId ? { agentId: event.agentId } : {}),
   };
-  const deferOutput = isTool && mode === "full" && phase === "update" && data.outputOnly === true;
-  let captured = captureProgressEvent(storedEvent, deferOutput);
+  const captureMode =
+    isTool && mode === "full"
+      ? phase === "update" && data.outputOnly === true
+        ? "output"
+        : undefined
+      : "scalars";
+  // Summary reconnects and oversized native payloads must not turn a saved slot pending again.
+  const retainCreationFacts = () => {
+    if (!isTool || typeof data.name !== "string" || !isAutomationsToolName(data.name)) {
+      return;
+    }
+    if (phase === "start") {
+      const args = automationCreationCall(data.args);
+      if (args) {
+        storedData.args = args;
+      }
+    } else if (phase === "result" && typeof data.isError === "boolean") {
+      storedData.isError = data.isError;
+      const automationCreation =
+        !data.isError && automationCreationFromToolDetails(asNullableRecord(data.result)?.details);
+      if (automationCreation) {
+        storedData.result = { details: { automationCreation } };
+      }
+    }
+  };
+  if (mode === "summary") {
+    retainCreationFacts();
+  }
+  let captured = captureProgressEvent(storedEvent, captureMode);
   if (!captured && isTool) {
     delete storedData.args;
     delete storedData.partialResult;
     delete storedData.diff;
     delete storedData.result;
-    captured = captureProgressEvent(storedEvent, deferOutput);
+    if (mode === "full") {
+      retainCreationFacts();
+    }
+    captured = captureProgressEvent(storedEvent, captureMode);
   }
   if (!captured) {
     return next;

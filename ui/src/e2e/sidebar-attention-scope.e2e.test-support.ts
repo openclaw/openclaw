@@ -141,6 +141,12 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
         }),
       )
       .toEqual({ opacity: "1", pointerEvents: "auto" });
+    const close = page
+      .getByRole("dialog", { name: "Inbox" })
+      .getByRole("button", { name: "Close", exact: true });
+    expect(await mainDismiss.evaluate((button) => button.getBoundingClientRect().right)).toBe(
+      await close.evaluate((button) => button.getBoundingClientRect().right),
+    );
     await captureProof("08-desktop-inbox-main-agent.png", true);
     await automationRows
       .filter({ hasText: "Main release digest" })

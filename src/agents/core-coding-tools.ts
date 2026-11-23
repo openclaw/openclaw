@@ -30,6 +30,7 @@ import type { ApplyPatchContainmentSource } from "./apply-patch-containment-hint
 import { createApplyPatchTool } from "./apply-patch.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
+import type { HostFileMutationPreparer } from "./host-file-write.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
 import { createLazyProcessTool } from "./lazy-process-tool.js";
@@ -192,6 +193,7 @@ type CoreCodingToolsOptions = {
   imageSanitization?: ImageSanitizationLimits;
   modelHasVision?: boolean;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+  prepareHostFileMutation?: HostFileMutationPreparer;
   applyPatchEnabled: boolean;
   applyPatchWorkspaceOnly: boolean;
   applyPatchContainmentSource?: ApplyPatchContainmentSource;
@@ -422,6 +424,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
         workspaceOnly: options.applyPatchWorkspaceOnly,
         containmentSource: options.applyPatchContainmentSource,
         memoryWriteProvenance: options.memoryWriteProvenance,
+        prepareHostFileMutation: options.prepareHostFileMutation,
         abortSignal: options.abortSignal,
       }),
     );
@@ -430,6 +433,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     shell.push(
       createLazyExecTool({
         ...options.execDefaults,
+        scratchRoot: options.containmentRoot,
         ...(sandbox?.required ? { sandboxRequired: true } : {}),
         cwd: options.codingRoot,
         sandbox: sandbox

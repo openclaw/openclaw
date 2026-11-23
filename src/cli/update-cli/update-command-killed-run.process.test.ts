@@ -9,19 +9,12 @@ import { packageVersion } from "../../infra/package-update-kill-sweep.test-suppo
 import { expectedPathExchangeRoute } from "../../infra/path-exchange.test-support.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
-import {
-  getUpdateRun,
-  listUpdateRuns,
-  reconcileAbandonedUpdateRunsAsync,
-} from "../../infra/update-run-ledger.js";
+import { listUpdateRuns } from "../../infra/update-run-ledger.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { defaultRuntime } from "../../runtime.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
-  beginRollback,
-  candidate,
-  config,
   ctx,
   expectFinishFailure,
   finalization,
@@ -29,164 +22,15 @@ import {
   fixtures,
   installation,
   killedPublication,
-  managedGateway,
   mocks,
   nextUpdate,
-  recorded,
-  repair,
   reserved,
-  settled,
-  shape,
   unleased,
   updater,
-  type Dead,
-  type Updater,
 } from "./update-command-killed-run.process.test-support.js";
-import { updateRepairCommand } from "./update-repair-command.js";
 
-// Settlement and finishing; refusals, the restart rule and source checkouts have their own suites.
+// Pre-routing recovery refusals; restart and source-checkout refusals have their own suites.
 describe.skipIf(process.platform === "win32")("next update after a killed update run", () => {
-  it("settles the dead run's plugin recovery itself and proceeds", () =>
-    fixtures.lifetime.run(async () => {
-      const killed = await updater(await installation());
-
-      await nextUpdate(killed.slot);
-
-      expect(mocks.proceed).toHaveBeenCalledOnce();
-      expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
-      // The dead update never installed its candidate, so its config change is undone.
-      expect(config()).toEqual({ plugins: { enabled: false } });
-      const note = settled(ctx.admitted[0]);
-      expect(note).toMatch(
-        new RegExp(`^Settled interrupted update ${killed.runId}.*rolled back, because`, "u"),
-      );
-      expect(defaultRuntime.error).toHaveBeenCalledWith(note);
-      // The admitted update's own history reconciliation can now close the dead run.
-      await reconcileAbandonedUpdateRunsAsync({});
-      expect(getUpdateRun(killed.runId)).toMatchObject({ status: "failed", reason: "abandoned" });
-
-      // A second update finds nothing left to settle or to refuse.
-      await nextUpdate(killed.slot);
-      expect(mocks.proceed).toHaveBeenCalledTimes(2);
-      expect(ctx.admitted[1]?.packageActivationSteps).toBeUndefined();
-    }));
-
-  it("keeps the plugin changes of a dead run whose candidate was verified serving", () =>
-    fixtures.lifetime.run(async () => {
-      // Killed in post-update maintenance: the Gateway it stopped is running the candidate.
-      const dead = { installed: "candidate", gateway: "restarted" } as const;
-      const killed = await updater(await installation(), dead);
-
-      await nextUpdate(killed.slot);
-
-      expect(mocks.proceed).toHaveBeenCalledOnce();
-      expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
-      expect(config().gateway).toEqual({ mode: "local" });
-      expect(settled(ctx.admitted[0])).toMatch(/kept, because its Gateway was verified/u);
-    }));
-
-  it.runIf(expectedPathExchangeRoute)(
-    "settles a killed publication and then the same run's plugin recovery",
-    () =>
-      fixtures.lifetime.run(async () => {
-        const killed = await updater(await killedPublication());
-
-        await nextUpdate(killed.slot);
-
-        expect(ctx.admitted[0]?.packageActivationSteps?.map((step) => step.name)).toEqual([
-          "package-publication-recovery",
-          "interrupted-update-recovery",
-        ]);
-        expect(packageVersion(killed.slot)).toBe("2026.11.3");
-        expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
-        expect(config()).toEqual({ plugins: { enabled: false } });
-      }),
-  );
-
-  // Repair finishes these installed versions; an update that found its core current would not.
-  const unfinished: Array<{ name: string; dead: Updater; rollback?: true; restart?: true }> = [
-    { name: "replaced the installed version unconfirmed", dead: { installed: "candidate" } },
-    {
-      // The cohort owner finishes a rollback that restored anything, even over a verified candidate.
-      name: "had begun rolling back on the version it installed",
-      dead: { installed: "candidate", gateway: "restarted" },
-      rollback: true,
-    },
-    {
-      name: "left the Gateway stopped",
-      dead: { installed: "candidate", gateway: "stopped" },
-      restart: true,
-    },
-  ];
-  async function unfinishedUpdate(state: (typeof unfinished)[number], name?: string) {
-    const killed = await updater(await installation(name), state.dead);
-    if (state.rollback) {
-      beginRollback(killed);
-    }
-    if (state.dead.gateway === "stopped") {
-      managedGateway(killed.slot);
-    }
-    return killed;
-  }
-  const finish = (killed: Dead, state: (typeof unfinished)[number]) =>
-    nextUpdate(killed.slot, state.restart ? { restart: true } : {});
-
-  it.each(unfinished)("finishes a dead update that $name as repair does, then proceeds", (state) =>
-    fixtures.lifetime.run(async () => {
-      const killed = await unfinishedUpdate(state);
-
-      await finish(killed, state);
-
-      expect(mocks.proceed).toHaveBeenCalledOnce();
-      // The installed version's Doctor ran and its Gateway started before this update went on,
-      // and nothing printed a result document on the way: the update's own stays the only one.
-      const started = state.dead.gateway === "stopped" ? 1 : 0;
-      expect(ctx.observedAtAdmission).toEqual([{ doctor: 1, json: 0, started }]);
-      expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
-      expect(packageVersion(killed.slot)).toBe(candidate);
-      // Repair keeps the change of a rollback that began over the verified candidate.
-      expect(config().gateway).toEqual(state.rollback ? { mode: "local" } : undefined);
-      expect(config().plugins).toEqual({ enabled: false });
-      const [stage, ...others] = finalizationRuns();
-      expect(others).toEqual([]);
-      expect(stage).toMatchObject({ trigger: "cli", status: "succeeded" });
-      expect(ctx.admitted[0]?.packageActivationSteps?.map((step) => step.name)).toEqual([
-        "interrupted-update-recovery",
-        "interrupted-update-finalization",
-      ]);
-      expect(recorded(ctx.admitted[0], "interrupted-update-finalization")).toBe(
-        `Finished interrupted update ${killed.runId} as ${repair} does (Doctor, plugin convergence and Gateway restoration); recorded as update run ${stage?.runId} (ok).`,
-      );
-      expect(getUpdateRun(killed.runId)).toMatchObject({ status: "failed", reason: "abandoned" });
-      expect(getUpdateRun(killed.runId)?.steps).toContainEqual(
-        expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
-      );
-    }),
-  );
-
-  it.each(unfinished)("records what repair records when the dead update $name", (state) =>
-    fixtures.lifetime.run(async () => {
-      const finished = await unfinishedUpdate(state);
-      await finish(finished, state);
-      const [stage] = finalizationRuns();
-      // Each killed updater's own config write stamps `meta`; compare what settlement decides.
-      const settledConfig = () => ({ plugins: config().plugins, gateway: config().gateway });
-      const configAfterUpdate = settledConfig();
-      const repaired = await unfinishedUpdate(state, "repaired");
-      mocks.root.mockResolvedValue(repaired.slot);
-
-      await updateRepairCommand({ json: true, yes: true });
-
-      const [repairRun] = finalizationRuns();
-      expect(repairRun?.runId).not.toBe(stage?.runId);
-      expect(shape(stage)).toEqual(shape(repairRun));
-      expect(settledConfig()).toEqual(configAfterUpdate);
-      expect(shape(getUpdateRun(finished.runId))).toEqual(shape(getUpdateRun(repaired.runId)));
-      // Repair reports its own result; the update's stage reported none.
-      expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
-    }),
-  );
-
   it.each([
     {
       name: "Doctor fails on the installed version",
@@ -206,7 +50,7 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
     },
   ])("stops and names repair when finishing fails: $name", ({ error, detail, stage }) =>
     fixtures.lifetime.run(async () => {
-      const killed = await unfinishedUpdate(unfinished[0]!);
+      const killed = await updater(await installation(), { installed: "candidate" });
       finalization.doctor.mockRejectedValue(error);
 
       const refused = await nextUpdate(killed.slot).catch((cause: unknown) => cause);
@@ -226,7 +70,10 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
   it("stops and names repair when repair's finish leaves that Gateway stopped", () =>
     fixtures.lifetime.run(async () => {
       // No managed service this update may restore: repair warns, the Gateway stays stopped.
-      const killed = await updater(await installation(), unfinished[2]!.dead);
+      const killed = await updater(await installation(), {
+        installed: "candidate",
+        gateway: "stopped",
+      });
 
       const refused = await nextUpdate(killed.slot, { restart: true }).catch(
         (cause: unknown) => cause,

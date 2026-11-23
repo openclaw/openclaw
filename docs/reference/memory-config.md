@@ -128,7 +128,7 @@ explicitly, for example to `"${OMLX_API_KEY}"`.
 
 <Warning>
 Changing the embedding provider, model, provider settings, sources, scope,
-chunking, or tokenizer can make the existing SQLite vector index incompatible.
+chunking, or tokenizer can make the existing memory index incompatible.
 For a scope-only mismatch, the next normal memory search requests a shadow
 rebuild of the configured corpus before serving results. This can re-embed
 content and incur provider costs.

@@ -12,7 +12,7 @@ module.exports = {
           id: "oauth",
           label: "Fixture browser sign-in",
           kind: "oauth",
-          async run({ oauth }) {
+          async run({ oauth, credentialOnly }) {
             if (!oauth.authorize)
               throw new Error("Fixture login requires the real secure browser callback");
             const state = randomUUID();
@@ -36,9 +36,18 @@ module.exports = {
               profiles: [
                 {
                   profileId: `${provider}:default`,
-                  credential: { type: "api_key", provider, key },
+                  // A browser sign-in saves an OAuth account, like OpenCode Go's Console login.
+                  credential: {
+                    type: "oauth",
+                    provider,
+                    access: key,
+                    refresh: "synthetic-refresh",
+                    expires: Date.now() + 24 * 60 * 60 * 1000,
+                  },
                 },
               ],
+              // Like OpenCode Go: a selecting sign-in offers the account's starter model.
+              ...(credentialOnly ? {} : { defaultModel: `${provider}/ready` }),
             };
           },
         },
@@ -46,7 +55,9 @@ module.exports = {
       catalog: {
         order: "profile",
         async run(ctx) {
-          const { discoveryApiKey } = ctx.resolveProviderAuth(provider);
+          const { apiKey, discoveryApiKey } = ctx.resolveProviderAuth(provider, {
+            oauthMarker: `oauth:${provider}`,
+          });
           if (!discoveryApiKey) return null;
           const response = await fetch(new URL("/models", origin), {
             headers: { Authorization: `Bearer ${discoveryApiKey}` },
@@ -56,6 +67,7 @@ module.exports = {
             provider: {
               baseUrl: origin,
               api: "openai-completions",
+              apiKey,
               models: await response.json(),
             },
           };

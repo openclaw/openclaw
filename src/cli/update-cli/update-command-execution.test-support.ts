@@ -39,6 +39,8 @@ const mocks = vi.hoisted(() => ({
       typeof import("../../infra/update-activated-gateway-check.js").checkActivatedGatewayStartup
     >(),
   nativeSupport: vi.fn<typeof serviceCommand.isUpdatedInstallGatewayExecutorSupported>(),
+  nodeServiceCommand: vi.fn(),
+  nodeServiceRuntime: vi.fn(),
   serviceStopped: false,
   shouldBlockServiceUpdate: vi.fn(),
   verifyPackageRecovery: vi.fn(),
@@ -139,6 +141,19 @@ vi.mock(import("./update-command-package.js"), async (original) => ({
   ...(await original()),
   runPackageInstallUpdate: mocks.runPackageUpdate,
 }));
+
+// Execution never inspects the host's real node service manager.
+vi.mock(import("../../daemon/node-service.js"), async (original) => {
+  const actual = await original();
+  return {
+    ...actual,
+    resolveNodeService: () => ({
+      ...actual.resolveNodeService(),
+      readCommand: mocks.nodeServiceCommand,
+      readRuntime: mocks.nodeServiceRuntime,
+    }),
+  };
+});
 
 vi.mock("./update-command-service.js", async () => {
   const actual = await vi.importActual<typeof import("./update-command-service-maintenance.js")>(
@@ -248,6 +263,8 @@ beforeEach(() => {
     (schemas) => schemas.incompatible.length > 0 || schemas.indeterminate.length > 0,
   );
   mocks.maybeRestartService.mockResolvedValue(undefined);
+  mocks.nodeServiceCommand.mockResolvedValue(null);
+  mocks.nodeServiceRuntime.mockResolvedValue({ status: "stopped" });
   mocks.maybeStopService.mockImplementation(async ({ phase }) => inspectOrStopService(phase));
   mocks.prepareMutableUpdate.mockResolvedValue(undefined);
   mocks.pluginPreflight.mockResolvedValue([]);

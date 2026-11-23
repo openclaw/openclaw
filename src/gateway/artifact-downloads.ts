@@ -93,13 +93,14 @@ export async function handleArtifactDownloadHttpRequest(
       const width = normalizeChatImageRenditionWidth(url.searchParams.get("width"));
       const cacheKey = `${createHash("sha256").update(source).digest("hex")}\0${width}`;
       // Preview failures are unavailable, never an implicit full-image download.
-      const bytes = new Uint8Array(
-        await resolveManagedImageThumbnail(cacheKey, () => encodeImageThumbnail(source, width)),
+      const image = await resolveManagedImageThumbnail(cacheKey, () =>
+        encodeImageThumbnail(source, width),
       );
+      const bytes = new Uint8Array(image.data);
       prepared.artifact = {
         ...prepared.artifact,
-        mimeType: "image/webp",
-        title: `${prepared.artifact.title}-preview.webp`,
+        mimeType: image.mimeType,
+        title: `${prepared.artifact.title}-preview${image.extension}`,
       };
       const response = resolveByteResponse({
         file: { size: bytes.byteLength },

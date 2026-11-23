@@ -182,7 +182,6 @@ function createFixture() {
       requestedSessionId: undefined,
       backingSessionId: "mention-session",
       resolvedSessionModel: { provider: "openai", model: "gpt-4.1" },
-      resolvedSessionAuthProvider: "openai",
       timeoutMs: 1000,
       now: 100,
     },

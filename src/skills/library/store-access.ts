@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
+import { operatorRoleSubject } from "../../gateway/operator-role-enforcement.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
@@ -39,7 +40,12 @@ export function captureSkillLibraryAccess(
     env,
   });
   const roles = structuredClone(authority.getConfig().gateway?.roles);
+  const readRoleSubject = () =>
+    authority.getConfig().gateway?.openclawId?.enabled && authority.profileId
+      ? operatorRoleSubject(readResidentUserProfileIdentity(authority.profileId))
+      : { profileId: authority.profileId, openclawIdMember: false };
   const input: SkillLibraryWorkerAuthority = {
+    roleSubject: readRoleSubject(),
     profileId: authority.profileId,
     namespace: authority.namespace,
     scopes: [...authority.scopes],
@@ -52,6 +58,7 @@ export function captureSkillLibraryAccess(
     authority.assertCurrent();
     if (
       !isDeepStrictEqual(roles, authority.getConfig().gateway?.roles) ||
+      !isDeepStrictEqual(input.roleSubject, readRoleSubject()) ||
       !isDeepStrictEqual(input.scopes, authority.scopes) ||
       input.profileId !== authority.profileId ||
       input.ownerDevice !== authority.ownerDevice ||

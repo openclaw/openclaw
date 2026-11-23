@@ -1,4 +1,5 @@
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+import type { PluginHookExecRequestOwner } from "./hook-agent-context.types.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
 
 export type PluginHookToolKind = "code_mode_exec";
@@ -47,4 +48,6 @@ export type PluginHookToolContext = {
   requester?: PluginHookToolRequesterContext;
   /** Run origin (for example "user", "cron", or "memory"); metadata, not authorization. */
   trigger?: string;
+  /** Same as the agent hook context's `execRequestOwners`, for the run making this call. */
+  execRequestOwners?: readonly PluginHookExecRequestOwner[];
 };

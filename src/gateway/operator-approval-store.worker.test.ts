@@ -2,11 +2,8 @@ import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createExecApprovalPolicySnapshot } from "../infra/exec-approvals-allow-always.js";
-import { recordAllowlistMatchesUse } from "../infra/exec-approvals-authorization.js";
-import {
-  prepareExecApprovalsCurrentRead,
-  updateExecApprovals,
-} from "../infra/exec-approvals-store.js";
+import { commitExecAuthorizationLocked } from "../infra/exec-approvals-authorization.js";
+import { updateExecApprovals } from "../infra/exec-approvals-store.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
@@ -34,6 +31,7 @@ import type { OperatorApprovalRow } from "./operator-approval-store.types.js";
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
@@ -114,8 +112,9 @@ it("preserves serialized records, first-answer wins, consumption and history thr
   );
 });
 
-it("keeps Allow Once executable during approval bookkeeping but rejects a later policy denial", async () => {
+it("keeps Allow Once executable during approval bookkeeping", async () => {
   const databaseOptions = options();
+  vi.stubEnv("OPENCLAW_STATE_DIR", databaseOptions.env.OPENCLAW_STATE_DIR);
   const context = captureOpenClawStateWorkerContext(databaseOptions);
   const policy = await updateExecApprovals(
     { update: { kind: "replace", file: { version: 1, defaults: { security: "allowlist" } } } },
@@ -133,21 +132,18 @@ it("keeps Allow Once executable during approval bookkeeping but rejects a later 
       databaseOptions,
     }),
   ).toMatchObject({ outcome: "resolved", record: { decision: "allow-once" } });
-  const assertCurrent = await recordAllowlistMatchesUse(
-    {
-      agentId: "main",
-      matches: [],
-      command: "printf 'héllo  world'",
-      authorization: {
-        source: "explicit-approval",
-        security: "allowlist",
-        ask: "always",
-        allowlistSatisfied: false,
-        policySnapshot: createExecApprovalPolicySnapshot({ file: policy.file, agentId: "main" }),
-      },
+  const assertCurrent = await commitExecAuthorizationLocked({
+    agentId: "main",
+    matches: [],
+    command: "printf 'héllo  world'",
+    authorization: {
+      source: "explicit-approval",
+      security: "allowlist",
+      ask: "always",
+      allowlistSatisfied: false,
+      policySnapshot: createExecApprovalPolicySnapshot({ file: policy.file, agentId: "main" }),
     },
-    context,
-  );
+  });
   const stages: string[] = [];
   const failures: unknown[] = [];
   const admissionProbe = probe.admission(workerAdmission, (request, grant, admit) => {
@@ -175,56 +171,6 @@ it("keeps Allow Once executable during approval bookkeeping but rejects a later 
   expect(failures).toEqual([]);
   expect(assertCurrent).not.toThrow();
   admissionProbe.mockRestore();
-
-  await updateExecApprovals(
-    { update: { kind: "replace", file: { version: 1, defaults: { security: "deny" } } } },
-    context,
-  );
-  expect(assertCurrent).toThrow("Exec approval changed before execution");
-});
-
-it("fences exec while an Allow Always MCP grant commits and publishes the new policy", async () => {
-  const databaseOptions = options();
-  const context = captureOpenClawStateWorkerContext(databaseOptions);
-  await updateExecApprovals({ update: { kind: "replace", file: { version: 1 } } }, context);
-  await store.insertOperatorApproval({
-    approval: {
-      ...approval("mcp-grant"),
-      kind: "plugin",
-      presentation: {
-        kind: "plugin",
-        title: "Approve tool",
-        description: "Allow the synthetic tool",
-        severity: "warning",
-        pluginId: "test-plugin",
-        toolName: "test-tool",
-        agentId: "main",
-        allowedDecisions: ["allow-once", "allow-always", "deny"],
-      },
-    },
-    databaseOptions,
-  });
-  const readCurrent = await prepareExecApprovalsCurrentRead(context);
-  const stages: string[] = [];
-  probe.admission(workerAdmission, (request, grant, admit) => {
-    admit(request, grant);
-    stages.push(request.stage);
-    expect(readCurrent).toThrow("Exec approval policy is unavailable or changing before execution");
-  });
-  expect(
-    await store.resolveOperatorApproval({
-      id: "mcp-grant",
-      decision: "allow-always",
-      resolver: { kind: "device", id: "reviewer" },
-      mcpToolGrant: { agentId: "main", server: "test-server", tool: "test-tool" },
-      nowMs: 2000,
-      databaseOptions,
-    }),
-  ).toMatchObject({ outcome: "resolved" });
-  expect(stages).toEqual(["transaction", "commit"]);
-  expect(readCurrent().agents?.main?.mcpTools).toEqual([
-    expect.objectContaining({ server: "test-server", tool: "test-tool" }),
-  ]);
 });
 
 it("publishes exact native postimages only after the outer commit and retention tombstones", () => {

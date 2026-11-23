@@ -20,18 +20,22 @@ export interface QualificationExemption {
 export function releaseQualificationExemptions(
   targetVersion: string,
   profile: string,
+  waivers?: ReleaseValidationWaiver[],
 ): QualificationExemption[];
 export function validateQualificationExemptions(
   exemptions: unknown,
   targetVersion: string,
   profile: string,
+  waivers?: ReleaseValidationWaiver[],
 ): void;
 export interface ReleaseValidationWaiver {
+  aggregates?: ReleaseChildPolicy["aggregates"];
   targetSha?: string;
   targetVersion: string;
   childRole: string;
   jobName: string;
   reason: string;
+  cancelledStep?: string;
   testFailures?: {
     stepName: string;
     signatures: { kind: "vitest"; file: string; test: string }[];
@@ -66,7 +70,17 @@ export function evaluateReleaseChildPolicy(input: {
   child: { key: string; jobs: ReleasePolicyJob[]; runId?: string; runAttempt?: number };
   targetVersion?: string;
   targetSha?: string;
+  waiverPolicy?: ReleaseValidationWaiver[];
 }): ReleaseChildPolicy;
+export const RELEASE_VALIDATION_WAIVERS_PATH: string;
+export function parseReleaseValidationWaivers(source: string): ReleaseValidationWaiver[];
+export function decodeReleaseValidationSource(payload: unknown, sourcePath: string): string;
+export function readReleaseValidationWaivers(
+  readSource: (path: string) => string,
+): ReleaseValidationWaiver[];
+export function readReleaseValidationWaiversAsync(
+  readSource: (path: string) => string | Promise<string>,
+): Promise<ReleaseValidationWaiver[]>;
 export class ReleaseAggregateValidationError extends Error {}
 export function validateReleaseWaiverAggregates(input: {
   policy: ReleaseChildPolicy;

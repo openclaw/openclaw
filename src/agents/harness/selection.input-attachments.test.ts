@@ -19,9 +19,9 @@ import {
 } from "../../plugins/hook-runner-global.js";
 import type { PluginHookName } from "../../plugins/hook-types.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import type { UserTurnInput } from "../../sessions/user-turn-input.types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createSqliteTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
-import type { UserTurnInput } from "../../sessions/user-turn-transcript.types.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {

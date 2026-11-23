@@ -53,6 +53,8 @@ vi.mock("./launchd-runtime.js", async (original) => ({
     port: null,
     probeHosts: [],
   }),
+  // The restore fixtures keep the loaded command equal to the plist; skip the host launchctl probe.
+  launchAgentNeedsReloadSync: () => false,
 }));
 // mock-isolation: Backup compensation mutates only the fixture's task registration and policy.
 vi.mock("./schtasks-exec.js", () => ({

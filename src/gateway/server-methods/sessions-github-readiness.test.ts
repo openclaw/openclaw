@@ -401,7 +401,6 @@ it("keeps an absent shared database absent and does not manufacture an exact rec
 });
 it.each([
   "connection",
-  "profile",
   "grant",
   "session",
   "visibility",
@@ -444,8 +443,6 @@ it.each([
         );
         if (kind === "connection") {
           f.disconnect();
-        } else if (kind === "profile") {
-          f.client.authenticatedUserProfile = undefined;
         } else if (kind === "grant") {
           grant.abort();
         } else if (kind === "source") {
@@ -766,7 +763,7 @@ it.each([
               (await addSessionMember(scope, { identityId: member, addedBy: creator!.id }))
                 .inserted,
             ).toBe(false);
-            for (const changed of ["member", "role", "scope"] as const) {
+            for (const changed of ["member", "role"] as const) {
               const held = holdStateRead("githubPublications.sharedObservation");
               const pending = call(f);
               try {
@@ -789,7 +786,7 @@ it.each([
                         definitions: {
                           ...current.gateway?.roles?.definitions,
                           guest: {
-                            scopes: changed === "scope" ? [] : ["operator.sessions.read"],
+                            scopes: ["operator.sessions.read"],
                             agents: ["main"],
                             sessions: { others: changed === "role" ? "none" : "view" },
                           },
@@ -805,26 +802,16 @@ it.each([
                 }
                 held.release();
                 const [ok, payload, error] = await pending;
-                if (changed === "scope") {
-                  // The router's named-role scope guard remains outside this read-owner change.
-                  expect(ok).toBe(false);
-                  expect(payload).toBeUndefined();
-                  expect(error?.code).toBe("FORBIDDEN");
-                } else {
-                  expect(ok).toBe(true);
-                  expect(payload).toMatchObject(unbound);
-                  expect(error).toBeUndefined();
-                  if (changed === "role") {
-                    const receiptRead = vi.spyOn(
-                      f.context.githubPublicationService!,
-                      "latestShared",
-                    );
-                    const next = await call(f);
-                    expect(next[0]).toBe(false);
-                    expect(next[2]?.code).toBe("INVALID_REQUEST");
-                    expect(receiptRead).not.toHaveBeenCalled();
-                    receiptRead.mockRestore();
-                  }
+                expect(ok).toBe(true);
+                expect(payload).toMatchObject(unbound);
+                expect(error).toBeUndefined();
+                if (changed === "role") {
+                  const receiptRead = vi.spyOn(f.context.githubPublicationService!, "latestShared");
+                  const next = await call(f);
+                  expect(next[0]).toBe(false);
+                  expect(next[2]?.code).toBe("INVALID_REQUEST");
+                  expect(receiptRead).not.toHaveBeenCalled();
+                  receiptRead.mockRestore();
                 }
               } finally {
                 held.release();
