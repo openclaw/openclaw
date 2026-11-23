@@ -6,12 +6,14 @@ import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
+import { continueFailed, preflightContinuation } from "../../scripts/frv.mjs";
 import { selectPublicationArtifactSource } from "../../scripts/full-release-artifacts.mjs";
 import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
 import {
   buildReleaseExecutionPlanArtifact,
   validateReleaseExecutionPlanArtifact,
   releaseExecutionPlanSha256,
+  releaseChildSpec,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { validateFullReleaseNpmPreflight } from "../../scripts/npm-preflight-tooling-identity.mjs";
 import {
@@ -1606,7 +1608,217 @@ function selectionFixture(
   return { f, current, client, env, candidate, archives, artifacts, qualified };
 }
 
+async function selectedPublicationFixture() {
+  const { f, current, client, env } = selectionFixture();
+  const selected = await selectPublicationArtifactSource(
+    { runId: "51", runAttempt: 1 },
+    env,
+    client,
+  );
+  Object.assign(
+    current.plan,
+    buildReleaseExecutionPlanArtifact({
+      ...current.plan,
+      expected: current.plan,
+      candidate: selected.candidate,
+      publicationArtifactSource: selected.source,
+    }),
+  );
+  Object.assign(current.manifest, {
+    candidateBinding: selected.candidate,
+    publicationArtifactSource: selected.source,
+    publicationArtifacts: selected.publicationArtifacts,
+    executionPlanSha256: current.plan.sha256,
+  });
+  expect(validateReleaseExecutionPlanArtifact(current.plan).candidate).toEqual(selected.candidate);
+  const finalClient = {
+    ...current.client,
+    readWorkloadIdentity: client.readWorkloadIdentity,
+    getArtifact: client.getArtifact,
+    getRunArtifacts: client.getRunArtifacts,
+    downloadArtifactArchive: client.downloadArtifactArchive,
+    verifyRetainedPublicationArtifacts: client.verifyRetainedPublicationArtifacts,
+    getRun: (id: string) =>
+      ["51", "77", "81", "91", "1001"].includes(id) ? client.getRun(id) : current.client.getRun(id),
+    getRunAttempt: (id: string, attempt: number) =>
+      ["51", "77", "81", "91", "1001"].includes(id)
+        ? client.getRunAttempt(id, attempt)
+        : current.client.getRunAttempt(id, attempt),
+    getRunAttemptJobs: async (id: string) => {
+      if (id === "51") {
+        // Preserve the original fixture's job identities for source authentication.
+        const jobs = structuredClone(await client.getRunAttemptJobs(id));
+        for (const job of jobs) {
+          job.id = Number(job.id) + 1e12;
+        }
+        return jobs;
+      }
+      return id === "77" ? client.getRunAttemptJobs(id) : current.client.getRunAttemptJobs(id);
+    },
+    getJobLog: (id: number) =>
+      id >= 1e12 ? client.getJobLog(id - 1e12) : current.client.getJobLog(id),
+    getWorkflowSource: (sha: string, path?: string) =>
+      sha === f.q
+        ? f.client.getWorkflowSource(sha, path)
+        : current.client.getWorkflowSource(sha, path),
+    loadExecutionPlanEvidence: (id: string) =>
+      id === "51"
+        ? f.client.loadExecutionPlanEvidence()
+        : current.client.loadExecutionPlanEvidence(),
+    verifyQualificationAdmission: (
+      options: Parameters<typeof current.client.verifyQualificationAdmission>[0],
+    ) =>
+      options.qualificationSha === f.q
+        ? f.client.verifyQualificationAdmission(options)
+        : current.client.verifyQualificationAdmission(options),
+  };
+  return { f, current, client, env, selected, finalClient };
+}
+
+async function retainedRecoveryFixture(legacy = false) {
+  const selectedFixture = await selectedPublicationFixture();
+  const { current, finalClient } = selectedFixture;
+  if (legacy) {
+    const getWorkflowSource = finalClient.getWorkflowSource;
+    finalClient.getWorkflowSource = (sha: string, path?: string) =>
+      getWorkflowSource(sha, path).replace('  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "2"\n', "");
+  }
+  const parentJobs = await current.client.getRunAttemptJobs(current.runId);
+  for (const name of [
+    "Prepare release npm artifacts",
+    "Prepare release Docker artifacts",
+    "Prepare exact plugin npm artifacts",
+    ...current.plan.children
+      .filter((entry) => entry.selected)
+      .map((entry) => releaseChildSpec(entry.key).parentJobName),
+  ]) {
+    if (!parentJobs.some((job) => job.name === name)) {
+      parentJobs.push({ ...parentJobs[0]!, id: 20000 + parentJobs.length, name });
+    }
+  }
+  const logs = new Map<number, string>();
+  for (const job of parentJobs) {
+    const child = current.plan.children.find(
+      (entry) => entry.selected && releaseChildSpec(entry.key).parentJobName === job.name,
+    );
+    logs.set(
+      job.id,
+      [
+        "RERUN_GROUP: all",
+        "FAIL_FAST: false",
+        `TARGET_SHA: ${current.c}`,
+        ...(child
+          ? [
+              "CI_RELEASE_SCOPE: npm-stable",
+              "-f publish_reports=false",
+              `Dispatched ${releaseChildSpec(child.key).workflow}: https://github.com/${current.repository}/actions/runs/${child.runId} (attempt 1)`,
+            ]
+          : ["Retained original artifact descriptor"]),
+      ].join("\n"),
+    );
+  }
+  const client = {
+    repository: current.repository,
+    getReleaseEvidenceClient: () => finalClient,
+    getRunAttempt: (id: string, attempt: number) =>
+      id === current.runId
+        ? { ...current.parent, display_title: "Full Release Validation" }
+        : finalClient.getRunAttempt(id, attempt),
+    getParentJobs: async () => parentJobs,
+    getJobLog: async (id: number) => logs.get(id)!,
+    getRun: finalClient.getRun,
+    getAttemptJobs: finalClient.getRunAttemptJobs,
+    rerunJob: vi.fn(),
+    rerunParent: vi.fn(),
+  };
+  return { ...selectedFixture, recoveryClient: client, parentJobs, logs };
+}
+
 describe("explicit publication artifact selection", () => {
+  it("forwards the existing GitHub credential to retained candidate downloads", async () => {
+    const { current, recoveryClient, finalClient } = await retainedRecoveryFixture();
+    const downloadArchive = finalClient.downloadArtifactArchive;
+    let downloads = 0;
+    finalClient.downloadArtifactArchive = async (options) => {
+      if (!("token" in options) || options.token !== "synthetic-recovery-token") {
+        throw new Error("Retained candidate download omitted the existing GitHub credential");
+      }
+      downloads += 1;
+      return downloadArchive(options);
+    };
+    vi.stubEnv("GH_TOKEN", "synthetic-recovery-token");
+    try {
+      await preflightContinuation(current.plan, current.runId, recoveryClient);
+      expect(downloads).toBeGreaterThan(0);
+      expect(JSON.stringify(current.plan)).not.toContain("synthetic-recovery-token");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+  it.each([false, true])(
+    "recovers a retained-original parent without inventing a new npm dispatch (legacy: %s)",
+    async (legacy) => {
+      const { current, recoveryClient, client } = await retainedRecoveryFixture(legacy);
+      client.verifyRetainedPublicationArtifacts.mockClear();
+      const before = JSON.stringify(current.plan);
+      await expect(
+        preflightContinuation(current.plan, current.runId, recoveryClient),
+      ).resolves.toMatchObject({
+        artifactProducers: [],
+        pendingArtifactProducers: false,
+      });
+      expect(client.verifyRetainedPublicationArtifacts).toHaveBeenCalledOnce();
+      expect(JSON.stringify(current.plan)).toBe(before);
+      const normalCi = current.plan.children.find((entry) => entry.key === "normalCi")!;
+      const [job] = await recoveryClient.getAttemptJobs(normalCi.runId);
+      if (typeof job?.name !== "string") {
+        throw new Error("Expected the fixture normal CI job name");
+      }
+      await expect(
+        continueFailed(current.plan, current.runId, recoveryClient, {
+          job: `normalCi:${job.name}`,
+          noFollow: true,
+          dryRun: true,
+          log: () => {},
+        }),
+      ).resolves.toMatchObject({ action: "would-rerun" });
+      expect(recoveryClient.rerunJob).not.toHaveBeenCalled();
+      expect(recoveryClient.rerunParent).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["missing", "forged", "ambiguous"])(
+    "refuses %s retained-original evidence before retry",
+    async (fault) => {
+      const { current, recoveryClient, finalClient } = await retainedRecoveryFixture();
+      if (fault === "missing") {
+        const getRunArtifacts = finalClient.getRunArtifacts;
+        finalClient.getRunArtifacts = async (id: string) =>
+          id === "81" ? [] : getRunArtifacts(id);
+      } else {
+        const getJobLog = finalClient.getJobLog;
+        finalClient.getJobLog = async (id: number) => {
+          const log = await getJobLog(id);
+          return id !== 1e12 + 81
+            ? log
+            : fault === "forged"
+              ? log.replace("openclaw/openclaw", "forged/repository")
+              : log + "\n" + log;
+        };
+      }
+      await expect(
+        continueFailed(current.plan, current.runId, recoveryClient, {
+          job: "normalCi:checks-node-compact-large-17 (node)",
+          noFollow: true,
+          log: () => {},
+        }),
+      ).rejects.toThrow(
+        fault === "forged" ? "original dispatch identity differs" : "missing or ambiguous",
+      );
+      expect(recoveryClient.rerunJob).not.toHaveBeenCalled();
+      expect(recoveryClient.rerunParent).not.toHaveBeenCalled();
+    },
+  );
   it.each([true, false])(
     "runs workflow selection in its provisioned checkout (admitted Q: %s)",
     (admitted) => {
@@ -1725,73 +1937,7 @@ describe("explicit publication artifact selection", () => {
     expect(client.verifyRetainedPublicationArtifacts).toHaveBeenCalledOnce();
   });
   it("seals and authenticates historical bytes through final verification and publication", async () => {
-    const { f, current, client, env } = selectionFixture();
-    const selected = await selectPublicationArtifactSource(
-      { runId: "51", runAttempt: 1 },
-      env,
-      client,
-    );
-    Object.assign(
-      current.plan,
-      buildReleaseExecutionPlanArtifact({
-        ...current.plan,
-        expected: current.plan,
-        candidate: selected.candidate,
-        publicationArtifactSource: selected.source,
-      }),
-    );
-    Object.assign(current.manifest, {
-      candidateBinding: selected.candidate,
-      publicationArtifactSource: selected.source,
-      publicationArtifacts: selected.publicationArtifacts,
-      executionPlanSha256: current.plan.sha256,
-    });
-    expect(validateReleaseExecutionPlanArtifact(current.plan).candidate).toEqual(
-      selected.candidate,
-    );
-    const finalClient = {
-      ...current.client,
-      readWorkloadIdentity: client.readWorkloadIdentity,
-      getArtifact: client.getArtifact,
-      getRunArtifacts: client.getRunArtifacts,
-      downloadArtifactArchive: client.downloadArtifactArchive,
-      verifyRetainedPublicationArtifacts: client.verifyRetainedPublicationArtifacts,
-      getRun: (id: string) =>
-        ["51", "77", "81", "91", "1001"].includes(id)
-          ? client.getRun(id)
-          : current.client.getRun(id),
-      getRunAttempt: (id: string, attempt: number) =>
-        ["51", "77", "81", "91", "1001"].includes(id)
-          ? client.getRunAttempt(id, attempt)
-          : current.client.getRunAttempt(id, attempt),
-      getRunAttemptJobs: async (id: string) => {
-        if (id === "51") {
-          // Preserve the original fixture's job identities for source authentication.
-          const jobs = structuredClone(await client.getRunAttemptJobs(id));
-          for (const job of jobs) {
-            job.id = Number(job.id) + 1e12;
-          }
-          return jobs;
-        }
-        return id === "77" ? client.getRunAttemptJobs(id) : current.client.getRunAttemptJobs(id);
-      },
-      getJobLog: (id: number) =>
-        id >= 1e12 ? client.getJobLog(id - 1e12) : current.client.getJobLog(id),
-      getWorkflowSource: (sha: string, path?: string) =>
-        sha === f.q
-          ? f.client.getWorkflowSource(sha, path)
-          : current.client.getWorkflowSource(sha, path),
-      loadExecutionPlanEvidence: (id: string) =>
-        id === "51"
-          ? f.client.loadExecutionPlanEvidence()
-          : current.client.loadExecutionPlanEvidence(),
-      verifyQualificationAdmission: (
-        options: Parameters<typeof current.client.verifyQualificationAdmission>[0],
-      ) =>
-        options.qualificationSha === f.q
-          ? f.client.verifyQualificationAdmission(options)
-          : current.client.verifyQualificationAdmission(options),
-    };
+    const { f, current, client, selected, finalClient } = await selectedPublicationFixture();
     const options = {
       repository: current.repository,
       runId: current.runId,
@@ -1801,7 +1947,25 @@ describe("explicit publication artifact selection", () => {
       verifierSourceSha: current.p,
       verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
     };
-    const evidence = await validateReleaseRunEvidence(options, finalClient);
+    const downloadArchive = finalClient.downloadArtifactArchive;
+    let authenticatedDownloads = 0;
+    finalClient.downloadArtifactArchive = async (downloadOptions) => {
+      if (!("token" in downloadOptions) || downloadOptions.token !== "synthetic-verifier-token") {
+        throw new Error("Final verifier omitted the existing GitHub credential");
+      }
+      authenticatedDownloads += 1;
+      return downloadArchive(downloadOptions);
+    };
+    vi.stubEnv("GH_TOKEN", "synthetic-verifier-token");
+    let evidence;
+    try {
+      evidence = await validateReleaseRunEvidence(options, finalClient);
+      expect(authenticatedDownloads).toBeGreaterThan(0);
+      expect(JSON.stringify(current.plan)).not.toContain("synthetic-verifier-token");
+    } finally {
+      vi.unstubAllEnvs();
+      finalClient.downloadArtifactArchive = downloadArchive;
+    }
     expect(evidence.current.conclusion).toBe("success");
     expect(client.verifyRetainedPublicationArtifacts).toHaveBeenLastCalledWith(
       expect.anything(),

@@ -29,6 +29,41 @@ function dispatches(fixture: ReturnType<typeof createDispatchFixture>) {
 }
 
 describe("candidate-owned full release dispatch entry point", () => {
+  it("admits repaired P while retaining existing Q, original artifacts, and baselines", () => {
+    const f = createDispatchFixture({ candidateOwned: true, advanceMainBeforeAdmission: 1 });
+    const artifacts = { runId: "51", runAttempt: 1 };
+    const result = f.run([
+      "--workflow-sha",
+      f.workflowSha,
+      "-f",
+      "validation_purpose=publish",
+      "-f",
+      "publication_selection_json=" + JSON.stringify(publicationSelectionFixture()),
+      "-f",
+      "qualification_baselines_json=" + JSON.stringify(frozenBaselines),
+      "-f",
+      "publication_artifact_source_json=" + JSON.stringify(artifacts),
+      "-f",
+      "reuse_evidence=true",
+      "-f",
+      "rerun_group=all",
+      "-f",
+      "fail_fast=false",
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(dispatches(f)).toEqual([P, Q]);
+    const repairedP = runGit(f.origin, ["rev-parse", "refs/heads/main"]);
+    expect(repairedP).not.toBe(f.workflowSha);
+    const retained = f.record();
+    expect(retained.admission.workflowSha).toBe(repairedP);
+    expect(retained.request.workflowSha).toBe(f.workflowSha);
+    expect(retained.request.targetSha).toBe(f.targetSha);
+    const envelope = JSON.parse(f.readPayload().body.inputs.trusted_workflow_json!);
+    expect(envelope.qualificationAdmission.workflowSha).toBe(repairedP);
+    expect(envelope.trustedWorkflow.sha).toBe(f.workflowSha);
+    expect(JSON.parse(envelope.laneInputs.qualification_baselines_json)).toEqual(frozenBaselines);
+    expect(JSON.parse(envelope.laneInputs.publication_artifact_source_json)).toEqual(artifacts);
+  });
   it("admits explicit Q without substituting the frozen candidate", () => {
     const f = createDispatchFixture({ candidateOwned: true, advanceMainAfterAdmission: true });
     const result = f.run([

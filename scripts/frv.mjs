@@ -14,9 +14,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { promisify, stripVTControlCharacters } from "node:util";
+import { isDeepStrictEqual, promisify, stripVTControlCharacters } from "node:util";
 import { parse as parseYaml } from "yaml";
-import { validateArtifactProducerRun } from "./full-release-artifacts.mjs";
+import {
+  selectPublicationArtifactSource,
+  validateArtifactProducerRun,
+} from "./full-release-artifacts.mjs";
 import {
   publicationAdmissionContract,
   publicationSourceContract,
@@ -598,7 +601,15 @@ async function recheckArtifactProducers(
 const ARTIFACT_PRODUCER_STAGES = new Set(["npm", "docker", "candidate", "plugin-npm"]);
 const ARTIFACT_RECOVERY_STAGES = new Set(["npm", "docker", "plugin-npm"]);
 
-async function legacyNpmRecoveryProducers(plan, parentJobs, client, repository, workflow, options) {
+async function legacyNpmRecoveryProducers(
+  plan,
+  parentJobs,
+  client,
+  repository,
+  workflow,
+  options,
+  retainedArtifacts,
+) {
   if (!workflow.includes("node scripts/full-release-artifacts.mjs resolve")) {
     return { pending: false, producers: [] };
   }
@@ -623,6 +634,22 @@ async function legacyNpmRecoveryProducers(plan, parentJobs, client, repository, 
       /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Dispatched full-release-artifacts\.yml: https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
     ),
   ];
+  if (retainedArtifacts) {
+    const jobs = Object.values(parseYaml(workflow).jobs ?? {}).filter(
+      (entry) => entry.name === job.name,
+    );
+    if (
+      dispatches.length !== 0 ||
+      job.conclusion !== "success" ||
+      jobs.length !== 1 ||
+      !jobs[0].steps?.some(
+        (step) => step.id === "reused" && step.if === "env.PUBLICATION_ARTIFACTS_REUSED == 'true'",
+      )
+    ) {
+      throw new Error("Retained npm artifact recovery identity is unavailable or ambiguous");
+    }
+    return { pending: false, producers: [] };
+  }
   if (
     dispatches.length !== 1 ||
     dispatches[0][1] !== repository ||
@@ -705,7 +732,15 @@ function artifactRecoveryJobs(workflow) {
   return producers;
 }
 
-async function artifactRecoveryProducers(plan, parentJobs, client, repository, workflow, options) {
+async function artifactRecoveryProducers(
+  plan,
+  parentJobs,
+  client,
+  repository,
+  workflow,
+  options,
+  retainedArtifacts,
+) {
   let source;
   try {
     source = parseYaml(workflow);
@@ -714,7 +749,15 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
   }
   const recoveryContract = source?.env?.FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT;
   if (!["1", "2"].includes(recoveryContract)) {
-    return legacyNpmRecoveryProducers(plan, parentJobs, client, repository, workflow, options);
+    return legacyNpmRecoveryProducers(
+      plan,
+      parentJobs,
+      client,
+      repository,
+      workflow,
+      options,
+      retainedArtifacts,
+    );
   }
   const producers = [];
   let pending = false;
@@ -767,6 +810,12 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
             /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Artifact dispatch (npm|docker) target ([a-f0-9]{40}): https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
           ),
         ];
+    if (retainedArtifacts) {
+      if (dispatches.length !== 0 || !allowsReuse || job.conclusion !== "success") {
+        throw new Error(`Retained ${stage} artifact recovery identity is unavailable or ambiguous`);
+      }
+      continue;
+    }
     if (
       dispatches.length === 0 &&
       plan.evidenceReuse?.requested === true &&
@@ -956,6 +1005,36 @@ export async function preflightContinuation(
       throw new Error("continuation differs from the authenticated original publication plan");
     }
   }
+  // Explicit byte reuse is independent of whole-verdict reuse. Authenticate it
+  // through the selection owner; retained producers belong to the original parent.
+  const selection = sourceAdmission?.coverage.publication_artifact_source_json;
+  if (selection) {
+    const selected = await selectPublicationArtifactSource(
+      JSON.parse(selection),
+      {
+        GH_TOKEN: process.env.GH_TOKEN,
+        GITHUB_REPOSITORY: repository,
+        GITHUB_RUN_ID: String(rootRunId),
+        GITHUB_RUN_ATTEMPT: String(plan.parentRunAttempt),
+        TARGET_SHA: plan.targetSha,
+        PARENT_WORKFLOW_SHA: plan.workflowSha,
+        SOURCE_ADMISSION_JSON: JSON.stringify(sourceAdmission),
+        CANDIDATE_REQUEST_JSON: JSON.stringify(plan.candidateRequest),
+        PLUGIN_NPM_REQUIRED: String(
+          sourceAdmission.publicationSelection?.pluginPublishScope !== "none",
+        ),
+      },
+      evidenceClient,
+    );
+    if (
+      !isDeepStrictEqual(selected.source, plan.publicationArtifactSource) ||
+      !isDeepStrictEqual(selected.candidate, plan.candidate)
+    ) {
+      throw new Error("Retained publication artifacts differ from the authenticated original plan");
+    }
+  } else if (plan.publicationArtifactSource) {
+    throw new Error("Historical publication artifacts require explicit admitted selection");
+  }
   const artifactRecovery = await artifactRecoveryProducers(
     plan,
     parentJobs,
@@ -963,6 +1042,7 @@ export async function preflightContinuation(
     repository,
     workflow,
     options,
+    Boolean(selection),
   );
   const childObservations = await Promise.all(
     selectedChildren(plan).map(async (child) => {

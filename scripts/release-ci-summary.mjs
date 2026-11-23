@@ -3008,6 +3008,7 @@ export async function validateReleaseRunEvidence(
         const selected = await selectPublicationArtifactSource(
           JSON.parse(manifest.sourceAdmission.coverage.publication_artifact_source_json),
           {
+            GH_TOKEN: process.env.GH_TOKEN,
             GITHUB_REPOSITORY: normalizedRepository,
             GITHUB_RUN_ID: manifest.runId,
             GITHUB_RUN_ATTEMPT: manifest.runAttempt,
