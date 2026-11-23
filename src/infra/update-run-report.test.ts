@@ -727,7 +727,11 @@ it.each<[string | null, string[], string]>([
 });
 
 it.each<[UpdateRunRecord["status"], string | null, string]>([
-  ["succeeded", null, "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1)."],
+  [
+    "succeeded",
+    null,
+    "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1); 1 warning needs attention.",
+  ],
   ["running", null, "⬆️ OpenClaw update in progress: verifying."],
   ["skipped", null, "ℹ️ OpenClaw update skipped: unknown reason."],
   ["rolled-back", null, "↩️ OpenClaw update rolled back to 2026.9.2: unknown reason."],
@@ -741,12 +745,12 @@ it.each<[UpdateRunRecord["status"], string | null, string]>([
     "still-starting",
     "ℹ️ OpenClaw 2026.9.2 installed; Gateway still starting; readiness unverified; recovery backups retained.",
   ],
-])("keeps %s headline despite failed children (%s)", (status, reason, headline) => {
+])("keeps the %s outcome when plugin maintenance fails (%s)", (status, reason, headline) => {
   const report = render({
     status,
     reason,
     phase: "verifying",
-    steps: [failedStep("finalize:doctor")],
+    steps: [failedStep("plugins")],
   });
   expect(report.headline).toBe(headline);
 });

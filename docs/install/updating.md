@@ -191,6 +191,8 @@ and `openclaw update status` offer Retry, then Report update failure if it fails
 again. Startup output remains in the saved diagnostic details, not a failed update
 step. Unperformed verification checks are not reported as warnings. Machine-only
 Doctor check receipts stay in saved JSON, not installation steps or report text.
+Failed supplemental steps count toward the success headline's warnings without
+changing the recorded successful outcome.
 The installed updater must contain preparation-step reporting changes; the
 restored release must contain rollback reporting changes. No schema or protocol
 change is needed.

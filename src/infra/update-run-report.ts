@@ -328,10 +328,16 @@ export function renderUpdateRunReport(
   let headline: string;
   switch (run.status) {
     case "succeeded": {
-      // A skipped post-swap step keeps the version change; the headline must not read as clean.
+      // Supplemental failures need attention without changing a successful core outcome.
+      let attentionCount = warnings.length;
+      for (const step of run.steps) {
+        if (step.status === "failed" && !PHASES.has(step.step)) {
+          attentionCount++;
+        }
+      }
       const attention =
-        warnings.length > 0
-          ? `; ${warnings.length} warning${warnings.length === 1 ? " needs" : "s need"} attention`
+        attentionCount > 0
+          ? `; ${attentionCount} warning${attentionCount === 1 ? " needs" : "s need"} attention`
           : "";
       headline = repairRun
         ? `✅ OpenClaw repair completed${after ? ` for ${after}` : ""}${attention}.`
