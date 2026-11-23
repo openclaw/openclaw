@@ -1945,7 +1945,7 @@ jobs:
           retention-days: 7
 
       - name: Check bundled plugin generated assets
-        if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
+        if: &dist_build_ready ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
         run: |
           set -euo pipefail
 
@@ -1962,7 +1962,7 @@ jobs:
           fi
 
       - name: Check generated schema validators
-        if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
+        if: *dist_build_ready
         run: |
           set -euo pipefail
           if node --input-type=module <<'NODE'
@@ -2016,11 +2016,11 @@ jobs:
           retention-days: 1
 
       - name: Smoke test CLI launcher help
-        if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
+        if: *dist_build_ready
         run: node openclaw.mjs --help
 
       - name: Smoke test CLI launcher status json
-        if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
+        if: *dist_build_ready
         run: node openclaw.mjs status --json --timeout 1
 
       - name: Smoke test built CLI with Bun
@@ -2100,7 +2100,7 @@ jobs:
             ${{ github.repository }}-vitest-workers-built-v1-protected-${{ steps.node_setup.outputs.node-toolchain-cache-key }}-
 
       - name: Run built artifact checks
-        if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
+        if: *dist_build_ready
         id: built_artifact_checks
         env:
           PARALLEL_GATEWAY_WATCH: ${{ runner.environment != 'github-hosted' && 'true' || 'false' }}
@@ -4912,16 +4912,16 @@ jobs:
           fi
 
       - name: Check config docs baseline
-        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_docs_content == 'true' }}
+        if: &docs_content_ready ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_docs_content == 'true' }}
         run: pnpm config:docs:check
 
       - name: Check plugin inventory
-        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_docs_content == 'true' }}
+        if: *docs_content_ready
         run: pnpm plugins:inventory:check
 
       - name: Checkout ClawHub docs source
         id: clawhub_docs
-        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_docs_content == 'true' }}
+        if: *docs_content_ready
         shell: bash
         env:
           CHECKOUT_KIND: clawhub
