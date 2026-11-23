@@ -4,12 +4,18 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { delimiter, join, resolve } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { parse } from "yaml";
-import { preparedDockerEvidenceFromFullRelease } from "../../scripts/docker-release-artifacts.mjs";
+import {
+  preparedDockerEvidenceFromFullRelease,
+  verifyDockerReleaseProducer,
+} from "../../scripts/docker-release-artifacts.mjs";
 import { validateFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
 import { releaseExecutionPlanSha256 } from "../../scripts/full-release-validation-policy.mjs";
 import { releaseChildDispatchInputs } from "../../scripts/lib/full-release-child-request.mjs";
 import type { ReusableReleaseChildSelection } from "../../scripts/lib/full-release-child-reuse.mjs";
-import { validateFullReleaseNpmPreflight } from "../../scripts/npm-preflight-tooling-identity.mjs";
+import {
+  validateFullReleaseNpmPreflight,
+  verifyNpmPreflightPublicationLineage,
+} from "../../scripts/npm-preflight-tooling-identity.mjs";
 import {
   validateReleaseRunEvidence,
   runReleaseRecoveryCli,
@@ -227,6 +233,7 @@ function fixture(substitute = false) {
   );
   return {
     f,
+    origin,
     normalCiSelection,
     producer,
     run,
@@ -241,7 +248,7 @@ function fixture(substitute = false) {
 }
 
 it("seals the original plan without an original manifest or any new CI/old-parent dispatch", async () => {
-  const { f, producer, client, rerun, setSealed } = fixture();
+  const { f, origin, producer, client, rerun, setSealed } = fixture();
   const { env, manifestPath } = await cliFixture(f, producer, client);
   await runReleaseRecoveryCli(["--seal-recovery"], env, client);
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
@@ -292,6 +299,40 @@ it("seals the original plan without an original manifest or any new CI/old-paren
       toolingSha: f.q,
     }),
   ).toEqual(manifest.publicationArtifacts.npmPreflight);
+  // A publication-only P descendant consumes this same successful seal.
+  const publisherSha = "d".repeat(40);
+  const publisherFullRef = "refs/tags/release-publish/" + publisherSha.slice(0, 12) + "-2";
+  const compareCommitLineage = vi.fn((base: string, head: string) => {
+    expect([base, head]).toEqual([f.p, publisherSha]);
+    return { status: "ahead", merge_base_commit: { sha: f.p } };
+  });
+  const publisherClient = {
+    ...client,
+    compareCommitLineage,
+    getRef: (ref: string) =>
+      ref === publisherFullRef ? { ref, object: { sha: publisherSha } } : client.getRef(ref),
+  };
+  await expect(
+    verifyNpmPreflightPublicationLineage({
+      manifest,
+      repository: f.repository,
+      sourceSha: f.c,
+      toolingSha: origin.q,
+      publisherSha,
+      publisherFullRef,
+      producerRunId: origin.runId,
+      producerRunAttempt: "1",
+      evidenceClient: publisherClient,
+    }),
+  ).resolves.toEqual(manifest.publicationArtifacts.npmPreflight);
+  await verifyDockerReleaseProducer(origin.docker, {
+    publisherSha,
+    publisherFullRef,
+    fullReleaseManifest: manifest,
+    readApi: origin.readApi,
+    evidenceClient: publisherClient,
+  });
+  expect(compareCommitLineage).toHaveBeenCalled();
   expect(
     preparedDockerEvidenceFromFullRelease({
       manifest,

@@ -171,52 +171,62 @@ describe("release tooling identity", () => {
     expect(result.stderr).not.toContain("unsettled top-level await");
   });
 
-  it.each(["lineage", "authority"])("loads npm publication %s without CLI deadlock", (mode) => {
-    const root = tempDirs.make("npm-publication-cli-");
-    const manifestDir = join(root, "full-release-validation");
-    mkdirSync(manifestDir);
-    const manifestPath = join(manifestDir, "full-release-validation-manifest.json");
-    writeFileSync(
-      manifestPath,
-      JSON.stringify({
-        runId: RUN_ID,
-        runAttempt: 1,
-        targetSha: SHA,
-        sourceAdmission: { qualificationAdmission: {} },
-      }),
-    );
-    const result = spawnSync(
-      process.execPath,
-      [
-        join(process.cwd(), "scripts/npm-preflight-tooling-identity.mjs"),
-        `--verify-publication-${mode}`,
-        ...Object.entries({
-          "full-release-manifest": manifestPath,
-          "publisher-full-ref": "invalid",
-          "source-sha": SHA,
-          "workflow-sha": SHA,
-        }).flatMap(([key, value]) => [`--${key}`, value]),
-      ],
-      {
-        cwd: root,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          GH_TOKEN: "",
-          GITHUB_TOKEN: "",
-          WORKFLOW_FULL_REF: "invalid",
-          FULL_RELEASE_VALIDATION_RUN_ID: RUN_ID,
-          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "1",
-          EXPECTED_RELEASE_SHA: SHA,
-          PREFLIGHT_WORKFLOW_SHA: SHA,
+  it.each(["lineage", "authority", "recovery-authority", "mismatched-recovery-authority"])(
+    "loads npm publication %s without CLI deadlock",
+    (mode) => {
+      const root = tempDirs.make("npm-publication-cli-");
+      const manifestDir = join(root, "full-release-validation");
+      mkdirSync(manifestDir);
+      const manifestPath = join(manifestDir, "full-release-validation-manifest.json");
+      writeFileSync(
+        manifestPath,
+        JSON.stringify({
+          runId: RUN_ID,
+          runAttempt: 1,
+          targetSha: SHA,
+          ...(mode.includes("recovery")
+            ? { recovery: { producer: { runId: PARENT_RUN_ID, runAttempt: 2 } } }
+            : {}),
+          sourceAdmission: { qualificationAdmission: {} },
+        }),
+      );
+      const result = spawnSync(
+        process.execPath,
+        [
+          join(process.cwd(), "scripts/npm-preflight-tooling-identity.mjs"),
+          `--verify-publication-${mode === "lineage" ? "lineage" : "authority"}`,
+          ...Object.entries({
+            "full-release-manifest": manifestPath,
+            "publisher-full-ref": "invalid",
+            "source-sha": SHA,
+            "workflow-sha": SHA,
+          }).flatMap(([key, value]) => [`--${key}`, value]),
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            GH_TOKEN: "",
+            GITHUB_TOKEN: "",
+            WORKFLOW_FULL_REF: "invalid",
+            FULL_RELEASE_VALIDATION_RUN_ID: mode === "recovery-authority" ? PARENT_RUN_ID : RUN_ID,
+            FULL_RELEASE_VALIDATION_RUN_ATTEMPT: mode === "recovery-authority" ? "2" : "1",
+            EXPECTED_RELEASE_SHA: SHA,
+            PREFLIGHT_WORKFLOW_SHA: SHA,
+          },
         },
-      },
-    );
+      );
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("trusted workflow full ref does not match its ref");
-    expect(result.stderr).not.toContain("unsettled top-level await");
-  });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        mode === "mismatched-recovery-authority"
+          ? "Full release publication authority differs"
+          : "trusted workflow full ref does not match its ref",
+      );
+      expect(result.stderr).not.toContain("unsettled top-level await");
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "retains GitHub failure diagnostics in the identity CLI",
@@ -474,9 +484,18 @@ describe("historical npm preflight tooling", () => {
     });
   });
 
+  it("accepts a protected release-only producer outside main on the publisher ancestry", () => {
+    expect(
+      verifyReleasePreflightToolingIdentity(
+        proof({
+          ["compare/" + SHA + "...main"]: { status: "diverged" },
+        }),
+      ),
+    ).toMatchObject({ route: "protected-tag", sha: SHA });
+  });
+
   it.each([
     ["ambiguous branch", `git/matching-refs/heads/${REF}`, [{ ref: `refs/heads/${REF}` }]],
-    ["producer outside main", `compare/${SHA}...main`, { status: "diverged" }],
     ["unrelated publisher", `compare/${SHA}...${OTHER_SHA}`, { status: "diverged" }],
   ])("rejects %s", (_name, route, response) => {
     expect(() => verifyReleasePreflightToolingIdentity(proof({ [route]: response }))).toThrow();

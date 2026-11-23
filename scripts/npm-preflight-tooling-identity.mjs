@@ -361,8 +361,8 @@ export function validateNpmPreflightQualification({
   const qualified = validateFullReleaseNpmPreflight({
     manifest,
     repository,
-    runId: manifest.runId,
-    runAttempt: manifest.runAttempt,
+    runId: releaseEvidenceProducerTuple(manifest).runId,
+    runAttempt: releaseEvidenceProducerTuple(manifest).runAttempt,
     sourceSha,
     toolingSha,
   });
@@ -452,23 +452,21 @@ export function verifyReleasePreflightToolingIdentity({
     "npm preflight producer branches",
   );
   const validated = validateReleasePreflightTagIdentity({ ...identity, tagRef, branches });
-  // Producer evidence and current publication authority are distinct. Require
-  // the producer on both trusted main and the current publisher's ancestry.
-  for (const target of ["main", targetSha]) {
-    const comparison = parseJson(
-      runGh([
-        "api",
-        `repos/${normalizedRepository}/compare/${validated.sha}...${target}`,
-        "--method",
-        "GET",
-        "--jq",
-        "{status}",
-      ]),
-      "npm preflight producer ancestry",
-    );
-    if (comparison?.status !== "ahead" && comparison?.status !== "identical") {
-      throw new Error(`npm preflight producer is not reachable from ${target}.`);
-    }
+  // The protected-tag owner authenticates release-only P independently of main.
+  // Retain the separate producer-to-current-publisher ancestry requirement.
+  const comparison = parseJson(
+    runGh([
+      "api",
+      `repos/${normalizedRepository}/compare/${validated.sha}...${targetSha}`,
+      "--method",
+      "GET",
+      "--jq",
+      "{status}",
+    ]),
+    "npm preflight producer ancestry",
+  );
+  if (comparison?.status !== "ahead" && comparison?.status !== "identical") {
+    throw new Error(`npm preflight producer is not reachable from ${targetSha}.`);
   }
   return validated;
 }
@@ -515,8 +513,10 @@ async function main() {
         : undefined;
       if (
         fullManifest &&
-        (String(fullManifest.runId) !== env.FULL_RELEASE_VALIDATION_RUN_ID ||
-          String(fullManifest.runAttempt) !== env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT)
+        (String(releaseEvidenceProducerTuple(fullManifest).runId) !==
+          env.FULL_RELEASE_VALIDATION_RUN_ID ||
+          String(releaseEvidenceProducerTuple(fullManifest).runAttempt) !==
+            env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT)
       ) {
         throw new Error(
           "Full release publication authority differs from the selected run and attempt",

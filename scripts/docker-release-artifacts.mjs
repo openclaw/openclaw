@@ -736,8 +736,8 @@ export async function verifyDockerReleaseProducer(
     const selected = preparedDockerEvidenceFromFullRelease({
       manifest: fullReleaseManifest,
       sourceSha: manifest.sourceSha,
-      runId: fullReleaseManifest.runId,
-      runAttempt: fullReleaseManifest.runAttempt,
+      runId: releaseEvidenceProducerTuple(fullReleaseManifest).runId,
+      runAttempt: releaseEvidenceProducerTuple(fullReleaseManifest).runAttempt,
     });
     requireValue(
       selected.preparedRunId === producer.runId &&

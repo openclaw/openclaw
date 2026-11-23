@@ -11,7 +11,10 @@ import {
 } from "./full-release-publication-contract.mjs";
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
-import { retainedPublicationArtifactSource } from "./lib/release-evidence-identity.mjs";
+import {
+  retainedPublicationArtifactSource,
+  releaseEvidenceProducerTuple,
+} from "./lib/release-evidence-identity.mjs";
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import { createReleaseEvidenceClient, validateReleaseRunEvidence } from "./release-ci-summary.mjs";
 
@@ -427,7 +430,7 @@ function validateCandidateOwnedArtifactBinding(manifest, candidateSha, qualifica
       (manifest.publicationArtifactSource ? manifest.workflowSha : qualificationSha) ||
     (manifest.publicationArtifactSource &&
       retainedPublicationArtifactSource(manifest)?.workflow.sha !== qualificationSha) ||
-    evidence.current.runAttempt !== Number(manifest.runAttempt) ||
+    evidence.current.runAttempt !== Number(releaseEvidenceProducerTuple(manifest).runAttempt) ||
     evidence.current.conclusion !== "success" ||
     !isDeepStrictEqual(evidence.current.manifest, sortJsonValueKeys(manifest))
   ) {
@@ -461,7 +464,7 @@ export async function authenticateCandidateOwnedArtifact({
   const evidence = await validateReleaseRunEvidence(
     {
       repository,
-      runId: String(manifest.runId),
+      runId: String(releaseEvidenceProducerTuple(manifest).runId),
       trustedWorkflowFullRef: publisherFullRef,
       trustedWorkflowRef: publisherFullRef.replace(/^refs\/(?:heads|tags)\//u, ""),
       trustedWorkflowSha: publisherSha,
