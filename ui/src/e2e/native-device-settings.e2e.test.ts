@@ -77,6 +77,37 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("keeps the wrapped browser Permissions help link's focus outline visible", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, locale: "en-US" },
+      async ({ page }) => {
+        await installMockGateway(page);
+        await page.goto(suite.server.baseUrl + "settings/device/permissions");
+        const surface = page.locator("openclaw-device-permissions-page");
+        await surface.getByText(/only available inside the OpenClaw app/).waitFor();
+        const link = surface.getByRole("link", { name: "Learn more", exact: true });
+        await link.focus();
+        await page.keyboard.press("Shift+Tab");
+        await page.keyboard.press("Tab");
+        expect(
+          await link.evaluate((anchor) => {
+            const header = anchor.closest(".content-header")!;
+            const style = getComputedStyle(anchor);
+            const ringStart =
+              anchor.getBoundingClientRect().left -
+              Number.parseFloat(style.outlineWidth) -
+              Number.parseFloat(style.outlineOffset);
+            return (
+              anchor.matches(":focus-visible") &&
+              (getComputedStyle(header).overflowX === "visible" ||
+                ringStart >= header.getBoundingClientRect().left)
+            );
+          }),
+        ).toBe(true);
+      },
+    );
+  });
+
   it("shows the desktop companion setting and reconciles native sharing changes", async () => {
     const artifactDir = captureUiProof
       ? createControlUiE2eArtifactDir("tauri-desktop-sharing")

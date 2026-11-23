@@ -295,6 +295,10 @@ describe("DailyChartCompact", () => {
         item.textContent?.trim(),
       ),
     ).toEqual(["Other83%", "OpenAI17%"]);
+    // Day two has only unattributed usage, not a provider's assigned hue.
+    expect(bars[1]?.querySelector<HTMLElement>(".cost-segment")?.style.background).toBe(
+      "var(--muted-strong)",
+    );
   });
 
   it("renders a range without cost as zero", () => {

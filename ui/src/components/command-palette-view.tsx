@@ -178,7 +178,8 @@ function getOptionId(index: number): string {
 }
 
 function matchesFilter(item: CommandPaletteItem, filter: PaletteFilter) {
-  return filter === "all" || item.category === (filter === "sessions" ? "chats" : "messages");
+  const category = item.category === "archived" ? "chats" : item.category;
+  return filter === "all" || category === (filter === "sessions" ? "chats" : "messages");
 }
 
 function resolvePaletteResults(snapshot: CommandPaletteProps, prepared?: CommandPaletteItem[]) {
@@ -457,6 +458,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
     <>
       <openclaw-modal-dialog
         prop:initialFocus={() => initialInput}
+        native-browser-backdrop
         class="cmd-palette-overlay palette"
         label={t("palette.placeholder")}
         style={COMMAND_PALETTE_DIALOG_STYLE}

@@ -744,3 +744,46 @@ test("allows fallback consent after hiding inactive metadata without reviving it
     ).toBe(false);
   }, true);
 });
+
+test("merges concurrent failure receipts for the operator and never advances one on legacy adoption", async () => {
+  const receiptKey = "ui.inbox.cronFailed";
+  await withPreferenceState(async () => {
+    const operator = ensureProfileForEmail("operator@example.test").id;
+    const other = ensureProfileForEmail("other@example.test").id;
+    const acknowledge = (jobId: string, failedAtMs: number, adopt = false) =>
+      preferences.setCanonicalUserPreferences(
+        operator,
+        {},
+        { cronFailure: { jobId, failedAtMs, adopt } },
+      );
+    await Promise.all([acknowledge("a", 10), acknowledge("b", 12)]);
+    expect(await acknowledge("a", 20, true)).toMatchObject({
+      ok: true,
+      value: { acknowledgedAtMs: 10 },
+    });
+    await acknowledge("a", 20);
+    await acknowledge("a", 10);
+    expect(
+      (await preferences.getCanonicalUserPreferences(operator, [receiptKey]))?.entries,
+    ).toEqual({ [receiptKey]: { a: 20, b: 12 } });
+    expect((await preferences.getCanonicalUserPreferences(other, [receiptKey]))?.entries).toEqual(
+      {},
+    );
+    expect(
+      await preferences.setCanonicalUserPreferences(operator, {
+        [receiptKey]: null,
+      }),
+    ).toMatchObject({ ok: false, error: { code: "invalid-key" } });
+    await preferences.setCanonicalUserPreferences(
+      other,
+      {},
+      {
+        cronFailure: { jobId: "b", failedAtMs: 30, adopt: false },
+      },
+    );
+    mergeProfiles(operator, other);
+    expect((await preferences.getCanonicalUserPreferences(other, [receiptKey]))?.entries).toEqual({
+      [receiptKey]: { a: 20, b: 30 },
+    });
+  });
+});

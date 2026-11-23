@@ -2624,6 +2624,7 @@ jobs:
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_STATE_SCRIPT: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/full-release-validation-state.mjs', github.workspace) || format('{0}/scripts/full-release-validation-state.mjs', github.workspace) }}
           OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
           OPENCLAW_RELEASE_WAIVERS_PATH: ${{ github.workspace }}/scripts/lib/release-validation-waivers.json
           SOURCE_ADMISSION_JSON: ${{ needs.resolve_target.outputs.source_admission_json }}
@@ -2646,7 +2647,7 @@ jobs:
               jq -c . "${GITHUB_WORKSPACE}/full-release-execution-plan-inputs/plan-inputs.json"
             )"
           fi
-          node scripts/full-release-validation-state.mjs plan
+          node "$RELEASE_STATE_SCRIPT" plan
 
       - name: Upload immutable release execution plan
         id: plan_upload

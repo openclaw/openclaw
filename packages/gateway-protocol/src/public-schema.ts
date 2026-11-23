@@ -395,6 +395,7 @@ export {
   CronJobSchema,
   CronListParamsSchema,
   CronStatusParamsSchema,
+  CronAcknowledgeFailureParamsSchema,
   CronGetParamsSchema,
   CronAddParamsSchema,
   CronAddJobResultSchema,
