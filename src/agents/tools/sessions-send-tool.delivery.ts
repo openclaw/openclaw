@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { appendSessionTranscriptReport } from "../../config/sessions/session-accessor.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -409,16 +409,11 @@ export async function recordSessionsSendForRequester(
       {
         kind: "custom",
         customTypes: [REQUESTER_MESSAGE_CUSTOM_TYPE],
-        // A retry with the same idempotency key records the message once.
-        selectReport: (latest) =>
-          isRecord(latest?.details) && latest.details.runId === params.runId
-            ? undefined
-            : {
-                customType: REQUESTER_MESSAGE_CUSTOM_TYPE,
-                content: params.sendParams.message,
-                display: false,
-                details: { runId: params.runId },
-              },
+        selectReport: () => ({
+          customType: REQUESTER_MESSAGE_CUSTOM_TYPE,
+          content: params.sendParams.message,
+          display: false,
+        }),
       },
     ),
   );

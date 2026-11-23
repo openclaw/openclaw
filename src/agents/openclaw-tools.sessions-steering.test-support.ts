@@ -306,20 +306,24 @@ export function registerSessionsSendActiveSteeringTests({
     }
   });
 
-  // A hidden child records its parent as spawnedBy; a visible dashboard child as parentSessionKey.
-  it.each([
-    { busy: false, lineage: "parentSessionKey" },
-    { busy: true, lineage: "spawnedBy" },
-  ] as const)(
-    "a child's send to its parent starts no parent turn (busy=$busy, $lineage)",
-    async ({ busy, lineage }) => {
+  // Supervised children (hidden, ACP or visible) name their parent as completion owner.
+  it.each([false, true])(
+    "a supervised child's send to its parent starts no parent turn (busy=%s)",
+    async (busy) => {
       const parentKey = `agent:main:dashboard:progress-parent-${busy}`;
       const childKey = `agent:main:dashboard:progress-child-${busy}`;
       const parentSessionId = `progress-parent-${busy}`;
       await seedSession(parentKey, parentSessionId);
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: childKey },
-        { sessionId: `progress-child-${busy}`, updatedAt: 1, [lineage]: parentKey, spawnDepth: 1 },
+        {
+          sessionId: `progress-child-${busy}`,
+          updatedAt: 1,
+          spawnedBy: parentKey,
+          parentSessionKey: parentKey,
+          completionOwnerSessionKey: parentKey,
+          spawnDepth: 1,
+        },
       );
       const queueMessage = busy
         ? await activeRun(parentKey, {
@@ -364,6 +368,39 @@ export function registerSessionsSendActiveSteeringTests({
       expect(gatewayCalls("agent")).toEqual([]);
     },
   );
+
+  it("an unsupervised session's send to its creator still starts a turn", async () => {
+    const creatorKey = "agent:main:dashboard:independent-creator";
+    const sessionKey = "agent:main:dashboard:independent-session";
+    await seedSession(creatorKey);
+    // sessions_create records lineage without a completion owner.
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      {
+        sessionId: sessionKey,
+        updatedAt: 1,
+        spawnedBy: creatorKey,
+        parentSessionKey: creatorKey,
+        spawnDepth: 1,
+      },
+    );
+    mockGatewayResponses({
+      agent: { runId: "creator-turn", status: "accepted" },
+      "agent.wait": {
+        status: "ok",
+        terminalReply: { disposition: "visible", text: "creator reply" },
+      },
+    });
+    const result = await getSessionTool("sessions_send", { agentSessionKey: sessionKey }).execute(
+      "independent-result",
+      { sessionKey: creatorKey, message: "synthetic result for the creator" },
+    );
+    expect(result.details).toMatchObject({ status: "ok", reply: "creator reply" });
+    expect(gatewayCalls("agent")).toEqual([
+      [expect.objectContaining({ params: expect.objectContaining({ sessionKey: creatorKey }) })],
+    ]);
+    await settleContinuations();
+  });
 
   it.each(["agent:main:dashboard:self-send", "agent:main:dashboard:self-send:run:captured"])(
     "sessions_send explicitly steers itself (%s)",

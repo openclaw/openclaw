@@ -554,8 +554,8 @@ export async function executeSessionsSend(
           nativeChild: targetIsSubagent && !targetAcpMeta,
           inputProvenance,
         });
-        const parent = requesterSessionEntry?.spawnedBy ?? requesterSessionEntry?.parentSessionKey;
-        if (requesterIsSubagent && parent === targetSession.canonicalKey) {
+        // Unsupervised sessions (no completion owner) keep ordinary recipient turns.
+        if (requesterSessionEntry?.completionOwnerSessionKey === targetSession.canonicalKey) {
           return await recordSessionsSendForRequester({
             cfg,
             admissionConfig: communication.admissionConfig,
@@ -564,7 +564,6 @@ export async function executeSessionsSend(
             sendParams,
             sessionKey: resolvedKey,
             sessionStoreTarget: targetSession,
-            expectedSessionId,
             preparedTargetSessionId: targetSessionEntry?.sessionId,
             assertSendCurrent: communication.assertCurrent,
             displayKey,
