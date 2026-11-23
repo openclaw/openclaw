@@ -828,8 +828,11 @@ internal fun OpenClawSidebar(
       SessionSnooze.nextWakeMs(sessions, sessionNowMs),
       SessionSnooze.nextWakeMs(searchState.entries, sessionNowMs),
     ).minOrNull()
-  LaunchedEffect(nextWakeMs) {
-    nextWakeMs?.let { sessionNowMs = awaitSessionStatusExpiry(it) }
+  LaunchedEffect(nextWakeMs, personalPins, gatewayStableId) {
+    nextWakeMs?.let {
+      sessionNowMs = awaitSessionStatusExpiry(it)
+      if (personalPins) viewModel.refreshChatSessions()
+    }
   }
   val searchResults =
     resolveSessionBrowserEntries(

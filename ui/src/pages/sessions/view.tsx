@@ -246,21 +246,19 @@ function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome 
   const pageSizeValue = createMemo(() => String(props.pageSize));
   const sortColumn = createMemo(() => props.sortColumn);
   const direction = createMemo(() => (props.sortDir === "asc" ? 1 : -1));
-  const personalLayout = createMemo(() => props.personalSidebarEntries);
-  const pinRanks = createMemo(() => {
-    const layout = personalLayout();
-    return layout ? new Map([...personalSessionPinKeys(layout)].map((key, i) => [key, i])) : null;
-  });
+  const pinRanks = createMemo(
+    () =>
+      new Map([...personalSessionPinKeys(props.personalSidebarEntries)].map((key, i) => [key, i])),
+  );
   const sorted = createMemo(() => {
     const column = sortColumn();
     const sortDirection = direction();
     const ranks = pinRanks();
     const now = Date.now();
-    const rows = ranks ? rawRows().map((row) => withTablePin(row, ranks, now)) : rawRows();
+    const rows = rawRows().map((row) => withTablePin(row, ranks, now));
     return rows.toSorted((a, b) => {
-      const pinnedDiff = ranks
-        ? (a.pinned ? ranks.get(a.key)! : ranks.size) - (b.pinned ? ranks.get(b.key)! : ranks.size)
-        : (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
+      const pinnedDiff =
+        (a.pinned ? ranks.get(a.key)! : ranks.size) - (b.pinned ? ranks.get(b.key)! : ranks.size);
       if (pinnedDiff !== 0) {
         return pinnedDiff;
       }

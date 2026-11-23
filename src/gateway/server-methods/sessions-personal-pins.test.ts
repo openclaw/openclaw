@@ -3,6 +3,7 @@ import { UI_RAIL_SHORTCUTS_PREFERENCE_KEY as PREF } from "../../../packages/gate
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
+  persistSessionTranscriptTurn,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -144,6 +145,20 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
     await expect(
       rpc(integration, "sessions.patch", { key: c, pinned: false }),
     ).resolves.toMatchObject({ key: c });
+    // Legacy operator RPC admission does not require a durable preference profile.
+    const ephemeral: GatewayClient = { connect: integration.connect };
+    await expect(list(ephemeral, { pinned: true })).resolves.toMatchObject({
+      sessions: [{ key: a, pinned: true }],
+    });
+    await expect(rpc(ephemeral, "sessions.describe", { key: a })).resolves.toMatchObject({
+      session: { key: a, pinned: true },
+    });
+    await expect(rpc(ephemeral, "sessions.patch", { key: c, pinned: true })).resolves.toMatchObject(
+      {
+        entry: { pinnedAt: expect.any(Number) },
+      },
+    );
+    await rpc(ephemeral, "sessions.patch", { key: c, pinned: false });
     integration.connect.caps = ["personal-session-pins"];
     await expect(list(integration, { pinned: true })).resolves.toMatchObject({
       sessions: [{ key: b }, { key: c }],
@@ -179,6 +194,43 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
         session: { key: a, pinned: true },
       });
     }
+    for (const sessionKey of [a, b, hidden]) {
+      await persistSessionTranscriptTurn(
+        { agentId: "main", sessionKey, sessionId: sessionKey },
+        {
+          cwd: "/fixture",
+          updateMode: "none",
+          messages: [{ message: { role: "user", content: "pinsearchprobe" }, now: 1 }],
+        },
+      );
+    }
+    const searchPins = (client: GatewayClient, pinned: boolean) =>
+      rpc(client, "sessions.search", {
+        query: "pinsearchprobe",
+        scope: { agentId: "main", pinned },
+      });
+    for (const [client, match, other] of [
+      [alice, b, a],
+      [bob, a, b],
+    ] as const) {
+      await expect(searchPins(client, true)).resolves.toMatchObject({
+        results: [{ sessionKey: match }],
+        sessions: [{ key: match, pinned: true }],
+      });
+      if (client === alice) {
+        await expect(searchPins(client, false)).resolves.toMatchObject({
+          results: [{ sessionKey: other }],
+          sessions: [{ key: other, pinned: false }],
+        });
+      }
+    }
+    await expect(searchPins(oldMac, true)).resolves.toMatchObject({
+      results: [{ sessionKey: a }],
+      sessions: [{ key: a, pinned: true }],
+    });
+    await expect(searchPins({ connect: alice.connect }, true)).rejects.toThrow(
+      /profile|requester/i,
+    );
     // The actual preference writer must not evict someone else's warm menu on a theme change.
     await rpc(bob, "users.prefs.set", { entries: { "ui.theme": "dark" } });
     const preferenceReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
@@ -264,6 +316,22 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
         { key: c, ok: false },
       ],
     });
+    const missing = "agent:main:stale-pin";
+    await expect(
+      rpc(alice, "sessions.patchMany", {
+        targets: [{ key: missing }, { key: b }],
+        patch: { pinned: false },
+      }),
+    ).resolves.toMatchObject({
+      outcomes: [
+        { key: missing, ok: false },
+        { key: b, ok: true },
+      ],
+    });
+    expect(
+      (await list(alice, { pinned: true })).sessions.map((row: { key: string }) => row.key),
+    ).not.toContain(b);
+    expect(loadSessionEntry({ agentId: "main", sessionKey: missing })).toBeUndefined();
     await expect(
       rpc(alice, "sessions.patch", { key: "agent:main:missing-pin", pinned: true }),
     ).rejects.toThrow(/not found|changed|visible/i);

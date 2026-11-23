@@ -117,7 +117,7 @@ struct ChatSessionSidebarBatchTests {
     }
 
     @Test func `reorder preserves heterogeneous layout values and compares their exact JSON`() async throws {
-        let original: [Any] = ["session:a", 7, NSNull(), ["future": [true, false]], "session:b"]
+        let original: [Any] = ["session:a  ", 7, NSNull(), ["future": [true, false]], "session:b"]
         var server = original
         var writes = 0
         let conn = try self.connection { request in
@@ -136,7 +136,7 @@ struct ChatSessionSidebarBatchTests {
                 7,
                 NSNull(),
                 ["future": [true, false]],
-                "session:a",
+                "session:a  ",
             ]))
             server = next
             writes += 1
@@ -145,7 +145,8 @@ struct ChatSessionSidebarBatchTests {
         let batch = ChatSessionSidebarBatch()
         try await batch.movePin(key: "b", target: "a", after: false, connection: conn)
         #expect(writes == 1)
-        #expect(batch.sidebarEntries == ["session:b", "session:a"])
+        #expect(batch.sidebarEntries == ["session:b", "session:a  "])
+        #expect(batch.pinPositions == ["b": 0, "a": 1])
     }
 
     @Test func `failed preference write rolls optimistic pin ordering back to the server snapshot`() async throws {

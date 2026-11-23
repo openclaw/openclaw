@@ -32,7 +32,6 @@ import {
 import { errorShapeFromError } from "../error-shape.js";
 import { hasOperatorBoundary, operatorSessionCap } from "../operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import { usesLegacySessionPins } from "../session-pin-compatibility.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import {
@@ -56,11 +55,7 @@ import {
 import { withPreparedSessionResolve } from "../sessions-resolve.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { createPreparedReadHandler } from "./prepared-read.js";
-import {
-  PERSONAL_PIN_PROFILE_REQUIRED,
-  readRequesterSessionPins,
-  sessionPinRequester,
-} from "./session-pin-requester.js";
+import { PERSONAL_PIN_PROFILE_REQUIRED, prepareSessionPinRead } from "./session-pin-requester.js";
 import { startSessionListDiagnostics } from "./sessions-list-diagnostics.js";
 import { sessionMaintenanceHandlers } from "./sessions-maintenance.js";
 import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
@@ -71,7 +66,8 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 export const sessionReadHandlers: GatewayRequestHandlers = {
-  "sessions.search": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
+  "sessions.search": async (options) => {
+    const { params, respond, context, client, sessionMutationAuthorization } = options;
     if (!assertValidParams(params, validateSessionsSearchParams, "sessions.search", respond)) {
       return;
     }
@@ -96,13 +92,24 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     }
     if (params.scope !== undefined) {
       try {
+        const pins = prepareSessionPinRead(options);
+        if (!pins.canFilter && params.scope.pinned !== undefined) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.FORBIDDEN, PERSONAL_PIN_PROFILE_REQUIRED),
+          );
+          return;
+        }
         await searchProjectedSessionTranscripts({
+          personalPins: await pins.read(),
           query,
           limit: params.limit,
           scope: params.scope,
           context,
           client: client ?? null,
           onResult: (result) => {
+            pins.assertCurrent?.();
             sessionMutationAuthorization?.assertCurrent();
             respond(true, result);
           },
@@ -368,8 +375,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         return undefined;
       }
       const projection = requireSessionRowProjection(context);
-      const owner = sessionPinRequester(args);
-      if (!owner && params.pinned !== undefined) {
+      const pins = prepareSessionPinRead(args);
+      if (!pins.canFilter && params.pinned !== undefined) {
         respondToCaller(
           false,
           undefined,
@@ -378,13 +385,12 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         diagnostics?.finish("returned");
         return undefined;
       }
-      const legacy = owner && usesLegacySessionPins(client);
       const assertCurrent = () => {
         args.sessionMutationAuthorization?.assertCurrent();
-        owner?.assertCurrent();
+        pins.assertCurrent?.();
       };
       return {
-        shareable: !owner,
+        shareable: pins.shareable,
         respond: respondToCaller,
         assertCurrent,
         beforeRespond: () => {
@@ -398,13 +404,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         },
         release: (outcome) => diagnostics?.finish(outcome),
         run: async (respond) => {
-          const personalPins = legacy
-            ? undefined
-            : owner
-              ? await readRequesterSessionPins(owner)
-              : new Map<string, number>();
           await listProjectedSessions({
-            personalPins,
+            personalPins: await pins.read(),
             projection,
             opts: params,
             context,

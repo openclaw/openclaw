@@ -1,6 +1,5 @@
 import type { AgentIdentityResult, GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { isGatewayCapabilityAdvertised } from "../../lib/gateway-methods.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
 import {
@@ -32,12 +31,7 @@ export function sessionTableNavigation(context: ApplicationContext) {
       agentsList: context.agents.state.agentsList,
       hello: context.gateway.snapshot.hello,
     }),
-    personalSidebarEntries: isGatewayCapabilityAdvertised(
-      context.gateway.snapshot,
-      "personal-session-pins",
-    )
-      ? context.navigation.snapshot.sidebarEntries
-      : null,
+    personalSidebarEntries: context.navigation.snapshot.sidebarEntries,
   };
 }
 

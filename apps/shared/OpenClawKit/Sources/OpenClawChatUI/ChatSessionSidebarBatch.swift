@@ -129,12 +129,22 @@ final class ChatSessionSidebarBatch {
         self.sidebarEntries = entries
     }
 
+    private static func sessionPinKey(_ text: String?) -> String? {
+        guard let text, text.hasPrefix("session:") else { return nil }
+        let key = text.dropFirst(8).trimmingCharacters(in: .whitespacesAndNewlines)
+        return key.isEmpty ? nil : key
+    }
+
+    var pinPositions: [String: Int] {
+        Dictionary(self.sidebarEntries.enumerated().compactMap { index, entry in
+            Self.sessionPinKey(entry).map { ($0, index) }
+        }, uniquingKeysWith: min)
+    }
+
     static func movingPin(_ entries: [AnyCodable], key: String, target: String?, after: Bool) -> [AnyCodable] {
         guard key != target else { return entries }
         func pinKey(_ entry: AnyCodable) -> String? {
-            guard let text = entry.value as? String, text.hasPrefix("session:") else { return nil }
-            let suffix = text.dropFirst(8).trimmingCharacters(in: .whitespacesAndNewlines)
-            return suffix.isEmpty ? nil : suffix
+            Self.sessionPinKey(entry.value as? String)
         }
         // Move only existing pin slots. The original JSON, including unknown future values, is the CAS base.
         let slots = entries.indices.filter { pinKey(entries[$0]) != nil }

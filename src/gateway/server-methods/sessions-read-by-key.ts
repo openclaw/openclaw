@@ -11,7 +11,6 @@ import { captureAgentHarnessLifecycleHooks } from "../../agents/harness/registry
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
-import { usesLegacySessionPins } from "../session-pin-compatibility.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
 import { prepareSessionRowPublication } from "../session-row-presentation.js";
@@ -22,7 +21,7 @@ import {
 } from "../session-sharing.js";
 import { readRecentSessionMessagesWithStatsAsync } from "../session-transcript-readers.js";
 import { createVisibleActiveSessionRunProjector } from "./session-active-runs.js";
-import { readRequesterSessionPins, sessionPinRequester } from "./session-pin-requester.js";
+import { prepareSessionPinRead } from "./session-pin-requester.js";
 import { requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -47,15 +46,10 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       });
       return agent.ok && !denied ? [{ key, agentId: agent.agentId }] : [];
     };
-    const pinOwner = sessionPinRequester(options);
-    const personalPins = pinOwner
-      ? usesLegacySessionPins(client)
-        ? undefined
-        : await readRequesterSessionPins(pinOwner)
-      : new Map<string, number>();
-    const presentationOptions = { ...params, personalPins };
+    const pins = prepareSessionPinRead(options);
+    const presentationOptions = { ...params, personalPins: await pins.read() };
     const selected = await withReadySessionRows(projection, queries, (read) => {
-      pinOwner?.assertCurrent();
+      pins.assertCurrent?.();
       sessionMutationAuthorization?.assertCurrent();
       const requestedAgent = resolveRequestedSessionAgentId(
         read.state.cfg,
@@ -117,7 +111,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       let active = true;
       const assertCurrent = () => {
         signal?.throwIfAborted();
-        pinOwner?.assertCurrent();
+        pins.assertCurrent?.();
         sessionMutationAuthorization?.assertCurrent();
         if (!projection.isCurrent(selected)) {
           throw new Error("Session changed while reading native subagents");

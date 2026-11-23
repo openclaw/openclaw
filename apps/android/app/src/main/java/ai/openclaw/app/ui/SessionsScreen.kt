@@ -148,6 +148,7 @@ internal fun SessionsScreen(
       personalPins = personalPins,
     )
   val nextAttentionExpiry = nextSessionStatusExpiry(searchState.entries, sessionStatusNowMs)
+  val nextWakeMs = SessionSnooze.nextWakeMs(searchState.entries, sessionStatusNowMs)
   val storedGroups by viewModel.sessionCustomGroups.collectAsState()
   val sections =
     buildSessionTreeSections(
@@ -177,9 +178,12 @@ internal fun SessionsScreen(
     }
   }
 
-  LaunchedEffect(nextAttentionExpiry) {
+  LaunchedEffect(nextAttentionExpiry, nextWakeMs, personalPins, activeGatewayStableId, filter) {
     nextAttentionExpiry?.let { expiry ->
       sessionStatusNowMs = awaitSessionStatusExpiry(expiry)
+      if (personalPins && nextWakeMs != null && nextWakeMs <= sessionStatusNowMs) {
+        viewModel.refreshChatSessions(limit = 200, archived = filter == SessionFilter.Archived)
+      }
     }
   }
 

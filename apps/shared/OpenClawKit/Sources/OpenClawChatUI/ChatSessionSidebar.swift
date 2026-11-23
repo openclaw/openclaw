@@ -195,6 +195,10 @@ struct ChatSessionSidebar: View {
                 try await Task.sleep(for: .seconds(max(0, nextWake.timeIntervalSinceNow)))
                 try Task.checkCancellation()
                 self.lastSnoozeWake = max(nextWake, .now)
+                if self.menuActions.connection?.supportsPersonalPins == true {
+                    self.viewModel.refreshSessions(limit: 200)
+                    self.viewModel.refreshSidebarData()
+                }
             } catch {}
         }
         .task(id: self.groupRefreshID) {

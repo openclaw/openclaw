@@ -370,13 +370,13 @@ describe("sessions view", () => {
     expect(keyboardContextMenu.defaultPrevented).toBe(true);
   });
 
-  it("keeps pinned sessions above newer unpinned sessions", async () => {
+  it("does not import a historical shared pin into an empty personal layout", async () => {
     await renderSettled([
       createRow("newer", { updatedAt: 200 }),
       createRow("pinned", { updatedAt: 100, pinned: true, pinnedAt: 300 }),
     ]);
 
-    expectTexts("tbody .session-data-row .session-key-cell__primary", ["pinned", "newer"]);
+    expectTexts("tbody .session-data-row .session-key-cell__primary", ["newer", "pinned"]);
   });
 
   it("keeps eligible personal pins in sidebar order before column sorting, including after a reorder", async () => {

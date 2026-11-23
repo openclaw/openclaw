@@ -8,6 +8,7 @@ import {
   readResidentUserProfileAliases,
   readResidentUserProfileId,
 } from "../../state/user-profile-list.js";
+import { usesLegacySessionPins } from "../session-pin-compatibility.js";
 import {
   isIneligiblePersonalGatewayCaller,
   isSyntheticGatewayCaller,
@@ -75,17 +76,13 @@ export function sessionPinRequester(options: GatewayRequestHandlerOptions) {
     return undefined;
   }
   const lifetime = readGatewayRequestMutationAuthority(options);
-  const assertCurrent = () => {
-    lifetime.assertCurrent();
-    if (identity() !== id || readResidentUserProfileId(id) !== profileId) {
-      throw new Error(PERSONAL_PIN_PROFILE_REQUIRED);
-    }
-  };
-  assertCurrent();
-  return { profileId, assertCurrent };
+  // Identity was admitted for this operation. Keep Stop/caller lifetime and target/CAS
+  // preconditions, not a second role or participant selection after an async read.
+  lifetime.assertCurrent();
+  return { profileId, assertCurrent: lifetime.assertCurrent };
 }
 
-export async function readRequesterSessionPins(
+async function readRequesterSessionPins(
   owner: NonNullable<ReturnType<typeof sessionPinRequester>>,
 ) {
   const order = await readProfileSidebarOrder(
@@ -94,4 +91,17 @@ export async function readRequesterSessionPins(
   );
   owner.assertCurrent();
   return new Map(order.map((key, index) => [key, order.length - index]));
+}
+
+/** Capture negotiation once at admission. An empty personal view never imports shared metadata. */
+export function prepareSessionPinRead(options: GatewayRequestHandlerOptions) {
+  const legacy = usesLegacySessionPins(options.client);
+  const owner = legacy ? undefined : sessionPinRequester(options);
+  return {
+    canFilter: legacy || Boolean(owner),
+    shareable: !owner,
+    assertCurrent: owner?.assertCurrent,
+    read: () =>
+      legacy ? undefined : owner ? readRequesterSessionPins(owner) : new Map<string, number>(),
+  };
 }

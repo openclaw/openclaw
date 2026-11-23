@@ -19,14 +19,12 @@ struct ChatSidebarDrag: Codable, Transferable {
 extension ChatSessionSidebar {
     func interactionSections(now: Date = .now) -> [ChatSessionSidebarModel.Section] {
         var sections = self.rosterSections(now: now, observedOrder: self.observedOrder)
-        let positions = Dictionary(
-            self.batch.sidebarEntries.enumerated().map { ($0.element, $0.offset) },
-            uniquingKeysWith: min)
+        let positions = self.batch.pinPositions
         sections = sections.map { section in
             guard section.id == "pinned" else { return section }
             let nodes = section.nodes.enumerated().sorted {
-                (positions["session:\($0.element.id)"] ?? Int.max, $0.offset) <
-                    (positions["session:\($1.element.id)"] ?? Int.max, $1.offset)
+                (positions[$0.element.id] ?? Int.max, $0.offset) <
+                    (positions[$1.element.id] ?? Int.max, $1.offset)
             }.map(\.element)
             return .init(id: section.id, title: section.title, nodes: nodes)
         }

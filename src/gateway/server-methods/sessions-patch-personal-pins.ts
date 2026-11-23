@@ -128,7 +128,18 @@ export async function patchPersonalSessionPins(
           }),
         };
       };
-      const initial = current().target;
+      let initial: SessionSharingTarget | null;
+      try {
+        initial = current().target;
+      } catch (error) {
+        // A stale target has no canonical sharing witness. It must not prevent a
+        // different, admitted target from succeeding; final mutation fences still throw.
+        if (!many || !(error instanceof SessionMutationAuthorizationChangedError)) {
+          throw error;
+        }
+        errors.set(index, error.error);
+        continue;
+      }
       const check = () => {
         owner.assertCurrent();
         if (many) {
