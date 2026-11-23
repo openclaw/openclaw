@@ -129,6 +129,12 @@ export function resolveAgentConfig(config: Record<string, unknown> | null, agent
   };
 }
 
+/** The agent's configured primary model, inherited from defaults; null when none is chosen. */
+export function resolveAgentModelPrimary(config: Record<string, unknown> | null, agentId: string) {
+  const { entry, defaults } = resolveAgentConfig(config, agentId);
+  return resolveModelPrimary(entry?.model) ?? resolveModelPrimary(defaults?.model);
+}
+
 /** Resolves the effective skill allowlist, including inherited agent defaults. */
 export function resolveAgentSkillsFilter(config: Record<string, unknown> | null, agentId: string) {
   const resolved = resolveAgentConfig(config, agentId);

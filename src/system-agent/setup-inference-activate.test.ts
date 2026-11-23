@@ -638,6 +638,21 @@ describe("setup activation credentials and configuration", () => {
     },
   );
 
+  it("reports a saved sign-in whose model is at capacity in one plain sentence", async () => {
+    const setup = await fixture();
+    setup.run.mockRejectedValueOnce(new Error("Selected model is at capacity"));
+
+    expect(await setup.activate()).toEqual({
+      ok: false,
+      status: "rate_limit",
+      error:
+        "Your sign-in is saved. The model check failed because the provider is busy or limiting requests. Wait a few minutes, then try again.",
+      disposition: "rejected-before-promotion",
+    });
+    expect(setup.readProfile()?.[1]).toMatchObject(credential);
+    expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
+  });
+
   it("keeps working credentials and rotation after rejected replacement", async () => {
     const setup = await fixture();
     const originalProfileId = "openai:fixture";

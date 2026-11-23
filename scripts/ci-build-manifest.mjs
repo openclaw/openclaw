@@ -766,7 +766,15 @@ let uiTestGroups =
         ...(uiE2eSelection ? { uiE2eFiles: uiE2eSelection.files } : {}),
       })
     : null;
-let uiTestShardCount = compatibilityTarget ? 1 : 3;
+// Reuse the target's own native UI shard invocation, not the current runner:
+// compatibility still owns discovery, isolation, workers, and test deadlines.
+const supportsUiNativeSharding =
+  /OPENCLAW_NODE_TEST_VITEST_ARGS_JSON:.*--shard=\{0\}\/\{1\}.*matrix\.shard, needs\.preflight\.outputs\.ui_test_shard_count/u.test(
+    targetWorkflow,
+  );
+// Explicit runtime overrides retain their existing compatibility runner envelope.
+let uiTestShardCount =
+  compatibilityTarget && (!supportsUiNativeSharding || dispatchRuntimePolicy) ? 1 : 3;
 if (selectedTestTargets) {
   if (!uiTestGroups) {
     throw new Error("Current PR CI requires UI target groups");
@@ -1199,6 +1207,9 @@ const postgresConformancePaths = [
   "src/gateway/server-methods/cron.ts",
   "src/gateway/server-methods/cron-add.ts",
   "src/gateway/server-methods/cron-run.ts",
+  "src/infra/gateway-lock.ts",
+  "src/infra/gateway-lock-recovery*.ts",
+  "src/infra/gateway-postgres-*.ts",
   "src/cli/gateway-cli/run.ts",
   "src/commands/*preflight*.ts",
   "src/commands/doctor-database-*.ts",

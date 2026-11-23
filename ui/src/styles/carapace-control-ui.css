@@ -442,10 +442,14 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 
 .settings-section__header.oc-settings-section-header {
   display: flex;
-  align-items: center;
   justify-content: space-between;
   gap: var(--oc-space-3);
   padding: 0;
+
+  /* Center actions in a row; settings.css owns alignment when headers stack. */
+  @media not all and (max-width: 640px) {
+    align-items: center;
+  }
 }
 
 .settings-section__copy.oc-settings-section-heading {

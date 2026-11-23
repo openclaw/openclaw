@@ -60,6 +60,12 @@ const GatewayGitHubEndpointSchema = z
     }
   });
 const GatewayOperatorRoleNameSchema = z.string().trim().min(1).max(128);
+const CloudflareAccessIssuerSchema = z
+  .string()
+  .regex(
+    /^https:\/\/[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.cloudflareaccess\.com$/u,
+    "Expected a Cloudflare Access HTTPS issuer origin without a trailing slash",
+  );
 const GATEWAY_HTTP_LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const GatewayHttpImagesSchema = z.strictObject(ResponsesEndpointUrlFetchShape).optional();
 
@@ -73,7 +79,19 @@ function validateGatewayPublicOrigin(value: string): boolean {
 
 export const GatewayConfigSchema = z
   .strictObject({
-    sessionControl: z.strictObject({ publicationReadEnabled: z.boolean().optional() }).optional(),
+    resources: z
+      .strictObject({
+        profile: z.enum(["auto", "standard", "lean"]).optional(),
+        memoryBudgetMiB: z.number().int().positive().optional(),
+      })
+      .optional(),
+    sessionControl: z
+      .strictObject({
+        publicationReadEnabled: z.boolean().optional(),
+        steeringEnabled: z.boolean().optional(),
+        publicationWriteEnabled: z.boolean().optional(),
+      })
+      .optional(),
     /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
     port: z.number().int().min(1).max(65_535).optional(),
     /**
@@ -158,7 +176,7 @@ export const GatewayConfigSchema = z
           .strictObject({
             /** Advanced native UI opt-out (default true; existing false stays off, bundled UI unaffected). */
             customPlugins: z.boolean().optional(),
-            /** Show the official Template catalog and Add flow in Control UI (default false). */
+            /** Advanced Templates opt-out (default true; existing false stays off). */
             templates: z.boolean().optional(),
             /** Enable experimental speech bubbles in the Control UI (default false). */
             chatBubbles: z.boolean().optional(),
@@ -334,16 +352,23 @@ export const GatewayConfigSchema = z
                   .optional(),
               })
               .optional(),
+            /**
+             * Verify cf-access-jwt-assertion against the team's signing keys before
+             * trusting the user header. Off by default; header presence alone is trusted then.
+             */
+            cloudflareAccessJwt: z
+              .strictObject({
+                /** Access team origin, such as https://example.cloudflareaccess.com. */
+                issuer: CloudflareAccessIssuerSchema,
+                /** Application Audience (AUD) tag the assertion must carry. */
+                audience: z.string().trim().min(1),
+              })
+              .optional(),
             /** Optional verified GitHub identity from one explicitly trusted Access OIDC provider. */
             cloudflareAccessOidc: z
               .strictObject({
                 /** Exact Cloudflare Access issuer origin, including https://. */
-                issuer: z
-                  .string()
-                  .regex(
-                    /^https:\/\/[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.cloudflareaccess\.com$/u,
-                    "Expected a Cloudflare Access HTTPS issuer origin without a trailing slash",
-                  ),
+                issuer: CloudflareAccessIssuerSchema,
                 /** Access identity-provider ID, not its display name or the OIDC subject. */
                 providerId: z.string().trim().min(1),
                 /** Forwarded claim containing a verified numeric GitHub account ID as a decimal string. */
@@ -368,6 +393,12 @@ export const GatewayConfigSchema = z
                 scopes: z.array(z.string().min(1)).optional(),
               })
               .optional(),
+            /**
+             * Let approved CLI and TUI devices that request more than their paired
+             * scopes connect within them instead of filing a scope-upgrade request,
+             * and issue the TUI a device token. @default false
+             */
+            narrowToDeviceGrant: z.boolean().optional(),
           })
           .optional(),
       })

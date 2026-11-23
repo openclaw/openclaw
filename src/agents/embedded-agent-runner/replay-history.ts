@@ -13,7 +13,7 @@ import {
   validateReplayTurnsForPolicy,
 } from "../embedded-agent-helpers/turns.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
-import { annotateInterSessionUserMessages } from "../replay-provenance.js";
+import { annotateCrossSessionMessages } from "../replay-provenance.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { SessionManager } from "../sessions/index.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
@@ -97,7 +97,7 @@ export async function sanitizeSessionHistory(
 ): Promise<AgentMessage[]> {
   // Keep docs/reference/transcript-hygiene.md in sync with any logic changes here.
   const policy = resolveReplayPolicy(params);
-  const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
+  const withCrossSessionMarkers = annotateCrossSessionMessages(params.messages);
   const signedThinkingProvider = providerRequiresSignedThinking(params.provider);
   const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
     modelApi: params.modelApi,
@@ -128,7 +128,7 @@ export async function sanitizeSessionHistory(
     : snapshotState.latestSwitchTimestamp;
   let messages = await sanitizeGenericReplayHistory(
     {
-      messages: withInterSessionMarkers,
+      messages: withCrossSessionMarkers,
       allowedToolNames: params.allowedToolNames,
       policy,
       imageLimits: resolveImageSanitizationLimits(params.config),

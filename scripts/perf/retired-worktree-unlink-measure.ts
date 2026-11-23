@@ -28,6 +28,8 @@ const { values } = parseArgs({
     "reservation-counter": { type: "string" },
     reflink: { type: "boolean", default: false },
     "fake-reservations": { type: "boolean", default: false },
+    "fake-commits": { type: "boolean", default: false },
+    "commit-counter": { type: "string" },
   },
 });
 assert(values.output);
@@ -61,12 +63,20 @@ const entryCount = sizes.size;
 let peakReservationBytes = 0;
 let simulatedMs = 0;
 let simulatedReservation = 0;
-if (values["fake-reservations"]) {
+const simulated = values["fake-reservations"] || values["fake-commits"];
+if (simulated) {
   assert(
     values["reservation-counter"],
     "Bind a writable fake counter over this filesystem's sysfs counter",
   );
   fs.writeFileSync(values["reservation-counter"], "0\n");
+}
+if (values["fake-commits"]) {
+  assert(values["commit-counter"] && !values["fake-reservations"]);
+  fs.writeFileSync(
+    values["commit-counter"],
+    "commits 0\ntotal_commit_ms 0\nlast_commit_ms 0\ncur_commit_ms 0\n",
+  );
 }
 const sampleReservation = () => {
   if (values["reservation-counter"]) {
@@ -95,6 +105,15 @@ const count = (target: fs.PathLike) => {
     simulatedReservation += 3 * 1024 ** 2;
     fs.writeFileSync(values["reservation-counter"]!, String(simulatedReservation));
   }
+  if (values["fake-commits"]) {
+    // Below the 40 GiB watermark: one observed 600 ms commit per 8,192 unlinks.
+    const commits = Math.floor((entryCount - sizes.size) / 8192);
+    fs.writeFileSync(values["reservation-counter"]!, String(39.6 * 1024 ** 3));
+    fs.writeFileSync(
+      values["commit-counter"]!,
+      `commits ${commits}\ntotal_commit_ms ${commits * 600}\nlast_commit_ms ${commits ? 600 : 0}\ncur_commit_ms 0\n`,
+    );
+  }
   if (entries % 128 === 0) {
     sampleReservation();
   }
@@ -117,14 +136,17 @@ fs.rmSync = (target, options) => {
 };
 timers.setTimeout = async (ms, value, options) => {
   const start = performance.now();
-  const result = await sleep(values["fake-reservations"] ? 0 : ms, value, options);
-  if (values["fake-reservations"]) {
+  const result = await sleep(simulated ? 0 : ms, value, options);
+  if (simulated) {
     const previousCommit = Math.floor(simulatedMs / 30_000);
     simulatedMs += ms ?? 1;
-    if (Math.floor(simulatedMs / 30_000) > previousCommit) {
+    if (values["fake-reservations"] && Math.floor(simulatedMs / 30_000) > previousCommit) {
       simulatedReservation = 0;
       fs.writeFileSync(values["reservation-counter"]!, "0\n");
     }
+  }
+  if (values["fake-commits"] && ms === 30_000) {
+    fs.writeFileSync(values["reservation-counter"]!, String(19 * 1024 ** 3));
   }
   batches.push({ entries, bytes, pauseMs: ms ?? 1, actualPauseMs: performance.now() - start });
   entries = 0;
@@ -141,16 +163,34 @@ const loadBefore = os.loadavg();
 const start = performance.now();
 sampleReservation();
 const sampler = setInterval(sampleReservation, 20);
+const worker = values.worker
+  ? pathToFileURL(path.resolve(values.worker)).href
+  : new URL("../../src/agents/worktrees/retired-worktree-cleanup.worker.js", import.meta.url).href;
+const passes: { elapsedMs: number; removed: number; yielded: boolean }[] = [];
+const exitCode = process.exitCode;
 try {
-  await import(
-    values.worker
-      ? pathToFileURL(path.resolve(values.worker)).href
-      : "../../src/agents/worktrees/retired-worktree-cleanup.worker.js"
-  );
+  do {
+    const passStart = performance.now();
+    const before = sizes.size;
+    process.exitCode = undefined;
+    await import(`${worker}?pass=${passes.length}`);
+    const yielded = process.exitCode === 75;
+    passes.push({
+      elapsedMs: performance.now() - passStart,
+      removed: before - sizes.size,
+      yielded,
+    });
+    if (!yielded) {
+      break;
+    }
+    process.argv[3] = "resume";
+    await timers.setTimeout(30_000);
+  } while (sizes.size);
 } finally {
   clearInterval(sampler);
   sampleReservation();
   process.argv = argv;
+  process.exitCode = exitCode;
   fs.unlinkSync = unlink;
   fs.rmdirSync = rmdir;
   fs.rmSync = rm;
@@ -171,7 +211,9 @@ const report = {
   cpuMs: (used.user + used.system) / 1000,
   allocatedBytes,
   peakReservationBytes,
-  simulatedMs: values["fake-reservations"] ? simulatedMs : undefined,
+  passes,
+  maxPassMs: Math.max(...passes.map((pass) => pass.elapsedMs)),
+  simulatedMs: simulated ? simulatedMs : undefined,
   loadBefore,
   loadAfter: os.loadavg(),
   maxBatchEntries: Math.max(...batches.map((batch) => batch.entries)),

@@ -5,7 +5,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { exceedsContextWindow } from "../../agents/context-pressure.js";
 import { resolveModelExtraParamSources } from "../../agents/model-extra-params.js";
-import { normalizeStaticProviderModelId } from "../../agents/model-ref-shared.js";
+import { normalizeStaticProviderModelId } from "../../agents/model-selection-normalize.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import {

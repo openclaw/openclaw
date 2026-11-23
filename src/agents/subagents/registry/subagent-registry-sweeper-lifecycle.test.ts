@@ -5,7 +5,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import * as controllerInputs from "./subagent-controller-inputs.js";
+import * as expiredDelivery from "./subagent-registry-suspended-delivery.js";
 import {
   createArchivedSubagentSweeperRun,
   createSubagentSweeperHarness,
@@ -68,7 +68,7 @@ it("lets I/O run during a retained backlog and skips owners replaced between bat
     // Expire the processing budget independently of host speed; keep real event-loop turns.
     let clockNow = performance.now();
     const clock = vi.spyOn(performance, "now").mockImplementation(() => (clockNow += 5));
-    const settle = vi.spyOn(controllerInputs, "settleSubagentCompletionReservation");
+    const settle = vi.spyOn(expiredDelivery, "settleSubagentCompletionReservation");
     const sweep = sweeper.runTick();
     const io = new Promise<void>((resolve) => {
       setImmediate(() => {

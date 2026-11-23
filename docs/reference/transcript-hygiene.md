@@ -60,9 +60,25 @@ rows. `/btw` and `/side` remain ephemeral.
 
 ## Delivered automation results
 
-Canonical `openclaw` / `automation-result` assistant rows remain in model history,
-even when their text matches the preceding assistant reply and their usage is
-zero. The historical duplicate filter still removes marker-free delivery mirrors.
+Canonical `openclaw` / `automation-result` rows stay assistant rows in the
+transcript and in chat history. Model context gets each one as a labelled user
+message instead: an `[OpenClaw background result]` line says the agent sent the
+text to the user from a separate background run, the user saw it, and it is a
+record, not a new request. The original text follows the label. The label is
+constant, so the projection is the same for a row on every request.
+
+The model never produced these rows in this conversation, and nothing in the
+conversation prompted them. Replayed as assistant turns, a run of consecutive
+hourly automation results looked like the model's own spontaneous habit, and the
+model continued it with fabricated future reports. The same projection runs
+before history assembly, at provider dispatch, and in exact-replay facts, and it
+runs before turn merging, so a result can never merge into an assistant turn on
+any route. Sessions that already hold results get one prompt-cache miss when
+this projection first applies.
+
+The historical duplicate filter still removes marker-free delivery mirrors. It
+never removes an automation result, even when its text matches the preceding
+assistant reply.
 
 ## Failed attempts and recovery
 

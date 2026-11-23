@@ -68,11 +68,13 @@ async function readKernelCounter(filePath: string): Promise<string> {
 }
 
 /** One maintenance owner samples host counters; no background poller or retained filesystem list. */
-export function createHostIoPressureProbe(root?: string): () => Promise<boolean> {
+export function createHostIoPressureProbe(root?: string, resume = false): () => Promise<boolean> {
   let previous = new Map<string, { commits: number; totalMs: number }>();
   const reservationCounter =
     process.platform === "linux" && root ? resolveBtrfsReservationCounter(root) : undefined;
-  let reservationPressure = false;
+  let reservationPressure = resume;
+  // 2026-11-20: a 6.34s commit stalled writers with only 39.6 G reserved.
+  const slowCommitMs = root ? 500 : SLOW_COMMIT_MS;
   return async () => {
     if (process.platform !== "linux") {
       return false;
@@ -104,13 +106,14 @@ export function createHostIoPressureProbe(root?: string): () => Promise<boolean>
       const before = previous.get(id);
       const fresh = !before || commits !== before.commits || totalMs !== before.totalMs;
       // Lifetime max and unchanged last-commit values must never hold cleanup forever.
-      pressured ||= value("cur_commit_ms") >= SLOW_COMMIT_MS;
-      if (fresh) {
-        pressured ||= value("last_commit_ms") >= SLOW_COMMIT_MS;
+      pressured ||= value("cur_commit_ms") >= slowCommitMs;
+      // A restarted removal pass has already cooled down; do not replay an old commit.
+      if (fresh && (before || !root)) {
+        pressured ||= value("last_commit_ms") >= slowCommitMs;
         if (before && commits > before.commits && totalMs >= before.totalMs) {
           // The interval total bounds its slowest commit; averaging hides a stall
           // followed by quick commits. The kernel maximum is lifetime, not recent.
-          pressured ||= totalMs - before.totalMs >= SLOW_COMMIT_MS;
+          pressured ||= totalMs - before.totalMs >= slowCommitMs;
         }
       }
       next.set(id, { commits, totalMs });

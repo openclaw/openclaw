@@ -49,6 +49,7 @@ it.each(["/beam/unfinished-share-5", "/settings/unknown/page"])(
       routeState: {},
       lastWorkspaceLocation: null,
       custodianMinimizeRequestId: 0,
+      firstUse: false,
       lastConcreteRouteId: undefined,
       didConsiderNativeRouteRestore: false,
       settingsSearchQuery: "",

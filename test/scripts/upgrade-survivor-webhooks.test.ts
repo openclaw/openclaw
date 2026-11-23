@@ -132,7 +132,7 @@ describe("legacy operator Webhooks retirement acceptance", () => {
     expect(specimen.provider).toMatchObject({
       baseUrl: "http://127.0.0.1:18888/v1",
       api: "openai-completions",
-      apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      apiKey: { source: "env", provider: "default", id: "OPENCLAW_UPGRADE_SURVIVOR_API_KEY" },
     });
     expect(() => assertLegacyOperatorConfig("baseline")).not.toThrow();
     expect(config().plugins?.entries?.webhooks).toMatchObject({

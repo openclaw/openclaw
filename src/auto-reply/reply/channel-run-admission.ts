@@ -114,7 +114,7 @@ export function prepareChannelRunAdmission(params: {
     },
     readOperatorAuthority: () => {
       if (closed && params.operatorAuthority) {
-        throw new Error("prepared operator authority is no longer active");
+        throw new Error("prepared execution context is already closed");
       }
       assertSourceCurrent();
       return params.operatorAuthority;

@@ -3,7 +3,10 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { sessionControllerMailboxes } from "../../../sessions/session-controller.mailbox.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
-import { recordRequesterDelivery as recordRequesterDeliveryFact } from "../registry/subagent-delivery-state.js";
+import {
+  hasPrivateRequesterInput,
+  recordRequesterDelivery as recordRequesterDeliveryFact,
+} from "../registry/subagent-delivery-state.js";
 import {
   sessionStore,
   setSessionStore,
@@ -141,8 +144,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       ]);
       if (consumed) {
         expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b", "run-c"], 1, {
-          delivered: true,
+          delivered: false,
           path: "direct",
+          disposition: "retryable",
+          reason: "visible_reply_missing",
+          error: "completion agent did not produce a visible reply",
         });
       } else {
         expect(completeBatchSpy).not.toHaveBeenCalled();
@@ -268,6 +274,47 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       }
     },
   );
+  it.each(["public", "private", "yielded-private"] as const)(
+    "replays the same raw %s input when a pending sibling settles during restart",
+    async (kind) => {
+      const child = makeSettledChild({
+        runId: "run-b",
+        completionTarget: kind === "public" ? undefined : "parent",
+        completion: completion("original child result"),
+        requesterSettleWake: {
+          ...wakeState(["run-a", "run-b"])!,
+          ...(kind === "yielded-private" ? { yieldedFinalDeliverable: true } : {}),
+        },
+      });
+      const sibling = makeSettledChild({
+        runId: "run-a",
+        execution: { status: "running", startedAt: 2_000 },
+        requesterSettleWake: { ...child.requesterSettleWake! },
+      });
+      setChildren([sibling, child]);
+      const stop = new AbortController();
+      deliverSpy.mockImplementationOnce(async (params) => {
+        await prepareDispatch(params);
+        stop.abort();
+        return { delivered: false, path: "direct", disposition: "retryable" };
+      });
+      expect(await wake({ signal: stop.signal })).toBe(false);
+      const first = deliveredCallArg();
+      expect(first.triggerMessage).toContain("1 other subagent(s)");
+      expect(child.requesterSettleWake?.status).toBe("dispatching");
+      expect(hasPrivateRequesterInput(child)).toBe(kind === "private");
+
+      sibling.execution = { status: "terminal", endedAt: 4_000, outcome: { status: "ok" } };
+      // Later result reads must not reconstruct the already admitted request.
+      child.completion = completion("updated child result");
+      expect(await wake()).toBe(true);
+      const replay = deliverSpy.mock.calls[1]?.[0];
+      expect(replay?.directIdempotencyKey).toBe(first.directIdempotencyKey);
+      expect(replay?.triggerMessage).toBe(first.triggerMessage);
+      expect(replay?.triggerMessage).toContain("original child result");
+    },
+  );
+
   it("waits for descendant events without writes and retains one terminal-delivery deadline", async () => {
     const child = makeSettledChild({
       runId: "run-a",
@@ -557,7 +604,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(await wake()).toBe(false);
     expect(deliverSpy).toHaveBeenCalledOnce();
   });
-  it("delivers a result that a failed turn already committed to the transcript", async () => {
+  it("hands a consumed failed turn to the retained settlement owner", async () => {
     const children = setChildren();
     deliverSpy.mockImplementationOnce(async (params) => {
       await prepareDispatch(params);
@@ -578,8 +625,10 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       true,
     );
     expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b"], undefined, {
-      delivered: true,
+      delivered: false,
       path: "direct",
+      disposition: "permanent_failure",
+      error: "529",
     });
   });
   it("keeps an answer that missed its channel failed, without replaying the committed result", async () => {

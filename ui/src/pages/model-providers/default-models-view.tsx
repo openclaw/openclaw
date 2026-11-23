@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Errored, For, isPending, latest, Loading } from "solid-js";
+import { createMemo, createSignal, Errored, For, isPending, latest, Loading, Show } from "solid-js";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import { dedupeByKey } from "../../../../src/shared/dedupe-by-key.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
@@ -24,11 +24,20 @@ import {
   listEffectiveModelAuthProviders,
 } from "../../lib/model-auth.ts";
 import { describeModelProviderAuth } from "../../lib/model-provider-auth-label.ts";
-import { formatCompletionRoute, type CompletionRoute } from "../../lib/model-runtime-label.ts";
+import { resolveModelRuntimeEntry } from "../../lib/model-runtime-choice.ts";
+import {
+  formatModelRuntimeLabel,
+  formatCompletionRoute,
+  type CompletionRoute,
+} from "../../lib/model-runtime-label.ts";
 import { modelSettingFallbacks, modelSettingPrimary } from "../../lib/model-setting.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { ModelDefaultsSaveField, ModelProviderRowMessage } from "./config-mutation.ts";
+import type {
+  ModelDefaultsSaveField,
+  ModelProviderRowMessage,
+  ModelRuntimePick,
+} from "./config-mutation.ts";
 import type { ModelProviderCatalogReceipt } from "./core-load.ts";
 import {
   modelCatalogRef,
@@ -67,8 +76,8 @@ export type DefaultModelsViewProps = {
   /** The last defaults write was acknowledged; later discovery runs in the background. */
   defaultsSaved?: boolean;
   message?: ModelProviderRowMessage;
-  onPrimaryChange: (model: string) => void;
-  onFallbackChange: (model: string | null) => void;
+  onPrimaryChange: (model: string, runtime?: ModelRuntimePick) => void;
+  onFallbackChange: (model: string | null, runtime?: ModelRuntimePick) => void;
   onUtilityChange: (model: string | null) => void;
   onUtilityFallbackChange: (model: string | null) => void;
   onDecisionChange: (model: string | null) => void;
@@ -77,6 +86,8 @@ export type DefaultModelsViewProps = {
   onFastModeChange: (mode: FastMode) => void;
   onFastModeReset: () => void;
   onCatalogRetry: () => void;
+  /** The selected agent's own model when it differs from the default, as a sentence. */
+  agentModel?: string;
 };
 
 const AUTOMATIC_UTILITY_VALUE = "__openclaw_automatic_utility__";
@@ -247,7 +258,7 @@ function FallbackModel(props: {
   label: string;
   fallbacks: string[];
   primary: string | undefined;
-  options: ModelPickerOption[];
+  options: (ModelPickerOption & { model?: string })[];
   disabled: boolean;
   title: string;
   onChange: (model: string | null) => void;
@@ -265,7 +276,7 @@ function FallbackModel(props: {
             ? t("modelProviders.defaults.clearFallbacks", { count: String(count()) })
             : t("modelProviders.defaults.noFallback"),
       },
-      ...modelOptions().filter((option) => option.value !== excluded),
+      ...modelOptions().filter((option) => (option.model ?? option.value) !== excluded),
     ];
   });
   return (
@@ -306,7 +317,8 @@ export function DefaultModels(props: DefaultModelsViewProps) {
   const title = () => props.mutationBlockedReason ?? "";
   const primaryModel = createMemo(() => {
     const selected = primary();
-    return models().find((model) => modelCatalogRef(model) === selected);
+    const entry = models().find((model) => modelCatalogRef(model) === selected);
+    return resolveModelRuntimeEntry(entry, props.selection.runtimes?.[selected]?.id);
   });
   const thinkingOptions = createMemo(() => {
     const options: { value: string; label: string; disabled?: boolean }[] = dedupeByKey(
@@ -366,19 +378,83 @@ export function DefaultModels(props: DefaultModelsViewProps) {
         ]),
       ),
   );
+  const distinctModels = createMemo(() => dedupeByKey(models(), modelCatalogRef));
   const options = createMemo(() => {
     const providers = authProviders();
-    return dedupeByKey(models(), modelCatalogRef).map((model) => modelOption(model, providers));
+    return distinctModels().map((model) => modelOption(model, providers));
   });
+  const chatChoices = createMemo(() => {
+    const choices = new Map<
+      string,
+      ModelPickerOption & { model: string; runtime?: ModelRuntimePick }
+    >();
+    const rows = options();
+    for (const [index, entry] of distinctModels().entries()) {
+      const row = rows[index]!;
+      const model = row.value;
+      const pin = props.selection.runtimes?.[model]?.id;
+      const runtimes = entry.defaultModelRuntimes;
+      const alternatives =
+        runtimes?.alternatives.filter((choice) => choice.manualSelectionAllowed !== false) ?? [];
+      const base = runtimes?.base.agentRuntime.id ?? entry.agentRuntime?.id;
+      const baseDisabled =
+        (runtimes ? runtimes.base.available === false : row.disabled === true) ||
+        entry.manualSelectionAllowed === false;
+      if (entry.selectionRef || !base || (!alternatives.length && (!pin || pin === base))) {
+        const label =
+          pin && !entry.selectionRef
+            ? formatModelRuntimeLabel(entry.provider, pin)?.label
+            : undefined;
+        choices.set(model, {
+          ...row,
+          ...(label ? { label: `${row.label} · ${label}` } : {}),
+          model,
+          disabled: baseDisabled,
+        });
+        continue;
+      }
+      const selected = pin ?? base;
+      const route = (id: string, disabled: boolean) => {
+        const value = id === selected ? model : JSON.stringify([model, id]);
+        const label = formatModelRuntimeLabel(entry.provider, id)?.label ?? id;
+        choices.set(value, {
+          ...row,
+          value,
+          model,
+          label: `${row.label} · ${label}`,
+          disabled,
+          runtime: { id, base },
+        });
+      };
+      route(base, baseDisabled);
+      for (const choice of alternatives) {
+        route(choice.agentRuntime.id, choice.available === false);
+      }
+      if (!choices.has(model)) {
+        route(selected, true);
+      }
+    }
+    return choices;
+  });
+  function selectChatChoice(value: string, change: DefaultModelsViewProps["onPrimaryChange"]) {
+    const choice = chatChoices().get(value);
+    if (!choice || choice.disabled) {
+      return;
+    }
+    if (choice.runtime) {
+      change(choice.model, choice.runtime);
+    } else {
+      change(choice.model);
+    }
+  }
+  const chatOptions = createMemo(() => [...chatChoices().values()]);
   const primaryOptions = createMemo(() => [
-    {
-      value: "",
-      label: t("modelProviders.defaults.selectModel"),
-      disabled: !canMutate() || Boolean(primary()),
-    },
+    ...(primary()
+      ? []
+      : [{ value: "", label: t("modelProviders.defaults.selectModel"), disabled: true }]),
     ...(canMutate()
-      ? options()
-      : options().map((option) => Object.assign({}, option, { disabled: true }))),
+      ? chatOptions()
+      : chatOptions().map((option) => Object.assign({}, option, { disabled: true }))),
   ]);
   const utilityValue = createMemo(
     () => modelSettingPrimary(props.selection.utilityModel) ?? AUTOMATIC_UTILITY_VALUE,
@@ -432,6 +508,15 @@ export function DefaultModels(props: DefaultModelsViewProps) {
 
   // Discovery reports on the heading line, so the rows below it never move.
   const catalogProgress = <CatalogProgress {...props} />;
+  // Fallback, utility and decision models stay folded until one of them is set. Once open they
+  // stay open, so clearing the last one never folds the row under the pointer; a click wins.
+  const [moreOpen, setMoreOpen] = createSignal<boolean>(
+    (open) =>
+      open === true ||
+      props.selection.fallbacks.length > 0 ||
+      props.selection.utilityModel !== null ||
+      Boolean(props.selection.decisionModel),
+  );
   return (
     <SettingsSection
       title={t("modelProviders.defaults.title")}
@@ -441,6 +526,7 @@ export function DefaultModels(props: DefaultModelsViewProps) {
       <div class="model-providers__defaults">
         <SettingsRow
           title={t("modelProviders.defaults.primary")}
+          description={props.agentModel}
           control={
             <ModelPicker
               windowed
@@ -449,18 +535,9 @@ export function DefaultModels(props: DefaultModelsViewProps) {
               options={primaryOptions()}
               disabled={props.models.length === 0 || saving()}
               title={title()}
-              onChange={props.onPrimaryChange}
+              onChange={(value) => selectChatChoice(value, props.onPrimaryChange)}
             />
           }
-        />
-        <FallbackModel
-          label={t("modelProviders.defaults.fallback")}
-          fallbacks={props.selection.fallbacks}
-          primary={props.selection.primary}
-          options={options()}
-          disabled={modelControlsDisabled() || saving() || !props.selection.primary}
-          title={title()}
-          onChange={props.onFallbackChange}
         />
         <BehaviorSetting
           field={"thinking"}
@@ -484,71 +561,100 @@ export function DefaultModels(props: DefaultModelsViewProps) {
           }}
           onReset={props.onFastModeReset}
         />
-        <SettingsRow
-          title={
-            <HelpTitle
-              title={t("modelProviders.defaults.utility")}
-              label={t("modelProviders.defaults.utilityHelpLabel")}
-              triggerId={UTILITY_MODEL_HELP_ID}
-              paragraphs={[
-                t("modelProviders.defaults.utilityHelpPurpose"),
-                t("modelProviders.defaults.utilityHelpAutomatic"),
-              ]}
-            />
-          }
-          description={
-            props.utilityOverrides?.length ? (
-              <UtilityOverrides
-                overrides={props.utilityOverrides}
-                basePath={props.basePath}
-                onOpen={props.onOpenAgent}
+        <button
+          type="button"
+          class="settings-row settings-row--nav settings-details-toggle"
+          aria-expanded={moreOpen() ? "true" : "false"}
+          data-models-more-settings
+          onClick={() => setMoreOpen(!moreOpen())}
+        >
+          <div class="settings-row__text">
+            <span class="settings-row__title">{t("modelProviders.defaults.moreSettings")}</span>
+          </div>
+          <div class="settings-row__control">
+            <span class="settings-row__chevron">
+              <Icon name="chevronRight" />
+            </span>
+          </div>
+        </button>
+        <Show when={moreOpen()}>
+          <FallbackModel
+            label={t("modelProviders.defaults.fallback")}
+            fallbacks={props.selection.fallbacks}
+            primary={props.selection.primary}
+            options={chatOptions()}
+            disabled={modelControlsDisabled() || saving() || !props.selection.primary}
+            title={title()}
+            onChange={(value) =>
+              value ? selectChatChoice(value, props.onFallbackChange) : props.onFallbackChange(null)
+            }
+          />
+          <SettingsRow
+            title={
+              <HelpTitle
+                title={t("modelProviders.defaults.utility")}
+                label={t("modelProviders.defaults.utilityHelpLabel")}
+                triggerId={UTILITY_MODEL_HELP_ID}
+                paragraphs={[
+                  t("modelProviders.defaults.utilityHelpPurpose"),
+                  t("modelProviders.defaults.utilityHelpAutomatic"),
+                ]}
               />
-            ) : undefined
-          }
-          control={
-            <ModelPicker
-              windowed
-              id={UTILITY_MODEL_PICKER_ID}
-              label={t("modelProviders.defaults.utility")}
-              value={utilityValue()}
-              options={utilityOptions()}
-              disabled={modelControlsDisabled() || saving()}
-              title={title() || utilityRoute()?.detail || ""}
-              onChange={(value) =>
-                props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value)
-              }
-            />
-          }
-        />
-        <FallbackModel
-          label={t("modelProviders.defaults.utilityFallback")}
-          fallbacks={modelSettingFallbacks(props.selection.utilityModel)}
-          primary={modelSettingPrimary(props.selection.utilityModel)}
-          options={options()}
-          disabled={modelControlsDisabled() || saving() || utilityValue() === ""}
-          title={title()}
-          onChange={props.onUtilityFallbackChange}
-        />
-        <SettingsRow
-          title={
-            <HelpTitle
-              title={t("chat.modelControls.decisionLabel")}
-              label={t("modelProviders.defaults.decisionHelpLabel")}
-              triggerId={DECISION_MODEL_HELP_ID}
-              paragraphs={[t("chat.modelControls.decisionHelp")]}
-            />
-          }
-          control={
-            <DecisionModelPicker
-              id={"model-providers-decision-model"}
-              models={props.decisionModels}
-              value={props.selection.decisionModel}
-              disabled={!props.canMutate || saving()}
-              title={title()}
-              onChange={props.onDecisionChange}
-            />
-          }
-        />
+            }
+            description={
+              props.utilityOverrides?.length ? (
+                <UtilityOverrides
+                  overrides={props.utilityOverrides}
+                  basePath={props.basePath}
+                  onOpen={props.onOpenAgent}
+                />
+              ) : undefined
+            }
+            control={
+              <ModelPicker
+                windowed
+                id={UTILITY_MODEL_PICKER_ID}
+                label={t("modelProviders.defaults.utility")}
+                value={utilityValue()}
+                options={utilityOptions()}
+                disabled={modelControlsDisabled() || saving()}
+                title={title() || utilityRoute()?.detail || ""}
+                onChange={(value) =>
+                  props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value)
+                }
+              />
+            }
+          />
+          <FallbackModel
+            label={t("modelProviders.defaults.utilityFallback")}
+            fallbacks={modelSettingFallbacks(props.selection.utilityModel)}
+            primary={modelSettingPrimary(props.selection.utilityModel)}
+            options={options()}
+            disabled={modelControlsDisabled() || saving() || utilityValue() === ""}
+            title={title()}
+            onChange={props.onUtilityFallbackChange}
+          />
+          <SettingsRow
+            title={
+              <HelpTitle
+                title={t("chat.modelControls.decisionLabel")}
+                label={t("modelProviders.defaults.decisionHelpLabel")}
+                triggerId={DECISION_MODEL_HELP_ID}
+                paragraphs={[t("chat.modelControls.decisionHelp")]}
+              />
+            }
+            control={
+              <DecisionModelPicker
+                id={"model-providers-decision-model"}
+                models={props.decisionModels}
+                value={props.selection.decisionModel}
+                disabled={!props.canMutate || saving()}
+                title={title()}
+                onChange={props.onDecisionChange}
+              />
+            }
+          />
+        </Show>
         {props.canMutate ? renderMutationMessage(props.message) : undefined}
       </div>
     </SettingsSection>

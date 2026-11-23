@@ -9,10 +9,10 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import {
-  createAdmittedRunOperatorAuthority,
   readAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { completionConfig } from "../../agents/bash-tools.lifecycle.test-support.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
@@ -294,7 +294,7 @@ it("finalizes a failed-before-reply event after its visitor policy scope closes"
         profile: { profileId: "visitor", emails: [], assignedRole: null },
         requiredByRole: true,
       })!;
-      const operatorAuthority = createAdmittedRunOperatorAuthority({
+      const operatorAuthority = createTestOperatorAuthority({
         profileId: "visitor",
         scopes: ["operator.write"],
         signal: access.signal,
@@ -461,7 +461,7 @@ it.for([
         let sourceReferences = 1;
         const operatorAuthority =
           scenario === "allow-control" || (scheduled && !failure)
-            ? createAdmittedRunOperatorAuthority({
+            ? createTestOperatorAuthority({
                 profileId: "original-guest",
                 scopes: ["operator.write"],
                 assertCurrent() {

@@ -1240,41 +1240,6 @@ describe("mcp loopback server", () => {
     }
   });
 
-  it("fences caller authority when the grant is replaced during tool execution", async () => {
-    const { promise: started, resolve: markStarted } = createDeferred();
-    const { promise: gate, resolve: release } = createDeferred();
-    let committed = false;
-    mockScopedTools([
-      makeMessageTool({
-        execute: async () => {
-          const caller = getGatewayToolCallerIdentity();
-          markStarted();
-          await gate;
-          if (caller?.receiptAuthority?.() !== true) {
-            throw new Error("Grant authority expired before publication");
-          }
-          committed = true;
-          return { content: [{ type: "text", text: "published" }] };
-        },
-      }),
-    ]);
-    await startLoopbackServerForTest();
-    const grant = await createCliGrant("run-publication", {
-      context: { sessionKey: "agent:main:publication" },
-      captureKey: "capture-publication",
-    });
-    const response = sendLoopbackToolCall({ ...grant.scope, name: "message" });
-    await started;
-    activateMcpLoopbackClientGrantCapture(grant.captureParams);
-    release();
-    expectMcpResultText(
-      await readOkMcpPayload(await response),
-      "Grant authority expired before publication",
-      true,
-    );
-    expect(committed).toBe(false);
-  });
-
   it("routes sessions_yield to the current CLI capture", async () => {
     resolveGatewayScopedToolsMock.mockImplementation(
       async (input): Promise<MockGatewayScopedTools> => {

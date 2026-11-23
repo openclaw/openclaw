@@ -1,5 +1,5 @@
 import { assert, describe, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { configFor } from "../agents/model-auth.fixtures.test-support.js";
 import {
   captureOperatorModelPolicySnapshot,
@@ -54,7 +54,7 @@ function fixture(defaultOnly = false) {
   };
   const source = new AbortController();
   let modelPolicy = prepareOperatorModelPolicy({ cfg, policy: { deny: ["fixture/blocked"] } });
-  const operatorAuthority = createAdmittedRunOperatorAuthority({
+  const operatorAuthority = createTestOperatorAuthority({
     profileId: "limited-operator",
     scopes: ["operator.write"],
     assertCurrent: () => source.signal.throwIfAborted(),
@@ -70,7 +70,7 @@ function fixture(defaultOnly = false) {
     const before = structuredClone(initial);
     const result = await projectSessionsPatchEntry({
       cfg,
-      operatorAuthority,
+      operatorAuthority: createTestOperatorAuthority({ ...operatorAuthority, modelPolicy }),
       existingEntry: initial,
       isLabelInUse: () => false,
       storeKey: key,
@@ -90,7 +90,7 @@ describe("session model patches under operator policy", () => {
   it("requires explicit Access grants independently of model aliases and keeps clearing safe", async () => {
     const cfg: OpenClawConfig = { agents: { defaults: { model: "openai/fixture" } } };
     const revoked = new AbortController();
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "limited-operator",
       scopes: ["operator.write"],
       assertCurrent: () => revoked.signal.throwIfAborted(),
@@ -150,6 +150,10 @@ describe("session model patches under operator policy", () => {
         undefined,
         undefined,
       ]);
+    } else if (change === "model-policy") {
+      assert(result.ok);
+      expect(result.validateModelSelection?.()).toBeUndefined();
+      expect(await value.project(model)).toMatchObject({ ok: false, error: denied });
     } else {
       expect(result).toMatchObject({
         ok: false,
@@ -180,7 +184,7 @@ describe("session model patches under operator policy", () => {
     assert(snapshot);
     for (const modelPolicy of [prepared, restoreOperatorModelPolicySnapshot(snapshot)]) {
       const source = new AbortController();
-      const operatorAuthority = createAdmittedRunOperatorAuthority({
+      const operatorAuthority = createTestOperatorAuthority({
         profileId: "limited-operator",
         scopes: ["operator.write"],
         assertCurrent: () => source.signal.throwIfAborted(),
@@ -208,7 +212,7 @@ describe("session model patches under operator policy", () => {
     }
   });
 
-  it("retains the exact selected-model guard until the write commits", async () => {
+  it("keeps the admitted model selection but fences a retired source before commit", async () => {
     const value = fixture();
     const result = await value.project("chosen");
     expect(result).toMatchObject({
@@ -218,6 +222,8 @@ describe("session model patches under operator policy", () => {
     assert(result.ok);
     expect(result.validateModelSelection?.()).toBeUndefined();
     value.tighten();
-    expect(result.validateModelSelection?.()).toMatchObject(denied);
+    expect(result.validateModelSelection?.()).toBeUndefined();
+    value.revoke();
+    expect(result.validateModelSelection?.()).toMatchObject({ code: "FORBIDDEN" });
   });
 });

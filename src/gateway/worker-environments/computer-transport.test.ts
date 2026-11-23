@@ -209,7 +209,7 @@ describe("session computer transport", () => {
     await expect(transport.invoke(request("snapshot"))).resolves.toEqual({ ok: true });
     await expect(transport.invoke(request("type"))).resolves.toEqual({ ok: true });
     attached = false;
-    await expect(transport.invoke(request("type"))).rejects.toThrow("authority changed");
+    await expect(transport.invoke(request("type"))).rejects.toThrow("placement changed");
     expect(h.state.environment.attachedSessionIds).toEqual([]);
     await service.close();
     expect(h.nativeExecutionIds).toHaveLength(3);
@@ -996,7 +996,7 @@ describe("session computer transport", () => {
           authority: nextAuthority,
           assertCurrent() {
             if (!validateAgentRunDelegatedAuthority(nextAuthority)) {
-              throw new Error("Session desktop placement authority changed");
+              throw new Error("Session desktop placement changed. Start a new turn.");
             }
           },
         });

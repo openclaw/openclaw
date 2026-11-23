@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as replyAuthority from "../../auto-reply/reply/reply-tool-authority.js";
 import type { ReplyToolAuthorityInput } from "../../auto-reply/reply/reply-tool-authority.types.js";
 import * as joinObservation from "../../sessions/session-controller.message-join-observation.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { captureCliRunToolAuthority } from "./tool-authority.js";
 import type { RunCliAgentParams } from "./types.js";
 
@@ -163,7 +163,7 @@ describe("CLI question creator binding", () => {
 
   it("carries the host-issued profile and refuses it after its source is revoked", async () => {
     let active = true;
-    const source = createAdmittedRunOperatorAuthority({
+    const source = createTestOperatorAuthority({
       profileId: "creator-profile",
       scopes: ["operator.write"],
       assertCurrent: () => {

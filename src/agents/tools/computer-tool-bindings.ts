@@ -12,10 +12,7 @@ import { isEligibleComputerNode } from "../computer-use-node-capabilities.js";
 import { loadGatewayComputerStatus, type GatewayComputerStatus } from "./computer-tool-gateway.js";
 import type { ComputerHost, ComputerToolTransport } from "./computer-tool-shared.js";
 import { COMPUTER_ACT_COMMAND, SCREEN_SNAPSHOT_COMMAND } from "./computer-tool-shared.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   callGatewayTool,
   shouldUseInProcessGatewayTool,
@@ -61,16 +58,15 @@ export async function resolveComputerBinding(params: {
 }): Promise<ComputerBinding> {
   if (params.environmentId !== undefined) {
     const caller = getGatewayToolCallerIdentity();
-    const assertCaller = captureGatewayToolCallerAssertion();
     const resolveContext = () => getInProcessGatewayToolContext(caller?.gatewayContextResolver);
     const context = resolveContext();
     const service = context?.workerEnvironmentService;
     const run = caller?.operationalRunInstance;
     const runAuthority = run ? getActiveAgentRunDelegatedAuthority(run) : undefined;
-    if (!caller || !assertCaller || !run || !runAuthority || !service?.prepareAttachedComputer) {
+    if (!caller || !run || !runAuthority || !service?.prepareAttachedComputer) {
       throw new Error("Attached computer control requires an admitted agent run on its Gateway");
     }
-    assertCaller();
+    params.signal?.throwIfAborted();
     const attachment = service.findSessionAttachment(caller);
     if (!attachment || attachment.environmentId !== params.environmentId) {
       throw new Error("Computer environment is not attached to this conversation");
@@ -82,7 +78,7 @@ export async function resolveComputerBinding(params: {
       service.assertSessionAttachment(attachment);
     };
     await service.touchSessionAttachment(attachment);
-    assertCaller();
+    params.signal?.throwIfAborted();
     assertCurrent();
     const prepared = await service.prepareAttachedComputer({
       ...attachment,
@@ -90,7 +86,7 @@ export async function resolveComputerBinding(params: {
       assertCurrent,
     });
     try {
-      assertCaller();
+      params.signal?.throwIfAborted();
       assertCurrent();
       if (!prepared) {
         throw new Error(
@@ -99,7 +95,7 @@ export async function resolveComputerBinding(params: {
       }
       const transport = prepared.bind(run);
       const node = await transport.resolveNode(undefined, params.signal);
-      assertCaller();
+      params.signal?.throwIfAborted();
       assertCurrent();
       return {
         host: { host: "node", nodeId: node.nodeId, environmentId: attachment.environmentId },
@@ -114,26 +110,21 @@ export async function resolveComputerBinding(params: {
             return { ok: true };
           }
           const invokingCaller = getGatewayToolCallerIdentity();
-          const assertInvocation = captureGatewayToolCallerAssertion();
           if (
-            !assertInvocation ||
             invokingCaller?.operationalRunInstance !== run ||
             invokingCaller.agentId !== attachment.agentId ||
             invokingCaller.sessionKey !== attachment.sessionKey
           ) {
             throw new Error("Attached computer invocation lost its admitted caller");
           }
-          assertInvocation();
+          request.signal?.throwIfAborted();
           await service.touchSessionAttachment(attachment);
-          assertInvocation();
+          request.signal?.throwIfAborted();
           assertCurrent();
-          const result = await transport.invoke(
-            { ...request, nodeId: node.nodeId },
-            assertInvocation,
-          );
-          assertInvocation();
+          const result = await transport.invoke({ ...request, nodeId: node.nodeId });
+          request.signal?.throwIfAborted();
           await service.touchSessionAttachment(attachment);
-          assertInvocation();
+          request.signal?.throwIfAborted();
           assertCurrent();
           return result;
         },

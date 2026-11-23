@@ -1,5 +1,6 @@
 import path from "node:path";
-import { AGENT_GIT_SANDBOX_BIN } from "../../infra/agent-git-shim.js";
+import { buildAgentGitShimInstallCommand } from "../../infra/agent-git-shim-install.js";
+import { AGENT_GIT_SANDBOX_BIN, AGENT_GIT_SANDBOX_SCRIPT } from "../../infra/agent-git-shim.js";
 import { createContainerEnvFile } from "../../infra/container-env-file.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { stripGatewayAllocatorEnv } from "../../process/child-env.js";
@@ -61,10 +62,7 @@ async function createContainerSandboxBackend(
   stateGuard?: WorkspaceStateGuard,
 ): Promise<SandboxBackendHandle> {
   using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.backend.target");
-  const assertCurrent = () => {
-    operatorAuthority?.assertCurrent();
-    params.assertRuntimeCurrent?.();
-  };
+  const assertCurrent = () => params.assertRuntimeCurrent?.();
   assertCurrent();
   if (engine.id === "podman" && params.cfg.browser.enabled) {
     throw new Error(
@@ -132,7 +130,7 @@ async function createContainerSandboxBackend(
       const gitBinDir = params.readOnlyResourceMounts?.some(
         (mount) => mount.containerPath === AGENT_GIT_SANDBOX_BIN,
       )
-        ? AGENT_GIT_SANDBOX_BIN
+        ? `${AGENT_GIT_SANDBOX_BIN}/container`
         : undefined;
       const engineTarget =
         podmanTarget ??
@@ -165,6 +163,15 @@ async function createContainerSandboxBackend(
           },
         );
       };
+      const prepareGit = gitBinDir
+        ? buildAgentGitShimInstallCommand(
+            path.posix.dirname(AGENT_GIT_SANDBOX_SCRIPT),
+            `${AGENT_GIT_SANDBOX_BIN}/git`,
+          )
+        : undefined;
+      if (prepareGit) {
+        await run({ script: prepareGit }, assertCurrent);
+      }
       const handle: SandboxBackendHandle = {
         id: boundEngine.id,
         runtimeId: containerName,
@@ -390,7 +397,18 @@ async function createContainerSandboxBackend(
               cfg: { ...allocation.cfg, image: resolvedImageId },
               engine: boundEngine,
               name: input.name,
-              command: input.command,
+              command: prepareGit
+                ? {
+                    ...input.command,
+                    argv: [
+                      "/bin/sh",
+                      "-c",
+                      `${prepareGit}\nexport PATH="${gitBinDir}:$PATH"\nexec "$@"`,
+                      "openclaw-agent-git",
+                      ...input.command.argv,
+                    ],
+                  }
+                : input.command,
               labels: input.labels,
               assertCurrent: assertAllocationCurrent,
             });

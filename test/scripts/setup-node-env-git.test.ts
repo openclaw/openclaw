@@ -34,8 +34,10 @@ describe.skipIf(process.platform === "win32")("CI Git capability setup", () => {
     const key = path.join(etc, "apt/keyrings/openclaw-git-core-ppa.asc");
     const source = path.join(etc, "apt/sources.list.d/openclaw-git-core-ppa.list");
     const unrelatedSource = path.join(etc, "apt/sources.list.d/unrelated.list");
+    const unrelatedIndex = path.join(root, "unrelated-index");
     mkdirSync(path.dirname(source), { recursive: true });
     writeFileSync(unrelatedSource, "existing source\n");
+    writeFileSync(unrelatedIndex, "existing index\n");
     mkdirSync(bin);
     writeFileSync(log, "");
     writeFileSync(
@@ -98,11 +100,22 @@ exec /usr/bin/install "\${args[@]}"`,
 printf 'apt %s noninteractive=%s\\n' "$*" "$DEBIAN_FRONTEND" >> "$FIXTURE_LOG"
 [[ "\${FIXTURE_INSTALL_FAIL:-}" != true ]] || exit 100
 if [[ "$*" == *' update' ]]; then
+  if [[ "\${FIXTURE_RELEASE_CHANGED:-}" == true ]]; then
+    if [[ " $* " != *" Dir::Etc::sourcelist=$FIXTURE_GIT_SOURCE "* || " $* " != *' Dir::Etc::sourceparts=- '* ]]; then
+      echo "E: Repository 'https://ppa.launchpadcontent.net/ondrej/php/ubuntu noble InRelease' changed its 'Label' value" >&2
+      exit 100
+    fi
+    [[ " $* " == *' APT::Get::List-Cleanup=0 '* ]] || rm "$FIXTURE_UNRELATED_INDEX"
+  fi
   updates=0
   [[ ! -f "$FIXTURE_CAPABLE.updates" ]] || read -r updates < "$FIXTURE_CAPABLE.updates"
   printf '%s\\n' "$((updates + 1))" > "$FIXTURE_CAPABLE.updates"
 fi
 if [[ "$*" == *'--no-install-recommends git' ]]; then
+  if [[ "\${FIXTURE_RELEASE_CHANGED:-}" == true ]]; then
+    [[ " $* " != *' Dir::Etc::sourcelist='* ]]
+    [[ -f "$FIXTURE_UNRELATED_INDEX" ]]
+  fi
   attempt=0
   [[ ! -f "$FIXTURE_CAPABLE.attempts" ]] || read -r attempt < "$FIXTURE_CAPABLE.attempts"
   attempt=$((attempt + 1))
@@ -137,6 +150,8 @@ fi`,
           GITHUB_ACTION_PATH: root,
           FIXTURE_LOG: log,
           FIXTURE_CAPABLE: capable,
+          FIXTURE_GIT_SOURCE: source,
+          FIXTURE_UNRELATED_INDEX: unrelatedIndex,
           ...extra,
         },
       });
@@ -147,6 +162,7 @@ fi`,
       key,
       source,
       unrelatedSource,
+      unrelatedIndex,
     };
   }
 
@@ -197,6 +213,21 @@ fi`,
     expect(readFileSync(setup.source, "utf8")).toContain("noble main\n");
     expect(readFileSync(setup.unrelatedSource, "utf8")).toBe("existing source\n");
   });
+
+  it.each(["0", "1"])(
+    "upgrades Git despite unrelated release metadata changes with %s stale index updates",
+    (staleUpdates) => {
+      const setup = fixture();
+      const result = setup.run({
+        FIXTURE_RELEASE_CHANGED: "true",
+        FIXTURE_STALE_INDEX_UPDATES: staleUpdates,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(existsSync(setup.capable)).toBe(true);
+      expect(readFileSync(setup.unrelatedSource, "utf8")).toBe("existing source\n");
+      expect(readFileSync(setup.unrelatedIndex, "utf8")).toBe("existing index\n");
+    },
+  );
 
   it.each([
     { failures: "1", status: 0, installs: 2 },

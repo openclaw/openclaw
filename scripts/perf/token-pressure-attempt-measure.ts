@@ -255,7 +255,6 @@ const { session } = await createAgentSession({
   tools: customTools.map(({ name }) => name),
   customTools,
   contextOverflowRecoveryOwner: "caller",
-  cleanupProviderSessionResourcesOnDispose: false,
 });
 const attempt = {
   config: {

@@ -474,6 +474,8 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
         } else {
           expect(count()).toBe(1000);
         }
+        const [plain, branded] = list.querySelectorAll("[role=option] .picker-select__label");
+        expect(plain!.getBoundingClientRect().left).toBe(branded!.getBoundingClientRect().left);
         const open = menu.getBoundingClientRect().width;
         if (width === 1280) {
           expect(open).toBeGreaterThan(trigger.getBoundingClientRect().width + 20);

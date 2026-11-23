@@ -27,6 +27,7 @@ import {
   ProjectCheckoutError,
   resolveProjectCheckout,
   resolveProjectDirectory,
+  resolveRecordedProjectByRoot,
   resolveWorkspaceProject,
   selectStoredProjectRegistry,
 } from "../projects/project-registry.js";
@@ -233,6 +234,9 @@ async function prepareSpawnParentWorktreeSource(
     "archivedAt",
     "projectId",
     "sessionRoot",
+    "spawnedCwd",
+    "execNode",
+    "deviceFolder",
     "worktree",
     "repositoryWorkspaceId",
   ] as const;
@@ -284,7 +288,14 @@ async function prepareSpawnParentWorktreeSource(
     return { kind: "repository", sessionId: parent.entry.sessionId, repository, assertCurrent };
   }
   if (!parent.entry.worktree) {
-    const projectId = normalizeOptionalString(parent.entry.projectId);
+    const { sessionRoot, spawnedCwd, execNode, deviceFolder } = parent.entry;
+    // Older direct-folder sessions did not record the project ID. Reuse only an
+    // exact registered local checkout, not an arbitrary cwd or a remote path.
+    const projectId =
+      normalizeOptionalString(parent.entry.projectId) ??
+      (sessionRoot && sessionRoot === spawnedCwd && !execNode && !deviceFolder
+        ? (await resolveRecordedProjectByRoot(sessionRoot))?.id
+        : undefined);
     if (!projectId) {
       return undefined;
     }

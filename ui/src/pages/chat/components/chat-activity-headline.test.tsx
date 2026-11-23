@@ -163,6 +163,18 @@ it.each([
   }
 });
 
+it("renders the OpenClaw action with one uninterrupted claw outline", async () => {
+  const activity = toolActivity("openclaw", {});
+  await renderActivityFixture([group("current", [activity])], liveOptions);
+  advanceTimersByTime(200);
+  expect(label()).toBe("OpenClaw");
+  const paths = query("icon")?.querySelectorAll("svg path");
+  expect(paths).toHaveLength(1);
+  const outline = paths?.[0]?.getAttribute("d") ?? "";
+  expect(outline.match(/[Mm]/gu)).toHaveLength(1);
+  expect(outline).toMatch(/[Zz]$/u);
+});
+
 it("shows a command once when its live activity group is expanded", async () => {
   const command = "pnpm test transcript";
   const activity = toolActivity("exec", { command });

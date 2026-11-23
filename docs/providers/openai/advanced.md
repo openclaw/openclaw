@@ -103,6 +103,11 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     `previous_response_id`. Otherwise it sends full history without that
     reference. Idle cached connections expire after five minutes; keeping a
     connection warm does not retain the completed run's execution context.
+    Only the run that writes the conversation keeps this connection and its
+    continuation. Background runs on the same conversation (session forks such
+    as skill reviews, memory flush, `/btw` side questions, compaction summaries)
+    share its prompt-cache key but send full history on their own connection, so
+    they never replace the conversation's continuation.
 
     A setup or handshake failure before request dispatch falls back to SSE; it
     is not retried or reconnected first. After dispatch, failures with an

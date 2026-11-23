@@ -249,6 +249,47 @@ describe.skipIf(!connection)("PostgreSQL agent-owned memory search admission", (
     });
   });
 
+  it("rolls back a dimension rebuild with its owner transaction, including retained admission", () => {
+    withEngineStoreAdmission(() => {
+      const changed = structuredClone(vector);
+      changed.vector!.chunks!.postgres!.dimensions = 4;
+      const bytes = Buffer.alloc(24);
+      bytes.writeDoubleLE(1, 0);
+      db.prepare(`INSERT INTO memory_index_chunks
+        (id, path, start_line, end_line, hash, model, text, embedding, updated_at)
+        VALUES ('kept', 'kept.md', 1, 1, 'hash', 'fixture', 'kept memory', ?, 1)`).run(bytes);
+      expect(() =>
+        db.runTransaction(
+          () => {
+            db.exec("DELETE FROM memory_index_chunks");
+            admitAgentEngineSearchExtensions(db, { "memory.vector": changed }, () => {}, true);
+          },
+          {
+            withCommit() {
+              throw new Error("Rebuild owner retired");
+            },
+          },
+        ),
+      ).toThrow("Rebuild owner retired");
+      expect(get("SELECT embedding FROM memory_index_chunks WHERE id = 'kept'")?.embedding).toEqual(
+        new Uint8Array(bytes),
+      );
+      expect(
+        get("SELECT embedding::text AS vector FROM memory_index_chunks_vec WHERE id = 'kept'"),
+      ).toEqual({ vector: "[1,0,0]" });
+      expect(JSON.parse(extensions())["memory.vector"]).toEqual(vector);
+      expect(
+        get(
+          "SELECT atttypmod AS dimensions FROM pg_attribute WHERE attrelid = 'memory_index_chunks_vec'::regclass AND attname = 'embedding'",
+        ),
+      ).toEqual({ dimensions: 3 });
+      admitAgentEngineSearchExtensions(db, { "memory.vector": vector }, () => {
+        throw new Error("Rollback must retain the old admission");
+      });
+      db.exec("DELETE FROM memory_index_chunks WHERE id = 'kept'");
+    });
+  });
+
   it("locks first-use installation and shares its admission with another handle", () => {
     withEngineStoreAdmission(() => {
       using nextAnchor = openNodeSqliteDatabase(databasePath);

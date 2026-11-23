@@ -365,4 +365,12 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     expect(prepared()).toBe(0);
     expect(all()).toEqual([{ id: 1, own: null }]);
   });
+
+  it("lets maintenance statements outlive the runtime statement limit and client cutoff", () => {
+    // 12s exceeds this connection's 1s statement limit and the 11s client cutoff derived from it.
+    const db = open(connection!, schema, { statementTimeoutMs: 1000 });
+    const sleep = () => db.query("SELECT 7 AS value FROM pg_sleep(12)").rows;
+    expect(run(() => db.runTransaction(sleep, { maintenance: true }))).toEqual([{ value: 7 }]);
+    expect(get(db, "SHOW statement_timeout")).toEqual({ statement_timeout: "1s" });
+  }, 60_000);
 });

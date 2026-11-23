@@ -550,6 +550,8 @@ export async function stageSystemdService({
   ...args
 }: GatewayServiceInstallArgs): Promise<{ unitPath: string }> {
   const { unitPath, backedUp } = await writeSystemdUnit(args);
+  // Reloading the manager changes the next start's ExecStart without stopping a running unit.
+  await reloadSystemdUserManager(args.env, undefined, args.assertCurrent);
   reportSystemdServicePublication(stdout, "Staged systemd service", unitPath, backedUp);
   return { unitPath };
 }

@@ -168,7 +168,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           const initialSetupSource = createDynamicSessionSourceAssertion(
             () => initialSetup?.assertCurrent,
             () => {
-              throw new Error("Worker setup authority changed during turn admission");
+              throw new Error("Worker setup ended during turn admission. Start a new turn.");
             },
           );
           const assertAdmissionCurrent = composeSessionSourceAssertion(

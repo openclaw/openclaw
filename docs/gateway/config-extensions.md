@@ -251,6 +251,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `plugins.entries.<id>.llm.allowedCompletionModels`: optional allowlist applied to every plugin LLM completion, including host-resolved defaults and overrides. Use `"*"` only when you intentionally want to allow any model.
 - `plugins.entries.<id>.llm.allowAuthProfileOverride`: explicitly trust this plugin to select a non-default auth profile for isolated `api.runtime.llm.complete` execution. Direct `model@profile` calls remain governed by model-override policy.
 - `plugins.entries.<id>.llm.allowAgentIdOverride`: explicitly trust this plugin to run `api.runtime.llm.complete` against a non-default agent id.
+- `plugins.entries.<id>.memoryBackend`: when `true`, an enabled memory plugin that does not own `plugins.slots.memory` loads as a passive backend the slot owner can query instead of being disabled. It registers only its provider runtime. When the slot owner's manifest declares `memoryBackends: true`, every enabled memory plugin defaults to `true`; set `false` to keep one out. Does not enable the plugin; has no effect on the slot owner or while the memory slot is `"none"`. See [Memory backends](/plugins/sdk-overview/memory-and-context#memory-backends).
 - `plugins.entries.<id>.config`: plugin-defined config object (validated by native OpenClaw plugin schema when available).
 - Channel plugin account/runtime settings live under `channels.<id>` and should be described by the owning plugin's manifest `channelConfigs` metadata, not by a central OpenClaw option registry.
 

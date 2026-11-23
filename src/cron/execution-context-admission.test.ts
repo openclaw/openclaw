@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { createTestCronOperatorSource } from "./execution-context.test-support.js";
 import type { CronStoredJob } from "./types.js";
 
@@ -28,8 +29,14 @@ const { buildScheduledParentPauseNotice } = await import("./scheduled-occurrence
 const { sessionChanges } = await import("../sessions/session-row-changes.js");
 
 const PARENT_KEY = "agent:main:dashboard:parent";
-// The admission reads only the restored authority's live assertion.
-const RESTORED_OPERATOR = { assertCurrent: vi.fn() } as unknown as AdmittedRunOperatorAuthority;
+// Restored admission carries the owner decision, not a permission-currentness closure.
+const RESTORED_OPERATOR: AdmittedRunOperatorAuthority = {
+  canonicalIdentity: null,
+  profileId: "requester",
+  scopes: ["operator.admin"],
+  requesterOwner: true,
+  assertCurrent() {},
+};
 
 function job(overrides: Partial<CronStoredJob> = {}): CronStoredJob {
   return {
@@ -63,7 +70,7 @@ function admit(stored: CronStoredJob) {
 
 async function mint(stored: CronStoredJob) {
   const occurrence = await admit(stored);
-  return { occurrence, minted: occurrence.mint(RUN) };
+  return { occurrence, minted: await occurrence.mint(RUN) };
 }
 
 beforeEach(() => {
@@ -114,6 +121,7 @@ describe("admitScheduledOccurrence", () => {
       ["100000000000000002", false],
     ] as const) {
       const cfg = { commands: { ownerAllowFrom: [`discord:${senderId}`] } };
+      setRuntimeConfigSnapshot(cfg);
       const occurrence = await admitScheduledOccurrence({
         cfg,
         job: stored,
@@ -121,7 +129,7 @@ describe("admitScheduledOccurrence", () => {
         trigger: "cron",
       });
       try {
-        expect(occurrence.mint({ ...RUN, cfg }).result).toMatchObject({
+        expect((await occurrence.mint({ ...RUN, cfg })).result).toMatchObject({
           status: "ready",
           facts: {
             authority: { owner, basis: owner ? "channel-owner" : "none" },
@@ -260,8 +268,8 @@ describe("admitScheduledOccurrence", () => {
       lifecycleRevision: "rev-1",
     });
     const occurrence = await admit(job(LINKED_JOB));
-    const first = occurrence.mint(RUN);
-    const retry = occurrence.mint({ ...RUN, runId: "run-2" });
+    const first = await occurrence.mint(RUN);
+    const retry = await occurrence.mint({ ...RUN, runId: "run-2" });
     expect(readSessionEntryInWorker).toHaveBeenCalledOnce();
     expect(prepareSessionGenerationFacts).toHaveBeenCalledOnce();
     expect(first.result).toMatchObject({
@@ -287,12 +295,13 @@ describe("admitScheduledOccurrence", () => {
       }),
     );
     const runSessionKey = PARENT_KEY;
-    expect(occurrence.mint({ ...RUN, runSessionKey }).result).toMatchObject({
+    expect((await occurrence.mint({ ...RUN, runSessionKey })).result).toMatchObject({
       status: "ready",
       facts: { authority: { owner: false, basis: "operator-source" } },
     });
     expect(
-      occurrence.mint({ ...RUN, runSessionKey, operatorAuthority: RESTORED_OPERATOR }).result,
+      (await occurrence.mint({ ...RUN, runSessionKey, operatorAuthority: RESTORED_OPERATOR }))
+        .result,
     ).toMatchObject({
       status: "ready",
       facts: { authority: { owner: true, basis: "operator-source" } },
@@ -374,7 +383,7 @@ describe("occurrence pause", () => {
     expect(prepareSessionGenerationFacts).toHaveBeenCalledWith(
       expect.objectContaining({ sessionKey: PARENT_KEY, ...row }),
     );
-    expect(occurrence.mint(RUN).result).toMatchObject({
+    expect((await occurrence.mint(RUN)).result).toMatchObject({
       status: "ready",
       facts: {
         principal: { kind: "parent", parent: { sessionKey: PARENT_KEY, ...row } },

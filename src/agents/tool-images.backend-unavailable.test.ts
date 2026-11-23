@@ -27,12 +27,16 @@ async function importSanitizer() {
       buildImageResizeSideGrid: () => [1200],
       getImageMetadata: getImageMetadataMock,
       isImageProcessorUnavailableError: (error: unknown) => error === backendUnavailableError,
-      readImageMetadataFromHeader: readImageMetadataFromHeaderMock,
       resizeToJpeg: async () => {
         throw backendUnavailableError;
       },
     };
   });
+  // mock-isolation: Preserve fixture dimensions independently of the unavailable encoder.
+  vi.doMock("../media/image-header-metadata.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../media/image-header-metadata.js")>()),
+    readImageMetadataFromHeader: readImageMetadataFromHeaderMock,
+  }));
   return await import("./tool-images.js");
 }
 

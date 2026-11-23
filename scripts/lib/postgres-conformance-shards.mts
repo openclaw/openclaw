@@ -15,6 +15,9 @@ const additionalPostgresConformanceTargets = [
   "src/infra/exec-approvals-native.test.ts",
   "src/infra/client-credential-update.test.ts",
   "src/infra/update-managed-service-handoff-engine.test.ts",
+  "src/channels/message/ingress-monitor.scheduling.test.ts",
+  "src/gateway/github-publication-runtime.test.ts",
+  "src/plugin-state/plugin-state-worker.test.ts",
 ] as const;
 
 /** Filesystem discovery owns suffix suites; explicit targets cover the remaining contracts. */

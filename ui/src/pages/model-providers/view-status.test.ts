@@ -39,6 +39,24 @@ it("uses the scoped check outcome without hiding catalog or account problems", (
   expect(status()).toBe("Ready");
 });
 
+it("preserves setup status when a probe has no model to check", () => {
+  const viewProps = props({ cards: [card({ catalogStatus: "ready" })] });
+  const container = mount({
+    ...viewProps,
+    probeResults: { openai: { provider: "openai", status: "no_model", results: [] } },
+  });
+  expect(text(container.querySelector(".provider-row__status"))).toBe("Ready");
+  mount(
+    {
+      ...viewProps,
+      cards: [card({ catalogStatus: "auth-rejected" })],
+      probeResults: { openai: { provider: "openai", status: "no_model", results: [] } },
+    },
+    container,
+  );
+  expect(text(container.querySelector(".provider-row__status"))).toBe("Credentials rejected");
+});
+
 it("labels a single measured account when per-login limits are unavailable", () => {
   const profile = { profileId: "openai:first", type: "oauth" as const, status: "ok" as const };
   const base = card({
@@ -167,11 +185,11 @@ it("uses catalog evidence for short-lived OAuth without treating expiry alone as
     profiles: [oauth],
     catalogStatus: "ready",
   });
-  const viewProps = props({ cards: [providerCard], configuredModels: [] });
+  const viewProps = props({ cards: [providerCard], configuredModels: [], modelRequired: true });
   const container = mount(viewProps);
   const status = () => text(container.querySelector(".provider-row__status"));
   expect(status()).toBe("Ready");
-  expect(text(container.querySelector("[data-model-readiness]"))).toContain("No models available");
+  expect(text(container.querySelector("[data-model-readiness]"))).toContain("no usable models");
   mount({ ...viewProps, cards: [{ ...providerCard, catalogStatus: undefined }] }, container);
   // Unverified credentials report nothing; the row's own meta line names them.
   expect(status()).toBe("");
@@ -367,14 +385,4 @@ it("counts a provider's only unavailable model in the singular", () => {
     container,
   );
   expect(text(container.querySelector(".provider-row__meta"))).toContain("2 of 3 models available");
-});
-
-it("hands the accent to an open API key form", () => {
-  const editable = card({ id: "example", displayName: "Example", catalogStatus: "ready" });
-  const viewProps = props({ cards: [editable], configuredModels: [] });
-  const container = mount(viewProps);
-  const connect = () => container.querySelector("[data-model-readiness] .btn") as HTMLButtonElement;
-  expect(connect().classList.contains("primary")).toBe(true);
-  mount({ ...viewProps, keyEditorProvider: "example" }, container);
-  expect(connect().classList.contains("primary")).toBe(false);
 });

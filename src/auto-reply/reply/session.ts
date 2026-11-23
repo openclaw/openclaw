@@ -28,8 +28,8 @@ import {
   resolveThreadFlag,
 } from "../../config/sessions/reset.js";
 import { commitReplySessionInitialization } from "../../config/sessions/session-accessor.js";
+import { buildNewSessionCreationFields } from "../../config/sessions/session-diff-baseline-capture.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
-import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { selectSessionModelOverride } from "../../config/sessions/session-entry-selection.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
@@ -594,7 +594,7 @@ async function initSessionStateAttemptLocked(
           origin: baseDeliveryOrigin,
         });
   const creationStamp =
-    !entry && ctx.SessionCreation ? buildSessionCreationStamp(ctx.SessionCreation) : undefined;
+    !entry && ctx.SessionCreation ? buildNewSessionCreationFields(ctx.SessionCreation) : undefined;
   const recordedActivity =
     !isNewSession &&
     params.recordedSessionActivity?.sessionId === sessionId &&

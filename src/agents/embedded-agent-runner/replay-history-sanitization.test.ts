@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { annotateInterSessionUserMessages } from "../replay-provenance.js";
+import { annotateCrossSessionMessages } from "../replay-provenance.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import type { TranscriptPolicy } from "../transcript-policy.types.js";
@@ -42,7 +42,7 @@ function sanitize(messages: AgentMessage[], overrides: Partial<GenericReplayHist
   );
   const run = sanitizeGenericReplayHistory(
     {
-      messages: annotateInterSessionUserMessages(messages),
+      messages: annotateCrossSessionMessages(messages),
       policy,
       imageLimits: { maxDimensionPx: 640, maxBytes: 1024 },
       signedThinkingProvider: false,

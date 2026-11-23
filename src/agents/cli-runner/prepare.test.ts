@@ -24,7 +24,6 @@ import {
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import {
   loadSessionEntryReadOnly,
   loadTranscriptEventsSync,
@@ -136,7 +135,7 @@ import { prepareCliBundleMcpCaptureAttempt, prepareCliBundleMcpConfig } from "./
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { finalizeCliContextEngineTurn } from "./cli-run-transcript.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
-import { prepareCliHistoryBoundary } from "./history-boundary.js";
+import { admitCliHistoryAccount } from "./history-boundary.js";
 import {
   createCliMcpTool,
   createJsonlStdinBackendConfig,
@@ -356,7 +355,7 @@ describe("prepareCliRunContext", () => {
     const admission = prepareSystemAgentRunAdmission({}, runId, "main", "history-fixture");
     try {
       const admittedRunContext = await admission.admit("embedded");
-      const writer = await prepareCliHistoryBoundary(
+      const admitted = await admitCliHistoryAccount(
         {
           admittedRunContext,
           runId,
@@ -373,29 +372,27 @@ describe("prepareCliRunContext", () => {
         },
         { credential },
       );
-      expect(writer).toBeDefined();
-      await runWithCliHistoryWriter(writer, () =>
-        run((overrides) =>
-          fixture.prepare({
-            ...overrides,
-            provider,
-            agentDir,
-            authProfileId,
-            runId,
-            preparedRunAdmission: admission,
-            sessionKey: sessionTarget.sessionKey,
-            ...(overrides.cliSessionBinding
-              ? {
-                  cliSessionBinding: {
-                    ...overrides.cliSessionBinding,
-                    authProfileId,
-                    authEpoch,
-                    authEpochVersion: CLI_AUTH_EPOCH_VERSION,
-                  },
-                }
-              : {}),
-          }),
-        ),
+      expect(admitted?.replaysHistory).toBe(true);
+      await run((overrides) =>
+        fixture.prepare({
+          ...overrides,
+          provider,
+          agentDir,
+          authProfileId,
+          runId,
+          preparedRunAdmission: admission,
+          sessionKey: sessionTarget.sessionKey,
+          ...(overrides.cliSessionBinding
+            ? {
+                cliSessionBinding: {
+                  ...overrides.cliSessionBinding,
+                  authProfileId,
+                  authEpoch,
+                  authEpochVersion: CLI_AUTH_EPOCH_VERSION,
+                },
+              }
+            : {}),
+        }),
       );
     } finally {
       admission.close();
@@ -711,7 +708,7 @@ describe("prepareCliRunContext", () => {
         trigger: "user",
         sessionKey: sessionTarget.sessionKey,
       }),
-    ).rejects.toThrow("authority");
+    ).rejects.toThrow("This agent run is no longer active");
   });
 
   it("honors an explicit auth agent directory independently of session identity", async () => {

@@ -2,6 +2,9 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { prepareAcpSessionEntryRead } from "../acp/runtime/session-meta-read.js";
 import { readSessionRuntimeOwnershipAsync } from "../agents/harness/session-runtime-ownership.js";
 import { listSubagentSessionListRunsForControllers } from "../agents/subagents/registry/subagent-registry-read.js";
+import { readRegistryWorktree } from "../agents/worktrees/registry-read.js";
+import { captureWorktreeRunEndContext } from "../agents/worktrees/run-end-lifecycle.js";
+import { reconcileSessionWorktreeAvailability } from "../agents/worktrees/session-lifecycle.js";
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
 import { readSessionActivitySummary } from "../config/sessions/activity-summary.js";
 import {
@@ -140,6 +143,13 @@ export async function withMemorySessionRows<T>(
           acpMeta: acp.session?.acp ?? null,
           runtimeOwnership: runtime.value ?? null,
           runtimeOwnershipDependencies: runtime.dependencies,
+          worktree: entry.worktree
+            ? await reconcileSessionWorktreeAvailability(
+                await readRegistryWorktree(captureWorktreeRunEndContext(env), entry.worktree.id),
+                env,
+                assertCurrent,
+              )
+            : null,
           repositoryWorkspace:
             workspaces.find((workspace) => workspace.workspaceId === entry.repositoryWorkspaceId) ??
             null,
@@ -279,4 +289,37 @@ export async function withMemorySessionRows<T>(
       await release();
     }
   }
+}
+
+/** Exact incognito acquisition never admits an ephemeral store to the resident roster. */
+export function readIncognitoSessionRow(params: {
+  assertCurrent: () => void;
+  cfg: OpenClawConfig;
+  key: string;
+  agentId: string;
+  storePath?: string;
+}) {
+  const { key, agentId, storePath } = params;
+  const memory = captureSessionActorStorageOwner(
+    { agentId, sessionKey: key, storePath },
+    { assertCurrent: params.assertCurrent, authorize: params.assertCurrent },
+  );
+  const current = memory?.owner?.readSession(key, memory.authority);
+  if (!current?.entry || !memory) {
+    return undefined;
+  }
+  const assertSessionCurrent = memory.owner?.captureSessionReadGuard(key);
+  return createIncognitoSessionRow({
+    ...params,
+    storePath: memory.path,
+    entry: current.entry,
+    membership: new Set(current.members.map((member) => member.identityId)),
+    source: {
+      identity: current.version.epoch,
+      assertCurrent() {
+        assertSessionCurrent?.();
+        memory.authority.assertCurrent();
+      },
+    },
+  });
 }

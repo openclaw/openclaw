@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { revokeGoalContinuationReturn } from "../../../auto-reply/reply/goal-continuation-return.js";
-import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
 import { prepareGatewayContextBindingOwner } from "../../../plugins/runtime/gateway-context-binding-owner.js";
 import {
   bindGatewayContextResolver,
@@ -379,7 +378,8 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     try {
       custody?.authority.assertCurrent();
     } catch (error) {
-      if (isOperatorAuthorityUnavailable(error)) {
+      // A cancellation notice belongs to the independently admitted cancelling caller.
+      if (!isSubagentCancellationNotice(entry)) {
         throw error;
       }
       return run();
