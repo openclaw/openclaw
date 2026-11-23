@@ -327,7 +327,7 @@ export function registerGatewayCronContextTests({
     expect(settlementContext).toBe(context);
     expect(observed).toBe(context);
     expect(observedBroker).toBe(broker);
-    expect(() => assertScheduledCaller?.("chat.history")).not.toThrow();
+    expect(() => assertScheduledCaller?.()).not.toThrow();
   });
 
   it.each(["absent", "retired", "session"] as const)(
@@ -411,6 +411,6 @@ export function registerGatewayCronContextTests({
     expect(observed).toBe(schedulerContext);
     expect(assertCaller).toBeUndefined();
     expect(caller.assertCurrent).toBeTypeOf("function");
-    expect(() => caller.assertCurrent?.("chat.history")).not.toThrow();
+    expect(() => caller.assertCurrent?.()).not.toThrow();
   });
 }
