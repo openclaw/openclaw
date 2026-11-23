@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import {
+  appendReplyMediaFailures,
   isCommandReplyForDelivery,
   isReplyPayloadSessionWriterDeliveryAuthorized,
   isReplyPayloadTerminalContent,
@@ -7,6 +8,8 @@ import {
   readPairingQrReplyChannelData,
   readReplyPayloadSourceOccurrence,
   setReplyPayloadMetadata,
+  stripReplyMediaFailureFallback,
+  type ReplyMediaFailure,
   type ReplyPayloadMetadata,
 } from "./reply-payload.js";
 
@@ -129,4 +132,57 @@ it("retains private delivery authority across independently loaded reply module 
   expect(adopt?.(draft)).toBe(false);
   expect(reloaded.isReplyPayloadSessionWriterDeliveryAuthorized(payload, currentEntry)).toBe(false);
   expect(JSON.stringify(payload)).toBe(JSON.stringify({ text: "same" }));
+});
+
+it("states the file size and the limit in an oversized-attachment receipt", () => {
+  const MB = 1024 * 1024;
+  const tooLarge = (
+    facts: Pick<ReplyMediaFailure, "sizeBytes" | "maxBytes">,
+  ): ReplyMediaFailure => ({
+    code: "file-too-large",
+    kind: "document",
+    label: "worksheet.pdf",
+    ...facts,
+  });
+  expect(
+    appendReplyMediaFailures("Here it is.", [
+      tooLarge({ sizeBytes: Math.round(5.6 * MB), maxBytes: 5 * MB }),
+    ]),
+  ).toBe(
+    "Here it is.\n⚠️ worksheet.pdf: Too large to attach (5.6 MB, limit 5 MB). Look for this file in Files.",
+  );
+  // A limit alone still tells the person what to aim for.
+  expect(appendReplyMediaFailures(undefined, [tooLarge({ maxBytes: 100 * MB })])).toBe(
+    "⚠️ worksheet.pdf: Too large to attach (limit 100 MB). Look for this file in Files.",
+  );
+  // A file a few bytes over must not read as if it were exactly at the limit.
+  expect(
+    appendReplyMediaFailures(undefined, [tooLarge({ sizeBytes: 5 * MB + 3, maxBytes: 5 * MB })]),
+  ).toBe(
+    "⚠️ worksheet.pdf: Too large to attach (over 5 MB, limit 5 MB). Look for this file in Files.",
+  );
+  // Without byte facts the shipped receipt is unchanged.
+  expect(appendReplyMediaFailures(undefined, [tooLarge({})])).toBe(
+    "⚠️ worksheet.pdf: Too large to attach. Look for this file in Files.",
+  );
+  // Byte facts never leak into other failure kinds.
+  expect(
+    appendReplyMediaFailures(undefined, [
+      { code: "file-not-found", kind: "document", label: "a.pdf", sizeBytes: 9, maxBytes: 1 },
+    ]),
+  ).toBe("⚠️ a.pdf: File not found. Check the path and try again.");
+});
+
+it("strips the oversized-attachment receipt it produced, including the byte facts", () => {
+  const failures: ReplyMediaFailure[] = [
+    {
+      code: "file-too-large",
+      kind: "image",
+      label: "photo.jpg",
+      sizeBytes: 12_000_000,
+      maxBytes: 5_242_880,
+    },
+  ];
+  const text = appendReplyMediaFailures("Caption", failures);
+  expect(stripReplyMediaFailureFallback(text, failures)).toBe("Caption");
 });

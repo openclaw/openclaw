@@ -19,10 +19,10 @@ import {
 } from "../../shared/text/trim-code-text.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
 import {
-  buildManagedMediaFailureBlock,
   createManagedOutgoingMediaBlocks,
   prepareOutgoingMediaFromReplyPayload,
 } from "../managed-image-attachments.js";
+import { buildManagedMediaFailureBlock } from "../managed-media-failure-block.js";
 import { formatForLog } from "../ws-log.js";
 import type { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
 

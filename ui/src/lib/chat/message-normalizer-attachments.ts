@@ -36,6 +36,7 @@ export function normalizeAttachmentContentBlock(
           kind: attachment.kind,
           label: attachment.label,
           ...(mimeType !== undefined ? { mimeType } : {}),
+          ...(attachment.code === "file-too-large" ? readSizeFacts(attachment) : {}),
         },
       },
     ];
@@ -65,4 +66,18 @@ export function normalizeAttachmentContentBlock(
     }
   }
   return [{ type: "attachment", attachment: normalized }];
+}
+
+function readSizeFacts(attachment: Record<string, unknown>): {
+  sizeBytes?: number;
+  maxBytes?: number;
+} {
+  const read = (value: unknown) =>
+    typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  const sizeBytes = read(attachment.sizeBytes);
+  const maxBytes = read(attachment.maxBytes);
+  return {
+    ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+    ...(maxBytes !== undefined ? { maxBytes } : {}),
+  };
 }

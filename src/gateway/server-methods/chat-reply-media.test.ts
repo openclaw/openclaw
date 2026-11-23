@@ -98,10 +98,16 @@ function buildContent(params: Omit<Parameters<typeof buildReplyContent>[0], "ses
   return buildReplyContent({ sessionKey: TEST_SESSION_KEY, ...params });
 }
 
-function attachmentError(code: string, label: string, kind = "document", mimeType?: string) {
+function attachmentError(
+  code: string,
+  label: string,
+  kind = "document",
+  mimeType?: string,
+  sizeFacts: { sizeBytes?: number; maxBytes?: number } = {},
+) {
   return {
     type: "attachment_error",
-    attachment: { code, kind, label, ...(mimeType ? { mimeType } : {}) },
+    attachment: { code, kind, label, ...(mimeType ? { mimeType } : {}), ...sizeFacts },
   };
 }
 
@@ -133,7 +139,10 @@ it("keeps a small ZIP while identifying the unchanged oversized original", async
     managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
   });
   expect(assistantContent).toContainEqual(
-    attachmentError("file-too-large", "orders-large.zip", "document", "application/zip"),
+    attachmentError("file-too-large", "orders-large.zip", "document", "application/zip", {
+      sizeBytes: large.length,
+      maxBytes: 512,
+    }),
   );
   expect(assistantContent?.filter((block) => block.type === "text")).toEqual([
     { type: "text", text: "Saved the import pack." },

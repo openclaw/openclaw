@@ -50,6 +50,7 @@ export function projectReplyMediaFailureText(
         code: "file-too-large",
         kind,
         label: `${kind === "document" ? "file" : kind} attachment`,
+        ...readAttachmentSizeFacts(attachment),
       });
     }
   }
@@ -62,6 +63,19 @@ export function projectReplyMediaFailureText(
   return {
     ...message,
     text: [appendReplyMediaFailures(undefined, failures), caption].filter(Boolean).join("\n"),
+  };
+}
+
+function readAttachmentSizeFacts(
+  attachment: Record<string, unknown>,
+): Pick<ReplyMediaFailure, "sizeBytes" | "maxBytes"> {
+  const read = (value: unknown) =>
+    typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  const sizeBytes = read(attachment.sizeBytes);
+  const maxBytes = read(attachment.maxBytes);
+  return {
+    ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+    ...(maxBytes !== undefined ? { maxBytes } : {}),
   };
 }
 

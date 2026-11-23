@@ -466,6 +466,10 @@ export type MessageContentItem =
         kind: Exclude<MediaKind, "sticker" | "unknown">;
         label: string;
         mimeType?: string;
+        /** Source size in bytes; only present on `file-too-large`. */
+        sizeBytes?: number;
+        /** Byte limit that refused the source; only present on `file-too-large`. */
+        maxBytes?: number;
       };
     }
   | {

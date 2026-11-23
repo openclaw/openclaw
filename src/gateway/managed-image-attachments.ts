@@ -91,6 +91,7 @@ import {
 import { withManagedImageSessionRead } from "./managed-image-session-read.js";
 import { readImageThumbnailFromFile } from "./managed-image-thumbnail-cache.js";
 import { handleManagedImageThumbnailResponse } from "./managed-image-thumbnail-response.js";
+import { buildManagedMediaFailureBlock } from "./managed-media-failure-block.js";
 import {
   MANAGED_OUTGOING_ATTACHMENT_ID_RE,
   buildManagedOutgoingArtifactId,
@@ -174,23 +175,6 @@ function resolveManagedImageAttachmentLimits(
     maxWidth: config?.maxWidth ?? DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.maxWidth,
     maxHeight: config?.maxHeight ?? DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.maxHeight,
     maxPixels: config?.maxPixels ?? DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.maxPixels,
-  };
-}
-
-export function buildManagedMediaFailureBlock(params: {
-  code: ReplyMediaFailureCode;
-  kind: ManagedMediaKind | "media";
-  label: string;
-  mimeType?: string;
-}): Record<string, unknown> {
-  return {
-    type: "attachment_error",
-    attachment: {
-      code: params.code,
-      kind: params.kind === "media" ? "document" : params.kind,
-      label: params.label,
-      ...(params.mimeType ? { mimeType: params.mimeType } : {}),
-    },
   };
 }
 

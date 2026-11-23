@@ -20,6 +20,25 @@ import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.
 
 const text = (value: string) => ({ type: "text", text: value });
 
+it("keeps the file size and limit in the text fallback for an oversized attachment", () => {
+  const card = {
+    type: "attachment_error",
+    attachment: {
+      code: "file-too-large",
+      kind: "document",
+      label: "private-filename.pdf",
+      sizeBytes: 5_872_026,
+      maxBytes: 5_242_880,
+    },
+  };
+  const message = projectChatDisplayMessage({ role: "assistant", content: [card] })!;
+  expect(message.content).toEqual([card]);
+  expect(message.text).toBe(
+    "⚠️ file attachment: Too large to attach (5.6 MB, limit 5 MB). Look for this file in Files.",
+  );
+  expect(message.text).not.toContain("private-filename");
+});
+
 it("keeps size recovery in text fallback without adding prose to the rich card", () => {
   const card = {
     type: "attachment_error",

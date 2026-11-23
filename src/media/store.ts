@@ -464,7 +464,7 @@ export async function saveMediaFile(
   prefix?: Buffer,
 ): Promise<SavedMedia> {
   if (opened.stat.size > maxBytes) {
-    throw SaveMediaSourceError.tooLarge(maxBytes);
+    throw SaveMediaSourceError.tooLarge(maxBytes, { sizeBytes: opened.stat.size });
   }
   // Stream the admitted descriptor, not its pathname: swapping the path cannot
   // redirect the copy after access validation. The caller owns descriptor disposal.
@@ -506,7 +506,7 @@ export async function saveMediaBuffer(
 ): Promise<SavedMedia> {
   options?.assertCommitAllowed?.();
   if (buffer.byteLength > maxBytes) {
-    throw SaveMediaSourceError.tooLarge(maxBytes);
+    throw SaveMediaSourceError.tooLarge(maxBytes, { sizeBytes: buffer.byteLength });
   }
   const dir = resolveMediaScopedDir(subdir, "saveMediaBuffer");
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
@@ -700,6 +700,7 @@ export async function readMediaBuffer(
     throw new FsSafeError(
       "too-large",
       `readMediaBuffer: media ID ${JSON.stringify(id)} is ${opened.stat.size} bytes; maximum is ${maxBytes} bytes`,
+      { details: { sizeBytes: opened.stat.size, maxBytes } },
     );
   }
   const buffer = await readFileHandleBounded(opened.handle, maxBytes);
