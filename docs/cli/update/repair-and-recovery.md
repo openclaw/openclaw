@@ -384,7 +384,12 @@ failures while reporting the outcome. Complete projections record
 cleanup, so recursive deletion does not delay command exit. Each runtime records
 the update process that created it in `owner.json`; cleanup removes the runtime
 once that process has exited and no running process points into the directory
-([Doctor checks](/cli/doctor/checks)). Run
+([Doctor checks](/cli/doctor/checks)). Every update on a prepared-release install
+runs this cleanup before it prepares, including Gateway and automatic updates. Older
+updaters wrote no `owner.json`; the `openclaw update` command removes their runtimes
+itself, because the Gateway cannot tell that command from an older updater still
+using one. Inside a container, cleanup keeps runtimes and says so, because host
+processes are not visible. Run
 `openclaw doctor --fix` before uninstalling; manual removal on Windows needs the
 extended-length path prefix ([Uninstall](/install/uninstall#remove-the-cli)). Incomplete preparation
 keeps immediate best-effort cleanup. Unsettled workers retain their runtime with

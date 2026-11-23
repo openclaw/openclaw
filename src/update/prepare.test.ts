@@ -5,6 +5,9 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as runtimePaths from "../daemon/runtime-paths.js";
+import { createDoctorRuntimeProjection } from "../flows/doctor-health-contributions.test-support.js";
+import * as processCensus from "../infra/openclaw-process-census.js";
+import * as openclawRoot from "../infra/openclaw-root.js";
 import {
   getUpdateRunAsync,
   getUpdateRunStatusAsync,
@@ -57,6 +60,14 @@ beforeEach(async () => {
   for (const key of ["container", "DOCKER_CONTAINER", "OPENCLAW_CONTAINER", "IN_NIX_SHELL"]) {
     vi.stubEnv(key, "");
   }
+  // Every update reclaims earlier updaters' runtimes; keep that scan inside this fixture.
+  const tmp = path.join(root, "tmp");
+  await fs.mkdir(tmp);
+  for (const key of ["TMPDIR", "TMP", "TEMP"]) {
+    vi.stubEnv(key, tmp);
+  }
+  vi.stubEnv("OPENCLAW_HOME", root);
+  vi.spyOn(openclawRoot, "resolveOpenClawPackageRootsSync").mockReturnValue([]);
 });
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -701,6 +712,55 @@ describe("already-current update", () => {
       expect(plugins?.status).toBe("completed");
       expect(plugins?.detail).toBe(expected.detail);
     } finally {
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+    }
+  });
+});
+
+describe("retained updater runtimes", () => {
+  it("reclaims an earlier updater's runtime and keeps one still in use without failing", async () => {
+    const { checkout, sha } = await repository();
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    vi.stubEnv("GIT_COMMIT", sha);
+    // Updaters before owner records projected the package they replaced into the temp dir.
+    const tmp = path.join(root, "tmp");
+    const abandoned = createDoctorRuntimeProjection(tmp, checkout, "Gone01");
+    const held = createDoctorRuntimeProjection(tmp, checkout, "Held01");
+    const census = vi
+      .spyOn(processCensus, "inspectOtherOpenClawProcesses")
+      .mockImplementation(((directory: string) =>
+        directory === held
+          ? { pids: [4242] }
+          : { pids: [] }) as typeof processCensus.inspectOtherOpenClawProcesses);
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    try {
+      openOpenClawStateDatabase({ env: process.env });
+      await runReleaseUpdateCli({
+        json: false,
+        restart: false,
+        runningRoot: checkout,
+        storedChannel: "dev",
+        timeoutMs: 30_000,
+      });
+      expect(process.exitCode).toBe(0);
+      await expect(fs.access(abandoned)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(held)).resolves.toBeUndefined();
+      expect(census).toHaveBeenCalledWith(held, { creatorExited: false });
+      // The run record shortens the fixture home to ~.
+      const shown = (name: string) => path.join("~", "tmp", `openclaw-update-runtime-${name}`);
+      const removed = `Removed abandoned updater runtime: ${shown("Gone01")}`;
+      const kept = `Runtime retained at ${shown("Held01")}: other OpenClaw processes are still running (PIDs: 4242)`;
+      const { lastRun } = await getUpdateRunStatusAsync();
+      expect(lastRun).toMatchObject({ status: "skipped", reason: "already-current" });
+      const detail = lastRun?.steps.find(({ step }) => step === "retained-runtimes")?.detail;
+      expect(detail?.split("\n").toSorted()).toEqual([removed, expect.stringContaining(kept)]);
+      const printed = log.mock.calls.map(([line]) => String(line));
+      expect(printed).toContain(removed);
+      expect(printed).toContainEqual(expect.stringContaining(kept));
+      expect(printed.at(-1)).toBe("Already up to date.");
+    } finally {
+      process.exitCode = undefined;
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
     }

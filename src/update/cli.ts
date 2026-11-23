@@ -24,7 +24,12 @@ import {
   checkUpdateInstallationSlot,
   resolveUpdateInstallationIdentity,
 } from "./installation-identity.js";
-import { PREPARE_DEADLINE_MS, prepareUpdate } from "./run.js";
+import {
+  PREPARE_DEADLINE_MS,
+  prepareUpdate,
+  reclaimRetainedUpdateRuntimes,
+  RETAINED_RUNTIMES_STEP,
+} from "./run.js";
 import { resolveTarget } from "./target.js";
 
 const POLL_MS = 2_000;
@@ -119,8 +124,20 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
       : undefined;
   // Explicit package targets stay local: update.run cannot carry them without a protocol change.
   // --no-restart prepares in this process; the release starts at the Gateway's next start.
-  const request =
-    opts.restart && !opts.tag ? await requestGatewayUpdate(target, { ...opts, timeoutMs }) : null;
+  const viaGateway = opts.restart && !opts.tag;
+  if (viaGateway) {
+    // The Gateway's census cannot tell this requesting CLI from an earlier updater that may
+    // still load a runtime without an owner record, so this process reclaims them first.
+    printLines(
+      await reclaimRetainedUpdateRuntimes({
+        env: process.env,
+        runningRoot: opts.runningRoot,
+        deadline: startedAt + (opts.timeoutMs ?? RUN_DEADLINE_MS),
+      }),
+      opts.json,
+    );
+  }
+  const request = viaGateway ? await requestGatewayUpdate(target, { ...opts, timeoutMs }) : null;
   let record = request
     ? await followRun(
         request.runId,
@@ -160,7 +177,7 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
       Math.max(0, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
     );
   }
-  report(record, opts.json);
+  report(record, opts.json, !request);
   process.exitCode =
     record?.status === "succeeded" || record?.status === "skipped" || isPendingActivation(record)
       ? 0
@@ -341,7 +358,25 @@ function isPendingActivation(record: UpdateRunRecord | undefined) {
   return record?.status === "running" && record.phase === "activating";
 }
 
-function report(record: UpdateRunRecord | undefined, json: boolean) {
+/** JSON output keeps stdout to the record; notes go to stderr. */
+function printLines(lines: readonly string[], json: boolean) {
+  for (const line of lines) {
+    if (json) {
+      defaultRuntime.error(line);
+    } else {
+      defaultRuntime.log(line);
+    }
+  }
+}
+
+function report(record: UpdateRunRecord | undefined, json: boolean, local: boolean) {
+  // A Gateway-run update's maintenance follows this CLI's own, which it already printed.
+  const runtimes = local
+    ? record?.steps.find(({ step }) => step === RETAINED_RUNTIMES_STEP)?.detail
+    : undefined;
+  if (runtimes) {
+    printLines(runtimes.split("\n"), json);
+  }
   if (json) {
     defaultRuntime.writeJson(record ?? { status: "unknown" });
     return;

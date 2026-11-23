@@ -10,6 +10,7 @@ import type { CallGatewayOptions } from "../gateway/call-options.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
+import { VERSION } from "../version.js";
 import { runReleaseUpdateCli } from "./cli.js";
 import { resolvePrefix, switchLink } from "./store.js";
 import type * as TargetModule from "./target.js";
@@ -28,7 +29,8 @@ const sent = vi.hoisted(() => [] as unknown[]);
 const missingCredentials = vi.hoisted(() => ({ enabled: false }));
 const install = vi.hoisted(() => ({ kind: "git" }));
 const localRun = vi.hoisted(() => ({ status: "skipped", phase: "finished" }));
-const packageTarget = vi.hoisted(() => ({ version: "2026.11.6" }));
+// The selected package release; the running version unless a case tests a downgrade.
+const packageTarget = { version: VERSION };
 const confirmDowngrade = vi.hoisted(() =>
   vi.fn<() => Promise<"confirmed" | "cancelled" | "confirmation-required">>(),
 );
@@ -64,13 +66,16 @@ vi.mock("../infra/update-install-status.js", async (importOriginal) => ({
   }),
 }));
 const prepared = vi.hoisted(() => [] as unknown[]);
-// mock-isolation: preparation builds a real release; this test checks only the channel it is given.
+const reclaim = vi.hoisted(() => vi.fn(async (): Promise<string[]> => []));
+// mock-isolation: preparation builds a real release and reclamation scans host temp
+// directories (prepare.test.ts runs both); this file checks what the CLI does around them.
 vi.mock("./run.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./run.js")>()),
   prepareUpdate: async (params: unknown) => {
     prepared.push(params);
     return { status: "current", version: "2026.11.6", pluginsChanged: false };
   },
+  reclaimRetainedUpdateRuntimes: reclaim,
 }));
 vi.mock("../infra/update-run-write.async.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-run-write.async.js")>()),
@@ -123,14 +128,17 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
 }));
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await home.restore();
   capabilities.length = 0;
   install.kind = "git";
   missingCredentials.enabled = false;
   localRun.status = "skipped";
   localRun.phase = "finished";
-  packageTarget.version = "2026.11.6";
+  packageTarget.version = VERSION;
   confirmDowngrade.mockReset();
+  reclaim.mockReset();
+  reclaim.mockResolvedValue([]);
   createRun.mockClear();
   mutateConfig.mockClear();
   sent.length = 0;
@@ -196,6 +204,44 @@ it("keeps following the run while the restarting Gateway refuses connections", a
   await runReleaseUpdateCli({ json: true, restart: true, runningRoot: root });
   expect(process.exitCode).toBe(0);
 });
+
+it.each([false, true])(
+  "reclaims earlier updaters' runtimes itself before the Gateway updates (json=%s)",
+  async (json) => {
+    const removed = "Removed abandoned updater runtime: /tmp/openclaw-update-runtime-Gone01";
+    // The Gateway's census would count this requesting CLI as a possible holder.
+    reclaim.mockImplementation(async () => {
+      expect(sent).toEqual([]);
+      return [removed];
+    });
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    runsGet.push(() => ({
+      run: {
+        status: "succeeded",
+        phase: "finished",
+        steps: [{ step: "retained-runtimes", status: "completed", detail: "nothing left" }],
+        after: { version: "2026.11.7" },
+        origin: {},
+      },
+    }));
+    await runReleaseUpdateCli({ json, restart: true, runningRoot: root });
+    expect(reclaim).toHaveBeenCalledWith(expect.objectContaining({ runningRoot: root }));
+    expect(sent).toEqual([{}]);
+    const lines = (spy: typeof log) => spy.mock.calls.map(([line]) => line);
+    if (json) {
+      // stdout carries only the record.
+      expect(lines(error)).toEqual([removed]);
+      expect(log).not.toHaveBeenCalled();
+      expect(writeJson).toHaveBeenCalledTimes(1);
+    } else {
+      expect(lines(log)).toEqual([removed, "finished: retained-runtimes", "Updated to 2026.11.7."]);
+      expect(error).not.toHaveBeenCalled();
+    }
+    expect(process.exitCode).toBe(0);
+  },
+);
 
 it("says the update is still running when the --timeout budget ends first", async () => {
   const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
