@@ -1207,9 +1207,14 @@ archives retain full integrity checks.
 To request full integrity checking across every table and index during migration:
 
 ```bash
-openclaw update --full-integrity-check
 openclaw doctor --fix --full-integrity-check
 ```
+
+Prepared-release updates (Git and npm, pnpm or Bun installs) refuse
+`openclaw update --full-integrity-check` before creating an update run. They do
+not support this selection. Run the Doctor command above separately when you
+need full migration checks, then update without the flag. Doctor does not turn
+an already-current database into a separate verification job.
 
 The default can miss an index/table mismatch in an untouched table. Use the full
 check when you need that coverage; it can take considerably longer on large
