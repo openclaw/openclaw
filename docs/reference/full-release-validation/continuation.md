@@ -66,6 +66,27 @@ gh workflow run openclaw-release-prepare.yml --ref <protected-P-tag> \
   -f operation=recover-qualification -f recovery_request="$(cat recovery-request.json)"
 ```
 
+If the retained-artifact parent dispatched a replacement normal CI, select the
+original normal-CI receipt explicitly instead. Copy its complete authenticated
+selection object from the prior execution plan's `childReuse.normalCi` field into
+`normal-ci-selection.json`, then prepare a read-only request:
+
+```bash
+node scripts/release-ci-summary.mjs --prepare-recovery <retained-artifact-parent> \
+  --output recovery-request.json --normal-ci-selection normal-ci-selection.json
+```
+
+Preparation verifies the original receipt against frozen-Q dispatch defaults,
+coverage, target context and upgrade baselines. Only the normal CI originally
+dispatched by the explicitly retained publication origin may be selected. The
+request records this selection separately; the original execution plan and its
+hash remain immutable. Sealing and subsequent publication verification recheck
+the receipt, its original dispatch witness and all other qualification evidence.
+The replacement CI is not a prerequisite. Missing or invalid evidence fails
+closed; there is no discovery, fallback dispatch or artifact rebuild. A prepared
+request is not a qualification seal: dispatch the protected P operation above,
+and use its successful, strictly verified aggregate for publication.
+
 The recovery operation authenticates the original immutable plan and admission,
 unchanged C/Q, exact publication bytes, and every explicitly pinned child attempt.
 It recomposes genuine executions through the shared owner and runs strict

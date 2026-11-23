@@ -740,7 +740,7 @@ else {
     expect(await discoverReusableReleaseChild(data.request, data.deps)).not.toBeNull();
   });
 
-  it("reuses a Q-policy-waived receipt through the default log reader", async () => {
+  it.each(["failure", "cancelled"])("reuses exact %s receipt policy", async (leafConclusion) => {
     const version = "2099.1.1";
     const targetSha = TARGET;
     const jobName = "a synthetic failing test";
@@ -766,11 +766,13 @@ else {
         conclusion: "failure",
       },
     ];
+    data.jobs[0]!.conclusion = leafConclusion;
+    data.jobs[0]!.steps = [{ name: "Swift test", status: "completed", conclusion: leafConclusion }];
     data.receipt.workloadConclusion = "failure";
     data.receipt.jobs = data.receipt.jobs.map((job, index) => ({
       ...job,
       name: data.jobs[index]!.name,
-      conclusion: "failure",
+      conclusion: data.jobs[index]!.conclusion,
     }));
     data.receipt.compositeJobsSha256 = jsonDigest({
       effectiveRunAttempt: data.receipt.effectiveRunAttempt,
@@ -816,6 +818,7 @@ process.stdout.write("##[error]checks-node-core-test-nondist-shard finished with
                 childRole: "normalCi",
                 jobName,
                 reason: "Synthetic operator approval",
+                ...(leafConclusion === "cancelled" ? { cancelledStep: "Swift test" } : {}),
                 aggregates: [
                   {
                     jobName: "openclaw/ci-gate",
@@ -856,6 +859,18 @@ process.stdout.write("##[error]checks-node-core-test-nondist-shard finished with
     );
     expect(recovered.run.conclusion).toBe("failure");
     expect(recovered.receipt.workloadConclusion).toBe("failure");
+    expect(recovered.receipt.jobs[0]?.conclusion).toBe(leafConclusion);
+    if (leafConclusion === "cancelled") {
+      data.jobs[0]!.steps[0]!.name = "Setup";
+      await expect(
+        validateReusableReleaseChild(
+          selection,
+          { ...data.request, policyTargetVersion: version },
+          deps,
+        ),
+      ).rejects.toThrow("non-policy cancellation");
+      data.jobs[0]!.steps[0]!.name = "Swift test";
+    }
     expect(await discoverReusableReleaseChild(data.request, deps)).toBeNull();
     expect(
       await discoverReusableReleaseChild({ ...data.request, policyTargetVersion: version }, deps),
