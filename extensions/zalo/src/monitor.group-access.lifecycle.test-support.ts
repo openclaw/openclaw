@@ -69,7 +69,8 @@ describe("Zalo group allowlist lifecycle", () => {
     text?: string;
     image?: boolean;
     rootGroups?: ZaloAccountConfig["groups"];
-    extraAccount?: boolean;
+    extraAccounts?: Record<string, ZaloAccountConfig>;
+    rootConfig?: ZaloAccountConfig;
   }) {
     const accountId = "acct-zalo-groups";
     const setup = createLifecycleMonitorSetup({
@@ -85,10 +86,11 @@ describe("Zalo group allowlist lifecycle", () => {
         channels: {
           zalo: {
             enabled: true,
+            ...params.rootConfig,
             ...(params.rootGroups ? { groups: params.rootGroups } : {}),
             accounts: {
               [accountId]: accountConfig,
-              ...(params.extraAccount ? { other: { enabled: true } } : {}),
+              ...params.extraAccounts,
             },
           },
         },
@@ -241,18 +243,48 @@ describe("Zalo group allowlist lifecycle", () => {
     },
   );
 
-  it.each([
-    ["inherits the channel map with one account", false, 0],
-    ["opts out of the channel map with several accounts", true, 1],
-  ] as const)("an empty account groups map %s", async (_label, extraAccount, expected) => {
+  // Matches the shared resolveChannelGroups rule: entries under `accounts` are counted, so a
+  // disabled placeholder counts and the implicit default account from a root botToken does not.
+  it.each<
+    [string, Pick<Parameters<typeof sendGroupMessage>[0], "extraAccounts" | "rootConfig">, number]
+  >([
+    ["inherits the channel map with one account entry", {}, 0],
+    [
+      "inherits the channel map beside an implicit default account",
+      { rootConfig: { botToken: "zalo-default-token" } },
+      0,
+    ],
+    [
+      "opts out of the channel map with several account entries",
+      { extraAccounts: { other: { enabled: true } } },
+      1,
+    ],
+    [
+      "opts out of the channel map beside a disabled placeholder account",
+      { extraAccounts: { placeholder: { enabled: false } } },
+      1,
+    ],
+  ])("an empty account groups map %s", async (_label, accounts, expected) => {
     expect(
       await sendGroupMessage({
         groupAccess: { groupPolicy: "open", groups: {} },
         rootGroups: { [LISTED_GROUP]: {} },
         chatId: OTHER_GROUP,
-        extraAccount,
+        ...accounts,
       }),
     ).toBe(expected);
+  });
+
+  it.each([
+    ["zgr-Listed-AbC", "zgr-listed-abc"],
+    ["zgr-listed-abc", "zgr-Listed-AbC"],
+  ])("matches group key %s to chat id %s case-insensitively", async (key, chatId) => {
+    expect(
+      await sendGroupMessage({
+        groupAccess: { groupPolicy: "allowlist", groups: { [key]: {} } },
+        chatId,
+      }),
+    ).toBe(1);
   });
 
   it("inherits the channel groups map when the account sets none", async () => {
@@ -280,4 +312,19 @@ describe("Zalo group allowlist lifecycle", () => {
       ).toBe(expected);
     },
   );
+
+  it("lets every member run control commands under the groupAllowFrom wildcard", async () => {
+    isControlCommandMessage.mockReturnValue(true);
+    expect(
+      await sendGroupMessage({
+        groupAccess: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["*"],
+          groups: { [LISTED_GROUP]: {} },
+        },
+        allowFrom: [OWNER],
+        text: "/new",
+      }),
+    ).toBe(1);
+  });
 });

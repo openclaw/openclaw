@@ -10,12 +10,8 @@ import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
 
 // Zalo delivers group messages only when the bot is mentioned, so requireMention is not offered.
-const ZaloGroupConfigSchema = buildGroupEntrySchema().omit({
-  requireMention: true,
-  toolsBySender: true,
-  skills: true,
-  allowFrom: true,
-  systemPrompt: true,
+const ZaloGroupConfigSchema = buildGroupEntrySchema(undefined, {
+  omit: ["requireMention", "toolsBySender", "skills", "allowFrom", "systemPrompt"],
 });
 
 export const ZaloAccountSchema = z.object({

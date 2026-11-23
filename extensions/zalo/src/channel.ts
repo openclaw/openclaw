@@ -68,6 +68,7 @@ import {
 } from "./accounts.js";
 import { zaloApprovalAuth } from "./approval-auth.js";
 import { ZaloConfigSchema } from "./config-schema.js";
+import { hasZaloGroupAllowlistedById, resolveZaloGroupToolPolicy } from "./group-access.js";
 import type { ZaloProbeResult } from "./probe.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { createZaloSetupWizardProxy, zaloSetupContract } from "./setup-core.js";
@@ -237,28 +238,9 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
       },
       groups: {
         resolveRequireMention: () => true,
+        resolveToolPolicy: resolveZaloGroupToolPolicy,
       },
-      doctor: {
-        // A group listed by id admits its members without a sender allowlist.
-        shouldSkipDefaultEmptyGroupAllowlistWarning: ({ channelName, account, parent }) => {
-          const groups = account.groups ?? parent?.groups;
-          return (
-            channelName === "zalo" &&
-            typeof groups === "object" &&
-            groups !== null &&
-            Object.entries(groups).some(
-              ([key, entry]) =>
-                key !== "*" &&
-                !(
-                  typeof entry === "object" &&
-                  entry !== null &&
-                  "enabled" in entry &&
-                  entry.enabled === false
-                ),
-            )
-          );
-        },
-      },
+      doctor: { shouldSkipDefaultEmptyGroupAllowlistWarning: hasZaloGroupAllowlistedById },
       actions: {
         describeMessageTool: ({ cfg, accountId }) => {
           const accounts = accountId
