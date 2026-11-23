@@ -66,6 +66,9 @@ function response(route, transport) {
     }
     record({ kind: "external-change", route });
   }
+  if (value.status >= 400) {
+    throw new Error("gh: Server Error (HTTP " + value.status + ")");
+  }
   if (/^actions\/runs\/[0-9]+\/artifacts$/u.test(path)) {
     const page = JSON.parse(value.data);
     page.artifacts = page.artifacts.map((artifact) => {
@@ -95,6 +98,11 @@ export function runGh(args) {
 if (process.env.NPM_CLI_ENTRYPOINT && import.meta.url !== pathToFileURL(process.argv[1]).href) {
   if (process.argv[1] === process.env.NPM_CLI_ENTRYPOINT) {
     record({ kind: "entrypoint" });
+    // Exercise production retry accounting without sleeping through its backoff.
+    Atomics.wait = () => {
+      record({ kind: "retry-wait" });
+      return "timed-out";
+    };
     for (const method of ["execFileSync", "spawn"]) {
       const original = childProcess[method];
       childProcess[method] = (file, args, options) =>
