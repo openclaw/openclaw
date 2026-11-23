@@ -16,6 +16,11 @@ export type ExtraGatewayService = {
   legacy?: boolean;
   /** Exact Startup definition; a task label cannot identify this native owner. */
   windowsStartupEntry?: string;
+  /**
+   * Set only when a non-canonical task's `openclaw-gateway-recovery.exe` is
+   * confirmed absent. Presence means the Windows package still owns the task.
+   */
+  windowsMissingRecoveryLauncher?: string;
 };
 
 type ScannedGatewayService = ExtraGatewayService & { extra: boolean; managedGateway: boolean };

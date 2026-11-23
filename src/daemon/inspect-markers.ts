@@ -162,6 +162,12 @@ export function isOpenClawGatewayTaskName(name: string): boolean {
   return stripped === defaultName || /^openclaw gateway \(.+\)$/.test(stripped);
 }
 
+/** WindowsApps recovery launcher. It has no gateway argv, so command markers miss it. */
+export function isWindowsGatewayRecoveryExecutable(command: string): boolean {
+  const executable = command.trim().replace(/^"+|"+$/g, "");
+  return /(?:^|[\\/])openclaw-gateway-recovery\.exe$/i.test(executable);
+}
+
 export function detectWindowsServiceExecutionMarker(args: string[], cwd?: string): Marker | null {
   if (
     classifyOpenClawArgv(args, { command: "gateway", cwd }).kind === "openclaw" ||

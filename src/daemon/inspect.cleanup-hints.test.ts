@@ -79,6 +79,20 @@ it.each<HintCase>([
     [task("\\OpenClaw Gateway Backup")],
     ['schtasks /Query /TN "\\OpenClaw Gateway Backup" /V /FO LIST'],
   ],
+  [
+    "missing Windows recovery launcher",
+    [
+      {
+        ...task("\\OpenClaw Gateway OpenClawFoundation.OpenClawGateway_example"),
+        windowsMissingRecoveryLauncher:
+          "C:\\WindowsApps\\OpenClawFoundation.OpenClawGateway_example\\openclaw-gateway-recovery.exe",
+      },
+    ],
+    [
+      'schtasks /Query /TN "\\OpenClaw Gateway OpenClawFoundation.OpenClawGateway_example" /V /FO LIST',
+      'schtasks /Delete /F /TN "\\OpenClaw Gateway OpenClawFoundation.OpenClawGateway_example"',
+    ],
+  ],
   ...["$(Start-Process calc)"].map((label): HintCase => [
     `rejects expandable Windows label ${label}`,
     [task(label)],
