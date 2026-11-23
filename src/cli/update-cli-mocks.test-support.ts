@@ -264,6 +264,7 @@ vi.mock("../state/openclaw-state-ownership-preflight.js", async (importOriginal)
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/openclaw-root.js")>();
   return {
+    resolveOpenClawPackageRootsSync: actual.resolveOpenClawPackageRootsSync,
     resolveOpenClawPackageRoot: vi.fn(),
     resolveOpenClawPackageRootSync: vi.fn((options) =>
       options.moduleUrl ? actual.resolveOpenClawPackageRootSync(options) : process.cwd(),

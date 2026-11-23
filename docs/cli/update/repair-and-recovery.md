@@ -388,6 +388,11 @@ outcome. An earlier nonzero exit remains nonzero while workers are draining.
 Mutation and recovery owners must still drain; their failures produce a nonzero
 exit even if the printed command result was successful.
 
+An eligible update retries abandoned runtimes before changing the installation,
+including when the core is already current. A dry run does not remove them.
+Run `openclaw doctor --fix` to check additional scratch directories recorded by
+the managed service.
+
 Retention copies plugin manifests and files inspected by plugin safety checks,
 so retaining the updater does not make the checkout's plugins fail hardlink
 validation. Other runtime files remain hardlinked when supported.

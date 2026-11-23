@@ -6,6 +6,7 @@ import { writePackageDistInventory } from "../../scripts/lib/package-dist-invent
 import { resolveConfigPath } from "../config/paths.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import * as serviceMembership from "../daemon/service-process-membership.js";
+import * as processCensus from "../infra/openclaw-process-census.js";
 import {
   finishUpdateRun,
   readOwedUpdateSteps,
@@ -95,6 +96,47 @@ describe("update-cli", () => {
       },
     );
   }
+
+  it.each([false, true])(
+    "reclaims a prior updater runtime on an already-current core (dry run: %s)",
+    async (dryRun) => {
+      const root = await prepareCurrentPackage();
+      const scratch = setup.createCaseDir("current-core-updater-runtime");
+      const retained = path.join(scratch, "openclaw-update-runtime-a1B2c3");
+      const base = path.parse(root).root;
+      const projected = path.join(
+        retained,
+        "tree",
+        Buffer.from(base).toString("hex"),
+        path.relative(base, root),
+      );
+      await fs.mkdir(projected, { recursive: true });
+      await writeJsonFixture(path.join(projected, "package.json"), { name: "openclaw" });
+      const census = vi
+        .spyOn(processCensus, "inspectOtherOpenClawProcesses")
+        .mockReturnValue({ pids: [] });
+      try {
+        await withEnvAsync({ TMPDIR: scratch }, () =>
+          updateCommand({ yes: true, restart: false, json: true, dryRun }),
+        );
+        if (dryRun) {
+          expect((await fs.stat(retained)).isDirectory()).toBe(true);
+        } else {
+          expect(
+            output(),
+            JSON.stringify(vi.mocked(modules.defaultRuntime.error).mock.calls),
+          ).toMatchObject({ reason: "already-current" });
+          expect(
+            census,
+            JSON.stringify(vi.mocked(modules.defaultRuntime.error).mock.calls),
+          ).toHaveBeenCalledWith(retained);
+          await expect(fs.stat(retained)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      } finally {
+        census.mockRestore();
+      }
+    },
+  );
 
   it.each(["stop", "changed owner", "linux"] as const)(
     "converges plugins on an already-current core (%s)",

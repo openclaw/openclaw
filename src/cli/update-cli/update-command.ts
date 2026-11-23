@@ -1,4 +1,5 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type { PackageActivationRuntime } from "../../infra/package-update-activation-runtime.types.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
@@ -50,6 +51,8 @@ import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import { resolveUpdateCommandTarget } from "./update-command-target.js";
 
 type PreparedUpdate = NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>;
+
+const RETAINED_RUNTIME_CLEANUP_BUDGET_MS = 2 * 60_000;
 
 export async function updateCommand(
   inputOpts: UpdateCommandOptions,
@@ -352,6 +355,40 @@ async function updateCommandInternal(
       });
       run.executorFence.assertCurrent();
       assertUpdatePackageActivationAdmission(root, { serviceRoot: managedServiceRoot });
+      // No-op updates never enter runtime retention. Retry older projections before
+      // finalization can change the installed process identity used by the census.
+      // The native process census can take 15 s, so skip it on short explicit timeouts.
+      if (
+        !opts.recovery &&
+        (timeoutMs === undefined || timeoutMs >= 10 * RETAINED_RUNTIME_CLEANUP_BUDGET_MS)
+      ) {
+        const deadline = performance.now() + RETAINED_RUNTIME_CLEANUP_BUDGET_MS;
+        try {
+          const { prepareRetainedUpdateRuntimeMaintenance } =
+            await import("../../commands/doctor-retained-runtime.js");
+          const maintain = await prepareRetainedUpdateRuntimeMaintenance(process.env, {
+            inspectService: false,
+            packageRoots: [root, discoveredRoot],
+          });
+          for (const line of await maintain(true, {
+            assertCurrent: () => {
+              executionGuards.assertCurrent();
+              if (performance.now() >= deadline) {
+                throw new Error("cleanup ran out of time; the next eligible update retries");
+              }
+            },
+          })) {
+            // The owner already logs why it kept a runtime. Keep JSON output machine-readable.
+            if (!line.startsWith("Runtime retained at ")) {
+              (opts.json ? defaultRuntime.error : defaultRuntime.log)(line);
+            }
+          }
+        } catch (error) {
+          defaultRuntime.error(
+            `Could not inspect retained updater runtimes: ${formatErrorMessage(error)}`,
+          );
+        }
+      }
     };
     if (packageAlreadyCurrent) {
       await activateCurrentCore();
