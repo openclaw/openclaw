@@ -8,6 +8,7 @@ import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const auth = vi.hoisted(() => ({ resolveApiKeyForProvider: vi.fn() }));
+// mock-isolation: Use only synthetic Router keys; never read real auth stores or credentials.
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => auth);
 import plugin from "./index.js";
 
