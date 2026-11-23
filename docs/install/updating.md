@@ -175,6 +175,10 @@ found that earlier receipts did not prove what they claimed.
 Add a note here when a change alters a contract. A note about the in-place update
 flow names the shipped-updater contract or unmoved route that it serves.
 
+At Gateway start, a preparation lock whose owner is dead or has the new Gateway's
+PID is released after its run is recorded as failed with reason `interrupted`.
+A live preparation owner in another process is left untouched.
+
 The resident launcher keeps the 20-minute combined trial ceiling while the new
 Gateway prepares state. Once the Gateway reports that boot state preparation has
 finished, it has up to 10 more minutes to finish starting, within that same
@@ -186,10 +190,6 @@ After rollback, the serving Gateway records why the update failed and names its
 running version. Another Update click starts a normal attempt; a failed version
 is not blocked. The resident launcher and candidate boot code must both contain
 this change; a candidate without the stage report keeps the original deadline.
-
-At Gateway start, a preparation lock whose owner is dead or has the new Gateway's
-PID is released after its run is recorded as failed with reason `interrupted`.
-A live preparation owner in another process is left untouched.
 
 Candidate Doctor removes empty snapshot directories left by cancellation between
 private directory creation and native-token acquisition, after its inspection
