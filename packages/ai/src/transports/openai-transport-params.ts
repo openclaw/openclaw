@@ -3,7 +3,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getAiTransportHost } from "../host.js";
 import type { CodeModeToolSurfaceObservation } from "../provider-options.js";
-import { clampOpenAIPromptCacheKey } from "../providers/openai-prompt-cache.js";
+import {
+  clampOpenAIPromptCacheKey,
+  resolveOpenAIPromptCacheLifetimeMs,
+} from "../providers/openai-prompt-cache.js";
 import type { OpenAIToolProjection } from "../providers/openai-tool-projection.js";
 import {
   findOpenAIStrictToolProjectionDiagnostics,
@@ -412,4 +415,18 @@ export function getCompat(model: OpenAIModeModel) {
     requiresStringContent: compat.requiresStringContent ?? false,
     strictMessageKeys: compat.strictMessageKeys === true,
   };
+}
+
+/** The documented minimum prompt-cache lifetime of a Responses request on this route, if any. */
+export function resolveOpenAIResponsesPromptCacheLifetimeMs(
+  model: OpenAIModeModel,
+  cacheRetention: CacheRetention,
+  promptCacheTtl?: "30m" | "12h",
+): number | undefined {
+  return resolveOpenAIPromptCacheLifetimeMs(
+    model,
+    cacheRetention,
+    getCompat(model),
+    promptCacheTtl,
+  );
 }

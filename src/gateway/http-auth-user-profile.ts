@@ -333,7 +333,7 @@ async function prepareHttpProfile(
   const authority = await prepareUserProfileRoleAuthority(profileId);
   assertCurrent();
   if (!authority?.isCurrent()) {
-    throw new Error("HTTP profile authority changed during acquisition");
+    throw new Error("HTTP profile changed during acquisition. Retry the request.");
   }
   const display = authority.display;
   const member = operatorRoleSubject(authority).openclawIdMember;
@@ -355,7 +355,7 @@ async function prepareHttpProfile(
     : undefined;
   assertCurrent();
   if (!authority.isCurrent()) {
-    throw new Error("HTTP profile authority changed during acquisition");
+    throw new Error("HTTP profile changed during acquisition. Retry the request.");
   }
   return {
     ...projectHttpProfile(display, updatedAt, operatorRolePolicy, operatorAccessAuthority),

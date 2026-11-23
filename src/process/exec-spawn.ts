@@ -31,33 +31,21 @@ import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.j
 import { BrokerChild } from "./spawn-broker/child.js";
 import { getSpawnBroker } from "./spawn-broker/context.js";
 import {
+  isBrokerOutputOption,
   restoreExecaResult,
   type BrokerExecaOptions,
-  type BrokerOutputOption,
 } from "./spawn-broker/execa-protocol.js";
 import type { CommandSpawnOptions, CommandSubprocess } from "./spawn-broker/execa-types.js";
 import type { SpawnBrokerHost } from "./spawn-broker/host.js";
 import { recordChildProcessSpawn } from "./spawn-diagnostics.js";
 import { resolveSafeChildProcessInvocation } from "./windows-command.js";
 
-function isOutputOption(value: unknown): value is BrokerOutputOption | undefined {
-  return (
-    value === undefined ||
-    value === "pipe" ||
-    value === "ignore" ||
-    value === "inherit" ||
-    (typeof value === "object" &&
-      value !== null &&
-      "file" in value &&
-      typeof value.file === "string" &&
-      Object.keys(value).length === 1)
-  );
-}
-
 /** Unsupported native descriptors and independent-lifetime commands remain explicit local paths. */
-function brokerExecaOptions(options: CommandSpawnOptions): BrokerExecaOptions | undefined {
+function brokerExecaOptions(
+  options: CommandSpawnOptions,
+): BrokerExecaOptions | "ipc" | "independent" | "descriptor" | "inherit" {
   if (options.ipc || options.cleanup === false || typeof options.stdin === "number") {
-    return undefined;
+    return options.ipc ? "ipc" : options.cleanup === false ? "independent" : "descriptor";
   }
   if (
     options.stdout === "inherit" ||
@@ -66,14 +54,17 @@ function brokerExecaOptions(options: CommandSpawnOptions): BrokerExecaOptions | 
     typeof options.stdout === "number" ||
     typeof options.stderr === "number"
   ) {
-    return undefined;
+    return typeof options.stdout === "number" || typeof options.stderr === "number"
+      ? "descriptor"
+      : "inherit";
   }
-  if (
-    options.stdio &&
-    typeof options.stdio !== "string" &&
-    options.stdio.some((entry, fd) => typeof entry === "number" || (fd > 0 && entry === "inherit"))
-  ) {
-    return undefined;
+  const nativeStdio = Array.isArray(options.stdio)
+    ? options.stdio.find(
+        (entry, fd) => typeof entry === "number" || (fd > 0 && entry === "inherit"),
+      )
+    : undefined;
+  if (nativeStdio !== undefined) {
+    return typeof nativeStdio === "number" ? "descriptor" : "inherit";
   }
   if (
     (options.cwd !== undefined && typeof options.cwd !== "string") ||
@@ -84,8 +75,8 @@ function brokerExecaOptions(options: CommandSpawnOptions): BrokerExecaOptions | 
       options.stdin !== "pipe" &&
       options.stdin !== "ignore" &&
       options.stdin !== "inherit") ||
-    !isOutputOption(options.stdout) ||
-    !isOutputOption(options.stderr) ||
+    !isBrokerOutputOption(options.stdout) ||
+    !isBrokerOutputOption(options.stderr) ||
     (options.shell !== undefined && options.shell !== false)
   ) {
     throw new TypeError("Unsupported spawn broker execa stream or invocation options");
@@ -94,8 +85,8 @@ function brokerExecaOptions(options: CommandSpawnOptions): BrokerExecaOptions | 
     Array.isArray(options.stdio) &&
     (options.stdio.length !== 3 ||
       !["pipe", "ignore", "inherit"].includes(String(options.stdio[0])) ||
-      !isOutputOption(options.stdio[1]) ||
-      !isOutputOption(options.stdio[2]))
+      !isBrokerOutputOption(options.stdio[1]) ||
+      !isBrokerOutputOption(options.stdio[2]))
   ) {
     throw new TypeError("Unsupported spawn broker execa stdio");
   }
@@ -684,7 +675,8 @@ export function spawnCommandWithInvocation<
   const broker = getSpawnBroker();
   // CLI and other platforms have no broker scope. Independent applications and
   // native descriptors retain their explicitly selected in-process transport.
-  const remoteOptions = broker ? brokerExecaOptions(commandOptions) : undefined;
+  const prepared = broker ? brokerExecaOptions(commandOptions) : "no-broker";
+  const remoteOptions = typeof prepared === "string" ? undefined : prepared;
   if (remoteOptions && executionTimeoutMs !== undefined) {
     // The 1s margin absorbs broker scheduling lag; the execution-only check cannot relabel an exited root.
     remoteOptions.executionDeadlineMs = executionTimeoutMs + 1_000;
@@ -706,7 +698,13 @@ export function spawnCommandWithInvocation<
           () => execa(limited.command, limited.args, commandOptions),
           "command",
         );
-  recordChildProcessSpawn(invocation.command, child.nodeChildProcess, undefined, invocation.args);
+  recordChildProcessSpawn(
+    invocation.command,
+    child.nodeChildProcess,
+    undefined,
+    invocation.args,
+    typeof prepared === "string" ? `native.${prepared}` : "broker",
+  );
   if (scope) {
     retainCommandProcess(scope, child, inheritScopeCancellation, reservation);
   }

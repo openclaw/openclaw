@@ -606,7 +606,7 @@ describe("prepareEmbeddedAttemptTransport", () => {
         expect(payload).not.toHaveProperty("context_management");
       } else {
         expect(payload.context_management).toEqual([
-          { type: "compaction", compact_threshold: 140_000 },
+          { type: "compaction", compact_threshold: 170_000 },
         ]);
       }
     }

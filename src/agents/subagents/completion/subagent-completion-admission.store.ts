@@ -115,9 +115,7 @@ async function formatChildStatus(child: SubagentRunRecord, budget: number): Prom
  * Appends the children's end state to the requester transcript as model-visible history.
  * This is the delivery; a wake turn is best-effort. Consumed input is already in history.
  */
-export async function appendChildStatusToRequester(
-  batch: readonly SubagentRunRecord[],
-): Promise<void> {
+async function appendChildStatusToRequester(batch: readonly SubagentRunRecord[]): Promise<void> {
   const shown = batch.filter(
     (child) =>
       child.expectsCompletionMessage !== false &&

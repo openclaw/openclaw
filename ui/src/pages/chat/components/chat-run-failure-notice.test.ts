@@ -170,9 +170,13 @@ it("shows a repeat count only for repeated failures", () => {
   }
 });
 
-it("names a provider's billing problem and sends its fix to Models, not another attempt", () => {
+it("names a provider's billing problem with its declared label and sends its fix to Models", () => {
   const navigate = vi.fn<ApplicationContext["navigate"]>();
   const onRetryRun = vi.fn<(runId: string) => void>();
+  // The provider plugin's declared label arrives on the chat's model catalog rows.
+  const modelCatalog = [
+    { id: "acme-large", name: "Acme Large", provider: "acme", providerName: "Acme Cloud Plan" },
+  ];
   const draw = (failoverReason: string) =>
     mountSolid(
       () =>
@@ -185,17 +189,18 @@ it("names a provider's billing problem and sends its fix to Models, not another 
                 runError: {
                   runId: "run-a",
                   summary: "Provider error",
-                  cause: { provider: "openrouter", failoverReason },
+                  cause: { provider: "acme", failoverReason },
                 },
               },
               recovery: { failureActionsRunId: "run-a", onRetryRun },
+              modelCatalog,
             });
           },
         }),
       { container },
     );
   const billing = draw("billing");
-  expect(part("title")?.textContent).toBe("OpenRouter reports a billing problem");
+  expect(part("title")?.textContent).toBe("Acme Cloud Plan reports a billing problem");
   const [openModels, tryAgain] = container.querySelectorAll<HTMLButtonElement>(
     ".chat-run-failure__retry",
   );
@@ -204,7 +209,7 @@ it("names a provider's billing problem and sends its fix to Models, not another 
   expect(tryAgain?.classList.contains("primary")).toBe(false);
   openModels?.click();
   expect(navigate).toHaveBeenCalledExactlyOnceWith("model-providers", {
-    search: "?provider=openrouter",
+    search: "?provider=acme",
   });
   expect(onRetryRun).not.toHaveBeenCalled();
   billing.unmount();
