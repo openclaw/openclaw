@@ -35,6 +35,15 @@ function createMockSettingsApi(settings: Record<string, unknown>, logs?: string[
           },
         },
       }),
+    emitDirect: async (key: string, value: unknown) =>
+      handlers.event?.({
+        "put-entry": {
+          desk: "moltbot",
+          "bucket-key": "tlon",
+          "entry-key": key,
+          value,
+        },
+      }),
   };
 }
 
@@ -72,14 +81,18 @@ describe("tlon settings store", () => {
   });
 
   it("loads autoDiscoverChannels and applies live subscription updates", async () => {
-    const { manager, emit } = createMockSettingsApi({ autoDiscoverChannels: true });
+    const { manager, emit, emitDirect } = createMockSettingsApi({ autoDiscoverChannels: true });
     // Regression: the parser previously read the dead `autoDiscover` key.
     expect((await manager.load()).autoDiscoverChannels).toBe(true);
     const updates: TlonSettingsStore[] = [];
     await manager.startSubscription((settings) => updates.push(settings));
     await emit("autoDiscoverChannels", false);
+    await emitDirect("dmAllowlist", ["~bus"]);
 
-    expect(updates).toEqual([expect.objectContaining({ autoDiscoverChannels: false })]);
+    expect(updates).toEqual([
+      expect.objectContaining({ autoDiscoverChannels: false }),
+      expect.objectContaining({ dmAllowlist: ["~bus"] }),
+    ]);
   });
 
   it("restores club grants and applies wrapped policy updates and removal", async () => {
