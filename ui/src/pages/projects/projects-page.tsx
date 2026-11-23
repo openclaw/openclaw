@@ -1,6 +1,7 @@
 import { createMemo, Errored, For, latest, Loading, onSettled, Show } from "solid-js";
 import type { ProjectRecord } from "../../../../packages/gateway-protocol/src/index.js";
 import "../../components/modal-dialog.tsx";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -36,6 +37,16 @@ import { ProjectsModel } from "./projects-model.ts";
 
 const PROJECTS_DOCS_URL =
   "https://docs.openclaw.ai/web/control-ui/sessions-and-sidebar#projects-tab";
+
+export const projectsRouteView = {
+  renderSolid: () => (
+    <ShellLayoutBoundary
+      traits={{ settingsPage: true, settingsWide: true, settingsWorkspace: true }}
+    >
+      <ProjectsPage />
+    </ShellLayoutBoundary>
+  ),
+};
 
 export function ProjectsPage() {
   const context = useApplication();
