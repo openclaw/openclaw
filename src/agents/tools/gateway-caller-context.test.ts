@@ -36,6 +36,7 @@ import type { AnyAgentTool } from "./common.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity as getCaller,
+  prepareGatewayToolCallerAssertion,
   withGatewayToolApprovalOwner,
   withGatewayToolCallerIdentity,
   wrapToolWithGatewayCallerIdentity,
@@ -119,6 +120,23 @@ describe("gateway caller context wrapper", () => {
           await prepared.release?.();
         }
         expect(released).toHaveBeenCalledOnce();
+      },
+    );
+  });
+
+  it("lets Stop on the caller refuse a prepared watch admission", async () => {
+    const stop = new AbortController();
+    await withCaller(
+      { operationalRunInstance: runInstance("watch-stop"), approvalSignals: [stop.signal] },
+      async () => {
+        const prepared = await prepareGatewayToolCallerAssertion();
+        try {
+          prepared.assertCurrent?.();
+          stop.abort(new Error("synthetic Stop"));
+          expect(() => prepared.assertCurrent?.()).toThrow("synthetic Stop");
+        } finally {
+          prepared.release();
+        }
       },
     );
   });
