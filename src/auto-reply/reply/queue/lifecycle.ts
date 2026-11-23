@@ -4,6 +4,7 @@ import { captureQueuedOperatorRecoverySource } from "../../../gateway/operator-r
 import {
   restoreGatewayQueuedOperatorRecovery,
   restoreScheduledAutomationOperator,
+  restoreTalkConsultOperator,
 } from "../../../gateway/operator-run-recovery.js";
 import {
   GatewayOperatorAccessUnavailableError,
@@ -16,6 +17,7 @@ import {
   retireSessionControllerInput,
   submitSessionControllerInput,
 } from "../../../sessions/session-controller.mailbox.js";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../../talk/agent-consult-tool.js";
 import type { FollowupQueueDisposition } from "../../get-reply-options.types.js";
 import { replyCallbackCustody } from "../reply-callback-custody.js";
 import type { ReplyOperationRunState } from "../reply-operation-run-state.js";
@@ -172,10 +174,14 @@ export async function prepareFollowupRunOperatorAuthority(
   try {
     const automation = run.run.scheduledAutomation;
     const operatorSource = automation?.job.operatorSource;
-    // A cron conversation event starts on the automation grant; queued chat needs write.
+    // Each queued start needs the grant that created it: the automation grant for a cron
+    // conversation event, talk for a Talk consult (only Talk sets this trusted provenance),
+    // and write for chat.
     const restore = automation
       ? restoreScheduledAutomationOperator
-      : restoreGatewayQueuedOperatorRecovery;
+      : run.run.inputProvenance?.sourceTool === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
+        ? restoreTalkConsultOperator
+        : restoreGatewayQueuedOperatorRecovery;
     const restored = await restore({
       context,
       agentId: run.run.agentId,
@@ -221,7 +227,6 @@ export async function admitFollowupRunLifecycle(
   run: FollowupRun | FollowupLifecycleSource,
 ): Promise<void> {
   const state = custody(run);
-  run.operatorAuthority?.assertCurrent();
   if (state.adopted) {
     return;
   }
@@ -233,11 +238,10 @@ export async function admitFollowupRunLifecycle(
   }
   const admission = Promise.resolve().then(async () => {
     await run.turnAdoptionLifecycle?.onAdopted();
-    // A successful custody callback commits before the post-await authority check.
+    // A successful custody callback commits adoption.
     state.adopted = true;
     state.failure = undefined;
     state.stopHeartbeat?.();
-    run.operatorAuthority?.assertCurrent();
   });
   state.adopting = admission;
   try {

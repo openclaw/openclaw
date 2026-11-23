@@ -74,11 +74,8 @@ export function continueStalledReplyTurn({
   ) {
     return false;
   }
-  try {
-    followupRun.operatorAuthority?.signal?.throwIfAborted();
-    followupRun.operatorAuthority?.assertCurrent();
-  } catch {
-    // Refusing this continuation does not revoke or settle any queued source.
+  // Refusing this continuation does not revoke or settle any queued source.
+  if (followupRun.operatorAuthority?.signal?.aborted) {
     return false;
   }
   const queuedRequest = !guidance && claimNextQueuedFollowupRequestFrom(queueKey, followupRun);

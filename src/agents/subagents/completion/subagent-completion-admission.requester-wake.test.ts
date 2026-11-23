@@ -337,7 +337,7 @@ describe("persisted subagent requester wakes", () => {
       expect(settled).toHaveLength(delivered ? 1 : 2);
       expect(settled[0]).toEqual(notices[0]);
       if (!delivered) {
-        expect(settled[1]).toMatchObject({ customType: "run-failed-before-reply", display: true });
+        expect(settled[1]).toMatchObject({ customType: "subagent-completion", display: true });
       }
     },
   );
@@ -389,11 +389,11 @@ describe("persisted subagent requester wakes", () => {
         disposition: "permanent_failure",
       });
       const notices = (await loadTranscriptEvents(scope)).filter((event) =>
-        JSON.stringify(event).includes("The child result couldn't be delivered"),
+        JSON.stringify(event).includes("couldn't be added to this conversation automatically"),
       );
       expect(notices).toHaveLength(1);
       expect(notices[0]).toMatchObject({
-        customType: "run-failed-before-reply",
+        customType: "subagent-completion",
         display: true,
       });
     },

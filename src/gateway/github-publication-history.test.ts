@@ -401,28 +401,6 @@ describe("GitHub publication branch history", () => {
     await f.published("case-alias-update");
   });
 
-  it.each(["branch", "published-pr"])(
-    "retains identity-change semantics during %s observation",
-    async (observation) => {
-      if (observation === "published-pr") {
-        await f.published("initial");
-      }
-      const fallback = mocks.runCommand.getMockImplementation()!;
-      mocks.runCommand.mockImplementation(async (args: string[], options) => {
-        const result = await fallback(args, options);
-        if (
-          observation === "branch"
-            ? args.includes("ls-remote")
-            : args.includes("repos/openclaw/openclaw/pulls/125200")
-        ) {
-          mocks.matchesIdentity.mockReturnValue(false);
-        }
-        return result;
-      });
-      await f.rejected("revoked-identity", "identity_changed", "Reconnect");
-    },
-  );
-
   it("rejects a receipt PR naming another head repository without changing saved work", async () => {
     await f.published("initial");
     const fallback = mocks.runCommand.getMockImplementation()!;

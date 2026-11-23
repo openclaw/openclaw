@@ -2006,6 +2006,7 @@ describe("ClawHub detached postpublish verification", () => {
           DEFER_CLAWHUB: String(deferred),
           RELEASE_NPM_DIST_TAG: tag,
           NORMAL_CLAWHUB_RUN_ID: "",
+          PLUGIN_NPM_RUN_ID: "73",
         },
       });
       expect(written.status, written.stderr).toBe(0);

@@ -329,7 +329,6 @@ export function buildSessionEventContext(params: {
     // text's existing command authorization. Non-owner and system turns never gain it.
     bindCommandOwnerAuthority(ctx, {
       operatorAuthority,
-      sourceAssertion: params.assertCurrent,
       isCurrent: () => {
         params.assertCurrent();
         return true;
@@ -337,7 +336,6 @@ export function buildSessionEventContext(params: {
       // Work that outlives this occurrence keeps only the live operator source.
       successor: {
         operatorAuthority,
-        sourceAssertion: operatorAuthority.assertCurrent,
         isCurrent: () => {
           operatorAuthority.assertCurrent();
           return true;
@@ -348,7 +346,6 @@ export function buildSessionEventContext(params: {
     bindCommandOwnerAuthority(ctx, {
       channelPrincipal: requesterPrincipal,
       recoveryReference: requesterOwner.recoveryReference,
-      sourceAssertion: params.assertCurrent,
       isCurrent: () => {
         params.assertCurrent();
         return true;
@@ -356,7 +353,6 @@ export function buildSessionEventContext(params: {
       successor: {
         channelPrincipal: requesterPrincipal,
         recoveryReference: requesterOwner.recoveryReference,
-        sourceAssertion: params.assertCurrent,
         isCurrent: () => {
           params.assertCurrent();
           return true;
@@ -376,7 +372,6 @@ export function buildSessionEventContext(params: {
       bindCommandOwnerAuthority(ctx, {
         channelPrincipal,
         recoveryReference: authority.recoveryReference,
-        sourceAssertion: params.assertCurrent,
         isCurrent: () => {
           params.assertCurrent();
           return true;
@@ -384,7 +379,6 @@ export function buildSessionEventContext(params: {
         successor: {
           channelPrincipal,
           recoveryReference: authority.recoveryReference,
-          sourceAssertion: params.assertCurrent,
           isCurrent: () => {
             params.assertCurrent();
             return true;

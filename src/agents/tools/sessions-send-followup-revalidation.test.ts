@@ -217,9 +217,7 @@ it.each([
           vi.useRealTimers();
         }
       } else if (change === "revoked") {
-        await expect(attempt()).rejects.toThrow(
-          "Requester followup authority is no longer current",
-        );
+        await expect(attempt()).rejects.toThrow("Requester followup ended");
       } else {
         await expect(attempt()).resolves.toBe("accepted");
       }

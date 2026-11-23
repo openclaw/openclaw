@@ -54,7 +54,7 @@ import { gitTargetSupportsReleaseUpdates, resolveTarget } from "./target.js";
 export const PREPARE_DEADLINE_MS = 45 * 60_000;
 const CHECK_RELEASE_TIMEOUT_MS = 3 * 60_000;
 
-export type InstallKind = { kind: ReleaseKind; checkout?: string };
+type InstallKind = { kind: ReleaseKind; checkout?: string };
 
 export type UpdateRunOutcome =
   | { status: "pending"; target: { version: string }; releaseRoot: string }
@@ -273,10 +273,14 @@ export async function prepareUpdate(params: {
       );
     }
     staging = await allocateStaging({ kind: install.kind }, prefix);
-    const onStep = async (name: string) => {
+    const onStep = async (name: string, status: "in_progress" | "completed") => {
       await recordUpdateRunStepAsync(
         params.runId,
-        { step: `prepare:${name}`, status: "in_progress", startedAtMs: Date.now() },
+        {
+          step: `prepare:${name}`,
+          status,
+          ...(status === "in_progress" ? { startedAtMs: Date.now() } : { endedAtMs: Date.now() }),
+        },
         { env },
       );
     };
@@ -516,8 +520,16 @@ async function maintainPlugins(params: {
       ]
     : [];
   if (failed && messages.length === 0) {
+    // The CLI's failure renderer owns this prefix; earlier stderr may be runtime warnings.
+    const reasonPrefix = "[openclaw] Reason: ";
+    const reason = stripAnsi(result.stderr)
+      .split(/\r?\n/u)
+      .find((line) => line.startsWith(reasonPrefix))
+      ?.slice(reasonPrefix.length);
     messages.push(
-      result.stderr.trim() || (result.code === null ? "timed out" : `exited ${result.code}`),
+      reason ||
+        result.stderr.trim() ||
+        (result.code === null ? "timed out" : `exited ${result.code}`),
     );
   }
   await recordUpdateRunStepAsync(

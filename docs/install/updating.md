@@ -121,6 +121,10 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    it restores the previous release and the SQLite migration originals.
 6. The Gateway that serves after the switch records the outcome. Only a Gateway
    that runs the target build records success.
+7. After success is recorded, the serving release runs advisory Doctor inspections
+   in the background. The same update details receive their results without a page
+   reload. Only warning and error findings add advice; inspections do not delay
+   completion, fail the update, or trigger rollback.
 
 Rules for update changes:
 
@@ -179,8 +183,19 @@ Candidate Doctor's retirement-only pass retains deferred advisory inspection
 selectors in its result. Shipped v2026.11.7 and v2026.11.10-beta.1 updaters read
 the last Doctor result and run those inspections after Gateway readiness; a
 narrow repair pass must not replace them with an empty list. The candidate must
-contain this fix. Release updates in `src/update/` do not yet run these advisory
-inspections after commit.
+contain this fix.
+
+The serving Gateway records a completed release rollback as a failed update, with
+the launcher's reason and the previous version's running facts. Settings → Updates
+and `openclaw update status` offer Retry, then Report update failure if it fails
+again. Startup output remains in the saved diagnostic details, not a failed update
+step. Unperformed verification checks are not reported as warnings. Machine-only
+Doctor check receipts stay in saved JSON, not installation steps or report text.
+Failed supplemental steps count toward the success headline's warnings without
+changing the recorded successful outcome.
+The installed updater must contain preparation-step reporting changes; the
+restored release must contain rollback reporting changes. No schema or protocol
+change is needed.
 
 At Gateway start, a preparation lock whose owner is dead or has the new Gateway's
 PID is released after its run is recorded as failed with reason `interrupted`.

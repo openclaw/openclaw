@@ -439,7 +439,7 @@ describe("built-in session tool role authority", () => {
         undefined,
         {
           code: "INVALID_REQUEST",
-          message: expect.stringMatching(/turn has ended|no longer active/),
+          message: expect.stringMatching(/turn has ended|no longer active|agent run ended/),
         },
       ]);
     });

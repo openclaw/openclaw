@@ -449,6 +449,10 @@ export async function verifyClawHubPostpublish({
     "normalClawHubRunId",
     "normalClawHubRunAttempt",
   ];
+  // The shared publication receipt also records npm bootstrap closeout work.
+  if (Object.hasOwn(dispatch ?? {}, "npmRunId")) {
+    dispatchFields.push("npmRunId");
+  }
   if (Object.hasOwn(dispatch ?? {}, "clawHubDeferred")) {
     dispatchFields.push("clawHubDeferred");
   }

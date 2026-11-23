@@ -250,7 +250,6 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
     );
     return;
   }
-  params.authority?.bindSource(readApprovalRequestSource(snapshot));
   const decisionPromise = params.manager.awaitDecision(id);
   if (!decisionPromise) {
     params.respond(
@@ -599,7 +598,11 @@ export async function handleApprovalResolve<
     return;
   }
   using retainedSessionAccess = sessionAccess;
-  if (!params.authority.isCurrent()) {
+  // Admission: resolving needs invite access to the approval's session, checked once here.
+  if (
+    !params.authority.isCurrent() ||
+    !retainedSessionAccess.canAccessInvited(readApprovalRequestSource(resolved.snapshot))
+  ) {
     respondUnknownOrExpiredApproval(params.respond);
     return;
   }
@@ -630,18 +633,9 @@ export async function handleApprovalResolve<
         params.manager.getLocalSnapshot(resolved.approvalId) !== resolved.snapshot ||
         resolved.snapshot.request.sessionKey !== sourceSessionKey ||
         resolved.snapshot.request.agentId !== sourceAgentId ||
-        params.client?.invalidated ||
-        !isApprovalRecordVisibleToClient({
-          record: resolved.snapshot,
-          client: params.client,
-          ...(params.authority.guard.family === "native-compatibility"
-            ? { cfg: params.context.getRuntimeConfig(), sessionAccess: retainedSessionAccess }
-            : {}),
-        }) ||
-        !retainedSessionAccess.canAccessInvited(readApprovalRequestSource(resolved.snapshot)) ||
         (params.reviewer && !custody?.isCurrent(resolved.snapshot))
       ) {
-        throw new Error("approval resolver authority is no longer active");
+        throw new Error("The approval record changed. Look up the approval again.");
       }
     },
   };
