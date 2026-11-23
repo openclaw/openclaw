@@ -21,6 +21,17 @@ import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { createRequestBoundaryCompaction } from "./request-boundary-compaction.js";
 
+// mock-isolation: records the boundary's lifecycle calls; the real hooks need a Gateway.
+const hookCalls = vi.hoisted(() => [] as string[]);
+vi.mock("../compaction-hooks.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../compaction-hooks.js")>()),
+  runCompactionHooks: async (params: { phase: string }) => {
+    hookCalls.push(`hooks:${params.phase}`);
+  },
+  runPostCompactionSideEffects: async () => {
+    hookCalls.push("post-compaction");
+  },
+}));
 registerAgentSessionLoopTestLifecycle();
 const initialHost = getAiTransportHost();
 const model = {
@@ -82,6 +93,7 @@ const anthropicEvents = (reply: Reply) => {
 };
 
 beforeEach(() => {
+  hookCalls.length = 0;
   requests = [];
   replies = [];
   const captureFetch: typeof fetch = async (input, init) => {
@@ -99,9 +111,7 @@ afterEach(() => {
 });
 
 const textOf = (message: Payload["messages"][number]) =>
-  typeof message.content === "string"
-    ? message.content
-    : message.content.map((block) => String(block.text ?? block.content ?? "")).join("\n");
+  typeof message.content === "string" ? message.content : JSON.stringify(message.content);
 const isSummaryRequest = (payload: Payload) =>
   textOf(payload.messages.at(-1)!).includes("context checkpoint summary");
 
@@ -169,6 +179,8 @@ async function fixture(options: { boundary?: boolean; history?: SessionManager }
           assertActive: () => {},
           withTranscriptWrite,
           onPrecheck,
+          hookContext: { sessionId: session.sessionId, sessionKey: "agent:main:main" },
+          postCompaction: { sessionKey: "agent:main:main", sessionFile: "warm.sqlite" },
         });
   const submit = (prompt = "current request") =>
     submitEmbeddedAttemptPrompt({
@@ -232,6 +244,11 @@ describe("warm text compaction at the request boundary", () => {
       route: "compact_only",
     });
     expect(completedCompactions(f.events)).toHaveLength(1);
+    // The boundary owns internal hooks and post-compaction sync, as the reply-level path did.
+    expect(hookCalls).toEqual(["hooks:before", "post-compaction", "hooks:after"]);
+    expect(f.events.find((event) => event.type === "compaction_start")).toMatchObject({
+      hooksHandled: true,
+    });
     const compaction = f.sessionManager
       .getEntries()
       .findLast((entry) => entry.type === "compaction");
@@ -308,6 +325,7 @@ describe("warm text compaction at the request boundary", () => {
       expect(f.onPrecheck).toHaveBeenCalledOnce();
       expect(f.onPrecheck.mock.calls[0]?.[0]).toMatchObject({ route: "compact_only" });
       expect(completedCompactions(f.events)).toEqual([]);
+      expect(hookCalls).toEqual(["hooks:before"]);
     },
   );
 });

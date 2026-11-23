@@ -219,6 +219,23 @@ export function createRequestBoundaryCompaction(params: {
       if (pressure !== "maintenance") {
         return undefined;
       }
+      const hooks =
+        params.hookContext || params.postCompaction
+          ? await import("../compaction-hooks.js")
+          : undefined;
+      if (params.hookContext) {
+        await hooks!.runCompactionHooks({
+          ...params.hookContext,
+          assertActive,
+          phase: "before",
+          metrics: {
+            messageCountOriginal: context.messages.length,
+            messageCountBefore: context.messages.length,
+            tokenCountOriginal: outgoing.estimatedPromptTokens,
+            tokenCountBefore: outgoing.estimatedPromptTokens,
+          },
+        });
+      }
       let failure = "compaction did not complete";
       const compacted = await params.session[agentSessionRunWarmCompaction](
         async (instructions, signal) => {
@@ -271,11 +288,29 @@ export function createRequestBoundaryCompaction(params: {
             throw error;
           }
         },
+        Boolean(params.hookContext),
       );
       assertActive();
       if (!compacted) {
         failed = true;
         return fallback(failure);
+      }
+      if (params.postCompaction) {
+        await hooks!.runPostCompactionSideEffects({ ...params.postCompaction, assertActive });
+      }
+      if (params.hookContext) {
+        await hooks!.runCompactionHooks({
+          ...params.hookContext,
+          assertActive,
+          phase: "after",
+          messageCountAfter: params.session.agent.state.messages.length,
+          tokensAfter: compacted.tokensAfter,
+          compactedCount: context.messages.length,
+          tokensBefore: compacted.result.tokensBefore,
+          firstKeptEntryId: compacted.result.firstKeptEntryId,
+          summaryLength: compacted.result.summary.length,
+          sessionFile: params.session.sessionFile ?? "",
+        });
       }
       // The loop still holds the uncompacted context. Stop at this settled boundary;
       // the run continues from the compacted transcript without compacting again.

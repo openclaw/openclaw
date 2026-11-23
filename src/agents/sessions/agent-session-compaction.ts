@@ -144,8 +144,15 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     super.dispose();
   }
 
-  async [agentSessionRunWarmCompaction](warmSummary: WarmCompactionSummary): Promise<boolean> {
-    return await this.completeAutoCompaction("threshold", false, undefined, warmSummary);
+  /** Resolves to the committed compaction, or undefined when nothing was written. */
+  async [agentSessionRunWarmCompaction](
+    summary: WarmCompactionSummary,
+    hooksHandled = false,
+  ): Promise<{ result: CompactionResult; tokensAfter: number } | undefined> {
+    return await this.completeAutoCompaction("threshold", false, undefined, {
+      summary,
+      hooksHandled,
+    });
   }
 
   /**
@@ -243,11 +250,13 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     itemId: string,
     outcome: Extract<CompactionWorkOutcome, { status: "completed" }>,
     willRetry: boolean,
+    hooksHandled: { hooksHandled?: true } = {},
   ): void {
     const details = parseCompactionDetails(outcome.result.details);
     this.emit({
       type: "compaction_end",
       reason,
+      ...hooksHandled,
       itemId,
       outcome: {
         status: "completed",
@@ -648,13 +657,14 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     reason: Exclude<CompactionReason, "manual">,
     willRetry: boolean,
     requestBudget?: CompactionRequestBudget,
-    warmSummary?: WarmCompactionSummary,
-  ): Promise<boolean> {
+    warm?: { summary: WarmCompactionSummary; hooksHandled: boolean },
+  ): Promise<{ result: CompactionResult; tokensAfter: number } | undefined> {
     const settings = this.settingsManager.getCompactionSettings();
     const contextWindow = this.model?.contextWindow;
+    const hooksHandled: { hooksHandled?: true } = warm?.hooksHandled ? { hooksHandled: true } : {};
 
     const itemId = generateSessionEntryId();
-    this.emit({ type: "compaction_start", reason, itemId });
+    this.emit({ type: "compaction_start", reason, itemId, ...hooksHandled });
     const abortController = new AbortController();
     this.autoCompactionAbortController = abortController;
 
@@ -676,24 +686,31 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         summaryOutputPolicy: "retry-invalid-once",
         settings,
         signal: abortController.signal,
-        ...(warmSummary ? { warmSummary } : {}),
+        ...(warm ? { warmSummary: warm.summary } : {}),
       });
       if (outcome.status !== "completed") {
-        this.emit({ type: "compaction_end", reason, itemId, outcome });
-        return false;
+        this.emit({ type: "compaction_end", reason, itemId, outcome, ...hooksHandled });
+        return undefined;
       }
-      this.emitCompletedCompaction(reason, itemId, outcome, willRetry);
-      return true;
+      this.emitCompletedCompaction(reason, itemId, outcome, willRetry, hooksHandled);
+      return outcome;
     } catch (error) {
       if (abortController.signal.aborted) {
-        this.emit({ type: "compaction_end", reason, itemId, outcome: { status: "aborted" } });
-        return false;
+        this.emit({
+          type: "compaction_end",
+          reason,
+          itemId,
+          outcome: { status: "aborted" },
+          ...hooksHandled,
+        });
+        return undefined;
       }
       const errorMessage = compactionErrorMessage(error, "compaction failed");
       this.emit({
         type: "compaction_end",
         reason,
         itemId,
+        ...hooksHandled,
         outcome: {
           status: "failed",
           reason:
@@ -702,7 +719,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
               : `Auto-compaction failed: ${errorMessage}`,
         },
       });
-      return false;
+      return undefined;
     } finally {
       if (this.autoCompactionAbortController === abortController) {
         this.autoCompactionAbortController = undefined;
