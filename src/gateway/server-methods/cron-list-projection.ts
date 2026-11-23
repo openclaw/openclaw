@@ -5,6 +5,7 @@ import { cronJobReadView } from "../../cron/job-read-view.js";
 import { toPublicCronJob } from "../../cron/public-job.js";
 import type { CronServiceContract } from "../../cron/service-contract.js";
 import type { CronListPageResult } from "../../cron/service/list-page-types.js";
+import { cronJobNeedsCreatorReauthorization } from "../../cron/tools-allow.js";
 import type { CronJob } from "../../cron/types.js";
 import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import { registerSerializedJsonArray } from "../serialized-json.js";
@@ -62,6 +63,10 @@ function prepareJob(job: CronJob, defaultAgentId: string | undefined, compact: b
   const row = freezeTrustedJsonSnapshot({
     ...(compact ? compactCronListJob(toPublicCronJob(job)) : cronJobReadView(job)),
     effectiveAgentId: tryResolveCronJobEffectiveAgentId(job, defaultAgentId) ?? null,
+    // Compact rows omit absent metadata; the flag is present only when the job is blocked.
+    ...(compact && cronJobNeedsCreatorReauthorization({ job })
+      ? { reauthorizationRequired: true }
+      : {}),
   });
   return { row, json: JSON.stringify(row) };
 }
@@ -74,6 +79,7 @@ function compactCronListJob(job: CronJob): CronCompactJob {
     updatedAtMs: job.updatedAtMs,
     declarationKey: job.declarationKey || undefined,
     displayName: job.displayName || undefined,
+    ...(job.cyberAccessProgram !== undefined ? { cyberAccessProgram: job.cyberAccessProgram } : {}),
     owner: job.owner,
     enabled: job.enabled,
     // Keep epoch fields for existing clients; readable dates avoid model timestamp arithmetic.

@@ -1,34 +1,15 @@
-import { action, createOptimistic, onSettled, Show } from "solid-js";
-import { ConnectCommand } from "../../components/solid/connect-command.tsx";
-import { DialogHeader } from "../../components/solid/dialog-header.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
+import { Errored, lazy, Loading, Show } from "solid-js";
 import "../../components/modal-dialog.tsx";
-import { formatTimeMs } from "../../lib/format.ts";
+import { DialogHeader } from "../../components/solid/dialog-header.tsx";
+import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { ConnectMachineRequest, ConnectMachineSetupState } from "./connect-machine-dialog.ts";
+import type { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
+
+const Content = lazy(() => import("./connect-machine-dialog-content.tsx"), {
+  export: "ConnectMachineDialogContent",
+});
 
 export function ConnectMachineDialog(props: ReturnType<ConnectMachineSetupState["view"]>) {
-  const [saving, setSaving] = createOptimistic(false);
-  const presentRequest = action(function* (request: ConnectMachineRequest) {
-    if (request.isCurrent()) {
-      setSaving(true);
-    }
-    yield Promise.race([request.completion, request.retired]);
-  });
-  // The ordered receipt covers minting from either host as well as dialog refresh.
-  onSettled(() =>
-    props.subscribeRequests((request) => {
-      // The native modal must finish opening before its operation joins an action.
-      onSettled(() => {
-        void presentRequest(request).catch(request.reportError);
-      });
-    }),
-  );
-  const busy = () => saving() || props.loading;
-  const expiresAt = () =>
-    props.setup?.expiresAtMs
-      ? formatTimeMs(props.setup.expiresAtMs, { hour: "numeric", minute: "2-digit" }, "")
-      : "";
   return (
     <Show when={props.open}>
       <openclaw-modal-dialog
@@ -43,60 +24,25 @@ export function ConnectMachineDialog(props: ReturnType<ConnectMachineSetupState[
             description={<p>{t("newSession.connectMachineDescription")}</p>}
             onClose={() => props.onClose()}
           />
-          <div class="oc-dialog__body connect-machine-dialog__body">
-            {busy() && !props.setup?.command ? (
-              <p class="connect-machine-dialog__status" role="status">
-                {t("newSession.connectMachineGenerating")}
-              </p>
-            ) : undefined}
-            {props.error ? (
-              <div class="callout danger" role="alert">
-                <p>{t("newSession.connectMachineFailed")}</p>
-                <p>{props.error}</p>
+          <Errored
+            fallback={(error, reset) => (
+              <div class="oc-dialog__body connect-machine-dialog__body">
+                <LazyViewError error={error()} onRetry={() => reset()} inline />
               </div>
-            ) : undefined}
-            <Show when={props.setup}>
-              {(setup) => (
-                <>
-                  <ConnectCommand command={setup().command} />
-                  <p class="connect-machine-dialog__hint">
-                    {t("newSession.connectMachineTeamHint")}
+            )}
+          >
+            <Loading
+              fallback={
+                <div class="oc-dialog__body connect-machine-dialog__body">
+                  <p class="connect-machine-dialog__status" role="status">
+                    {t("newSession.connectMachineGenerating")}
                   </p>
-                  <p class="connect-machine-dialog__hint">
-                    {t("newSession.connectMachineInstalled")}{" "}
-                    <code translate="no" style={{ "overflow-wrap": "anywhere" }}>
-                      {setup().installedCommand}
-                    </code>
-                  </p>
-                  <p class="connect-machine-dialog__hint" hidden={!setup().versionNote}>
-                    {setup().versionNote}
-                  </p>
-                  <details>
-                    <summary>{t("newSession.connectMachineCommandOnly")}</summary>
-                    <ConnectCommand command={setup().serviceCommand} />
-                  </details>
-                  <p class="connect-machine-dialog__hint">
-                    {expiresAt()
-                      ? t("newSession.connectMachineSingleUseExpires", { time: expiresAt() })
-                      : t("newSession.connectMachineSingleUse")}
-                  </p>
-                </>
-              )}
-            </Show>
-          </div>
-          <openclaw-modal-actions class="oc-dialog__footer connect-machine-dialog__actions">
-            {props.setup?.command || props.error ? (
-              <button class="btn" type="button" disabled={busy()} onClick={() => props.onRefresh()}>
-                <Icon name="refresh" />
-                {busy()
-                  ? t("newSession.connectMachineRefreshing")
-                  : t("newSession.connectMachineFreshCode")}
-              </button>
-            ) : undefined}
-            <button class="btn btn--ghost" type="button" onClick={() => props.onManageDevices()}>
-              {t("newSession.connectMachineManageDevices")}
-            </button>
-          </openclaw-modal-actions>
+                </div>
+              }
+            >
+              <Content {...props} />
+            </Loading>
+          </Errored>
         </section>
       </openclaw-modal-dialog>
     </Show>

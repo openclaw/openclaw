@@ -82,6 +82,7 @@ describe("node worker Git transfers", () => {
       await fs.mkdir(source);
       await git(source, ["init", "--quiet", "--object-format=sha1"]);
       await fs.writeFile(path.join(source, "tracked.txt"), "dispatch base\n");
+      await fs.writeFile(path.join(source, ".gitignore"), ".artifacts/\n");
       await git(source, ["add", "."]);
       await git(source, ["commit", "--quiet", "-m", "dispatch base"]);
       const baseCommit = await git(source, ["rev-parse", "HEAD"]);
@@ -120,6 +121,8 @@ describe("node worker Git transfers", () => {
         await git(workspaceDir, ["commit", "--quiet", "-m", "worker authored"]);
         const headCommit = await git(workspaceDir, ["rev-parse", "HEAD"]);
         await fs.writeFile(path.join(workspaceDir, "tracked.txt"), "uncommitted worker change\n");
+        await fs.mkdir(path.join(workspaceDir, ".artifacts"));
+        await fs.writeFile(path.join(workspaceDir, ".artifacts", "proof.txt"), "authored proof");
         const resultVersion = version === 2 ? 2 : undefined;
         const token = service.prepareUpload(
           "history",
@@ -138,6 +141,9 @@ describe("node worker Git transfers", () => {
         expect(await fs.readFile(path.join(uploaded.stagingRoot, "tracked.txt"), "utf8")).toBe(
           "uncommitted worker change\n",
         );
+        expect(
+          await fs.readFile(path.join(uploaded.stagingRoot, ".artifacts", "proof.txt"), "utf8"),
+        ).toBe("authored proof");
         if (version === 1) {
           expect(uploaded.gitHistory).toBeUndefined();
           expect(uploaded.gitPackPath).toBeUndefined();

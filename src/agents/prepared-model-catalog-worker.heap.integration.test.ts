@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { MessagePort } from "node:worker_threads";
 import { expect, it } from "vitest";
 import {
@@ -27,7 +28,22 @@ import {
   usePreparedCatalogWorkerFixtures,
 } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
-const { makeTempDir, observeWorkers, createCatalogPool } = usePreparedCatalogWorkerFixtures();
+const {
+  makeTempDir,
+  observeWorkers,
+  createCatalogPool: createWorkerPool,
+} = usePreparedCatalogWorkerFixtures();
+
+function createCatalogPool(env: NodeJS.ProcessEnv) {
+  const preload = path.join(makeTempDir("openclaw-catalog-retention-"), "preload.mjs");
+  // A synchronous TypeScript require starts esbuild's persistent worker inside the catalog scope.
+  fs.writeFileSync(
+    preload,
+    `import { forceFullGc } from ${JSON.stringify(new URL("../test-utils/retention.ts", import.meta.url).href)};
+globalThis[Symbol.for("openclaw.test.catalog.forceFullGc")] = forceFullGc;`,
+  );
+  return createWorkerPool(env, pathToFileURL(preload));
+}
 
 it("shares remote catalog revisions across workspaces without retaining superseded copies", async () => {
   const fixture = await createCatalogFixture(makeTempDir, 0);
@@ -386,6 +402,7 @@ it("collects superseded remote snapshots while reusing registered catalog callba
   writeFixtureFiles(path.join(fixture.root, "plugin"), {
     "index.cjs": `
 const fs = require("node:fs");
+const forceFullGc = globalThis[Symbol.for("openclaw.test.catalog.forceFullGc")];
 const state = globalThis[Symbol.for("catalog.remote.retention")] ??= {
   snapshots: new Map(), configs: new Map(), callbacks: [], captures: [], control: new WeakRef({})
 };
@@ -400,7 +417,7 @@ module.exports = { id: ${JSON.stringify(PLUGIN_ID)}, register(api) {
     state.configs.set(config.plugins.entries[${JSON.stringify(PLUGIN_ID)}].config.revision, new WeakRef(config));
     for (let pass = 0; pass < 2; pass++) {
       await new Promise(resolve => setImmediate(() => {
-        require("node:v8").queryObjects(WeakRef);
+        forceFullGc();
         resolve();
       }));
     }
@@ -491,7 +508,7 @@ it("bounds catalog worker retention across repeated fleet preparations", async (
   fs.writeFileSync(
     path.join(fixture.root, "plugin", "index.cjs"),
     `
-const v8 = require("node:v8");
+const forceFullGc = globalThis[Symbol.for("openclaw.test.catalog.forceFullGc")];
 const state = globalThis[Symbol.for("openclaw.catalogHeapFixture")] ??= {
   callbacks: 0, finalizedCallbacks: 0, calls: 0, controlCollected: false
 };
@@ -510,7 +527,7 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
       // JSC's promise stack can retain completed callbacks; collect from native immediates.
       for (let pass = 0; pass < 8; pass++) {
         await new Promise(resolve => setImmediate(() => {
-          v8.queryObjects(FinalizationRegistry);
+          forceFullGc();
           resolve();
         }));
       }
@@ -813,13 +830,13 @@ it("reuses immutable config across remote catalog revisions but captures config 
 
 it("reuses one installed native ESM evaluation across 20 catalog context changes", async () => {
   await using fixture = await createNativeCatalogFixture({
-    setup: `import { queryObjects } from "node:v8";
+    setup: `const forceFullGc = globalThis[Symbol.for("openclaw.test.catalog.forceFullGc")];
 const control = new WeakRef({});
 const retained = new Uint8Array(${NATIVE_ESM_BUFFER_BYTES});
 retained[0] = 7;`,
     catalog: `if (retained[0] !== 7) throw new Error("lost retained module state");
 // Measure retained buffers after collection, independent of the runtime's GC schedule.
-queryObjects(WeakRef);
+forceFullGc();
 extra = { controlCollected: control.deref() === undefined };`,
   });
   const samples: NativeCatalogSample[] = [];

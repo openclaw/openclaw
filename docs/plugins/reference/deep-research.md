@@ -20,3 +20,7 @@ Bounded research with source-backed findings and explicit gaps.
 ## Surface
 
 - Contracts: `tools`
+
+## Related docs
+
+- [deep-research](/tools/deep-research)

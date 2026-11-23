@@ -1,4 +1,3 @@
-import type { Buffer } from "node:buffer";
 import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { AgentsListResult, PresenceEntry } from "../api/types.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
@@ -18,9 +17,9 @@ import {
   teamScaleAgentIdentities,
 } from "./control-ui-sidebar-presentation.test-support.ts";
 import { withTeamScaleConfig } from "./control-ui-team-scale-config.ts";
+import type { FixtureOptions } from "./control-ui-team-scale-fixture-options.ts";
 import {
   createTeamScaleHistoryFixture,
-  type LongSessionScenario,
   type TeamScaleFixtureAsset,
 } from "./control-ui-team-scale-history-fixture.ts";
 import {
@@ -47,38 +46,6 @@ export { TEAM_SCALE_SELF_INSTANCE_ID };
 const TEAM_SCALE_LIVE_RUN_ID = "team-scale-live-run";
 type TeamScaleCatalogEvent = { event: "sessions.catalog.host"; payload: SessionsCatalogHostEvent };
 type TeamScaleEvent = TeamScaleCatalogEvent | { event: "presence"; payload: PresencePayload };
-
-type FixtureOptions = Parameters<typeof prepareTeamScalePaneFixture>[0]["options"] & {
-  baseUrl?: string;
-  now?: number;
-  /** Supply the real canvas sandbox fixture for browser/widget measurements. */
-  sandboxUrl?: string;
-  sandboxPort?: number;
-  liveRun?: boolean;
-  sidebarListChurn?: boolean;
-  sidebarLiveChurn?: boolean;
-  sidebarAvatars?: boolean;
-  sidebarPresentation?: boolean;
-  sidebarCachedParity?: boolean;
-  sidebarPersistentChildren?: boolean;
-  sessionEventChurn?: boolean;
-  sessionEventDurationMs?: number;
-  sessionEventAncestorRefs?: boolean;
-  duplicateBootReads?: boolean;
-  closedMenuMembers?: boolean;
-  largeSnapshot?: boolean;
-  historyStateReceipt?: boolean;
-  rowFacts?: boolean;
-  offRosterSession?: boolean;
-  archivedSession?: boolean;
-  transcriptMessages?: number;
-  richTranscript?: boolean;
-  longSessionScenario?: LongSessionScenario;
-  dashboardMcpApp?: { font: Buffer };
-  /** Opt into a scripted HTML dashboard with an independently fetched web font. */
-  dashboardWidgetFontUrl?: string;
-  dashboardPaintMarker?: boolean;
-};
 
 /** One deterministic inventory shared by browser benchmarks and focused UI proofs. */
 export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {

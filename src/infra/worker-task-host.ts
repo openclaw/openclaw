@@ -8,6 +8,11 @@ import { getDatabaseEngineSelection } from "./database-engine/context.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import { createPostgresPoolEndpoints, postgresPoolTransferList } from "./postgres-sync/pool.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
+import {
+  claimsSharedHostSlot,
+  createHostedWorker,
+  isHostedWorkerEndpoint,
+} from "./shared-worker-host.js";
 import { trackSqliteDatabaseAdmissionWorker } from "./sqlite-database-admission.js";
 import { readSqliteDatabaseAdmissionDeadline } from "./sqlite-worker-database-admission-relay.js";
 import {
@@ -23,6 +28,7 @@ import {
   receiveWorkerMemoryPort,
   isWorkerGcObservationEnabled,
 } from "./worker-cpu.js";
+import { createWorkerPoolMemoryBudget } from "./worker-memory-budget.js";
 import { recordWorkerMessage } from "./worker-message-metrics.js";
 import {
   captureRetainedNativeWorkerSource,
@@ -41,7 +47,6 @@ const diagnosticTaskKinds = new Set([
   "prepare",
   "prepare-session",
   "transcript-stats",
-  "session-entry",
   "session-entries",
   "session-cleanup",
   "session-memory-capture",
@@ -51,6 +56,10 @@ const diagnosticTaskKinds = new Set([
   "model-context",
   "context-messages",
   "transcript-search",
+  "session-target-prepare",
+  "session-store-target",
+  "session-target-inventory",
+  "combined-store-topology",
 ]);
 
 const prepareResources = createLazyRuntimeModule(() => import("./temp-artifact-cleanup.js"));
@@ -78,6 +87,8 @@ export function createWorkerTaskHost(
     : undefined;
   return {
     maxWorkers: workerClass ? resolveWorkerPoolSize(workerClass) : undefined,
+    createMemoryBudget: (pool, url, maxWorkers) =>
+      createWorkerPoolMemoryBudget(pool, url, maxWorkers, !owner.nativeResource),
     requiresReady: owner.retainedTransport,
     createWorker(url, options) {
       const workerOptions = { execArgv: resolveRuntimeWorkerThreadExecArgv(url), ...options };
@@ -92,6 +103,13 @@ export function createWorkerTaskHost(
           codeRangeSizeMb: limits?.codeRangeSizeMb,
           stackSizeMb: limits?.stackSizeMb,
         };
+      }
+      // Lean: the first slot of a core kind is a logical endpoint of the shared host.
+      if (!owner.nativeResource && claimsSharedHostSlot(url)) {
+        const hosted = createHostedWorker(url, workerOptions, {
+          ready: owner.retainedTransport === true,
+        });
+        return owner.retainedTransport ? { worker: hosted, native: hosted } : { worker: hosted };
       }
       if (owner.retainedTransport) {
         const { port1, port2 } = new MessageChannel();
@@ -112,7 +130,13 @@ export function createWorkerTaskHost(
         admission.service();
       }
       // This factory binds every native worker in the pool to the same captured source.
-      workers[0]?.service();
+      workers.find((worker) => !isHostedWorkerEndpoint(worker))?.service();
+      // Hosted endpoints use their own ports, outside that source.
+      for (const worker of workers) {
+        if (isHostedWorkerEndpoint(worker)) {
+          worker.service();
+        }
+      }
     },
     prepareResources,
     async releaseTemporaryDirectory(directory) {
@@ -134,11 +158,6 @@ export function createWorkerTaskHost(
           retiring: false,
         };
         admissions.set(worker, admission);
-        const retained = admission;
-        worker.once("exit", () => {
-          retained.owner.finish();
-          admissions.delete(worker);
-        });
       }
       // The retained relay supplies current facts on demand; global snapshots grow with sessions.
       const selection = getDatabaseEngineSelection();
@@ -172,7 +191,13 @@ export function createWorkerTaskHost(
           operation === undefined ? "task" : classifyWorkerRequest(operation),
         );
     },
-    describeTask(url, input) {
+    describeTask(url, input, diagnosticOperation) {
+      if (diagnosticOperation !== undefined) {
+        const operation = diagnosticTaskKinds.has(diagnosticOperation)
+          ? diagnosticOperation
+          : classifyWorkerRequest(diagnosticOperation);
+        return `${workerRequestKind(url)}.${operation}`;
+      }
       // Inspect a data property only: diagnostics must not execute an input getter.
       const kind: unknown =
         input !== null && typeof input === "object"
@@ -184,19 +209,46 @@ export function createWorkerTaskHost(
     receiveMessage: receiveWorkerMemoryPort,
     observeResourceReply: () => recordWorkerMessage("resource", "from_worker"),
     captureWorkerStartObserver,
-    workerStarted(worker, pool) {
-      if (owner.databaseAccess !== "read-only") {
-        trackSqliteDatabaseAdmissionWorker(worker);
+    workerStarted(worker, pool, cap, options, policyOwner) {
+      if (isHostedWorkerEndpoint(worker)) {
+        // The physical host owns admission tracking and the worker census entry.
+        worker.pool = pool;
+        return;
       }
-      attributeWorkerToPool(worker, pool, workerClass);
+      // Read-only connections also retain admission references until their worker exits.
+      trackSqliteDatabaseAdmissionWorker(worker);
+      attributeWorkerToPool(worker, pool, workerClass, {
+        floor: policyOwner.retainOneIdleWorker ? 1 : 0,
+        cap,
+        pointReadCap: cap + 1,
+        idleTimeoutMs: options.idleTimeoutMs ?? 60_000,
+        burstIdleTimeoutMs: options.burstIdleTimeoutMs,
+      });
     },
     workerRetiring(worker, reason) {
+      if (isHostedWorkerEndpoint(worker)) {
+        worker.retiring(reason);
+      }
       const admission = admissions.get(worker);
       if (admission) {
         // Final facts still settle over this channel, but retirement cannot create a new file.
         admission.retiring = true;
       }
       markWorkerRetirement(worker, reason);
+    },
+    workerStopped(worker) {
+      const admission = admissions.get(worker);
+      if (admission) {
+        admission.retiring = true;
+        const finishing = admission.owner.finish();
+        if (finishing) {
+          return finishing.then(() => {
+            admissions.delete(worker);
+          });
+        }
+        admissions.delete(worker);
+      }
+      return undefined;
     },
     flushWorkerDiagnostics,
     computeCapacity: getWorkerComputeCapacity(),

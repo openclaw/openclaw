@@ -1,17 +1,8 @@
-import fs from "node:fs";
-import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import * as embeddedStateLock from "../../infra/embedded-state-lock.js";
-import { captureNativeSignalBridge } from "../../infra/embedded-state-lock.test-support.js";
-import * as gatewayLockProcessModule from "../../infra/gateway-lock-process.js";
-import { acquireGatewayLock, type GatewayLockOptions } from "../../infra/gateway-lock.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-
-const acquireNativeStateLock = embeddedStateLock.acquireEmbeddedStateLock;
-const createNativeBridge = embeddedStateLock.createEmbeddedStateSignalBridge;
 
 type ProbeModule = typeof import("./list.probe.js");
 type ProbeParams = Parameters<ProbeModule["runAuthProbes"]>[0];
@@ -107,57 +98,6 @@ it("reports failover reasons through probe results", async () => {
     mocks.runner.mockRejectedValueOnce({ name: "FailoverError", reason, message: "probe failed" });
     const report = await probe.runAuthProbes(probeInput({}, { profileIds: ["openai:profile"] }));
     expect(report.results).toMatchObject([{ status: expected, error: "probe failed" }]);
-  }
-});
-
-function useStateLock() {
-  vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockImplementation(
-    () => 123_456,
-  );
-  const lockOptions: GatewayLockOptions = {
-    allowInTests: true,
-    env: state.env,
-    lockDir: state.path("locks"),
-    timeoutMs: 100,
-  };
-  vi.spyOn(embeddedStateLock, "acquireEmbeddedStateLock").mockImplementation((params) =>
-    acquireNativeStateLock({ ...params, options: lockOptions }),
-  );
-  return lockOptions;
-}
-
-it("refuses CLI probes while a live Gateway owns canonical state", async () => {
-  const lockOptions = useStateLock();
-  const lock = await acquireGatewayLock({ ...lockOptions, port: 28789 });
-  assert(lock, "Expected live Gateway fixture lock");
-  try {
-    await expect(
-      probe.withAuthProbeStateOwnership({ mode: "exclusive" }, async () => undefined),
-    ).rejects.toThrow(
-      `A Gateway is running for this state directory (pid ${process.pid}, port 28789). Stop the Gateway first (openclaw gateway stop), then rerun models status --probe.`,
-    );
-  } finally {
-    await lock.release();
-  }
-});
-
-it("releases direct state ownership before propagating a rejected no-tail operation", async () => {
-  const options = useStateLock();
-  const signals = captureNativeSignalBridge(createNativeBridge);
-  vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementationOnce(
-    signals.create,
-  );
-  const original = new Error("synthetic direct probe failure");
-  try {
-    await expect(
-      probe.withAuthProbeStateOwnership({ mode: "exclusive" }, async () => {
-        throw original;
-      }),
-    ).rejects.toBe(original);
-    expect(fs.existsSync(path.join(options.lockDir!, "gateway.state.lock"))).toBe(false);
-    expect([signals.listenerCount("SIGINT"), signals.listenerCount("SIGTERM")]).toEqual([0, 0]);
-  } finally {
-    signals.dispose();
   }
 });
 

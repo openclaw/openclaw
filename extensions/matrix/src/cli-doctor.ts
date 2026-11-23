@@ -1,29 +1,29 @@
-import os from "node:os";
 import path from "node:path";
-import type { Command } from "commander";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import type { PluginDoctorRecoveryCliContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   listMatrixCryptoUnsafeState,
   recoverMatrixCryptoUnsafeState,
 } from "./matrix/crypto-unsafe-state-doctor.js";
-import { getMatrixRuntime } from "./runtime.js";
 import { sanitizeMatrixPathSegment } from "./storage-paths.js";
 
-export function registerMatrixDoctorCommands(root: Command): void {
+export function registerMatrixDoctorCommands(
+  params: Pick<PluginDoctorRecoveryCliContext, "program" | "stateDir" | "context">,
+): void {
   const accountForRoot = (rootDir: string, stateDir: string) =>
     rootDir === path.resolve(stateDir, "matrix")
       ? "default"
       : path.basename(path.dirname(path.dirname(rootDir)));
-  const doctor = root
-    .command("doctor")
-    .description("Inspect and recover Matrix crypto storage refusal");
+  const doctor = params.program.description("Inspect and recover Matrix crypto storage refusal");
   doctor
     .command("inspect")
     .description("List accounts blocked by an unsafe crypto final save (read-only)")
     .option("--json", "Output JSON")
     .action(async (options: { json?: boolean }) => {
-      const stateDir = getMatrixRuntime().state.resolveStateDir(process.env, os.homedir);
-      const roots = await listMatrixCryptoUnsafeState(stateDir);
+      const stateDir = params.stateDir;
+      const roots = await listMatrixCryptoUnsafeState(stateDir, {
+        openKeyedStoreV2: params.context.openPluginStateKeyedStore,
+      });
       const accounts = roots.map((rootDir) => ({
         account: accountForRoot(rootDir, stateDir),
         rootDir,
@@ -50,9 +50,10 @@ export function registerMatrixDoctorCommands(root: Command): void {
       "Acknowledge that keys from the failed owner may be lost",
     )
     .action(async (options: { account: string; acceptSnapshotRollback?: boolean }) => {
-      const stateDir = getMatrixRuntime().state.resolveStateDir(process.env, os.homedir);
+      const stateDir = params.stateDir;
       const account = sanitizeMatrixPathSegment(normalizeAccountId(options.account));
-      const roots = (await listMatrixCryptoUnsafeState(stateDir)).filter(
+      const stateRuntime = { openKeyedStoreV2: params.context.openPluginStateKeyedStore };
+      const roots = (await listMatrixCryptoUnsafeState(stateDir, stateRuntime)).filter(
         (rootDir) => accountForRoot(rootDir, stateDir) === account,
       );
       if (roots.length !== 1) {
@@ -63,7 +64,10 @@ export function registerMatrixDoctorCommands(root: Command): void {
       await recoverMatrixCryptoUnsafeState({
         storageRootDir: roots[0]!,
         acceptSnapshotRollback: options.acceptSnapshotRollback === true,
+        stateRuntime,
       });
-      console.log(`Matrix crypto refusal cleared for account ${account}; restart the Gateway.`);
+      console.log(
+        `Matrix crypto refusal cleared for account ${account}. Run openclaw update repair (or openclaw doctor --fix) to finish pending migrations, then restart the Gateway.`,
+      );
     });
 }

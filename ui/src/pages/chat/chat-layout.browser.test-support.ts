@@ -101,7 +101,7 @@ export function readUiCss(): string {
     chat/composer chat/composer-queue chat/composer-queue-content chat/progress-card chat/composer-progress
     chat/composer-context-strip chat/text chat/grouped chat/tool-cards
     chat/working-indicator chat/question-card rail-header
-    chat/sidebar chat/sidebar-panels chat/session-rail chat/side-panel`;
+    chat/sidebar chat/sidebar-panels chat/session-rail chat/side-panel chat/mobile-host`;
   return (cachedUiCss ??= styles
     .split(/\s+/)
     .map((name) => readStyleSheet(`ui/src/styles/${name}.css`))

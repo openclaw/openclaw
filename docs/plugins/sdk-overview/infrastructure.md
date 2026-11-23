@@ -749,6 +749,15 @@ Telegram-specific; other channels keep their own interactive result contracts.
 
 ### Doctor plugin-state repairs
 
+`runtime-doctor-migrations` also exports `PluginDoctorRecoveryCliRegistrar` and
+`PluginDoctorRecoveryCliContext` for optional explicit recovery commands that
+must stay reachable during a pending migration. Declare the owned command paths
+in [the manifest](/plugins/manifest/surfaces#explicit-recovery-cli-subtrees) and
+export `registerRecoveryCli` from the separate Doctor artifact. It receives the
+mounted command, selected config/environment/state directory, and a plugin-bound
+keyed-store adapter. It receives no Gateway runtime. This registration never
+participates in automatic state migration or implies recovery consent.
+
 `PluginDoctorStateMigrationContext.repairPluginStateEntries(namespace, replacements)`
 is available during the offline `after-session-repair` phase. Each replacement
 contains an exact `PluginDoctorRawStateEntry` observation from
@@ -781,6 +790,14 @@ Reusing an ID requires the same captured source, target, and requested tools.
 A changed operator, grant, or captured policy cannot adopt an orphaned admission;
 use a new operation ID instead. Existing admitted work is still reauthorized
 against current policy on every wake.
+
+For access from an already-live tool invocation, use
+`sessionWork.withCurrent({ agentId, sessionKey, toolName }, async (current) => { ... })`.
+This reuses admission's source, owner and current-session checks without writing
+an accepted-work record or restoring a saved source. Compare all fields of the
+host-issued `current.target`, including `lifecycleRevision`, when accessing retained
+feature state. Recheck `current.assertCurrent()` after awaits; the borrow closes
+when the callback settles. Selectors and saved revisions cannot supply authority.
 
 A scheduled callback can call `sessionWork.run(id, async (current) => { ... })`.
 An unavailable result carries `retryAfterMs` only for temporary preparation failure;

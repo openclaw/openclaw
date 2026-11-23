@@ -62,8 +62,8 @@ function fixture(
   // DOM behavior is real; only browser layout is deterministic in this Node test.
   let rowHeight = initialRowHeight;
   dom.window.Element.prototype.getBoundingClientRect = function () {
-    if (this.matches(".reader-controls")) {
-      return new dom.window.DOMRect(0, 528, 400, 56);
+    if (this.matches(".reader-jump")) {
+      return new dom.window.DOMRect(282, 544, 36, 36);
     }
     const rows = Array.from(document.querySelectorAll(".transcript > *"));
     const index = rows.indexOf(this);
@@ -211,7 +211,6 @@ it("replaces surrounding rows and page content without detaching a kept widget",
   expect(f.document.querySelector(".transcript")!.textContent).toContain("new tail");
   expect(f.document.querySelector(".transcript")!.textContent).not.toContain("old");
   expect(f.document.querySelector(".article-head h1")!.textContent).toBe("Earlier conversation");
-  expect(f.document.querySelectorAll(".pagination")).toHaveLength(2);
   expect(f.document.title).toBe("Earlier conversation · OpenClaw");
   await vi.advanceTimersByTimeAsync(60000);
   expect(f.fetch).toHaveBeenCalledTimes(1);
@@ -270,6 +269,10 @@ it("jitters conditional reads, retains ETag manually, and catches up only when v
   await vi.advanceTimersByTimeAsync(1500);
   expect(f.fetch).toHaveBeenCalledTimes(1);
   expect(f.document.title).toBe("updated · OpenClaw");
+  expect(f.document.querySelector(".article-head h1")?.textContent).toBe("updated");
+  expect(
+    [...f.document.querySelectorAll("[data-public-title]")].map((node) => node.textContent),
+  ).toEqual(["updated", "updated"]);
   f.fetch.mockResolvedValue(f.response(304));
   await vi.advanceTimersByTimeAsync(16500);
   expect(f.fetch).toHaveBeenLastCalledWith(
@@ -319,6 +322,7 @@ it("honors Retry-After without replacing the readable transcript", async () => {
   await vi.advanceTimersByTimeAsync(60000);
   expect(f.fetch).toHaveBeenCalledTimes(1);
   expect(f.document.title).toBe("Shared · OpenClaw");
+  expect(f.document.querySelector("[data-public-delayed]")).not.toBeNull();
   await vi.advanceTimersByTimeAsync(1500);
   expect(f.fetch).toHaveBeenCalledTimes(2);
 });
@@ -358,13 +362,9 @@ it("keeps the visible message and expanded tools when the latest page rolls forw
   expect(f.window.scrollY).toBe(350);
   expect(f.document.querySelector("details")!.open).toBe(true);
 });
-it("offers top/latest controls and refreshes manually without a navigation", async () => {
+it("offers a latest control and refreshes manually without a navigation", async () => {
   const f = fixture();
   f.scroll(800);
-  const top = f.document.querySelector<HTMLButtonElement>("[data-public-top]");
-  expect(top).not.toBeNull();
-  top!.click();
-  expect(f.window.scrollY).toBe(0);
   f.document.querySelector<HTMLButtonElement>("[data-public-latest]")!.click();
   expect(f.window.scrollY).toBe(1388);
   f.document.querySelector<HTMLAnchorElement>("[data-public-refresh-now]")!.click();
@@ -380,7 +380,7 @@ it("refreshes legacy links in place and clears a plain revoked response", async 
   await vi.advanceTimersByTimeAsync(16500);
   expect(f.document.querySelector(".transcript")).toBeNull();
   expect(f.document.body.textContent).toContain("no longer publicly available");
-  expect(f.document.querySelector(".reader-controls")?.hasAttribute("hidden")).toBe(true);
+  expect(f.document.querySelector(".reader-jump")?.hasAttribute("hidden")).toBe(true);
   await vi.advanceTimersByTimeAsync(60000);
   expect(f.fetch).toHaveBeenCalledTimes(2);
 });

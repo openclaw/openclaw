@@ -357,14 +357,15 @@ it.each(["connection", "scope", "provider", "cancel"])(
   },
 );
 
-it("rechecks live authority after exchanging proof and before storing the link", async () => {
-  let finish!: (identity: { senderId: string }) => void;
-  exchange.mockImplementationOnce(
-    () =>
-      new Promise((resolve) => {
-        finish = resolve;
-      }),
-  );
+it("finishes an admitted OAuth callback after its initiating socket disconnects", async ({
+  signal,
+}) => {
+  const finish = createDeferred<{ senderId: string }>();
+  const completed = createDeferred<Promise<void>>();
+  exchange.mockImplementationOnce((params) => {
+    completed.resolve(waitForAbortSignal(params.signal));
+    return finish.promise;
+  });
   const observer = {
     ...alice,
     connId: "observer",
@@ -375,9 +376,10 @@ it("rechecks live authority after exchanging proof and before storing the link",
   expect(callback(flow, cookie)).toBe(200);
   await vi.waitFor(() => expect(exchange).toHaveBeenCalledOnce());
   clients.delete(alice);
-  finish({ senderId: "123456789012345678" });
-  expect((await terminal(flow, observer)).status).toBe("failed");
-  expect(await listCanonicalUserChannelIdentities(owner(alice))).toEqual([]);
+  finish.resolve({ senderId: "123456789012345678" });
+  await withinTest(completed.promise, signal);
+  expect((await terminal(flow, observer)).status).toBe("linked");
+  expect(await listCanonicalUserChannelIdentities(owner(alice))).toHaveLength(1);
 });
 
 it("keeps administrative attestation privileged and rejects claimed profile IDs and unknown accounts", async () => {

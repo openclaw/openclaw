@@ -44,6 +44,7 @@ export function createRemoteControlUiTransport({
       inputSignal,
       context.signal,
       host.signal,
+      host.admissionSignal,
       lifetime.signal,
       controller.signal,
     ]);

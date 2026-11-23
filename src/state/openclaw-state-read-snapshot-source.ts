@@ -29,9 +29,11 @@ import {
   runSqliteReadOnlyOperation,
   sqliteInspectionTimeoutError,
 } from "../infra/sqlite-readonly-worker.js";
+import { isSqliteSnapshotReuseActive } from "../infra/sqlite-snapshot-reuse.js";
 import {
   forkSqlitePrivateSnapshot,
   prepareSqliteReadOnlyLocation,
+  prepareSqliteReadOnlyLocationAwaited,
   startSqliteReadOnlyLocationAsync,
 } from "../infra/sqlite-snapshot-source.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -40,6 +42,7 @@ import {
   captureOpenClawStateDatabaseReadAdmission,
   openClawStateDatabaseCache,
 } from "./openclaw-state-db-cache.js";
+import { isStatePostgres } from "./openclaw-state-db-engine.js";
 import { existingPathOrUndefined } from "./openclaw-state-db.paths.js";
 import { recoverOpenClawStateRollbackJournal } from "./openclaw-state-ownership.js";
 import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
@@ -121,6 +124,7 @@ export async function prepareOpenClawStateReadSnapshotSource({
         preserveSourceArtifacts,
         signal: admissionSignal,
         expectedSourceIdentity: preserveSourceArtifacts ? captured.identity : undefined,
+        reuse: true,
       });
       // Sync readers must publish the same source without waiting for a Promise reaction.
       materialization = mapRetainedOperation(preparation, (location) => {
@@ -212,14 +216,25 @@ export async function prepareOpenClawStateReadSnapshotSource({
         } else {
           prepared = { location: pathname, cleanupAsync: async () => true };
         }
+      } else if (artifactPreserving && isSqliteSnapshotReuseActive()) {
+        prepared = await prepareSqliteReadOnlyLocationAwaited(pathname, {
+          signal: admissionSignal,
+          expectedSourceIdentity: admission.identity,
+          reuse: true,
+        });
+        // A borrowed image settles at once, so cancellation has not been observed yet.
+        admissionSignal.throwIfAborted();
       } else if (artifactPreserving) {
         // Share only the retained read producer, never a generic mutable snapshot lease.
         preparation = startSqliteReadOnlyLocationAsync(pathname, {
           preserveSourceArtifacts: true,
           signal: admissionSignal,
           expectedSourceIdentity: admission.identity,
+          reuse: true,
         });
         prepared = await preparation.result;
+        // A borrowed image settles at once, so cancellation has not been observed yet.
+        admissionSignal.throwIfAborted();
       } else {
         prepared = await prepareSqliteReadOnlyLocation(pathname, {
           preserveSourceArtifacts: artifactPreserving,
@@ -263,6 +278,10 @@ export async function prepareOpenClawStateReadSnapshotSource({
     },
     readSource: (): StateReadSnapshotSource | undefined => {
       if (lazy) {
+        // A lazy scope can open before engine selection; PostgreSQL readers keep their own path.
+        if (isStatePostgres()) {
+          return undefined;
+        }
         const pending = startLazySource();
         if (pending) {
           const pause = new Int32Array(new SharedArrayBuffer(4));
@@ -294,7 +313,9 @@ export async function prepareOpenClawStateReadSnapshotSource({
     },
     prepareSource: lazy
       ? async () => {
-          await startLazySource()?.result;
+          if (!isStatePostgres()) {
+            await startLazySource()?.result;
+          }
         }
       : undefined,
     forkSource: async (signal?: AbortSignal) => {

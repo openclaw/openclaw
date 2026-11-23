@@ -74,8 +74,8 @@ it.each([
 
 it("validates caller schemas with repeated $id independently across calls", async () => {
   for (const [key, value, type, text] of [
-    ["foo", "bar", "string", '{\n  "foo": "bar"\n}'],
-    ["count", 1, "number", '{\n  "count": 1\n}'],
+    ["foo", "bar", "string", '{"foo":"bar"}'],
+    ["count", 1, "number", '{"count":1}'],
   ] as const) {
     const json = { [key]: value };
     const schema = {
@@ -113,6 +113,24 @@ it("accepts model overrides that already include the selected provider prefix", 
     model: "anthropic/claude-4-sonnet",
   });
   expect(isolatedCompletionCall().model).toBe("anthropic/claude-4-sonnet");
+});
+
+it("resolves a qualified model override with only a per-agent model configured", async () => {
+  await createTool({ agents: { entries: { chat: { model: "openai/gpt-5.5" } } } }).execute("id", {
+    prompt: "x",
+    model: "anthropic/claude-sonnet-4-6",
+  });
+  expect(isolatedCompletionCall().model).toBe("anthropic/claude-sonnet-4-6");
+});
+
+it("resolves a configured alias with only a per-agent model configured", async () => {
+  await createTool({
+    agents: {
+      defaults: { models: { "anthropic/claude-sonnet-4-6": { alias: "Sonnet" } } },
+      entries: { chat: { model: "openai/gpt-5.5" } },
+    },
+  }).execute("id", { prompt: "x", model: "Sonnet" });
+  expect(isolatedCompletionCall().model).toBe("anthropic/claude-sonnet-4-6");
 });
 
 it("throws on invalid thinking level", async () => {

@@ -111,20 +111,20 @@ suite.define(() => {
       async ({ page }) => {
         await page.goto(await open("settings/model-providers"));
         await waitForControlUiGatewayReady(page);
-        await page.locator('[data-model-readiness="model-required"]').waitFor();
+        await page.locator("[data-models-catalog]").waitFor();
+        expect(await page.locator(".page-subtitle").first().textContent()).toContain(
+          "Connect providers and choose the models your agents use.",
+        );
 
         let clicks = 0;
         const started = Date.now();
-        await page.getByRole("button", { name: "Add account", exact: true }).first().click();
-        clicks++;
-        const picker = page.getByRole("dialog", { name: "Add an account" });
-        await picker.getByRole("searchbox", { name: "Search providers…" }).fill("Tencent");
-        await picker.getByRole("button", { name: "Tencent Tokenhub" }).click();
+        await page.locator("[data-models-catalog-search]").fill("Tencent");
+        await page.locator('[data-models-catalog-provider="tencent-tokenhub"] button').click();
         clicks++;
         const form = page.getByRole("dialog", { name: "Add provider" });
         // A provider with config still shows its display name, not its config id.
         expect((await form.locator(".oc-dialog__title").textContent())?.trim()).toBe(
-          "Tencent Tokenhub",
+          "Tencent TokenHub",
         );
         await form.getByRole("textbox", { name: "API key" }).fill("sk-synthetic-first-provider");
         await form.getByRole("button", { name: "Save provider", exact: true }).click();

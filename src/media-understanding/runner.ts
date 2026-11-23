@@ -22,6 +22,7 @@ import type {
   MediaUnderstandingModelDecision,
   MediaUnderstandingOutput,
 } from "../../packages/media-understanding-common/src/types.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
 import { isProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import { configuredModelSupportsNativeVideo } from "../agents/model-input.js";
@@ -52,6 +53,7 @@ import {
   resolveConfiguredMediaEntryCapabilities,
 } from "./entry-capabilities.js";
 import { inspectLocalAudioSelection } from "./local-audio.js";
+import { failedAttachmentDisposition } from "./media-attachment-outcomes.js";
 import {
   assertMediaExecutionCurrent,
   hasProviderAuthAvailable,
@@ -245,10 +247,9 @@ function resolveImageModelFromAgentDefaults(params: {
   if (refs.length === 0) {
     return [];
   }
-  const defaultProvider = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  }).provider;
+  const defaultProvider =
+    resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId })?.provider ??
+    DEFAULT_PROVIDER;
   const entries: MediaUnderstandingModelConfig[] = [];
   for (const ref of refs) {
     const effectiveDefaultProvider = ref.includes("/")
@@ -480,11 +481,24 @@ async function runAttachmentEntries(
   output: MediaUnderstandingOutput | null;
   attempts: MediaUnderstandingModelDecision[];
   processing: MediaAttachmentProcessing;
+  failed?: MediaAttachmentDisposition;
 }> {
   const { entries, capability } = params;
   const attachmentIndex = params.attachment.index;
   const attempts: MediaUnderstandingModelDecision[] = [];
   let processing: MediaAttachmentProcessing = "omitted";
+  // The first failure is the one the operator summary reports, so the marker keeps the same one.
+  let failed: MediaAttachmentDisposition | undefined;
+  const recordFailure = (
+    entry: MediaUnderstandingModelConfig,
+    entryType: "provider" | "cli",
+    error: unknown,
+  ) => {
+    failed ??= failedAttachmentDisposition(error);
+    attempts.push(
+      buildModelDecision({ entry, entryType, outcome: "failed", reason: String(error) }),
+    );
+  };
   for await (const candidate of entries) {
     const { entry } = candidate;
     const entryType = entry.type ?? (entry.command ? "cli" : "provider");
@@ -503,14 +517,7 @@ async function runAttachmentEntries(
         if (
           !(params.automaticAudio && isProviderAuthError(attempt.error, "missing-provider-auth"))
         ) {
-          attempts.push(
-            buildModelDecision({
-              entry,
-              entryType,
-              outcome: "failed",
-              reason: String(attempt.error),
-            }),
-          );
+          recordFailure(entry, entryType, attempt.error);
         }
         continue;
       }
@@ -550,14 +557,7 @@ async function runAttachmentEntries(
           logVerbose(`Skipping ${capability} model due to ${err.reason}: ${err.message}`);
         }
       } else {
-        attempts.push(
-          buildModelDecision({
-            entry,
-            entryType,
-            outcome: "failed",
-            reason: String(err),
-          }),
-        );
+        recordFailure(entry, entryType, err);
         if (shouldLogVerbose()) {
           logVerbose(`${capability} understanding failed: ${String(err)}`);
         }
@@ -568,7 +568,7 @@ async function runAttachmentEntries(
     }
   }
 
-  return { output: null, attempts, processing };
+  return { output: null, attempts, processing, failed };
 }
 
 export async function runCapability(
@@ -724,14 +724,14 @@ export async function runCapability(
   // it once here (apply.ts's memoized factory builds it at most once per turn)
   // and reuse the concrete value for every remaining call below.
   const providerRegistry = resolveProviderRegistry(params.providerRegistry);
-  const entries = resolveModelEntries({
+  let resolvedEntries = resolveModelEntries({
     cfg,
     capability,
     config,
     providerRegistry,
+    modelOverride: params.request?.modelOverride,
   });
-  const automaticAudio = capability === "audio" && entries.length === 0;
-  let resolvedEntries: ResolvedMediaModelEntry[] = entries;
+  const automaticAudio = capability === "audio" && resolvedEntries.length === 0;
   if (!automaticAudio && resolvedEntries.length === 0) {
     resolvedEntries = await resolveAutoEntries({
       ...params,
@@ -766,7 +766,7 @@ export async function runCapability(
   const attachmentDecisions: MediaUnderstandingDecision["attachments"] = [];
   const attachmentDispositions = buildDispositions({ kind: "failed" }, { kind: "not-selected" });
   for (const attachment of selection.selected) {
-    const { output, attempts, processing } = await runAttachmentEntries({
+    const { output, attempts, processing, failed } = await runAttachmentEntries({
       ...params,
       attachment,
       providerRegistry,
@@ -790,7 +790,7 @@ export async function runCapability(
     attachmentDispositions[attachment.index] = output
       ? { kind: "handled" }
       : attempts.length > 0
-        ? { kind: "failed" }
+        ? (failed ?? { kind: "failed" })
         : { kind: "no-model" };
     attachmentDecisions.push({
       attachmentIndex: attachment.index,

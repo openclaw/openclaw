@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Command } from "commander";
+import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseCliInteger, writeCliJson } from "./cli-command-io.js";
 import { getCallHistoryFromStore, MAX_CALL_RECORD_EVENTS } from "./manager/store.js";
@@ -188,6 +189,8 @@ export function registerVoiceCallLogs(params: {
       const onSigterm = () => interrupt(143);
       process.on("SIGINT", onSigint);
       process.on("SIGTERM", onSigterm);
+      // A closed output pipe ends the command scope; the follow loop must stop with it.
+      getAsyncWorkSignal()?.addEventListener("abort", () => cancellation.abort(), { once: true });
       try {
         if (fs.existsSync(file) && path.basename(file) !== "calls.jsonl") {
           for await (const line of readLogLines(file, since, pollMs, signal)) {

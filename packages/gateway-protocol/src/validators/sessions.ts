@@ -195,6 +195,14 @@ export const validateSessionsTitlePrepareParams = createProtocolValidator(
   S.SessionsTitlePrepareParamsSchema,
   Checks.isSessionsTitlePrepareParams,
 );
+export const validateSessionsSteerTargetParams = createProtocolValidator(
+  S.SessionsSteerTargetParamsSchema,
+  Checks.isSessionsSteerTargetParams,
+);
+export const validateSessionsSteerActiveParams = createProtocolValidator(
+  S.SessionsSteerActiveParamsSchema,
+  Checks.isSessionsSteerActiveParams,
+);
 export const validateSessionsSendParams = createProtocolValidator(
   S.SessionsSendParamsSchema,
   Checks.isSessionsSendParams,
@@ -383,6 +391,10 @@ export const validateSessionGitHubConfirmParams = createProtocolValidator(
 export const validateSessionsFilesPreviewParams = createProtocolValidator(
   S.SessionsFilesPreviewParamsSchema,
   Checks.isSessionsFilesPreviewParams,
+);
+export const validateSessionsFilesStatParams = createProtocolValidator(
+  S.SessionsFilesStatParamsSchema,
+  Checks.isSessionsFilesStatParams,
 );
 export const validateSessionsFilesPreviewReleaseParams = createProtocolValidator(
   S.SessionsFilesPreviewReleaseParamsSchema,

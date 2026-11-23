@@ -7,6 +7,7 @@ import type {
   SessionSuggestionResolution,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../../app/exec-approval.ts";
+import { openCommandPaletteWithAttachments } from "../../components/command-palette-contract.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import type {
   ChatAttachment,
@@ -69,6 +70,7 @@ export type ChatProps = Omit<
   | "commentsDisabled"
   | "onAddToChat"
   | "onCompanionSelection"
+  | "onNewSessionSelection"
   | "onOpenSidebar"
 > &
   Omit<
@@ -88,6 +90,8 @@ export type ChatProps = Omit<
     onConversationFrameRef?: (element: HTMLElement) => void | (() => void);
     onFooterElementRef?: (element: HTMLElement) => void | (() => void);
     onCompanionStageAttachment?: (attachment: ChatAttachment, sourceSessionKey: string) => boolean;
+    /** Presentation custody, not send authority. */
+    ownsComposer?: boolean;
     transcript: ChatTranscript;
     asyncQuestionStorage?:
       | import("../../lib/chat/composer-draft-store.runtime.ts").DurableComposerDraftScope
@@ -123,6 +127,7 @@ export type ChatProps = Omit<
     ) => void | Promise<void>;
     workspaceConflict?: WorkspaceResultConflict;
     onDismissWorkspaceConflict?: () => void;
+    onDismissRunError?: () => void;
     chatMessageMaxWidth?: string | null;
     showNewMessages?: boolean;
     onScrollToBottom?: (options?: { smooth?: boolean }) => void;
@@ -146,6 +151,7 @@ export type ChatProps = Omit<
       resolution: SessionSuggestionResolution,
     ) => void;
     detailsEnabled?: boolean;
+    hideComposerSessionCards?: boolean;
   };
 
 // The view frame refreshes on each pane render and the chat-item cache keys the queue by
@@ -306,6 +312,16 @@ export function createChatViewFrame(
               true,
             )
         : undefined,
+    onNewSessionSelection: (selection) => {
+      const attachment = createChatSelectionAttachment(
+        { ...selection, comment: "", sessionKey: props.sessionKey },
+        { attachmentLimits: props.attachmentLimits },
+        0,
+      );
+      if (attachment) {
+        openCommandPaletteWithAttachments([attachment]);
+      }
+    },
     commentAttachments: props.suggestionComposer ? undefined : props.attachments,
     commentsDisabled: !canCompose || Boolean(props.readSignal?.aborted),
     onAddToChat:

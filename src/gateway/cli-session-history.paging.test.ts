@@ -108,7 +108,7 @@ function historyParams(
     storePath: scope.storePath,
     sessionAgentId: scope.agentId,
     canonicalKey: scope.sessionKey,
-    cliHistoryHomeDir: homeDir,
+    cliHistoryProjectsDir: path.join(homeDir, ".claude", "projects"),
     max,
     maxHistoryBytes: 64 * 1024,
     effectiveMaxChars: 4096,

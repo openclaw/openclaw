@@ -32,6 +32,7 @@ export type GatewayActiveWorkInspectors = Omit<
   getRootRequestHolders?: () => string[];
   getChatRunHolders?: () => string[];
   getTerminalPersistenceHolders?: () => string[];
+  getTerminalPersistenceDiagnostics?: () => { oldestAgeMs: number | null; runIds: string[] };
 };
 
 const defaultInspectors = {

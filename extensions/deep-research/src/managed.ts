@@ -139,7 +139,7 @@ export async function reconcileManaged(
   return client({ version: 1, action: "poll", handle }, signal);
 }
 
-export function managedResult(snapshot: ResearchAdapterSnapshot): ResearchResult {
+function managedResult(snapshot: ResearchAdapterSnapshot): ResearchResult {
   return {
     version: 1,
     engine: "managed",
@@ -189,4 +189,22 @@ export function recordManagedPollFailure(
   } else {
     job.nextWakeAt = now + Math.max(response.retryAfterMs, 5000 * 2 ** (job.pollFailures - 1));
   }
+}
+
+export async function finishManaged(
+  job: ResearchJob,
+  snapshot: ResearchAdapterSnapshot,
+  save: () => Promise<void>,
+) {
+  job.handle = snapshot.handle;
+  job.result = managedResult(snapshot);
+  job.state =
+    snapshot.state === "completed" || snapshot.state === "cancelled" || snapshot.state === "partial"
+      ? snapshot.state
+      : snapshot.state === "indeterminate"
+        ? "indeterminate"
+        : "failed";
+  job.progress = snapshot.reason ?? "Provider report ready";
+  await save();
+  return job;
 }

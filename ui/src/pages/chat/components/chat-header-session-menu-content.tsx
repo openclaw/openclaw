@@ -15,7 +15,7 @@ import { compactSessionMenuViewForValue } from "../../../components/session-menu
 import { sessionMenuDataFromRow } from "../../../components/session-menu-data.ts";
 import { useSessionMenuEntries } from "../../../components/session-menu-view.tsx";
 import { createSessionOwnerMenu } from "../../../components/session-owner-menu.ts";
-import { sessionPlacementAction } from "../../../components/session-placement-action.ts";
+import { sessionMenuPlacementAction } from "../../../components/session-placement-action.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import type { MenuControls, MenuEntry, MenuItem } from "../../../components/solid/menu.tsx";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
@@ -60,9 +60,10 @@ const COMPACT_MENU_VIEW_BY_VALUE: Record<string, CompactMenuView> = {
 };
 
 const VIEW_SETTINGS = [
-  ["reasoning", "chatShowThinking", "chat.view.reasoning", false],
-  ["tool-calls", "chatShowToolCalls", "chat.view.toolCalls", true],
-  ["commentary", "chatPersistCommentary", "chat.view.commentary", undefined],
+  ["reasoning", "chatShowThinking", "chat.view.reasoning", false, true],
+  ["tool-calls", "chatShowToolCalls", "chat.view.toolCalls", true, true],
+  ["commentary", "chatPersistCommentary", "chat.view.commentary", undefined, true],
+  ["inline-commands", "chatInlineCommands", "chat.view.inlineCommands", false, false],
 ] as const;
 
 export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
@@ -85,37 +86,36 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
       "main",
       parseAgentSessionKey(row.key)?.agentId ?? row.agentId,
     ).sessionKey;
-    const label = menu.session.label;
-    const isChild =
-      !isSubagentSessionKey(row.key) &&
-      Boolean(resolveSidebarSessionParentKey(row, new Set([mainSessionKey])));
-    const archiving = owner.context.sessions.archiveVisibility(row.key) === "pending";
-    const pinned = owner.context.navigation.snapshot.sidebarEntries.includes(
-      serializeSidebarEntry({ type: "session", key: row.key }),
-    );
     const pinnable = isPinnableUiSessionRow(row);
+    const presentation = {
+      label: menu.session.label,
+      placementAction: sessionMenuPlacementAction(row, agentsList),
+      isChild:
+        !isSubagentSessionKey(row.key) &&
+        Boolean(resolveSidebarSessionParentKey(row, new Set([mainSessionKey]))),
+      archiving: owner.context.sessions.archiveVisibility(row.key) === "pending",
+      pinned: owner.context.navigation.snapshot.sidebarEntries.includes(
+        serializeSidebarEntry({ type: "session", key: row.key }),
+      ),
+      pinnable,
+    };
     const session = sessionDataMemo.read(
       [
-        label,
-        sessionPlacementAction(row),
+        ...Object.values(presentation),
         row.key,
         row.agentId,
         row.sessionId,
-        isChild,
-        pinned,
-        pinnable,
         row.snoozedUntil,
         row.unread,
         row.hiddenFromInvolvingMe,
         row.communication,
         row.effectiveCommunication,
         row.archived,
-        archiving,
         row.category,
         row.icon,
         row.color,
       ],
-      () => sessionMenuDataFromRow(row, { label, isChild, pinned, pinnable, archiving }),
+      () => sessionMenuDataFromRow(row, presentation),
     );
     const sessionReasons = sessionMenuReasons({
       snapshot,
@@ -191,17 +191,16 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
   const nativeActions = new ChatPaneNativeSessionActions();
   const sessionActions = createMemo(() => {
     const source = props.actionSource;
-    const actions = source
-      ? [
-          ...nativeActions.read(
+    const native =
+      source && presented()
+        ? nativeActions.read(
             source.readOwner().context,
             source.readRow(),
             source.stopDisabledReason,
             onAction,
-          ),
-          ...props.sessionActions,
-        ]
-      : props.sessionActions;
+          )
+        : [];
+    const actions = native.length ? [...native, ...props.sessionActions] : props.sessionActions;
     return props.composeSessionActions?.(actions) ?? actions;
   });
   const quickActions = useChatQuickActionEntries(sessionActions, false, "quick:");
@@ -336,14 +335,16 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
       return [...viewActions()];
     }
     return [
-      ...VIEW_SETTINGS.map(([value, key, label, onboarding]) => ({
+      ...VIEW_SETTINGS.map(([value, key, label, onboarding, defaultValue]) => ({
         id: `view:${value}`,
         label: t(label),
         class: "session-menu__item",
         labelClass: "session-menu__text",
         type: "checkbox" as const,
         checked:
-          props.onboarding && onboarding !== undefined ? onboarding : props.settings[key] !== false,
+          props.onboarding && onboarding !== undefined
+            ? onboarding
+            : (props.settings[key] ?? defaultValue),
         disabled: props.onboarding,
         attributes: { title: props.onboarding ? t("chat.onboardingDisabled") : undefined },
         closeOnSelect: false,
@@ -592,8 +593,8 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
     if (nextView) {
       event.preventDefault();
       inputs.onCompactViewChange(nextView);
-      if (managementView === "icon") {
-        view.appearance.prepare();
+      if (managementView) {
+        view.prepareView(managementView);
       } else if (nextView === "sharing" && !props.sharing?.openDisabledReason) {
         props.sharing?.onOpen();
       }
@@ -648,7 +649,7 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
       const setting = value.slice("view:".length);
       const option = VIEW_SETTINGS.find(([id]) => id === setting);
       if (option) {
-        props.onSettingsChange({ [option[1]]: props.settings[option[1]] === false });
+        props.onSettingsChange({ [option[1]]: !(props.settings[option[1]] ?? option[4]) });
       } else if (
         setting === "speech-bubbles" &&
         props.bubbleModeEnabled &&

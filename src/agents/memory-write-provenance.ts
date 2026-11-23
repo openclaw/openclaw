@@ -7,10 +7,6 @@ import {
   normalizeMemoryArtifactRelativePath,
   recordMemoryArtifactWriteProvenance,
 } from "../memory/memory-artifact-provenance.js";
-import {
-  captureAgentToolSourceExecutionGuard,
-  runWithAgentToolSourceExecutionScope,
-} from "./agent-tool-source-execution-guard.js";
 
 export type MemoryWriteProvenanceObserver = {
   classifies: (absolutePath: string) => Promise<boolean>;
@@ -24,8 +20,8 @@ export type MemoryWriteProvenanceObserver = {
 };
 
 type ProvenanceWriteOperations = {
-  readFile: (absolutePath: string) => Promise<Buffer | string>;
-  writeFile: (absolutePath: string, content: string) => Promise<void>;
+  readFile: (absolutePath: string, signal?: AbortSignal) => Promise<Buffer | string>;
+  writeFile: (absolutePath: string, content: string, signal?: AbortSignal) => Promise<void>;
   remove?: (absolutePath: string) => Promise<void>;
 };
 
@@ -36,9 +32,9 @@ export function withMemoryWriteProvenance<T extends ProvenanceWriteOperations>(
   if (!observer) {
     return operations;
   }
-  const readContentBefore = (absolutePath: string) =>
+  const readContentBefore = (absolutePath: string, signal?: AbortSignal) =>
     operations
-      .readFile(absolutePath)
+      .readFile(absolutePath, signal)
       .then((value) => (Buffer.isBuffer(value) ? value.toString("utf8") : value))
       .catch((error: unknown) => {
         if (!isMissingPathError(error) && !isMissingPathError(readErrorCause(error))) {
@@ -49,21 +45,18 @@ export function withMemoryWriteProvenance<T extends ProvenanceWriteOperations>(
   const remove = operations.remove;
   return {
     ...operations,
-    writeFile: async (absolutePath: string, content: string) => {
-      // Retained provenance callbacks keep the invocation's original owner.
-      const assertCurrent = captureAgentToolSourceExecutionGuard();
-      const commit = () =>
-        runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-          assertCurrent();
-          await operations.writeFile(absolutePath, content);
-        });
+    writeFile: async (absolutePath: string, content: string, signal?: AbortSignal) => {
+      const commit = () => {
+        signal?.throwIfAborted();
+        return operations.writeFile(absolutePath, content, signal);
+      };
       if (!(await observer.classifies(absolutePath))) {
         await commit();
         return;
       }
       await observer.write({
         absolutePath,
-        contentBefore: await readContentBefore(absolutePath),
+        contentBefore: await readContentBefore(absolutePath, signal),
         contentAfter: content,
         commit,
       });
@@ -71,14 +64,10 @@ export function withMemoryWriteProvenance<T extends ProvenanceWriteOperations>(
     ...(remove
       ? {
           remove: async (absolutePath: string) => {
-            const assertCurrent = captureAgentToolSourceExecutionGuard();
             const contentBefore = (await observer.classifies(absolutePath))
               ? await readContentBefore(absolutePath)
               : "";
-            await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-              assertCurrent();
-              await remove(absolutePath);
-            });
+            await remove(absolutePath);
             await observer.clearAfterDelete(absolutePath, contentBefore);
           },
         }

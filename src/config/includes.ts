@@ -15,9 +15,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { canUseRootFileOpen, openRootFileSync } from "../infra/boundary-file-read.js";
-import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { mergeDeep as mergeDeepValues } from "../infra/deep-merge.js";
 import { isMissingPathError } from "../infra/errno.js";
+import {
+  canonicalizeContainmentRootSync,
+  realpathViaExistingPrefixSync,
+} from "../infra/path-containment.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isPlainObject } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
@@ -54,16 +57,19 @@ export function resolveConfigIncludeWritePath(params: {
   const roots = [path.dirname(params.configPath), ...(params.allowedRoots ?? [])]
     .filter((root) => path.isAbsolute(root))
     .map((root) => path.normalize(root));
-  if (!roots.some((root) => isPathInside(root, resolvedPath))) {
+  // The canonical spelling decides; the lexical check only picks the clearer error message.
+  const canonical = realpathViaExistingPrefixSync(resolvedPath);
+  const canonicalPath = canonical ? path.normalize(canonical) : undefined;
+  const realRoots = roots.map((root) => path.normalize(canonicalizeContainmentRootSync(root)));
+  const canonicalInside =
+    canonicalPath !== undefined && realRoots.some((root) => isPathInside(root, canonicalPath));
+  if (!canonicalInside && !roots.some((root) => isPathInside(root, resolvedPath))) {
     throw new ConfigIncludeError(
       `Include write path escapes config directory: ${params.includePath}`,
       params.includePath,
     );
   }
-
-  const canonicalPath = path.normalize(resolvePathViaExistingAncestorSync(resolvedPath));
-  const realRoots = roots.map((root) => path.normalize(safeRealpath(root)));
-  if (!realRoots.some((root) => isPathInside(root, canonicalPath))) {
+  if (!canonicalInside || canonicalPath === undefined) {
     throw new ConfigIncludeError(
       `Include write path resolves outside config directory (symlink): ${params.includePath}`,
       params.includePath,
@@ -84,12 +90,14 @@ export function isInternalIncludeWriteTarget(params: {
 }): boolean {
   const resolvedPath = path.normalize(path.resolve(params.includePath));
   const configDir = path.normalize(path.dirname(path.resolve(params.configPath)));
-  if (!isPathInside(configDir, resolvedPath)) {
-    return false;
-  }
-  const canonicalPath = path.normalize(resolvePathViaExistingAncestorSync(resolvedPath));
-  const canonicalDir = path.normalize(resolvePathViaExistingAncestorSync(configDir));
-  return isPathInside(canonicalDir, canonicalPath);
+  const canonicalPath = realpathViaExistingPrefixSync(resolvedPath);
+  return (
+    canonicalPath !== undefined &&
+    isPathInside(
+      path.normalize(canonicalizeContainmentRootSync(configDir)),
+      path.normalize(canonicalPath),
+    )
+  );
 }
 
 export type IncludeResolver = {
@@ -431,7 +439,14 @@ class IncludeProcessor {
     // roots (CWE-22: Path Traversal). Allowed roots come from
     // OPENCLAW_INCLUDE_ROOTS and let operators opt into shared include trees
     // without weakening the default lock-down.
-    const lexicalMatch = this.findContainingRoot(normalized, "rootDir");
+    // An aliased spelling of an in-root path matches through its canonical form; the realpath
+    // recheck below still decides for existing files.
+    const canonicalInclude = realpathViaExistingPrefixSync(normalized);
+    const lexicalMatch =
+      this.findContainingRoot(normalized, "rootDir") ??
+      (canonicalInclude
+        ? this.findContainingRoot(path.normalize(canonicalInclude), "rootRealDir")
+        : null);
     if (!lexicalMatch) {
       throw new ConfigIncludeError(
         `Include path escapes config directory: ${includePath} (root: ${this.rootDir})`,
@@ -523,11 +538,7 @@ class IncludeProcessor {
 }
 
 function safeRealpath(target: string): string {
-  try {
-    return fs.realpathSync(target);
-  } catch {
-    return target;
-  }
+  return canonicalizeContainmentRootSync(target);
 }
 
 /** Capture the lexical and canonical include roots once for a resolver traversal. */

@@ -17,6 +17,8 @@ permissions:
 
 concurrency:
   group: postgres-conformance-weekly
+  # Keep manual qualification pending when a scheduled run joins the same queue.
+  queue: max
   cancel-in-progress: false
 
 jobs:
@@ -28,10 +30,10 @@ jobs:
     timeout-minutes: 50
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 4
       matrix:
         version: ${{ fromJSON(github.event_name == 'workflow_dispatch' && (inputs.versions == 'all' && '["pg16","pg17","pg18"]' || format('["{0}"]', inputs.versions)) || github.event.schedule == '17 7 * * *' && '["pg17"]' || '["pg16","pg18"]') }}
-        shard: [1/3, 2/3, 3/3]
+        shard: [1/4, 2/4, 3/4, 4/4]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

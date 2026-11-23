@@ -1,11 +1,14 @@
 // Covers process respawn behavior across supervisors.
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   formatWindowsTaskSupervisorChildArgument,
   WINDOWS_TASK_SUPERVISOR_CHILD_FLAG,
 } from "../daemon/windows-task-supervisor-contract.js";
 import { captureFullEnv, deleteTestEnvValue } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import { acquireGatewayStateOwner } from "./gateway-state-owner.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -50,6 +53,38 @@ import {
 const originalArgv = [...process.argv];
 const originalExecArgv = [...process.execArgv];
 const envSnapshot = captureFullEnv();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("does not respawn or schedule a launchd handoff while Doctor owns maintenance", () => {
+  const root = tempDirs.make("openclaw-respawn-maintenance-");
+  process.env.OPENCLAW_STATE_DIR = root;
+  delete process.env.OPENCLAW_NO_RESPAWN;
+  spawnMock.mockReturnValue(mockDetachedChild(6161));
+  const owner = acquireGatewayStateOwner({
+    databasePath: path.join(root, "state", "openclaw.sqlite"),
+  });
+  try {
+    for (const respawn of [respawnGatewayProcessForUpdate, restartGatewayProcessWithFreshPid]) {
+      expect(respawn({ decision: { mode: "supervised", supervisor: "launchd" } })).toMatchObject({
+        mode: "failed",
+        detail: expect.stringContaining("maintenance"),
+      });
+    }
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(scheduleLaunchdHandoffMock).not.toHaveBeenCalled();
+  } finally {
+    owner.release();
+  }
+});
+
+it("leaves an update successor of a launcher child to its launcher", () => {
+  process.env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-respawn-launcher-");
+  delete process.env.OPENCLAW_NO_RESPAWN;
+  process.env.OPENCLAW_LAUNCHER_IPC = "1";
+  spawnMock.mockReturnValue(mockDetachedChild(6262));
+  expect(respawnGatewayProcessForUpdate()).toEqual({ mode: "supervised", exitCode: 0 });
+  expect(spawnMock).not.toHaveBeenCalled();
+});
 
 afterEach(() => {
   envSnapshot.restore();
@@ -73,7 +108,10 @@ function clearSupervisorHints() {
   }
 }
 
-beforeEach(clearSupervisorHints);
+beforeEach(() => {
+  clearSupervisorHints();
+  process.env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-respawn-");
+});
 
 function setupSupervisor(platform: NodeJS.Platform, env: NodeJS.ProcessEnv = {}) {
   mockProcessPlatform(platform);

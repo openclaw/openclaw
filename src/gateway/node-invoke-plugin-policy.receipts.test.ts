@@ -149,56 +149,45 @@ describe("plugin node action receipts", () => {
     expect(receipts).toEqual([]);
   });
 
-  it.for(["allowed", "denied", "throws"] as const)(
-    "does not attribute a late %s policy result after runtime authority closes",
-    (outcome, testContext) => {
-      const policyStarted = createDeferred();
-      const policyWait = createDeferred();
-      const lateError = new Error("late policy failure");
-      let authorityActive = true;
-      let operation: ReturnType<ReturnType<typeof fixture>["run"]> | undefined;
-      authorityScenario = runQaGatewayTestFixture(
-        testContext,
-        async () => {
-          registerPolicy(async () => {
-            policyStarted.resolve();
-            await policyWait.promise;
-            if (outcome === "throws") {
-              throw lateError;
-            }
-            return outcome === "allowed"
-              ? { ok: true, payload: "done" }
-              : { ok: false, code: "PLUGIN_DENIED", message: "denied" };
-          });
-          const { context, invoke, run } = fixture(undefined, `run-node-policy-${outcome}`);
-          context.validateAgentRuntimeApprovalAuthority = () => authorityActive;
-          operation = run();
-          await withinTest(
-            awaitGateBeforeSettlement(
-              policyStarted.promise,
-              operation,
-              "Plugin invocation ended before policy entry",
-            ),
-            testContext.signal,
-          );
-          authorityActive = false;
-          policyWait.resolve();
-          await withinTest(
-            outcome === "throws"
-              ? expect(operation).rejects.toBe(lateError)
-              : expect(operation).resolves.toMatchObject({ ok: outcome === "allowed" }),
-            testContext.signal,
-          );
-          expect(invoke).not.toHaveBeenCalled();
-          expect(receipts).toEqual([]);
-        },
-        () => {
-          authorityActive = false;
-          policyWait.resolve();
-        },
-        () => Promise.allSettled(operation ? [operation] : []),
-      );
-      return authorityScenario;
-    },
-  );
+  it("attributes a policy result that arrives after the run ended", (testContext) => {
+    const policyStarted = createDeferred();
+    const policyWait = createDeferred();
+    let authorityActive = true;
+    let operation: Promise<unknown> | undefined;
+    authorityScenario = runQaGatewayTestFixture(
+      testContext,
+      async () => {
+        registerPolicy(async () => {
+          policyStarted.resolve();
+          await policyWait.promise;
+          return { ok: false, code: "PLUGIN_DENIED", message: "denied" };
+        });
+        const { context, invoke, run } = fixture(undefined, "run-node-policy-ended");
+        context.validateAgentRuntimeApprovalAuthority = () => authorityActive;
+        operation = run();
+        await withinTest(
+          awaitGateBeforeSettlement(
+            policyStarted.promise,
+            operation,
+            "Plugin invocation ended before policy entry",
+          ),
+          testContext.signal,
+        );
+        authorityActive = false;
+        policyWait.resolve();
+        await withinTest(
+          expect(operation).resolves.toMatchObject({ ok: false, code: "PLUGIN_DENIED" }),
+          testContext.signal,
+        );
+        expect(invoke).not.toHaveBeenCalled();
+        expect(receipts).toMatchObject([expectedReceipt("denied", "node_plugin_policy_denied")]);
+      },
+      () => {
+        authorityActive = false;
+        policyWait.resolve();
+      },
+      () => Promise.allSettled(operation ? [operation] : []),
+    );
+    return authorityScenario;
+  });
 });

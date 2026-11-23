@@ -25,9 +25,44 @@ import {
   resolveGatewayOperatorRoleActor,
 } from "../operator-role-policy.js";
 import { APPROVALS_SCOPE, isOperatorScope } from "../operator-scopes.js";
+import {
+  isPublicationTransportCurrent,
+  isPublicationTransportEnabled,
+  isPublicationTransportMethod,
+  isPublicationTransportScope,
+} from "../publication-reader.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
 import { isDirectCronOwnerClient, isHumanCronMutation } from "./cron-human-owner.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./shared-types.js";
+
+/** Resolve the grant's dispatch ceiling without rechecking source or role liveness. */
+export function authorizeGatewayMethodScopes(
+  method: string,
+  scopes: readonly string[],
+  params: unknown,
+  methodRegistry: GatewayMethodRegistryView,
+) {
+  const registeredScope = methodRegistry.getScope(method);
+  let scopeAuth = isOperatorScope(registeredScope)
+    ? authorizeOperatorScopesForRequiredScope(
+        registeredScope,
+        scopes,
+        methodRegistry.getSessionAccess?.(method)?.allowOwnSessionScope
+          ? "operator.sessions.write"
+          : resolveSessionMethodScope(method, params),
+        method,
+      )
+    : authorizeOperatorScopesForMethod(method, scopes, params);
+  if (!scopeAuth.allowed && isInProcessSessionRun(method, params)) {
+    scopeAuth = authorizeOperatorScopesForRequiredScope(
+      scopeAuth.missingScope,
+      scopes,
+      "operator.sessions.write",
+      method,
+    );
+  }
+  return scopeAuth;
+}
 
 export function authorizeGatewayMethod(
   method: string,
@@ -36,6 +71,31 @@ export function authorizeGatewayMethod(
   methodRegistry: GatewayMethodRegistryView,
   context: GatewayRequestContext,
 ): { error: ErrorShape | null; sessionScope?: SessionOperatorScope } {
+  if (
+    client?.internal?.publicationTransport ||
+    client?.connect.scopes?.some(isPublicationTransportScope)
+  ) {
+    const admission = client.internal?.publicationTransport;
+    const allowed =
+      isPublicationTransportCurrent(admission) &&
+      isPublicationTransportEnabled(admission.scope) &&
+      !client.invalidated &&
+      client.isDeviceTokenAuth === true &&
+      client.connect.role === "operator" &&
+      client.connect.scopes?.length === 1 &&
+      client.connect.scopes[0] === admission.scope &&
+      client.connect.device?.id === admission.deviceId &&
+      client.internal?.operatorDeviceTokenIdentity?.key === admission.key &&
+      !client.internal?.syntheticClient &&
+      !client.authenticatedUserProfile &&
+      !client.internal?.operatorRoleActor &&
+      isPublicationTransportMethod(methodRegistry, method, admission.scope);
+    return {
+      error: allowed
+        ? null
+        : errorShape(ErrorCodes.FORBIDDEN, "publication transport method denied"),
+    };
+  }
   // Pre-connect and health requests are allowed through; role/scope checks require the
   // authenticated connect metadata established by the gateway handshake.
   if (!client?.connect || method === "health") {
@@ -77,24 +137,7 @@ export function authorizeGatewayMethod(
   if (registeredScope === APPROVALS_SCOPE && isHostPluginApprovalCall(method, client)) {
     return { error: null };
   }
-  let scopeAuth = isOperatorScope(registeredScope)
-    ? authorizeOperatorScopesForRequiredScope(
-        registeredScope,
-        scopes,
-        methodRegistry.getSessionAccess?.(method)?.allowOwnSessionScope
-          ? "operator.sessions.write"
-          : resolveSessionMethodScope(method, params),
-        method,
-      )
-    : authorizeOperatorScopesForMethod(method, scopes, params);
-  if (!scopeAuth.allowed && isInProcessSessionRun(method, params)) {
-    scopeAuth = authorizeOperatorScopesForRequiredScope(
-      scopeAuth.missingScope,
-      scopes,
-      "operator.sessions.write",
-      method,
-    );
-  }
+  const scopeAuth = authorizeGatewayMethodScopes(method, scopes, params, methodRegistry);
   if (!scopeAuth.allowed) {
     // Handlers recheck the stored human owner at the mutation commit boundary.
     if (isHumanCronMutation(method) && isDirectCronOwnerClient(client)) {

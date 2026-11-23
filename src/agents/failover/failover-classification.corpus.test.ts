@@ -130,7 +130,7 @@ it("preserves model-unavailable guidance from the canonical reason", () => {
   expect(classifyProviderRequestFacets({ message })).toBeNull();
   expect(classifyReplyRequest({ message })).toMatchObject({
     code: "provider_model_unavailable",
-    userMessage: expect.stringContaining("Choose another model in the Control UI"),
+    userMessage: expect.stringContaining("Choose another model in the OpenClaw app"),
   });
 });
 
@@ -144,7 +144,7 @@ it("preserves quota guidance for generic provider text with HTTP 429 evidence", 
 it("preserves authentication guidance for provider HTTP 401 failures", () => {
   const message =
     "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses";
-  expectClassification({ message, status: 401 }, "auth");
+  expect(classifyReplyRequest({ message, status: 401, code: "api_key_expired" })).toBeUndefined();
   expectRequest(message, null, "provider_authentication_error", 401);
 });
 it("preserves provider-internal guidance", () =>

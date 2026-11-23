@@ -77,3 +77,13 @@ Prefer sub-agents when the repo is large or the requested change set is broad; u
 - Delegation notes when sub-agents were used (scope delegated and how findings were merged).
 - Multilingual parity note (in-sync, partial with rationale, or intentionally divergent).
 - Repository-specific overlay notes when one was used.
+
+## Instruction rules
+
+These apply to `AGENTS.md` files, skills and review prompts.
+
+- A new rule cites an incident: a PR, issue or commit. No incident, no rule.
+- A new rule passes the deletion test: without it, a senior engineer does the wrong thing.
+- A rule has no "unless security, data or money" exception. Name the exact failure.
+- A proof or test demand names the real input and the wrong result. For a speculative race, ask only for the failure mode and its likelihood.
+- A rule added in one layer deletes its looser and stricter copies in the other layers in the same PR.

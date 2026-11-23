@@ -20,6 +20,7 @@ function mountFrame(
   context: ApplicationContext,
   overrides: Parameters<typeof createFrameOwner>[1] = {},
   subscribe = false,
+  proxyReady = true,
 ) {
   const fetchDocument = vi.fn(async () => new Response("<p>Dashboard</p>"));
   vi.stubGlobal("fetch", fetchDocument);
@@ -42,9 +43,17 @@ function mountFrame(
   const post = vi.spyOn(frame.contentWindow!, "postMessage");
   const notify = (data: object, ports: MessagePort[] = []) =>
     dispatchFrameMessage(frame, { origin: new URL(frame.src).origin, data, ports });
-  notify({ method: "ui/notifications/sandbox-proxy-ready", params: { sandboxUrl: frame.src } });
+  if (proxyReady) {
+    notify({ method: "ui/notifications/sandbox-proxy-ready", params: { sandboxUrl: frame.src } });
+  }
   return { root, frame, post, notify, fetchDocument, refresh };
 }
+const connectedContext = {
+  gateway: {
+    snapshot: { phase: "connected" },
+    connection: { gatewayUrl: "https://gateway.example" },
+  },
+} as ApplicationContext;
 afterEach(() => {
   lifecycle?.disconnect();
   lifecycle = undefined;
@@ -144,12 +153,6 @@ it("resumes its board bridge after suspension rolls back without reconnecting", 
 
 it("keeps a stalled inner document mounted, offers retry, and accepts only the current render", async () => {
   vi.useFakeTimers();
-  const context = {
-    gateway: {
-      snapshot: { phase: "connected" },
-      connection: { gatewayUrl: "https://gateway.example" },
-    },
-  } as ApplicationContext;
   const {
     root,
     frame,
@@ -157,7 +160,7 @@ it("keeps a stalled inner document mounted, offers retry, and accepts only the c
     notify: dispatch,
     fetchDocument,
     refresh,
-  } = mountFrame(grantedFrameWidgetFixture(), context, {}, true);
+  } = mountFrame(grantedFrameWidgetFixture(), connectedContext, {}, true);
   const notify = (method: string, params: object) => dispatch({ method, params });
   await vi.advanceTimersByTimeAsync(0);
   const renderId = () =>
@@ -187,6 +190,31 @@ it("keeps a stalled inner document mounted, offers retry, and accepts only the c
   expect(frame.hasAttribute("inert")).toBe(false);
   expect(root.querySelector('[role="status"] button')).toBeNull();
 });
+
+it.each([
+  { sandboxOrigin: undefined, hint: true },
+  { sandboxOrigin: "https://sandbox.example", hint: false },
+])(
+  "offers sandboxOrigin guidance behind More info after the ready deadline (sandboxOrigin=$sandboxOrigin)",
+  async ({ sandboxOrigin, hint }) => {
+    vi.useFakeTimers();
+    // The outer sandbox frame never announces readiness.
+    const widget = { ...grantedFrameWidgetFixture(), sandboxOrigin };
+    const { root } = mountFrame(widget, connectedContext, {}, true, false);
+    await vi.advanceTimersByTimeAsync(30_000);
+    flush();
+    const notice = root.querySelector('[role="status"]');
+    expect(notice?.textContent).toContain("reconnects automatically");
+    const details = notice?.querySelector("details");
+    expect(Boolean(details)).toBe(hint);
+    if (details) {
+      // The short notice leads; the possible cause stays collapsed until asked for.
+      expect(details.open).toBe(false);
+      expect(details.querySelector("summary")?.textContent).toBe("More info");
+      expect(details.querySelector("p")?.textContent).toContain("mcp.apps.sandboxOrigin");
+    }
+  },
+);
 
 it.each(["current", "revision", "replacement", "reconnect"] as const)(
   "publishes a failed refresh only for its admitted frame lifecycle (%s)",

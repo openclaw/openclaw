@@ -7,8 +7,12 @@ export function buildTlonSettingsMigrations(
   account: TlonResolvedAccount,
   currentSettings: TlonSettingsStore,
 ): Array<{ key: keyof TlonSettingsStore; fileValue: unknown; settingsValue: unknown }> {
+  const configuredClubRules =
+    Object.keys(account.clubRules).length > 0 ? JSON.stringify(account.clubRules) : undefined;
   const keys = [
     "dmAllowlist",
+    "clubPolicy",
+    "clubRules",
     "groupInviteAllowlist",
     "groupChannels",
     "defaultAuthorizedShips",
@@ -17,7 +21,11 @@ export function buildTlonSettingsMigrations(
     "autoAcceptGroupInvites",
   ] as const;
   return [
-    ...keys.map((key) => ({ key, fileValue: account[key], settingsValue: currentSettings[key] })),
+    ...keys.map((key) => ({
+      key,
+      fileValue: key === "clubRules" ? configuredClubRules : account[key],
+      settingsValue: currentSettings[key],
+    })),
     {
       key: "showModelSig",
       fileValue: account.showModelSignature,
@@ -70,6 +78,8 @@ export function applyTlonSettingsOverrides(params: {
   }
   return {
     effectiveDmAllowlist: settings.dmAllowlist ?? account.dmAllowlist,
+    effectiveClubPolicy: settings.clubPolicy ?? account.clubPolicy ?? "approve-once",
+    effectiveClubRules: settings.clubRules ?? account.clubRules,
     effectiveShowModelSig: settings.showModelSig ?? account.showModelSignature ?? false,
     effectiveAutoAcceptDmInvites:
       settings.autoAcceptDmInvites ?? account.autoAcceptDmInvites ?? false,
@@ -97,10 +107,12 @@ export function createTlonSettingsInstaller(
   return (currentSettings: TlonSettingsStore, preserveApprovalState = false) => {
     const pendingApprovals = state.pendingApprovals;
     const effectiveDmAllowlist = state.effectiveDmAllowlist;
+    const effectiveClubRules = state.effectiveClubRules;
     Object.assign(state, applyTlonSettingsOverrides({ account, currentSettings, log }));
     if (preserveApprovalState) {
       state.pendingApprovals = pendingApprovals;
       state.effectiveDmAllowlist = effectiveDmAllowlist;
+      state.effectiveClubRules = effectiveClubRules;
     }
   };
 }

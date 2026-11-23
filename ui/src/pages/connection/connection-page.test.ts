@@ -104,7 +104,7 @@ function source(
   return createApplicationGateway({
     client,
     phase: "connected",
-    hello: gatewayHelloForMethods(["system.info"]),
+    hello: gatewayHelloForMethods(["system.info", "last-heartbeat"]),
     sessionKey: "main",
   } as ApplicationGatewaySnapshot);
 }
@@ -197,7 +197,7 @@ async function display(snapshot: Partial<ApplicationGatewaySnapshot> = {}) {
 }
 
 function authHello(authMode: "token" | "password" | "trusted-proxy"): GatewayHelloOk {
-  return { ...gatewayHelloForMethods(["system.info"]), snapshot: { authMode } };
+  return { ...gatewayHelloForMethods(["system.info", "last-heartbeat"]), snapshot: { authMode } };
 }
 
 function control(page: HTMLElement, selector: string) {
@@ -413,7 +413,7 @@ it.each(["reconnect", "source", "client", "source error", "source queued"] as co
       publish(first, {
         phase: "connected",
         sessionKey: "remote-session",
-        hello: gatewayHelloForMethods(["system.info"]),
+        hello: gatewayHelloForMethods(["system.info", "last-heartbeat"]),
       });
       await check({ secret: "draft-secret", session: "draft-session" });
     } else if (change.startsWith("source")) {
@@ -612,6 +612,7 @@ it("swaps the connection action slot in place while the draft differs", async ()
       button.textContent?.trim(),
     );
   expect(labels()).toEqual(["Reconnect"]);
+  expect(page.textContent).not.toContain("Reconnect to the current Gateway to try again.");
   expect(page.querySelector(".connection-actions .btn.primary")).toBeNull();
   editInput(page, "Gateway secret", "draft-token");
   await waitForPage(() => expect(labels()).toEqual(["Discard changes", "Apply and reconnect"]));
@@ -663,32 +664,37 @@ it("stops polling after a missing-read-scope error", async () => {
     .mockResolvedValueOnce(deviceSystemInfo)
     .mockRejectedValueOnce(missingReadScopeErrorFixture())
     .mockResolvedValue(deviceSystemInfo);
-  const { check } = await setup(request);
+  const { check, ...current } = await setup(request);
   await vi.advanceTimersByTimeAsync(10_000);
-  await check({ hostName: null });
-  await vi.advanceTimersByTimeAsync(10_000);
+  await check({ hostName: null, activityFailed: false });
+  publish(current, { sessionKey: "another-session" });
+  await vi.advanceTimersByTimeAsync(20_000);
   expect(request).toHaveBeenCalledTimes(2);
 });
 
 it.each(["advertisement", "scope"] as const)(
-  "retires a pending host read when its %s disappears",
+  "retires pending diagnostics when their %s disappears",
   async (change) => {
     const response = deferred<SystemInfoResult>();
     const request = vi
       .fn()
       .mockReturnValueOnce(response.promise)
       .mockResolvedValue(deviceSystemInfo);
-    const { check, ...current } = await setup(request);
+    const pendingPing = deferred<null>();
+    const ping = vi.fn().mockReturnValueOnce(pendingPing.promise).mockResolvedValue(null);
+    const { check, ...current } = await setup(request, ping);
     publish(current, {
       hello: gatewayHelloForMethods(
-        change === "advertisement" ? [] : ["system.info"],
+        change === "advertisement" ? [] : ["system.info", "last-heartbeat"],
         change === "scope" ? ["operator.sessions.read"] : ["operator.admin"],
       ),
     });
     response.resolve(deviceSystemInfo);
-    await check({ hostElement: null });
+    pendingPing.resolve(null);
+    await check({ hostElement: null, average: "—", activityFailed: false });
+    expect(ping.mock.calls[0]?.[2].signal.aborted).toBe(true);
     publish(current, {
-      hello: gatewayHelloForMethods(["system.info"]),
+      hello: gatewayHelloForMethods(["system.info", "last-heartbeat"]),
     });
     await check({ hostName: "Gateway", calls: 2 });
   },
@@ -822,4 +828,61 @@ it("renders host identity and resource meters, including disk removal", async ()
       "config-host__meter-fill--warn",
     ]),
   );
+});
+
+it.each(["session-only", "unadvertised", "unknown"] as const)(
+  "settles %s diagnostics without requests or retry notices and resumes after reconnect",
+  async (kind) => {
+    vi.useFakeTimers();
+    mockVisibility();
+    const request = vi.fn().mockResolvedValue(gatewaySystemInfo);
+    const ping = vi.fn().mockResolvedValue(null);
+    const current = source(makeClient(request), ping);
+    publish(current, {
+      hello:
+        kind === "unknown"
+          ? null
+          : gatewayHelloForMethods(
+              kind === "unadvertised" ? [] : ["system.info", "last-heartbeat"],
+              kind === "session-only" ? ["operator.sessions.read"] : ["operator.read"],
+            ),
+    });
+    const { page, check } = await mount(current.gateway);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(request).not.toHaveBeenCalled();
+    expect(ping).not.toHaveBeenCalled();
+    expect(page.textContent).not.toContain("Retrying");
+    expect(page.querySelector(".skeleton")).toBeNull();
+    expect(page.textContent).toContain("Connected");
+    publish(current, { phase: "reconnecting" });
+    publish(current, {
+      phase: "connected",
+      hello: gatewayHelloForMethods(["system.info", "last-heartbeat"], ["operator.read"]),
+    });
+    await check({ hostName: "Gateway", activity: contains("432 MB") });
+    expect(ping).toHaveBeenCalledOnce();
+  },
+);
+
+it("settles denied pings until a fresh connection and preserves independent host polling", async () => {
+  vi.useFakeTimers();
+  mockVisibility();
+  const ping = vi
+    .fn()
+    .mockRejectedValueOnce(missingReadScopeErrorFixture())
+    .mockResolvedValue(null);
+  const { page, request, check, ...current } = await setup(undefined, ping);
+  await check({ hostName: "Gateway" });
+  publish(current, { sessionKey: "another-session" });
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(ping).toHaveBeenCalledOnce();
+  expect(request).toHaveBeenCalledTimes(3);
+  expect(page.textContent).not.toContain("Last ping failed");
+  publish(current, { phase: "reconnecting" });
+  publish(current, {
+    phase: "connected",
+    hello: gatewayHelloForMethods(["system.info", "last-heartbeat"]),
+  });
+  await check({ hostName: "Gateway", average: contains("ms") });
+  expect(ping).toHaveBeenCalledTimes(2);
 });

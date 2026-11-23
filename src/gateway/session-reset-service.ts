@@ -5,13 +5,12 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
-  missingScopeErrorShape,
+  type missingScopeErrorShape,
   type PreservedSessionWorktree,
 } from "../../packages/gateway-protocol/src/index.js";
 import { tryPrepareFreshManagerRuntimeSession } from "../acp/control-plane/manager.runtime-resume-state.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { rebindDurableAcpSessionMetaAfterReset } from "../acp/runtime/session-meta-reset.js";
-import { assertOperatorAccessProgramAllowed } from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { clearAllCliSessions } from "../agents/cli-session.js";
 import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
@@ -49,12 +48,10 @@ import { createSessionResetBoundaryId } from "../config/sessions/session-reset-b
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { isIncognitoSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
-import { resolveMissingAgentHarnessSessionError } from "../sessions/agent-harness-session-key.js";
 import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_RESET_MESSAGE,
@@ -75,8 +72,7 @@ import {
   finalizeDetachedSessionWorktree,
   removeSessionWorktree,
 } from "../sessions/session-worktree-lifecycle.js";
-import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
-import { ADMIN_SCOPE } from "./operator-scopes.js";
+import { resolveCreatorSandbox } from "./operator-role-policy.js";
 import type * as SessionLifecycle from "./session-create-service.types.js";
 import { createResetBoundaryTranscriptSource } from "./session-end-transcript-reader.js";
 import {
@@ -92,13 +88,18 @@ import {
   rollbackGatewaySessionPreparation,
   settleGatewaySessionLifecycleCommit,
 } from "./session-lifecycle-preparation.js";
-import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { invalidSessionRequest, unavailableSessionRequest } from "./session-request-error.js";
 import {
   buildPendingAcpMeta,
   closeAcpRuntimeForSession,
   closeChildAcpRuntimesForParent,
 } from "./session-reset-acp.js";
+import {
+  createSessionResetEntryChecks,
+  prepareSessionResetPermissionAuthorization,
+  resolveSessionResetAuthorizationError,
+} from "./session-reset-authorization.js";
 import { deleteIncognitoSessionForReset } from "./session-reset-incognito.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 import { ensureSessionRuntimeCleanup } from "./session-reset-runtime-cleanup.js";
@@ -130,7 +131,7 @@ export async function performGatewaySessionReset(
       ok: true;
       key: string;
       entry: SessionEntry;
-      resolved: { modelProvider: string; model: string };
+      resolved: { modelProvider?: string; model?: string };
       agentId: string;
       storePath: string;
     }
@@ -204,14 +205,12 @@ async function performPreparedGatewaySessionReset({
     agentId: resetTarget.target.agentId,
     storePath: resetTarget.storePath,
   });
-  const authorizeResetCreation = () =>
-    authorizeGatewaySessionCreation({
-      cfg: resetTarget.cfg,
-      agentId: resetTarget.target.agentId,
-      ...(params.operatorRoleActor
-        ? { actor: params.operatorRoleActor }
-        : { profileId: params.requestingOperatorProfileId }),
-    });
+  const {
+    authorizeResetCreation,
+    resolveResetOwnershipError,
+    resolveResetHarnessError,
+    resolveFastModeSelectionError,
+  } = createSessionResetEntryChecks(params, resetTarget);
   const reportLifecycleCleanupError = (error: unknown) => {
     if (params.onLifecycleCleanupError) {
       params.onLifecycleCleanupError(error);
@@ -223,6 +222,13 @@ async function performPreparedGatewaySessionReset({
     params.assertCurrent?.();
     params.assertAuthorizedInstance?.();
   };
+  const permissionAuthority = await prepareSessionResetPermissionAuthorization(
+    params,
+    resetTarget,
+    initialResetEntry,
+    assertReadAuthorized,
+  );
+  using _ = { [Symbol.dispose]: permissionAuthority.release };
   const loadResetSession = (assertReadCurrent?: () => void) =>
     withGatewaySessionEntryReadOnly(lookup, async (current) => {
       assertReadCurrent?.();
@@ -240,44 +246,13 @@ async function performPreparedGatewaySessionReset({
       : !entry
         ? authorizeResetCreation()
         : undefined;
-  const resolveResetOwnershipError = (
-    entry: SessionEntry | undefined,
-    key = resetTarget.target.canonicalKey,
-  ) =>
-    resolvePluginSessionOwnershipError({
-      action: "reset",
-      entry,
-      key,
-      pluginOwnerId: params.authorizedPluginId,
-    });
-  const resolveResetHarnessError = (entry: SessionEntry | undefined) => {
-    const message = resolveMissingAgentHarnessSessionError(resetTarget.target.canonicalKey, entry);
-    return message ? errorShape(ErrorCodes.INVALID_REQUEST, message) : undefined;
-  };
-  const resolveFastModeSelectionError = (entry: SessionEntry | undefined) => {
-    const selection = params.fastModeSelection;
-    return entry &&
-      selection &&
-      selection.value !== entry.fastMode &&
-      !selection.allowExistingChange
-      ? missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] })
-      : undefined;
-  };
-  const resolveResetAccessProgramError = (entry: SessionEntry | undefined) => {
-    try {
-      assertOperatorAccessProgramAllowed(params.operatorAuthority, entry?.cyberAccessProgram);
-      return undefined;
-    } catch (error) {
-      return errorShape(ErrorCodes.FORBIDDEN, formatErrorMessage(error));
-    }
-  };
   const resolveResetEntryAccessError = (entry: SessionEntry | undefined, canonicalKey: string) =>
-    resolveResetAccessProgramError(entry) ??
+    resolveSessionResetAuthorizationError(entry, params, permissionAuthority) ??
     resolveFastModeSelectionError(entry) ??
     resolveResetOwnershipError(entry, canonicalKey);
   const initialEntryError =
     resolveResetCreationError(initialResetEntry) ??
-    resolveResetAccessProgramError(initialResetEntry) ??
+    resolveSessionResetAuthorizationError(initialResetEntry, params, permissionAuthority) ??
     resolveResetOwnershipError(initialResetEntry) ??
     resolveFastModeSelectionError(initialResetEntry) ??
     resolveResetHarnessError(initialResetEntry);
@@ -498,6 +473,17 @@ async function performPreparedGatewaySessionReset({
         await triggerInternalHook(hookEvent);
         params.assertCurrent?.();
         params.assertAuthorizedInstance?.();
+        let permissionEntry = entry;
+        const assertPermissionAuthorized = () => {
+          const error = permissionAuthority.validate(
+            permissionEntry,
+            buildResetWorkspaceFields(permissionEntry, params).permissionMode,
+          );
+          if (error) {
+            throw new SessionMutationAuthorizationChangedError(error);
+          }
+        };
+        assertPermissionAuthorized();
         // Destructive cleanup adopts only this existing generation. Finish its durable
         // transition after caller closure; missing-row creation still needs live authority.
         const assertCompletionAuthorized = hadExistingEntry
@@ -570,6 +556,7 @@ async function performPreparedGatewaySessionReset({
         let rejectedRevocation: unknown;
         const commitGuard = () => {
           assertCompletionAuthorized?.();
+          assertPermissionAuthorized();
           try {
             validateCleanupRevocation?.();
           } catch (error) {
@@ -748,6 +735,8 @@ async function performPreparedGatewaySessionReset({
               resetSkipped = true;
               return currentEntry;
             }
+            permissionEntry = currentEntry;
+            assertPermissionAuthorized();
             // Revoke only the selected session, after no-op generation checks and before reset commits.
             validateCleanupRevocation = await prepareSubagentSessionCleanupRevocation(
               target.canonicalKey,
@@ -1008,8 +997,8 @@ async function performPreparedGatewaySessionReset({
         const next = lifecycle.nextEntry;
         const selectedModel = resolveSessionModelRef(cfg, next, target.agentId);
         const resolved = {
-          modelProvider: selectedModel.provider,
-          model: selectedModel.model,
+          modelProvider: selectedModel?.provider,
+          model: selectedModel?.model,
         };
         // Runtime model identity is a response projection, not reset persistence. Keep the
         // established RPC entry shape while the stored row retains selection intent only.

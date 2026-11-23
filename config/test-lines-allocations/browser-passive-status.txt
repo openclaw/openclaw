@@ -1,2 +1,0 @@
-4
-# Status/list boundary regressions retain explicit-use coverage.

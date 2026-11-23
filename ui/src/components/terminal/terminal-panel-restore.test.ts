@@ -413,7 +413,7 @@ describe("restore", () => {
   );
 
   it.for(["list", "attach"] as const)(
-    "retains ids after failed %s without opening a replacement",
+    "retries saved ids after failed %s without opening a replacement",
     async (stage, { signal }) => {
       const gateway = createGateway();
       const error = new Error("gateway temporarily unavailable");
@@ -433,6 +433,22 @@ describe("restore", () => {
       expect(panel.hostedTabs).toEqual([]);
       expect(gateway.calls("terminal.open")).toEqual([]);
       await waitForPanelReady(panel);
+      const retry = panel.querySelector<HTMLButtonElement>(".tp-error button");
+      expect(retry?.textContent).toBe("Retry");
+      retry!.click();
+      const retryIndex = stage === "list" ? 0 : 1;
+      const retriedFirst = await waitForAttach(gateway, retryIndex, signal);
+      expect(retriedFirst.sessionId).toBe("session-a");
+      retriedFirst.resolve(attachResult(retriedFirst.sessionId));
+      const retriedSecond = await waitForAttach(gateway, retryIndex + 1, signal);
+      expect(retriedSecond.sessionId).toBe("session-b");
+      retriedSecond.resolve(attachResult(retriedSecond.sessionId));
+      await waitForPanelReady(panel);
+      expect(panel.hostedTabs.map((tab) => tab.className)).toEqual(["is-live", "is-live"]);
+      expect(panel.querySelector('.tp-error[role="alert"]')).toBeNull();
+      expect(savedIds()).toEqual(["session-a", "session-b"]);
+      expect(gateway.calls("terminal.open")).toEqual([]);
+      expect(gateway.calls("terminal.close")).toEqual([]);
     },
   );
 });

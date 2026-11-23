@@ -3,12 +3,19 @@ import {
   AUTOMATIC_RECOVERY_CLEANUP_STEP,
   canAutomaticallyCleanUpdateRecovery,
   automaticRecoveryCleanupWarning,
+  hasSettledAutomaticRecoveryCleanup,
 } from "../infra/update-automatic-cleanup-result.js";
 import { isNeverActivatedFailedUpdate } from "../infra/update-run-activation.js";
 import { getUpdateRun } from "../infra/update-run-reader.js";
+import { isUpdateRecoveryPending } from "../infra/update-run-recovery-schema.js";
+import { inspectUpdateRecoveries } from "../infra/update-run-recovery.js";
 import type { UpdateStepResult } from "../infra/update-step-result.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireOwnedSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
+import { describeAutomaticCleanup } from "./update-automatic-cleanup-report.js";
+import { isUnchangedUpdate, isVerifiedSuccessfulUpdate } from "./update-capture-cleanup.js";
+
+const RESOLVED_WARNING = "An earlier cleanup warning was resolved by a later cleanup.";
 
 /** Called only inside the selected state owner's lifetime, after durable completion. */
 export async function cleanupCompletedUpdateRecovery(
@@ -23,13 +30,18 @@ export async function cleanupCompletedUpdateRecovery(
     if (!run || !canAutomaticallyCleanUpdateRecovery(run)) {
       return undefined;
     }
+    // After an activated failure, older backup sets go only once no recovery is pending.
     if (
-      run.steps.some(
-        (step) => step.step === AUTOMATIC_RECOVERY_CLEANUP_STEP && step.status === "completed",
-      )
+      !isNeverActivatedFailedUpdate(run) &&
+      (run.status === "failed" || run.status === "rolled-back") &&
+      inspectUpdateRecoveries({ env }).some(({ record }) => isUpdateRecoveryPending(record))
     ) {
+      return undefined;
+    }
+    if (hasSettledAutomaticRecoveryCleanup(run)) {
       const message = run.steps.find(
-        (step) => step.step === `warning:${AUTOMATIC_RECOVERY_CLEANUP_STEP}`,
+        (step) =>
+          step.step === `warning:${AUTOMATIC_RECOVERY_CLEANUP_STEP}` && step.status === "completed",
       )?.detail;
       const detail = run.steps.find(
         (step) => step.step === `diagnostic:${AUTOMATIC_RECOVERY_CLEANUP_STEP}`,
@@ -44,8 +56,12 @@ export async function cleanupCompletedUpdateRecovery(
         ...(detail ? { diagnostics: [detail] } : {}),
       };
     }
-    // A failure that never activated releases its own capture along with superseded recovery.
-    const ownCaptureReleased = isNeverActivatedFailedUpdate(run);
+    // A failure that never activated, an already-current run, or a verified healthy success
+    // releases its own capture.
+    const ownCaptureReleased =
+      isNeverActivatedFailedUpdate(run) ||
+      isUnchangedUpdate(run) ||
+      isVerifiedSuccessfulUpdate(run);
     const io = createConfigIO({ env, observe: false, pluginValidation: "core-only" });
     const readConfig = () => io.readSourceConfigBestEffort();
     const preview = await inspectSessionSqliteRecovery({ cfg: await readConfig(), env });
@@ -56,18 +72,21 @@ export async function cleanupCompletedUpdateRecovery(
         preview,
         readConfig,
         confirm: async (verified) => {
-          // Backward clock adjustments must not make this run its own successor.
+          // Backward clock adjustments must not make this run its own successor. Only its
+          // own verified success releases its backups, and nothing releases its own
+          // database snapshot: that waits for a later verified update.
           if (
-            !ownCaptureReleased &&
             verified.artifacts.some(
               (item) =>
-                item.kind === "update-capture" &&
                 item.outcome === "candidate" &&
-                item.runs.includes(runId),
+                item.runs.includes(runId) &&
+                !(item.kind === "update-capture"
+                  ? ownCaptureReleased
+                  : item.kind !== "database-snapshot" && isVerifiedSuccessfulUpdate(run)),
             )
           ) {
             throw new Error(
-              "The triggering update's own capture must be retained; cleanup deferred",
+              "The triggering update's own capture or backups must be retained; cleanup deferred",
             );
           }
           return true;
@@ -77,28 +96,35 @@ export async function cleanupCompletedUpdateRecovery(
       },
       { assertCurrent },
     );
-    const retained = report.artifacts.filter(
-      (item) =>
-        ["blocked", "failed", "candidate", "verification-required"].includes(item.outcome) ||
-        item.reason === "unreadable-update-history" ||
-        item.reason === "historical-manifest-without-import-proof" ||
-        item.reason === "historical-recovery-dependencies-unverified",
-    );
-    const summary = `Recovery cleanup removed ${report.totals.removedFiles} files (${report.totals.removedBytes} logical bytes); protected recovery artifacts were retained.`;
+    const { diagnostics, warning } = describeAutomaticCleanup(report.artifacts);
+    // A rerun replaces the earlier report; an earlier warning it no longer has is resolved.
+    const resolved =
+      !warning &&
+      run.steps.some(
+        (step) =>
+          step.step === `warning:${AUTOMATIC_RECOVERY_CLEANUP_STEP}` && step.status === "completed",
+      );
+    // A failed update's own result already names what it keeps; add only real effects.
+    if (
+      !ownCaptureReleased &&
+      (run.status === "failed" || run.status === "rolled-back") &&
+      !warning &&
+      !report.artifacts.some((item) => item.removedBytes !== undefined)
+    ) {
+      return undefined;
+    }
     return {
       name: AUTOMATIC_RECOVERY_CLEANUP_STEP,
       command: "openclaw update cleanup",
       cwd: "",
       durationMs: Math.max(0, Date.now() - startedAt),
       exitCode: 0,
-      diagnostics: [summary],
-      ...(retained.length
-        ? {
-            advisory: {
-              kind: "recoverable-maintenance" as const,
-              message: `${summary} Not fully retired: ${retained.map((item) => `${item.path} (${item.reason}${item.detail ? `: ${item.detail}` : ""})`).join("; ")}. Inspect with openclaw update cleanup --dry-run.`,
-            },
-          }
+      // An empty warning list settles an earlier warning; the note stays a diagnostic.
+      diagnostics: resolved ? [...diagnostics, RESOLVED_WARNING] : diagnostics,
+      ...(resolved ? { warnings: [] } : {}),
+      // Failed deletions and unverifiable state are warnings; policy keeps are diagnostics.
+      ...(warning
+        ? { advisory: { kind: "recoverable-maintenance" as const, message: warning } }
         : {}),
     };
   } catch (error) {

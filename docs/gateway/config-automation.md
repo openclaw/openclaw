@@ -102,14 +102,14 @@ See [Automation delivery](/automation/cron-jobs/delivery#default-destinations).
 ```
 
 `cron.failureAlert` owns the global alert policy and its default destination. Jobs
-with an existing failure route are covered by default after 2 consecutive
-execution failures with a 1-hour cooldown; a `cron.failureAlert` object explicitly
+with an existing failure route are covered by default from the first
+execution failure, with a 1-hour cooldown; a `cron.failureAlert` object explicitly
 activates/tunes the policy even when no route existed. The retired
 `cron.failureDestination` block is merged into it by
 [`openclaw doctor --fix`](/cli/doctor).
 
 - `enabled`: explicitly enable or disable the global policy. `false` disables inherited notifications unless a job has its own `failureAlert` object; `true` explicitly enables globally. Omitting it preserves route-backed defaults.
-- `after`: consecutive failures before an alert fires (positive integer, min: `1`; default: `2`).
+- `after`: consecutive failures before an alert fires (positive integer, min: `1`; default: `1`).
 - `cooldownMs`: minimum milliseconds between repeated alerts for the same job (non-negative integer; default: `3600000`).
 - `includeSkipped`: count consecutive skipped runs toward the alert threshold (default: `false`). Skipped runs are tracked separately and do not affect execution-error backoff.
 - `mode`: delivery mode - `"announce"` sends via a channel message; `"webhook"` posts to the target in `to`. Defaults to `"announce"` when enough target data exists.
@@ -117,7 +117,7 @@ activates/tunes the policy even when no route existed. The retired
 - `to`: explicit announce target or webhook URL. Required for webhook mode.
 - `accountId`: optional account or channel id to scope alert delivery.
 - Route precedence is per-job `failureAlert` route fields, then per-job `delivery.failureDestination` layered over these global destination fields (or the creator's `cron.creators.<profileId>.failureAlert` route, else the owning agent's `cron.agents.<agentId>.failureAlert` route, when set), then the primary announce target, including a configured default destination.
-- Per-job `failureAlert: false` disables execution and required-delivery failure alerts for that job; the auto-disable safety notification remains active. Any per-job `failureAlert` object explicitly enables and tunes that job.
+- Per-job `failureAlert: false` disables execution and required-delivery failure alerts for that job. Any per-job `failureAlert` object explicitly enables and tunes that job.
 - `delivery.bestEffort: true` suppresses inherited/default execution alerts; an explicit per-job `failureAlert` remains authoritative.
 - Required completion-delivery failure (`status: "ok"`, `completionStatus: "failed"`) does not increment execution backoff and may notify immediately only through a resolved alternate failure destination, not the failed primary route.
 - `delivery.failureDestination` is only supported for `sessionTarget="isolated"` jobs unless the job's primary `delivery.mode` is `"webhook"`.

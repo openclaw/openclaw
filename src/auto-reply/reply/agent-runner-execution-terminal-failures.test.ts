@@ -17,13 +17,21 @@ import {
   createAgentRunRestartAbortError,
 } from "../../agents/run-termination.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
+import { ChannelRunAuthorizationError } from "../../channels/message-access/run-authorization-error.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { projectChatDisplayMessages } from "../../gateway/chat-display-projection.core.js";
 import { deriveGatewaySessionLifecycleProjectionPatch } from "../../gateway/session-lifecycle-projection.js";
+import { reports, seed, target } from "../../gateway/session-lifecycle-run-failure.test-support.js";
+import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
+import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { setupExecutionSuite } from "./agent-runner-execution-suite.test-support.js";
@@ -36,6 +44,7 @@ import {
   type EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
 import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -102,6 +111,73 @@ it.each([
     ]);
   },
 );
+
+it("records a revoked queued request for the owner without channel delivery", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    await seed();
+    const secret = "synthetic-revoked-request-secret";
+    const notice =
+      "This request was not started because the requester no longer has access to this channel. Review the channel access settings; once access is restored, ask the requester to send the request again.";
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      new ChannelRunAuthorizationError(
+        new Error("private policy detail", { cause: new Error(secret) }),
+      ),
+    );
+    const deliver = vi.fn(async () => {});
+    const deliverPrepared = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({ deliver, deliverPrepared });
+    const result = await runRawTurn({
+      sessionKey: target.sessionKey,
+      followupRun: createFollowupRun(target),
+      sessionCtx: { Provider: "discord", ChatType: "channel", MessageSid: "queued-request" },
+      opts: {
+        onBlockReply: async (payload) => {
+          dispatcher.sendBlockReply(payload);
+        },
+        onPreparedBlockReply: async (plan) => {
+          dispatcher.sendPreparedReply("block", plan);
+        },
+        onToolResult: async (payload) => {
+          dispatcher.sendToolResult(payload);
+        },
+      },
+    });
+    assert(result.outcome.kind === "rejected");
+    const terminals = terminalEvents(result.runId);
+    expect(terminals).toHaveLength(1);
+    const terminal = { ...terminals[0]!, ts: 2_000 };
+    expect(terminal.data).toMatchObject({ phase: "error", errorNotice: notice });
+    dispatcher.sendFinalReply(result.outcome.payload);
+    await dispatcher.waitForIdle();
+
+    await patchSessionEntryCore(target, () => ({
+      lifecycleRunId: result.runId,
+      activeWriterRunId: result.runId,
+    }));
+    await persistGatewaySessionLifecycleEvent({ ...target, event: terminal });
+    expect(await reports()).toHaveLength(1);
+    await persistGatewaySessionLifecycleEvent({ ...target, event: terminal });
+    expect(await reports()).toEqual([
+      expect.objectContaining({
+        customType: "run-failed-before-reply",
+        display: true,
+        content: notice,
+        details: expect.objectContaining({ runId: result.runId }),
+      }),
+    ]);
+    const history = projectChatDisplayMessages(
+      await readSessionMessagesAsync(target, { mode: "full", reason: "revoked channel refusal" }),
+    );
+    expect(history.at(-1)).toMatchObject({
+      openclawRunError: { runId: result.runId, summary: notice },
+    });
+    expect(terminal.data.errorNotice).not.toContain(secret);
+    expect(JSON.stringify(history)).not.toContain(secret);
+    expect(deliver).not.toHaveBeenCalled();
+    expect(deliverPrepared).not.toHaveBeenCalled();
+  });
+});
 
 it("preserves disabled retry exhaustion through returned provider payloads", async () => {
   const rawError = "429 rate limit exceeded. Please try again in 221ms.";
@@ -492,7 +568,7 @@ it("warns that interrupted CLI background work may have completed", () => {
 
   expect(payload?.text).toContain("Some work may have completed");
   expect(payload?.text).toContain("Check its results before trying again");
-  expect(payload?.text).toContain("task time limit in the Control UI settings");
+  expect(payload?.text).toContain("task time limit in the OpenClaw app settings");
 });
 
 it("surfaces Codex app-server bridge failures instead of generic copy", async () => {

@@ -31,7 +31,11 @@ export type ToastOptions = {
   actionPrimary?: boolean;
   onAction?: (event?: MouseEvent) => void;
   onDismiss?: (reason: ToastDismissReason) => void;
-  durationMs?: number;
+  /** Null keeps the toast until explicit dismissal or its owner retires it. */
+  durationMs?: number | null;
+  dismissible?: boolean;
+  /** Removes the toast once what it offers was resolved elsewhere. */
+  signal?: AbortSignal;
 };
 
 export type ToastPlacement = "top-center" | "top-right";
@@ -271,6 +275,9 @@ class ToastOwner {
   }
 
   show(options: ToastOptions) {
+    if (options.signal?.aborted) {
+      return;
+    }
     const lane = toastLane(options);
     // A panel holds one notice; other lanes deduplicate by explicit identity or unkeyed copy.
     for (const toast of this.live) {
@@ -284,11 +291,25 @@ class ToastOwner {
               typeof options.message === "string" &&
               toast.options.message === options.message))
       ) {
+        if (
+          options.dedupeKey &&
+          options.durationMs === null &&
+          toast.options.durationMs === null &&
+          toast.options.signal === options.signal
+        ) {
+          toast.options = options;
+          this.publish();
+          return;
+        }
         this.finish(toast, "replaced");
       }
     }
+    const id = nextToastId++;
+    if (options.signal) {
+      listen(options.signal, "abort", () => this.dismiss(id, "dismiss"), { once: true });
+    }
     this.live.unshift({
-      id: nextToastId++,
+      id,
       options,
       lane,
       remainingMs: options.durationMs ?? TOAST_DURATION_MS[options.severity ?? "neutral"],
@@ -372,7 +393,11 @@ class ToastOwner {
       }
       const index = depth.get(toast.lane) ?? 0;
       depth.set(toast.lane, index + 1);
-      if (this.isOpen(toast.lane) || index >= TOAST_VISIBLE_LIMIT) {
+      if (
+        toast.options.durationMs === null ||
+        this.isOpen(toast.lane) ||
+        index >= TOAST_VISIBLE_LIMIT
+      ) {
         this.pause(toast);
       } else if (toast.timer === undefined) {
         toast.deadline = performance.now() + toast.remainingMs;

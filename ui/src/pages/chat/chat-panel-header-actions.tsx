@@ -19,7 +19,7 @@ export function ExternalPanelLink(props: {
   return (
     <a
       ref={props.actionRef}
-      class="rail-header__action"
+      class="oc-icon-button oc-icon-button--28 rail-header__action"
       href={props.href}
       target="_blank"
       rel="noopener"
@@ -52,7 +52,7 @@ export function ClearCompanion(
     <openclaw-tooltip prop:content={action().label}>
       <button
         ref={props.actionRef}
-        class="rail-header__action chat-session-rail__clear"
+        class="oc-icon-button oc-icon-button--28 rail-header__action chat-session-rail__clear"
         type="button"
         aria-label={action().label}
         disabled={action().disabled}
