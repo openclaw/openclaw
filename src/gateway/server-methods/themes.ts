@@ -25,7 +25,6 @@ import {
   type ThemeMode,
 } from "../../../packages/gateway-protocol/src/theme.js";
 import {
-  captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
   resolveGatewayPersonalToolParticipant,
 } from "../../agents/tools/gateway-caller-context.js";
@@ -55,14 +54,12 @@ function requestOwner(options: ThemeRequest) {
       : client?.internal?.syntheticClient
         ? caller?.gatewayUiCommandTarget?.profileId
         : client?.authenticatedUserProfile?.profileId;
-  const assertCaller = captureGatewayToolCallerAssertion();
   const profileId = capturedProfile ? readResidentUserProfileId(capturedProfile) : undefined;
   const assertCurrent = () => {
     participant?.assertCurrent();
     options.signal?.throwIfAborted();
     options.sessionMutationCommitGuard?.();
     options.sessionMutationAuthorization?.assertCurrent();
-    assertCaller?.();
     if (options.hasCurrentClientAuthority?.() === false || client?.invalidated) {
       throw new Error("Theme request authority is no longer active.");
     }

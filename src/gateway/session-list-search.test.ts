@@ -391,9 +391,9 @@ function eagerSearchFields(params: SessionListFilterParams, key: string, entry: 
           allowPluginNormalization: false,
           configuredDefaultModelByAgent: rowContext.configuredDefaultModelByAgent,
         },
-      ),
+      ) ?? {},
     );
-    modelFields(source.selectedModel);
+    modelFields(source.selectedModel ?? {});
     modelFields(source.rowModelIdentity);
   }
   models.push(formatAgentRuntimeLabel(source.thinkingProjection.agentRuntime));
@@ -574,4 +574,36 @@ test("search preserves the eager predicate's rows and order across vocabulary su
       .map(([key]) => key);
     expect(searchKeys(params), search).toEqual(expected);
   }
+});
+
+test("title-only search finds an archived title beyond metadata matches without exposing private rows", () => {
+  const rows: [string, SessionEntry][] = [
+    ...Array.from({ length: 10 }, (_, index): [string, SessionEntry] => [
+      `agent:main:metadata-${index}`,
+      {
+        sessionId: `metadata-${index}`,
+        updatedAt: now - index,
+        model: "gpt-model",
+        label: "Other work",
+        archivedAt: now,
+      },
+    ]),
+    [
+      "agent:main:private",
+      { sessionId: "private", updatedAt: now - 11, label: "GPT private plan", archivedAt: now },
+    ],
+    [
+      "agent:main:target",
+      { sessionId: "target", updatedAt: now - 12, displayName: "GPT migration", archivedAt: now },
+    ],
+  ];
+  const { params } = searchFixture(rows, {
+    opts: { search: "gpt", archived: true, searchTitlesOnly: true },
+    entryFilter: (key) => key !== "agent:main:private",
+  });
+  const result = filterSessionEntries(params, { offset: 0, limit: 10, ownerLimit: 0 });
+  expect(result.entries.map(([key]) => key)).toEqual(["agent:main:target"]);
+  expect(result.totalCount).toBe(1);
+  params.opts = { search: "gpt", archived: true };
+  expect(searchKeys(params)).toHaveLength(11);
 });

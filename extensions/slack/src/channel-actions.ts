@@ -151,6 +151,7 @@ export function createSlackActions(
       "list-pins",
       "member-info",
       "emoji-list",
+      "channel-list",
       "download-file",
     ],
     describeMessageTool: describeSlackMessageTool,
@@ -317,6 +318,7 @@ export function createSlackActions(
           after: readStringParam(actionParams, "after"),
           messageId: readStringParam(actionParams, "messageId"),
           threadId: readStringParam(actionParams, "threadId"),
+          readAs: readStringParam(actionParams, "readAs"),
         });
       }
 
@@ -376,6 +378,18 @@ export function createSlackActions(
           throw new Error("member-info requires a userId outside a current Slack conversation.");
         }
         return await invokeSlackAction({ action: "memberInfo", userId });
+      }
+
+      if (action === "channel-list") {
+        return await invokeSlackAction({
+          action: "channelList",
+          types: actionParams.types,
+          limit: actionParams.limit,
+          pageToken: readStringParam(actionParams, "pageToken"),
+          includeArchived: readBooleanParam(actionParams, "includeArchived"),
+          teamId: readStringParam(actionParams, "teamId"),
+          readAs: readStringParam(actionParams, "readAs"),
+        });
       }
 
       if (action === "emoji-list") {

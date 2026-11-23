@@ -32,6 +32,7 @@ type RemoteDefaultAttempt = {
 };
 type RemoteDefaultPreparation = { borrowers: number; attempt?: RemoteDefaultAttempt };
 export type WorktreeBasePreparation = (options: {
+  idleIoPriority?: boolean;
   signal?: AbortSignal;
   assertCurrent?: () => void;
   localDefault?: "preserve" | "fast-forward";
@@ -111,6 +112,7 @@ export async function resolveWorktreeBase(
   signal?: AbortSignal,
   assertCurrent?: () => void,
   localDefault: "preserve" | "fast-forward" = "preserve",
+  idleIoPriority?: boolean,
 ): Promise<ResolvedWorktreeBase> {
   if (baseRef) {
     const verified = await runGit(
@@ -147,6 +149,7 @@ export async function resolveWorktreeBase(
     return { commit, gitOperand, recordRef: baseRef };
   }
   const options = {
+    idleIoPriority,
     signal,
     beforeRun: composeSessionSourceAssertion(
       assertCurrent ? [assertCurrent] : [],
@@ -165,7 +168,7 @@ export async function resolveWorktreeBase(
   );
   const checkout = await fs.realpath(repoRoot);
   return await withWorktreeBasePreparation({ repoRoot: checkout, commonDir }, (resolve) =>
-    resolve({ signal, assertCurrent, localDefault }),
+    resolve({ signal, assertCurrent, localDefault, idleIoPriority }),
   );
 }
 
@@ -232,10 +235,12 @@ export async function withWorktreeBasePreparation<T>(
     assertCurrent,
     localDefault = "preserve",
     waitBudget,
+    idleIoPriority,
   }) => {
     let retirement: { error: unknown } | undefined;
     let waiting: ReturnType<typeof startWorktreeWait> | undefined;
     const options = {
+      idleIoPriority,
       signal,
       beforeRun: composeSessionSourceAssertion(
         assertCurrent ? [assertCurrent] : [],
@@ -300,6 +305,7 @@ export async function withWorktreeBasePreparation<T>(
                   signal: options.signal,
                   assertCurrent: options.beforeRun,
                   preparationKey,
+                  idleIoPriority,
                 }),
               );
               base.preparationKey = preparationKey;

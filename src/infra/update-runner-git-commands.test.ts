@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { describeUnsupportedGit } from "./update-runner-git-commands.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
@@ -31,6 +32,31 @@ describe("git update clean check", () => {
 
 describe("git version prerequisite", () => {
   const gitReporting = (stdout: string) => async () => ({ stdout, stderr: "", code: 0 });
+
+  it.skipIf(process.platform === "win32").each([false, true])(
+    "uses macOS system Git only with a selected developer directory (selected: %s)",
+    async (selected) => {
+      await withMockedPlatform("darwin", async () => {
+        let gitInvoked = false;
+        const result = await describeUnsupportedGit(
+          async ([executable]) => {
+            if (executable === "/usr/bin/xcode-select") {
+              return { code: selected ? 0 : 2, stdout: "", stderr: "", termination: "exit" };
+            }
+            gitInvoked = true;
+            return { code: 0, stdout: "git version 2.54.0 (Apple Git-157)", stderr: "" };
+          },
+          { timeoutMs: 1000, env: { PATH: "/usr/bin:/bin" } },
+        );
+        expect(gitInvoked).toBe(selected);
+        if (selected) {
+          expect(result).toBeNull();
+        } else {
+          expect(result).toMatch(/\/usr\/bin\/git.*xcode-select --install/u);
+        }
+      });
+    },
+  );
 
   it.each([
     ["git version 2.31.0\n", null],

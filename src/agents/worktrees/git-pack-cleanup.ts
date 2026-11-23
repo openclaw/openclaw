@@ -18,9 +18,12 @@ export async function cleanTemporaryPacks(
   assertCurrent: () => void,
 ) {
   const files = names
-    // index-pack also leaves tmp_idx_/tmp_rev_ files when interrupted; Git prune owns
-    // every tmp_ prefix, but gc.auto is disabled for managed clones.
-    .filter((name) => /^tmp_[a-z]+_[a-zA-Z0-9_-]+$/.test(name))
+    // gc.auto is disabled; interrupted index-pack and repack leave different names.
+    .filter((name) =>
+      /^(?:tmp_[a-z]+_[a-zA-Z0-9_-]+|\.tmp-\d+-pack-[a-f0-9]+\.(?:pack|idx|rev|bitmap|mtimes))$/.test(
+        name,
+      ),
+    )
     .map((name) => path.join(directory, name));
   if (process.platform !== "linux" || files.length === 0) {
     return;
@@ -55,6 +58,7 @@ export async function cleanTemporaryPacks(
   const counts = JSON.parse(result.stdout.toString("utf8")) as {
     removed: number;
     retained: number;
+    bytesRemoved: number;
   };
   if (counts.retained > 0) {
     log.warn(
@@ -62,6 +66,8 @@ export async function cleanTemporaryPacks(
     );
   }
   if (counts.removed > 0) {
-    log.info(`Removed ${counts.removed} stale temporary Git packs from ${directory}.`);
+    log.info(
+      `Removed ${counts.removed} stale temporary Git packs (${counts.bytesRemoved} bytes) from ${directory}.`,
+    );
   }
 }

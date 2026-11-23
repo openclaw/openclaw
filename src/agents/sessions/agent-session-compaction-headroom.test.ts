@@ -1,7 +1,7 @@
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { buildRuntimeContextCustomMessage } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { agentSessionAutomaticCompaction } from "./agent-session-compaction.js";
 import {

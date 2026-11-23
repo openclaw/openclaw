@@ -1,11 +1,15 @@
+import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { isCurrentPluginMetadataSnapshotRuntimeGeneration } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import { loadPluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
+import { copyPreparedModelRuntimeAuthBindings } from "../../prepared-model-runtime-auth.js";
 import { getPreparedModelRuntimeBorrowedSnapshot } from "../../prepared-model-runtime-generation-scope.js";
+import { capturePreparedModelRuntimeCatalog } from "../../prepared-model-runtime.capture.js";
 import {
   preparedModelRuntimeConfigsMatch,
   type PreparedModelRuntimeSnapshot,
 } from "../../prepared-model-runtime.js";
+import { prepareAgentPromptProjects } from "../../prompt-projects.js";
 import {
   resolveCanonicalRunRuntimeWorkspace,
   resolveRootedRunRuntimeWorkspace,
@@ -75,6 +79,42 @@ export function resolvePreparedRuntimeWorkspaces(params: RunEmbeddedAgentParamsW
     runtimeWorkspaceResolution: sharedRuntimeWorkspace ?? requestedWorkspaceResolution,
     preserveExecutionWorkspace: sharedRuntimeWorkspace !== undefined,
   };
+}
+
+/** Setup initializes missing account rows before the probe captures its immutable turn facts. */
+export async function initializeReadOnlyRunModelCatalog(
+  run: RunEmbeddedAgentParamsWithSessionFile,
+  snapshot: PreparedModelRuntimeSnapshot,
+  model: { provider: string; modelId: string },
+  signal: AbortSignal,
+): Promise<PreparedModelRuntimeSnapshot> {
+  if (
+    run.preparedModelRuntimeMode !== "isolated-read-only" ||
+    !run.refreshModelCatalog ||
+    !snapshot.loadFullModelCatalog ||
+    snapshot.findConfiguredRuntimeModel(model.provider, model.modelId)
+  ) {
+    return snapshot;
+  }
+  // This is explicit setup demand; passive turns must never wait for provider discovery.
+  // The lease remains read-only and owns cancellation and worker cleanup.
+  await racePromiseWithAbortSignal(
+    snapshot.loadFullModelCatalog({ providerIds: [model.provider], refresh: true, wait: true }),
+    signal,
+  );
+  signal.throwIfAborted();
+  return capturePreparedModelRuntimeCatalog(snapshot, snapshot);
+}
+
+/** Adds turn-owned project facts without losing the admitted generation's private auth binding. */
+export async function prepareRunModelRuntimeProjects(
+  run: RunEmbeddedAgentParamsWithSessionFile,
+  snapshot: PreparedModelRuntimeSnapshot,
+) {
+  const projects = await prepareAgentPromptProjects(run);
+  const prepared = Object.freeze({ ...snapshot, ...projects });
+  copyPreparedModelRuntimeAuthBindings(snapshot, prepared);
+  return prepared;
 }
 
 /** Rebinds every config-derived run projection to one committed prepared generation. */

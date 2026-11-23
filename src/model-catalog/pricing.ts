@@ -3,13 +3,11 @@ import { isIP } from "node:net";
 import { MODEL_PRICING_SOURCES } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ModelCatalogCost } from "@openclaw/model-catalog-core/model-catalog-types";
-import {
-  createStaticProviderModelIdNormalizer,
-  normalizeProviderId,
-} from "../agents/model-ref-shared.js";
+import { normalizeProviderId } from "../agents/model-ref-shared.js";
+import { createStaticProviderModelIdNormalizer } from "../agents/model-selection-normalize.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
+import { createInstalledPluginEnabledPredicate } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import {
@@ -86,11 +84,10 @@ function activeManifestRegistry(
   if (config.plugins?.enabled === false) {
     return { plugins: [], diagnostics: [] };
   }
+  const isEnabled = createInstalledPluginEnabledPredicate(snapshot.index.plugins, config);
   return {
     diagnostics: snapshot.manifestRegistry.diagnostics,
-    plugins: snapshot.manifestRegistry.plugins.filter((plugin) =>
-      isInstalledPluginEnabled(snapshot.index, plugin.id, config),
-    ),
+    plugins: snapshot.manifestRegistry.plugins.filter((plugin) => isEnabled(plugin.id)),
   };
 }
 

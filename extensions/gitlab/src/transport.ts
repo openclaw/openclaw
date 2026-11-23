@@ -33,6 +33,7 @@ async function git(
   args: string[],
   options: ManagedProjectTransportOptions,
   label: string,
+  input?: string,
 ): Promise<string> {
   const start = options.startRun ?? (async <T>(run: () => T) => await run());
   const env = {
@@ -46,6 +47,7 @@ async function git(
         env,
         timeoutMs: options.timeoutMs ?? GIT_TIMEOUT_MS,
         signal: options.signal,
+        input,
         beforeRun: options.assertCurrent,
         killProcessTree: true,
       }),
@@ -61,11 +63,16 @@ async function git(
 }
 
 async function hasCommit(target: string, commit: string, options: ManagedProjectTransportOptions) {
-  try {
-    return (await git(target, ["cat-file", "-t", commit], options, "commit lookup")) === "commit";
-  } catch {
-    return false;
-  }
+  // Batch lookup reports a missing object on stdout without turning Git failures into misses.
+  return (
+    (await git(
+      target,
+      ["cat-file", "--batch-check=%(objecttype)"],
+      options,
+      "commit lookup",
+      `${commit}\n`,
+    )) === "commit"
+  );
 }
 
 async function ensureCommit(

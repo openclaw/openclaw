@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { holdWorkspacePreparationSnapshot } from "../../agents/workspace-preparation-queue.test-support.js";
 import {
   WorkspaceAliasRepointedError,
@@ -81,7 +81,7 @@ it("rejects queued reply preparation after abort or operator revocation without 
         authority === "abort"
           ? { abortSignal: controller.signal }
           : {
-              operatorAuthority: createAdmittedRunOperatorAuthority({
+              operatorAuthority: createTestOperatorAuthority({
                 profileId: "workspace-test-operator",
                 scopes: ["operator.write"],
                 signal: controller.signal,

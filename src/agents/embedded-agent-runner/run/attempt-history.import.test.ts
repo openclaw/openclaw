@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-input.types.js";
 
 // mock-isolation: history projection must not initialize provider runtime bindings.
 vi.mock("../../../plugins/provider-hook-runtime.js", () => {

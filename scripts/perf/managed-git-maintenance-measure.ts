@@ -30,6 +30,7 @@ const { values } = parseArgs({
     passes: { type: "string", default: "1" },
     "blobs-per-pack": { type: "string", default: "128" },
     "revision-bytes": { type: "string" },
+    "delta-revisions": { type: "boolean" },
     consolidate: { type: "boolean" },
     help: { type: "boolean" },
   },
@@ -75,6 +76,15 @@ and unique added blob, then runs full fsck. The checkout has 62000 tracked 18KiB
 The workspace adds one pack to the requested fragmented pack count.
 Optional --owner-module <path> selects a frozen owner module for baseline proof;
 its imports must resolve to the original dependencies. Use a fresh fixture for each arm.
+--mode prepare-tail creates a real blob:none clone with four fetched 8/10/18/22 MiB
+promisor packs and 107 tiny fetched packs. For scaled budget-boundary proof, use
+frozen owner modules with PACK_BATCH_BYTES divided by 512 (32 MiB), leaving the
+selection algorithm and other limits intact. Add the 62000-file workspace with
+augment-backlog and keep its new pack before measurement.
+--delta-revisions creates 4-KiB revisions within each pack and packs them with
+native Git offset deltas before measurement. Use --packs 16 --blobs-per-pack 2048
+for 128 MiB of payload. Combine with --hardlinked-packs and augment-backlog for
+shared-pack and production-sized checkout proof; keep the added workspace pack.
 Add --registration-delay-ms 5000 to delay the first real verify-pack command and
 start six concurrent addManagedWorktree calls once verification starts. These use
 deferred checkout to measure registration independently of copying 62000 files.
@@ -98,6 +108,7 @@ assert(values["state-dir"], "--state-dir must name a task-owned synthetic fixtur
 assert(
   [
     "prepare",
+    "prepare-tail",
     "measure",
     "owner",
     "prepare-midx",
@@ -139,7 +150,9 @@ assert(
     (revisionBytes === 0 || (revisionBytes >= 8 && !nativeMidx && !backlog)),
   "--revision-bytes must be an integer >=8 for the ordinary owner fixture",
 );
-const blobBytes = nativeMidx || backlog ? 16 : revisionBytes || 32 * 1024;
+assert(!values["delta-revisions"] || (!nativeMidx && !backlog && !revisionBytes));
+const blobBytes =
+  nativeMidx || backlog ? 16 : values["delta-revisions"] ? 4096 : revisionBytes || 32 * 1024;
 const payloadBytes = (backlog ? blobsPerPack + packCount : packCount * blobsPerPack) * blobBytes;
 assert(Number.isSafeInteger(packCount) && packCount >= 16, "--packs must be an integer >=16");
 assert(
@@ -223,7 +236,9 @@ async function checkDirty() {
   assert(Number.isFinite(dirtyKiB) && dirtyKiB < 2 * 1024 * 1024, "Host Dirty exceeds 2 GiB");
 }
 
-if (values.mode === "prepare-backlog") {
+if (values.mode === "prepare-tail") {
+  await prepareTail();
+} else if (values.mode === "prepare-backlog") {
   await prepareBacklog();
 } else if (values.mode === "prepare" || values.mode === "prepare-midx") {
   await checkDirty();
@@ -245,6 +260,7 @@ if (values.mode === "prepare-backlog") {
     await configureProjectCheckoutMaintenance(repo, { env: process.env });
   }
   const objects: string[] = [];
+  const deltaPacks: string[] = [];
   const sampleStride = Math.max(1, Math.floor((packCount * blobsPerPack) / 4096));
   let parent: string | undefined;
   for (let index = 0; index < packCount; index++) {
@@ -254,12 +270,14 @@ if (values.mode === "prepare-backlog") {
       // Deterministic incompressible data gives paired fixtures identical bytes.
       const nonce = Buffer.alloc(16);
       nonce.writeUInt32LE(revisionBytes ? 0 : index, 0);
-      nonce.writeUInt32LE(blob, 4);
+      nonce.writeUInt32LE(values["delta-revisions"] ? 0 : blob, 4);
       const bytes = nativeMidx
         ? nonce
         : createCipheriv("aes-256-ctr", Buffer.alloc(32), nonce).update(Buffer.alloc(blobBytes));
       if (revisionBytes) {
         bytes.writeBigUInt64LE(BigInt(index));
+      } else if (values["delta-revisions"]) {
+        bytes.writeUInt32LE(blob);
       }
       commands.push(
         Buffer.from(`blob\n${nativeMidx ? "" : `mark :${blob + 1}\n`}data ${blobBytes}\n`),
@@ -286,14 +304,39 @@ if (values.mode === "prepare-backlog") {
           "\ndone\n",
       ),
     );
+    const directory = path.join(repo, ".git/objects/pack");
+    const before = values["delta-revisions"] ? new Set(await fs.readdir(directory)) : undefined;
     await git(["fast-import", "--quiet", "--done"], Buffer.concat(commands));
+    if (before) {
+      const imported = (await fs.readdir(directory)).filter((name) => !before.has(name));
+      const input = imported.filter((name) => name.endsWith(".pack"));
+      const hash = await git(
+        [
+          "pack-objects",
+          "--stdin-packs",
+          "--no-reuse-delta",
+          "--delta-base-offset",
+          "--threads=1",
+          path.join(directory, "pack"),
+        ],
+        `${input.join("\n")}\n`,
+      );
+      deltaPacks.push(`pack-${hash}.pack`);
+      for (const name of imported.filter((file) => !file.startsWith(`pack-${hash}.`))) {
+        await fs.rm(path.join(directory, name));
+      }
+    }
     parent = await git(["rev-parse", "HEAD"]);
     objects.push(...(await git(["ls-tree", "-r", "--format=%(objectname)", "HEAD"])).split("\n"));
   }
   assert.equal(await packs(), packCount);
   if (promisorPackCount > 0) {
     const directory = path.join(repo, ".git", "objects", "pack");
-    const names = (await fs.readdir(directory)).filter((name) => name.endsWith(".pack")).toSorted();
+    // Promisor history must include its ancestors, or index-pack promotes ordinary
+    // ancestors into additional packs and measures a different write workload.
+    const names = values["delta-revisions"]
+      ? deltaPacks
+      : (await fs.readdir(directory)).filter((name) => name.endsWith(".pack")).toSorted();
     for (const name of names.slice(0, promisorPackCount)) {
       await fs.writeFile(path.join(directory, name.replace(/\.pack$/, ".promisor")), "");
     }
@@ -356,6 +399,7 @@ if (values.mode === "prepare-backlog") {
     hardlinkedPacks: hardlinkedPackCount,
     blobBytes,
     payloadBytes,
+    deltaRevisions: values["delta-revisions"] ?? false,
     ...(revisionBytes ? { revisionBytes } : {}),
     ...(nativeMidx ? { nativeMidx: true, objectCount: packCount * blobsPerPack } : {}),
     objects,
@@ -607,16 +651,16 @@ if (values.mode === "prepare-backlog") {
         const packBytesBefore = await packBytes();
         const promisorPacksBefore = await promisorPacks();
         const progress = new WorktreeGcProgress();
-        const before = fixture.hardlinkedPacks ? await inventory() : undefined;
-        const freeBefore = before ? await availableBytes() : 0;
+        const before = await inventory();
+        const freeBefore = await availableBytes();
         const passStarted = performance.now();
         const maintenance = createWorktreeGitMaintenance(process.env);
         const registrations = registrationDelayMs
           ? await measureRegistrations(pass, (signal) => maintenance({ progress, signal }))
           : await maintenance({ progress });
         const elapsedMs = performance.now() - passStarted;
-        const freeAfter = before ? await availableBytes() : 0;
-        const after = before ? await inventory() : [];
+        const freeAfter = await availableBytes();
+        const after = await inventory();
         assert.equal(progress.result.issueCount, 0, JSON.stringify(progress.result.issues));
         assert.equal(progress.result.gitMaintenance?.stage, "completed");
         const packsAfter = await packs();
@@ -635,20 +679,16 @@ if (values.mode === "prepare-backlog") {
           promisorPacksBefore,
           promisorPacksAfter,
           registrations,
-          ...(before
-            ? {
-                freeBytesDelta: freeAfter - freeBefore,
-                writtenBytes: after
-                  .filter((pack) => !before.some((old) => old.name === pack.name))
-                  .reduce((sum, pack) => sum + pack.size, 0),
-                freedBytes: before
-                  .filter(
-                    (pack) => pack.nlink === 1 && !after.some((next) => next.name === pack.name),
-                  )
-                  .reduce((sum, pack) => sum + pack.size, 0),
-                sharedPacks: after.filter((pack) => pack.nlink > 1).length,
-              }
-            : {}),
+          freeBytesDelta: freeAfter - freeBefore,
+          writtenBytes: after
+            .filter((pack) => !before.some((old) => old.name === pack.name))
+            .reduce((sum, pack) => sum + pack.size, 0),
+          freedBytes: before
+            .filter((pack) => pack.nlink === 1 && !after.some((next) => next.name === pack.name))
+            .reduce((sum, pack) => sum + pack.size, 0),
+          sharedPacks: after.filter((pack) => pack.nlink > 1).length,
+          retiredPacks: before.filter((pack) => !after.some((next) => next.name === pack.name)),
+          newPacks: after.filter((pack) => !before.some((old) => old.name === pack.name)),
         });
         await fs.writeFile(
           summary,
@@ -678,6 +718,7 @@ if (values.mode === "prepare-backlog") {
     }
   } else {
     await checkDirty();
+    const objectsBefore = await git(["cat-file", "--batch-all-objects", "--batch-check"]);
     await fs.writeFile(trace, "");
     const beforeReads = backlog ? await measureReads("before", fixture.objects) : undefined;
     const timeOutput = path.join(root, "maintenance.time.txt");
@@ -741,6 +782,7 @@ if (values.mode === "prepare-backlog") {
       );
       assert.equal(checked, shared.map((oid) => `${oid} blob 16`).join("\n"));
     }
+    assert.equal(await git(["cat-file", "--batch-all-objects", "--batch-check"]), objectsBefore);
     await git(["fsck", "--full", "--no-dangling"]);
     console.log(
       JSON.stringify(
@@ -768,6 +810,97 @@ if (values.mode === "prepare-backlog") {
       ),
     );
   }
+}
+
+async function prepareTail() {
+  await fs.mkdir(root);
+  for (const directory of [process.env.HOME!, process.env.TMPDIR!]) {
+    await fs.mkdir(directory, { recursive: true });
+  }
+  const remote = path.join(root, "remote");
+  await run("git", ["init", "--initial-branch=main", remote]);
+  const origin = (args: string[], input?: string | Buffer) =>
+    run("git", ["-C", remote, ...args], input);
+  await origin(["config", "uploadpack.allowFilter", "true"]);
+  await origin(["config", "gc.auto", "0"]);
+  const objects: string[] = [];
+  const sizes = [
+    ...[8, 10, 18, 22].map((mib) => mib * 1024 * 1024),
+    ...Array<number>(107).fill(4096),
+  ];
+  const commands: Buffer[] = [];
+  for (const [index, size] of sizes.entries()) {
+    const nonce = Buffer.alloc(16);
+    nonce.writeUInt32LE(index);
+    const bytes = createCipheriv("aes-256-ctr", Buffer.alloc(32), nonce).update(Buffer.alloc(size));
+    objects.push(createHash("sha1").update(`blob ${size}\0`).update(bytes).digest("hex"));
+    commands.push(
+      Buffer.from(`blob\nmark :${index + 1}\ndata ${size}\n`),
+      bytes,
+      Buffer.from("\n"),
+    );
+  }
+  commands.push(
+    Buffer.from(
+      "commit refs/heads/main\ncommitter Synthetic <synthetic@example.invalid> 1700000000 +0000\ndata 4\ntail\n" +
+        sizes.map((_, index) => `M 100644 :${index + 1} blob-${index}\n`).join("") +
+        "\ndone\n",
+    ),
+  );
+  await origin(
+    ["-c", "fastimport.unpackLimit=0", "fast-import", "--quiet", "--done"],
+    Buffer.concat(commands),
+  );
+  await run("git", [
+    "clone",
+    "--filter=blob:none",
+    "--no-checkout",
+    pathToFileURL(remote).href,
+    repo,
+  ]);
+  const { configureProjectCheckoutMaintenance } =
+    await import("../../src/projects/project-clone-runtime.js");
+  await configureProjectCheckoutMaintenance(repo, { env: process.env });
+  await git(["config", "fastimport.unpackLimit", "0"]);
+  assert.equal(await git(["config", "remote.origin.partialclonefilter"]), "blob:none");
+  const directory = path.join(repo, ".git/objects/pack");
+  for (const name of await fs.readdir(directory)) {
+    if (name.endsWith(".pack")) {
+      await fs.writeFile(path.join(directory, name.replace(/\.pack$/, ".keep")), "");
+    }
+  }
+  for (const oid of objects) {
+    await git(["fetch", "--no-auto-maintenance", "--no-write-fetch-head", "origin", oid]);
+  }
+  const { insertRegistryWorktree } = await import("../../src/agents/worktrees/registry.js");
+  const { closeOpenClawStateDatabaseAsync } = await import("../../src/state/openclaw-state-db.js");
+  try {
+    await insertRegistryWorktree(process.env, {
+      id: "synthetic-maintenance",
+      name: "synthetic-maintenance",
+      repoFingerprint: "synthetic-maintenance",
+      repoRoot: repo,
+      path: repo,
+      branch: "main",
+      baseRef: "main",
+      ownerKind: "manual",
+      createdAt: 1_700_000_000_000,
+      lastActiveAt: 1_700_000_000_000,
+    });
+  } finally {
+    await closeOpenClawStateDatabaseAsync();
+  }
+  const fixture = {
+    version: 1,
+    policy: "candidate",
+    packs: await packs(),
+    promisorPacks: await promisorPacks(),
+    blobBytes: 4096,
+    payloadBytes: sizes.reduce((sum, size) => sum + size, 0),
+    objects: objects.slice(4),
+  };
+  await fs.writeFile(marker, `${JSON.stringify(fixture)}\n`);
+  console.log(JSON.stringify({ mode: values.mode, ...fixture, objects: fixture.objects.length }));
 }
 
 async function measureRegistrations(

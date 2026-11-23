@@ -861,11 +861,25 @@ internal fun overviewHeaderState(
 
 internal fun overviewHeaderRoute(attentionRows: List<HomeAttentionRow>): SettingsRoute = attentionRows.firstOrNull()?.settingsRoute ?: SettingsRoute.Gateway
 
-internal fun overviewRecentSessions(sessions: List<ChatSessionEntry>): List<ChatSessionEntry> =
-  sessions
-    .sortedWith(compareByDescending<ChatSessionEntry> { it.lastActivityAt ?: it.updatedAtMs ?: Long.MIN_VALUE }.thenBy { it.key })
-    .distinctBy(ChatSessionEntry::key)
+/** Top-level sessions only, ranked by their newest child; child sessions are reached through their parent. */
+internal fun overviewRecentSessions(sessions: List<ChatSessionEntry>): List<ChatSessionEntry> {
+  val parentByKey = navigationParentLinks(sessions)
+  val threadActivity = mutableMapOf<String, Long>()
+  sessions.forEach { session ->
+    val activity = session.lastActivityAt ?: session.updatedAtMs ?: Long.MIN_VALUE
+    var root = session.key
+    while (true) root = parentByKey[root] ?: break
+    threadActivity[root] = maxOf(threadActivity[root] ?: Long.MIN_VALUE, activity)
+  }
+  return sessions
+    .filter { it.key !in parentByKey }
+    .sortedWith(
+      compareByDescending<ChatSessionEntry> { threadActivity[it.key] ?: Long.MIN_VALUE }
+        .thenByDescending { it.lastActivityAt ?: it.updatedAtMs ?: Long.MIN_VALUE }
+        .thenBy { it.key },
+    ).distinctBy(ChatSessionEntry::key)
     .take(overviewRecentSessionLimit)
+}
 
 internal data class OverviewMetricCardSpec(
   val title: String,

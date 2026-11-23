@@ -151,6 +151,7 @@ export type ChatProps = Omit<
       resolution: SessionSuggestionResolution,
     ) => void;
     detailsEnabled?: boolean;
+    hideComposerSessionCards?: boolean;
   };
 
 // The view frame refreshes on each pane render and the chat-item cache keys the queue by

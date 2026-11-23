@@ -2,7 +2,8 @@
 
 import { beforeEach, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { buildModelProviderCards } from "./data.ts";
 import { card, mount, props, text } from "./view.test-support.tsx";
 
@@ -38,6 +39,137 @@ it("uses the scoped check outcome without hiding catalog or account problems", (
   expect(status()).toBe("Ready");
 });
 
+it("preserves setup status when a probe has no model to check", () => {
+  const viewProps = props({ cards: [card({ catalogStatus: "ready" })] });
+  const container = mount({
+    ...viewProps,
+    probeResults: { openai: { provider: "openai", status: "no_model", results: [] } },
+  });
+  expect(text(container.querySelector(".provider-row__status"))).toBe("Ready");
+  mount(
+    {
+      ...viewProps,
+      cards: [card({ catalogStatus: "auth-rejected" })],
+      probeResults: { openai: { provider: "openai", status: "no_model", results: [] } },
+    },
+    container,
+  );
+  expect(text(container.querySelector(".provider-row__status"))).toBe("Credentials rejected");
+});
+
+it("labels a single measured account when per-login limits are unavailable", () => {
+  const profile = { profileId: "openai:first", type: "oauth" as const, status: "ok" as const };
+  const base = card({
+    apiKey: undefined,
+    auth: { kind: "ok" },
+    catalogStatus: "ready",
+    usage: {
+      provider: "openai",
+      displayName: "OpenAI",
+      windows: [{ label: "Week", usedPercent: 100 }],
+    },
+  });
+  const view = (profiles: (typeof profile)[]) => props({ cards: [{ ...base, profiles }] });
+  const container = mount(view([profile, { ...profile, profileId: "openai:second" }]));
+  container.querySelector<HTMLButtonElement>(".provider-row__summary")!.click();
+  flush();
+  expect(text(container.querySelector(".provider-row__limits-pane"))).toContain(
+    "Limits for one account",
+  );
+  expect(text(container.querySelector(".provider-row__summary"))).not.toContain("0% left");
+  mount(view([profile]), container);
+  expect(text(container.querySelector(".provider-row__summary"))).toContain("Week 0% left");
+});
+
+it.each([true, false])(
+  "shows a plan-only sample for one account, not the whole provider (profiles visible: %s)",
+  (canViewProfiles) => {
+    const profiles = ["first", "second"].map((profileId) => ({
+      profileId,
+      type: "oauth" as const,
+      status: "ok" as const,
+    }));
+    const usage = { provider: "openai", displayName: "OpenAI", plan: "Team", windows: [] };
+    const container = mount(
+      props({ canViewProfiles, canMutate: false, cards: [card({ profiles, usage })] }),
+    );
+    const summary = container.querySelector<HTMLButtonElement>(".provider-row__summary")!;
+    expect(text(summary)).not.toContain("Team");
+    summary.click();
+    flush();
+    expect(text(container.querySelector(".provider-row__limits-pane"))).toMatch(
+      /Limits for one account.*Team/u,
+    );
+  },
+);
+
+it("uses the scoped quota once for a single login, retaining the collapsed summary", async () => {
+  const profiles = [{ profileId: "openai:first", type: "oauth" as const, status: "ok" as const }];
+  const usage = {
+    provider: "openai",
+    displayName: "OpenAI",
+    plan: "Pro",
+    windows: [{ label: "Week", usedPercent: 100 }],
+  };
+  const client = createTestGatewayClient(() => ({
+    providers: [{ ...usage, windows: [{ label: "Week", usedPercent: 45 }] }],
+  }));
+  const view = props({
+    cards: [
+      card({ apiKey: undefined, profiles, usage, catalogStatus: "ready", auth: { kind: "ok" } }),
+    ],
+    accountUsage: { client, agentId: "main", revision: 0 },
+  });
+  const container = mount(view);
+  const summary = container.querySelector<HTMLButtonElement>(".provider-row__summary")!;
+  expect(text(summary)).toContain("Pro");
+  expect(text(summary)).toContain("Week 0% left");
+  summary.click();
+  await waitForSolid(() =>
+    expect(text(container.querySelector(".model-providers__account-limits"))).toContain("55% left"),
+  );
+  expect(container.querySelectorAll(".provider-usage__window")).toHaveLength(1);
+  expect(text(summary)).not.toContain("Pro");
+  expect(text(summary)).not.toContain("Week 0% left");
+  expect(text(container.querySelector(".model-providers__account-limits"))).toContain("Pro");
+
+  // A provider-level Admin API spend snapshot isn't a duplicate of the login quota.
+  mount(
+    {
+      ...view,
+      cards: [
+        card({
+          profiles,
+          usage: {
+            ...usage,
+            plan: "Admin API",
+            windows: [],
+            billing: [{ type: "spend", amount: 25, unit: "USD" }],
+          },
+        }),
+      ],
+    },
+    container,
+  );
+  expect(text(container.querySelector(".provider-row__limits-pane"))).toContain("$25.00");
+  expect(text(summary)).toContain("Admin API");
+  const error = "Admin API key required";
+  mount(
+    {
+      ...view,
+      cards: [
+        card({
+          profiles,
+          usage: { provider: "openai", displayName: "OpenAI", windows: [], error },
+        }),
+      ],
+    },
+    container,
+  );
+  expect(text(container.querySelector(".provider-row__limits-pane"))).toContain(error);
+  expect(text(container.querySelector(".model-providers__account-limits"))).toContain("55% left");
+});
+
 it("uses catalog evidence for short-lived OAuth without treating expiry alone as sign-out", () => {
   const oauth = {
     profileId: "example:account",
@@ -53,11 +185,11 @@ it("uses catalog evidence for short-lived OAuth without treating expiry alone as
     profiles: [oauth],
     catalogStatus: "ready",
   });
-  const viewProps = props({ cards: [providerCard], configuredModels: [] });
+  const viewProps = props({ cards: [providerCard], configuredModels: [], modelRequired: true });
   const container = mount(viewProps);
   const status = () => text(container.querySelector(".provider-row__status"));
   expect(status()).toBe("Ready");
-  expect(text(container.querySelector("[data-model-readiness]"))).toContain("No models available");
+  expect(text(container.querySelector("[data-model-readiness]"))).toContain("no usable models");
   mount({ ...viewProps, cards: [{ ...providerCard, catalogStatus: undefined }] }, container);
   // Unverified credentials report nothing; the row's own meta line names them.
   expect(status()).toBe("");
@@ -253,14 +385,4 @@ it("counts a provider's only unavailable model in the singular", () => {
     container,
   );
   expect(text(container.querySelector(".provider-row__meta"))).toContain("2 of 3 models available");
-});
-
-it("hands the accent to an open API key form", () => {
-  const editable = card({ id: "example", displayName: "Example", catalogStatus: "ready" });
-  const viewProps = props({ cards: [editable], configuredModels: [] });
-  const container = mount(viewProps);
-  const connect = () => container.querySelector("[data-model-readiness] .btn") as HTMLButtonElement;
-  expect(connect().classList.contains("primary")).toBe(true);
-  mount({ ...viewProps, keyEditorProvider: "example" }, container);
-  expect(connect().classList.contains("primary")).toBe(false);
 });

@@ -471,8 +471,8 @@ async function handlePreparedNodeEvent(
           loadGatewayModelCatalog: ctx.loadGatewayModelCatalog,
           loadGatewayModelCatalogSnapshot: ctx.loadGatewayModelCatalogSnapshot,
           agentId: sessionAgentId,
-          provider: modelRef.provider,
-          model: modelRef.model,
+          provider: modelRef?.provider,
+          model: modelRef?.model,
         });
         if (!(await isNodeEventConnectionCurrent(opts))) {
           return pairingChangedResult(evt.event);

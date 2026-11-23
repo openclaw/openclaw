@@ -10,17 +10,19 @@ const URL = "https://gitlab.example.test/group/project.git";
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gitlab-transport-"));
 const remote = path.join(root, "remote.git");
 
-// Only the network is replaced: the HTTPS project URL is served from a local bare repository.
+const probe = vi.hoisted(() => ({ uncertain: false }));
+
+// Serve the HTTPS project from a local bare repository and inject a process-settlement failure.
 vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
   return {
     ...actual,
-    executeGitCommand: (
+    executeGitCommand: async (
       cwd: string,
       args: string[],
       options: Parameters<typeof actual.executeGitCommand>[2],
-    ) =>
-      actual.executeGitCommand(
+    ) => {
+      const result = await actual.executeGitCommand(
         cwd,
         args
           .filter(
@@ -29,7 +31,11 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
           )
           .map((arg) => (arg === URL ? remote : arg)),
         { ...options, env: { ...options?.env, GIT_ALLOW_PROTOCOL: "file" } },
-      ),
+      );
+      return probe.uncertain && args.includes("cat-file")
+        ? { ...result, cleanup: "uncertain" as const }
+        : result;
+    },
   };
 });
 
@@ -82,4 +88,16 @@ it("resolves an explicit tag or commit that a fresh clone does not hold", async 
   await expect(
     transport.resolveBase({ url: URL, target, ref: "missing" }, options),
   ).rejects.toThrow("no branch or tag with that name");
+
+  probe.uncertain = true;
+  try {
+    await expect(
+      transport.ensureCommit({ url: URL, target, commit: head }, options),
+    ).rejects.toMatchObject({
+      name: "CommandProcessCleanupError",
+      cleanup: "uncertain",
+    });
+  } finally {
+    probe.uncertain = false;
+  }
 });

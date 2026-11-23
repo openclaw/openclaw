@@ -117,7 +117,9 @@ export async function runSetupInferenceTurn(params: {
       error:
         status === "timeout"
           ? "The setup response check timed out. Retry setup, or choose another model or runtime. No default model was changed."
-          : error,
+          : status === "rate_limit"
+            ? "The model check failed because the provider is busy or limiting requests. Wait a few minutes, then try again."
+            : error,
     };
   };
   const preparedRunAdmission = prepareSystemAgentRunAdmission(
@@ -191,6 +193,7 @@ export async function runSetupInferenceTurn(params: {
         // instead of spending the chat turn's ~90 s backoff ladder on 5xx/429/overload.
         retryTransientErrors: false,
         preparedModelRuntimeMode: "isolated-read-only",
+        refreshModelCatalog: !harness || harness === "openclaw",
         ...(harness === "codex" ? { cleanupBundleMcpOnRunEnd: true } : {}),
         ...(harness ? { agentHarnessRuntimeOverride: harness } : {}),
         lane: `session:probe-setup-inference:${route.provider}`,

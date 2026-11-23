@@ -48,6 +48,7 @@ export function createWorkerPlacementTools(params: {
     shellTools: execUnavailable ? "patch-only" : "full",
     execDefaults: {
       ...policy,
+      workerMemoryBoundary: params.execAuthority?.memoryBoundary,
       strictInlineEval: execAuthority.strictInlineEval,
       safeBins: execAuthority.safeBins ?? [],
       node: execAuthority.host === "node" ? execAuthority.node : undefined,

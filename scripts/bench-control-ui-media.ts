@@ -84,7 +84,7 @@ const icon = raster(40, 40);
 const thumbnails = new Map(
   await Promise.all(
     ([480, 960, 1920] as const).map(
-      async (width) => [width, await encodeImageThumbnail(photograph, width)] as const,
+      async (width) => [width, (await encodeImageThumbnail(photograph, width)).data] as const,
     ),
   ),
 );

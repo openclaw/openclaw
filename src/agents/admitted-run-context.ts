@@ -87,9 +87,26 @@ export function createAdmittedRunOperatorAuthority(
   const readRoleFacts = source.readCurrentRoleFacts;
   const authority = Object.freeze({
     profileId: source.profileId,
+    canonicalIdentity:
+      source.canonicalIdentity &&
+      Object.freeze({
+        profileId: source.canonicalIdentity.profileId,
+      }),
+    clientId: source.clientId,
     openclawIdPrincipal: source.openclawIdPrincipal
       ? freezeJsonSnapshot(structuredClone(source.openclawIdPrincipal))
       : undefined,
+    device: source.device && Object.freeze({ ...source.device }),
+    deviceScopeCeiling: source.deviceScopeCeiling && Object.freeze([...source.deviceScopeCeiling]),
+    authPolicy: source.authPolicy && Object.freeze({ ...source.authPolicy }),
+    sharedGeneration: source.sharedGeneration,
+    ingress:
+      source.ingress &&
+      Object.freeze({
+        ...source.ingress,
+        principal: Object.freeze({ ...source.ingress.principal }),
+        scopeCeiling: Object.freeze([...source.ingress.scopeCeiling]),
+      }),
     recoverySnapshot: source.recoverySnapshot
       ? freezeJsonSnapshot(structuredClone(source.recoverySnapshot))
       : undefined,
@@ -101,6 +118,7 @@ export function createAdmittedRunOperatorAuthority(
         })
       : undefined,
     scopes: Object.freeze([...source.scopes]),
+    requesterOwner: source.requesterOwner,
     gatewayAccessGrant: source.gatewayAccessGrant
       ? Object.freeze({ ...source.gatewayAccessGrant })
       : source.gatewayAccessGrant,
@@ -108,7 +126,6 @@ export function createAdmittedRunOperatorAuthority(
     invocation: source.invocation,
     signal,
     retain: source.retain,
-    reauthorize: source.reauthorize,
     onModelPolicyChanged: source.onModelPolicyChanged,
     get modelPolicy() {
       return source.modelPolicy;
@@ -311,9 +328,7 @@ export function runWithPreparedRunSourceScope<T>(
 ): Promise<T> {
   let assertion = params.preparedRunAdmission?.assertSourceCurrent;
   if (params.admittedRunContext) {
-    const lease = delegatedAuthorityLeases.get(params.admittedRunContext);
-    const captured =
-      lease && captureAdmittedRunActiveAssertion(params.admittedRunContext, lease.authority);
+    const captured = resolveAdmittedRunActiveAssertion(params.admittedRunContext);
     if (!captured) {
       return Promise.reject(new Error("admitted run authority is no longer active"));
     }
@@ -389,23 +404,30 @@ export function getAdmittedRunSource(
     : undefined;
 }
 
-/** Captures an exact admitted-run assertion for work that may cross an await boundary. */
+/** Reads the initiating profile only from the host's exact active admission lease. */
+export function getAdmittedRunOperatorProfileId(
+  authority: AgentRunDelegatedAuthority,
+): string | undefined {
+  const context = admittedContextsByAuthority.get(authority);
+  if (!context || getAdmittedRunDelegatedAuthority(context) !== authority) {
+    return undefined;
+  }
+  const operator = readAdmittedRunOperatorAuthority(context);
+  operator?.assertCurrent();
+  return operator?.profileId;
+}
+
+/** Stop, run occurrence and the run's registry session source, for work that crosses an await. */
 export function resolveAdmittedRunActiveAssertion(
   context: AdmittedRunContext,
   signal?: AbortSignal,
-): ReturnType<typeof captureAdmittedRunActiveAssertion> {
-  const authority = getAdmittedRunDelegatedAuthority(context);
-  return authority ? captureAdmittedRunActiveAssertion(context, authority, signal) : undefined;
-}
-
-/** Capture an already-resolved authority without repeating its source reads. */
-export function captureAdmittedRunActiveAssertion(
-  context: AdmittedRunContext,
-  authority: AgentRunDelegatedAuthority,
-  signal?: AbortSignal,
 ) {
-  const operationalRunInstance = context.operationalRunInstance;
   const lease = delegatedAuthorityLeases.get(context);
+  if (!lease || lease.foregroundClosed) {
+    return undefined;
+  }
+  const { authority } = lease;
+  const operationalRunInstance = context.operationalRunInstance;
   const refuse = (): never => {
     throw new Error(
       "admitted run authority is no longer active",
@@ -413,14 +435,13 @@ export function captureAdmittedRunActiveAssertion(
     );
   };
   const source = captureAgentRunDelegatedSourceAssertion(authority, refuse);
-  if (!lease || lease.foregroundClosed || lease.authority !== authority || !source) {
+  if (!source) {
     return undefined;
   }
   const assertLocalCurrent = (assertSource: () => void) => {
     if (
       signal?.aborted ||
       context.operationalRunInstance !== operationalRunInstance ||
-      delegatedAuthorityLeases.get(context) !== lease ||
       lease.foregroundClosed
     ) {
       refuse();
@@ -428,11 +449,9 @@ export function captureAdmittedRunActiveAssertion(
     assertSource();
   };
   return Object.assign(
-    composeSessionSourceAssertion(
-      [source.assertCurrent],
-      scopeOperatorAccessDecisions(assertLocalCurrent),
-      { synchronousCheck: true },
-    ),
+    composeSessionSourceAssertion([source.assertCurrent], assertLocalCurrent, {
+      synchronousCheck: true,
+    }),
     {
       assertScopeCurrent: () => assertLocalCurrent(source.assertBinding),
     },
@@ -539,13 +558,12 @@ export function prepareAgentRunAdmission(params: {
   if (operatorAuthority !== undefined) {
     assertAdmittedRunOperatorAuthority(operatorAuthority);
   }
-  const assertOperatorCurrent = operatorAuthority?.assertCurrent;
   const releaseOperatorAuthority = operatorAuthority?.retain?.();
   let sourceFailure: Error | undefined;
   const assertSourceCurrent =
-    (sourceAssertion || assertOperatorCurrent) &&
+    sourceAssertion &&
     composeSessionSourceAssertion(
-      [sourceAssertion, assertOperatorCurrent],
+      [sourceAssertion],
       scopeOperatorAccessDecisions((assertSources: () => void) => {
         if (sourceFailure) {
           throw sourceFailure;
@@ -588,9 +606,7 @@ export function prepareAgentRunAdmission(params: {
       if (!admittedContext) {
         return;
       }
-      const lease = delegatedAuthorityLeases.get(admittedContext);
-      const assertActive =
-        lease && captureAdmittedRunActiveAssertion(admittedContext, lease.authority);
+      const assertActive = resolveAdmittedRunActiveAssertion(admittedContext);
       if (!assertActive) {
         throw new Error("prepared execution authority is no longer active");
       }
@@ -638,7 +654,6 @@ export function prepareAgentRunAdmission(params: {
       admitted ??= runWithSessionSourceScope(
         assertSourceCurrent,
         async () => {
-          operatorAuthority?.reauthorize?.();
           assertSourceCurrent?.();
           const facts = executionIdentitySpawnAdmission({
             operation: "attach",

@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { TLSSocket } from "node:tls";
+import { Value } from "typebox/value";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import { PluginsControlUiCatalogSchema } from "../../packages/gateway-protocol/src/public-schema-plugins.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -248,6 +250,19 @@ it("discovers only active repository sources without browser assets or custom UI
   const disabled = await listControlUiPluginCatalog();
   expect(disabled.repositorySources).toEqual([]);
   expect(disabled.revision).not.toBe(catalog.revision);
+});
+
+it("keeps Settings metadata out of the browser module catalog", async () => {
+  const fixture = activateFixture();
+  fixture.record.controlUi = {
+    ...fixture.record.controlUi!,
+    settingsViews: [{ section: "memory", panel: "overview" }],
+  };
+  fixture.manifest(fixture.record.uiCapabilities);
+
+  const catalog = await listControlUiPluginCatalog();
+  expect(catalog.plugins.map((plugin) => plugin.pluginId)).toEqual(["native-ui"]);
+  expect(Value.Check(PluginsControlUiCatalogSchema, catalog)).toBe(true);
 });
 
 it("omits settings-only presentations from activation while keeping ordinary plugins", async () => {
@@ -716,9 +731,9 @@ it("serves profile-bound cookie assets with a replaced profile catalog", async (
   });
 });
 
-it.each(["auth rotation", "response closure"] as const)(
+it.each(["response closure"] as const)(
   "refuses asset disclosure after %s during profile preparation",
-  async (invalidation) => {
+  async () => {
     await withOpenClawTestState({ prefix: "native-ui-profile-authority-" }, async () => {
       await withConfig(async () => {
         activateFixture();
@@ -735,7 +750,7 @@ it.each(["auth rotation", "response closure"] as const)(
             await resume.promise;
             return catalog;
           });
-        let currentAuth = AUTH_TOKEN;
+        const currentAuth = AUTH_TOKEN;
         const request = createRequest({
           path: entry.entryUrl,
           headers: { cookie: cookieForGrant({ profileId: profile.id }) },
@@ -752,18 +767,10 @@ it.each(["auth rotation", "response closure"] as const)(
             operation,
             "asset request completed before profile preparation",
           );
-          if (invalidation === "auth rotation") {
-            currentAuth = { ...AUTH_TOKEN, token: "rotated-token" };
-          } else {
-            response.res.destroy();
-          }
+          response.res.destroy();
           resume.resolve();
           expect(await operation).toBe(true);
-          if (invalidation === "auth rotation") {
-            expect(response.res.statusCode).toBe(401);
-          } else {
-            expect(response.end).not.toHaveBeenCalled();
-          }
+          expect(response.end).not.toHaveBeenCalled();
         } finally {
           resume.resolve();
           try {

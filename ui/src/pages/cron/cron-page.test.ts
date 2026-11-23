@@ -287,6 +287,16 @@ it.each(["selecting another job", "changing agent scope", "opening another link"
   },
 );
 
+it("opens an explicitly linked automation directly in its settings", async () => {
+  const job = createCronViewJob("linked-job", { state: {} });
+  const { page } = mountCronPage(cronRpc({ "cron.get": () => job }));
+  page.routeSearch = "?job=linked-job&tab=settings";
+  await waitFor(() => {
+    expect(page.cron.cronEditingJob?.id).toBe(job.id);
+    expect(page.querySelector("#cron-payload-text")).not.toBeNull();
+  });
+});
+
 it("clears a failed job link when opening another link", async () => {
   const job = createCronViewJob("current-job", { state: {} });
   const request = cronRpc({

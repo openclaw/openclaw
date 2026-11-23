@@ -216,7 +216,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
               signal?.aborted ||
               hasCurrentClientAuthority?.() === false ||
               !canReviewOperatorApproval(client) ||
-              !sessionAccess?.canAccess({
+              !sessionAccess?.canRead({
                 sessionKey: canonicalKey,
                 agentId: requestedAgentId,
               })

@@ -707,7 +707,11 @@ describe("host-owned current admission annotation", () => {
           sessionKey: f.target.sessionKey,
           operationalRunInstance: f.admittedRunContext.operationalRunInstance,
           workerTurnClaim: claim,
-          receiptAuthority: () => placements.validateTurnClaim(claim),
+          receiptAuthority: () => {
+            if (!placements.validateTurnClaim(claim)) {
+              throw new Error("worker turn claim is no longer current");
+            }
+          },
         },
         () => f.createHost(),
       );
