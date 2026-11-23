@@ -24,6 +24,7 @@ import {
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { assertSkillMutationsEnabled } from "../../skills/deployment-policy.js";
 import {
   assertPreparedSkillLibrarySelection,
   changeSkillLibrarySelection,
@@ -97,6 +98,7 @@ export async function activateLibrarySelection(
   options: SkillLibraryRequestOwner,
   params: SkillsLibraryActivateParams,
 ) {
+  assertSkillMutationsEnabled();
   const { client, context } = options;
   const resolvedAuthorization = await resolveSessionMutationAuthorizationAsync({
     client,

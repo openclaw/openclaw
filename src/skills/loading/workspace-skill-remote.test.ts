@@ -3,9 +3,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import { stripRuntimeOnlySessionSkillsFields } from "../../config/sessions/store-entry-shape.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
 import { prepareWorkspaceSkillStatus } from "../discovery/status.js";
+import { prepareSkillResourceDelivery } from "../runtime/resources.js";
 import { recordSkillFileHost, resolveSkillFileHost } from "../skill-file-host.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { resolveWorkshopSkillsDir } from "../test-support/workshop-config.test-support.js";
@@ -99,6 +101,54 @@ const skillNamed = (entries: SkillEntry[], name: string) =>
   entries.find((entry) => entry.skill.name === name)?.skill;
 const writeCard = (dir: string, content: string) =>
   fs.writeFile(path.join(dir, "skill-card.md"), content);
+
+it("selects and delivers the deployment-pinned Gateway skill over a remote workspace collision", async () => {
+  const { gateway, remote, options, bind } = await fixture();
+  const extra = path.join(path.dirname(gateway), "deployed");
+  await writeNamedSkill(extra, "available", "Pinned Gateway instructions");
+  const pinnedFile = path.join(extra, "available", "SKILL.md");
+  await fs.writeFile(path.join(extra, "available", "guide.txt"), "Approved supporting file");
+  const params = {
+    ...options,
+    librarySelections: undefined,
+    config: { ...options.config, skills: { load: { extraDirs: [extra], watch: false } } },
+  };
+  bind();
+  expect(skillNamed(await prepareWorkspaceSkills(gateway, params), "available")?.filePath).toBe(
+    path.join(remote, "skills", "available", "SKILL.md"),
+  );
+  vi.stubEnv("OPENCLAW_PINNED_SKILL_FILES", JSON.stringify({ available: pinnedFile }));
+  const entries = await prepareWorkspaceSkills(gateway, params);
+  expect(skillNamed(entries, "available")).toMatchObject({
+    filePath: pinnedFile,
+    description: "Pinned Gateway instructions",
+    fileHost: "gateway",
+  });
+  const snapshot = await buildSkillSnapshot(gateway, { ...params, entries });
+  const compact = stripRuntimeOnlySessionSkillsFields({
+    sessionId: "managed-skill",
+    updatedAt: 1,
+    skillsSnapshot: snapshot,
+  }).skillsSnapshot!;
+  const delivery = await prepareSkillResourceDelivery(compact, () => {}, [], gateway);
+  expect(delivery?.skills.find((skill) => skill.name === "available")).toMatchObject({
+    sourcePath: pinnedFile,
+    files: expect.arrayContaining([
+      expect.objectContaining({
+        path: "SKILL.md",
+        content: expect.stringContaining("Pinned Gateway instructions"),
+      }),
+      expect.objectContaining({ path: "guide.txt", content: "Approved supporting file" }),
+    ]),
+  });
+  const forged = structuredClone(compact);
+  // Simulate an untrusted persisted snapshot carrying a forged source field.
+  const forgedSkill = forged.skills.find((skill) => skill.name === "available")!;
+  Object.assign(forgedSkill, { source: { filePath: pinnedFile, fileHost: "workspace" } });
+  await expect(prepareSkillResourceDelivery(forged, () => {}, [], gateway)).rejects.toThrow(
+    "deployment-pinned Gateway source",
+  );
+});
 
 it("keeps explicitly hidden remote collision losers out of snapshot hydration", async () => {
   const { gateway, sources, options, bind } = await fixture();

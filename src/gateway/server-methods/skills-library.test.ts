@@ -112,6 +112,18 @@ function retainedFilesHarness() {
 }
 
 describe("skill library retained support files", () => {
+  it("refuses an authenticated profile's Library publication when deployment skill mutations are disabled", async () => {
+    const { call } = retainedFilesHarness();
+    vi.stubEnv("OPENCLAW_DISABLE_SKILL_INSTALLS", "1");
+    expect(
+      await call("skills.library.save", { slug: "managed", content, expectedRevision: null }),
+    ).toMatchObject([
+      false,
+      undefined,
+      { code: "UNAVAILABLE", message: expect.stringContaining("disabled") },
+    ]);
+  });
+
   it("rejects client file creation at the real filesystem mutation admission", async () => {
     const { call, cfg, root } = retainedFilesHarness();
     const openRoot = fsSafe.root;

@@ -87,6 +87,9 @@ it("seeds a linked owner's new session with the person's library skills", async 
   expect((await seeded(OWNER)).map((pin) => pin.skillId)).toEqual([saved.entry.skillId]);
   // The person's own connection is held to their role, which cannot read the library.
   expect(await seeded()).toEqual([]);
+  // Managed deployments must not implicitly activate retained Library entries in a new session.
+  vi.stubEnv("OPENCLAW_DISABLE_SKILL_INSTALLS", "1");
+  expect(await seeded(OWNER)).toEqual([]);
 });
 
 it("keeps a linked owner's accepted work when the person's stored role changes", () =>

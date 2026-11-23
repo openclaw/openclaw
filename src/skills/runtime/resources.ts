@@ -22,8 +22,10 @@ import { acquireFileLock } from "../../infra/file-lock.js";
 import { removeTemporaryArtifacts } from "../../infra/temp-artifact-cleanup.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { deploymentSkillPins } from "../deployment-policy.js";
 import {
   copyExplicitSkillSelectionFileHost,
+  recordExplicitSkillSelectionFileHost,
   resolveExplicitSkillSelectionFileHost,
 } from "../discovery/skill-command-provenance.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
@@ -143,11 +145,54 @@ export async function prepareSkillResourceDelivery(
     return undefined;
   }
   assertCurrent();
+  const deploymentPins = deploymentSkillPins();
+  const explicitSelections = inputExplicitSelections.map((selection) =>
+    copyExplicitSkillSelectionFileHost(selection, { ...selection }),
+  );
+  const compact =
+    inputSnapshot.resolvedSkills === undefined && inputSnapshot.discoverySkills === undefined;
+  const advertised =
+    compact && deploymentPins.size
+      ? new Set(parseSkillsPromptCatalog(inputSnapshot.prompt).map((skill) => skill.name))
+      : undefined;
+  for (const skill of inputSnapshot.skills) {
+    const file = deploymentPins.get(skill.name);
+    if (!file) {
+      continue;
+    }
+    if (
+      skill.source?.fileHost !== "gateway" ||
+      skill.source.filePath !== file ||
+      skill.gatewayFilePath !== file ||
+      inputSnapshot.librarySelections?.some((selection) => selection.name === skill.name)
+    ) {
+      throw new Error(
+        `Skill ${JSON.stringify(skill.name)} conflicts with its deployment-pinned Gateway source.`,
+      );
+    }
+    // Persisted sessions omit runtime arrays. Restore only pins still advertised by their prompt.
+    if (advertised?.has(skill.name)) {
+      explicitSelections.push(
+        recordExplicitSkillSelectionFileHost({ name: skill.name, path: file }, "gateway"),
+      );
+    }
+  }
+  for (const selection of explicitSelections) {
+    const file = deploymentPins.get(selection.name);
+    if (
+      file &&
+      (selection.path !== file || resolveExplicitSkillSelectionFileHost(selection) === "workspace")
+    ) {
+      throw new Error(
+        `Skill ${JSON.stringify(selection.name)} conflicts with its deployment-pinned Gateway source.`,
+      );
+    }
+  }
   if (
     !inputSnapshot.resolvedSkills?.length &&
     !inputSnapshot.discoverySkills?.length &&
     !inputSnapshot.librarySelections?.length &&
-    !inputExplicitSelections.length
+    !explicitSelections.length
   ) {
     return undefined;
   }
@@ -162,9 +207,6 @@ export async function prepareSkillResourceDelivery(
     resolvedSkills: inputSnapshot.resolvedSkills?.map((skill) => ({ ...skill })),
     skillRoots: inputSnapshot.skillRoots && { ...inputSnapshot.skillRoots },
   };
-  const explicitSelections = inputExplicitSelections.map((selection) =>
-    copyExplicitSkillSelectionFileHost(selection, { ...selection }),
-  );
   // Library-only and node-native catalogs need no workspace filesystem access.
   let sourceReader: SkillResourceSourceReader | undefined;
   const getSourceReader = (skill?: Skill) => {
@@ -251,6 +293,14 @@ export async function prepareSkillResourceDelivery(
     }
     candidates.push(loaded);
   }
+  for (const skill of candidates) {
+    const file = deploymentPins.get(skill.name);
+    if (file && (resolveSkillFileHost(skill) !== "gateway" || skill.filePath !== file)) {
+      throw new Error(
+        `Skill ${JSON.stringify(skill.name)} conflicts with its deployment-pinned Gateway source.`,
+      );
+    }
+  }
   const pins = [
     ...new Set(
       candidates.flatMap((skill) => {
@@ -303,7 +353,7 @@ export async function prepareSkillResourceDelivery(
         );
       } else {
         files = await getSourceReader(skill).readSkillFiles(skill, {
-          allowMissingRoot: !explicitlySelected,
+          allowMissingRoot: !explicitlySelected && !deploymentPins.has(skill.name),
         });
       }
     } catch (error) {

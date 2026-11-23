@@ -16,6 +16,10 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import {
+  SKILL_MUTATIONS_DISABLED_MESSAGE,
+  skillMutationsDisabled,
+} from "../skills/deployment-policy.js";
 import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
 import {
   withArtifactPreservingStateReads,
@@ -390,6 +394,19 @@ export async function handleGatewayRequest(
       entry?.assertOpen();
       if (authorization.error) {
         respond(false, undefined, authorization.error);
+        return;
+      }
+      const scope = methodRegistry.getScope(req.method);
+      if (
+        req.method.startsWith("skills.") &&
+        (scope === "operator.write" || scope === "operator.admin") &&
+        skillMutationsDisabled()
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, SKILL_MUTATIONS_DISABLED_MESSAGE),
+        );
         return;
       }
       const handler = methodRegistry.getHandler(req.method) as GatewayRequestHandler | undefined;

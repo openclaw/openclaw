@@ -12,6 +12,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { evaluateSkillInstallPolicy } from "../../plugins/install-security-scan.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
+import { assertSkillMutationsEnabled } from "../deployment-policy.js";
 import {
   assertSkillBundleHasNoLiteralSecrets,
   scanSkillBundle,
@@ -84,6 +85,7 @@ export async function saveSkillLibrary(
   options: OpenClawStateDatabaseOptions = {},
   uploadId?: string,
 ): Promise<SkillsLibraryReceipt> {
+  assertSkillMutationsEnabled();
   if (!validateSkillsLibrarySaveParams(params)) {
     throw new SkillLibraryError("INVALID_BUNDLE", "Invalid skill save parameters.");
   }
@@ -183,5 +185,6 @@ export async function mutateSkillLibrary(
   params: SkillsLibraryMutateParams,
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<SkillsLibraryReceipt> {
+  assertSkillMutationsEnabled();
   return captureSkillLibraryAccess(authority, options).write("skillLibrary.mutate", { params });
 }

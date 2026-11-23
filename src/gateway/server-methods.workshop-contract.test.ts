@@ -92,6 +92,28 @@ afterEach(async () => {
 });
 
 describe("Workshop through Gateway authorization and dispatch", () => {
+  it("keeps managed skill reads available while refusing core and plugin skill mutations", async () => {
+    vi.stubEnv("OPENCLAW_DISABLE_SKILL_INSTALLS", "1");
+    try {
+      expect(await dispatch("skills.workshop.list", { agentId: "ops" })).toMatchObject({
+        ok: true,
+      });
+      for (const [method, params] of [
+        ["skills.workshop.archive", { agentId: "ops", name: "deploy-notes" }],
+        ["skills.install", { source: "clawhub", slug: "deploy-notes" }],
+        ["skills.upload.begin", { kind: "skill-archive", sizeBytes: 1 }],
+      ] as const) {
+        expect(await dispatch(method, params)).toMatchObject({
+          ok: false,
+          error: { code: "UNAVAILABLE", message: expect.stringContaining("disabled") },
+        });
+      }
+      expect(await fs.readFile(path.join(root, "deploy-notes", "SKILL.md"), "utf8")).toBe(skill);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("lets operator.read list, read and page changes but refuses every mutation", async () => {
     const readScopes = ["operator.read"];
     expect(await dispatch("skills.workshop.list", { agentId: "ops" }, readScopes)).toMatchObject({

@@ -90,6 +90,15 @@ Most skills configuration lives under `skills` in
   need this setting.
 </ParamField>
 
+## Deployment-managed skills
+
+A deployment system can set these variables on the Gateway process before startup:
+
+- `OPENCLAW_DISABLE_SKILL_INSTALLS=1` rejects Gateway `skills.*` methods that require `operator.write` or `operator.admin`, including installation, uploads, Library publication and Workshop mutations. Plugin skill-authoring writes, including model-facing Workshop publication, and direct personal Library publication, mutation, import, upload, and activation are also refused. Fresh authenticated sessions do not automatically activate Library entries; existing session selections and delegated spawn inheritance remain unchanged. Read-scoped skill status and discovery remain available.
+- `OPENCLAW_PINNED_SKILL_FILES` is a JSON object mapping skill names to absolute Gateway-hosted `SKILL.md` paths, for example `{"guide":"/opt/deployed/skills/guide/SKILL.md"}`. Each file must already be discoverable from a Gateway-owned source such as `skills.load.extraDirs`. The selected file takes precedence over same-named workspace, node and Library entries. Missing or conflicting pins fail closed, including when restoring a persisted session's compact skill snapshot.
+
+These variables are process-owned and cannot be set or overridden through `env.vars` in Gateway configuration. Protect the source directory with deployment-managed filesystem permissions; pinning a path does not make a writable file immutable. Without these variables, normal skill behavior is unchanged.
+
 ## Operator Install Policy (`security.installPolicy`)
 
 Use `security.installPolicy` when operators need a trusted local command to

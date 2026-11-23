@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { skillMutationsDisabled } from "../skills/deployment-policy.js";
 import {
   seedSkillLibrarySelection,
   type PreparedSkillLibrarySession,
@@ -22,6 +23,9 @@ export async function prepareSkillLibrarySessionCreation(
     return creation;
   }
   prepared?.assertCurrent();
+  if (skillMutationsDisabled()) {
+    return { ...creation, skillLibrarySelections: [] };
+  }
   // A linked owner device seeds with the owner's library permissions (OCF-510).
   const ownerDevice = currentOwnerDevicePrincipal(client) !== undefined;
   return {
