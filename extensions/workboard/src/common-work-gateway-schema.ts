@@ -117,6 +117,7 @@ export const commonWorkOperationSchema = z.discriminatedUnion("kind", [
 ]);
 
 export function parseCommonWorkOperation(input: unknown): CommonWorkOperation {
+  // SAFETY: The strict discriminated schema mirrors every CommonWorkOperation variant and rejects extras.
   return commonWorkOperationSchema.parse(input) as CommonWorkOperation;
 }
 
