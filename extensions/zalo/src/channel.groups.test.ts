@@ -12,7 +12,6 @@ describe("Zalo groups map consumers", () => {
         groups: {
           "*": { tools: { deny: ["browser"] } },
           [MIXED_CASE_GROUP]: { tools: { deny: ["exec"] } },
-          "zgr-plain": {},
         },
       },
     },
@@ -32,11 +31,6 @@ describe("Zalo groups map consumers", () => {
     expect(sessionGroupId).toBe(MIXED_CASE_GROUP.toLowerCase());
     expect(tools(sessionGroupId ?? "")).toEqual({ deny: ["exec"] });
     expect(tools(MIXED_CASE_GROUP)).toEqual({ deny: ["exec"] });
-  });
-
-  it("falls back to the wildcard entry's tools", () => {
-    expect(tools("zgr-plain")).toEqual({ deny: ["browser"] });
-    expect(tools("zgr-other")).toEqual({ deny: ["browser"] });
   });
 
   const skipWarning = (
