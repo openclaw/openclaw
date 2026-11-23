@@ -18,6 +18,7 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { gitCommitPrefixesMatch, resolveLoadedCommitHash } from "../infra/git-commit.js";
 import { resolveNpmCommand } from "../infra/npm-command.js";
+import { compareSemverStrings } from "../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { isPackageTargetAlreadyCurrent } from "../infra/update-global.js";
 import { describeUnavailableMacosSystemGit } from "../infra/update-macos-git.js";
@@ -31,6 +32,7 @@ import {
 } from "../infra/update-run-write.async.js";
 import { SystemPackageOwnershipError } from "../infra/update-system-package-ownership.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { VERSION } from "../version.js";
 import { checkRelease } from "./check-release.js";
 import { stageReleaseService } from "./convert-service.js";
 import { writeLauncher } from "./launcher.js";
@@ -382,6 +384,19 @@ export async function prepareUpdate(params: {
       }
     }
     await markForwarding(params.runningRoot, launcher, prefix);
+    // Older releases do not have post-ready maintenance. A downgrade does not migrate
+    // state forward, so retain their pre-trial maintenance and warning recording.
+    if ((compareSemverStrings(VERSION, prepared.version) ?? 0) > 0) {
+      const { step } = await runPluginMaintenance({
+        root: releaseRoot,
+        node,
+        env,
+        channel: params.channel,
+        timeoutMs: Math.max(1, deadline - Date.now()),
+        acceptCapabilities: params.acceptCapabilities,
+      });
+      await recordUpdateRunStepAsync(params.runId, step, { env });
+    }
     await createTrialPending(
       {
         runId: params.runId,

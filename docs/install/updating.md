@@ -183,8 +183,10 @@ found that earlier receipts did not prove what they claimed.
 Add a note here when a change alters a contract. A note about the in-place update
 flow names the shipped-updater contract or unmoved route that it serves.
 
-Prepared-release plugin maintenance runs only after the candidate has migrated
-state and reported ready. The previous Gateway no longer owns the shared state,
+Prepared-release plugin maintenance normally runs after the candidate has migrated
+state and reported ready. Downgrades retain pre-trial maintenance because older
+releases do not have the post-ready job and do not migrate the schema forward.
+The previous Gateway no longer owns the shared state during post-ready maintenance,
 and plugin downloads and installs do not extend the restart outage. Core success
 is recorded first; final plugin results arrive later in the open details. The
 existing trial record carries explicit `--accept-capabilities` consent; an absent
@@ -193,9 +195,10 @@ budget. A Gateway stop during that work can leave no plugin result for that
 update. Published compatible plugin versions load at the next Gateway start;
 `openclaw plugins update` finishes the rest. The next core update also retries.
 Core rollback does not wait for plugin maintenance, and a candidate that fails
-before readiness does not update plugins. The candidate must contain the post-ready
-maintenance call; the installed updater must contain the removal of the
-pre-restart call.
+before readiness does not update plugins on an upgrade. The candidate must contain
+the post-ready maintenance call; the installed updater must contain the version-aware
+pre-restart decision. A Git target with the same version string but an older revision
+does not receive plugin maintenance; run `openclaw plugins update` in that case.
 The internal maintenance-command result carries exact install-record hashes into
 the existing batch reload check. A record changed again before reload is refused.
 Removed records do not hot-unload a running plugin; the existing metadata-only
