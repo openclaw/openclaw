@@ -163,10 +163,12 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   const pinnable = createMemo(() => session().pinnable);
   const childCount = createMemo(() => {
     const row = session();
-    // A flat Home reference has child keys, but Home's branch owns those children.
     const homeReference =
       !row.childLoadParentKeys?.length && host().mainSessionRow()?.key === row.key;
-    return homeReference ? 0 : (row.snapshot?.childCount ?? row.childSessionKeys.length);
+    // Flat references (such as pinned Home) can have child keys without a sidebar branch.
+    return row.childLoadParentKeys?.length
+      ? (row.snapshot?.childCount ?? row.childSessionKeys.length)
+      : 0;
   });
   const groupWriteAccess = createMemo(() =>
     host().readSessionMutationAccess({
