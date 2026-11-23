@@ -96,19 +96,48 @@ it("offers retry after rollback without telling the user to diagnose before retr
   expect(onUpdateNow).toHaveBeenCalledOnce();
 });
 
-it("shows a failed confirmation load and retries the command", async () => {
-  const onUpdateNow = vi
-    .fn<() => Promise<void>>()
-    .mockRejectedValueOnce(new Error("Confirmation unavailable"))
-    .mockResolvedValue(undefined);
-  renderUpdates({ onUpdateNow });
-  row("Update Gateway…").querySelector<HTMLButtonElement>("button")!.click();
-  const alert = () => container.querySelector('[role="alert"]');
-  await waitForSolid(() => expect(alert()?.textContent).toContain("Confirmation unavailable"));
-  container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
-  await waitForSolid(() => expect(alert()).toBeNull());
-  expect(onUpdateNow).toHaveBeenCalledTimes(2);
-});
+it.each([false, true])(
+  "retries a failed confirmation only while self-managed (host refresh: %s)",
+  async (hostRefresh) => {
+    const onUpdateNow = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("Confirmation unavailable"))
+      .mockResolvedValue(undefined);
+    const commandScope = {};
+    renderUpdates({ commandScope, onUpdateNow });
+    row("Update Gateway…").querySelector<HTMLButtonElement>("button")!.click();
+    const alert = () => container.querySelector('[role="alert"]');
+    await waitForSolid(() => expect(alert()?.textContent).toContain("Confirmation unavailable"));
+    if (hostRefresh) {
+      renderUpdates({
+        commandScope,
+        onUpdateNow,
+        update: {
+          updateSchedule: {
+            channel: "stable",
+            autoEnabled: false,
+            install: {
+              kind: "host",
+              host: {
+                owner: "macos-app",
+                displayName: "OpenClaw.app",
+                updateHint: "Update the app.",
+              },
+            },
+          },
+        },
+      });
+      expect(row("Update Gateway").textContent).toContain("Update the app.");
+      expect(alert()?.textContent).toContain("Confirmation unavailable");
+      expect(alert()!.querySelector("button")).toBeNull();
+      expect(onUpdateNow).toHaveBeenCalledOnce();
+      return;
+    }
+    container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
+    await waitForSolid(() => expect(alert()).toBeNull());
+    expect(onUpdateNow).toHaveBeenCalledTimes(2);
+  },
+);
 
 it("keeps native automatic-update intent until acknowledgement and permits retry after failure", async () => {
   const snapshot = createNativeDeviceSettingsSnapshot();

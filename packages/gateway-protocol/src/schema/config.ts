@@ -204,9 +204,22 @@ export const UpdateScheduleStateSchema = closedObject({
   autoEnabled: Type.Boolean(),
   install: Type.Optional(
     closedObject({
-      kind: stringLiteralUnion(["package", "git", "immutable", "unknown"]),
+      kind: stringLiteralUnion(["package", "git", "immutable", "host", "unknown"]),
       git: Type.Optional(GitUpdateStatusSchema),
       immutable: Type.Optional(UpdateImmutableInstallSchema),
+      /** Present when another application owns updates; clients show guidance instead of Gateway update actions. */
+      host: Type.Optional(
+        closedObject({
+          owner: stringLiteralUnion([
+            "macos-app",
+            "desktop-app",
+            "container-image",
+            "immutable-deployer",
+          ]),
+          displayName: NonEmptyString,
+          updateHint: NonEmptyString,
+        }),
+      ),
     }),
   ),
   target: Type.Optional(
