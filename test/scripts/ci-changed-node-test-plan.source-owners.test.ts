@@ -176,6 +176,44 @@ describe("CI changed Node test plan", () => {
     ).toEqual([consumer]);
   });
 
+  it("retains prompt-cache and compaction behavior tests for their production owners", () => {
+    const sources = [
+      "src/agents/embedded-agent-runner/run/request-boundary-compaction.ts",
+      "src/agents/embedded-agent-runner/run/attempt-prompt-build.ts",
+      "src/agents/embedded-agent-runner/prompt-cache-history.ts",
+      "packages/agent-core/src/harness/compaction/compaction-assembly.ts",
+      "packages/ai/src/transports/anthropic-compaction-replay.ts",
+      "packages/ai/src/transports/openai-responses-payload-policy.ts",
+      "packages/ai/src/utils/compaction-threshold.ts",
+    ];
+    const unrelated = "src/agents/embedded-agent-runner/run/stream-diagnostics.ts";
+    const consumers = [
+      "src/agents/embedded-agent-runner.prompt-cache.test.ts",
+      "src/auto-reply/reply/agent-runner-compaction-fallback.test.ts",
+      "src/auto-reply/reply/agent-runner-required-maintenance.pending-input.test.ts",
+      "src/cron/session-context-accounting.gateway.integration.test.ts",
+    ];
+    const cwd = createSourceFixture(
+      "changed-request-boundary-",
+      Object.fromEntries(
+        [...sources, unrelated, ...consumers].map((file) => [file, "export {};\n"]),
+      ),
+    );
+    const options = {
+      cwd,
+      selectionMode: "aggressive" as const,
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyRuntimeTests: false,
+    };
+
+    for (const source of sources) {
+      expect(resolveChangedNodeTestTargets([source], options).toSorted(), source).toEqual(
+        consumers,
+      );
+    }
+    expect(resolveChangedNodeTestTargets([unrelated], options)).toEqual([]);
+  });
+
   it("packs the native inventory reader without a whole tooling family", () => {
     const reader = "test/scripts/native-app-i18n.test.ts";
     const shards = createChangedNodeTestShards(

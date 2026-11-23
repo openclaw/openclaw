@@ -184,6 +184,26 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "vitest.config.ts",
     ],
   },
+  // Prompt assembly and compaction reach these behavior tests through runner
+  // facades and Gateway fixtures beyond the aggressive import depth.
+  ...[
+    "src/agents/embedded-agent-runner.prompt-cache.test.ts",
+    "src/auto-reply/reply/agent-runner-compaction-fallback.test.ts",
+    "src/auto-reply/reply/agent-runner-required-maintenance.pending-input.test.ts",
+    "src/cron/session-context-accounting.gateway.integration.test.ts",
+  ].map((testFile): PolicyTestWatch => ({
+    testFile,
+    watchGlobs: [
+      "packages/agent-core/src/harness/compaction/*.ts",
+      "packages/ai/src/openai-completions-messages.ts",
+      "packages/ai/src/transports/{anthropic-messages,anthropic-payload-policy,openai-responses-payload-policy,*compaction-replay*}.ts",
+      "packages/ai/src/utils/compaction-threshold.ts",
+      "src/agents/{compaction*,agent-hooks/compaction-safeguard,sessions/agent-session-compaction}.ts",
+      "src/agents/embedded-agent-runner/{prompt-cache-*,run/attempt-prompt-*,run/request-boundary-compaction,run/session-boundary-prompt-cache-key}.ts",
+      "src/auto-reply/reply/agent-runner-memory{,-runtime}.ts",
+    ],
+    sourceOnly: true,
+  })),
   // These owner contracts enter production through fixture adapters or a facade.
   {
     testFile: "src/gateway/server.agents.config-readiness.test.ts",
