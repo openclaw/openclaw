@@ -64,6 +64,43 @@ const activeMessageIds = (scope: Parameters<typeof readMessages>[0]) =>
   );
 
 /**
+ * Extend the fixture transcript past a lossy compaction: assistant-2 is followed
+ * by a degraded compaction, then user-3/assistant-3 become the active leaf.
+ * Appending the compaction marks the entry degraded, mirroring production.
+ */
+async function seedDegradedCompaction(scope: Parameters<typeof appendEvent>[0], stateDir: string) {
+  const at = (second: number) =>
+    new Date(Date.parse("2026-07-18T00:00:00Z") + second).toISOString();
+  await appendEvent(scope, {
+    type: "compaction",
+    id: "degraded-compaction",
+    parentId: "assistant-2",
+    timestamp: at(7),
+    details: { readFiles: [], modifiedFiles: [], qualityDegraded: true },
+  });
+  await appendMessage(scope, {
+    eventId: "user-3",
+    parentId: "degraded-compaction",
+    message: { role: "user", content: "third prompt" },
+    now: Date.parse("2026-07-18T00:00:00Z") + 8_000,
+  });
+  await appendMessage(scope, {
+    eventId: "assistant-3",
+    parentId: "user-3",
+    message: { role: "assistant", content: "third answer" },
+    now: Date.parse("2026-07-18T00:00:00Z") + 9_000,
+  });
+  await appendEvent(scope, {
+    type: "leaf",
+    id: "active-leaf-degraded",
+    parentId: "assistant-3",
+    timestamp: at(10),
+    targetId: "assistant-3",
+  });
+  await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+}
+
+/**
  * Install one stored shape whose canonical navigation is not its raw chain, through
  * the append owner: no async writer produces these shapes today.
  */
@@ -380,6 +417,76 @@ it("rewinds by repointing the active leaf and returns the editor text", async ()
     to: "chat-123",
     accountId: undefined,
   });
+});
+
+// Rewinding to before a lossy compaction must not keep warning that the restored
+// history may be missing details: the degraded flag belongs to the selected path.
+it("rewinds before a degraded compaction and clears the degraded flag", async () => {
+  const { env, scope, params } = await createSession();
+  await seedDegradedCompaction(scope, env.OPENCLAW_STATE_DIR as string);
+  expect(readEntry(scope)?.compactionQualityDegraded).toBe(true);
+
+  const result = await rewind(params);
+  assert(result.status === "created", `rewind refused: ${result.status}`);
+  expect(result.entry.compactionQualityDegraded).toBeUndefined();
+  expect(result.entry.compactionCount).toBeUndefined();
+  expect(readEntry(scope)?.compactionQualityDegraded).toBeUndefined();
+});
+
+// The flag is derived from the selected path, not cleared unconditionally:
+// switching away drops it, switching back to the degraded branch restores it.
+it("restores the degraded flag when switching back to degraded history", async () => {
+  const { env, scope } = await createSession();
+  await seedDegradedCompaction(scope, env.OPENCLAW_STATE_DIR as string);
+  expect(readEntry(scope)?.compactionQualityDegraded).toBe(true);
+
+  const away = await switchBranch({
+    agentId,
+    env,
+    sessionKey,
+    leafEntryId: "off-path-user",
+  });
+  assert(away.status === "created", `switch away refused: ${away.status}`);
+  expect(away.entry.compactionQualityDegraded).toBeUndefined();
+  expect(readEntry(scope)?.compactionQualityDegraded).toBeUndefined();
+
+  const back = await switchBranch({
+    agentId,
+    env,
+    sessionKey,
+    leafEntryId: "assistant-3",
+  });
+  assert(back.status === "created", `switch back refused: ${back.status}`);
+  expect(back.entry.compactionQualityDegraded).toBe(true);
+  expect(readEntry(scope)?.compactionQualityDegraded).toBe(true);
+});
+
+// Fork derives the flag from the copied prefix: a fork whose prefix includes the
+// degraded compaction keeps the warning, one cut before it does not.
+it("forks degradation from the copied prefix only", async () => {
+  const { env, scope, params } = await createSession();
+  await seedDegradedCompaction(scope, env.OPENCLAW_STATE_DIR as string);
+  expect(readEntry(scope)?.compactionQualityDegraded).toBe(true);
+
+  const degraded = await fork({
+    ...params,
+    sessionKey: "agent:main:canonical-message-cut",
+    sessionStoreKey: sessionKey,
+    targetKey: "agent:main:dashboard:message-cut-degraded-fork",
+    entryId: "user-3",
+  });
+  assert(degraded.status === "created", `fork refused: ${degraded.status}`);
+  expect(degraded.entry.compactionQualityDegraded).toBe(true);
+
+  const clean = await fork({
+    ...params,
+    sessionKey: "agent:main:canonical-message-cut",
+    sessionStoreKey: sessionKey,
+    targetKey: "agent:main:dashboard:message-cut-clean-fork",
+    entryId: "user-2",
+  });
+  assert(clean.status === "created", `fork refused: ${clean.status}`);
+  expect(clean.entry.compactionQualityDegraded).toBeUndefined();
 });
 
 // Canonical navigation is neither the raw parent chain nor raw child links, and a

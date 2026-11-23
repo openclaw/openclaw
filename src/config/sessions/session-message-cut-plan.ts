@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
 import { readMessageWorkContext } from "../../chat/work-context.js";
 import { assertModelSelectionUnlocked } from "../../sessions/model-overrides.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
@@ -77,11 +78,35 @@ export type SessionMessageCutReader = {
   canonicalSelectionHolds(targetId: string | null): boolean;
   /** Canonical path to this leaf, as physical sequences; indexed readers only. */
   canonicalBranchPathSeqs?(leafEventId: string): readonly number[] | undefined;
+  /**
+   * True when the canonical path the planned control would select contains a
+   * compaction whose details mark the history quality-degraded. The planner
+   * installs this on the cut entry so /status reflects the new active path
+   * instead of carrying the displaced branch's flag. A compaction payload the
+   * reader cannot verify (missing, or over the read budget) counts as not
+   * degraded: compaction payloads are summaries, far under the budget in
+   * practice, and the cut must not fail for a flag it cannot see.
+   */
+  selectedPathHasDegradedCompaction(targetId: string | null): boolean;
   activeLeafEventId(): string | null;
   /** Physical append cursor: the newest identity row, which the leaf control chains onto. */
   tailEventId(): string | null;
   allocateEventId(): string;
 };
+
+/**
+ * True when this event is a compaction whose committed details mark the history
+ * quality-degraded (a summary committed without passing the safeguard audit).
+ * Shared by the cut planners and both readers so the flag is derived from the
+ * selected transcript path in one place.
+ */
+export function isDegradedCompactionEvent(event: unknown): boolean {
+  const record = asRecord(event);
+  return (
+    record?.type === "compaction" &&
+    parseCompactionDetails(record.details)?.qualityDegraded === true
+  );
+}
 
 /**
  * Reader for a memory-resident transcript, where the whole event list is already
@@ -137,6 +162,13 @@ export function createMemorySessionMessageCutReader(
       );
     },
     canonicalSelectionHolds: (targetId) => resolve(targetId).leafId === targetId,
+    selectedPathHasDegradedCompaction(targetId) {
+      // The whole transcript is in memory here, so the selected path is always readable.
+      const pathTree = resolve(targetId);
+      return selectSessionTranscriptTreePathNodes(pathTree, pathTree.leafId).some((node) =>
+        isDegradedCompactionEvent(node.entry),
+      );
+    },
     activeLeafEventId: () => tree.leafId,
     tailEventId: () => tree.nodes.at(-1)?.id ?? null,
     allocateEventId,
@@ -185,7 +217,13 @@ export function planSessionMessageCut(
     result: {
       status: "created",
       key: params.targetKey,
-      entry: buildMessageCutSessionEntry(currentEntry, params, nextSessionId),
+      entry: buildMessageCutSessionEntry(
+        currentEntry,
+        params,
+        nextSessionId,
+        // The forked transcript is the prefix itself.
+        cut.prefix.some((event) => isDegradedCompactionEvent(event)),
+      ),
       ...readMessageCutEditorFields(cut.message),
     },
   };
@@ -259,7 +297,14 @@ export function planInPlaceSessionMessageCut(
     result: {
       status: "created",
       key: params.targetKey,
-      entry: buildMessageCutSessionEntry(currentEntry, params, currentEntry.sessionId),
+      entry: buildMessageCutSessionEntry(
+        currentEntry,
+        params,
+        currentEntry.sessionId,
+        // The repoint selects a new active path; its degradation is what /status
+        // must show, not the displaced branch's flag.
+        reader.selectedPathHasDegradedCompaction(repointTargetId),
+      ),
       ...readMessageCutEditorFields(message),
     },
   };
@@ -316,11 +361,17 @@ function settledWorkspaceConflicts(
  * Fork installs a detached identity. Rewind and switch keep theirs and reset
  * only the state the moved transcript tail invalidates, so the next turn
  * rebuilds context, run and harness facts from the new active path.
+ *
+ * `compactionQualityDegraded` is the one transcript-derived field that is set
+ * rather than cleared: it describes the selected path, so the caller derives it
+ * from the new active path (fork prefix, or the repoint target's path) instead
+ * of spreading the displaced branch's flag.
  */
 function buildMessageCutSessionEntry(
   currentEntry: SessionEntry,
   params: SessionMessageCutIntent,
   sessionId: string,
+  compactionQualityDegraded: boolean,
 ): SessionEntry {
   const forked = params.mode === "fork";
   const workspace = params.settledLocalWorkspace;
@@ -366,6 +417,7 @@ function buildMessageCutSessionEntry(
     contextTokensSource: undefined,
     contextBudgetStatus: undefined,
     compactionCount: undefined,
+    compactionQualityDegraded: compactionQualityDegraded ? true : undefined,
     transcriptByteCompactionLatch: undefined,
     memoryFlush: undefined,
     cliSessionBindings: undefined,

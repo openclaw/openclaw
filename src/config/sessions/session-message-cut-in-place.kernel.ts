@@ -19,6 +19,7 @@ import {
 } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import {
+  isDegradedCompactionEvent,
   planInPlaceSessionMessageCut,
   type SessionMessageCutReader,
 } from "./session-message-cut-plan.js";
@@ -244,6 +245,36 @@ function createSessionMessageCutReader(
       // A reset after the selection is the only normalization that can move the
       // planned control's target, so an ordinary cut answers without the scan.
       return !hasResetAfterSelection(targetId) || resolve(targetId).leafId === targetId;
+    },
+    selectedPathHasDegradedCompaction(targetId) {
+      // Navigation rows carry no compaction details, so only compaction rows on
+      // the selected path pay for a payload read; compactions are rare, and the
+      // read budget keeps a corrupt row from ballooning the worker heap.
+      const tree = resolve(targetId);
+      const compactionSeqs = selectSessionTranscriptTreePathNodes(tree, tree.leafId).flatMap(
+        (node) =>
+          node.entry?.type === "compaction" && typeof node.entry?.seq === "number"
+            ? [node.entry.seq]
+            : [],
+      );
+      return compactionSeqs.some((seq) => {
+        const payload = executeSqliteQueryTakeFirstSync(
+          database.db,
+          db
+            .selectFrom("transcript_events")
+            .select(["event_json", "event_zstd", "event_utf8_bytes"])
+            .where("session_id", "=", sessionId)
+            .where("seq", "=", seq),
+        );
+        if (
+          !payload ||
+          (payload.event_json === null && payload.event_zstd === null) ||
+          (payload.event_utf8_bytes ?? 0) > SESSION_MESSAGE_CUT_MAX_BYTES
+        ) {
+          return false;
+        }
+        return isDegradedCompactionEvent(asRecord(JSON.parse(readTranscriptPayload(payload))));
+      });
     },
     canonicalBranchPathSeqs(leafEventId) {
       return selectSessionTranscriptTreePathNodes(resolve(leafEventId), leafEventId).flatMap(

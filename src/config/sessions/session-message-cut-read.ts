@@ -68,8 +68,14 @@ export function readSessionMessageCut(
         );
       }
       let event: TranscriptEvent = JSON.parse(row.event_json);
-      // The header's lineage and the selected user's editor content are part of the result.
-      if (isRecord(event) && (event.type === "session" || event.id === entryId)) {
+      // The header's lineage, the selected user's editor content, and compaction
+      // details are part of the result: fork planning derives the degraded-history
+      // flag from the copied prefix's compaction events, and navigation rows
+      // carry no details.
+      if (
+        isRecord(event) &&
+        (event.type === "session" || event.type === "compaction" || event.id === entryId)
+      ) {
         bytes += row.payload_bytes;
         if (bytes > SESSION_MESSAGE_CUT_MAX_BYTES) {
           throw new SqliteJsonlReadBudgetExceededError(
