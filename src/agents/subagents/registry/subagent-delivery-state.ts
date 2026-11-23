@@ -236,56 +236,12 @@ export function hasConsumedRequesterInput(entry: SubagentRunRecord): boolean {
   return entry.delivery?.requesterDelivery?.state === "consumed";
 }
 
-/** Captured private findings stay internal unless their admitted wake owes a visible final. */
-export function hasPrivateRequesterInput(entry: SubagentRunRecord): boolean {
-  return (
-    entry.requesterSettleWake?.yieldedFinalDeliverable !== true &&
-    (entry.completionTarget === "parent" ||
-      (entry.requesterSettleWake?.privateInput !== undefined &&
-        entry.requesterSettleWake.privateInput.privateOnly !== false))
-  );
-}
-
-/** A committed private result can settle delivery when there is no uncertain send to resolve. */
-export function hasConsumedPrivateRequesterInput(entry: SubagentRunRecord): boolean {
-  return (
-    entry.delivery?.disposition !== "ambiguous" &&
-    hasConsumedRequesterInput(entry) &&
-    hasPrivateRequesterInput(entry)
-  );
-}
-
-// The requester turn itself stopped; no answer exists to deliver.
-const REQUESTER_TURN_FAILURES = new Set<SubagentAnnounceDeliveryResult["reason"]>([
-  "requester_aborted",
-  "requester_timed_out",
-  "requester_preparation_changed",
-  "requester_state_conflict",
-  "requester_transcript_conflict",
-  "visible_reply_missing",
-]);
-
-/**
- * A committed result can cover a turn that failed before answering. An unconfirmed
- * channel send keeps its own outcome even when the requester received the input.
- */
+/** A result committed to the requester transcript is delivered, whatever the turn did next. */
 export function resolveRequesterDeliveryOutcome(
   entries: readonly SubagentRunRecord[],
-  outcome: SubagentAnnounceDeliveryResult | undefined,
-): SubagentAnnounceDeliveryResult | undefined {
-  const turnFailedBeforeAnswer =
-    outcome?.finalAssistantVisibleText === undefined &&
-    (outcome?.reason === undefined || REQUESTER_TURN_FAILURES.has(outcome.reason));
-  return outcome &&
-    !outcome.delivered &&
-    outcome.disposition !== "ambiguous" &&
-    entries.length > 0 &&
-    entries.every(
-      (entry) =>
-        entry.delivery?.disposition !== "ambiguous" &&
-        (hasConsumedPrivateRequesterInput(entry) ||
-          (turnFailedBeforeAnswer && hasConsumedRequesterInput(entry))),
-    )
+  outcome: SubagentAnnounceDeliveryResult,
+): SubagentAnnounceDeliveryResult {
+  return !outcome.delivered && entries.length > 0 && entries.every(hasConsumedRequesterInput)
     ? { delivered: true, path: "direct" }
     : outcome;
 }
@@ -302,7 +258,6 @@ export function isDeliveryTerminalForRequesterSettle(
   entry: Pick<SubagentRunRecord, "delivery" | "pauseReason">,
 ): boolean {
   return (
-    isDeliverySuspended(entry) ||
     entry.delivery?.status === "delivered" ||
     (entry.delivery?.status === "not_required" && entry.pauseReason !== "sessions_yield") ||
     entry.delivery?.status === "discarded" ||
@@ -312,20 +267,9 @@ export function isDeliveryTerminalForRequesterSettle(
   );
 }
 
+/** Older builds parked undelivered results; the sweeper settles each one into history once. */
 export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">): boolean {
-  return entry.delivery?.status === "suspended" && typeof entry.delivery.suspendedAt === "number";
-}
-
-/** A finished requester without its required reply receipt must not execute again implicitly. */
-export function isCompletedRequesterDeliveryBlocked(
-  entry: Pick<SubagentRunRecord, "delivery">,
-): boolean {
-  return (
-    isDeliverySuspended(entry) &&
-    entry.delivery?.suspendedReason === "permanent_failure" &&
-    (entry.delivery.lastDropReason === "message_tool_delivery_missing" ||
-      entry.delivery.lastDropReason === "visible_reply_missing")
-  );
+  return entry.delivery?.status === "suspended";
 }
 
 export function getDeliveryLastError(entry: SubagentRunRecord): string | undefined {

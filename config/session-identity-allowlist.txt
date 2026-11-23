@@ -436,7 +436,7 @@ src/agents/subagents/completion/session-followup-completion.ts	21
 src/agents/subagents/completion/subagent-completion-admission.store.ts	17
 src/agents/subagents/completion/subagent-completion-admission.worker.ts	13
 src/agents/subagents/completion/subagent-completion-delivery.ts	6
-src/agents/subagents/completion/subagent-completion-mutation.kernel.ts	16
+src/agents/subagents/completion/subagent-completion-mutation.kernel.ts	15
 src/agents/subagents/registry/subagent-active-context.ts	2
 src/agents/subagents/registry/subagent-child-owner-match.ts	4
 src/agents/subagents/registry/subagent-control-kill-capture.ts	6
@@ -456,7 +456,7 @@ src/agents/subagents/registry/subagent-registry-execution-cleanup.ts	10
 src/agents/subagents/registry/subagent-registry-helpers.ts	13
 src/agents/subagents/registry/subagent-registry-lifecycle-announce-cleanup.ts	5
 src/agents/subagents/registry/subagent-registry-lifecycle-bookkeeping.ts	1
-src/agents/subagents/registry/subagent-registry-lifecycle-cleanup.ts	6
+src/agents/subagents/registry/subagent-registry-lifecycle-cleanup.ts	5
 src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	3
 src/agents/subagents/registry/subagent-registry-lifecycle-finalize-cleanup.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle-persistence.ts	3
@@ -622,7 +622,6 @@ src/boards/sqlite-board-store.kernel.ts	2
 src/channels/draft-stream-controls.ts	2
 src/channels/message/ingress-queue.ts	1
 src/channels/message/live.ts	4
-src/channels/plugins/message-action-dispatch.ts	3
 src/channels/status-reactions.ts	1
 src/channels/turn/admitting-gateway-delivery.ts	1
 src/channels/turn/direct-delivery-active.ts	2
@@ -735,7 +734,7 @@ src/daemon/schtasks-process.ts	1
 src/daemon/service-rebind.ts	2
 src/daemon/service-stage.ts	1
 src/gateway/agent-runtime-execution-lineage.ts	4
-src/gateway/agent-runtime-identity-token.ts	13
+src/gateway/agent-runtime-identity-token.ts	12
 src/gateway/agent-turn/agent-admission-controller.ts	2
 src/gateway/agent-turn/agent-dedupe.ts	3
 src/gateway/agent-turn/agent-delivery-phase.ts	2
@@ -780,11 +779,8 @@ src/gateway/cron-stream-sandbox-authority.ts	4
 src/gateway/cron-stream-sandbox.ts	1
 src/gateway/dashboard-session-title.ts	6
 src/gateway/desktop/computer-service.ts	2
-src/gateway/device-revocation.ts	1
 src/gateway/event-web-push.ts	2
-src/gateway/exec-approval-authority.ts	1
 src/gateway/exec-approval-manager.ts	2
-src/gateway/exec-approval-resolution-authority.ts	1
 src/gateway/gateway-codex-harness.command-evidence.live-helpers.ts	1
 src/gateway/github-oauth-lifecycle.ts	1
 src/gateway/github-personal-publication-status.ts	4
@@ -836,10 +832,8 @@ src/gateway/operator-approval-placement-grants.ts	2
 src/gateway/operator-approval-session-events.ts	4
 src/gateway/operator-approval-store.receipts.ts	1
 src/gateway/operator-approval-store.rows.ts	3
-src/gateway/operator-invocation-authority.ts	2
-src/gateway/operator-run-authority.ts	1
 src/gateway/plugin-command-scheduled-run.ts	9
-src/gateway/question-manager.ts	4
+src/gateway/question-manager.ts	3
 src/gateway/question-session-access.ts	4
 src/gateway/queued-chat-input-admission.ts	2
 src/gateway/remote-control-ui-ingress.ts	1
@@ -978,12 +972,9 @@ src/gateway/server-methods/update-status.ts	4
 src/gateway/server-methods/usage-session-selection.ts	9
 src/gateway/server-methods/usage.ts	2
 src/gateway/server-plugin-forked-turn.ts	2
-src/gateway/server-plugin-github-account.ts	1
-src/gateway/server-plugin-in-process-authority.ts	1
-src/gateway/server-plugin-in-process-session-read.ts	3
-src/gateway/server-plugin-session-facts.ts	4
+src/gateway/server-plugin-in-process-session-read.ts	2
+src/gateway/server-plugin-session-facts.ts	2
 src/gateway/server-plugin-subagent-runtime.ts	1
-src/gateway/server-plugin-user-profile.ts	1
 src/gateway/server-plugins.ts	3
 src/gateway/server-restart-plugin-cohort.ts	4
 src/gateway/server-restart-sentinel-agent-delivery.ts	8
@@ -1470,7 +1461,6 @@ src/sessions/user-turn-transcript-updates.ts	1
 src/sessions/user-turn-transcript.persistence.ts	2
 src/sessions/user-turn-transcript.ts	9
 src/sessions/user-turn-transcript.types.ts	2
-src/shared/channel-read-authority.ts	1
 src/shared/session-method-scopes-base.ts	3
 src/skills/lifecycle/upload-store.ts	1
 src/skills/lifecycle/workspace-skill-write.ts	1

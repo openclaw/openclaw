@@ -146,7 +146,6 @@ export function captureCliRunToolAuthority(
       assertSourceCurrent?.();
       const bind = (questionSessionKey: string, assertActive: () => void) => {
         const source = readSource();
-        source?.assertCurrent();
         const authority = createAgentQuestionAnswerAuthority({
           sessionKey: questionSessionKey,
           requesterProfileId: source?.profileId,
@@ -165,7 +164,6 @@ export function captureCliRunToolAuthority(
               : snapshot?.project(caller, route),
           assertActive: () => {
             assertActive();
-            source?.assertCurrent();
             assertSourceCurrent?.();
             signal?.throwIfAborted();
             if (

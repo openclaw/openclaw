@@ -157,16 +157,9 @@ export function retainHarnessSource(
     ? undefined
     : bindOperatorModelExecution(source, undefined);
   const release = nativeModelPolicySupported ? source.retain?.() : modelExecution?.release;
-  const assertSourceCurrent = () => {
-    if (nativeModelPolicySupported) {
-      source.assertCurrent();
-    } else {
-      modelExecution?.assertCurrent();
-    }
-  };
   try {
     assertActive();
-    assertSourceCurrent();
+    modelExecution?.assertCurrent();
     assertActive();
   } catch (error) {
     release?.();
@@ -188,7 +181,7 @@ export function retainHarnessSource(
   };
   const assertCurrent = () => {
     assertRetained();
-    assertSourceCurrent();
+    modelExecution?.assertCurrent();
     assertRetained();
   };
   return Object.freeze({
@@ -256,7 +249,6 @@ export function assertCompactionSource(
   source.assertActive();
   if (source.operatorAuthority !== undefined) {
     assertAdmittedRunOperatorAuthority(source.operatorAuthority);
-    source.operatorAuthority.assertCurrent();
   }
 }
 

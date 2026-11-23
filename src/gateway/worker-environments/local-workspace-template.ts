@@ -27,6 +27,7 @@ import { prepareWorktreeTemplate } from "../../agents/worktrees/template-cache.j
 import {
   readTemplateManifest,
   prepareTemplateManifest,
+  type TemplateManifest,
 } from "../../agents/worktrees/template-registry-async.js";
 import type { WorktreeTemplateRecord } from "../../agents/worktrees/template-registry.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
@@ -174,7 +175,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
   const policyKey = digest(
     JSON.stringify(["template-manifest-v1", WORKSPACE_PATH_EXCLUSIONS_JS, buildCacheInputs]),
   );
-  let manifest: { rawManifest: string; manifestRef: string } | undefined;
+  let manifest: TemplateManifest | undefined;
   let previousGeneration: WorktreeTemplateRecord | undefined;
   let changedPaths: string[] | undefined;
   const prepareManifest = async (
@@ -199,6 +200,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
               root: record.path,
               baseCommit: record.sourceCommit,
               buildCacheInputs,
+              captureFingerprints: record.backend === "sandbox-btrfs",
               previous: prior && changedPaths ? { ...prior, changedPaths } : undefined,
             },
             options.signal,
@@ -461,7 +463,12 @@ export async function cloneLocalWorkspaceTemplate(
       stateOwnerPath: guard.workerAuthority?.stateOwnerPath,
       killProcessTree: true,
     });
-    return prepared.manifest!;
+    return {
+      ...prepared.manifest!,
+      ...(backend.id === "btrfs"
+        ? { clonedDevice: (await fs.stat(params.destination, { bigint: true })).dev }
+        : {}),
+    };
   } catch (error) {
     outcome = error;
     throw error;

@@ -423,7 +423,7 @@ export async function prepareGatewayOperatorRunAuthority(
         allowedScopes: client.connect.scopes ?? [],
       })
     ) {
-      throw new Error("Gateway caller authority is no longer active.");
+      throw new Error("Gateway request could not start. Reconnect and try again.");
     }
   };
   try {

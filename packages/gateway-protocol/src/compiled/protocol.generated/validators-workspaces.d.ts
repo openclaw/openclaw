@@ -32,6 +32,7 @@ export {
   isProjectsRemoveParams,
   isProjectsMoveSessionOptionsParams,
   isProjectsMoveSessionParams,
+  isProjectsRenameParams,
   isWorktreesListParams,
   isBoardGetParams,
   isBoardUpdateParams,

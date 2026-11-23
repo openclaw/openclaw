@@ -126,6 +126,16 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    reload. Only warning and error findings add advice; inspections do not delay
    completion, fail the update, or trigger rollback.
 
+Before a startup migration replaces a SQLite database, the swap owner drains its
+readers and retires the retained admission descriptors for both the live database
+and its prepared replacement. Closing SQLite alone does not release those identity
+descriptors, and Windows refuses the rename while either file is still open.
+The candidate must contain this fix; the launcher needs no change. The swap still
+preserves the previous files for rollback and admits the replacement as a new file.
+On Windows, the task supervisor starts without the Gateway's config or state
+bootstrap. Only its child opens the state databases; the waiting supervisor must
+not retain a connection or admission descriptor across a release switch.
+
 Rules for update changes:
 
 - Change update behavior in `src/update/`. Do no update work while the Gateway is
@@ -196,6 +206,13 @@ changing the recorded successful outcome.
 The installed updater must contain preparation-step reporting changes; the
 restored release must contain rollback reporting changes. No schema or protocol
 change is needed.
+
+Candidate Doctor accepts a read-only reader that finishes rebuilding a checkpointed
+SQLite WAL index between update capture and source verification. Rebuilding that
+index can clear its commit counter and checksum without changing the database.
+Migration admission still checks physical identity and committed content, so an
+outside write remains refused. The candidate must contain this repair; shipped
+first-hop updaters need no change.
 
 At Gateway start, a preparation lock whose owner is dead or has the new Gateway's
 PID is released after its run is recorded as failed with reason `interrupted`.

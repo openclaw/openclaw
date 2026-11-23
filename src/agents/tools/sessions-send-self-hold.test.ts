@@ -896,7 +896,7 @@ it.each([false, true])(
             context,
             hasCurrentClientAuthority: bob.device.isCurrent,
           }),
-        ).rejects.toThrow("Gateway caller authority is no longer active.");
+        ).rejects.toThrow("Gateway request could not start. Reconnect and try again.");
         expect(() => alice.source.authority.assertCurrent()).not.toThrow();
         release();
         consumer.release();

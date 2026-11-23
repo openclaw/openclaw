@@ -47,7 +47,7 @@ function creatorContext(request: ReturnType<typeof vi.fn>, signIn = false) {
     }),
   });
 }
-async function fixture(review = reviewed) {
+function setup(review = reviewed) {
   const request = vi.fn(
     async (method: string, _params?: Record<string, unknown>): Promise<unknown> => {
       if (method === "plugins.catalog.get") {
@@ -79,6 +79,10 @@ async function fixture(review = reviewed) {
   );
   const context = creatorContext(request);
   context.router.subscribe = () => () => false;
+  return { request, context };
+}
+async function fixture(review = reviewed) {
+  const { request, context } = setup(review);
   const flow = templateCreatorFlow(context);
   flow.open(target.agentId, target.draftId);
   const page = mountSolid(() => <TemplateCreatorReview context={context} />);
@@ -211,6 +215,35 @@ it.each(["copied", "denied", "blocked"])(
     expect(methods).not.toContain("templates.drafts.publish");
   },
 );
+
+it("offers retry without presenting a review card for a failed initial preparation", async () => {
+  const { request, context } = setup();
+  request
+    .mockResolvedValueOnce({
+      revision: reviewed.revision,
+      content: JSON.stringify({ scope: reviewed.scope }),
+    })
+    .mockRejectedValueOnce(new Error("Draft review failed"));
+  const page = mountSolid(() => (
+    <TemplateCreatorInlineReview
+      context={context}
+      payload={target}
+      sessionKey={target.sessionKey}
+    />
+  ));
+  await vi.advanceTimersByTimeAsync(0);
+  await waitForSolid(() =>
+    expect(page.getByRole("alert").textContent).toContain("Draft review failed"),
+  );
+  expect(page.queryByRole("region", { name: "Publish Template" })).toBeNull();
+  const retry = createDeferred<typeof reviewed>();
+  request.mockReturnValueOnce(retry.promise);
+  fireEvent.click(page.getByRole("button", { name: "Try again" }));
+  await waitForSolid(() => expect(page.container.textContent).toBe(""));
+  retry.resolve(reviewed);
+  await waitForSolid(() => expect(page.getByRole("button", { name: "Publish" })).toBeTruthy());
+  expect(page.getAllByRole("region", { name: "Publish Template" })).toHaveLength(1);
+});
 
 it.each(["skill", "plugin"] as const)("previews pinned and bundled %s", async (kind) => {
   for (const bundled of [false, true]) {

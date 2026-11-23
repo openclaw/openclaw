@@ -91,8 +91,8 @@ function createProjectedEntry(
 
 it.each([
   [1, 0, true, false],
-  [749_999, 1_000_000, true, false],
-  [750_001, 1_000_000, true, true],
+  [799_999, 1_000_000, true, false],
+  [800_001, 1_000_000, true, true],
   [923_326, 1_000_000, true, true],
   [923_326, 1_000_000, false, false],
 ])("compacts %i tokens in a %i window (enabled: %s)", (tokens, window, enabled, expected) => {
