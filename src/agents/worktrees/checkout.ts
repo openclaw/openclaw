@@ -13,7 +13,10 @@ import {
   materializeManagedWorktree,
   prepareClonedWorktreeIndex,
 } from "./checkout-materialize.js";
-import { resolveWorktreeCheckoutKey } from "./checkout-policy-key.js";
+import {
+  resolveWorktreeCheckoutKey,
+  validateWorktreeTemplateStatus,
+} from "./checkout-policy-key.js";
 import { takeWarmWorktree } from "./checkout-pool.js";
 import type { WorktreeSourceProfile } from "./checkout-profiles.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
@@ -31,6 +34,7 @@ import {
   type GitResult,
 } from "./git.js";
 import {
+  recordWorktreeTemplateProbeFailure,
   setWorktreePreparationTemplate,
   timeWorktreePreparationPhase,
 } from "./preparation-timing.js";
@@ -210,25 +214,10 @@ export async function prepareManagedWorktreeTemplate(options: CheckoutOptions) {
               gitOptions: gitOptions({ ...options, ...templateOptions }),
             })) !== existing.contentKey
           ) {
+            setWorktreePreparationTemplate(undefined, { validationFailure: "checkout-policy" });
             return false;
           }
-          const status = await git.run(
-            existing.path,
-            ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--ignored"],
-            gitOptions(templateOptions),
-          );
-          // NUL records keep filenames from impersonating HEAD headers.
-          const fields = status.stdout.split("\0");
-          const heads = fields.filter((field) => field.startsWith("# branch.oid "));
-          return (
-            status.termination === "exit" &&
-            status.code === 0 &&
-            !status.stdoutTruncatedBytes &&
-            fields.pop() === "" &&
-            fields.every((field) => field.startsWith("# ")) &&
-            heads.length === 1 &&
-            heads[0] === `# branch.oid ${existing.sourceCommit}`
-          );
+          return await validateWorktreeTemplateStatus(existing, git, gitOptions(templateOptions));
         },
         refresh: async (existing, preparing, templateOptions) => {
           // Attribute changes can transform unchanged blobs; rebuild those trees.
@@ -245,9 +234,17 @@ export async function prepareManagedWorktreeTemplate(options: CheckoutOptions) {
             ],
             gitOptions(templateOptions),
           );
+          if (attributes.code !== 0 || attributes.termination !== "exit") {
+            if (attributes.termination === "exit" && attributes.code === 1) {
+              setWorktreePreparationTemplate(undefined, {
+                refreshRejectReason: "attributes-changed",
+              });
+            } else {
+              recordWorktreeTemplateProbeFailure("diff-probe-failed", attributes);
+            }
+            return false;
+          }
           if (
-            attributes.code !== 0 ||
-            attributes.termination !== "exit" ||
             (await resolveWorktreeCheckoutKey({
               ...options,
               destination: existing.path,
@@ -256,6 +253,9 @@ export async function prepareManagedWorktreeTemplate(options: CheckoutOptions) {
               gitOptions: gitOptions(templateOptions),
             })) !== contentKey
           ) {
+            setWorktreePreparationTemplate(undefined, {
+              refreshRejectReason: "checkout-policy-mismatch",
+            });
             return false;
           }
           await registerTemplate(preparing.path, existing.sourceCommit, templateOptions);

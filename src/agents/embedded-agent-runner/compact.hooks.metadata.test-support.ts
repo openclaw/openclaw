@@ -20,6 +20,32 @@ export type CompactHooksQueuedCompaction = (
   >,
 ) => ReturnType<typeof import("./compact.queued.js").compactQueuedEmbeddedAgentSession>;
 
+/** Entry points with the session model the real callers pass, plus a default source authority. */
+export function wrapCompactHooksEntryPoints(
+  compactModule: typeof import("./compact.js"),
+  compactQueuedModule: typeof import("./compact.queued.js"),
+): {
+  compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
+  compactEmbeddedAgentSession: CompactHooksQueuedCompaction;
+} {
+  const model = { provider: "openai", model: "fake-model" } as const;
+  return {
+    compactEmbeddedAgentSessionDirect: (params) =>
+      compactModule.compactEmbeddedAgentSessionDirect({ ...model, ...params }),
+    compactEmbeddedAgentSession: (params, host = {}) =>
+      compactQueuedModule.compactQueuedEmbeddedAgentSession(
+        { ...model, ...params },
+        {
+          ...host,
+          sourceAuthority: host.sourceAuthority ?? {
+            assertActive: host.assertActive ?? (() => {}),
+            operatorAuthority: undefined,
+          },
+        },
+      ),
+  };
+}
+
 const emptyPluginMetadataSnapshot = createEmptyPluginMetadataSnapshot();
 
 export const getCurrentPluginMetadataSnapshotMock: Mock<

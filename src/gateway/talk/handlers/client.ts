@@ -53,7 +53,7 @@ import {
 import { abortChatRunById } from "../../chat-abort.js";
 import { transferGatewayLocalUserIngress } from "../../local-user-ingress.js";
 import {
-  captureGatewayOperatorRunAuthority,
+  prepareGatewayOperatorRunAuthority,
   transferGatewayOperatorSourceIdentity,
 } from "../../operator-run-authority.js";
 import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
@@ -666,7 +666,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const captured = await captureGatewayOperatorRunAuthority({
+      const captured = await prepareGatewayOperatorRunAuthority({
         client: client ?? null,
         context,
         hasCurrentClientAuthority,

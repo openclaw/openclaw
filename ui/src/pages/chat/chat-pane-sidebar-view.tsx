@@ -1,5 +1,6 @@
 import { Portal } from "@solidjs/web";
 import { Errored, For, Loading, Show, createMemo, lazy, onSettled, type Element } from "solid-js";
+import { isNativeMacWebChromeHost } from "../../app/native-web-chrome.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -68,6 +69,7 @@ function MobileHostBoundary(props: { children: Element; fallback?: Element }) {
 }
 
 export function SidebarRegionView(props: SidebarRegionViewProps) {
+  const macTitlebar = isNativeMacWebChromeHost();
   let shell!: HTMLElement;
   let regionView: HTMLElementTagNameMap["openclaw-chat-sidebar-region"] | undefined;
   let detailsMount!: HTMLDivElement;
@@ -327,9 +329,15 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
         <div class="sidebar-region__panels-toggle">
           <IconButton
             size={28}
-            class="chat-pane__panels-toggle"
+            class={["chat-pane__panels-toggle", { "macos-titlebar-sidebar-toggle": macTitlebar }]}
             label={t("chat.sessionHeader.panels")}
-            icon={sideVisible() ? "sessionPanelsActive" : "sessionPanels"}
+            icon={
+              macTitlebar
+                ? "macosTitlebarSidebar"
+                : sideVisible()
+                  ? "sessionPanelsActive"
+                  : "sessionPanels"
+            }
             aria-expanded={sideVisible() ? "true" : "false"}
             onClick={() => props.callbacks.setOpen(!sideVisible())}
           />

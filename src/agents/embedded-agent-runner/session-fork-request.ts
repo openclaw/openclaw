@@ -16,6 +16,14 @@ const TOOL_CHOICE_NONE = new Map<Model["api"], "object" | "string">([
   ["openai-chatgpt-responses", "string"],
   ["openai-completions", "string"],
 ]);
+
+/** Whether the fork can stop hosted tools before the provider executes them. */
+export function sessionForkGatesHostedTools(
+  api: Model["api"],
+  allowedTools: readonly string[],
+): boolean {
+  return allowedTools.length === 0 && TOOL_CHOICE_NONE.has(api);
+}
 const OUTPUT_LIMIT_KEYS = ["max_tokens", "max_output_tokens", "max_completion_tokens"] as const;
 
 /**

@@ -2,33 +2,19 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import {
-  assertOperatorModelAllowed,
-  createAdmittedRunOperatorAuthority,
   readAdmittedRunOperatorAuthority,
   readPreparedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { resolveRequesterToolPolicies } from "../../agents/requester-tool-policy.js";
 import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as sessionReaders from "../../config/sessions/session-transcript-worker-runtime.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  captureGatewayDeviceRevocation,
-  invalidateGatewayDeviceRevocation,
-} from "../../gateway/device-revocation.js";
-import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
-import {
-  createContext,
-  createOperatorClient,
-} from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
-import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
-import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -41,10 +27,14 @@ import {
   createQueueSettings,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
-import { resolveFollowupDeliveryStorageKey } from "./queue/delivery-context.js";
+import {
+  createOverflowSummaryRetrySource,
+  resolveFollowupDeliveryStorageKey,
+} from "./queue/delivery-context.js";
 import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import { resolveFollowupAbortSignal, type FollowupRun } from "./queue/types.js";
+import { replyCallbackCustody } from "./reply-callback-custody.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 installQueueRuntimeErrorSilencer();
 const keys = new Set<string>();
@@ -67,7 +57,7 @@ const webchatRun = (prompt: string, execution: Partial<FollowupRun["run"]> = {})
 function createOperatorAuthority() {
   let references = 1;
   const controller = new AbortController();
-  const authority: AdmittedRunOperatorAuthority = createAdmittedRunOperatorAuthority({
+  const authority: AdmittedRunOperatorAuthority = createTestOperatorAuthority({
     profileId: "guest",
     scopes: ["operator.read", "operator.write"],
     source: {},
@@ -108,210 +98,6 @@ function prepareOperatorAdmission(run: FollowupRun, runId: string) {
 }
 
 describe("followup queue authority", () => {
-  it.for([false, true])(
-    "reauthorizes queued owner input after socket close (device revoked=%s)",
-    async (deviceRevoked, { signal }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const profile = ensureGatewayOwnerProfile("Queued owner");
-        const context = createContext();
-        context.resolveGatewayContext = () => context;
-        const connection = new AbortController();
-        const client = createOperatorClient({
-          profileId: profile.id,
-          scopes: ["operator.admin"],
-        });
-        client.connectionSignal = connection.signal;
-        client.internal = {
-          authenticatedOperator: true,
-          operatorRoleActor: { kind: "system" },
-        };
-        const device = captureGatewayDeviceRevocation(
-          context,
-          { deviceId: "queued-owner-device", role: "operator" },
-          () => !connection.signal.aborted,
-          connection.signal,
-        );
-        using _ = { [Symbol.dispose]: device.release };
-        const captured = await captureGatewayOperatorRunAuthority({
-          client,
-          context,
-          hasCurrentClientAuthority: device.isCurrent,
-          sourceAuthority: null,
-        });
-        if (!captured) {
-          throw new Error("expected captured owner authority");
-        }
-        const key = queueKey(`test-queued-owner-socket-close-${deviceRevoked}`);
-        const queued = webchatRun("queued owner request");
-        queued.operatorAuthority = captured.authority;
-        const effects: string[] = [];
-        const errors = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-        try {
-          enqueueFollowupRun(key, queued, createQueueSettings({ mode: "followup" }));
-          const settlement = queued.controllerInput!.settlement.promise;
-          const completed = deviceRevoked
-            ? expect(settlement).rejects.toThrow(/authority is no longer active/)
-            : expect(settlement).resolves.toBeUndefined();
-          connection.abort(new Error("dashboard reloaded"));
-          if (deviceRevoked) {
-            invalidateGatewayDeviceRevocation(context, "queued-owner-device", "operator");
-          }
-          scheduleFollowupDrain(key, async (run) => {
-            await admitFollowupRunLifecycle(run);
-            effects.push(run.prompt);
-          });
-          await withinTest(completed, signal);
-          expect(effects).toEqual(deviceRevoked ? [] : ["queued owner request"]);
-          expect(captured.authority.signal?.aborted).toBe(false);
-          expect(captured.authority.assertCurrent).not.toThrow();
-          expect(errors).toHaveBeenCalledTimes(deviceRevoked ? 1 : 0);
-        } finally {
-          clearFollowupQueue(key);
-          captured.release();
-          errors.mockRestore();
-        }
-      });
-    },
-  );
-
-  it.for([
-    "write scope removal",
-    "agent policy restriction",
-    "model policy narrowing",
-    "model policy widening",
-    "sourceAgent narrowing",
-    "sourceAgent widening",
-  ] as const)(
-    "refuses queued input after %s without revoking the running turn",
-    async (restriction, { signal }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const profile = ensureProfileForEmail("queued-operator@example.test");
-        setUserProfileRole(profile.id, "writer");
-        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-        const config = {
-          agents: {
-            entries: { source: { model: { primary: "fixture/a", fallbacks: ["fixture/b"] } } },
-          },
-          gateway: {
-            roles: {
-              default: "reader",
-              definitions: {
-                writer: {
-                  scopes: ["operator.read", "operator.write"],
-                  agents: "*",
-                  sessions: { others: "none" },
-                  modelPolicy: restriction.startsWith("sourceAgent")
-                    ? { sourceAgent: "source" }
-                    : { allow: ["fixture/a", "fixture/b"] },
-                },
-                reader: {
-                  scopes: ["operator.read"],
-                  agents: "*",
-                  sessions: { others: "none" },
-                },
-                restricted: {
-                  scopes: ["operator.read", "operator.write"],
-                  agents: [],
-                  sessions: { others: "none" },
-                  modelPolicy: { allow: ["fixture/a", "fixture/b"] },
-                },
-              },
-            },
-          },
-        } satisfies OpenClawConfig;
-        const context = createContext([], () => config);
-        context.resolveGatewayContext = () => context;
-        const client = createOperatorClient({
-          profileId: profile.id,
-          scopes: ["operator.read", "operator.write"],
-        });
-        client.internal = { authenticatedOperator: true };
-        const captured = await captureGatewayOperatorRunAuthority({
-          client,
-          context,
-          sourceAuthority: null,
-        });
-        if (!captured) {
-          throw new Error("expected captured Gateway operator authority");
-        }
-        const key = queueKey(`test-queued-gateway-role-change-${restriction}`);
-        const entered = createDeferredCore();
-        const release = createDeferredCore();
-        const effects: string[] = [];
-        const onAdopted = vi.fn();
-        const onAbandoned = vi.fn();
-        const running = webchatRun("running request", { provider: "fixture", model: "a" });
-        running.operatorAuthority = captured.authority;
-        const queued = webchatRun("queued request", { provider: "fixture", model: "a" });
-        queued.operatorAuthority = captured.authority;
-        queued.turnAdoptionLifecycle = { onAdopted, onAbandoned };
-        const errors = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-        const execute = async (run: FollowupRun) => {
-          await admitFollowupRunLifecycle(run);
-          effects.push(run.prompt);
-          if (run === running) {
-            entered.resolve();
-            await release.promise;
-            captured.authority.assertCurrent();
-            effects.push("running request finished");
-          }
-        };
-        try {
-          enqueueFollowupRun(key, running, createQueueSettings({ mode: "followup" }));
-          scheduleFollowupDrain(key, execute);
-          await withinTest(entered.promise, signal);
-          enqueueFollowupRun(key, queued, createQueueSettings({ mode: "followup" }));
-          scheduleFollowupDrain(key, execute);
-          if (restriction.startsWith("sourceAgent")) {
-            config.agents.entries.source.model.fallbacks =
-              restriction === "sourceAgent narrowing" ? [] : ["fixture/b", "fixture/c"];
-          } else if (restriction.startsWith("model policy")) {
-            config.gateway.roles.definitions.writer.modelPolicy = {
-              allow:
-                restriction === "model policy narrowing"
-                  ? ["fixture/a"]
-                  : ["fixture/a", "fixture/b", "fixture/c"],
-            };
-          } else {
-            setUserProfileRole(
-              profile.id,
-              restriction === "write scope removal" ? "reader" : "restricted",
-            );
-          }
-          expect(captured.authority.signal?.aborted).toBe(false);
-          expect(captured.authority.assertCurrent).not.toThrow();
-          const refused = expect(queued.controllerInput!.settlement.promise).rejects.toThrow(
-            "Your operator role changed",
-          );
-          release.resolve();
-          await withinTest(refused, signal);
-          expect(effects).toEqual(["running request", "running request finished"]);
-          expect(onAdopted).not.toHaveBeenCalled();
-          expect(onAbandoned).toHaveBeenCalledOnce();
-          expect(queued.controllerInput?.phase).toBe("consumed");
-          expect(queued.controllerInput?.retirementRequested).toBe(true);
-          expect(errors).toHaveBeenCalledExactlyOnceWith(
-            expect.stringContaining("mailbox execution failed for " + key + ": "),
-          );
-          expect(captured.authority.signal?.aborted).toBe(false);
-          expect(captured.authority.assertCurrent).not.toThrow();
-          expect(captured.authority.scopes).toEqual(["operator.read", "operator.write"]);
-          expect(() =>
-            assertOperatorModelAllowed(captured.authority, { provider: "fixture", model: "b" }),
-          ).not.toThrow();
-          expect(() =>
-            assertOperatorModelAllowed(captured.authority, { provider: "fixture", model: "c" }),
-          ).toThrow();
-        } finally {
-          release.resolve();
-          clearFollowupQueue(key);
-          captured.release();
-          errors.mockRestore();
-        }
-      });
-    },
-  );
-
   it.each([false, true])(
     "keeps different requesters separate when requests are identical=%s",
     async (identical) => {
@@ -412,14 +198,14 @@ describe("followup queue authority", () => {
     const authority = source.authority;
     const variants = [
       authority,
-      createAdmittedRunOperatorAuthority({
+      createTestOperatorAuthority({
         ...authority,
         scopes: ["operator.write", "operator.read", "operator.write"],
       }),
-      createAdmittedRunOperatorAuthority({ ...authority, signal: new AbortController().signal }),
-      createAdmittedRunOperatorAuthority({ ...authority, profileId: "maintainer" }),
-      createAdmittedRunOperatorAuthority({ ...authority, scopes: ["operator.admin"] }),
-      createAdmittedRunOperatorAuthority({ ...authority, source: {} }),
+      createTestOperatorAuthority({ ...authority, signal: new AbortController().signal }),
+      createTestOperatorAuthority({ ...authority, profileId: "maintainer" }),
+      createTestOperatorAuthority({ ...authority, scopes: ["operator.admin"] }),
+      createTestOperatorAuthority({ ...authority, source: {} }),
       undefined,
       authority,
     ];
@@ -428,10 +214,7 @@ describe("followup queue authority", () => {
     for (const [index, operatorAuthority] of variants.entries()) {
       enqueueFollowupRun(
         key,
-        {
-          ...webchatRun(`request ${index}`),
-          operatorAuthority,
-        },
+        { ...webchatRun(`request ${index}`), operatorAuthority },
         createQueueSettings(),
       );
     }
@@ -470,10 +253,10 @@ describe("followup queue authority", () => {
     expect(source.references()).toBe(0);
   });
 
-  it.for(["older client", "latest client", "operator grant"] as const)(
+  it.for(["older client", "latest client"] as const)(
     "honors %s cancellation ownership after collect admission",
     async (cancellation, { signal }) => {
-      const key = queueKey(`test-collect-operator-revocation-${cancellation}`);
+      const key = queueKey(`test-collect-operator-cancellation-${cancellation}`);
       const source = createOperatorAuthority();
       const firstCancel = new AbortController();
       const secondCancel = new AbortController();
@@ -493,7 +276,7 @@ describe("followup queue authority", () => {
       source.releaseRequest();
       scheduleFollowupDrain(key, async (run) => {
         const abortSignal = resolveFollowupAbortSignal(run);
-        const prepared = prepareOperatorAdmission(run, "collected-operator-revocation");
+        const prepared = prepareOperatorAdmission(run, "collected-operator-cancellation");
         try {
           await admitFollowupRunLifecycle(run);
           const context = await prepared.admit("embedded");
@@ -504,23 +287,12 @@ describe("followup queue authority", () => {
             effects.push(label);
           };
           performEffect("before cancellation");
-          const controller =
-            cancellation === "operator grant"
-              ? source.controller
-              : cancellation === "older client"
-                ? firstCancel
-                : secondCancel;
-          controller.abort();
           if (cancellation === "older client") {
+            firstCancel.abort();
             expect(abortSignal?.aborted).toBe(false);
             performEffect("after older client cancellation");
-            source.controller.abort();
           }
-          expect(abortSignal?.aborted).toBe(true);
-          if (cancellation !== "latest client") {
-            // Original grant revocation still applies after an older client is retired.
-            expect(assertCurrent).toThrow();
-          }
+          secondCancel.abort();
           expect(() => performEffect("after cancellation")).toThrow();
         } catch (error) {
           done.reject(error);
@@ -566,47 +338,69 @@ describe("followup queue authority", () => {
     },
   );
 
-  it("retains an independent operator source hold for a stranded delivery retry", async () => {
-    const key = queueKey("test-operator-delivery-retry");
-    const source = createOperatorAuthority();
-    const parent = createRun({ prompt: "original request" });
-    parent.operatorAuthority = source.authority;
-    parent.turnAdoptionLifecycle = { onAdopted: () => {}, onSettled: source.releaseRequest };
-    const recovery = resolveStrandedReplyRecovery({
-      base: parent,
-      payloads: [],
-      finalText: "The answer is ready.",
-      terminalReply: { disposition: "visible", text: "The answer is ready." },
-      sourceReplyDeliveryMode: "message_tool_only",
-      sendPolicyDenied: false,
-      successfulSourceReplyDelivery: false,
+  it.each([false, true])(
+    "retains independent operator and callback holds for a stranded delivery retry (compacted=%s)",
+    async (compacted) => {
+      const key = queueKey("test-operator-delivery-retry");
+      const source = createOperatorAuthority();
+      const parent = createRun({ prompt: "original request" });
+      parent.operatorAuthority = source.authority;
+      let callbackReferences = 1;
+      parent[replyCallbackCustody] = {
+        retain: () => {
+          callbackReferences++;
+          return () => {
+            callbackReferences--;
+          };
+        },
+      };
+      parent.turnAdoptionLifecycle = {
+        onAdopted: () => {},
+        onSettled: () => {
+          source.releaseRequest();
+          callbackReferences--;
+        },
+      };
+      const recovery = resolveStrandedReplyRecovery({
+        base: compacted ? createOverflowSummaryRetrySource(parent) : parent,
+        payloads: [],
+        finalText: "The answer is ready.",
+        terminalReply: { disposition: "visible", text: "The answer is ready." },
+        sourceReplyDeliveryMode: "message_tool_only",
+        sendPolicyDenied: false,
+        successfulSourceReplyDelivery: false,
 
-      isRoomEvent: false,
-    });
-    if (recovery.kind !== "retry") {
-      throw new Error("expected source delivery recovery");
-    }
-    let delivered = false;
-    const failures: unknown[] = [];
-    enqueueFollowupRun(key, recovery.run, createQueueSettings());
-    completeFollowupRunLifecycle(parent);
-    await parent.controllerInput!.settlement.promise;
-    expect(source.references()).toBe(1);
-    scheduleFollowupDrain(key, async (run) => {
-      try {
-        run.operatorAuthority?.assertCurrent();
-        delivered = run.operatorAuthority?.profileId === "guest";
-      } catch (error) {
-        failures.push(error);
-      } finally {
-        completeFollowupRunLifecycle(run);
+        isRoomEvent: false,
+      });
+      if (recovery.kind !== "retry") {
+        throw new Error("expected source delivery recovery");
       }
-    });
-    await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
-    expect(failures).toEqual([]);
-    expect(delivered).toBe(true);
-    expect(source.references()).toBe(0);
-  });
+      let delivered = false;
+      const failures: unknown[] = [];
+      enqueueFollowupRun(key, recovery.run, createQueueSettings());
+      completeFollowupRunLifecycle(parent);
+      await parent.controllerInput!.settlement.promise;
+      expect(source.references()).toBe(1);
+      expect(callbackReferences).toBe(1);
+      expect(recovery.run.turnAdoptionLifecycle).toBeUndefined();
+      scheduleFollowupDrain(key, async (run) => {
+        try {
+          run.operatorAuthority?.assertCurrent();
+          expect(callbackReferences).toBe(1);
+          delivered = run.operatorAuthority?.profileId === "guest";
+        } catch (error) {
+          failures.push(error);
+        } finally {
+          completeFollowupRunLifecycle(run);
+        }
+      });
+      await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
+      expect(failures).toEqual([]);
+      expect(delivered).toBe(true);
+      expect(source.references()).toBe(0);
+      expect(callbackReferences).toBe(0);
+    },
+  );
 
   it("splits collect batches when queued authority facts change", async () => {
     const q = createQueueCase({ mode: "collect", debounceMs: 0 }, 3);

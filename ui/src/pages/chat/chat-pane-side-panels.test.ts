@@ -238,6 +238,8 @@ it("discards a Details process request after switching agents on the same global
   state.assistantAgentId = "research";
   expect(runtime.companionIntents.processesShowRequest?.()).toBeUndefined();
 
+  // The research agent's global row is outside the roster; its history read names it.
+  state.currentSessionId = "research-global-session";
   open();
   expect(runtime.companionIntents.processesShowRequest?.()).toEqual({
     instanceId: "process-main",

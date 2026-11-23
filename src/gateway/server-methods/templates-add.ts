@@ -26,6 +26,7 @@ import type { PluginInstallBatchReload } from "../../plugins/install-runtime-bat
 import { reloadManagedPlugin } from "../../plugins/management-mutations.js";
 import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import { TemplateAddMutationError } from "../../templates/add-mutation-error.js";
+import { assertTemplatesEnabled, TemplatesDisabledError } from "../../templates/availability.js";
 import { ClawHubSourceError } from "../../templates/clawhub-source.js";
 import { createTemplateCronGateway } from "../../templates/cron-gateway.js";
 import {
@@ -45,10 +46,6 @@ import type {
 } from "../../templates/gateway-add-source.js";
 import { TemplateGatewayConsentError } from "../../templates/gateway-plugin-consent.js";
 import { TemplateSkillConsentError } from "../../templates/gateway-skill-consent.js";
-import {
-  assertTemplatesLabsEnabled,
-  TemplatesLabsDisabledError,
-} from "../../templates/labs-gate.js";
 import { resolveTemplatePreferredModel } from "../../templates/preferred-model.js";
 import { TemplateProjectError } from "../../templates/project.js";
 import { buildTemplateOpeningMessage } from "../../templates/setup-prompt.js";
@@ -120,7 +117,7 @@ export function reportTemplateAddFailure(
     return `${error.message} Nothing was kept. Ask the publisher to move the conflicting workspace file and publish a corrected release before adding it again.`;
   }
   if (
-    error instanceof TemplatesLabsDisabledError ||
+    error instanceof TemplatesDisabledError ||
     error instanceof ClawHubSourceError ||
     (operation === "apply" &&
       (error instanceof TemplateGatewayAuthorityError ||
@@ -176,12 +173,12 @@ export async function planTemplateAddForRequest(
     }
   };
   assertLocalSourceAuthority();
-  assertTemplatesLabsEnabled(context.getRuntimeConfig());
+  assertTemplatesEnabled(context.getRuntimeConfig());
   const config = await readCurrentConfigForPolicyCheckAsync({
     configPath: resolveConfigPath(),
     env: process.env,
   });
-  assertTemplatesLabsEnabled(config);
+  assertTemplatesEnabled(config);
   options.onStage?.("source_resolution_and_plan");
   const plan = await planTemplateAddForGateway({
     source: params.source,
@@ -197,7 +194,7 @@ export async function planTemplateAddForRequest(
       return listedMcp.authoredConfig?.mcp?.servers ?? {};
     },
   });
-  assertTemplatesLabsEnabled(context.getRuntimeConfig());
+  assertTemplatesEnabled(context.getRuntimeConfig());
   assertLocalSourceAuthority();
   return plan;
 }
@@ -230,8 +227,8 @@ export async function applyTemplateAddForRequest(
       );
     }
   };
-  assertTemplatesLabsEnabled(context.getRuntimeConfig());
-  assertTemplatesLabsEnabled(
+  assertTemplatesEnabled(context.getRuntimeConfig());
+  assertTemplatesEnabled(
     await readCurrentConfigForPolicyCheckAsync({ configPath, env: configEnv }),
   );
   assertCurrent();
@@ -357,7 +354,7 @@ export async function applyTemplateAddForRequest(
             env: configEnv,
           });
           assertCurrent();
-          assertTemplatesLabsEnabled(config);
+          assertTemplatesEnabled(config);
           return {
             config,
             resolvePreferredModel: preferredModelResolver(context),
@@ -523,7 +520,7 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
       // A preview never mutates state; say so, or owner-routed CLIs report a possible partial Add.
       const noEffect = { details: { mutationAccepted: false } };
       if (
-        error instanceof TemplatesLabsDisabledError ||
+        error instanceof TemplatesDisabledError ||
         error instanceof TemplateGatewayAuthorityError
       ) {
         diagnostic(stage, "forbidden", "kind" in params.source ? params.source.kind : "clawhub");
@@ -580,8 +577,7 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
         "kind" in params.source ? params.source.kind : undefined,
       );
       const code =
-        error instanceof TemplateGatewayAuthorityError ||
-        error instanceof TemplatesLabsDisabledError
+        error instanceof TemplateGatewayAuthorityError || error instanceof TemplatesDisabledError
           ? ErrorCodes.FORBIDDEN
           : (error instanceof TemplateProjectError && error.code === "project_invalid") ||
               error instanceof TemplateGatewayPlanChangedError ||

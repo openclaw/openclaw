@@ -288,11 +288,11 @@ export async function proveAggregateWorkspaceRecovery({
   const first = await prepareSandbox();
   const projection = first!.workspaceDir;
   // Real aggregate budget, individually valid files: no limit override can hide a staging bypass.
+  // Use eligible output paths; .NET Debug/Release build directories are excluded.
   const artifactBytes = Math.ceil((768 * 1024 * 1024) / 13);
   const artifacts = Array.from(
     { length: 13 },
-    (_, index) =>
-      "src/App/" + (index % 2 ? "obj" : "bin") + "/Debug/net10.0/output-" + index + ".dll",
+    (_, index) => "src/App/" + (index % 2 ? "obj" : "bin") + "/exports/output-" + index + ".dll",
   );
   const sourceText = "authored edit survives aggregate recovery\n";
   for (const relative of artifacts) {

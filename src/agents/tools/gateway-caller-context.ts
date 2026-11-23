@@ -125,8 +125,6 @@ type GatewayToolCallerIdentity = {
   /** Host-only native issuer retained by the current MCP grant; never serialized. */
   mintCronRequesterGrant?: (signal?: AbortSignal) => CronCreatorAuthorityGrant;
   cronManagementGrant?: CronCreatorAuthorityGrant;
-  /** Cron permission can end while the admitted run retains its other tools. */
-  cronAuthorityCheck?: () => boolean;
   // Trusted run context, carried separately from model-authored tool arguments.
   turnSourceChannel?: string;
   turnSourceLocal?: true;
@@ -162,7 +160,6 @@ type AdmittedGatewayToolCallerParams = {
   requesterOrigin?: RequesterOrigin;
   receiptAuthority?: ReceiptAuthority;
   receiptAdmission?: GatewayToolCallerReceiptAdmission;
-  cronAuthorityCheck?: () => boolean;
   mintCronRequesterGrant?: GatewayToolCallerIdentity["mintCronRequesterGrant"];
   approvalSignals?: readonly AbortSignal[];
   agentId?: string;
@@ -279,7 +276,6 @@ export function createAdmittedGatewayToolCallerIdentity(
     ...(delegatedAuthority ? { approvalAuthority: delegatedAuthority } : {}),
     ...(operatorAuthority ? { operatorAuthority } : {}),
     ...(params.receiptAuthority ? { approvalAuthorityCheck: params.receiptAuthority } : {}),
-    ...(params.cronAuthorityCheck ? { cronAuthorityCheck: params.cronAuthorityCheck } : {}),
     executionIdentityToken: params.admittedRunContext.executionIdentityToken,
     gatewayContextResolver: captureGatewayContextResolver(
       getGatewayContextResolver(params.admittedRunContext),
@@ -435,56 +431,29 @@ export function resolveGatewayPersonalToolParticipant(
   return undefined;
 }
 
-/** Capture the admitted run and worker owner, independently of optional audit collection. */
+/** Admission checked authority; a started tool call only honors Stop and the session-store write fences. */
 export function captureGatewayToolCallerAssertion(
-  boundMethod?: string,
+  _boundMethod?: string,
 ): ((method?: string) => void) | undefined {
   const caller = getGatewayToolCallerIdentity();
   if (!caller?.operationalRunInstance) {
     return undefined;
   }
-  const isCurrent = caller.receiptAuthority;
   const signals = caller.approvalSignals ?? [];
-  const selection = caller.personalToolIdentityScoped
-    ? resolveGatewayToolOperatorSelection()
-    : undefined;
-  const assertMethod = (method?: string) => {
-    if (method?.startsWith("cron.") && caller.cronAuthorityCheck?.() === false) {
-      throw new Error("Automation caller authority is no longer active.");
+  const assertNotStopped = () => {
+    for (const signal of signals) {
+      signal.throwIfAborted();
     }
   };
-  const assertCurrent = composeSessionSourceAssertion(
-    [
-      selection?.assertCurrent,
-      // Selection already checks its exact operator source in this synchronous guard.
-      selection?.operatorAuthority === caller.operatorAuthority
-        ? undefined
-        : caller.operatorAuthority?.assertCurrent,
-      composeSessionSourceAssertion(
-        isCurrent ? [captureGatewayToolReceiptAssertion(isCurrent)] : [],
-        (assertReceipt) => {
-          try {
-            if (!isCurrent || signals.some((signal) => signal.aborted)) {
-              throw new Error("agent tool caller authority is no longer active");
-            }
-            assertReceipt();
-          } catch {
-            throw new Error("agent tool caller authority is no longer active");
-          }
-        },
-      ),
-    ],
+  // Prepared writes still run the receipt's session fences; the synchronous call checks Stop only.
+  const fences = composeSessionSourceAssertion(
+    caller.receiptAuthority ? [captureGatewayToolReceiptAssertion(caller.receiptAuthority)] : [],
     (assertSources) => {
+      assertNotStopped();
       assertSources();
-      assertMethod(boundMethod);
     },
   );
-  return Object.assign((method = boundMethod) => {
-    assertCurrent();
-    if (method !== boundMethod) {
-      assertMethod(method);
-    }
-  }, assertCurrent);
+  return Object.assign(assertNotStopped, fences);
 }
 
 /** Watch admission preserves opaque lifecycle assertions while moving registered row predicates. */
@@ -663,10 +632,6 @@ export async function withGatewayToolCallerIdentity<T>(
         identity.cronCreatorAuthorityGrant ?? inheritedOwner?.cronCreatorAuthorityGrant,
       mintCronRequesterGrant: inheritedValue("mintCronRequesterGrant"),
       cronManagementGrant: identity.cronManagementGrant ?? inheritedOwner?.cronManagementGrant,
-      cronAuthorityCheck: composeReceiptAuthority(
-        inheritedOwner?.cronAuthorityCheck,
-        identity.cronAuthorityCheck,
-      ),
       executionIdentityToken: inheritedValue("executionIdentityToken"),
       receiptAuthority: composeReceiptAuthority(
         inheritedOwner?.receiptAuthority,

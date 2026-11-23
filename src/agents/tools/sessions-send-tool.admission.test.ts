@@ -495,7 +495,7 @@ describe("sessions_send dispatch admission", () => {
     ) =>
       attachActiveEmbeddedRun("target-session", handle, targetSessionKey, file, "main", operation);
     attach(sibling, operations[1]!);
-    const captured = await operatorCapture.captureGatewayOperatorRunAuthority({
+    const captured = await operatorCapture.prepareGatewayOperatorRunAuthority({
       client: owner,
       context,
       hasCurrentClientAuthority: source.isCurrent,
@@ -635,9 +635,9 @@ describe("sessions_send dispatch admission", () => {
       const capturing = createDeferredCore();
       const allowCapture = createDeferredCore();
       let invocationStarted = false;
-      const capture = operatorCapture.captureGatewayOperatorRunAuthority;
+      const capture = operatorCapture.prepareGatewayOperatorRunAuthority;
       const heldCapture = vi
-        .spyOn(operatorCapture, "captureGatewayOperatorRunAuthority")
+        .spyOn(operatorCapture, "prepareGatewayOperatorRunAuthority")
         .mockImplementation(async (...args) => {
           const captured = await capture(...args);
           if (invocationStarted) {

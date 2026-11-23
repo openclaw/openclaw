@@ -5,7 +5,6 @@ import * as agentEn from "./en-agents.ts";
 
 type EnglishCatalog = TranslationMap & {
   languages: TranslationMap;
-  onboarding: TranslationMap & { memoryImport: TranslationMap };
   execApproval: TranslationMap & { labels: TranslationMap; scope: TranslationMap };
   sessionProgressCard: TranslationMap & {
     refresh: TranslationMap;
@@ -1119,11 +1118,6 @@ const startupEnglish = {
     providerConnected: {},
   },
   memoryImport: {},
-  onboarding: {
-    memoryImport: {
-      title: "Bring your agent memory with you",
-    },
-  },
   assistantPanel: {
     title: "Assistant sidebar",
     home: "Home",
@@ -1170,17 +1164,14 @@ const startupEnglish = {
     install: "Install",
   },
   labsPage: {
-    sectionDescription:
-      "Changes save without restarting the Gateway. Code Mode and Tool Search apply to future replies.",
+    sectionDescription: "Changes save without restarting the Gateway.",
     restartRequired: "Gateway restart required.",
     saveErrorTitle: "Couldn’t save this setting. Try again.",
     saveFailed: "The feature setting could not be saved.",
     decisionAssistance: {},
     usageRankedToolIndex: {},
-    codeMode: {},
 
     swarm: {},
-    toolSearch: {},
 
     hostDesktop: {},
     openclawId: {},
@@ -1621,7 +1612,6 @@ const startupEnglish = {
       preparingContext: "Preparing reply",
       memoryFlushing: "Saving conversation memory",
       startingModel: "Waiting for a response",
-      preparingTool: "Preparing a tool call",
       waitingForLocalModel: "Waiting for the local model to respond",
       waitingForModelSlot: "Waiting for a free model slot",
       waitingForState: "Temporarily busy—retrying",

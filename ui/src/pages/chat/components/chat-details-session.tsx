@@ -346,6 +346,8 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
               compact: true,
             };
           });
+          const publishedRequests = () =>
+            props.props?.displayPullRequests ?? props.props?.pullRequests ?? [];
           const outputsCount = () => {
             const data = outputs();
             return data ? getChatOutputsCount(data) : null;
@@ -517,7 +519,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                   {(requests) => (
                     <Show
                       when={
-                        requests().pullRequests.length > 0 ||
+                        publishedRequests().length > 0 ||
                         requests().publication?.result?.status === "published"
                       }
                     >
@@ -538,7 +540,11 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                                 );
                               }}
                             >
-                              <ChatPullRequests {...requests()} publishedOnly />
+                              <ChatPullRequests
+                                {...requests()}
+                                pullRequests={publishedRequests()}
+                                publishedOnly
+                              />
                             </ChatDetailsDesktopSection>
                           }
                         >
@@ -553,10 +559,14 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                           >
                             <summary class="chat-details__caption">
                               {t("chat.sessionDetails.pullRequests")}
-                              <span>{props.props?.pullRequests?.length || null}</span>
+                              <span>{publishedRequests().length || null}</span>
                               <Icon name="chevronDown" />
                             </summary>
-                            <ChatPullRequests {...requests()} publishedOnly />
+                            <ChatPullRequests
+                              {...requests()}
+                              pullRequests={publishedRequests()}
+                              publishedOnly
+                            />
                           </details>
                         </Show>
                       </div>

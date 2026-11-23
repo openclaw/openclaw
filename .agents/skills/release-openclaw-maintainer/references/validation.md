@@ -191,9 +191,13 @@ source, including soak and blocking performance. Beta confidence may inform
 diagnosis but cannot substitute for required stable evidence.
 
 Preserve the validation parent and successful children when continuation is
-eligible; parents that produced sealed candidate artifacts need a new parent
-with verified evidence reuse. Diagnose failures and retry only the affected
-surface within the controller's budget. Classify every selected test failure as
+eligible. If sealing/collection failed or same-parent continuation cannot restore
+the original plan, assess [receipt-backed aggregate recovery](../../release-openclaw-ci/SKILL.md#receipt-backed-aggregate-recovery)
+before starting a new full qualification. It can authenticate the original
+admission, C/Q, completed child receipts, and unchanged publication bytes under
+a reviewed trusted P; the original failed parent stays failed. Missing required
+evidence or invalid bytes still block recovery. Diagnose failures and retry only
+the affected surface within the controller's budget. Classify every selected test failure as
 a real blocker or a flake under the
 [shared release boundaries](../SKILL.md#shared-release-boundaries): flakes get
 bounded recorded reruns on the same Release SHA and a fix-in-parallel issue or

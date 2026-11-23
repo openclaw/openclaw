@@ -142,6 +142,10 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       modelCatalogState: readChatModelCatalogState(state),
       modelAuthStatusResult: state.modelAuthStatusResult,
       onSetup: () => this.context.navigate("model-setup"),
+      onOpenModels: (provider) =>
+        provider
+          ? navigateToModelProvider(this.context, currentAgentId ?? null, provider)
+          : this.context.navigate("model-providers"),
     });
     const placementStartup = this.context.placementStartup.get(state.sessionKey);
     const pendingReason = chatSendPendingReason(state, state.sessionKey, placementStartup !== null);
@@ -340,7 +344,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       disabledReasonBusy: placementComposer.busyMessage !== null,
       disabledBanner:
         sessionDisabledBanner ?? placementComposer.disabledBanner ?? modelUnavailableBanner,
-      ...chatSubmitState(state, initialHistoryUnavailable, nativeConversation),
+      ...chatSubmitState(state, initialHistoryUnavailable, nativeConversation, selectedSession),
     };
     const mentionsUnsupported = !nativeConversation || selectedSession?.incognito || !selfProfileId;
     const conversationAttention = this.projectConversationAttention(
@@ -407,6 +411,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       fallbackStatus: state.fallbackStatus,
       providerPolicyNotice: catalogKey ? null : state.providerPolicyNotice,
       readProviderReview,
+      hideComposerSessionCards: this.inputRegion === "dock" && !this.onBackToSubagents,
       progressCard: progressPresentation?.card ?? null,
       progressCardIdentity: progressPresentation?.identity,
       progressCardLifetime: progressPresentation?.lifetime,

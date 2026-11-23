@@ -35,7 +35,7 @@ import { tryWriteCompletionCache } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import { recoverStaleGitListener } from "./update-command-git-stale-listener.js";
 import { recordMutableUpdateSignalPhase } from "./update-command-mutable-signals.js";
-import { recordOwedUpdateStep } from "./update-command-owed.js";
+import { oweServiceDefinitionRefresh, recordOwedUpdateStep } from "./update-command-owed.js";
 import {
   hasRunningGatewayService,
   observeUpdateGatewayReadiness,
@@ -51,6 +51,7 @@ import {
   GatewayRestartHealthError,
   isPackageManagerUpdateMode,
   runUpdatedInstallGatewayCommand,
+  stageUpdatedInstallGatewayService,
 } from "./update-command-service-command.js";
 import type { UpdateServiceRestartParams } from "./update-command-service-context-types.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
@@ -449,6 +450,11 @@ export async function maybeRestartService(
         );
       }
     }
+    // Rebind the next start to the launcher without activating it. Staging skips a service
+    // that already names the launcher; the link can name the npm package a switch keeps.
+    if (activation.result.mode === "git" && (await serviceUsesUpdatedRoot()) !== null) {
+      await stageUpdatedInstallGatewayService(activation, preserveDefinition);
+    }
     return "ok";
   }
   if (
@@ -553,7 +559,8 @@ export async function maybeRestartService(
         }
         // The update continues on the previous definition, so its refresh is owed.
         recordOwedUpdateStep(run, { id: "service-definition", reason: warning });
-        if (requiresInstallRootRefresh) {
+        // An install the previous definition does not start (a Git release) is not served.
+        if (requiresInstallRootRefresh || (await serviceUsesUpdatedRoot()) === false) {
           return await reconciliationPending();
         }
         if (DEFINITION_DENIAL.test(String(err))) {
@@ -613,12 +620,7 @@ export async function maybeRestartService(
         }
       }
       if (requiresInstallRootRefresh && (await serviceUsesUpdatedRoot()) !== true) {
-        const warning =
-          `Gateway service still points outside the updated install ${activation.result.root}. ` +
-          `Run \`${formatCliCommand("openclaw gateway install --force", activation.serviceEnv)}\`, then \`${formatCliCommand("openclaw gateway restart", activation.serviceEnv)}\`.`;
-        recordServiceReconciliationWarning(activation.result, activation.serviceEnv, warning);
-        assertCurrent();
-        recordOwedUpdateStep(run, { id: "service-definition", reason: warning });
+        oweServiceDefinitionRefresh(run, activation.result, activation.serviceEnv, assertCurrent);
         return await reconciliationPending();
       }
     }

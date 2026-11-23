@@ -9,7 +9,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { UsersSelfResult } from "../../packages/gateway-protocol/src/schema/users.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
-import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import {
@@ -157,7 +157,7 @@ async function rejectAfterChange(
 it(
   "carries current caller, membership and global ownership through transcript persistence and agent dispatch",
   { timeout: 90_000 },
-  async () => {
+  async ({ signal }) => {
     const state = await createProductState("chat-membership-authority");
     const requests: string[] = [];
     const providerErrors: unknown[] = [];
@@ -182,7 +182,7 @@ it(
       cleanups.push(() => runExecution.restore());
       const waitForRun = async (client: Client, runId: string) => {
         // A queued RPC observation is nonterminal; join the run's actual effects first.
-        await runExecution.waitForCompletion(runId);
+        await withinTest(runExecution.waitForCompletion(runId), signal);
         const terminal = await client.request<{ status: string }>(
           "agent.wait",
           { runId, timeoutMs: 30_000 },
@@ -606,9 +606,10 @@ it(
         } finally {
           hold.resume.resolve();
         }
-        expect(await terminal).toMatchObject({ status: expect.stringMatching(/^(ok|error)$/) });
+        expect(await terminal).toMatchObject({ status: "ok" });
         expect(forbidden.supplied).toBe(true);
-        await expect(fs.stat(forbidden.file)).rejects.toMatchObject({ code: "ENOENT" });
+        // Removal denies the next start, not the tool call of this admitted turn.
+        expect(await fs.readFile(forbidden.file, "utf8")).toBe(forbidden.message);
         expect(await fs.readFile(allowed.file, "utf8")).toBe(allowed.message);
       }
       expect(providerErrors).toEqual([]);

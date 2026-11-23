@@ -163,7 +163,7 @@ export async function withSessionRowDatabaseFacts(
         }
         const sharedRead = prepareSessionRowSharedFacts({ rows, facts, env, shared });
         if (sharedRead) {
-          sharedRead.accept(await sharedRead.reply);
+          await sharedRead.accept(await sharedRead.reply);
         }
         for (const row of rows) {
           const prepared = facts.get(identity(row));

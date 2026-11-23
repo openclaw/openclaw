@@ -1,3 +1,4 @@
+import type { SkillsSearchParams } from "@openclaw/gateway-protocol";
 import {
   createDeferred,
   createEffect,
@@ -5,6 +6,7 @@ import {
   createSignal,
   createStore,
   onSettled,
+  refresh,
   Show,
 } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -17,7 +19,6 @@ import {
 import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { createPageRequest, type PageReadResult } from "../../lib/page-request.ts";
 import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
@@ -25,7 +26,10 @@ import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import { searchClawHub } from "../../lib/skills/clawhub-search.ts";
+import {
+  loadSkillCategories,
+  type SkillCategoryDirectory,
+} from "../../lib/skills/clawhub-search.ts";
 import {
   closeClawHubDetail,
   createSkillsChangeReloader,
@@ -50,6 +54,7 @@ import { SkillLibraryNavigation, SkillLibraryPageMenu } from "./library-toolbar.
 import { SkillLibrary, SkillLibraryDialogs, SkillLibraryFeedback } from "./library-view.tsx";
 import { createSkillsMutationPresentation } from "./mutation-presentation.ts";
 import { createSkillPages } from "./skill-page-route.ts";
+import { createSkillsDiscoveryRequest } from "./skills-discovery-request.ts";
 import { SkillsHeader } from "./skills-header.tsx";
 import { createSkillsData } from "./skills-page-state.ts";
 import type {
@@ -81,12 +86,9 @@ export function SkillsPage(props: SkillsPageProps) {
     skillsStatusFilter: "all",
     skillsDetailKey: null,
     clawhubSearchQuery: "",
+    clawhubCategory: null,
   });
   let active = true;
-  let clawhubSearchTimer: {
-    timeout: ReturnType<typeof setTimeout>;
-    resolve: (result: PageReadResult) => void;
-  } | null = null;
   let routeDataInitialized = false;
   let accessSignature = "";
   const skills = observeState<SkillsState>({
@@ -117,27 +119,7 @@ export function SkillsPage(props: SkillsPageProps) {
     });
   });
   const [detailReceipt, setDetailReceipt] = createSignal<ClawHubDetailReceipt | null>(null);
-  const [searchCompletion, setSearchCompletion] = createSignal<Promise<PageReadResult> | null>(
-    null,
-  );
-  const searchRequest = createPageRequest(() => {}, {
-    task: ({ client, query }: { client: GatewayBrowserClient; query: string }, { signal }) =>
-      searchClawHub(client, query, signal),
-    onComplete: (results) => {
-      data.clawhubSearchResults = results;
-    },
-    onError: () => {},
-  });
-  const readClawHubSearch = createMemo(() => {
-    const completion = searchCompletion();
-    // First readiness belongs to Loading too, before request admission publishes its receipt.
-    return (completion ?? Promise.resolve(null)).then((result) => {
-      if (result) {
-        throw result.error;
-      }
-      return true;
-    });
-  });
+  const search = createSkillsDiscoveryRequest(data);
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
     onIdentityChange: resetLoadedSkillState,
@@ -181,6 +163,22 @@ export function SkillsPage(props: SkillsPageProps) {
   // Unrelated skill publications must not re-arm the detail boundary.
   const detailClient = createMemo(() => gateway.client);
   const detailEpoch = createMemo(() => gateway.epoch);
+  // Taxonomy is optional: it never holds the ordinary feed or installed inventory.
+  const categoryClient = createMemo(() =>
+    surface() === "discovery" &&
+    canCallGatewayMethod(gateway.snapshot, "skills.categories", "operator.read")
+      ? gateway.client
+      : null,
+  );
+  const categoryDirectory = createMemo(() => {
+    detailEpoch();
+    const client = categoryClient();
+    // Each registry starts with unknown grouping, without holding route and search admission.
+    return createDeferred<SkillCategoryDirectory | null>(
+      () => (client ? loadSkillCategories(client) : { categories: [] }),
+      { loadingValue: null },
+    );
+  });
   const detailRef = createMemo(() => skills.read().clawhubDetailRef);
   const detailSnapshot = createMemo(() => skills.read().clawhubDetail);
   const detailError = createMemo(() => skills.read().clawhubDetailError);
@@ -366,8 +364,7 @@ export function SkillsPage(props: SkillsPageProps) {
       [stopLifecycle, stopNavigation, stopAgents, ...stopSelections, stopSkills].forEach((stop) =>
         stop(),
       );
-      clearClawHubSearchTimer();
-      searchRequest.cancel();
+      search.reset();
       skills.dispose();
       clawhubIcons.reset();
     };
@@ -378,25 +375,28 @@ export function SkillsPage(props: SkillsPageProps) {
       return;
     }
     lastSearchScope = scope;
-    if (scope[1] && !clawhubSearchTimer) {
-      void setSearchCompletion(performSearch(query));
+    // A category and its cursor belong to the registry on the previous connection.
+    setLocal((state) => void (state.clawhubCategory = null));
+    // The raw gateway may be connected before this page has admitted that connection.
+    if (!scope[0] || !scope[1]) {
+      search.reset();
+      return;
     }
+    performSearch({ query });
   }
 
-  function performSearch(query: string): Promise<PageReadResult> {
-    searchRequest.reset();
-    const snapshot = context.gateway.snapshot;
-    const client = snapshot.client;
+  function performSearch(params: SkillsSearchParams, debounce = false) {
+    const snapshot = gateway.snapshot;
     if (
-      snapshot.phase !== "connected" ||
-      !canReadSkills() ||
+      snapshot?.phase !== "connected" ||
+      !hasOperatorReadAccess(snapshot.hello?.auth ?? null) ||
       admittedSurface !== "discovery" ||
-      !client
+      !snapshot.client
     ) {
-      return Promise.resolve(null);
+      search.reset();
+      return;
     }
-    void searchRequest.run({ client, query });
-    return searchRequest.read!;
+    search.run(snapshot.client, params, debounce);
   }
 
   function agentSelection() {
@@ -425,9 +425,7 @@ export function SkillsPage(props: SkillsPageProps) {
     data.skillsAgentRevision++;
     data.skillsLoading = false;
     data.skillOperation = null;
-    setSearchCompletion(null);
-    searchRequest.reset();
-    clearClawHubSearchTimer();
+    search.reset();
     clawhubIcons.reconcileKeys(new Set(Object.keys(data.clawhubIconUrls)));
   }
 
@@ -436,9 +434,7 @@ export function SkillsPage(props: SkillsPageProps) {
     retireSkillsReads(data);
     setDetailReceipt(null);
     library.reset();
-    setSearchCompletion(null);
-    searchRequest.reset();
-    clearClawHubSearchTimer();
+    search.reset();
     pageRoute.reset();
     Object.assign(data, createSkillsData(), {
       skillsAgentRevision: data.skillsAgentRevision + 1,
@@ -518,26 +514,27 @@ export function SkillsPage(props: SkillsPageProps) {
     setLocal((state) => {
       state.clawhubSearchQuery = query;
     });
-    data.clawhubSearchResults = null;
     data.clawhubInstallMessage = null;
-    clearClawHubSearchTimer();
-    searchRequest.reset();
-    void setSearchCompletion(
-      new Promise<PageReadResult>((resolve) => {
-        const timeout = setTimeout(() => {
-          clawhubSearchTimer = null;
-          void performSearch(query).then(resolve);
-        }, 300);
-        clawhubSearchTimer = { timeout, resolve };
-      }),
-    );
+    performSearch({ query, category: local.clawhubCategory?.slug }, Boolean(query.trim()));
   }
 
-  function clearClawHubSearchTimer() {
-    if (clawhubSearchTimer) {
-      clearTimeout(clawhubSearchTimer.timeout);
-      clawhubSearchTimer.resolve(null);
-      clawhubSearchTimer = null;
+  function selectCategory(category: SkillsPresentation["clawhubCategory"]) {
+    if (local.clawhubCategory?.slug === category?.slug) {
+      return;
+    }
+    setLocal((state) => void (state.clawhubCategory = category));
+    data.clawhubInstallMessage = null;
+    performSearch({ query: local.clawhubSearchQuery, category: category?.slug });
+  }
+
+  function loadNextPage() {
+    const cursor = search.nextCursor();
+    if (cursor) {
+      performSearch({
+        query: local.clawhubSearchQuery,
+        category: local.clawhubCategory?.slug,
+        cursor,
+      });
     }
   }
 
@@ -611,7 +608,12 @@ export function SkillsPage(props: SkillsPageProps) {
             }
             readClawHubDetail={readClawHubDetail}
             readClawHubVerdicts={readClawHubVerdicts}
-            readClawHubSearch={readClawHubSearch}
+            readClawHubSearch={search.read}
+            readCategories={() => categoryDirectory()()}
+            onRetryCategories={() => void refresh(categoryDirectory())}
+            onCategoryChange={selectCategory}
+            hasNextPage={Boolean(search.nextCursor())}
+            onLoadMore={loadNextPage}
             clawhubSearchEpoch={gateway.epoch}
             surface={surface()}
             libraryEntries={library.state.list ? library.entries() : undefined}
