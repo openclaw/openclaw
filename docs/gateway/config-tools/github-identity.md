@@ -9,6 +9,16 @@ title: "Configuration — GitHub identity for agent tools"
 
 `tools.github` selects the shared managed GitHub CLI identity used by agent execution, and defines which execution paths receive its credential.
 
+## File an issue from a project conversation
+
+Ask the agent to file an issue in the conversation’s registered GitHub project.
+The `github_publish` action `create_issue` takes a title and optional body, not a
+repository URL. The Gateway checks the requester’s session and project access
+and posts with the agent’s selected GitHub account. A guest can use it from
+their own conversation in a public project without a worktree, a PR, or GitHub
+credentials in the sandbox. Success returns the issue URL. If the result is
+unconfirmed, check the project’s issues before trying again.
+
 ## Session GitHub App reader
 
 A configured `tools.github` (or complete agent override) with
@@ -447,6 +457,8 @@ This check covers only workflow definition files. Workflows commonly run code fr
 Local session-owned worktrees can use the same **Publish PR** action in the Control UI. The Gateway derives the managed worktree, repository, branch, base, and head from current session ownership. It never accepts those authority facts from the browser or model. Publication retries use a durable request ID, an exact commit marker, remote branch observation, and pull-request lookup by head branch so a Gateway restart or lost response does not create duplicate commits, pushes, or pull requests.
 
 Automatic shared-publication recovery waits one minute after the first failed attempt and two minutes after the second. After three failed attempts, or a failed attempt on a receipt at least one hour old, it stops GitHub effect recovery and marks the receipt failed with an unconfirmed outcome. If that settlement fails, later attempts retry settlement without repeating GitHub effects. Each request has its own cooldown; an unsettled request still prevents later requests from overtaking it in the same worktree. The attempt count, cooldown, and latest diagnostic reset when the Gateway restarts, but receipt age still bounds failed recovery. Recorded effects and saved work are retained.
+
+For a local managed worktree, the next publish call recovers an unfinished publication with a recorded head before accepting a new request. It returns the original request's outcome; later edits require a subsequent publication. Recovery uses the original requester and target. If observation remains unavailable, the refusal preserves the original diagnostic and names the exact `github_publish` readiness call and request ID. Readiness only observes. An operator must inspect the Gateway's publication recovery warning and repair the reported workspace, repository, or publisher access problem before recovery can finish. Publisher accounts are in **Settings → Profile → GitHub accounts**.
 
 During cooldown, publication status includes the remaining wait and the latest failure. Base-fetch failures identify the failed stage and native reason, including timeouts, with bounded, redacted Git diagnostics in status and the recovery warning. Inspect the original branch and PR, repair the reported access, connectivity, or Git-object problem, and let recovery reconcile the existing request. A failed observation does not establish that a push or PR creation failed; do not request a replacement publication to recover it.
 

@@ -693,7 +693,7 @@ describe("steerSessionControllerOperation", () => {
       "stale guidance",
     );
     const rejected = expect(result).rejects.toThrow(
-      "Message injection authority is no longer current",
+      "The message input is no longer available. Start a new turn to retry.",
     );
     try {
       await gate.entered;

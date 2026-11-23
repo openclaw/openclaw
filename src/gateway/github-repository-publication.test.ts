@@ -591,11 +591,11 @@ it("records a recovered push response even when authority closes during its obse
   };
   expect(await f.coordinator.requestForSessionV2(request)).toMatchObject({
     requestId: first.requestId,
-    status: "failed",
-    code: "identity_changed",
+    status: "published",
+    url,
   });
   expect(readReceipt(first.requestId)?.pushed_head_commit).toBe(f.runtime.head);
-  expect(f.runtime.effects).toEqual(["push"]);
+  expect(f.runtime.effects).toEqual(["push", "pull_request"]);
 });
 
 it.each([

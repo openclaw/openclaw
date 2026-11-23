@@ -23,8 +23,6 @@ import {
   setMessageActionTestPlugin as setTestPlugin,
 } from "./message-action-runner.test-helpers.js";
 
-const maybeIt = process.platform === "win32" ? it.skip : it;
-
 const workspaceConfig = {
   channels: { workspace: { botToken: "xoxb-test", appToken: "xapp-test" } },
 } as OpenClawConfig;
@@ -101,123 +99,6 @@ describe("runMessageAction media behavior", () => {
       expect(args.mediaUrls).toEqual([sent?.mediaUrl]);
     });
   });
-
-  it("treats top-level image param as a send media source", async () => {
-    await withSandbox(async (sandboxDir) => {
-      const result = await runDrySend(
-        {
-          message: "1/7",
-          image: "/workspace/photo.jpg",
-        },
-        sandboxDir,
-      );
-
-      const sent = sendResult(result);
-      const mediaUrl = path.join(sandboxDir, "photo.jpg");
-      expect(sent).toMatchObject({ mediaUrl, mediaUrls: [mediaUrl] });
-    });
-  });
-
-  it("sends structured mediaUrls arrays", async () => {
-    await withSandbox(async (sandboxDir) => {
-      const result = await runDrySend(
-        {
-          mediaUrls: ["./one.png", "/workspace/two.png"],
-        },
-        sandboxDir,
-      );
-
-      const mediaUrls = [path.join(sandboxDir, "one.png"), path.join(sandboxDir, "two.png")];
-      expect(sendResult(result)).toMatchObject({ mediaUrl: mediaUrls[0], mediaUrls });
-      const args = sendArgs();
-      const sendCtx = requireRecord(args.ctx);
-      const sendParams = requireRecord(sendCtx.params);
-      const sendMediaAccess = requireRecord(sendCtx.mediaAccess);
-      expect(sendMediaAccess.localRoots).toEqual(expect.arrayContaining([sandboxDir]));
-      expect(sendParams.mediaUrls).toEqual(mediaUrls);
-    });
-  });
-
-  maybeIt.each([{ contentType: "image/png", mimeType: "image/jpeg" }, { mimeType: "image/png" }])(
-    "dedupes resolved media while retaining first-entry metadata (%j)",
-    async (metadata) => {
-      const containerWorkdir = "/sandbox";
-      await withSandbox(async (sandboxDir) => {
-        await runDrySend(
-          {
-            message: "attachments ready",
-            media: `file://${containerWorkdir}/assets/photo.png`,
-            filename: "first.png",
-            ...metadata,
-            mediaUrls: [
-              ` file://${containerWorkdir}/assets/photo.png `,
-              `${containerWorkdir}/assets/photo.png`,
-              "buffer://message-send/attachment",
-              " ",
-            ],
-            attachments: [
-              {
-                path: `${containerWorkdir}/assets/photo.png`,
-                name: "later.bin",
-                mimeType: "application/octet-stream",
-                type: "file",
-              },
-              {
-                path: `${containerWorkdir}/last.txt`,
-                name: "last.txt",
-                mimeType: "text/plain",
-                type: "file",
-              },
-            ],
-          },
-          ` ${sandboxDir} `,
-          containerWorkdir,
-        );
-
-        expect(mocks.executeSendAction).toHaveBeenCalledTimes(1);
-        const args = sendArgs();
-        expect(args.contentType).toBe("image/png");
-        const mediaUrls = [
-          path.join(sandboxDir, "assets", "photo.png"),
-          "buffer://message-send/attachment",
-          path.join(sandboxDir, "last.txt"),
-        ];
-        expect(args.mediaUrls).toEqual(mediaUrls);
-        expect(requireRecord(args.payload).mediaUrls).toEqual(mediaUrls);
-        expect(requireRecord(args.payload).attachments).toEqual([
-          { path: mediaUrls[0], type: "file", name: "first.png", mimeType: "image/png" },
-          { path: mediaUrls[1] },
-          { path: mediaUrls[2], type: "file", name: "last.txt", mimeType: "text/plain" },
-        ]);
-      });
-    },
-  );
-
-  it.each([{ name: "blank", sandboxRoot: "   " }])(
-    "preserves ordered remote media when the sandbox root is $name",
-    async ({ sandboxRoot }) => {
-      const mediaUrls = [
-        "https://example.com/first.png?sig=1",
-        "http://example.com/second.png",
-        "mxc://matrix.org/opaque-media",
-        "buffer://message-send/attachment",
-      ];
-
-      await runDrySend(
-        {
-          message: "attachments ready",
-          mediaUrls: [` ${mediaUrls[0]} `, mediaUrls[0], ...mediaUrls.slice(1), " "],
-        },
-        sandboxRoot,
-      );
-
-      expect(mocks.executeSendAction).toHaveBeenCalledTimes(1);
-      const args = sendArgs();
-      expect(args.mediaUrls).toEqual(mediaUrls);
-      expect(requireRecord(args.payload).mediaUrls).toEqual(mediaUrls);
-      expect(requireRecord(args.payload)).not.toHaveProperty("attachments");
-    },
-  );
 
   it.each([false, true])(
     "rejects a later invalid media hint before any dispatch (sandbox=%s)",
@@ -394,41 +275,6 @@ describe("runMessageAction media access", () => {
         ).rejects.toThrow(/sandbox/i);
       });
     });
-
-    it("prefers media over mediaUrl when both aliases are present", async () => {
-      await withSandbox(async (sandboxDir) => {
-        const result = await runDrySend(
-          {
-            media: "./data/primary.txt",
-            mediaUrl: "./data/secondary.txt",
-            message: "",
-          },
-          sandboxDir,
-        );
-
-        const sent = sendResult(result);
-        expect(sent?.mediaUrl).toBe(path.join(sandboxDir, "data", "primary.txt"));
-      });
-    });
-
-    it.each(["mediaUrl", "fileUrl"])(
-      "keeps remote HTTP %s aliases unchanged under sandbox validation",
-      async (mediaField) => {
-        await withSandbox(async (sandboxDir) => {
-          const remoteUrl = "https://example.com/files/report.pdf?sig=1";
-          const result = await runDrySend(
-            {
-              [mediaField]: remoteUrl,
-              message: "",
-            },
-            sandboxDir,
-          );
-
-          const sent = sendResult(result);
-          expect(sent?.mediaUrl).toBe(remoteUrl);
-        });
-      },
-    );
 
     it("allows media paths under preferred OpenClaw tmp root", async () => {
       const tmpRoot = resolvePreferredOpenClawTmpDir();

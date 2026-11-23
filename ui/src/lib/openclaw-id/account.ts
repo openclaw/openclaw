@@ -9,6 +9,7 @@
 // token) stays in localStorage until it expires or the user signs out.
 import { createSignal } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { webKitHostWindow } from "../../app/native-webkit-bridge.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import {
   openExternalUrlSafe,
@@ -193,11 +194,16 @@ export async function signInWithOpenClawId(params: {
       throw new Error("You signed out while sign-in was in progress. Start again.");
     }
   };
-  // Reserved while the click still counts as user activation; the callback answers through
-  // localStorage, so the popup needs no opener.
-  const popup = reserveExternalWindowForDeferredNavigation({
-    popup: centeredPopupFeatures({ width: 520, height: 720 }),
-  });
+  // The Mac host returns the callback to this document, not to an external browser
+  // with different storage. Ordinary browsers keep their user-activated popup.
+  const nativeHandler = webKitHostWindow()?.webkit?.messageHandlers?.openclawIdSignIn;
+  // WebKit uses a bound single-argument RPC, not Window.postMessage.
+  const nativeSignIn = nativeHandler?.postMessage.bind(nativeHandler);
+  const popup = nativeSignIn
+    ? null
+    : reserveExternalWindowForDeferredNavigation({
+        popup: centeredPopupFeatures({ width: 520, height: 720 }),
+      });
   try {
     const started = await params.client.request<{ authorizationUrl: string; state: string }>(
       "openclawId.authority",
@@ -205,12 +211,17 @@ export async function signInWithOpenClawId(params: {
     );
     assertCurrent();
     getSafeLocalStorage()?.setItem(ISSUER_KEY, new URL(started.authorizationUrl).origin);
-    if (popup) {
-      popup.location.href = started.authorizationUrl;
+    let returned: OpenClawIdCallbackMessage;
+    if (nativeSignIn) {
+      returned = await nativeSignIn({ authorizationUrl: started.authorizationUrl });
     } else {
-      openExternalUrlSafe(started.authorizationUrl);
+      if (popup) {
+        popup.location.href = started.authorizationUrl;
+      } else {
+        openExternalUrlSafe(started.authorizationUrl);
+      }
+      returned = await awaitCallback(started.state);
     }
-    const returned = await awaitCallback(started.state);
     assertCurrent();
     if (returned.error || !returned.code) {
       throw new Error("Sign-in did not finish. Try again.");

@@ -10,7 +10,6 @@ import {
   listSessionPendingInputs,
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
 import { prepareSqliteScope } from "../config/sessions/session-accessor.sqlite-scope.js";
 import {
   captureSessionQueuedInputsForRestart,
@@ -299,8 +298,8 @@ it("retries relinquished startup input after a post-staging authority outage exa
   expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
 });
 
-it.each(["missing source", "different sender", "revoked device"] as const)(
-  "cancels queued input with %s despite the sender's local administrator role",
+it.each(["allowed", "missing source", "different sender", "revoked device"] as const)(
+  "readmits queued input through its original requester source: %s",
   async (change) => {
     const created = await createFixture();
     await using fixture = created.fixture;
@@ -341,7 +340,10 @@ it.each(["missing source", "different sender", "revoked device"] as const)(
     }
     await continueSessionQueuedInputs(fixture.context, retained.target, retained);
     await fixture.finishDispatch();
-    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(change === "allowed" ? 1 : 0);
+    if (change === "allowed") {
+      return;
+    }
     expect((await listSessionPendingInputs(fixture.scope)).items).toMatchObject([
       {
         id: inputId,
@@ -361,86 +363,79 @@ it.each(["missing source", "different sender", "revoked device"] as const)(
   },
 );
 
-it("readmits accepted delivery, reply, and runtime intent with the sender's current role", async () => {
-  const created = await createFixture();
-  const { profile } = created;
-  await using fixture = created.fixture;
-  await appendTranscriptMessage(fixture.scope, {
-    eventId: "quoted-answer",
-    message: { role: "assistant", content: "The selected earlier answer.", timestamp: 2 },
-  });
-  Object.assign(fixture.params, {
-    deliver: true,
-    originatingChannel: "discord",
-    originatingTo: "channel:queued-result",
-    originatingAccountId: "queued-account",
-    originatingThreadId: "queued-thread",
-    replyToId: "quoted-answer",
-    thinking: "high",
-    fastMode: "auto",
-    fastAutoOnSeconds: 7,
-    timeoutMs: 90_000,
-  });
-  expectStarted(await fixture.send());
-  const accepted = (await listSessionPendingInputs(fixture.scope)).items;
-  expect(accepted).toHaveLength(1);
-  const retained = await retireOriginalInputs(fixture);
-  const [row] = (await readSessionQueuedInputPage(retained.target)).rows;
-  const recoverySource = decodeQueuedOperatorRecoverySource(JSON.parse(row!.origin_source_json!));
-  const dispatched: DispatchedInput[] = [];
-  dispatchInboundMessageMock.mockImplementation(async (input) => {
-    dispatched.push(input);
-    expect(getRequesterProfile(input.ctx)?.id).toBe(profile.id);
-    await input.replyOptions?.userTurnTranscriptRecorder?.persistApproved();
-    return {};
-  });
-  const first = accepted.find((input) => input.runId === fixture.params.idempotencyKey);
-  if (!first) {
-    throw new Error("Expected accepted queued send");
-  }
-  vi.mocked(fixture.context.logGateway.warn).mockClear();
-  await continueSessionQueuedInputs(fixture.context, retained.target, retained);
-  await fixture.finishDispatch();
-  expect(fixture.context.logGateway.warn).not.toHaveBeenCalled();
-  expect(dispatched).toHaveLength(1);
-  expect(dispatched[0]?.ctx).toMatchObject({
-    OriginatingChannel: "discord",
-    OriginatingTo: "channel:queued-result",
-    AccountId: "queued-account",
-    MessageThreadId: "queued-thread",
-    ExplicitDeliverRoute: true,
-    ReplyToId: "quoted-answer",
-    ReplyToBody: "The selected earlier answer.",
-  });
-  expect(dispatched[0]?.replyOptions).toMatchObject({
-    thinkingLevelOverride: "high",
-    fastModeOverride: "auto",
-    fastModeAutoOnSecondsOverride: 7,
-    timeoutOverrideMs: 90_000,
-  });
-  // Accept the next input only after the first replay finishes, then demote its
-  // sender before readmission. Selection is owned by the durable queue, not IDs.
-  const demoted = await stageSessionPendingInput(retained.target, {
-    runId: "queued-after-demotion",
-    message: { ...first.message, idempotencyKey: "queued-after-demotion:user" },
-    recoverySource,
-    assertCurrent() {},
-  });
-  if (!demoted) {
-    throw new Error("Expected the second accepted queued input");
-  }
-  const secondCapture = await captureSessionQueuedInputsForRestart(retained.target);
-  secondCapture.preserve();
-  demoted.finish("interrupted", "restart-unrecoverable");
-  await demoted.settled?.();
-  setUserProfileRole(profile.id, "writer");
-  await continueSessionQueuedInputs(fixture.context, retained.target, retained);
-  await fixture.finishDispatch();
-  expect(dispatched).toHaveLength(1);
-  expect((await listSessionPendingInputs(fixture.scope)).items).toMatchObject([
-    { id: demoted.inputId, state: "cancelled", endCause: "revoked" },
-  ]);
-});
+it.each(["original route", "writer"] as const)(
+  "readmits accepted reply and runtime intent under current route permissions: %s",
+  async (mode) => {
+    const created = await createFixture();
+    const { profile } = created;
+    await using fixture = created.fixture;
+    await appendTranscriptMessage(fixture.scope, {
+      eventId: "quoted-answer",
+      message: { role: "assistant", content: "The selected earlier answer.", timestamp: 2 },
+    });
+    Object.assign(fixture.params, {
+      deliver: true,
+      originatingChannel: "discord",
+      originatingTo: "channel:queued-result",
+      originatingAccountId: "queued-account",
+      originatingThreadId: "queued-thread",
+      replyToId: "quoted-answer",
+      thinking: "high",
+      fastMode: "auto",
+      fastAutoOnSeconds: 7,
+      timeoutMs: 90_000,
+    });
+    expectStarted(await fixture.send());
+    const accepted = (await listSessionPendingInputs(fixture.scope)).items;
+    expect(accepted).toHaveLength(1);
+    const retained = await retireOriginalInputs(fixture);
+    const dispatched: DispatchedInput[] = [];
+    dispatchInboundMessageMock.mockImplementation(async (input) => {
+      dispatched.push(input);
+      expect(getRequesterProfile(input.ctx)?.id).toBe(profile.id);
+      await input.replyOptions?.userTurnTranscriptRecorder?.persistApproved();
+      return {};
+    });
+    vi.mocked(fixture.context.logGateway.warn).mockClear();
+    if (mode !== "original route") {
+      setUserProfileRole(profile.id, "writer");
+    }
+    await continueSessionQueuedInputs(fixture.context, retained.target, retained);
+    await fixture.finishDispatch();
+    if (mode === "writer") {
+      expect(dispatched).toEqual([]);
+      expect(fixture.context.logGateway.warn).toHaveBeenCalledWith(
+        expect.stringContaining("originating route fields require admin scope"),
+      );
+      expect((await listSessionPendingInputs(fixture.scope)).items).toMatchObject([
+        { id: accepted[0]!.id, state: "cancelled" },
+      ]);
+      return;
+    }
+    expect(fixture.context.logGateway.warn).not.toHaveBeenCalled();
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]?.ctx).toMatchObject({
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:queued-result",
+      AccountId: "queued-account",
+      MessageThreadId: "queued-thread",
+      ExplicitDeliverRoute: true,
+      ReplyToId: "quoted-answer",
+      ReplyToBody: "The selected earlier answer.",
+    });
+    expect(dispatched[0]?.replyOptions).toMatchObject({
+      thinkingLevelOverride: "high",
+      fastModeOverride: "auto",
+      fastModeAutoOnSecondsOverride: 7,
+      timeoutOverrideMs: 90_000,
+    });
+    expect(dispatched[0]?.replyOptions?.operatorAuthority?.scopes.toSorted()).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+    ]);
+  },
+);
 
 it("publishes a retained human mention once as its freshly admitted queued principal", async () => {
   const created = await createFixture();

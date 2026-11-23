@@ -113,6 +113,17 @@ export function formatModelLabel(
 export type ChatModelPickerOptionProps = {
   rowKey?: string;
   favorite?: { selected: boolean; disabled: boolean; onToggle: (event: MouseEvent) => void };
+  reorder?: {
+    disabled: boolean;
+    dragging: boolean;
+    indicator?: "before" | "after";
+    onDragStart: (event: DragEvent) => void;
+    onDragEnd: () => void;
+    onDragOver: (event: DragEvent & { currentTarget: HTMLElement }) => void;
+    onDragLeave: (event: DragEvent) => void;
+    onDrop: (event: DragEvent & { currentTarget: HTMLElement }) => void;
+    onMove: (offset: number) => void;
+  };
   contextWindow?: ChatContextWindowControlParams;
   hideCooldown?: boolean;
   sessionKey?: string;
@@ -146,7 +157,6 @@ export function prepareChatModelPickerPanel(
   },
   favorites?: {
     keys: readonly string[];
-    /** A remembered Favorites tab opens only while it holds the selected model. */
     opening: { keys: readonly string[]; selected: string; favoritesTab?: boolean };
   },
 ) {
@@ -214,12 +224,7 @@ export function prepareChatModelPickerPanel(
 
   if (favoriteOptions.length && orderedProviderGroups.length > 1) {
     orderedProviderGroups.unshift([FAVORITES_GROUP, { lead: favoriteOptions, more: [] }]);
-    // Opening keys keep the tab steady while stars change; an emptied group falls back.
-    if (
-      favorites?.opening.favoritesTab &&
-      activeModelOption &&
-      openingFavorites.includes(activeModelOption)
-    ) {
+    if (favorites?.opening.favoritesTab) {
       openingProvider = FAVORITES_GROUP;
     }
   }

@@ -143,7 +143,11 @@ it.for([
         sessionKey: binding.sessionKey,
         operationalRunInstance: run,
         approvalAuthority: authority,
-        receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+        receiptAuthority: () => {
+          if (!validateAgentRunDelegatedAuthority(authority)) {
+            throw new Error("agent tool caller authority is no longer active");
+          }
+        },
         ...turnSource,
       },
       async () => {

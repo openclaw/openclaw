@@ -174,6 +174,8 @@ Except for the temporary CodeQL exception below, macOS jobs use GitHub-hosted `x
 
 iOS screenshot capture, Store Release, and its screenshot-only operation use `xcode-27-xlarge` on the same macOS 27 image as the reusable qualification job. On the 3-CPU, 7 GB `xcode-27` runner, the iPad Pro 13-inch simulator exhausted memory: `simctl` and XCTest launches stalled for 60 to 100 seconds, failing iPad captures at launch or readiness. Screenshot capture uses stock simulators without SimSlim. It creates a fresh simulator for each device type, then shuts down and deletes it before starting the next; the screenshot-only job accepts a selected branch without release credentials. The qualification job uses the same larger runner for its Simulator and isolated Gateway. Stock qualification keeps the simulator unmodified. Its Debug build targets the host simulator architecture with compiler indexing disabled. After the native build, each arm starts one isolated Gateway and prepares its setup handler through `device.pair.setupStatus` before booting a fresh simulator. The status call prunes expired completion records without issuing a credential; the setup code consumed by the app is issued after boot. The same Gateway serves the live pairing, chat, and relaunch case, then stops before the independent transcript-reader case on the same simulator. Both cases must pass within their individual deadlines.
 
+The optional qualification comparison records each measurement's scheduled, start, and completion offsets, including failed calls, plus both test boundaries. These offsets use the test window's monotonic clock. Each trial retains up to 4,096 call records and reports any dropped records separately; dropped diagnostics do not change the original sampling or qualification rules. SimSlim preparation records elapsed wall seconds and exit codes for cold boot, configuration, readiness, and verification. These Bash timings separate the preparation commands but are not monotonic timestamps. Neither timing surface proves a cause or a memory saving on its own.
+
 Before checkout, the screenshot capture and release jobs disable host Spotlight indexing on their disposable runners, matching release qualification. This reduces contention while retaining the existing simulator headroom checks. The optional `startup_probe` diagnostic keeps indexing enabled for its Spotlight positive controls. Local screenshot commands leave host indexing unchanged.
 
 Screenshot-only runs retain the full build and XCTest logs and archived `.xcresult` bundles alongside phase and resource diagnostics, including when capture fails. Main CI also retains the full command logs in its screenshot timing diagnostics artifact. These captures use synthetic screenshot fixtures; the console keeps only the final 8 KiB of each native command's output.
@@ -267,6 +269,13 @@ more than the build diagnostic. The label does not promise 32 usable CPUs; see
 [measured capacity](#blacksmith-runner-capacity).
 
 ### Blacksmith runner capacity
+
+Current PRs use the 2-vCPU runner for central type checks that run only the
+extension-test and scripts graphs. This includes full-check plans when all five
+core stripes are present and own the root-test partitions. Frozen, release,
+compatibility and other graph layouts retain their existing allocation. The
+[original sizing proof](https://github.com/openclaw/openclaw/pull/197786) covers
+these two serial compiler graphs; this changes allocation, not test coverage.
 
 Main CI previously used `blacksmith-32vcpu-ubuntu-2404` for test types,
 core type stripes, and runtime-topology checks
@@ -403,10 +412,15 @@ reuse, dispatch, and execution-plan jobs, always use `ubuntu-24.04`. Reusable
 live/E2E source admission and candidate evidence binding use the same label.
 Full Release Validation honors `OPENCLAW_RELEASE_RUNNER_GROUP`; the reusable
 workflow honors its `runner_group` input. Release Decision, Diagnostic Drain,
-and the nightly watcher keep their 720-minute budgets. When
-`OPENCLAW_CI_RUNNER_BACKEND=boat`, short hosted jobs provision separate Boat VMs
-and register ephemeral organization runners for those three jobs. Native Boat
-CI has a six-hour limit, so these watchers use regular VMs instead.
+and the nightly watcher keep their 720-minute budgets. The current reusable
+release watcher uses `blacksmith-2vcpu-ubuntu-2404` independently of backend and
+runner-group settings; it retains the `runner_label` input for caller compatibility.
+Both release callers pin the merged Blacksmith watcher definition and run
+without Boat provisioning or cleanup jobs. Historical immutable watcher pins
+retain their original routing. The nightly watcher is unchanged: when
+`OPENCLAW_CI_RUNNER_BACKEND=boat`, a short hosted job provisions its Boat VM
+and registers an ephemeral organization runner. Native Boat CI has a six-hour
+limit, so the nightly watcher uses a regular VM instead.
 
 This route requires the repository secrets `BOAT_API_KEY` and
 `BOAT_RUNNER_APP_PRIVATE_KEY`, plus the variables `BOAT_ORG`,
@@ -415,12 +429,12 @@ GitHub App with organization self-hosted runner write access and a dedicated
 runner group. `OPENCLAW_RELEASE_RUNNER_GROUP` continues to select the existing
 hosted runners. App token creation must succeed before a VM is provisioned;
 a missing app ID or private key stops provisioning.
-The runner group must admit the nightly workflow on `main` and
-`full-release-state-watcher.yml` at `ad1621f7e9d896dfdcc202d007e766e6c30153df`.
-Full Release Validation pins that reviewed watcher definition from its immutable
-`release-ci/` refs; the watcher checks out the caller's pinned tooling and admitted
-verifier. When changing the watcher definition, update the caller pin and
-runner-group entry together. Install a Crabbox release supporting
+The Boat runner group must admit the nightly workflow on `main`; Release
+Decision and Diagnostic Drain no longer use that group. Full Release Validation
+pins the reviewed Blacksmith watcher definition from its immutable `release-ci/`
+refs; the watcher checks out the caller's pinned tooling and admitted verifier.
+When changing the watcher definition, update both caller pins together. Install
+a Crabbox release supporting
 `actions register --receipt` and `actions unregister --receipt` before enabling
 the backend. The provisioning preflight rejects older clients before creating
 a VM.
@@ -434,9 +448,11 @@ outputs reach GitHub can prevent automated cleanup; the provider expiry limits
 compute lifetime, but does not prove data deletion. An unconfirmed deletion
 reports its operation ID for reconciliation with `boat deletion status`.
 
-Mantis Discord and web UI actor authorization, request resolution, and ref
-validation use `ubuntu-24.04`. Their live proof jobs retain separate runtime
-placement and deadlines.
+Mantis Discord and web UI actor authorization, request resolution, ref validation,
+and ordinary proof orchestration use `ubuntu-24.04`. This preserves access for all
+authorized maintainers without requiring Boat account admission. Request-bound
+isolated web chat and Telegram proof jobs also use `ubuntu-24.04`, with bounded
+rootless Podman storage and their existing 60-minute deadlines.
 
 Mantis scenario dispatch and QA actor/ref validation also use `ubuntu-24.04`.
 The QA controls honor their `runner_group` input. Reusable live/E2E and QA
@@ -516,12 +532,14 @@ canonical-main admission, protected environments, commands, and 120-minute deadl
 ### Hourly plugin routing
 
 Plugin Prerelease prepares hourly extension jobs for the repository-wide Boat
-backend. Its manifest translates the resolved physical two-CPU Blacksmith class
+backend. Only file-bounded extension shards qualify for Boat. Mixed extension
+batches use GitHub-hosted runners after observed Boat RAM and swap exhaustion; their
+parallelism and file inventory are unchanged. The manifest translates the resolved physical two-CPU Blacksmith class
 to `boat` (four CPUs, 8 GiB) and the four-CPU class to `boat-large` (eight CPUs,
 16 GiB). Canonical scheduled first attempts use the same account start budget
 as ordinary CI: at most 20 jobs per run, with daily, hourly, and minute headroom.
-Missing or unavailable limits select no Boat jobs. Overflow retains the resolved
-Blacksmith class; inactive matrices consume no allowance. This is a snapshot,
+Missing or unavailable limits select no Boat jobs. Overflow uses
+`ubuntu-24.04`; inactive matrices consume no allowance. This is a snapshot,
 not an atomic reservation across concurrent workflows. Logical planner labels
 and test concurrency stay unchanged. Manual dispatches and retries use
 `ubuntu-24.04`; runner groups, coverage,
@@ -552,15 +570,16 @@ within the existing 77-row Node cap, even for docs-only or empty change sets.
 The dispatch actor supplies author provenance; both actor and starter must be
 in the rollout list below to allocate Boat runners. It does not change the repository backend.
 
-`OPENCLAW_CI_RUNNER_BACKEND=boat` uses the existing hybrid logical plan. Only
+`OPENCLAW_CI_RUNNER_BACKEND=boat` uses a GitHub-hosted logical plan for ordinary CI. Only
 same-repository first attempts whose source author and starter are each one of
 `davemorin`, `jalehman`, `joshavant`, `steipete`, or `vincentkoc` may allocate Boat
 runners. Other authors, starters, forks, and retries use GitHub-hosted runners.
-For ordinary admitted runs, hybrid remains the base route. Preflight reads the
-configured Boat organization's included start allowance and sends at most 20 of
-the longest eligible Node rows to Boat. Checks, builds and other rows retain
-hybrid routing. Missing credentials, unreadable limits or exhausted headroom
-select zero Boat rows. Explicit qualification dispatches retain their full
+Preflight reads the configured Boat organization's included start allowance and
+sends at most 20 of the longest eligible Node rows to `boat-large` or
+`boat-xlarge`. Each runtime row consumes one start. These rows retain the hosted
+plan's memory floor and use at most four CPUs. Checks, builds, smaller Node rows,
+the prepared-workspace proof, and overflow use GitHub-hosted runners. Missing
+credentials, unreadable limits or exhausted headroom select zero Boat rows. Explicit qualification dispatches retain their full
 Boat route. See [Boat start admission](/ci/capacity#boat-start-admission).
 Source author still means the PR creator or push commit author; an owner merging
 a contributor commit does not change that provenance. Scheduled and ordinary

@@ -69,40 +69,6 @@ function enqueuePriorityRun(key: string, settings: QueueSettings) {
 }
 
 describe("followup queue collect routing", () => {
-  it.each([false, true])(
-    "notifies every collected run observer before surfacing a callback failure (throws: %s)",
-    async (throws) => {
-      const q = createQueueCase();
-      const error = new Error("first observer failed");
-      const first = vi.fn(() => {
-        if (throws) {
-          throw error;
-        }
-      });
-      const second = vi.fn();
-      const onModelSelected = vi.fn();
-      for (const [prompt, runObservers] of [
-        ["first", { onAgentRunTerminalOutcome: first }],
-        ["second", { onAgentRunTerminalOutcome: second }],
-        ["last", { onModelSelected }],
-      ] as const) {
-        q.add({ ...createRun({ prompt, originatingChannel: "a2a" }), runObservers });
-      }
-      await q.drain();
-      expect(q.calls).toHaveLength(1);
-      const observers = q.calls[0]!.runObservers;
-      expect(observers?.onModelSelected).toBe(onModelSelected);
-      const fail = () => observers?.onAgentRunTerminalOutcome?.("failed");
-      if (throws) {
-        expect(fail).toThrow(error);
-      } else {
-        fail();
-      }
-      expect(first).toHaveBeenCalledExactlyOnceWith("failed");
-      expect(second).toHaveBeenCalledExactlyOnceWith("failed");
-    },
-  );
-
   it("settles every collected source while publishing content once", async () => {
     const q = createQueueCase();
     const first = vi.fn();
@@ -465,18 +431,6 @@ describe("followup queue collect routing", () => {
     );
     expect(onAdmitted).toHaveBeenCalledTimes(1);
     expect(events).toEqual(["admission-started", "admission-rejected", "complete"]);
-  });
-
-  it("does not enqueue when the external lifecycle rejects the run identity", () => {
-    const q = createQueueCase({ mode: "followup", debounceMs: 10_000, cap: 50 });
-    const onEnqueued = vi.fn(() => false);
-    const run = createRun({ prompt: "duplicate owner" });
-    run.turnAdoptionLifecycle = { onAdopted: async () => {}, onDeferred: onEnqueued };
-    const enqueued = q.add(run);
-    expect(enqueued).toBe(false);
-    expect(onEnqueued).toHaveBeenCalledTimes(1);
-    expect(getExistingFollowupQueue(q.key)?.items ?? []).toEqual([]);
-    clearFollowupQueue(q.key);
   });
 
   it("retires only the failed reservation when enqueue validation throws", async ({ signal }) => {

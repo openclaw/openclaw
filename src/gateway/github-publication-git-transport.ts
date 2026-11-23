@@ -407,6 +407,9 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
   return await withSettledLocalWorkspacePath(params, async (custody) => {
     custody?.markPhase?.("operation.sourceAdmission");
     const admittedPaths = await custody?.canonicalPaths?.();
+    // Settlement already captured the guest into the canonical worktree. Keep its
+    // lease through staging; later guest writes belong to the next checkpoint.
+    await custody?.resume?.();
     const bound = {
       ...params,
       markPhase: custody?.markPhase,

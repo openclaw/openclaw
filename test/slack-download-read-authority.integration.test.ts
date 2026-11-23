@@ -97,7 +97,7 @@ type Phase =
   | "image-read"
   | "result"
   | "gateway-mirror";
-type Revocation = "plugin" | "turn" | "claim" | "signal";
+type Revocation = "plugin" | "turn" | "signal";
 type DownloadResult = Awaited<ReturnType<typeof dispatchChannelMessageAction>>;
 type FixtureOptions = {
   origin?: "global" | "bundled";
@@ -134,7 +134,7 @@ type GatewayMirrorSnapshot = {
 };
 
 function createOriginatingRun(currentProvider: string, currentChannelId: string) {
-  const run = createMessageReadAuthority({
+  return createMessageReadAuthority({
     runId: `slack-download-${++sequence}`,
     sessionKey: `agent:main:${currentProvider}:channel:${currentChannelId}`,
     requesterSenderId: "synthetic-requester",
@@ -148,10 +148,6 @@ function createOriginatingRun(currentProvider: string, currentChannelId: string)
       currentThreadTs: "9999999999.999999",
     },
   });
-  return {
-    ...run,
-    revoke: (kind: Revocation) => (kind === "claim" ? run.releaseClaim() : run.revokeTurn()),
-  };
 }
 
 async function filesUnder(directory: string): Promise<string[]> {
@@ -289,7 +285,7 @@ async function withDownloadFixture(
           } else if (!options.revoke || options.revoke === "plugin") {
             record.enabled = false;
           } else {
-            run.revoke(options.revoke);
+            run.revokeTurn();
           }
         };
         const actions = slackPlugin.actions;
@@ -765,7 +761,7 @@ describe("Slack download authority through artifact completion", () => {
     ["prepublication", {}, 1],
     ["published", { origin: "bundled" }, 1],
     ["image-read", { image: true }, 1],
-    ["result", { image: true, revoke: "claim" }, 1],
+    ["result", { image: true, revoke: "turn" }, 1],
   ] satisfies Array<[Phase, FixtureOptions, number]>)(
     "rejects revoked output and retains only preexisting files after %s (%j)",
     async (phase, options, requests) => {
@@ -847,14 +843,9 @@ describe("Gateway message.action Slack download completion", () => {
     });
   });
 
+  // Runtime run-claim release is not a completion fence; turn and plugin retirement are.
   it.each([
     { name: "the provider result", phase: "result", revoke: "turn" },
-    {
-      name: "late image completion after run-claim release",
-      phase: "gateway-mirror",
-      revoke: "claim",
-      image: true,
-    },
     { name: "late completion after plugin disablement", phase: "gateway-mirror", revoke: "plugin" },
   ] satisfies Array<FixtureOptions & { name: string; phase: Phase }>)(
     "does not return or cache revoked download success at $name",
@@ -870,7 +861,11 @@ describe("Gateway message.action Slack download completion", () => {
         }
         expect(response.ok).toBe(false);
         expect(response.payload).toBeUndefined();
-        expect(response.error?.message).toMatch(/no longer active/i);
+        expect(response.error?.message).toMatch(
+          options.revoke === "turn"
+            ? "The message turn has ended. Start a new turn to retry."
+            : /no longer active/i,
+        );
         expect(fixture.gatewayResponses).toHaveLength(1);
         expect(fixture.gatewayCacheWrites.some((entry) => entry.ok)).toBe(false);
         expect(await filesUnder(fixture.mediaDir)).toEqual([fixture.preservedPath]);

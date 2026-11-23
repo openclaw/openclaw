@@ -40,6 +40,9 @@ paths:
     ignore:
       - '^unexpected key "cache-mode" for "job" section\.'
   # GitHub Actions supports concurrency.queue, but actionlint does not yet model it.
+  .github/workflows/openclaw-performance.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
   .github/workflows/postgres-conformance-weekly.yml:
     ignore:
       - 'unexpected key "queue" for "concurrency" section'

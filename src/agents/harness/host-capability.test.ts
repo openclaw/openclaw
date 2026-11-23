@@ -28,6 +28,7 @@ import {
 } from "../../plugins/runtime/gateway-request-scope.js";
 import * as processExec from "../../process/exec.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import {
   closeAdmittedRunDelegatedAuthority,
@@ -35,6 +36,7 @@ import {
   getAdmittedRunDelegatedAuthority,
 } from "../admitted-run-context.js";
 import * as agentTools from "../agent-tools.async.js";
+import { findSkillUsageMatch } from "../agent-tools.before-tool-call.diagnostics.js";
 import {
   rewrapToolWithBeforeToolCallHook,
   runBeforeToolCallHook,
@@ -395,7 +397,19 @@ describe("agent harness host capability", () => {
 
   it("keeps policy snapshots independent from later attempt mutation", async () => {
     const config = { tools: { loopDetection: { enabled: true } } };
-    const skillsSnapshot = { prompt: "safe", version: 1, skills: [{ name: "safe" }] };
+    const skill = createCanonicalFixtureSkill({
+      name: "safe",
+      description: "Synthetic",
+      filePath: "/synthetic/safe/SKILL.md",
+      baseDir: "/synthetic/safe",
+      source: "workspace",
+    });
+    const skillsSnapshot = {
+      prompt: "safe",
+      version: 1,
+      skills: [{ name: "safe" }],
+      resolvedSkills: [skill],
+    };
     const { attempt } = await admittedAttempt("run-snapshot", { config, skillsSnapshot });
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
 
@@ -423,6 +437,11 @@ describe("agent harness host capability", () => {
         }),
       }),
     );
+    const ctx = mockRunBefore.mock.lastCall?.[0].ctx;
+    expect(Object.isFrozen(ctx?.skillsSnapshot)).toBe(true);
+    expect(
+      findSkillUsageMatch({ toolName: "read", toolParams: { path: skill.filePath }, ctx }),
+    ).toMatchObject({ skillName: "safe", activation: "read", skillSource: "workspace" });
   });
 
   it("closes prepared mutable-file approval revalidators with the admitted run", async () => {
@@ -586,7 +605,7 @@ describe("agent harness host capability", () => {
   it("rejects a deferred policy result after exact authority release", async () => {
     const { attempt } = await admittedAttempt("run-policy-race");
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-    const hookStarted = createDeferred<(() => boolean | void) | undefined>();
+    const hookStarted = createDeferred<(() => void) | undefined>();
     const hookResult = createDeferred<{ blocked: false; params: { command: string } }>();
     mockRunBefore.mockImplementationOnce(async () => {
       hookStarted.resolve(getGatewayToolCallerIdentity()?.receiptAuthority);
@@ -600,7 +619,7 @@ describe("agent harness host capability", () => {
     const receiptAuthority = await hookStarted.promise;
     expect(receiptAuthority).toEqual(expect.any(Function));
     closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
-    expect(receiptAuthority?.()).toBe(false);
+    expect(receiptAuthority).toThrow("no longer active");
     hookResult.resolve({ blocked: false, params: { command: "true" } });
     await expect(pending).rejects.toThrow("no longer active");
   });
@@ -915,7 +934,9 @@ describe("agent harness host capability", () => {
         return [];
       }
       assertCurrent() {
-        return current;
+        if (!current) {
+          throw new Error("agent tool caller authority is no longer active");
+        }
       }
       release() {
         this.releases += 1;
@@ -923,7 +944,11 @@ describe("agent harness host capability", () => {
     }
     const source = new PreparedReceipt();
     const receipt = Object.assign(
-      vi.fn(() => current),
+      vi.fn(() => {
+        if (!current) {
+          throw new Error("agent tool caller authority is no longer active");
+        }
+      }),
       {
         prepareSessionSource: async () => source,
       },

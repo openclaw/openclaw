@@ -67,6 +67,14 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
     });
   };
 
+  /**
+   * Processes belong to a session row. A pane learns the row from the roster, its cached
+   * transcript or its history read; a main conversation has none until its first turn.
+   */
+  protected processesOpener(state: ChatPageHost, session: GatewaySessionRow | undefined) {
+    return session || state.currentSessionId ? this.showDetailsProcess : undefined;
+  }
+
   protected readonly returnToProcessDetails = () => {
     if (!this.state) {
       return;
@@ -312,6 +320,7 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
           ]),
           chat: merge(paneChatProps, detailsActions, detailsOutputs, {
             cachedDetails: cached?.details,
+            displayPullRequests: this.visibleDetailsPullRequests,
             sessionFactsReady:
               this.resourceSessionObservation()?.hasObserved === true &&
               state.sessionWorkspaceReadDisabledReason !== undefined,
@@ -393,7 +402,7 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
                 backTo: { area: "details" },
               });
             },
-            onOpenProcesses: this.showDetailsProcess,
+            onOpenProcesses: this.processesOpener(state, selectedSession),
           } satisfies Partial<ChatDetailsProps>),
           mobileBindings: {
             sharing: this.prepareSessionSharing(selectedSession, {

@@ -69,14 +69,6 @@ const activeCronCreatorAuthorityResolver = new AsyncContext<CronCreatorAuthority
   Symbol("cronCreatorAuthorityResolver"),
 );
 
-/** Retain the Cron-only fence when tools materialize outside their creator scope. */
-export function bindActiveCronAuthorityCurrentness(
-  runId: string | undefined,
-): (() => boolean) | undefined {
-  const scope = activeCronCreatorAuthority.getStore();
-  return scope?.active && scope.runId === runId?.trim() ? scope.isCurrent : undefined;
-}
-
 /** Retain only the live Cron scope; late CLI admission still supplies caller authority. */
 export function bindCronManagementToolConstruction(
   runId: string | undefined,
@@ -161,6 +153,7 @@ export function captureActiveCronManagementAuthority(params: {
   }
   const isActive = () => {
     try {
+      caller.receiptAuthority?.();
       return (
         scope.active &&
         !scope.signal.aborted &&
@@ -168,7 +161,6 @@ export function captureActiveCronManagementAuthority(params: {
         (scope.managementEntitlement?.source !== "channel-owner" ||
           scope.managementEntitlement.isCurrent()) &&
         !caller.approvalSignals?.some((signal) => signal.aborted) &&
-        caller.approvalAuthorityCheck?.() !== false &&
         getAgentRunContext(params.runId) === context &&
         validateAgentRunDelegatedAuthority(authority)
       );
@@ -230,13 +222,13 @@ export function bindRequesterOwnerIdentity(params: {
   const runId = params.runId;
   const isCurrent = () => {
     try {
+      caller.receiptAuthority?.();
       return (
         scope.active &&
         !scope.signal.aborted &&
         scope.isCurrent?.() === true &&
         owner.isCurrent() &&
         !caller.approvalSignals?.some((signal) => signal.aborted) &&
-        caller.approvalAuthorityCheck?.() !== false &&
         getAgentRunContext(runId) === context &&
         validateAgentRunDelegatedAuthority(authority)
       );
@@ -444,7 +436,7 @@ export function bindActiveCronCreatorAuthorityResolver(
     authority.signal.throwIfAborted();
     operationSignal?.throwIfAborted();
     if (authority.isCurrent?.() === false) {
-      throw new Error("Automation caller authority is no longer active.");
+      throw new Error("This agent run is no longer active. Start a new turn to retry.");
     }
     const signal = operationSignal
       ? AbortSignal.any([authority.signal, operationSignal])
@@ -496,12 +488,10 @@ export function bindActiveOperatorTurnAuthority(runId: string | undefined):
       if (
         !authority.active ||
         authority.runId !== normalizedRunId ||
-        authority.isCurrent?.() === false ||
-        (authority.managementEntitlement?.source === "channel-owner" &&
-          !authority.managementEntitlement.isCurrent())
+        authority.isCurrent?.() === false
       ) {
         authority.signal.throwIfAborted();
-        throw new Error("operator turn authority is no longer active");
+        throw new Error("The message turn has ended. Start a new turn to retry.");
       }
     },
   };
