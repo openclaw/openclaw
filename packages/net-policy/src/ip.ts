@@ -44,6 +44,21 @@ const PRIVATE_OR_LOOPBACK_IPV4_RANGES = new Set<Ipv4Range>([
   "carrierGradeNat",
 ]);
 
+// Keep inbound locality independent of outbound rejection: blocking another
+// special-use range must not grant its clients local pairing trust.
+const PRIVATE_OR_LOOPBACK_IPV6_RANGES = new Set<string>([
+  "unspecified",
+  "loopback",
+  "linkLocal",
+  "uniqueLocal",
+  "multicast",
+  "reserved",
+  "benchmarking",
+  "discard",
+  "orchid2",
+  "deprecatedSiteLocal",
+]);
+
 // Default-deny: ipaddr.js names each special-use IPv6 range, so every range it
 // adds stays blocked. Only global unicast passes, plus IPv4 transition forms
 // whose embedded IPv4 callers check through `extractEmbeddedIpv4FromIpv6`.
@@ -218,7 +233,7 @@ export function isCloudMetadataIpAddress(raw: string | undefined): boolean {
   return CLOUD_METADATA_IP_ADDRESSES.has(normalized.toString());
 }
 
-/** True for canonical private, loopback, link-local, or blocked special-use IPs. */
+/** True for canonical private, loopback, link-local, or established internal IP ranges. */
 export function isPrivateOrLoopbackIpAddress(raw: string | undefined): boolean {
   const parsed = parseCanonicalIpAddress(raw);
   if (!parsed) {
@@ -228,7 +243,10 @@ export function isPrivateOrLoopbackIpAddress(raw: string | undefined): boolean {
   if (isIpv4Address(normalized)) {
     return PRIVATE_OR_LOOPBACK_IPV4_RANGES.has(normalized.range());
   }
-  if (isBlockedSpecialUseIpv6Address(normalized)) {
+  if (
+    PRIVATE_OR_LOOPBACK_IPV6_RANGES.has(normalized.range()) ||
+    isRfc8215Nat64LocalUseAddress(normalized)
+  ) {
     return true;
   }
   const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(normalized);
