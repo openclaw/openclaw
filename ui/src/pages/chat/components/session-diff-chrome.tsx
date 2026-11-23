@@ -105,10 +105,14 @@ export function createSessionDiffChrome(bindings: SessionDiffViewBindings) {
               <Show
                 when={summary.result.baseRef && summary.result.baseRef !== summary.result.branch}
               >
-                <small>{summary.result.baseRef}</small>
+                <small title={summary.result.baseRef}>
+                  <bdi>{summary.result.baseRef}</bdi>
+                </small>
               </Show>
               <Show when={summary.result.branch}>
-                <span>{summary.result.branch}</span>
+                <span title={summary.result.branch}>
+                  <bdi>{summary.result.branch}</bdi>
+                </span>
               </Show>
             </span>
           </div>

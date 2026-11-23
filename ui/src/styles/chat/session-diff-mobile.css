@@ -127,7 +127,12 @@ openclaw-session-diff:has(> .session-diff--mobile) {
 }
 
 .session-diff-mobile__branch > span > * {
-  overflow-wrap: anywhere;
+  min-width: 0;
+  overflow: hidden;
+  direction: rtl;
+  text-align: match-parent;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-diff-mobile__counts {

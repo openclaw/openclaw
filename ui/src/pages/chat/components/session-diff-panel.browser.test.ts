@@ -579,14 +579,16 @@ describe.runIf(browserMode)("Review layout", () => {
     );
     expect(refs.map((ref) => ref.textContent)).toEqual([baseRef, headRef]);
     for (const ref of refs) {
+      expect(ref.title).toBe(ref.textContent);
+      const text = ref.querySelector("bdi")!.firstChild!;
       const range = document.createRange();
-      range.selectNodeContents(ref);
-      const lines = Array.from(range.getClientRects());
+      range.selectNodeContents(text);
+      expect(new Set(Array.from(range.getClientRects(), (rect) => rect.top)).size).toBe(1);
+      range.setStart(text, text.textContent!.lastIndexOf("-") + 1);
+      const rect = range.getBoundingClientRect();
       const bounds = ref.getBoundingClientRect();
-      expect(lines.length).toBeGreaterThan(1);
-      for (const line of lines) {
-        expect(line.right).toBeLessThanOrEqual(bounds.right + 1);
-      }
+      expect(rect.left).toBeGreaterThanOrEqual(bounds.left - 1);
+      expect(rect.right).toBeLessThanOrEqual(bounds.right + 1);
     }
     await userEvent.click(view);
     await waitForSolid(() =>
