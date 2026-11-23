@@ -160,7 +160,11 @@ export function registerDetachedCleanupAuthorityTest({
         sessionKey,
         operationalRunInstance:
           createTestAdmittedRunContext("cleanup-requester").operationalRunInstance,
-        receiptAuthority: () => !disposed,
+        receiptAuthority: () => {
+          if (disposed) {
+            throw new Error("agent tool caller authority is no longer active");
+          }
+        },
       },
       () =>
         transcripts.withOwnedSessionTranscriptWrites(

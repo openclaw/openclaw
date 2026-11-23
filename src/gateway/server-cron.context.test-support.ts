@@ -129,7 +129,11 @@ export function registerGatewayCronContextTests({
             agentId: "main",
             sessionKey: `agent:main:${name}`,
             operationalRunInstance: { runId: name, instanceId: `${name}-instance` },
-            receiptAuthority: () => caller.active,
+            receiptAuthority: () => {
+              if (!caller.active) {
+                throw new Error("agent tool caller authority is no longer active");
+              }
+            },
           },
           () => {
             caller.assertCurrent = captureGatewayToolCallerAssertion();
