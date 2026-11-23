@@ -268,18 +268,18 @@ export function renderProjectsView(model: ProjectsModel, view: () => ProjectsMod
                       <tbody>
                         <For each={filtered()} keyed={(project) => project.id}>
                           {(project) => (
-                            <tr onClick={() => model.select(project().id)}>
+                            <tr
+                              tabindex="0"
+                              onClick={() => model.select(project().id)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault();
+                                  model.select(project().id);
+                                }
+                              }}
+                            >
                               <td>
-                                <button
-                                  type="button"
-                                  class="btn btn--sm btn--ghost"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    model.select(project().id);
-                                  }}
-                                >
-                                  {project().displayName}
-                                </button>
+                                <div>{project().displayName}</div>
                                 <Show when={project().repositoryIdentity}>
                                   {(identity) => <div class="muted">{identity()}</div>}
                                 </Show>

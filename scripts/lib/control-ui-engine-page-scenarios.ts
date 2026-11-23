@@ -952,7 +952,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   projects: {
     ready: "openclaw-projects-page tbody tr",
     rows: { selector: "openclaw-projects-page tbody tr", minimum: 300 },
-    action: click("openclaw-projects-page tbody button", ".projects-detail"),
+    action: click("openclaw-projects-page tbody tr", ".projects-detail"),
   },
   workboard: {
     ready: ".workboard-card",

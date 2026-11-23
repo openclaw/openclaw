@@ -125,7 +125,7 @@ suite.define(() => {
         .toEqual([{ path: "/srv/projects" }]);
       await browser.waitFor({ state: "detached" });
 
-      await page.getByRole("button", { name: "docs", exact: true }).click();
+      await page.getByRole("row", { name: /^docs openclaw\/docs/ }).press("Enter");
       const dialog = page.locator(".projects-detail");
       await dialog.waitFor();
       const contractor = dialog.getByRole("switch", { name: "contractor" });

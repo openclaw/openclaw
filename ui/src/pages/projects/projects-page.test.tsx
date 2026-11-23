@@ -147,9 +147,6 @@ function createProjectsPage(
     },
     { container: element },
   );
-  const buttons = (root: ParentNode = document) => [
-    ...root.querySelectorAll<HTMLButtonElement>("button"),
-  ];
   return {
     model,
     context,
@@ -159,11 +156,11 @@ function createProjectsPage(
     holdPatches(gate: Promise<void>) {
       patchGate = gate;
     },
-    button: (label: string, root?: ParentNode) =>
-      buttons(root).find((button) => button.textContent?.trim() === label),
+    button: (label: string, root: ParentNode = document) =>
+      [...root.querySelectorAll("button")].find((button) => button.textContent?.trim() === label),
     rowText: (id: string) =>
       [...element.querySelectorAll("tbody tr")]
-        .find((row) => row.querySelector("button")?.textContent === id)
+        .find((row) => row.querySelector("td > div")?.textContent === id)
         ?.textContent?.replace(/\s+/g, " "),
     dialog: () => document.querySelector<HTMLElement>(".projects-detail"),
     switchFor: (role: string) =>
@@ -178,7 +175,9 @@ function createProjectsPage(
 }
 
 async function openDetails(page: ReturnType<typeof createProjectsPage>, name: string) {
-  page.button(name, page.element)!.click();
+  [...page.element.querySelectorAll<HTMLElement>("tbody td > div")]
+    .find((cell) => cell.textContent === name)!
+    .click();
   await waitForSolid(() => expect(page.dialog()).not.toBeNull());
 }
 
