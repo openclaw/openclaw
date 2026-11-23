@@ -39,12 +39,7 @@ async function statHostFile(absolutePath: string) {
       mtimeMs: stat.mtimeMs,
     } as const;
   } catch (error) {
-    if (
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      (error as { code?: unknown }).code === "ENOENT"
-    ) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       return null;
     }
     throw error;

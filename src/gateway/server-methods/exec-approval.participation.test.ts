@@ -40,8 +40,10 @@ import {
   canResolveParticipationExecApproval,
   prepareExecApprovalParticipation,
 } from "../exec-approval-participation.js";
+import { createExpectedProfileBinding } from "../expected-profile.js";
 import { captureQueuedOperatorRecoverySource } from "../operator-run-recovery-source.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { createRequestGatewayMethodRegistry } from "../server-methods.js";
 import { waitForApprovalRequested } from "./approval-request.test-support.js";
 import { createApprovalHandlers } from "./approval.js";
 import {
@@ -51,6 +53,7 @@ import {
   getOperatorApproval,
 } from "./approval.test-support.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
+import { authorizeGatewayMethod } from "./method-authorization.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const binding = { creatorProfileId: "creator", participantProfileId: "participant", sessionKey };
@@ -108,17 +111,26 @@ it.for(methods)(
       record.requestedByDeviceId = "participant";
       record.approvalReviewerDeviceIds = ["participant", "assignee", "unrelated"];
       const registered = await manager.register(record, 60_000);
-      const invoke = (who: ReturnType<typeof client>, id = record.id) =>
-        createApprovalInvocation({
+      const context = { ...createContext(), execApprovalManager: manager };
+      const methodRegistry = createRequestGatewayMethodRegistry(handlers);
+      const invoke = async (who: ReturnType<typeof client>, id = record.id) => {
+        const body = {
+          id,
+          ...(method === "approval.resolve" ? { kind: "exec" } : {}),
+          decision: "allow-once",
+        };
+        const admission = authorizeGatewayMethod(method, who, body, methodRegistry, context);
+        if (admission.error) {
+          return { ok: false, error: admission.error };
+        }
+        return createApprovalInvocation({
           handlers,
           method,
-          body: {
-            id,
-            ...(method === "approval.resolve" ? { kind: "exec" } : {}),
-            decision: "allow-once",
-          },
+          body,
           client: who,
+          context,
         }).invoke();
+      };
       for (const name of ["participant", "assignee", "unrelated"]) {
         const who = client(name, ["operator.approvals"]);
         expect(
@@ -196,20 +208,33 @@ it.for(methods)(
 );
 
 it.for(methods)(
-  "%s refuses a changed creator at the final mutation guard",
+  "%s preserves the selected creator profile through the final mutation guard",
   async (method, test) => {
     const fixture = await createPreparedTestApprovalManager(test);
     await fixture.run(async () => {
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const { manager, databaseOptions } = fixture;
       const handlers = handlersFor(method, fixture);
+      const creatorProfile = await ensureCanonicalUserProfileForEmail("creator@approval.test");
+      const participantProfile = await ensureCanonicalUserProfileForEmail(
+        "participant@approval.test",
+      );
       const record = manager.create({ command: "echo guard" }, 60_000);
-      record.participation = binding;
+      record.participation = {
+        ...binding,
+        creatorProfileId: creatorProfile.id,
+        participantProfileId: participantProfile.id,
+      };
       await manager.register(record, 60_000);
-      const creator = client("creator", ["operator.read", "operator.write"]);
+      const creator = client(creatorProfile.id, ["operator.read", "operator.write"]);
+      const expectedProfileBinding = await createExpectedProfileBinding(creatorProfile.id, creator);
+      expectDefined(expectedProfileBinding, "creator profile binding").assertCurrent();
       const original = manager.resolveDetailed.bind(manager);
       vi.spyOn(manager, "resolveDetailed").mockImplementationOnce((...args) => {
-        creator.authenticatedUserProfile = client("participant", []).authenticatedUserProfile;
+        creator.authenticatedUserProfile = client(
+          participantProfile.id,
+          [],
+        ).authenticatedUserProfile;
         return original(...args);
       });
       const response = await createApprovalInvocation({
@@ -221,6 +246,7 @@ it.for(methods)(
           decision: "allow-once",
         },
         client: creator,
+        expectedProfileBinding,
       }).invoke();
       expect(response.ok).toBe(false);
       expect(getOperatorApproval({ id: record.id, databaseOptions })?.status).toBe("pending");
