@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { globSync } from "tinyglobby";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveConfig } from "vitest/node";
 import { resolveCanonicalNodeTestConfig } from "../../scripts/lib/ci-node-test-plan.mts";
 import {
   listVitestRuntimeConsumerFiles,
@@ -85,7 +86,7 @@ describe("test-projects args", () => {
     [catalogFile, catalogFile, "unrelated.test.ts", true],
   ])(
     "discovers Gateway owner selector %s for %s (exclude %s)",
-    (selector, expected, exclude, visible) => {
+    async (selector, expected, exclude, visible) => {
       const previousArgv = process.argv;
       try {
         process.argv = [
@@ -97,7 +98,10 @@ describe("test-projects args", () => {
           selector,
           ...(exclude ? ["--exclude", exclude] : []),
         ];
-        const config = createGatewayDatabaseWorkersVitestConfig({});
+        const config = await resolveConfig(
+          { config: false },
+          createGatewayDatabaseWorkersVitestConfig({}),
+        );
         const testConfig = expectDefined(config.test, "Gateway owner test config");
         const dir = path.resolve(config.root ?? process.cwd(), testConfig.dir ?? ".");
         const relative = path.relative(dir, path.resolve(expected)).replaceAll("\\", "/");
@@ -151,7 +155,7 @@ describe("test-projects args", () => {
     ["test/plugins/deep-research-recovery.gateway.test.ts", undefined],
   ] as const)(
     "keeps %s native provider graph isolated with its runtime prerequisite",
-    (file, mode) => {
+    async (file, mode) => {
       const config = "test/vitest/vitest.gateway-server-isolated.config.ts";
       const plan = expectDefined(planRuns([file])[0], "native provider plan");
       expect(resolveCanonicalNodeTestConfig(file, plan.config)).toBe(config);
@@ -159,7 +163,7 @@ describe("test-projects args", () => {
         {},
         { argv: ["node", "vitest", "run", file] },
       );
-      expect(project.test).toMatchObject({
+      expect((await resolveConfig({ config: false }, project)).test).toMatchObject({
         include: [file],
         isolate: true,
         pool: "forks",

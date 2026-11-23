@@ -239,11 +239,11 @@ it("keeps direct volume bound to the real source config instead of its canonical
   ]);
 });
 
-it("matches runtime-config execution inventory without changing canonical ownership", () => {
+it("matches runtime-config execution inventory without changing canonical ownership", async () => {
   const config = "test/vitest/vitest.runtime-config.config.ts";
   const files = expectDefined(listNodeTestVolumeConfigFiles(config), "runtime-config inventory");
   expect(files.toSorted()).toEqual(
-    listMatchedTestFiles(createRuntimeConfigVitestConfig({})).toSorted(),
+    (await listMatchedTestFiles(createRuntimeConfigVitestConfig({}))).toSorted(),
   );
   expect(files).toContain("src/config/io.load-async.test.ts");
   expect(files).not.toContain("src/config/sessions/session-canonical-key.test.ts");
@@ -251,11 +251,11 @@ it("matches runtime-config execution inventory without changing canonical owners
   expect(listNodeTestConfigFiles(config)).toBeUndefined();
 });
 
-it("matches isolated-unit execution inventory including both observed direct targets", () => {
+it("matches isolated-unit execution inventory including both observed direct targets", async () => {
   const config = "test/vitest/vitest.unit-fast-isolated.config.ts";
   const files = expectDefined(listNodeTestVolumeConfigFiles(config), "isolated-unit inventory");
   expect(files.toSorted()).toEqual(
-    listMatchedTestFiles(createUnitFastIsolatedVitestConfig({}, { argv: [] })).toSorted(),
+    (await listMatchedTestFiles(createUnitFastIsolatedVitestConfig({}, { argv: [] }))).toSorted(),
   );
   expect(files).toEqual(
     expect.arrayContaining([

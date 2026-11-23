@@ -22,6 +22,7 @@ import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { minimatch } from "minimatch";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { resolveConfig } from "vitest/node";
 import { isAlias, isScalar, parse, parseDocument, visit } from "yaml";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import {
@@ -6388,8 +6389,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
   });
 
-  it("keeps private Control UI servers and resource-sensitive files under one serial owner", () => {
-    assertControlUiE2eOwnership((prefix) => tempDirs.make(prefix), parser);
+  it("keeps private Control UI servers and resource-sensitive files under one serial owner", async () => {
+    await assertControlUiE2eOwnership((prefix) => tempDirs.make(prefix), parser);
   });
 
   it("restores shared build content while retaining private real-Gateway preparation", () => {
@@ -6418,7 +6419,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     { frozen: false, prebuilt: false, childExit: 0 },
   ])(
     "selects the real-Gateway tier without retrying failures: %j",
-    ({ frozen, prebuilt, childExit, releaseTier, sharded }) => {
+    async ({ frozen, prebuilt, childExit, releaseTier, sharded }) => {
       const step = requiredWorkflowStep(
         readCiWorkflow().jobs["checks-ui-e2e-real-gateway"].steps,
         "Test Control UI suites with a real Gateway",
@@ -6537,7 +6538,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           [testNodeExecPath, ...args],
         );
         selectedFiles.push(
-          ...(selectedConfig.test?.include ?? []).filter((file) => file !== desktop),
+          ...(await resolveConfig({ config: false }, selectedConfig)).test.include.filter(
+            (file) => file !== desktop,
+          ),
         );
         if (frozen) {
           expect(

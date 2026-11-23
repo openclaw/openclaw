@@ -3,6 +3,7 @@ import { existsSync, globSync, writeFileSync } from "node:fs";
 import path, { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { resolveConfig } from "vitest/node";
 import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   createExtensionTestShards,
@@ -31,15 +32,14 @@ const frozenRoot = fileURLToPath(
   new URL("../fixtures/plugin-prerelease-frozen-target/", import.meta.url),
 );
 
-function listRunnableExtensionTestFiles(worker = false, extensionId = "telegram") {
-  const testConfig =
-    (worker
-      ? createExtensionDatabaseWorkersVitestConfig({})
-      : extensionId === "codex"
-        ? createExtensionVitestConfig("codex", codexExtensionTestRoots, {})
-        : createExtensionTelegramVitestConfig({})
-    ).test ?? {};
-  const dir = testConfig.dir ?? process.cwd();
+async function listRunnableExtensionTestFiles(worker = false, extensionId = "telegram") {
+  const config = worker
+    ? createExtensionDatabaseWorkersVitestConfig({})
+    : extensionId === "codex"
+      ? createExtensionVitestConfig("codex", codexExtensionTestRoots, {})
+      : createExtensionTelegramVitestConfig({});
+  const { test: testConfig } = await resolveConfig({ config: false }, config);
+  const dir = testConfig.dir || testConfig.root;
   const exclude = (testConfig.exclude ?? []).map((pattern) =>
     path.isAbsolute(pattern) ? path.relative(dir, pattern).replaceAll("\\", "/") : pattern,
   );
@@ -154,7 +154,7 @@ export const collectBundledPluginSources=()=>[{dirName:'source-only',manifestPat
     expect(new Set(genericIds).size).toBe(genericExtensionIds.length);
   });
 
-  it("keeps dedicated Telegram and Codex file shards inside the existing aggregate job contract", () => {
+  it("keeps dedicated Telegram and Codex file shards inside the existing aggregate job contract", async () => {
     const workflow = readWorkflow();
     const extensionJob = workflow.jobs["plugin-prerelease-extension-shard"];
     const runStep = findStep(extensionJob, "Run extension shard");
@@ -168,8 +168,8 @@ export const collectBundledPluginSources=()=>[{dirName:'source-only',manifestPat
       );
     const codexRows = fileRows("codex");
     const codexFiles = [
-      ...listRunnableExtensionTestFiles(false, "codex"),
-      ...listRunnableExtensionTestFiles(true, "codex"),
+      ...(await listRunnableExtensionTestFiles(false, "codex")),
+      ...(await listRunnableExtensionTestFiles(true, "codex")),
     ].toSorted();
 
     expect(genericRows.some((row) => row.extensions_csv.split(",").includes("codex"))).toBe(false);
@@ -198,8 +198,8 @@ export const collectBundledPluginSources=()=>[{dirName:'source-only',manifestPat
     ).toBe("runtime");
     const allFiles = listExtensionTestFilesForRoots(["extensions/telegram"]);
     const telegramFiles = [
-      ...listRunnableExtensionTestFiles(),
-      ...listRunnableExtensionTestFiles(true),
+      ...(await listRunnableExtensionTestFiles()),
+      ...(await listRunnableExtensionTestFiles(true)),
     ].toSorted();
 
     expect(genericRows).toHaveLength(DEFAULT_EXTENSION_TEST_SHARD_COUNT);
@@ -207,8 +207,8 @@ export const collectBundledPluginSources=()=>[{dirName:'source-only',manifestPat
       false,
     );
     const expectedPartitions = [
-      [databaseConfig, listRunnableExtensionTestFiles(true)],
-      [telegramConfig, listRunnableExtensionTestFiles()],
+      [databaseConfig, await listRunnableExtensionTestFiles(true)],
+      [telegramConfig, await listRunnableExtensionTestFiles()],
     ] as const;
     const expectedRows = expectedPartitions.flatMap(([vitest_config, files]) =>
       splitExtensionTestJobTargets(vitest_config, files).map((includePatterns) => ({

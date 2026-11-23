@@ -1,6 +1,7 @@
 import { globSync } from "node:fs";
 import path from "node:path";
-import { assert, beforeAll, expect, it } from "vitest";
+import { beforeAll, expect, it } from "vitest";
+import { resolveConfig } from "vitest/node";
 import { buildVitestRunPlans } from "../scripts/test-projects.test-support.mts";
 import { diagnosticForksPool } from "./vitest/vitest.forks-pool.ts";
 import { createGatewayCoreVitestConfig } from "./vitest/vitest.gateway-core.config.ts";
@@ -20,16 +21,15 @@ const consumers = [
   { file: "src/infra/state-migrations.test.ts", owner: "infra" },
 ];
 
-function inspectProject(config: ReturnType<typeof createInfraVitestConfig>) {
-  const test = config.test;
-  assert(test);
+async function inspectProject(config: ReturnType<typeof createInfraVitestConfig>) {
+  const { test } = await resolveConfig({ config: false }, config);
   const cwd = path.resolve(test.dir ?? config.root ?? process.cwd());
   const exclude = (test.exclude ?? []).map((pattern) =>
     path.isAbsolute(pattern) ? path.relative(cwd, pattern).replaceAll("\\", "/") : pattern,
   );
   return {
     name: test.name,
-    pool: test.pool,
+    pool: config.test?.pool,
     files: new Set(
       globSync(test.include ?? [], { cwd, exclude }).map((file) =>
         path.relative(process.cwd(), path.resolve(cwd, file)).replaceAll("\\", "/"),
@@ -38,12 +38,13 @@ function inspectProject(config: ReturnType<typeof createInfraVitestConfig>) {
   };
 }
 
-let projects: ReturnType<typeof inspectProject>[];
-beforeAll(() => {
+let projects: Awaited<ReturnType<typeof inspectProject>>[];
+beforeAll(async () => {
   const argv = process.argv;
   process.argv = argv.slice(0, 2);
   try {
-    projects = [
+    projects = [];
+    for (const config of [
       createInfraVitestConfig({}),
       createGatewayDatabaseWorkersVitestConfig({}),
       createGatewayCoreVitestConfig({}),
@@ -51,7 +52,9 @@ beforeAll(() => {
       createUnitFastVitestConfig({}, { argv: [] }),
       createUnitFastIsolatedVitestConfig({}, { argv: [] }),
       createUnitFastFakeTimersVitestConfig({}, { argv: [] }),
-    ].map(inspectProject);
+    ]) {
+      projects.push(await inspectProject(config));
+    }
   } finally {
     process.argv = argv;
   }

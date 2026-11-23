@@ -45,24 +45,26 @@ function createPrExemptCensus() {
       import { globSync } from "node:fs";
       import path from "node:path";
       import { pathToFileURL } from "node:url";
+      import { resolveConfig } from "vitest/node";
       const projects = {};
       for (const config of ${JSON.stringify(configs)}) {
         const module = await import(pathToFileURL(path.resolve(config)).href);
         const root = config === "test/vitest/vitest.ui-e2e.config.ts"
           ? module.createUiE2eVitestConfig({ ...process.env, OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "0" }, [])
           : module.default;
-        projects[config] = (root.test.projects ?? [root]).map(project => {
+        projects[config] = [];
+        for (const project of root.test.projects ?? [root]) {
           if (!project || typeof project !== "object" || !project.test) {
             throw new Error("Unsupported inline test project in " + config);
           }
-          const test = project.test;
+          const { test } = await resolveConfig({ config: false }, { root: root.root, ...project });
           const cwd = test.dir ?? test.root ?? project.root ?? root.test.dir ?? root.test.root ?? root.root ?? process.cwd();
           const exclude = (test.exclude ?? []).map(pattern => path.isAbsolute(pattern) ? path.relative(cwd, pattern).split(path.sep).join("/") : pattern);
-          return {
+          projects[config].push({
             name: test.name,
             files: globSync(test.include ?? [], { cwd, exclude }).map(file => path.relative(process.cwd(), path.resolve(cwd, file)).split(path.sep).join("/")),
-          };
-        });
+          });
+        }
       }
       process.stdout.write(JSON.stringify(projects));
     `,

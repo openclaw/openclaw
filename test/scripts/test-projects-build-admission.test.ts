@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveConfig } from "vitest/node";
 import type { VitestBatchRunParams } from "../../scripts/lib/vitest-batch-runner.mts";
 import {
   listVitestRuntimeConsumerFiles,
@@ -1497,6 +1498,7 @@ describe("test-projects build admission", () => {
       }
       const selected: unknown[] = [];
       commands.reader.mockImplementation(({ env, pnpmArgs }) => {
+        let config: ReturnType<typeof createInfraVitestConfig>;
         const wrapperArgv = process.argv;
         // The config consumes the reader's CLI, not its parent wrapper's targets.
         process.argv = [
@@ -1506,12 +1508,15 @@ describe("test-projects build admission", () => {
         try {
           const createConfig =
             args[0] === infraConfig ? createInfraVitestConfig : createToolingVitestConfig;
-          selected.push(createConfig(env).test?.include);
+          config = createConfig(env);
         } finally {
           process.argv = wrapperArgv;
         }
         return {
-          completion: Promise.resolve({ code: 0, signal: null }),
+          completion: resolveConfig({ config: false }, config).then(({ test }) => {
+            selected.push(test.include);
+            return { code: 0, signal: null };
+          }),
           getForwardedSignal: () => undefined,
         };
       });

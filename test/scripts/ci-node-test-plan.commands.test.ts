@@ -253,7 +253,7 @@ it("projects serial timings once, retaining complete history and indivisible fil
     },
   );
 });
-it("keeps Doctor session SQLite owners complete and isolated", () => {
+it("keeps Doctor session SQLite owners complete and isolated", async () => {
   const placementsFor = (plan: CompactNodeTestShard[], owners: string[]) =>
     plan.flatMap((job, jobIndex) =>
       job.groups
@@ -265,7 +265,7 @@ it("keeps Doctor session SQLite owners complete and isolated", () => {
   const base = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
   const commandShards = base.filter((shard) => shard.configs.includes(commandsConfig));
   const commandFiles = commandShards.flatMap((shard) => shard.includePatterns ?? []).toSorted();
-  expect(commandFiles).toEqual(listMatchedTestFiles(createCommandsVitestConfig({})));
+  expect(commandFiles).toEqual(await listMatchedTestFiles(createCommandsVitestConfig({})));
   expect(new Set(commandFiles).size).toBe(commandFiles.length);
 
   for (const compactMode of ["push", "pull-request"] as const) {

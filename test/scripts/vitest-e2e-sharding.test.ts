@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
-import type { TestSpecification } from "vitest/node";
+import { resolveConfig, type TestSpecification } from "vitest/node";
 import { createE2EVitestConfig } from "../vitest/vitest.e2e.config.ts";
 import { RepoE2eSequencer } from "../vitest/vitest.e2e.sequencer.ts";
 import { createUiE2eVitestConfig } from "../vitest/vitest.ui-e2e.config.ts";
@@ -20,8 +20,8 @@ vi.mock("../../scripts/lib/ci-test-timings.mts", async (importOriginal) => ({
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const directories: string[] = [];
 
-it("keeps host E2Es and browser suites in their own projects", () => {
-  const ui = createUiE2eVitestConfig({}, []).test!;
+it("keeps host E2Es and browser suites in their own projects", async () => {
+  const { test: ui } = await resolveConfig({ config: false }, createUiE2eVitestConfig({}, []));
   const gateway = createE2EVitestConfig({}).test!;
   expect(gateway.pool).toBe("forks");
   const browserFiles = new Set(globSync(ui.include!, { cwd: repoRoot, exclude: ui.exclude }));
@@ -116,12 +116,11 @@ it("keeps shared UI/Gateway partition ties deterministic without collapsing spec
 });
 
 it("keeps the UI worker borrowers together without changing discovered or selected files", async () => {
-  const ui = createUiE2eVitestConfig({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" }, []).test!;
-  const discovered = (ui.projects ?? []).flatMap((project) => {
-    if (typeof project !== "object" || project === null || !("test" in project) || !project.test) {
-      return [];
-    }
-    const config = project.test;
+  const { test: ui } = await resolveConfig(
+    { config: false },
+    createUiE2eVitestConfig({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" }, []),
+  );
+  const discovered = ui.resolvedProjects.flatMap(({ projectConfig: config }) => {
     return globSync(config.include ?? [], { cwd: repoRoot, exclude: config.exclude }).map((file) =>
       Object.assign({ moduleId: path.join(repoRoot, file) } as TestSpecification, {
         project: { name: config.name, config },

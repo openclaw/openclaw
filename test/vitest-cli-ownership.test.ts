@@ -33,16 +33,15 @@ const includeEnv = (files: string[]) => ({
   OPENCLAW_VITEST_INCLUDE_FILE: patternFiles.writePatternFile("include.json", files),
 });
 
-function discover(config: {
+async function discover(config: {
   root?: string;
   test?: { dir?: string; include?: string[]; exclude?: string[] };
 }) {
-  assert(config.test);
-  assert(config.root);
-  const dir = config.test.dir ?? config.root;
+  const { test } = await resolveConfig({ config: false }, config);
+  const dir = test.dir ?? test.root;
   return fs
-    .globSync(config.test.include ?? [], { cwd: dir, exclude: config.test.exclude })
-    .map((file) => path.relative(config.root!, path.join(dir, file)).replaceAll("\\", "/"));
+    .globSync(test.include, { cwd: dir, exclude: test.exclude })
+    .map((file) => path.relative(test.root, path.join(dir, file)).replaceAll("\\", "/"));
 }
 
 function selectProjects(projects: Record<string, string[]>, filters: string[]) {
@@ -51,27 +50,30 @@ function selectProjects(projects: Record<string, string[]>, filters: string[]) {
   );
 }
 
-function gatewayProjectFiles(filters: string[], env: Record<string, string | undefined> = {}) {
+async function gatewayProjectFiles(
+  filters: string[],
+  env: Record<string, string | undefined> = {},
+) {
   const originalArgv = process.argv;
   process.argv = ["node", "vitest", "run", ...filters];
   try {
-    return Object.fromEntries<string[]>(
-      [
-        createGatewayCoreVitestConfig,
-        createGatewayDatabaseWorkersVitestConfig,
-        createGatewayClientVitestConfig,
-        createGatewayMethodsVitestConfig,
-        createGatewayMethodsIsolatedVitestConfig,
-        createGatewayServerVitestConfig,
-        createGatewayServerIsolatedVitestConfig,
-      ].map((createConfig) => {
-        const config = createConfig(env);
-        const test = config.test!;
-        assert(typeof test.name === "string");
-        const files = select(discover(config), filters).toSorted();
-        return [test.name, files];
-      }),
-    );
+    const projects: Array<[string, string[]]> = [];
+    for (const createConfig of [
+      createGatewayCoreVitestConfig,
+      createGatewayDatabaseWorkersVitestConfig,
+      createGatewayClientVitestConfig,
+      createGatewayMethodsVitestConfig,
+      createGatewayMethodsIsolatedVitestConfig,
+      createGatewayServerVitestConfig,
+      createGatewayServerIsolatedVitestConfig,
+    ]) {
+      const config = createConfig(env);
+      const test = config.test!;
+      assert(typeof test.name === "string");
+      const files = select(await discover(config), filters).toSorted();
+      projects.push([test.name, files]);
+    }
+    return Object.fromEntries(projects);
   } finally {
     process.argv = originalArgv;
   }
@@ -85,12 +87,12 @@ function select(files: readonly string[], filters: string[]) {
   );
 }
 
-let canonicalGatewayFiles: ReturnType<typeof gatewayProjectFiles>;
-beforeAll(() => {
-  canonicalGatewayFiles = gatewayProjectFiles([]);
+let canonicalGatewayFiles: Awaited<ReturnType<typeof gatewayProjectFiles>>;
+beforeAll(async () => {
+  canonicalGatewayFiles = await gatewayProjectFiles([]);
 });
 
-it("routes resume local-node handshakes only through the core broker fork", () => {
+it("routes resume local-node handshakes only through the core broker fork", async () => {
   const file = "src/cli/resume-cli.test.ts";
   expect(buildVitestRunPlans([file])).toEqual([
     {
@@ -105,7 +107,7 @@ it("routes resume local-node handshakes only through the core broker fork", () =
   const previous = createCliVitestConfig(env);
   assert(worker.test);
   expect(worker.test.pool).toBe(diagnosticForksPool);
-  expect([discover(worker), discover(previous)]).toEqual([[file], []]);
+  expect([await discover(worker), await discover(previous)]).toEqual([[file], []]);
 });
 
 it.each(["src/gateway/config-reload.telegram-policy.test.ts", "src/gateway"])(
@@ -138,7 +140,7 @@ it.each(["src/gateway/config-reload.telegram-policy.test.ts", "src/gateway"])(
     const includePatterns = plans[0]!.includePatterns;
     assert(includePatterns);
     const env = includeEnv(includePatterns);
-    const selected = gatewayProjectFiles([], env);
+    const selected = await gatewayProjectFiles([], env);
     expect(selected).toEqual(selectProjects(canonicalGatewayFiles, filters));
     expect(selected["gateway-database-workers"]).toEqual(
       select(gatewayDatabaseWorkerTestFiles, filters),
@@ -157,7 +159,7 @@ it.each(["src/gateway/config-reload.telegram-policy.test.ts", "src/gateway"])(
       )?.projectConfig;
       assert(worker);
       expect(worker.pool).toBe(diagnosticForksPool.name);
-      workerFiles.push(...discover({ root: worker.root, test: worker }));
+      workerFiles.push(...(await discover({ root: worker.root, test: worker })));
     }
     expect(workerFiles.toSorted()).toEqual(select(databaseWorkerCoreTestFiles, filters).toSorted());
     const files = [...Object.values(selected).flat(), ...workerFiles];
@@ -178,12 +180,12 @@ it.each(
     ["src/gateway/link-understanding.product.test.ts"],
     ["src/gateway/server", "src/gateway/worker-environments"],
   ].map((filters) => ({ filters })),
-)("preserves canonical project ownership for $filters", ({ filters }) => {
+)("preserves canonical project ownership for $filters", async ({ filters }) => {
   const canonical = canonicalGatewayFiles;
   expect(canonical["gateway-database-workers"]).toEqual(gatewayDatabaseWorkerTestFiles);
   const expected = selectProjects(canonical, filters);
 
-  expect(gatewayProjectFiles(filters)).toEqual(expected);
+  expect(await gatewayProjectFiles(filters)).toEqual(expected);
   const selected = Object.values(expected).flat();
   expect(selected.length).toBeGreaterThan(0);
   expect(new Set(selected).size).toBe(selected.length);

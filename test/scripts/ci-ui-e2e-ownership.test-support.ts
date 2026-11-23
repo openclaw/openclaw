@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import * as ts from "typescript/ast";
 import { expect } from "vitest";
+import { resolveConfig } from "vitest/node";
 import {
   createUiRealGatewayTestShards,
   createUiTestShardGroups,
@@ -19,10 +20,10 @@ import {
 } from "../vitest/vitest.ui-e2e.config.ts";
 import { uiE2eRealGatewayTestFiles } from "../vitest/vitest.ui-paths.mjs";
 
-export function assertControlUiE2eOwnership(
+export async function assertControlUiE2eOwnership(
   makeTempDirectory: (prefix: string) => string,
   parser: NativeTypeScriptParser,
-): void {
+): Promise<void> {
   const trackedUiE2eFiles = execFileSync(
     "git",
     [
@@ -112,20 +113,17 @@ export function assertControlUiE2eOwnership(
   expect(uiE2eRealGatewayTestFiles.every((file) => uiE2eSerialTestFiles.includes(file))).toBe(true);
   expect(uiE2eSerialTestFiles).toContain(uiE2eRuntimeBudgetTestFile);
 
-  const config = createUiE2eVitestConfig({}, []);
-  type Project = {
-    cacheDir: string;
-    test: {
-      exclude: string[];
-      fileParallelism: boolean;
-      globalSetup?: string[];
-      include: string[];
-      maxWorkers?: number;
-      name: string;
-      sequence: { groupOrder: number };
-    };
-  };
-  const projectsOf = (value: typeof config) => value.test?.projects as Project[];
+  const config = await resolveConfig({ config: false }, createUiE2eVitestConfig({}, []));
+  const projectsOf = (value: typeof config) =>
+    value.test.resolvedProjects.map(({ viteConfig, projectConfig }) => ({
+      cacheDir: viteConfig.cacheDir,
+      test: {
+        ...projectConfig,
+        globalSetup: projectConfig.globalSetup.map((file) =>
+          path.relative(process.cwd(), file).split(path.sep).join("/"),
+        ),
+      },
+    }));
   const projects = projectsOf(config);
   const selectedFiles = (test: { exclude: string[]; include: string[] }) =>
     globSync(test.include, { cwd: process.cwd(), exclude: test.exclude }).toSorted();
@@ -193,7 +191,10 @@ export function assertControlUiE2eOwnership(
   expect(localSelected[0]).toContain("ui/src/e2e/memory-overview-plugin.e2e.test.ts");
   expect(localSelected[3]).toContain("ui/src/e2e/memory-overview-source.e2e.test.ts");
 
-  const ordinaryConfig = createUiE2eVitestConfig({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" }, []);
+  const ordinaryConfig = await resolveConfig(
+    { config: false },
+    createUiE2eVitestConfig({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" }, []),
+  );
   const ordinarySelected = select(ordinaryConfig);
   expect(ordinarySelected.flat()).not.toContain(readonlyHome);
   expect(selectedFiles(ordinaryConfig.test as typeof rootTest)).toEqual(ordinary);
@@ -205,24 +206,33 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/service-worker-update.e2e.test.ts",
     "ui/src/e2e/template-chat-review.e2e.test.ts",
   ];
-  const delegated = createUiE2eVitestConfig(
-    { OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1", OPENCLAW_UI_E2E_SKIP_PRODUCTION_ARTIFACT: "1" },
-    [],
+  const delegated = await resolveConfig(
+    { config: false },
+    createUiE2eVitestConfig(
+      { OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1", OPENCLAW_UI_E2E_SKIP_PRODUCTION_ARTIFACT: "1" },
+      [],
+    ),
   );
   assertPartition(
     select(delegated),
     ordinary.filter((file) => !productionArtifactFiles.includes(file)),
   );
-  const production = createUiE2eVitestConfig(
-    { OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT: "/fixture/production-ui" },
-    [],
+  const production = await resolveConfig(
+    { config: false },
+    createUiE2eVitestConfig(
+      { OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT: "/fixture/production-ui" },
+      [],
+    ),
   );
   expect(select(production)).toEqual([[], productionArtifactFiles, [], []]);
 
   // The packaged delivery proof needs the runtime build owned by the prebuilt lane.
   const packagedWorkboard = "ui/src/pages/workboard/workboard-distribution.e2e.test.ts";
   expect(ordinarySelected.flat()).not.toContain(packagedWorkboard);
-  const prebuilt = createPrebuiltUiE2eVitestConfig({}, ["node", "vitest", packagedWorkboard]);
+  const prebuilt = await resolveConfig(
+    { config: false },
+    createPrebuiltUiE2eVitestConfig({}, ["node", "vitest", packagedWorkboard]),
+  );
   expect(
     projectsOf(prebuilt)
       .map((project) => ({ name: project.test.name, files: selectedFiles(project.test) }))
@@ -241,12 +251,14 @@ export function assertControlUiE2eOwnership(
 
   const bundledFile = expectDefined(ordinarySelected[0]?.[0], "bundled Control UI E2E file");
   const serialFile = expectDefined(ordinarySelected[3]?.[0], "serial Control UI E2E file");
-  expect(select(createUiE2eVitestConfig({}, ["node", "vitest", serialFile]))).toEqual([
-    [],
-    [],
-    [],
-    [serialFile],
-  ]);
+  expect(
+    select(
+      await resolveConfig(
+        { config: false },
+        createUiE2eVitestConfig({}, ["node", "vitest", serialFile]),
+      ),
+    ),
+  ).toEqual([[], [], [], [serialFile]]);
 
   const includeDir = makeTempDirectory("openclaw-ui-e2e-project-includes-");
   const includeFile = path.join(includeDir, "include.json");
@@ -255,11 +267,12 @@ export function assertControlUiE2eOwnership(
     OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1",
     OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
   };
-  const selectIncludeFile = () => select(createUiE2eVitestConfig(includeEnv, []));
-  expect(selectIncludeFile()).toEqual([[bundledFile], [], [], [serialFile]]);
+  const selectIncludeFile = async () =>
+    select(await resolveConfig({ config: false }, createUiE2eVitestConfig(includeEnv, [])));
+  expect(await selectIncludeFile()).toEqual([[bundledFile], [], [], [serialFile]]);
 
   writeFileSync(includeFile, JSON.stringify(["ui/src/e2e/*.e2e.test.ts"]));
-  const globSelected = selectIncludeFile().flat();
+  const globSelected = (await selectIncludeFile()).flat();
   const expectedGlobFiles = ordinary.filter((file) =>
     path.matchesGlob(file, "ui/src/e2e/*.e2e.test.ts"),
   );
