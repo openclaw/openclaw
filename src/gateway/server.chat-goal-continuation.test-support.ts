@@ -17,7 +17,7 @@ import {
 } from "../agents/tools/gateway-caller-context.js";
 import { createCreateGoalTool, createUpdateGoalTool } from "../agents/tools/goal-tools.js";
 import * as goalContinuation from "../auto-reply/reply/goal-continuation.js";
-import { enqueueSessionEventForHost } from "../auto-reply/reply/session-event-handoff.js";
+import * as sessionEventHandoff from "../auto-reply/reply/session-event-handoff.js";
 import * as sessionEventTarget from "../auto-reply/reply/session-event-target.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -175,12 +175,15 @@ export function registerGoalAutomaticContinuationCases(
       prompts.push(params.prompt);
       delivery.push(getAgentRunContext(params.runId)?.sessionEventDelivery);
       if (runEmbeddedAgent.mock.calls.length === 1) {
-        const receipt = enqueueSessionEventForHost("Background exec completed", {
-          ...scope(),
-          ...event,
-          source: "exec",
-          sourceTurnId: "exec:goal-background",
-        });
+        const receipt = sessionEventHandoff.enqueueSessionEventForHost(
+          "Background exec completed",
+          {
+            ...scope(),
+            ...event,
+            source: "exec",
+            sourceTurnId: "exec:goal-background",
+          },
+        );
         expect(await receipt.accepted).toEqual({ ok: true });
       } else if (runEmbeddedAgent.mock.calls.length >= 2) {
         await onEventTurn();
@@ -238,7 +241,7 @@ export function registerGoalAutomaticContinuationCases(
   };
   const completeRequesterExec = async (senderId: string, silent = false) => {
     const { agentId, sessionKey } = scope();
-    const id = `goal-${senderId}-${Date.now()}`;
+    const id = `goal-${senderId}-${randomUUID()}`;
     const process = createProcessSessionFixture({ id, backgrounded: true });
     Object.assign(process, { agentId, sessionKey, notifyOnExit: true });
     Object.assign(process, { notifyOnExitEmptySuccess: true });
@@ -388,6 +391,49 @@ export function registerGoalAutomaticContinuationCases(
       expect.stringContaining("Exec completed"),
       expect.stringContaining("Advance"),
     ]);
+  });
+
+  // Two results wait behind a completion turn and share the next one, which is refused before
+  // it stages its input. The retry reads the stored row, so it still carries both results.
+  it("retries a refused shared exec turn with every result it carried", async () => {
+    const restore = withOwnerPolicy();
+    const enqueueEvent = vi.spyOn(sessionEventHandoff, "enqueueSessionEventForHost");
+    const prompts: string[] = [];
+    // The shared turn starts from the batch lane's settle timer, after the active work drains.
+    const retried = createDeferred();
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      prompts.push(params.prompt);
+      if (prompts.length === 1) {
+        await completeRequesterExec("456");
+      } else if (prompts.length === 2) {
+        await completeRequesterExec("456");
+        await completeRequesterExec("456");
+        enqueueEvent.mockImplementationOnce(() => ({
+          id: "refused-shared-turn",
+          cancel: () => false,
+          accepted: Promise.resolve({ ok: false, error: "destination refused" }),
+          settled: Promise.resolve({
+            status: "failed",
+            executionStarted: false,
+            delivered: false,
+            error: "destination refused",
+          }),
+        }));
+      } else if (prompts.length === 3) {
+        await setGoalStatus("complete");
+        retried.resolve();
+      }
+      return result(params.sessionId);
+    });
+    try {
+      await start("Finish after three transfers");
+      await retried.promise;
+      await expectDrained();
+    } finally {
+      enqueueEvent.mockRestore();
+      restore();
+    }
+    expect(prompts[2]?.match(/Exec completed/g)).toHaveLength(2);
   });
 
   it("downgrades an owner's Goal successor once ownership is revoked", async () => {

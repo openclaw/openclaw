@@ -119,11 +119,12 @@ export async function fold(first: Owed, others: readonly Owed[]): Promise<void> 
   }
 }
 
-/** True while the row is neither appended nor withheld. */
-export async function isOwedPending(item: Owed): Promise<boolean> {
+/** The stored item while its row is neither appended nor withheld; its text may be folded. */
+export async function readPendingOwed(item: Owed): Promise<Owed | undefined> {
   const opened = await openOwed(item);
   await opened?.store.release();
-  return opened?.pending !== undefined;
+  const content = opened?.pending && JSON.parse(opened.pending.message_json).content;
+  return typeof content === "string" ? { ...item, text: content } : undefined;
 }
 
 /**
