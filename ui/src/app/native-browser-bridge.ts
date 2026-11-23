@@ -3,7 +3,8 @@
  * Handler: window.webkit.messageHandlers.openclawBrowser, Promise reply {ok:true,...}
  * or {ok:false,error}. Requests use type: open {tabId,url,sessionKey,activate?}, navigate
  * {tabId,url}, back/forward/reload/stop/close/snapshot/download {tabId}, inspect {tabId,x,y},
- * present {scope,tabId,rect:{x,y,width,height}|null,visible}, release-scope {scope}.
+ * present {scope,tabId,rect:{x,y,width,height}|null,visible}, release-scope {scope},
+ * set-color-scheme {colorScheme: light|dark} (macOS dashboard chrome).
  * Hosts advertising __OPENCLAW_NATIVE_BROWSER_CUTOUTS__ also accept
  * overlay-cutouts {cutouts:[{x,y,width,height,radius}]}, in viewport CSS pixels.
  * IDs and scopes are opaque; web-created IDs are `mac-` plus a generated UUID.
@@ -63,7 +64,8 @@ export type NativeBrowserMessage =
       visible: boolean;
     }
   | { type: "release-scope"; scope: string }
-  | { type: "overlay-cutouts"; cutouts: NativeBrowserCutout[] };
+  | { type: "overlay-cutouts"; cutouts: NativeBrowserCutout[] }
+  | { type: "set-color-scheme"; colorScheme: "light" | "dark" };
 export type NativeBrowserReply =
   | {
       ok: true;

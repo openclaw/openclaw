@@ -310,7 +310,7 @@ html.openclaw-native-macos.openclaw-native-web-chrome
      unified 52pt needs 87px. Updated apps supply the measured native inset. */
   --shell-native-titlebar-controls-inset: var(
     --openclaw-native-controls-inset,
-    clamp(80px, calc(var(--openclaw-native-titlebar-height, 52px) + 40px), 87px)
+    clamp(80px, calc(var(--rail-header-height) + 40px), 87px)
   );
   --shell-native-titlebar-controls-left: var(--shell-native-titlebar-controls-inset);
   --shell-native-titlebar-controls-width: 124px;
@@ -330,7 +330,7 @@ html.openclaw-native-macos.openclaw-native-web-chrome
   &::after {
     position: absolute;
     z-index: 30;
-    inset: var(--openclaw-native-titlebar-height, 52px) 0 0 var(--shell-nav-rail-width, 0px);
+    inset: var(--rail-header-height) 0 0 var(--shell-nav-rail-width, 0px);
     border-radius: var(--radius-lg) var(--radius-lg) 0 var(--radius-lg);
     box-shadow:
       0 0 0 var(--radius-lg) var(--sidebar-rail-surface),
@@ -350,17 +350,17 @@ html.openclaw-native-macos.openclaw-native-web-chrome
 
   .shell-nav {
     min-height: 0;
-    padding-top: var(--openclaw-native-titlebar-height, 52px);
+    padding-top: var(--rail-header-height);
     background-color: var(--sidebar-rail-surface);
     border-image: linear-gradient(
-        transparent var(--openclaw-native-titlebar-height, 52px),
+        transparent var(--rail-header-height),
         var(--resize-handle-rest-color) 0
       )
       0 1;
   }
 
   .sidebar-resizer {
-    margin-top: var(--openclaw-native-titlebar-height, 52px);
+    margin-top: var(--rail-header-height);
   }
 
   .settings-sidebar__header {
@@ -371,6 +371,18 @@ html.openclaw-native-macos.openclaw-native-web-chrome
   .chat,
   .chat-main__conversation-frame {
     border-radius: 0;
+  }
+
+  /* Chat loading shares the native band and its window-control clearance. */
+  .content--workbench .lazy-view-state--route[data-chat] .loading-skeleton__header {
+    height: var(--rail-header-height);
+    padding-left: var(--shell-titlebar-inset);
+    border-bottom: 0;
+    background: var(--sidebar-rail-surface);
+
+    > .loading-skeleton__avatar {
+      display: none;
+    }
   }
 
   .macos-titlebar-controls__button svg {
@@ -384,7 +396,7 @@ html.openclaw-native-macos.openclaw-native-web-chrome
 
   /* New session has no chat header, but keeps the same native titlebar surface. */
   .content--new-session .new-session-page::before {
-    flex: 0 0 var(--openclaw-native-titlebar-height, 52px);
+    flex: 0 0 var(--rail-header-height);
     margin-inline: calc(0px - var(--content-inline-padding));
     background: var(--sidebar-rail-surface);
     content: "";
@@ -392,32 +404,29 @@ html.openclaw-native-macos.openclaw-native-web-chrome
   }
 
   .content--new-session .new-session-page__scroll {
-    padding-top: max(
-      0px,
-      calc(clamp(44px, 5vh, 52px) - var(--openclaw-native-titlebar-height, 52px))
-    );
+    padding-top: max(0px, calc(clamp(44px, 5vh, 52px) - var(--rail-header-height)));
   }
 
   .new-session-page__incognito-rail {
-    top: calc((var(--openclaw-native-titlebar-height, 52px) - var(--rail-header-action-size)) / 2);
+    top: calc((var(--rail-header-height) - var(--rail-header-action-size)) / 2);
   }
   /* Keep the native drag band outside page scrollports, including Settings. */
   background-image: linear-gradient(
-    var(--sidebar-rail-surface) var(--openclaw-native-titlebar-height, 52px),
-    transparent var(--openclaw-native-titlebar-height, 52px)
+    var(--sidebar-rail-surface) var(--rail-header-height),
+    transparent var(--rail-header-height)
   );
 
   .content--plugin-embed .plugin-tab-embed {
-    margin-top: var(--openclaw-native-titlebar-height, 52px);
+    margin-top: var(--rail-header-height);
   }
 
   .content:not(.content--chat, .content--custodian, .content--workboard, .content--plugin-embed) {
-    margin-top: var(--openclaw-native-titlebar-height, 52px);
+    margin-top: var(--rail-header-height);
     padding-top: max(
       0px,
       calc(
-        var(--settings-content-block-start-padding, var(--openclaw-native-titlebar-height, 52px)) -
-          var(--openclaw-native-titlebar-height, 52px)
+        var(--settings-content-block-start-padding, var(--rail-header-height)) -
+          var(--rail-header-height)
       )
     );
   }

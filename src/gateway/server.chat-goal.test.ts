@@ -330,7 +330,7 @@ describe("Goal chat admission and continuation", () => {
       return storePath;
     },
     send: (request) => rpc("chat.send", request),
-    assertNoModelRun: () => expect(runEmbeddedAgent).not.toHaveBeenCalled(),
+    assertOneModelRun: () => expect(runEmbeddedAgent).toHaveBeenCalledTimes(1),
   });
   it("starts the first message as a Goal with an ACP-scoped hook and replays without a second session or run", async () => {
     await useFreshSessionStore();
