@@ -6,9 +6,8 @@ import { fileURLToPath } from "node:url";
 import { load as loadSqliteVec } from "sqlite-vec";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { captureSqliteDatabaseAdmissions } from "../infra/sqlite-database-admission.js";
-import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import { sqliteDatabaseAdmissionState } from "../infra/sqlite-database-admission-context.js";
+import { captureSqliteDatabaseDescriptorCustodyLocations } from "../infra/sqlite-database-admission.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -39,24 +38,29 @@ it("releases admitted source and successor descriptors before replacing a databa
   dirs.push(root);
   const live = path.join(root, "live.sqlite");
   const next = path.join(root, "next.sqlite");
-  const descriptors = [live, next].map((file, index) => {
-    const db = openNodeSqliteDatabase(file);
-    try {
+  [live, next].forEach((file, index) => {
+    {
+      using db = new DatabaseSync(file);
       db.exec("CREATE TABLE witness (value INTEGER)");
       db.prepare("INSERT INTO witness VALUES (?)").run(index);
-      admitSqliteSchema(db);
-      return captureSqliteDatabaseAdmissions().find((record) => record.location === file)!
-        .descriptor;
-    } finally {
-      db.close();
     }
+    // Vitest is a worker, not admission's host. Retain the host's real descriptor custody.
+    const descriptor = fs.openSync(file, "r");
+    sqliteDatabaseAdmissionState.registry.retainDescriptorCustody(
+      file,
+      descriptor,
+      fs.fstatSync(descriptor, { bigint: true }),
+    );
   });
+  expect([...captureSqliteDatabaseDescriptorCustodyLocations()]).toEqual(
+    expect.arrayContaining([live, next]),
+  );
 
   applyPlan({ appVersion: "custody-test", ops: [{ kind: "replace", live, next }] });
 
-  for (const descriptor of descriptors) {
-    expect(() => fs.fstatSync(descriptor)).toThrow();
-  }
+  const retained = [...captureSqliteDatabaseDescriptorCustodyLocations()];
+  expect(retained).not.toContain(live);
+  expect(retained).not.toContain(next);
   using published = new DatabaseSync(live, { readOnly: true });
   expect(published.prepare("SELECT value FROM witness").get()).toEqual({ value: 1 });
   using previous = new DatabaseSync(`${live}.pre-custody-test`, { readOnly: true });
