@@ -762,7 +762,7 @@ internal fun OpenClawSidebar(
   LaunchedEffect(connection.isConnected, gatewayStableId, selectedAgentId, visible) {
     if (connection.isConnected && visible) {
       viewModel.refreshSessionGroups()
-      viewModel.refreshChatSessions()
+      viewModel.refreshCurrentChatSessionWindow()
     }
   }
   val sectionRows: @Composable (String, List<ChatSessionEntry>) -> Unit = { token, entries ->
@@ -831,7 +831,7 @@ internal fun OpenClawSidebar(
   LaunchedEffect(nextWakeMs, personalPins, gatewayStableId) {
     nextWakeMs?.let {
       sessionNowMs = awaitSessionStatusExpiry(it)
-      if (personalPins) viewModel.refreshChatSessions()
+      if (personalPins) viewModel.refreshPersonalSessionPins()
     }
   }
   val searchResults =
@@ -841,6 +841,7 @@ internal fun OpenClawSidebar(
       filter = SessionFilter.Recent,
       recentFirst = true,
       nowMs = sessionNowMs,
+      personalPins = personalPins,
     )
 
   Column(

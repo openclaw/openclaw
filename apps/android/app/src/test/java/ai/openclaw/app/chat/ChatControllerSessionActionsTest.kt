@@ -164,6 +164,51 @@ class ChatControllerSessionActionsTest {
     }
 
   @Test
+  fun wakeAndPinPushInvalidateOffWindowSearchWithoutSwitchingTheArchivedRoster() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      var searchPin = false
+      gateway.respond("sessions.list") { raw ->
+        val params = json.parseToJsonElement(requireNotNull(raw)).jsonObject
+        when {
+          params["search"] == JsonPrimitive("Cedar") -> """{"sessions":[{"key":"cedar","pinned":$searchPin}]}"""
+          params["archived"] == JsonPrimitive(true) -> """{"sessions":[{"key":"archived","archived":true}]}"""
+          else -> """{"sessions":[{"key":"recent"}]}"""
+        }
+      }
+      val controller = controller(this, gateway)
+      controller.refreshSessions(limit = 7, archived = true)
+      runCurrent()
+      val archived = controller.sessions.value
+      assertEquals(listOf("archived"), archived.map { it.key })
+      assertFalse(controller.fetchSessionList("Cedar", archived = false).single().pinned == true)
+      for (afterWake in listOf(true, false)) {
+        val before = controller.personalPinRevision.value
+        val matchingRows =
+          async {
+            controller.personalPinRevision.first { it != before }
+            controller.fetchSessionList("Cedar", archived = false)
+          }
+        runCurrent()
+        controller.handleGatewayEvent("users.prefs.changed", """{"keys":["ui.theme"]}""")
+        runCurrent()
+        assertFalse(matchingRows.isCompleted)
+        searchPin = afterWake
+        if (afterWake) {
+          controller.refreshPersonalSessionPins()
+        } else {
+          controller.handleGatewayEvent("users.prefs.changed", """{"keys":["ui.railShortcuts"]}""")
+        }
+        runCurrent()
+        assertEquals(afterWake, matchingRows.await().single().pinned)
+        assertEquals(archived, controller.sessions.value)
+      }
+      val windows = gateway.calls.map { json.parseToJsonElement(requireNotNull(it.paramsJson)).jsonObject }.filter { it["search"] == null }
+      assertEquals(3, windows.size)
+      assertTrue(windows.all { it["archived"] == JsonPrimitive(true) && it["limit"] == JsonPrimitive(7) })
+    }
+
+  @Test
   fun snoozeAndWakeRequireDurableSessionIdentity() =
     runTest {
       val gateway = ScriptedGateway(json)

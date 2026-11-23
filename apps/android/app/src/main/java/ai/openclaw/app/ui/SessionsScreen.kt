@@ -182,7 +182,7 @@ internal fun SessionsScreen(
     nextAttentionExpiry?.let { expiry ->
       sessionStatusNowMs = awaitSessionStatusExpiry(expiry)
       if (personalPins && nextWakeMs != null && nextWakeMs <= sessionStatusNowMs) {
-        viewModel.refreshChatSessions(limit = 200, archived = filter == SessionFilter.Archived)
+        viewModel.refreshPersonalSessionPins()
       }
     }
   }
@@ -1052,16 +1052,16 @@ internal fun rememberSessionBrowserSearchState(
   archived: Boolean,
 ): SessionBrowserSearchState {
   val normalizedQuery = query.trim()
-  var searchResults by remember { mutableStateOf<List<ChatSessionEntry>>(emptyList()) }
+  if (normalizedQuery.isEmpty()) return SessionBrowserSearchState(normalizedQuery, sessions, false)
+  val gatewayId by viewModel.activeGatewayStableId.collectAsState()
+  val ownerAgentId by viewModel.chatSessionOwnerAgentId.collectAsState()
+  val pinRevision by viewModel.personalPinRevision.collectAsState()
+  var searchResults by remember(gatewayId, ownerAgentId, normalizedQuery, archived) { mutableStateOf<List<ChatSessionEntry>>(emptyList()) }
   var searchLoading by remember { mutableStateOf(false) }
 
-  // Keyed on the live list too: row mutations refresh sessions and re-run an active search.
-  LaunchedEffect(normalizedQuery, archived, sessions) {
-    if (normalizedQuery.isEmpty()) {
-      searchResults = emptyList()
-      searchLoading = false
-      return@LaunchedEffect
-    }
+  // Search is a separate Gateway query: an off-window match can wake or change rank
+  // without changing the rows in the active or archived roster window.
+  LaunchedEffect(gatewayId, ownerAgentId, normalizedQuery, archived, sessions, pinRevision) {
     searchResults = emptyList()
     searchLoading = true
     try {
@@ -1080,7 +1080,7 @@ internal fun rememberSessionBrowserSearchState(
 
   return SessionBrowserSearchState(
     query = normalizedQuery,
-    entries = if (normalizedQuery.isEmpty()) sessions else searchResults,
+    entries = searchResults,
     loading = searchLoading,
   )
 }
