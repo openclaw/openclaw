@@ -929,6 +929,7 @@ src/gateway/server-methods/environments.session.ts	5
 src/gateway/server-methods/exec-approval.ts	2
 src/gateway/server-methods/factory-github-proof.ts	1
 src/gateway/server-methods/github-personal-authorization.ts	8
+src/gateway/server-methods/mcp-auth-login.ts	1
 src/gateway/server-methods/message-action-context.ts	2
 src/gateway/server-methods/nodes.event.ts	2
 src/gateway/server-methods/nodes.invoke.ts	2
