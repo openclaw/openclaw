@@ -7,7 +7,11 @@ export const UPDATE_OPTION_SPECS: readonly [
   ["--json", "Output result as JSON", false],
   ["--no-restart", "Skip updater restart (package Gateways may restart themselves)"],
   ["--dry-run", "Preview update actions without making changes", false],
-  ["--full-integrity-check", "Run full database integrity checks during migrations", false],
+  [
+    "--full-integrity-check",
+    "Unavailable for prepared-release updates; use openclaw doctor --fix --full-integrity-check",
+    false,
+  ],
   [
     "--admission <auto|installed>",
     "Select candidate or installed admission checks (default: auto)",
@@ -23,7 +27,7 @@ export const UPDATE_OPTION_SPECS: readonly [
   ["--yes", "Skip confirmation prompts (non-interactive)", false],
   [
     "--reapply-local-overrides",
-    "Replay trusted packaged dist edits when the target baseline is unchanged",
+    "Compatibility option; prepared releases require saving and manually reapplying local dist edits",
     false,
   ],
   ["--accept-capabilities", "Accept widened plugin capabilities", false],

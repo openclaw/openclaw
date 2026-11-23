@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   RealtimeVoiceBridge,
@@ -15,7 +16,7 @@ import { sendCarrierStart } from "./realtime-handler.lifecycle.test-helpers.js";
 async function openCall(call: CallRecord, handler: RealtimeCallHandler) {
   const stream = handler.issueStreamSession({
     providerName: "twilio",
-    callId: call.callId,
+    callId: expectDefined(call.providerCallId, "test call provider ID"),
     direction: call.direction,
   });
   const server = await startUpgradeWsServer({

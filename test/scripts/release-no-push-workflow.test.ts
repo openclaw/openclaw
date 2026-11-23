@@ -56,7 +56,6 @@ beforeAll(() => {
     "scripts/lib/canonical-json.mjs",
     "scripts/lib/docker-e2e-plan.mts",
     "scripts/lib/docker-e2e-scenarios.mts",
-    "scripts/e2e/lib/upgrade-survivor/installed-recovery-cases.mjs",
     "scripts/lib/official-external-channel-catalog.json",
     "scripts/lib/official-external-provider-catalog.json",
     "scripts/lib/record-shared.mjs",
@@ -1984,11 +1983,7 @@ describe("release validation no-push transport", () => {
     const fullText = readFileSync(FULL_RELEASE, "utf8");
     const performance = readWorkflow(PERFORMANCE);
     const publisher = job(performance, "publish");
-    const dangerousSteps = [
-      "Prepare clawgrit report commit",
-      "Create clawgrit reports app token",
-      "Publish to clawgrit reports",
-    ];
+    const dangerousSteps = ["Prepare clawgrit report commit", "Publish to clawgrit reports"];
 
     expect(performance.on?.workflow_dispatch?.inputs?.publish_reports).toMatchObject({
       default: true,

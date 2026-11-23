@@ -10,6 +10,10 @@ import { isPluginBuiltCoreToolId } from "../agents/core-tool-facts.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import {
@@ -17,6 +21,10 @@ import {
   readInProcessSubagentResume,
 } from "./in-process-subagent-resume.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
+import {
+  readOperatorToolGatewayAuthority,
+  runOutsideOperatorToolGatewayAuthority,
+} from "./operator-tool-gateway-authority.js";
 import type { GatewayNodeInvokeStream, GatewayRequestOptions } from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -223,4 +231,34 @@ export function resolvePluginSubagentToolsAlsoAllow(params: {
     }
   }
   return { pluginId, toolNames: requested };
+}
+/** Transfer bounded cleanup without retaining the finished operator invocation. */
+export function runWithOperatorToolGatewayCleanupContext<T>(run: () => T): T {
+  const authority = readOperatorToolGatewayAuthority();
+  if (!authority) {
+    return run();
+  }
+  authority.signal.throwIfAborted();
+  const scope = getPluginRuntimeGatewayRequestScope();
+  // Retain the effective actor and scopes after releasing the invocation;
+  // profile attribution alone does not establish authority.
+  const client = createSyntheticPluginRuntimeClient({
+    authenticatedUserProfile: authority.authenticatedUserProfile,
+    scopes: [...authority.scopes],
+    operatorRoleActor:
+      authority.operatorRoleActor ??
+      scope?.client?.internal?.operatorRoleActor ??
+      (authority.authenticatedUserProfile
+        ? {
+            kind: "operator",
+            profileId: authority.authenticatedUserProfile.profileId,
+          }
+        : undefined),
+  });
+  return runOutsideOperatorToolGatewayAuthority(() =>
+    withPluginRuntimeGatewayRequestScope(
+      { ...scope, client, isWebchatConnect: scope?.isWebchatConnect ?? (() => false) },
+      run,
+    ),
+  );
 }

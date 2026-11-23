@@ -109,6 +109,8 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     jobs: page.cron().cronJobs,
     reads: page.reads,
     editingJob: page.cron().cronEditingJob,
+    /** A copy starts from its source's name, so its create form shows the name field. */
+    cloning: page.cron().cronCloningJob !== null,
     createOpen: page.cron().cronCreateOpen,
     activityOpen: page.activityOpen(),
     detailTab: page.detailTab(),

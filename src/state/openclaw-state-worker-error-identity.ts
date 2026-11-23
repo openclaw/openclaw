@@ -24,7 +24,13 @@ import {
 } from "../config/sessions/session-transcript-writer-claim-error.js";
 import { ModelAccountConnectAuthorityError } from "../gateway/model-account-connect-errors.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
-import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner-errors.js";
+import {
+  GatewayStateOwnerContentionError,
+  StateDatabaseAccessError,
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseMaintenanceScopeError,
+  StateDatabaseOfflineMaintenanceError,
+} from "../infra/gateway-state-owner-errors.js";
 import { SqliteJsonlReadBudgetExceededError } from "../infra/sqlite-jsonl-budget-error.js";
 import {
   SqliteCoordinatorError,
@@ -54,6 +60,7 @@ const MESSAGE_ONLY_ERRORS = {
   "session-pending-input-custody": SessionPendingInputCustodyError,
   "session-transcript-read-fence": SessionTranscriptReadFenceError,
   "skill-upload-request": SkillUploadRequestError,
+  "state-database-access": StateDatabaseAccessError,
   coordinator: SqliteCoordinatorError,
   ownership: OpenClawStateOwnershipError,
   "newer-schema": SqliteSchemaVersionError,
@@ -172,6 +179,15 @@ export function identifyError(error: Error) {
   if (error instanceof GatewayStateOwnerContentionError) {
     return { type: "state-owner-contention" as const, databasePath: error.databasePath };
   }
+  if (error instanceof StateDatabaseAdmissionPendingError) {
+    return { type: "state-admission-pending" as const, databasePath: error.databasePath };
+  }
+  if (error instanceof StateDatabaseOfflineMaintenanceError) {
+    return { type: "state-offline-maintenance" as const, databasePath: error.databasePath };
+  }
+  if (error instanceof StateDatabaseMaintenanceScopeError) {
+    return { type: "state-maintenance-scope" as const };
+  }
   if (error instanceof OpenClawStateLeaseError) {
     return { type: "state-lease" as const, leaseCode: error.code, leaseLoss: error.loss };
   }
@@ -262,6 +278,12 @@ export function createError(node: ErrorIdentity & { message: string }): Error {
       return new AuthProfileStoreUnreadableError(node.databasePath);
     case "state-owner-contention":
       return new GatewayStateOwnerContentionError(node.databasePath);
+    case "state-admission-pending":
+      return new StateDatabaseAdmissionPendingError(node.databasePath, node.message);
+    case "state-offline-maintenance":
+      return new StateDatabaseOfflineMaintenanceError(node.databasePath, node.message);
+    case "state-maintenance-scope":
+      return new StateDatabaseMaintenanceScopeError("");
     case "ownership-metadata":
       return new OpenClawStateOwnershipMetadataError(node.databasePath, "");
     case "external-ownership":

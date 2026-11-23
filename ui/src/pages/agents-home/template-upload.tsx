@@ -342,7 +342,7 @@ export function TemplateUpload() {
               fallback={
                 <section class="template-package-preview template-creator">
                   <header class="template-creator__header">
-                    <span class="template-package-art">
+                    <span class="template-art template-package-art">
                       <TemplateArtwork />
                     </span>
                     <h2>{installed()?.name ?? t("templatesCatalog.importTitle")}</h2>
@@ -353,9 +353,7 @@ export function TemplateUpload() {
                         class="template-import-skeleton templates-content-skeleton"
                         aria-hidden="true"
                       >
-                        <For each={[1, 2, 3]}>
-                          {() => <span class="skeleton templates-content-skeleton__row" />}
-                        </For>
+                        <For each={[1, 2, 3]}>{() => <span class="skeleton" />}</For>
                       </div>
                     </Show>
                     <Show when={installed()}>

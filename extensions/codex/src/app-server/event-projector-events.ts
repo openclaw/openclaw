@@ -389,6 +389,7 @@ export class CodexEventProjection {
       stream: "run_status",
       data: {
         phase: "retrying",
+        reason: "codex_retry",
         message: rateLimited
           ? "Rate limited. The provider is retrying."
           : "Connection interrupted. The provider is retrying.",

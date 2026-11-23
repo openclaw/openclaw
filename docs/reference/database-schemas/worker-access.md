@@ -50,6 +50,12 @@ recorders remain non-enumerable symbol properties, consumed before serialization
 
 ## Rules for code changes
 
+Shared-state read producers hand over commands that remain unchanged until completion.
+Fresh selectors and registry-owned immutable topology need no transport copy or
+immutability scan. A producer borrowing mutable arrays, records, or configuration
+captures them before handing the command to the reader; native worker messaging
+still serializes the command. Capture before lazy snapshot preparation can yield.
+
 - Kysely for ordinary SQLite; raw SQL only for schema, migrations, bootstrap, justified primitives. Write transactions synchronous: plan async work first, reread authoritative rows, then write; no Promise or `await` in transaction callbacks.
 - Database access: worker threads (read-only worker scope, SQLite writer broker), never Gateway main thread; main thread only awaits results and installs published facts. Exceptions: boot admission, migrations, Doctor/CLI one-shots, lock primitives. Existing main-thread access = legacy: never add more; migrate what you touch.
 - SQLite format/schema/integrity/index/table checks: once per physical DB per process load, shared across workers/handles; never add repeats, remove when touched. Clean-close seals skip startup validation; Doctor/explicit verification keep checks. [Lifecycle](/reference/database-schemas/integrity-and-recovery#integrity-checks).
@@ -72,14 +78,12 @@ stores and cross-store conversation guards retain their existing discovery check
 Profile authority readers retain shared-cell views, never a cached allow decision;
 each use checks the exact lifetime, generation, and mutation publication.
 
-Host file writes prepare retained session-generation authority at their final
-effect boundary, after overwrite rollback capture. The existing session worker
-validates physical sources and refreshes facts after committed native mutations;
-the final host assertion checks the retained generation, native handle and revision,
-and live owner. Lifecycle adapters preserve that preparation through indirect
-settings reads. Ordinary synchronous assertions, opaque callback sources, and
-uncommitted native transactions retain their existing checks; an async wrapper
-alone does not move those callbacks off the main thread.
+Host file writes prepare retained database custody at their final effect boundary,
+after overwrite rollback capture. The existing session worker validates physical
+sources; the final host assertion checks the retained owner's lifetime and database
+admission identity without synchronous filesystem probes or SQL. Lifecycle adapters
+preserve this explicit storage capability. An admitted tool call can finish after a
+permission change; storage preparation does not replay policy or opaque callbacks.
 
 Finished worker admissions release publication observers and request callbacks.
 Committed facts remain available for lost-reply recovery, which runs
@@ -296,7 +300,7 @@ before caller SQL. A lost active transaction or uncertain statement outcome stil
 fails; reconnect never replays caller SQL or claims an uncertain commit rolled back.
 
 If PostgreSQL schema publication invalidates admission, connection opening,
-shared-state reads before their callback, and standalone feature-schema ensures
+shared-state reads and writes before their callback, and standalone feature-schema ensures
 share a brief backoff retry for at most one second, bounded by the caller's
 deadline and cancellation. Transaction retries require a completed rollback;
 feature-schema ensures only replay their own schema work. Each retry asks the
@@ -307,6 +311,11 @@ the retry deadline. Cancellation and earlier transport failures remain distinct.
 Readers never replay caller work or refresh an imported
 snapshot, and fragment checks inside a caller's transaction do not retry.
 Schema validation and live ownership checks remain in force.
+First-use fragment creation checks the committed catalog under the writer lock
+when admitted facts say the fragment is absent. A peer-created fragment must
+pass schema-seal validation before adoption. During migrations or publication
+gaps, schema helpers inspect the transaction's catalog instead of treating
+unavailable facts as an absent table, column, or primary key.
 
 Startup client credential preparation uses the existing credential worker and
 its native custody admission. The admission's receipt postimage also decides
@@ -789,12 +798,13 @@ reads scan transiently and retain no full-history navigation cache. Payload-size
 projections remain in SQL, and the bounded reader's limits and output are unchanged.
 
 Cold input preparation uses the turn planner instead of fetching a full actor
-replica first. The planner carries its recovery expectation into the input
-command; prepared, explicit, and warm replica expectations remain fixed across
-version retries. Transcript input and restart recovery still
-commit atomically under the existing writer FIFO, source checks, final host
-COMMIT authorization, and receipt settlement. Schemas, durability, and update
-behavior are unchanged.
+replica first. Ordinary transcript input selects its implicit lifecycle expectation
+inside the owning actor command, after preceding run completion can settle. This
+applies to durable and memory sessions. Caller-supplied lifecycle expectations stay
+fixed, including restart recovery and queued-input adoption. Transcript input and
+restart recovery still commit atomically under the existing writer FIFO, source
+checks, final host COMMIT authorization, and receipt settlement. Schemas,
+durability, and update behavior are unchanged.
 
 Pending-input staging selects its lifecycle expectation inside the same writer
 FIFO. A current published entry supplies those fields without a preliminary full

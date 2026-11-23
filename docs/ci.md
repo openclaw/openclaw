@@ -449,8 +449,11 @@ Release-path migration matrices isolate channel switching and each published
 baseline on separate runners when multiple baselines are selected; per-host
 weighted resource limits and exact-candidate artifact checks remain unchanged.
 Package Acceptance admits its long standalone upgrade lanes before expanded
-scenario jobs and orders pinned baseline cohorts newest first, without changing
-its matrix cap or scenario coverage.
+scenario jobs and orders pinned baseline cohorts newest first. Its
+[expanded package-survivor matrix](/ci/release-validation/package-acceptance)
+admits up to 64 jobs on GitHub-hosted runners without a custom runner group;
+source-only, unexpanded, self-hosted/custom-group, and update-migration matrices
+retain 32. Scenario coverage and per-runner limits are unchanged.
 
 Android native resource preparation uses the Mermaid renderer's filtered dependency install, including optional build tooling. Pnpm retains root dependencies but omits unrelated plugin packages; Gradle still builds the assets and runs the selected native tests and lint. Historical targets keep their compatibility path.
 
@@ -485,6 +488,10 @@ The first `checks-ui` shard also runs a curated WebKit overlay and composer-focu
 Control UI E2E skips Vitest requirement discovery when its selected files cannot
 include a WebKit or Gateway-runtime suite. Matching or unspecified selections
 retain the existing shard discovery before installing WebKit or preparing runtime.
+
+WebKit system-package downloads retry without the first mirror after a timeout.
+Recovery uses APT's configured local text mirror list, then restores it on success
+or failure. Package installation itself runs without a download deadline.
 
 The WebKit project requires every selected assertion to pass, with no expected-failure exceptions. Shared fixtures wait for usable overlay content, inspect native adopted stylesheets, and establish keyboard traversal independently of Safari's pointer-focus behavior.
 
@@ -602,8 +609,11 @@ An indivisible over-budget test fails planning with its owner named; unmeasured
 rows still need native timing evidence before claiming the 20-minute objective.
 
 Full Release Validation's exact-target UI job retains the current three native
-shards for both runtimes. Historical compatibility targets keep their original
-unsharded package command; see [UI job budgets](/ci/scope-and-routing/job-budgets).
+shards for both runtimes. Default Node compatibility targets whose own CI workflow
+already advertises native UI sharding use three partitions of their original
+package command, retaining file isolation, test deadlines, worker defaults, and
+complete discovery. Unknown targets and explicit runtime overrides retain the
+unsharded compatibility route; see [UI job budgets](/ci/scope-and-routing/job-budgets).
 
 Set the repository variable `OPENCLAW_RELEASE_RUNNER_GROUP` to reserve a runner
 group for Full Release Validation and its artifact, validation, and reusable
@@ -737,6 +747,11 @@ Every section heading from the previous single-page version keeps its anchor her
 - [Release channels](/install/development-channels)
 
 Ordinary PR iOS smoke keeps app and test-bundle compilation while selecting its two simulator groups by source owner. With neither group selected, simulator preparation is skipped. `OPENCLAW_CI_IOS_SIMULATOR_FULL=true` restores full PR execution; [selection and routing](/ci/scope-and-routing/selection) documents the owners and full hourly/release coverage.
+
+Selected iOS lanes install and verify the pinned simulator helper before compiling
+the app. A failed download stops the job before compilation. Simulator boot and
+preparation still run alongside the build, with the same checks required before
+tests start.
 
 Android's existing `android-access-native` emulator rows retain their packaged
 Access-crypto proof and exercise Gateway WebSocket and widget HTTPS clients on

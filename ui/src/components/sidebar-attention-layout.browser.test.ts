@@ -1,5 +1,5 @@
 import { render as renderSolid } from "@solidjs/web";
-import { createSignal, flush } from "solid-js";
+import { flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../app/context.ts";
@@ -122,18 +122,17 @@ function panelParams(entries: readonly SidebarInboxEntry[]): PanelFixtureParams 
       dispose: () => undefined,
     },
     entries,
-    onApprovalDecision: () => {},
     onClose: () => {},
     onDismiss: vi.fn(),
-    onKeydown: () => {},
     onNavigate: () => {},
     onOpen: () => {},
-    onSelectTab: () => {},
-    overflowAbove: false,
-    overflowBelow: false,
     panelPosition: { left: 0, anchor: "top", top: 0 },
-    selectedTab: "all",
   };
+}
+
+function selectInboxTab(shell: HTMLElement, tab: string) {
+  query(shell, `#sidebar-issues-tab-${tab}`).click();
+  flush();
 }
 
 afterEach(() => {
@@ -172,22 +171,12 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
 
     for (const mobile of [false, true]) {
       const shell = shellFor(mobile);
-      const [selectedTab, setSelectedTab] = createSignal<"all" | "approvals">("all");
-      mountPanel(
-        {
-          ...params,
-          get selectedTab() {
-            return selectedTab();
-          },
-        },
-        shell,
-      );
+      mountPanel(params, shell);
       await waitForSolid(() => expect(part(shell, "tabs")).not.toBeNull());
       const headerHeight = bounds(part(shell, "header")).height;
       const tabsTop = bounds(part(shell, "tabs")).top;
 
-      setSelectedTab("approvals");
-      flush();
+      selectInboxTab(shell, "approvals");
       expect(shell.querySelector('[data-value="dismiss-shown"]')).toBeNull();
       expect(shell.querySelector('[data-value="notifications"]')).not.toBeNull();
       expect(bounds(part(shell, "header")).height).toBe(headerHeight);
@@ -213,7 +202,8 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       );
       const params = panelParams(entries);
       params.mentions.snapshot.dismissing = ["mention-b"];
-      const shell = mountPanel({ ...params, selectedTab });
+      const shell = mountPanel(params);
+      selectInboxTab(shell, selectedTab);
 
       expect(
         Array.from(shell.querySelectorAll("[data-mention-id]"), (row) =>
@@ -237,7 +227,8 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     const params = panelParams(inboxEntries([authWarning], []));
     params.mentions.snapshot.phase = "loading";
     const all = mountPanel(params, shellFor());
-    const mentions = mountPanel({ ...params, selectedTab: "mentions" }, shellFor());
+    const mentions = mountPanel(params, shellFor());
+    selectInboxTab(mentions, "mentions");
     expect([part(mentions, "loading"), part(mentions, "empty")]).toEqual([null, null]);
     await waitForSolid(() =>
       expect(part(mentions, "loading")?.textContent).toBe("Loading mentions…"),
@@ -248,7 +239,8 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       null,
     ]);
     params.mentions.snapshot.phase = "ready";
-    const loaded = mountPanel({ ...params, selectedTab: "mentions" }, shellFor());
+    const loaded = mountPanel(params, shellFor());
+    selectInboxTab(loaded, "mentions");
     expect([part(loaded, "loading"), part(loaded, "empty")?.tagName]).toEqual([null, "DIV"]);
   });
 
@@ -257,7 +249,8 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     const params = panelParams(entries);
     params.mentions.snapshot.phase = "error";
     params.mentions.snapshot.error = "Connection interrupted";
-    const shell = mountPanel({ ...params, selectedTab: "mentions" });
+    const shell = mountPanel(params);
+    selectInboxTab(shell, "mentions");
 
     expect(query(shell, '[data-mention-id="mention-a"]')).not.toBeNull();
     expect(part(shell, "empty")).toBeNull();

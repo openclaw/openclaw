@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { FailoverError } from "./failover-error.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
 import { prepareOperatorModelPolicy } from "./operator-model-policy.js";
@@ -13,7 +13,7 @@ const cfg = createModelFallbackConfig("fixture/primary", [
 cfg.agents!.defaults!.models = { "fixture/restricted-v1": { alias: "special" } };
 
 const source = (assertCurrent = () => {}) =>
-  createAdmittedRunOperatorAuthority({
+  createTestOperatorAuthority({
     profileId: "fixture-operator",
     scopes: ["operator.write"],
     assertCurrent,

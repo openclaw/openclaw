@@ -13,6 +13,14 @@
   gap: var(--space-2);
 }
 
+/* A page-leading strip hangs into the gutter by its button padding. The label
+   follows the reading edge without shrinking the button or its underline. */
+.config-sections-hub-tabs:first-child,
+.hub-page-header--stacked .hub-page-header__tabs > .hub-tabs,
+.transcript-reader-hub-tabs {
+  margin-inline-start: calc(-1 * var(--space-2));
+}
+
 .hub-tabs--sub {
   gap: var(--space-1);
 }
@@ -105,6 +113,30 @@
   max-height: none;
   margin-inline: auto;
   padding-inline: var(--settings-header-inline-padding, var(--space-4));
+
+  .hub-page-header__title {
+    grid-area: title;
+    justify-self: start;
+  }
+
+  .page-title {
+    font-size: 26px;
+  }
+
+  .hub-page-header__tabs {
+    grid-area: tabs;
+    justify-self: start;
+    padding-block: var(--space-2);
+  }
+
+  .hub-page-header__actions {
+    grid-area: actions;
+  }
+
+  /* Keep the stacked-header gap independent of lazy stylesheet order. */
+  & + .settings-workspace {
+    margin-top: 0;
+  }
 }
 
 .content-header.hub-page-header--untabbed {
@@ -115,30 +147,6 @@
 .content-header.hub-page-header--wide {
   max-width: none;
   padding-inline: 0;
-}
-
-.content-header.hub-page-header--stacked .hub-page-header__title {
-  grid-area: title;
-  justify-self: start;
-}
-
-.content-header.hub-page-header--stacked .page-title {
-  font-size: 26px;
-}
-
-.content-header.hub-page-header--stacked .hub-page-header__tabs {
-  grid-area: tabs;
-  justify-self: start;
-  padding-block: var(--space-2);
-}
-
-.content-header.hub-page-header--stacked .hub-page-header__actions {
-  grid-area: actions;
-}
-
-/* Keep the stacked-header gap independent of lazy stylesheet order. */
-.content-header.hub-page-header--stacked + .settings-workspace {
-  margin-top: 0;
 }
 
 .hub-page-header__title,
@@ -199,10 +207,9 @@
   }
 
   .content-header.hub-page-header {
-    display: grid;
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
-      "intro"
+      "title"
       "tabs"
       "actions";
     justify-items: center;
@@ -211,7 +218,7 @@
   }
 
   .hub-page-header .hub-page-header__title {
-    grid-area: intro;
+    grid-area: title;
     justify-self: stretch;
   }
 
@@ -225,11 +232,15 @@
   }
 
   .content-header.hub-page-header--stacked {
-    grid-template-areas:
-      "title"
-      "tabs"
-      "actions";
     justify-items: stretch;
+
+    .hub-page-header__actions {
+      justify-self: end;
+    }
+
+    .page-title {
+      font-size: 22px;
+    }
   }
 
   .content-header.hub-page-header--untabbed {
@@ -237,21 +248,14 @@
       "title"
       "actions";
   }
-
-  .content-header.hub-page-header--stacked .hub-page-header__title {
-    grid-area: title;
-  }
-
-  .content-header.hub-page-header--stacked .hub-page-header__actions {
-    justify-self: end;
-  }
-
-  .content-header.hub-page-header--stacked .page-title {
-    font-size: 22px;
-  }
 }
 
 @media (max-width: 640px) {
+  /* With no header inset, the first tab's leading hit area sits in the page gutter. */
+  .content-header.hub-page-header--stacked:not(.hub-page-header--untabbed) {
+    overflow: visible;
+  }
+
   /* Outranks the settings-page header column inset regardless of stylesheet order. */
   .content.content--hub-header .content-header.hub-page-header {
     padding-inline: 0;

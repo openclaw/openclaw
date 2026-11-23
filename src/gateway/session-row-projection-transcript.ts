@@ -124,6 +124,7 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
                   maxSeq: fact.value.rawSeq,
                 },
                 transcriptPreview: fact.value.lastMessagePreview,
+                transcriptHasMessages: fact.value.hasMessages,
                 transcriptAssistantMessage:
                   fact.value.lastAssistantMessage === "unchanged"
                     ? facts.transcriptAssistantMessage

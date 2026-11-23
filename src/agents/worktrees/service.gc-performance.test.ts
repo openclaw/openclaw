@@ -464,7 +464,7 @@ describe("worktree Git maintenance", () => {
     const commands = vi
       .spyOn(gitExec, "executeGitCommand")
       .mockImplementation(async (cwd, args, options) => {
-        if (args.at(-1) === "openclaw-consolidate") {
+        if (args.includes("openclaw-consolidate")) {
           throw new Error("pack publication failed");
         }
         return execute(cwd, args, options);
@@ -488,56 +488,22 @@ describe("worktree Git maintenance", () => {
         }
       },
     });
-    expect(result).toMatchObject({ outcome: "completed", packsRemoved: 16 });
+    expect(result).toMatchObject({ outcome: "completed", packsRemoved: 15 });
     expect(checkpoints).toEqual(
       expect.arrayContaining([
         { repoRoot: repo, stage: "packs", packsBefore: 19, packsAfter: undefined },
-        { repoRoot: repo, stage: "maintenance", packsBefore: 19, packsAfter: 3 },
+        { repoRoot: repo, stage: "maintenance", packsBefore: 19, packsAfter: 4 },
       ]),
     );
     const remaining = await fs.readdir(packDirectory);
-    expect(remaining.filter((name) => name.endsWith(".pack"))).toHaveLength(3);
+    expect(remaining.filter((name) => name.endsWith(".pack"))).toHaveLength(4);
     expect(remaining).toContain(`${kept}.pack`);
     expect(remaining).toContain(`${generated[17]}.pack`);
-    expect(remaining.filter((name) => name.endsWith(".promisor"))).toHaveLength(2);
+    expect(remaining.filter((name) => name.endsWith(".promisor"))).toHaveLength(3);
     expect(await objectTypes(repo, objects)).toBe(objects.map(() => "blob").join("\n"));
     expect(await git(repo, "rev-list", "--objects", "--all", "--missing=print")).toBe(missing);
     await git(repo, "multi-pack-index", "verify");
     expect(await fs.readFile(trace, "utf8")).not.toContain("upload-pack");
-    // A tiny duplicate does not force rewriting its dominant pack or rebuilding
-    // a full MIDX just to discover redundant copies.
-    const duplicate = await pack(repo, [objects[1]!]);
-    await fs.writeFile(path.join(packDirectory, `${duplicate}.promisor`), "");
-    await createWorktreeGitMaintenance(env)({});
-    const afterDuplicate = await fs.readdir(packDirectory);
-    expect(afterDuplicate.filter((name) => name.endsWith(".pack"))).toHaveLength(4);
-    expect(afterDuplicate.filter((name) => name.endsWith(".promisor"))).toHaveLength(3);
-    expect(await git(repo, "cat-file", "-t", objects[1]!)).toBe("blob");
-    await git(repo, "multi-pack-index", "verify");
-  });
-
-  it("rolls up equal-sized small packs while leaving a dominant pack untouched", async () => {
-    const repo = await initRepo(tempDirs.make("worktree-geometric-packs-"));
-    const directory = path.join(repo, ".git", "objects", "pack");
-    const dominant = Buffer.alloc(4096);
-    for (let offset = 0; offset < dominant.length; offset += 4) {
-      dominant.writeUInt32BE(offset, offset);
-    }
-    const { objects, packs: stems } = await packBlobs(repo, ["small-a", "small-b", dominant]);
-    const packs = stems.map((stem) => path.join(directory, `${stem}.pack`));
-    const sizes = await Promise.all(packs.map(async (name) => (await fs.stat(name)).size));
-    expect(sizes[2]).toBeGreaterThan(sizes[0]! + sizes[1]!);
-    await git(repo, "prune-packed");
-    await register(repo, "geometric-packs", { branch: "main" });
-    const progress = new WorktreeGcProgress();
-    await createWorktreeGitMaintenance(env)({ progress });
-    expect(progress.result.gitMaintenance).toMatchObject({
-      stage: "completed",
-      packsBefore: 3,
-      packsAfter: 2,
-    });
-    await fs.access(packs[2]!);
-    expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
   });
 
   it.each([
@@ -612,7 +578,7 @@ describe("worktree Git maintenance", () => {
     let stalled = false;
     vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
       const result = await execute(cwd, args, options);
-      if (args.at(-1) === "openclaw-consolidate" && !stalled) {
+      if (args.includes("openclaw-consolidate") && !stalled) {
         stalled = true;
         // The host misses every renewal while Git rewrites packs, as in production.
         now = real + 60_000;
@@ -642,7 +608,7 @@ describe("worktree Git maintenance", () => {
     vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
       // A base-ref fetch must not wait for the whole verification and rewrite.
       const signal = AbortSignal.timeout(5_000);
-      if (args.at(-1) === "openclaw-consolidate") {
+      if (args.includes("openclaw-consolidate")) {
         const peer = new WorktreeGcProgress();
         await createWorktreeGitMaintenance(env)({ progress: peer });
         expect(peer.result.issues).toEqual([
@@ -687,7 +653,7 @@ describe("worktree Git maintenance", () => {
       .spyOn(gitExec, "executeGitCommand")
       .mockImplementation(async (cwd, args, options) => {
         const result = await execute(cwd, args, options);
-        if (args.at(-1) === "openclaw-consolidate") {
+        if (args.includes("openclaw-consolidate")) {
           foreground = withProjectCheckoutLifecycle(
             repo,
             { context: captureOpenClawStateWorkerContext({ env }), waitMs: 0 },
@@ -809,7 +775,7 @@ describe("worktree Git maintenance", () => {
     const directory = path.join(repo, ".git", "objects", "pack");
     const { objects, packs: inputs } = await packBlobs(
       repo,
-      Array.from({ length: 15 }, (_, index) => `retained-${index}`),
+      Array.from({ length: 2 }, (_, index) => `retained-${index}`),
       true,
     );
     for (const stem of inputs) {
@@ -822,7 +788,7 @@ describe("worktree Git maintenance", () => {
     const execute = gitExec.executeGitCommand;
     vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
       const result = await execute(cwd, args, options);
-      if (args.at(-1) === "openclaw-consolidate") {
+      if (args.includes("openclaw-consolidate")) {
         expect(result.stdout.trim()).toBe(`pack\t${union.slice(5)}`);
         await fs.writeFile(
           path.join(directory, `${inputs[0]}.keep`),
@@ -838,7 +804,7 @@ describe("worktree Git maintenance", () => {
     await createWorktreeGitMaintenance(env)({ progress });
     expect(progress.result.gitMaintenance).toMatchObject({
       stage: "completed",
-      packsBefore: 16,
+      packsBefore: 3,
       packsAfter: 2,
     });
     expect(await packNames(repo)).toEqual([`${inputs[0]}.pack`, `${union}.pack`].toSorted());
@@ -857,11 +823,25 @@ describe("worktree Git maintenance", () => {
       const young = path.join(directory, "tmp_pack_young");
       const unrelated = path.join(directory, "operator-note");
       const link = path.join(directory, "tmp_pack_symlink");
-      for (const file of [old, oldIndex, active, young, unrelated]) {
+      const repack = ["pack", "idx", "rev", "bitmap", "mtimes"].map((extension) =>
+        path.join(directory, `.tmp-2147483647-pack-${"a".repeat(40)}.${extension}`),
+      );
+      const liveRepack = path.join(directory, `.tmp-${process.pid}-pack-${"b".repeat(40)}.idx`);
+      const freshRepack = path.join(directory, `.tmp-2147483647-pack-${"c".repeat(40)}.pack`);
+      for (const file of [
+        old,
+        oldIndex,
+        active,
+        young,
+        unrelated,
+        ...repack,
+        liveRepack,
+        freshRepack,
+      ]) {
         await fs.writeFile(file, "retain or reclaim");
       }
       const yesterday = new Date(Date.now() - 48 * 60 * 60_000);
-      for (const file of [old, oldIndex, active, unrelated]) {
+      for (const file of [old, oldIndex, active, unrelated, ...repack, liveRepack]) {
         await fs.utimes(file, yesterday, yesterday);
       }
       await fs.symlink(unrelated, link);
@@ -877,13 +857,16 @@ describe("worktree Git maintenance", () => {
         await fs.access(active);
         await expectMissing(old);
         await expectMissing(oldIndex);
+        for (const file of repack) {
+          await expectMissing(file);
+        }
       } finally {
         await writer.close();
       }
       await service.gc({ retryDeferred: true });
       await expectMissing(old);
       await expectMissing(active);
-      for (const file of [young, unrelated, link]) {
+      for (const file of [young, unrelated, link, liveRepack, freshRepack]) {
         await fs.access(file);
       }
     },

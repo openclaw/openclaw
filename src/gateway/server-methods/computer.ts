@@ -19,7 +19,7 @@ function resolveComputerCaller(
   ownerSignal?: AbortSignal;
   assertCurrent: () => void;
 } {
-  const { client, context, hasCurrentClientAuthority, sessionMutationCommitGuard } = options;
+  const { client, context, sessionMutationCommitGuard } = options;
   const identity = client?.internal?.agentRuntimeIdentity;
   const principal = client?.internal?.remoteIngressPrincipal;
   const discovery = purpose === "status" && client?.internal?.syntheticClient === true;
@@ -48,16 +48,10 @@ function resolveComputerCaller(
     assertCurrent: () => {
       sessionMutationCommitGuard?.();
       signal?.throwIfAborted();
-      if (client.invalidated || hasCurrentClientAuthority?.() === false) {
-        throw new Error("Gateway computer requester authority is no longer current");
-      }
       if (principal && !hasCurrentPersonalGatewaySource(client, context)) {
         throw new Error("Gateway computer requester grant is no longer current");
       }
       if (identity && purpose === "invoke") {
-        if (context.validateAgentRuntimeApprovalAuthority?.(identity) !== true) {
-          throw new Error("Gateway computer agent run authority is no longer current");
-        }
         client.internal?.agentToolCaller?.assertCurrent?.();
       } else if (
         !client.internal?.syntheticClient &&

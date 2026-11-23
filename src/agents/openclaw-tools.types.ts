@@ -100,8 +100,12 @@ export type OpenClawSharedToolsOptions = {
   /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
   runtimeToolAllowlist?: string[];
+  /** The session lists one fixed set: the run allowlist gates calls, never construction. */
+  fixedToolListing?: boolean;
   /** Session-owned Gateway publication surface; the broker checks current identity and authority. */
   githubPublicationAvailable?: boolean;
+  /** Admitted session is in its default workspace. The move checks live authority separately. */
+  sessionProjectMoveEligible?: boolean;
   cronCreatorAuthorityUnavailableReason?: CronToolOptions["creatorAuthorityUnavailableReason"];
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
   computerContextEpoch?: { value: number };
@@ -121,6 +125,8 @@ export type OpenClawSharedToolsOptions = {
 };
 
 export type OpenClawToolsOptions = {
+  /** Host-owned admission policy, separate from model and tool-listing config. */
+  readDelegationConfig?: () => OpenClawConfig;
   /** Internal listing owner pins discovery changes or renders a read-only inventory. */
   githubPublicationConfigurationAware?: true;
   /** Internal inventory projection; the resulting GitHub tool cannot execute. */
@@ -187,8 +193,8 @@ export type OpenClawToolsOptions = {
   cronSandboxContext?: CronToolOptions["sandboxContext"];
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
-  /** Prepared profile authority for the gateway tool's configuration-read actions. */
-  gatewayConfigReadAllowed?: boolean;
+  /** Whether the tool profile exposes Gateway management actions beyond maintenance. */
+  gatewayManagementActionsAllowed?: boolean;
   /** Effective caller tool surface to persist on isolated cron agentTurn jobs. */
   cronCreatorToolAllowlist?: CronToolOptions["creatorToolAllowlist"];
   cronCreatorToolAllowlistCaptureRef?: CronToolOptions["creatorToolAllowlistCaptureRef"];
@@ -204,6 +210,8 @@ export type OpenClawToolsOptions = {
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   /** Restrict cron operations to the active cron job's self-scoped surface. */
   cronSelfRemoveOnlyJobId?: string;
+  /** Host-stamped user turn; non-conversational callers retain the native add contract. */
+  requireCronCreationPlan?: boolean;
   /** Process-local completion authority restricted to the current source conversation. */
   sourceReplyOnly?: boolean;
   /**

@@ -48,9 +48,10 @@ Foreground local `exec` waits for process cleanup before delivery. Interrupting 
 keeps running, and the tool result tells the model how to poll or stop it. Node,
 durable, and explicitly backgrounded execution do not offer this shortcut.
 Code Mode aggregate tools and native or remote backends do not support tool-only
-interruption. A required Code Mode cell waiting solely on shell commands can
-yield its wait to a pending steer without stopping the commands: the correction
-reaches the next model decision, and `wait` collects the original cell's result.
+interruption. A required Code Mode cell waiting solely on shell commands or
+`process` polls can yield its wait to a pending steer without stopping the commands.
+The correction reaches the next model decision, and `wait` collects the original
+cell's result.
 Other unsupported calls keep waiting for their normal runtime boundary.
 
 Internal updates, including subagent completion reports, also use this steering boundary. These updates can be hidden from the chat transcript and do not appear in the user message queue. A skipped tool therefore does not necessarily mean a user message is waiting; the agent processes the incoming update before deciding which tools to call next.
@@ -263,6 +264,8 @@ An authorized Gateway client can withdraw a message still waiting in the OpenCla
 runtime's steering queue or the followup queue, before delivery starts, with `chat.abort({ sessionKey,
 runId })`. Use the `runId` returned by that message's `chat.send`. This withdraws
 that message without stopping the active run or retrying it as a followup.
+After withdrawing a steer from the runtime's queue, sending the same message ID
+returns a cancellation error. To send the message again, use a new message ID.
 
 Once delivery starts, cancellation cannot guarantee withdrawal or undo completed
 work. If delivery cannot be confirmed, OpenClaw reports the uncertainty and retains

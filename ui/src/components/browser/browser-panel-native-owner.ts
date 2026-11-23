@@ -6,7 +6,11 @@ import {
   type NativeBrowserMessage,
   type NativeBrowserTab,
 } from "../../app/native-browser-bridge.ts";
-import { subscribeNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
+import { isNativeMacWebChromeHost } from "../../app/native-web-chrome.ts";
+import {
+  subscribeNativeOverlayOcclusion,
+  type NativeOverlayOcclusion,
+} from "../../lib/native-overlay-occlusion.ts";
 import { observeDocumentScroll } from "../../lib/reactive/document-scroll.ts";
 import { observeIntersection, observeResize } from "../../lib/reactive/observers.ts";
 import { observeWindowResize } from "../../lib/reactive/window-resize.ts";
@@ -70,7 +74,8 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
   let lastPresented = 0;
   let presentationStage: HTMLElement | null = null;
   let intersecting = true;
-  let occluded = false;
+  let occlusion: NativeOverlayOcclusion = "live";
+  let backdrop: { tab: NativeBrowserTab; image?: HTMLImageElement } | null = null;
   let frame: number | null = null;
   let lastPresentation: { key: string } | null = null;
   let connected = false;
@@ -90,24 +95,69 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
     });
   }
 
-  function canPresent(): boolean {
+  function hasLiveStage(): boolean {
     return Boolean(
       connected &&
       controller.host.isConnected &&
       controller.host.browserPanelIsOpen() &&
       controller.native.activeTab &&
       controller.mode === "interact" &&
-      !occluded &&
       intersecting,
     );
+  }
+
+  function clearBackdrop(): void {
+    backdrop?.image?.remove();
+    backdrop = null;
+  }
+
+  async function captureBackdrop(stage: HTMLElement, tab: NativeBrowserTab): Promise<void> {
+    if (
+      backdrop?.image?.parentElement === stage &&
+      backdrop.tab.id === tab.id &&
+      backdrop.tab.url === tab.url
+    ) {
+      return;
+    }
+    clearBackdrop();
+    const capture: NonNullable<typeof backdrop> = { tab };
+    backdrop = capture;
+    // Request the final frame before hiding the native surface. It stays in this
+    // viewport only, not in the Browser capture, sharing, or attachment state.
+    const reply = await postNativeBrowserMessage({ type: "snapshot", tabId: tab.id });
+    if (backdrop !== capture || !reply?.ok || !reply.dataUrl) {
+      return;
+    }
+    const image = await loadBrowserPanelImage(reply.dataUrl).catch(() => null);
+    const activeTab = controller.native.activeTab;
+    if (
+      !image ||
+      backdrop !== capture ||
+      (occlusion !== "backdrop" && occlusion !== "hidden-backdrop") ||
+      stage !== presentationStage ||
+      !hasLiveStage() ||
+      activeTab?.id !== tab.id ||
+      activeTab.url !== tab.url
+    ) {
+      return;
+    }
+    image.className = "bp-native-backdrop";
+    image.alt = "";
+    image.draggable = false;
+    image.hidden = occlusion === "hidden-backdrop";
+    stage.append(image);
+    capture.image = image;
   }
 
   function report(): void {
     if (!connected) {
       return;
     }
-    if (!presentationStage || !canPresent()) {
+    if (!presentationStage || !hasLiveStage()) {
       presentation.hide();
+      return;
+    }
+    if (occlusion !== "live") {
       return;
     }
     const rect = presentationStage.getBoundingClientRect();
@@ -165,6 +215,9 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
       lastPresented = ++presentationOrder;
     }
     void postNativeBrowserMessage(payload).then((reply) => {
+      if (lastPresentation === presentation && reply?.ok && tabId && occlusion === "live") {
+        clearBackdrop();
+      }
       if (
         reply &&
         !reply.ok &&
@@ -191,9 +244,26 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
       hostElement()?.setAttribute("data-native-browser-scope", scope);
       const stopOcclusion = subscribeNativeOverlayOcclusion(
         (value) => {
-          occluded = value;
-          if (value) {
-            presentation.hide();
+          occlusion = value;
+          if (value === "hidden") {
+            clearBackdrop();
+          } else if (backdrop?.image) {
+            // A modal covering the palette hides the frame without ending its lifetime.
+            backdrop.image.hidden = value === "hidden-backdrop";
+          }
+          if (
+            (value === "backdrop" || value === "hidden-backdrop") &&
+            isNativeMacWebChromeHost() &&
+            presentationStage &&
+            presentedTabId
+          ) {
+            const tab = controller.native.activeTab;
+            if (tab?.id === presentedTabId) {
+              void captureBackdrop(presentationStage, tab);
+            }
+          }
+          if (value !== "live") {
+            send(null, null);
           }
           schedule();
         },
@@ -217,8 +287,12 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
       if (!connected) {
         return;
       }
-      if (!canPresent()) {
+      if (!hasLiveStage()) {
         presentation.hide();
+      }
+      const tab = controller.native.activeTab;
+      if (backdrop && (backdrop.tab.id !== tab?.id || backdrop.tab.url !== tab.url)) {
+        clearBackdrop();
       }
       schedule();
     },
@@ -252,6 +326,7 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
       schedule();
     },
     hide(): void {
+      clearBackdrop();
       if (connected) {
         send(null, null);
       }

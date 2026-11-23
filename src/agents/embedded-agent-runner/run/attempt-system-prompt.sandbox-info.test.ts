@@ -102,7 +102,9 @@ it.each(["abort", "close"] as const)(
       if (action === "abort") {
         await expect(refresh).rejects.toBe(reason);
       } else {
-        await expect(refresh).rejects.toThrow("admitted run authority is no longer active");
+        await expect(refresh).rejects.toThrow(
+          "This agent run is no longer active. Start a new turn to retry.",
+        );
       }
     });
   },

@@ -56,7 +56,7 @@ import {
   resolveMcpAppAllowedToolNames,
 } from "../mcp-app-operations.js";
 import { mintMcpAppViewFromTranscript } from "../mcp-app-reconstruction.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { resolveSandboxView } from "../sandbox-view.js";
 import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
 import {
@@ -176,7 +176,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
           );
         }
         const boardAuthority = captureBoardRequestAuthority(invocation);
-        let requester: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+        let requester: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
         let canvasRead: Awaited<ReturnType<typeof retainCanvasWidgetRead>> | undefined;
         const authority = {
           ...boardAuthority,
@@ -233,7 +233,9 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
               );
               return;
             }
-            const document = await readCanvasDocumentHtmlSource(requestParams.content.docId);
+            const document =
+              canvasRead?.document ??
+              (await readCanvasDocumentHtmlSource(requestParams.content.docId));
             authority.assertActive();
             if (document.cspSandbox !== "scripts") {
               throw new BoardValidationError(
@@ -243,7 +245,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
             }
             content = { kind: "html", html: document.html };
           } else if (requestParams.content.kind === "mcp-app") {
-            requester = await captureGatewayOperatorRunAuthority({
+            requester = await prepareGatewayOperatorRunAuthority({
               client: invocation.client,
               context,
               hasCurrentClientAuthority: invocation.hasCurrentClientAuthority,

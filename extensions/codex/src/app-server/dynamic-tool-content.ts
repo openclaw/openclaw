@@ -49,6 +49,7 @@ export function createCodexToolResultPresentation(
       toolName,
       await withoutGatewayOnlySkillLocation(toolName, result, context?.gatewayOnlySkillDirs),
       maxChars,
+      result,
     );
   return { maxChars, presentSkillResult };
 }
@@ -99,6 +100,7 @@ function enforceWholeSkillResult(
   toolName: string,
   result: AgentToolResult<unknown>,
   maxChars: number,
+  originalResult: AgentToolResult<unknown>,
 ): AgentToolResult<unknown> {
   if (toolName !== "skills_read" || isToolResultError(result)) {
     return result;
@@ -107,7 +109,17 @@ function enforceWholeSkillResult(
     (total, item) => total + (item.type === "text" ? estimateToolResultTextChars(item.text) : 0),
     0,
   );
-  return budget <= maxChars
+  const details = asOptionalRecord(originalResult.details);
+  const instructions = readStringField(details, "content");
+  const [item] = originalResult.content;
+  // Generic skill reads can paginate; compare the original body before location redaction.
+  // Already-delivered notices have no named instruction record.
+  const incomplete =
+    readStringField(details, "name") !== undefined &&
+    readStringField(details, "location") !== undefined &&
+    instructions !== undefined &&
+    (item?.type !== "text" || !item.text.endsWith(instructions));
+  return !incomplete && budget <= maxChars
     ? result
     : failedToolResult(
         `This Codex turn cannot deliver the whole skill within its ${maxChars}-character weighted output budget. No instructions were returned; use a harness with a larger instruction budget.`,

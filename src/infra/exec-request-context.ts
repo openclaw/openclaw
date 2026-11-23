@@ -33,6 +33,8 @@ export type ExecRequestOwner = {
 type ExecRequestTurn = {
   identity: ExecRequestIdentity;
   owners: readonly ExecRequestOwner[];
+  /** The owners came from another request's events, such as a background exec completion. */
+  continues: boolean;
 };
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.execRequestContext"), () => ({
@@ -41,6 +43,38 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.execRequestContext"), 
 }));
 const EVENT_OWNERS = Symbol.for("openclaw.execRequestEventOwners");
 type OwnedEvent = { [EVENT_OWNERS]?: readonly ExecRequestOwner[] };
+
+/** Public projection of an exec request's starting turn. */
+export type ExecRequestOwnerRef = Readonly<{
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  ownerDeviceId?: string;
+}>;
+
+/**
+ * Starting turns of the commands the current run continues, such as a background exec
+ * completion. A run that owns only its own request continues nothing.
+ */
+export function readInheritedExecRequestOwners(): readonly ExecRequestOwnerRef[] | undefined {
+  const turn = state.context.getStore();
+  if (!turn?.continues) {
+    return undefined;
+  }
+  const refs = turn.owners.flatMap(({ identity }) =>
+    identity.runId
+      ? [
+          Object.freeze({
+            runId: identity.runId,
+            ...(identity.sessionKey ? { sessionKey: identity.sessionKey } : {}),
+            ...(identity.sessionId ? { sessionId: identity.sessionId } : {}),
+            ...(identity.ownerDeviceId ? { ownerDeviceId: identity.ownerDeviceId } : {}),
+          }),
+        ]
+      : [],
+  );
+  return refs.length ? Object.freeze(refs) : undefined;
+}
 
 /** Opaque request ancestry retained by work admitted through a host capability. */
 export type ExecRequestCustody = Readonly<OwnedEvent>;
@@ -195,6 +229,8 @@ export async function withExecRequestTurn<T>(
   params: {
     identity: ExecRequestIdentity;
     owners?: readonly ExecRequestOwner[];
+    /** The owners came from another request's events; hooks then report them as ancestry. */
+    continues?: boolean;
     abortSignal?: AbortSignal;
   },
   run: () => Promise<T>,
@@ -214,7 +250,11 @@ export async function withExecRequestTurn<T>(
       owner.turnRunIds.add(params.identity.runId);
     }
   }
-  const turn = { identity, owners };
+  const turn = {
+    identity,
+    owners,
+    continues: params.continues ?? sameTurn?.continues ?? false,
+  };
   const stop = () => {
     // Restart interrupts commands with their run, overlapping their cleanup grace.
     // Handler retirement and inherited event cancellation preserve other owners.

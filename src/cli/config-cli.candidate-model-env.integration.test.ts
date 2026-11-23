@@ -34,8 +34,10 @@ vi.mock("./config-model-validation.js", async (importOriginal) => {
             },
             agentId: ref.agentId,
             defaultProvider: "anthropic",
-            defaultModel: "",
           });
+          if (!primary) {
+            return "Unknown fixture model";
+          }
           const resolved = ref.fallback
             ? resolveModelRefFromString({
                 cfg: config,

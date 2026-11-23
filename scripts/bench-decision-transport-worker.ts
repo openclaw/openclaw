@@ -382,6 +382,7 @@ async function benchmarkRegisteredV1(evaluations: number, fixture: string, mode:
   setRuntimeConfigSnapshot(config);
   const lifetime = new AbortController();
   const authority = createAdmittedRunOperatorAuthority({
+    canonicalIdentity: null,
     profileId: "benchmark-operator",
     scopes: ["operator.write"],
     signal: lifetime.signal,

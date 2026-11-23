@@ -71,7 +71,6 @@ export async function prepareCodexAttemptContext(
     const messages = await readMirroredSessionHistoryMessages({
       ...activeTranscriptTarget,
       signal: connection.runAbortController.signal,
-      contextTokenBudget: effectiveContextTokenBudget,
       ...(transcriptReadFence ? { admission: transcriptReadFence } : {}),
     });
     connection.runAbortController.signal.throwIfAborted();
@@ -199,6 +198,7 @@ export async function prepareCodexAttemptContext(
       skillsInstructions,
       workspaceBootstrapContext.sharedPersonaInstructions,
       workspaceBootstrapContext.memoryInstructions,
+      workspaceBootstrapContext.sessionProjectGuidance,
     ) || undefined;
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {

@@ -238,6 +238,10 @@ async function buildOpenAICodexLiveProviderConfig(params: {
             ...(params.accountId ? { "ChatGPT-Account-ID": params.accountId } : {}),
           }),
         });
+        // A ChatGPT account always has models; an empty list is a backend fault, so keep the last rows.
+        if (rows.length === 0) {
+          throw new Error("OpenAI Codex model discovery returned no models");
+        }
         // The backend also sends prompt templates; retain only account catalog facts.
         return {
           provider: {
