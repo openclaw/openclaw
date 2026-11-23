@@ -1,5 +1,7 @@
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { preparedDockerEvidenceFromFullRelease } from "../../scripts/docker-release-artifacts.mjs";
@@ -14,6 +16,7 @@ import {
 } from "../../scripts/release-ci-summary.mjs";
 import { verifyReleaseRecoveryProducer } from "../../scripts/release-qualification-admission.mjs";
 import { authenticateFullReleaseValidationEvidence } from "../../scripts/validate-full-release-validation-evidence.mjs";
+import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
 
 const directories: string[] = [];
@@ -510,3 +513,139 @@ it.each(["selection", "dispatch"])(
     ).rejects.toThrow();
   },
 );
+
+it("runs the actual Node seal CLI through its reverse import and reports the evidence failure", async () => {
+  const { f, producer, client, run } = fixture();
+  const { env, request, eventPath, manifestPath } = await cliFixture(f, producer, client);
+  const directory = resolve(env.RUNNER_TEMP);
+  const bin = join(directory, "bin");
+  mkdirSync(bin);
+  const responses: Record<string, { json?: unknown; bytes?: string }> = {};
+  const api = (path: string, json: unknown) => {
+    responses["repos/" + f.repository + "/" + path] = { json };
+  };
+  for (const endpoint of new Set(f.admission.calls)) {
+    responses[endpoint.replace(/([?&])per_page=100(?:&page=1)?/u, "")] = {
+      json: JSON.parse(f.admission.runGh(["api", endpoint])),
+    };
+  }
+  for (const [key, text] of f.admission.sources) {
+    const separator = key.indexOf(":");
+    const sha = key.slice(0, separator),
+      path = key.slice(separator + 1);
+    const bytes = Buffer.from(text);
+    api("contents/" + path + "?ref=" + sha, {
+      type: "file",
+      path,
+      encoding: "base64",
+      size: bytes.length,
+      content: bytes.toString("base64"),
+      sha: createHash("sha1")
+        .update("blob " + bytes.length + "\0")
+        .update(bytes)
+        .digest("hex"),
+    });
+  }
+  api("actions/runs/991", run);
+  api("actions/runs/991/attempts/1", run);
+  api("actions/runs/991/attempts/1/jobs", {
+    total_count: 1,
+    jobs: [
+      {
+        name: "Seal retained qualification",
+        run_id: 991,
+        run_attempt: 1,
+        status: "in_progress",
+        conclusion: null,
+        steps: [
+          {
+            name: "Checkout authenticated P recovery owner",
+            status: "completed",
+            conclusion: "success",
+          },
+        ],
+      },
+    ],
+  });
+  api("actions/runs/" + f.runId, await client.getRun(f.runId));
+  api("actions/runs/" + f.runId + "/attempts/1", client.getRunAttempt(f.runId, 1));
+  const jobs = await client.getRunAttemptJobs(f.runId);
+  api("actions/runs/" + f.runId + "/attempts/1/jobs", { total_count: jobs.length, jobs });
+  for (const job of jobs.filter((entry) => entry.name === "Seal release execution plan")) {
+    responses["repos/" + f.repository + "/actions/jobs/" + job.id + "/logs"] = {
+      bytes: Buffer.from(await client.getJobLog(job.id)).toString("base64"),
+    };
+  }
+  for (const child of f.plan.children.filter((entry) => entry.selected)) {
+    api("actions/runs/" + child.runId, await client.getRun(child.runId));
+  }
+  const archive = makeStoredZip({ "full-release-execution-plan.json": JSON.stringify(f.plan) });
+  const artifact = {
+    ...client.loadExecutionPlanEvidence().artifact,
+    expired: false,
+    workflow_run: { id: Number(f.runId), head_sha: f.q, head_branch: f.branch },
+    digest: "sha256:" + createHash("sha256").update(archive).digest("hex"),
+    size_in_bytes: archive.length,
+  };
+  api("actions/runs/" + f.runId + "/artifacts", { total_count: 1, artifacts: [artifact] });
+  api("actions/artifacts/900", artifact);
+  responses["repos/" + f.repository + "/actions/artifacts/900/zip"] = {
+    bytes: archive.toString("base64"),
+  };
+  Object.assign(request.sourceArtifact, { digest: artifact.digest, sizeInBytes: archive.length });
+  writeFileSync(
+    eventPath,
+    JSON.stringify({
+      inputs: {
+        operation: "recover-qualification",
+        recovery_request: JSON.stringify(request),
+      },
+    }),
+  );
+  // The production selector must reach and reject this source, after importing
+  // the still-running CLI module. No module mocks, preloads, timers or keepalive.
+  api("actions/runs/500", { status: "queued", run_attempt: 1 });
+  const responsesPath = join(directory, "responses.json"),
+    callsPath = join(directory, "calls.txt");
+  writeFileSync(responsesPath, JSON.stringify(responses));
+  writeFileSync(
+    join(bin, "gh"),
+    String.raw`#!/usr/bin/env node
+import fs from "node:fs";
+const args = process.argv.slice(2);
+if (args[0] !== "api" || args.includes("POST")) throw new Error("Unexpected mutation");
+const endpoint = args.find(arg => arg.startsWith("repos/"));
+const url = new URL("https://fixture/" + endpoint);
+url.searchParams.delete("page"); url.searchParams.delete("per_page");
+const key = url.pathname.slice(1) + url.search;
+fs.appendFileSync(process.env.FIXTURE_CALLS, key + "\n");
+const response = JSON.parse(fs.readFileSync(process.env.FIXTURE_RESPONSES, "utf8"))[key];
+if (!response) throw new Error("Unplanned fixture read: " + key);
+process.stdout.write(response.bytes === undefined ? JSON.stringify(response.json) : Buffer.from(response.bytes, "base64"));
+`,
+    { mode: 0o755 },
+  );
+  const result = spawnSync("node", ["scripts/release-ci-summary.mjs", "--seal-recovery"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    timeout: 15_000,
+    killSignal: "SIGKILL",
+    env: {
+      ...process.env,
+      ...env,
+      NODE_OPTIONS: "",
+      GH_TOKEN: "fixture-token",
+      OPENCLAW_GH_BIN: join(bin, "gh"),
+      PATH: bin + delimiter + process.env.PATH,
+      FIXTURE_RESPONSES: responsesPath,
+      FIXTURE_CALLS: callsPath,
+    },
+  });
+  expect(result.status, result.stderr).toBe(1);
+  expect(result.stderr).toContain(
+    "Selected publication artifact parent attempt changed or is not terminal",
+  );
+  expect(result.stderr).not.toContain("unsettled top-level await");
+  expect(readFileSync(callsPath, "utf8")).toContain("actions/runs/500");
+  expect(existsSync(manifestPath)).toBe(false);
+});

@@ -4417,7 +4417,9 @@ async function main() {
 }
 
 if (process.argv[1]?.endsWith("release-ci-summary.mjs")) {
-  await main().catch(
+  // Finish module evaluation before the artifact selector imports this module
+  // back into the active CLI. Awaiting main here deadlocks that import cycle.
+  void main().catch(
     /** @param {unknown} error */ (error) => {
       console.error(error instanceof Error ? error.message : String(error));
       process.exit(1);
