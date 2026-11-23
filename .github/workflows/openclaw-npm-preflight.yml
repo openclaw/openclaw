@@ -130,10 +130,9 @@ jobs:
     # Request 32 to clear parallel-check thresholds; see docs/ci.md#blacksmith-runner-capacity.
     runs-on: &linux_runner_xlarge >-
       ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
-      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' ||
-      inputs.use_github_hosted_runners) && 'ubuntu-24.04' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && 'boat-xlarge' || 'blacksmith-8vcpu-ubuntu-2404'))) ||
-      ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04'
-      || vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && 'boat-xlarge' || 'blacksmith-8vcpu-ubuntu-2404') }}
+      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) ||
+      (inputs.use_github_hosted_runners && 'ubuntu-24.04'
+      || 'blacksmith-8vcpu-ubuntu-2404') }}
     steps:
       - &checkout_npm_source
         name: Checkout

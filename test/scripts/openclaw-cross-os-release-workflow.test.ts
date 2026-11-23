@@ -127,8 +127,8 @@ describe("cross-OS release checks workflow", () => {
   });
 
   it.each([
-    ["boat", "", "", "ubuntu-24.04"],
-    ["boat", " repository-linux ", "", "repository-linux"],
+    ["boat", "", "", "blacksmith-2vcpu-ubuntu-2404"],
+    ["boat", " repository-linux ", "", "blacksmith-2vcpu-ubuntu-2404"],
     ["boat", "repository-linux", " explicit-linux ", "explicit-linux"],
     ["blacksmith", "", "", "blacksmith-2vcpu-ubuntu-2404"],
   ])(

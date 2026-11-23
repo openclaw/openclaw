@@ -638,7 +638,7 @@ describe("ci workflow guards", () => {
         "boat",
       ] as const) {
         for (const runnerGroup of ["", "release-runners"]) {
-          const label = runnerBackend === "boat" ? "boat" : "blacksmith-2vcpu-ubuntu-2404";
+          const label = "blacksmith-2vcpu-ubuntu-2404";
           expect(evaluateWorkflowRunner(job["runs-on"], { runnerBackend, runnerGroup })).toEqual(
             runnerGroup ? { group: runnerGroup, labels: label } : label,
           );

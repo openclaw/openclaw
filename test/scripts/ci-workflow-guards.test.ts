@@ -643,27 +643,35 @@ describe("ci workflow guards", () => {
         "run_live_slack",
       ],
     ],
-  ] as const)("routes %s runtime jobs to hosted Ubuntu in Boat mode", (name, jobs) => {
-    const workflow = readWorkflow(`.github/workflows/${name}.yml`);
-    for (const runnerBackend of ["", "blacksmith", "hybrid", "runson", "github", "boat"] as const) {
-      const labels = ["github", "boat"].includes(runnerBackend)
-        ? "ubuntu-24.04"
-        : "blacksmith-4vcpu-ubuntu-2404";
-      for (const group of ["", "release-runners"]) {
-        for (const job of jobs) {
-          expect(
-            evaluateWorkflowRunner(workflow.jobs[job]["runs-on"], {
-              runnerBackend,
-              runnerGroup: group,
-              releaseRunnerGroup: group,
-              dispatchId: "full-release-validation-routing-proof",
-            }),
-            job,
-          ).toEqual(group ? { group, labels } : labels);
+  ] as const)(
+    "pins %s runtime jobs to Blacksmith independently of the shared backend",
+    (name, jobs) => {
+      const workflow = readWorkflow(`.github/workflows/${name}.yml`);
+      for (const runnerBackend of [
+        "",
+        "blacksmith",
+        "hybrid",
+        "runson",
+        "github",
+        "boat",
+      ] as const) {
+        const labels = "blacksmith-4vcpu-ubuntu-2404";
+        for (const group of ["", "release-runners"]) {
+          for (const job of jobs) {
+            expect(
+              evaluateWorkflowRunner(workflow.jobs[job]["runs-on"], {
+                runnerBackend,
+                runnerGroup: group,
+                releaseRunnerGroup: group,
+                dispatchId: "full-release-validation-routing-proof",
+              }),
+              job,
+            ).toEqual(group ? { group, labels } : labels);
+          }
         }
       }
-    }
-  });
+    },
+  );
 
   it("separates release QA lanes without weakening their resource locks", () => {
     const workflow = readWorkflow(".github/workflows/qa-live-transports-convex.yml");
@@ -2732,34 +2740,36 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       runner: "blacksmith-8vcpu-ubuntu-2404",
       job: "check_openclaw_npm_stage",
     },
-  ])("honors the global hosted runner override for $file/$job", ({ file, runner, job }) => {
-    const workflow = readWorkflow(`.github/workflows/${file}`);
-    const runsOn = workflow.jobs[job]["runs-on"];
-    const supportsHostedInput =
-      file === "openclaw-npm-preflight.yml" || file === "openclaw-live-and-e2e-checks-reusable.yml";
+  ])(
+    "pins release runners independently of the global backend for $file/$job",
+    ({ file, runner, job }) => {
+      const workflow = readWorkflow(`.github/workflows/${file}`);
+      const runsOn = workflow.jobs[job]["runs-on"];
+      const supportsHostedInput =
+        file === "openclaw-npm-preflight.yml" ||
+        file === "openclaw-live-and-e2e-checks-reusable.yml";
 
-    for (const runnerBackend of ["github", "", "blacksmith", "hybrid"] as const) {
-      for (const useGithubHostedRunners of [false, true]) {
-        const expectedRunner =
-          runnerBackend === "github" || (supportsHostedInput && useGithubHostedRunners)
-            ? "ubuntu-24.04"
-            : runner;
-        const actualRunner =
-          typeof runsOn === "string" && runsOn.startsWith("${{")
-            ? evaluateWorkflowExpression(runsOn, {
-                eventName: "workflow_dispatch",
-                runnerBackend,
-                useGithubHostedRunners,
-              })
-            : runsOn;
+      for (const runnerBackend of ["boat", "github", "", "blacksmith", "hybrid"] as const) {
+        for (const useGithubHostedRunners of [false, true]) {
+          const expectedRunner =
+            supportsHostedInput && useGithubHostedRunners ? "ubuntu-24.04" : runner;
+          const actualRunner =
+            typeof runsOn === "string" && runsOn.startsWith("${{")
+              ? evaluateWorkflowExpression(runsOn, {
+                  eventName: "workflow_dispatch",
+                  runnerBackend,
+                  useGithubHostedRunners,
+                })
+              : runsOn;
 
-        expect(
-          actualRunner,
-          `${runnerBackend || "unset"}, use_github_hosted_runners=${useGithubHostedRunners}`,
-        ).toBe(expectedRunner);
+          expect(
+            actualRunner,
+            `${runnerBackend || "unset"}, use_github_hosted_runners=${useGithubHostedRunners}`,
+          ).toBe(expectedRunner);
+        }
       }
-    }
-  });
+    },
+  );
 
   it.each(["release/2026.9.1"])(
     "honors trusted dispatch runner selection for check shards with context %j",
