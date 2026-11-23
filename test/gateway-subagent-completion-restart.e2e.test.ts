@@ -51,6 +51,9 @@ it
   async (kind, { signal, onTestFailed, onTestFinished }) => {
     const interruptAnnounce = kind.includes("announcing");
     const preparingAnnounce = kind === "preparing-announcing";
+    const rewriteRequesterMarkers =
+      kind === "unmarked-requester" || kind === "stale-settle-requester";
+    const holdCompletionPreparation = preparingAnnounce || rewriteRequesterMarkers;
     const queuedPrivateAnnounce = kind === "private-queued-announcing";
     const unconsumedAnnounce = preparingAnnounce || queuedPrivateAnnounce;
     const privateContinuation = kind.includes("private-");
@@ -314,7 +317,7 @@ it
       },
       env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1", OPENCLAW_GATEWAY_RESTART_TRACE: "1" },
     });
-    if (preparingAnnounce) {
+    if (holdCompletionPreparation) {
       const pluginDir = instance.state.path("held-completion-preparation");
       await writeRestartPlugin(
         pluginDir,
@@ -550,11 +553,13 @@ it
           );
         }
         if (interruptAnnounce) {
-          phase = "requester announce in flight";
           assert(finishChild);
           if (!privateContinuation) {
             finishChild();
           }
+        }
+        if (interruptAnnounce || holdCompletionPreparation) {
+          phase = "requester announce in flight";
           await vi.waitFor(() => expect(announcing).toBe(true), { timeout: 15_000 });
           await vi.waitFor(
             () =>
@@ -562,7 +567,7 @@ it
                 delivery: {
                   status: "pending",
                   requesterDelivery: {
-                    state: unconsumedAnnounce ? "waiting" : "consumed",
+                    state: unconsumedAnnounce || rewriteRequesterMarkers ? "waiting" : "consumed",
                     ...(queuedPrivateAnnounce ? {} : { runId: expect.any(String) }),
                   },
                 },
@@ -584,7 +589,7 @@ it
           await instance.crashGateway();
         } else {
           const stopping = instance.stopGateway();
-          if (preparingAnnounce) {
+          if (holdCompletionPreparation) {
             await vi.waitFor(
               () => expect(instance.logs()).toContain("restart.close.session-abort "),
               {
@@ -631,9 +636,10 @@ it
             execution: { outcome: { status: "error", error: "Gateway stopped" } },
           });
         }
-        if (kind === "unmarked-requester" || kind === "stale-settle-requester") {
+        if (rewriteRequesterMarkers) {
           // Recreate the persisted incident state: a settled, unmarked requester still owes
-          // this real child result. Change only the stopped fixture's requester markers.
+          // this real child result. The preparation barrier prevents graceful shutdown
+          // from delivering it before we change the stopped fixture's requester markers.
           const db = openNodeSqliteDatabase(
             path.join(instance.state.agentDir("main"), "openclaw-agent.sqlite"),
           );
