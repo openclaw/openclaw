@@ -1,5 +1,11 @@
+import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeBoundedOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { Value } from "typebox/value";
+import {
+  SessionCatalogSourceProfileRelationSchema,
+  type SessionCatalogSourceProfileRelation,
+} from "../../packages/gateway-protocol/src/schema/session-catalog-query.js";
 import type { SessionCatalogTranscriptItem } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
@@ -34,12 +40,14 @@ type SessionCatalogParameterMessages = {
 };
 
 type SessionCatalogListParams = {
+  profileRelation?: SessionCatalogSourceProfileRelation;
   searchTerm?: string;
   limit: number;
   cursor?: string;
 };
 
 type SessionCatalogReadParams = {
+  profileRelation?: SessionCatalogSourceProfileRelation;
   threadId: string;
   limit: number;
   cursor?: string;
@@ -55,8 +63,33 @@ function boundedSessionCatalogLimit(value: unknown, fallback = DEFAULT_PAGE_LIMI
   return Number(value);
 }
 
-function encodeSessionCatalogCursor(offset: number): string {
-  return Buffer.from(JSON.stringify({ offset }), "utf8").toString("base64url");
+function cursorScope(query: SessionCatalogSourceProfileRelation): string {
+  return createHash("sha256")
+    .update(JSON.stringify([query.relationship, query.target.type, query.target.id]))
+    .digest("base64url");
+}
+
+function parseProfileRelation(value: unknown): SessionCatalogSourceProfileRelation | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Value.Check(SessionCatalogSourceProfileRelationSchema, value)) {
+    throw new Error("profileRelation is invalid");
+  }
+  return {
+    relationship: value.relationship,
+    target: { type: value.target.type, id: value.target.id },
+  };
+}
+
+function encodeSessionCatalogCursor(
+  offset: number,
+  query?: SessionCatalogSourceProfileRelation,
+): string {
+  return Buffer.from(
+    JSON.stringify({ offset, ...(query ? { scope: cursorScope(query) } : {}) }),
+    "utf8",
+  ).toString("base64url");
 }
 
 function optionalSessionCatalogCursor(
@@ -76,6 +109,7 @@ function parseSessionCatalogListParams(
   value: unknown,
   options: {
     searchMaxLength: number;
+    supportsProfileRelation?: boolean;
     messages: SessionCatalogParameterMessages;
   },
 ): SessionCatalogListParams {
@@ -86,7 +120,13 @@ function parseSessionCatalogListParams(
     throw new Error(options.messages.listNotObject);
   }
   const unknown = Object.keys(value).find(
-    (key) => !["searchTerm", "limit", "cursor"].includes(key),
+    (key) =>
+      ![
+        "searchTerm",
+        "limit",
+        "cursor",
+        ...(options.supportsProfileRelation ? ["profileRelation"] : []),
+      ].includes(key),
   );
   if (unknown) {
     throw new Error(options.messages.unknownListParameter(unknown));
@@ -97,6 +137,9 @@ function parseSessionCatalogListParams(
   }
   const cursor = optionalSessionCatalogCursor(value.cursor);
   return {
+    ...(value.profileRelation !== undefined
+      ? { profileRelation: parseProfileRelation(value.profileRelation) }
+      : {}),
     limit: boundedSessionCatalogLimit(value.limit),
     ...(searchTerm ? { searchTerm } : {}),
     ...(cursor ? { cursor } : {}),
@@ -107,6 +150,7 @@ function parseSessionCatalogReadParams(
   value: unknown,
   options: {
     threadIdMaxLength: number;
+    supportsProfileRelation?: boolean;
     threadIdPattern: RegExp;
     cursorMaxLength?: number;
     messages: SessionCatalogParameterMessages;
@@ -115,7 +159,15 @@ function parseSessionCatalogReadParams(
   if (!isRecord(value)) {
     throw new Error(options.messages.readNotObject);
   }
-  const unknown = Object.keys(value).find((key) => !["threadId", "limit", "cursor"].includes(key));
+  const unknown = Object.keys(value).find(
+    (key) =>
+      ![
+        "threadId",
+        "limit",
+        "cursor",
+        ...(options.supportsProfileRelation ? ["profileRelation"] : []),
+      ].includes(key),
+  );
   if (unknown) {
     throw new Error(options.messages.unknownReadParameter(unknown));
   }
@@ -126,12 +178,18 @@ function parseSessionCatalogReadParams(
   const cursor = optionalSessionCatalogCursor(value.cursor, options.cursorMaxLength);
   return {
     threadId,
+    ...(value.profileRelation !== undefined
+      ? { profileRelation: parseProfileRelation(value.profileRelation) }
+      : {}),
     limit: boundedSessionCatalogLimit(value.limit),
     ...(cursor ? { cursor } : {}),
   };
 }
 
-function decodeSessionCatalogCursor(value: unknown): number {
+function decodeSessionCatalogCursor(
+  value: unknown,
+  query?: SessionCatalogSourceProfileRelation,
+): number {
   const cursor = optionalSessionCatalogCursor(value);
   if (cursor === undefined) {
     return 0;
@@ -146,7 +204,7 @@ function decodeSessionCatalogCursor(value: unknown): number {
       throw new Error("invalid offset");
     }
     const offset = Number(parsed.offset);
-    if (encodeSessionCatalogCursor(offset) !== cursor) {
+    if (encodeSessionCatalogCursor(offset, query) !== cursor) {
       throw new Error("non-canonical cursor payload");
     }
     return offset;
@@ -155,12 +213,45 @@ function decodeSessionCatalogCursor(value: unknown): number {
   }
 }
 
-function isExactSessionCatalogCursor(value: unknown): value is string {
+function encodeScopedCursor(cursor: string, query?: SessionCatalogSourceProfileRelation): string {
+  return query
+    ? Buffer.from(JSON.stringify({ cursor, scope: cursorScope(query) }), "utf8").toString(
+        "base64url",
+      )
+    : cursor;
+}
+
+function decodeScopedCursor(
+  cursor: string | undefined,
+  query?: SessionCatalogSourceProfileRelation,
+): string | undefined {
+  if (!cursor || !query) {
+    return cursor;
+  }
+  try {
+    const parsed: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+    if (
+      !isRecord(parsed) ||
+      typeof parsed.cursor !== "string" ||
+      encodeScopedCursor(parsed.cursor, query) !== cursor
+    ) {
+      throw new Error("query mismatch");
+    }
+    return parsed.cursor;
+  } catch (error) {
+    throw new Error("cursor does not belong to this relationship query", { cause: error });
+  }
+}
+
+function isExactSessionCatalogCursor(
+  value: unknown,
+  query?: SessionCatalogSourceProfileRelation,
+): value is string {
   if (typeof value !== "string") {
     return false;
   }
   try {
-    decodeSessionCatalogCursor(value);
+    decodeSessionCatalogCursor(value, query);
     return true;
   } catch {
     return false;
@@ -209,6 +300,8 @@ function boundSessionCatalogTranscriptPage(
 
 /** Canonical bounded parameter, base64url cursor, and UTF-8 transcript paging contract. */
 export const sessionCatalogPaging = {
+  encodeScopedCursor,
+  decodeScopedCursor,
   boundedLimit: boundedSessionCatalogLimit,
   encodeCursor: encodeSessionCatalogCursor,
   optionalCursor: optionalSessionCatalogCursor,
