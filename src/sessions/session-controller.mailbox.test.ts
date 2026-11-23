@@ -139,6 +139,7 @@ describe("controller mailbox scheduling", () => {
     ];
     const ceiling = { kind: "send" as const, profileId: "guest", sessionKey: key };
     const authority = createAdmittedRunOperatorAuthority({
+      canonicalIdentity: null,
       profileId: "guest",
       scopes: [],
       assertCurrent() {},

@@ -24,6 +24,7 @@ export function createParticipationTestAuthority(
     },
   };
   return createAdmittedRunOperatorAuthority({
+    canonicalIdentity: null,
     profileId: ceiling.profileId,
     scopes: [...scopes],
     assertCurrent() {},

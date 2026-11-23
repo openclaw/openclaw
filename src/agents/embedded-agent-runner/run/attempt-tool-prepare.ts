@@ -33,8 +33,8 @@ import {
 } from "../../local-model-lean.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { resolveNativeWebSearchRoute } from "../../native-web-search.js";
-import { getPreparedModelRuntimePolicyConfigReader } from "../../prepared-model-runtime-auth.js";
 import { participationAllowsTool } from "../../participation-ceiling.js";
+import { getPreparedModelRuntimePolicyConfigReader } from "../../prepared-model-runtime-auth.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
 import { prepareRunSessionPermissionPolicy } from "../../session-permission-policy.js";
 import { resolveSessionPlacementComputer } from "../../session-placement-computer.js";

@@ -88,7 +88,15 @@ async function admitStart(
 ): Promise<RestoredGatewayOperatorAuthority> {
   const admitted = await admitQueuedSource(params);
   const { channelRecoverySource, scopes } = admitted.authority;
-  if (!channelRecoverySource && !operatorScopeSatisfied(admitted.authority.participationCeiling && grant === "operator.sessions.write" ? "operator.sessions.read" : grant, scopes)) {
+  if (
+    !channelRecoverySource &&
+    !operatorScopeSatisfied(
+      admitted.authority.participationCeiling && grant === "operator.sessions.write"
+        ? "operator.sessions.read"
+        : grant,
+      scopes,
+    )
+  ) {
     admitted.release();
     throw new GatewayOperatorRecoveryAuthorizationError(
       `Your operator role no longer allows ${action}; ask an administrator to restore access.`,
@@ -122,11 +130,22 @@ async function admitQueuedSource(
     throw error;
   }
   const admitted = decideOperatorAdmission(facts, prepared);
-  const ceiling = facts.kind === "gateway" ? facts.snapshot.participationCeiling : facts.kind === "live" ? facts.authority.participationCeiling : undefined;
-  if (!ceiling) return admitted;
+  const ceiling =
+    facts.kind === "gateway"
+      ? facts.snapshot.participationCeiling
+      : facts.kind === "live"
+        ? facts.authority.participationCeiling
+        : undefined;
+  if (!ceiling) {
+    return admitted;
+  }
   try {
     const context = params.context.resolveGatewayContext?.();
-    if (!context) throw new GatewayOperatorRecoveryAuthorizationError("Participant continuation requires its original Gateway.");
+    if (!context) {
+      throw new GatewayOperatorRecoveryAuthorizationError(
+        "Participant continuation requires its original Gateway.",
+      );
+    }
     const revoked = new AbortController();
     const participation = await prepareRecoveredParticipation({
       context,
@@ -138,7 +157,10 @@ async function admitQueuedSource(
       ...admitted,
       ...retainGatewayOperatorInvocation(admitted, {
         participationCeiling: participation.ceiling,
-        assertCurrent: () => revoked.signal.throwIfAborted(),
+        assertCurrent: () => {
+          revoked.signal.throwIfAborted();
+          participation.assertCurrent();
+        },
         signal: revoked.signal,
         release: participation.release,
       }),
@@ -173,5 +195,8 @@ export async function captureGatewayOperatorContinuation(
     source: inherited.source,
     scopes: intersectOperatorScopes(restored.authority.scopes, input.client?.connect.scopes ?? []),
   });
-  return retainGatewayOperatorInvocation({ authority, release: restored.release }, input.invocationAuthority);
+  return retainGatewayOperatorInvocation(
+    { authority, release: restored.release },
+    input.invocationAuthority,
+  );
 }

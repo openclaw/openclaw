@@ -592,6 +592,7 @@ it("carries the admitted session permission and placement into the CLI grant", a
 it("refuses a participating CLI fallback before launching its backend", async () => {
   const { turn, followupRun } = await sessionFixture("agent:main:participant-cli", {});
   followupRun.operatorAuthority = createAdmittedRunOperatorAuthority({
+    canonicalIdentity: null,
     profileId: "guest",
     scopes: [],
     assertCurrent() {},

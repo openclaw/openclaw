@@ -97,9 +97,14 @@ it("keeps default-mode participant authority when publishing after a native chil
         expect(listSubagentRunsForRequester(parent.key)).toContainEqual(
           expect.objectContaining({
             runId: child.runId,
-            participationCeiling: expect.objectContaining({
-              profileId: carol.id,
-              permission: "workspace",
+            requesterOperatorSource: expect.objectContaining({
+              kind: "gateway",
+              snapshot: expect.objectContaining({
+                participationCeiling: expect.objectContaining({
+                  profileId: carol.id,
+                  permission: "workspace",
+                }),
+              }),
             }),
             requesterSettleWake: expect.objectContaining({ requesterYieldBatch: true }),
           }),

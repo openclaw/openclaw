@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { canRequesterAbortChatRun } from "./server-methods/chat-abort-authorization.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
@@ -18,11 +18,12 @@ it("keeps inherited invocation custody through retention and authorized incarnat
   const lifetime = retainSessionParticipation(target);
   const released = vi.fn(lifetime.release);
   const inherited = createAdmittedRunOperatorAuthority({
+    canonicalIdentity: null,
     profileId: target.profileId,
     scopes: ["operator.sessions.read"],
     assertCurrent() {},
   });
-  const captured = await captureGatewayOperatorRunAuthority({
+  const captured = await prepareGatewayOperatorRunAuthority({
     client: {
       connect: {
         minProtocol: 1,
@@ -59,6 +60,7 @@ it("keeps inherited invocation custody through retention and authorized incarnat
 it("participant Stop follows the original profile and exact target, never a matching transport", () => {
   const target = { agentId: "main", sessionKey: "agent:main:scope", sessionId: "current" };
   const initiator = createAdmittedRunOperatorAuthority({
+    canonicalIdentity: null,
     profileId: "participant",
     scopes: [],
     assertCurrent() {},

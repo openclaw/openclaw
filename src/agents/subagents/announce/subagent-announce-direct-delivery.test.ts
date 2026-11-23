@@ -482,6 +482,7 @@ it("queues participant completion as a capped new turn instead of steering an ac
     },
   };
   const operatorAuthority = createAdmittedRunOperatorAuthority({
+    canonicalIdentity: null,
     profileId: ceiling.profileId,
     scopes: ["operator.write"],
     participationCeiling: { ...ceiling, permission: "guarded" },

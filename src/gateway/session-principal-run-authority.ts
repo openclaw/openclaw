@@ -2,11 +2,9 @@ import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
-import { intersectOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { intersectParticipationCeilings } from "../agents/participation-ceiling.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { readSessionDelegatedParticipation } from "./session-delegated-operator-source.js";
 import { isParticipantPublicationMethod } from "./session-method-policy.js";
 import type { SessionMutationAuthorizationParams } from "./session-sharing-authorization.js";
@@ -42,29 +40,26 @@ export async function prepareSessionPrincipalRunAuthority(
   const { prepareSessionPrincipalRunAccess } =
     await import("./session-sharing-authorization-async.js");
   const source = await prepareSessionPrincipalRunAccess(params);
-  let admitted: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+  const original = source.recordedOperatorAuthority;
+  if (original) {
+    return {
+      authority: createAdmittedRunOperatorAuthority({
+        ...original,
+        assertCurrent: source.assertCurrent,
+        signal: source.signal,
+      }),
+      release: source.release,
+    };
+  }
+  let admitted: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
   try {
-    admitted = await captureGatewayOperatorRunAuthority({
+    admitted = await prepareGatewayOperatorRunAuthority({
       client: source.client,
       context: params.context,
       sourceAuthority: source,
     });
     if (!admitted) {
       throw new Error("Session principal has no current run authority.");
-    }
-    const original = source.recordedOperatorAuthority;
-    if (original) {
-      const current = admitted.authority;
-      admitted.authority = createAdmittedRunOperatorAuthority({
-        ...current,
-        scopes: intersectOperatorScopes(current.scopes, original.scopes),
-        gatewayAccessGrant: original.gatewayAccessGrant,
-        recoverySnapshot: original.recoverySnapshot,
-        channelRecoverySource: original.channelRecoverySource,
-        get modelPolicy() {
-          return intersectOperatorModelPolicy(original.modelPolicy, current.modelPolicy);
-        },
-      });
     }
     return admitted;
   } catch (error) {

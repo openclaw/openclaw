@@ -89,6 +89,7 @@ export function registerCompletedFollowupAuthorityTests({
           execution: { status: "terminal", outcome: { status: cancelled ? "error" : "ok" } },
         };
         const authority = createAdmittedRunOperatorAuthority({
+          canonicalIdentity: null,
           profileId: "participant",
           scopes: ["operator.write"],
           participationCeiling: restriction,

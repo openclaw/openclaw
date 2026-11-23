@@ -351,9 +351,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     });
   const attemptControls = createAttemptControls({
     admittedRunContext,
-    onAbort: () => {
-      params.replyOperation?.abortByUser();
-    },
+    onAbort: () => params.replyOperation?.abortByUser(),
   });
   const pluginRefresh = captureAgentPluginRuntimeRefresh();
   const preparedSessionTarget =

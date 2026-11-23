@@ -9,12 +9,12 @@ import { composeSessionSourceAssertion } from "../config/sessions/session-source
 import type { ExecPolicyCeiling } from "../infra/exec-policy.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { bindGatewayDeviceRevocation } from "./device-revocation.js";
-import type { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import type { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 
 /** Retain a recovered source and its new exact invocation restriction as one producer. */
 export function retainGatewayOperatorInvocation(
   captured: { authority: AdmittedRunOperatorAuthority; release: () => void },
-  invocation: Parameters<typeof captureGatewayOperatorRunAuthority>[0]["invocationAuthority"],
+  invocation: Parameters<typeof prepareGatewayOperatorRunAuthority>[0]["invocationAuthority"],
 ) {
   if (!invocation) {
     return captured;

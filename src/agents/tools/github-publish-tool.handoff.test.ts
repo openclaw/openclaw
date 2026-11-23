@@ -11,12 +11,12 @@ import {
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { composePreparedOnlySessionSource } from "../../config/sessions/session-source-authority.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
+import { composePreparedOnlySessionSource } from "../../config/sessions/session-source-authority.js";
 import * as transcript from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareGitHubPublicationRequesterV2 } from "../../gateway/github-publication-requester.js";
-import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import {
   createOperatorRecoveryFixture,
   pairedOperator,
@@ -282,7 +282,7 @@ it.for([
           () => config,
         );
         context.resolveGatewayContext = () => context;
-        let participant: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+        let participant: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
         if (participantPublication) {
           const original = await createOperatorRecoveryFixture({
             stateDir: state.stateDir,
@@ -303,7 +303,7 @@ it.for([
           });
           const grant = expectDefined(invitation.authorization, "participant invitation");
           try {
-            participant = await captureGatewayOperatorRunAuthority({
+            participant = await prepareGatewayOperatorRunAuthority({
               client,
               context,
               sourceAuthority: null,

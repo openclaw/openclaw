@@ -5,7 +5,7 @@ import {
   participationAllowsTool,
   type BoundParticipationCeiling,
 } from "../agents/participation-ceiling.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -37,13 +37,14 @@ it("captures a principal-ingress participant with the same strict durable dialec
     const identity = await prepareUserProfileIdentity(profile.id);
     try {
       const authority = createAdmittedRunOperatorAuthority({
+        canonicalIdentity: null,
         profileId: profile.id,
         scopes: ["operator.sessions.read"],
         gatewayAccessGrant: null,
         assertCurrent() {},
         participationCeiling: { ...bound, profileId: profile.id },
       });
-      const snapshot = captureGatewayOperatorRecoverySnapshot({
+      const snapshot = await captureGatewayOperatorRecoverySnapshot({
         authority,
         identity,
         config: fixture.context.getRuntimeConfig(),
@@ -54,6 +55,9 @@ it("captures a principal-ingress participant with the same strict durable dialec
             ...fixture.client.internal,
             remoteIngressPrincipal: {
               bindingId: "fixture",
+              pluginId: "fixture",
+              audienceId: "audience",
+              principal: { kind: "person", profileId: profile.id },
               authenticatedUserProfile: {
                 profileId: profile.id,
                 displayName: null,
@@ -179,6 +183,7 @@ it("narrows same-role invitation fields on recovery without widening retained wo
             delegatedOperatorSource: { kind: "gateway", snapshot },
           },
           authority: createAdmittedRunOperatorAuthority({
+            canonicalIdentity: null,
             profileId: "different-admin",
             scopes: ["operator.admin"],
             assertCurrent() {},
@@ -238,6 +243,10 @@ it("narrows same-role invitation fields on recovery without widening retained wo
         } finally {
           restricted.release();
         }
+        await patchSessionEntryCore(target, () => ({ sessionRoot: "/different-invitation-root" }));
+        expect(original.authority.assertCurrent).toThrow(
+          "Session is unavailable for this principal.",
+        );
       } finally {
         original.release();
       }

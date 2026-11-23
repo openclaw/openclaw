@@ -171,6 +171,7 @@ describe("shared operator recovery dialect", () => {
   it("never downgrades unavailable or oversized participant scheduling to source-less work", () => {
     for (const recoverySnapshot of [undefined, ordinary]) {
       const authority = createAdmittedRunOperatorAuthority({
+        canonicalIdentity: null,
         profileId: "operator",
         scopes: ["operator.admin"],
         assertCurrent() {},
@@ -183,6 +184,7 @@ describe("shared operator recovery dialect", () => {
       ).toThrow(/retained/);
     }
     const authority = createAdmittedRunOperatorAuthority({
+      canonicalIdentity: null,
       profileId: "operator",
       scopes: ["operator.admin"],
       assertCurrent() {},

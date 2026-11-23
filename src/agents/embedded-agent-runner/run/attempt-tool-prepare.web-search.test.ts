@@ -9,7 +9,10 @@ import {
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
 import { expectCollected } from "../../../test-utils/retention.js";
-import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  prepareSystemAgentRunAdmission,
+} from "../../admitted-run-context.js";
 import { createTestOperatorAuthority } from "../../admitted-run-context.test-support.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
@@ -359,6 +362,7 @@ it.each(["full", null] as const)(
         approvalReviewerDeviceId: "guest-device",
       },
       createAdmittedRunOperatorAuthority({
+        canonicalIdentity: null,
         profileId: "guest",
         scopes: [],
         assertCurrent() {},

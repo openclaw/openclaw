@@ -43,7 +43,7 @@ import {
   publicationGuestEmail as email,
   resumePublicationFixture,
 } from "./github-publication-requester.test-support.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -252,7 +252,8 @@ it("retains a send participant across recovery without lending creator or admin 
   );
   expect(queued.status).toBe("requested");
   f.setRole({ sessions: { others: "invited", maxInvitedAccess: "send", invitedTools: ["read"] } });
-  expect(() => renewed.assertCurrent()).toThrow();
+  expect(() => renewed.assertCurrent()).not.toThrow();
+  await expect(restoreGitHubPublicationRequester(json, session, getConfig)).rejects.toThrow();
   await f.placements.releaseTurn(claim);
   const restarted = await resumePublicationFixture(f);
   expect(await restarted.readAsync(queued.requestId)).toMatchObject({
@@ -266,7 +267,7 @@ it("binds inherited participant callers and task handoffs to their exact target"
   const f = await participantFixture();
   const { captured, session, getConfig, context } = f;
   const participation = captured.requester.snapshot.participation!;
-  const source = (await captureGatewayOperatorRunAuthority({ client: f.client, context }))!;
+  const source = (await prepareGatewayOperatorRunAuthority({ client: f.client, context }))!;
   onTestFinished(source.release);
   const authority = createAdmittedRunOperatorAuthority({
     ...source.authority,
@@ -346,7 +347,7 @@ it.each([false, true])(
   async (linked) => {
     const f = await participantFixture();
     const personal = vi.spyOn(f.coordinator, "requestPersonalForSessionV2");
-    const source = (await captureGatewayOperatorRunAuthority({
+    const source = (await prepareGatewayOperatorRunAuthority({
       client: f.client,
       context: f.context,
     }))!;

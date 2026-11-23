@@ -12,6 +12,7 @@ import { createContext } from "./server-plugin-in-process-dispatch.test-support.
 it("retains participant identity for delegated reads but refuses authority mutations before dispatch", async () => {
   const profileId = "participant-source";
   const authority = createAdmittedRunOperatorAuthority({
+    canonicalIdentity: null,
     profileId,
     scopes: ["operator.admin"],
     assertCurrent() {},
@@ -85,6 +86,7 @@ it("retains participant identity for delegated reads but refuses authority mutat
       selected === profileId
         ? authority
         : createAdmittedRunOperatorAuthority({
+            canonicalIdentity: null,
             profileId: selected,
             scopes: ["operator.admin"],
             assertCurrent() {},

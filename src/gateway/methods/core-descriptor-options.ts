@@ -4,12 +4,6 @@ export const CONTROL_PLANE_WRITE = { controlPlaneWrite: true } as const;
 export const SIDECAR_CONTROL_PLANE_WRITE = { startup: true, controlPlaneWrite: true } as const;
 export const UNADVERTISED = { advertise: false } as const;
 export const PROFILE_DEPENDENT = { profileAccess: "required" } as const;
-export const MODELS_LIST_READ = {
-  ...PROFILE_DEPENDENT,
-  shareKey: modelsListShareKey,
-  shareMaxAgeMs: 1_000,
-  shareInvalidationEvents: ["chat.metadata.changed", "sessions.changed"],
-} as const;
 export const PROFILE_STARTUP = { startup: true, ...PROFILE_DEPENDENT } as const;
 export const MODEL_CATALOG_READ = {
   ...PROFILE_DEPENDENT,

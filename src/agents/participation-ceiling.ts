@@ -70,6 +70,9 @@ export function resolveParticipationTools(policy?: {
   invitedTools?: readonly string[];
   invitedAlsoAllow?: readonly string[];
 }): string[] {
+  if (!policy?.invitedTools && !policy?.invitedAlsoAllow?.length) {
+    return DEFAULT_PARTICIPATION_TOOLS.slice();
+  }
   return [
     ...new Set(
       policy?.invitedTools ?? [...DEFAULT_PARTICIPATION_TOOLS, ...(policy?.invitedAlsoAllow ?? [])],

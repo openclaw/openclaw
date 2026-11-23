@@ -137,6 +137,7 @@ it("uses only admitted participation authority for the original root and permiss
     const root = state.path("original-root");
     await fs.mkdir(root);
     const authority = createAdmittedRunOperatorAuthority({
+      canonicalIdentity: null,
       profileId: "guest",
       scopes: [],
       assertCurrent() {},

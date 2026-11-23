@@ -342,6 +342,7 @@ it.each(["admission", "recorder"] as const)(
   "leaves ordinary operator maintenance model-only via %s without a recovery source",
   async (route) => {
     const authority = createAdmittedRunOperatorAuthority({
+      canonicalIdentity: null,
       profileId: "ordinary-owner",
       scopes: ["operator.admin"],
       assertCurrent() {},

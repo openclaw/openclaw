@@ -527,7 +527,10 @@ export async function prepareGatewayOperatorRunAuthority(
         references += 1;
         return releaseHold();
       },
-      modelPolicy: intersectOperatorModelPolicy(modelPolicy, params.invocationAuthority?.participationAuthority?.modelPolicy),
+      modelPolicy: intersectOperatorModelPolicy(
+        modelPolicy,
+        params.invocationAuthority?.participationAuthority?.modelPolicy,
+      ),
     });
     if (
       authenticatedOwner &&

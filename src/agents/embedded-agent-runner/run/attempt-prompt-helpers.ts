@@ -339,7 +339,6 @@ export function resolveAttemptFsWorkspaceOnly(params: {
 
 type AfterTurnRuntimeContextAttempt = Pick<
   EmbeddedRunAttemptParams,
-  | "admittedRunContext"
   | "sessionTarget"
   | "trigger"
   | "bootstrapContextRunKind"
@@ -375,6 +374,7 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "runtimePlan"
   | "userTurnTranscriptRecorder"
 > & {
+  admittedRunContext?: EmbeddedRunAttemptParams["admittedRunContext"];
   sessionId?: EmbeddedRunAttemptParams["sessionId"];
 };
 

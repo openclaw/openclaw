@@ -6,6 +6,7 @@ import {
   type ParticipationCeiling,
 } from "../agents/participation-ceiling.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { prepareSessionEventTargetForHost } from "../auto-reply/reply/session-event-target.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -28,6 +29,7 @@ import { createDirectChatContext } from "./server-chat.agent-events.test-helpers
 import { createCronJob } from "./server-methods/cron.validation.test-support.js";
 import { authorizeGatewayMethod } from "./server-methods/method-authorization.js";
 import { resolveInProcessGatewayDispatch } from "./server-plugin-in-process-authority.js";
+import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { prepareSessionDelegatedOperatorAuthority } from "./session-delegated-operator-source.js";
 import { revokeSessionParticipation } from "./session-participation-lifetime.js";
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
@@ -103,6 +105,7 @@ async function fixture(stateDir: string, tools = ["read", "write"]) {
     createdActor: { type: "human", source: "profile", id: profileId },
   });
   const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+  context.resolveGatewayContext = () => context;
   const entry = await readSessionEntryReadOnlyInWorker(child);
   const prepare = () =>
     prepareSessionDelegatedOperatorAuthority({ context, agentId: "main", entry });
@@ -280,7 +283,17 @@ it.each(["captured", "unavailable"] as const)(
         preserveRecordedSource: true,
         operatorSource:
           sourceKind === "captured"
-            ? { kind: "gateway", snapshot: recovery.snapshot }
+            ? {
+                kind: "gateway",
+                snapshot: expectDefined(
+                  normalizeGatewayOperatorRecoverySnapshot({
+                    ...recovery.snapshot,
+                    version: 2,
+                    participationCeiling: f.ceiling,
+                  }),
+                  "participant source",
+                ),
+              }
             : { kind: "unavailable" },
       });
       if (sourceKind === "unavailable") {
@@ -368,6 +381,7 @@ it("binds participant publication to the current native child without scope or o
             ).toThrow("Participating GitHub");
           }
           setSessionMemberAccess(f.source, { identityId: f.profileId, access: "read" });
+          revokeSessionParticipation({ ...f.source, profileId: f.profileId, sessionId: "root-id" });
           expect(() =>
             readParticipantPublicationAuthority("sessions.github.publish", request),
           ).toThrow();
@@ -408,16 +422,19 @@ it.each(["sessions.patch", "sessions.abort", "chat.abort"])(
 );
 
 it.each(["read", "suggest"] as const)(
-  "refuses detached repair after participant becomes %s",
+  "refuses detached repair at work start after participant becomes %s",
   async (access) => {
     await withFixture(async (f) => {
       setSessionMemberAccess(f.source, { identityId: f.profileId, access });
       const stored = createTestCronOperatorSource(f.source.sessionKey);
       stored.source.snapshot = snapshotFor(f.entry);
       const job = { ...createCronJob({ sessionKey: f.source.sessionKey }), operatorSource: stored };
-      await expect(
-        captureCronJobTurnTarget({ job, ...f.source, context: f.context }),
-      ).rejects.toThrow(/participant/i);
+      const context = createContext();
+      context.getRuntimeConfig = () => f.cfg;
+      context.resolveGatewayContext = () => context;
+      context.cron = { ...context.cron, getJob: () => job };
+      const target = await captureCronJobTurnTarget({ job, ...f.source, context });
+      await expect(prepareSessionEventTargetForHost(target)).rejects.toThrow();
     });
   },
 );

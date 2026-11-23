@@ -41,8 +41,8 @@ import {
   resolveSessionPermissionExecMode,
   SESSION_PERMISSION_BY_EXEC_MODE,
 } from "../session-permission-exec-mode.js";
-import { isSessionProjectMoveEligible } from "../session-project-guidance.js";
 import { prepareRunSessionPermissionPolicy } from "../session-permission-policy.js";
+import { isSessionProjectMoveEligible } from "../session-project-guidance.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { resolveRuntimeAgentName } from "../system-prompt-params.js";

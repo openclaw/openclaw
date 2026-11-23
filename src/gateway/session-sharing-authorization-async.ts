@@ -63,8 +63,6 @@ import {
 import { resolveSessionMutationAuthorization } from "./session-sharing.js";
 import { prepareTalkSessionTarget } from "./talk/session-target.js";
 
-
-
 /** Resolve a recorded person against current grants and an existing exact session. */
 export async function prepareSessionPrincipalRunAccess(params: {
   context: GatewayRequestContext;
@@ -247,7 +245,11 @@ export async function prepareSessionPrincipalRunAccess(params: {
     return {
       client,
       assertCurrent,
-      signal: AbortSignal.any([recorded?.authority.signal, sharing.participationSignal].filter((signal): signal is AbortSignal => signal !== undefined)),
+      signal: AbortSignal.any(
+        [recorded?.authority.signal, sharing.participationSignal].filter(
+          (signal): signal is AbortSignal => signal !== undefined,
+        ),
+      ),
       gatewayAccessGrant: original
         ? original.gatewayAccessGrant
         : access
@@ -581,8 +583,10 @@ export async function resolveSessionMutationAuthorizationAsync(
             authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent,
           ),
           participationAuthority: childParticipation?.authority,
-          assertCurrent: () =>
-            (authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent)(),
+          assertCurrent: () => {
+            authorization.participationSignal?.throwIfAborted();
+            (authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent)();
+          },
           release: retain(),
         }),
         release: () => {
