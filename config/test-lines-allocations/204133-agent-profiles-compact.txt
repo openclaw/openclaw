@@ -1,0 +1,12 @@
+# #204133 Agent Profiles compact context: 932 net test/helper lines on top of #202517
+# and #204132, which this change is stacked on (stacked total 3785 against 1601f86def0;
+# the 400-line allowance is already used by the core record, so this record covers the
+# whole slice growth).
+# Compact serialization rewrites what the model sees for inbound metadata, history,
+# reply chains and the resumable prompt carrier. Its tests pin the lossy edges one by
+# one: bounded tails and strings, durable-identity and timestamp-plus-body duplicate
+# rules for transcript-backed rows, ReplyChain fallback, the carrier on normal,
+# runtime-only and v4 turns, and the mark that display stripping removes.
+# Several came from review findings (duplicate rule, ReplyChain, instruction fragments).
+# No test restates another: each duplicate-rule case uses different roles or bodies.
+932
