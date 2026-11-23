@@ -19,10 +19,6 @@ import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import { readCronQuarantinedJobsInDatabase } from "../cron/store/quarantine.kernel.js";
 import {
-  claimCronRunReceiptInDatabaseForTest,
-  prepareCronRunReceiptClaim,
-} from "../cron/store/run-receipt-store.test-support.js";
-import {
   loadedCronStoreFromRows,
   loadCronRows,
   upsertCronJobRow,
@@ -31,6 +27,10 @@ import {
   readCronRunRecordsInDatabase,
   recordCronRunInDatabase,
 } from "../cron/store/run-history.kernel.js";
+import {
+  claimCronRunReceiptInDatabaseForTest,
+  prepareCronRunReceiptClaim,
+} from "../cron/store/run-receipt-store.test-support.js";
 import { replaceCronRuntimeAuthorityRows } from "../cron/store/save.kernel.js";
 import { getCronStoreKysely } from "../cron/store/schema.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
