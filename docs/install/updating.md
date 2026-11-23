@@ -636,6 +636,13 @@ last commit checksum are unchanged, and automatic restoration stays available.
 Any commit after admission, including one that restores identical content, still
 refuses. The Doctor of the version being installed owns this check, so updates
 from older releases benefit once the target contains it.
+
+Candidate Doctor also accepts a read-only reader that finishes rebuilding a
+checkpointed SQLite WAL index between update capture and source verification.
+That rebuild can clear both the index counter and checksum without changing the
+database. Migration admission still checks physical identity and committed
+content. Shipped first-hop updaters need no change.
+
 Each migration also needs every other connection to its database closed. Doctor
 waits up to 5 seconds for an outside reader or probe to close before it gives
 up; a tool that keeps the database open for the whole update still stops the
