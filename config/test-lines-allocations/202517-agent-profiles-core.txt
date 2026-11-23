@@ -1,0 +1,13 @@
+# #202517 Agent Profiles core: 2065 net test/helper lines against 1601f86def0; the
+# ordinary allowance covers 400.
+# Each profile effect has a regression test on every runtime that consumes it, because
+# each runtime builds its prompt and tools through its own seam: embedded runner, CLI
+# runner, Codex app-server attempt, ACP harness, agentsapi prompt, isolated completion,
+# worker turn, compaction, and the coding-tool surface.
+# The resolver, built-in profiles, workspace-context budgets and the doctor migration
+# for legacy lean settings each have their own suite (resolver 185, workspace-context 274,
+# migration 174 lines).
+# Test names across those suites are distinct behaviors (budget caps, never-widen,
+# size-selection off, native-owned thread), so no test restates another.
+# Exact measured net growth minus the standard 400-line allowance.
+1665
