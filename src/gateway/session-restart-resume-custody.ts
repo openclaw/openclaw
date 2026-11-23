@@ -113,18 +113,14 @@ export async function prepareRestartCompletionCustody(
       if (
         message.provenance?.kind !== "inter_session" ||
         message.provenance.sourceTool !== "subagent_settle" ||
-        row.idempotency_key !== `${row.run_id}:user` ||
-        !entries.some(
-          ({ sessionKey, entry }) =>
-            sessionKey === row.session_key && entry.sessionId === row.session_id,
-        )
+        row.idempotency_key !== `${row.run_id}:user`
       ) {
         return false;
       }
       const runs = [...getSubagentRunsForRequesterSession(row.session_key)];
       const runsById = new Map(runs.map((entry) => [entry.runId, entry]));
-      // Only a freshly recovered exact cohort can retain its input; orphaned or
-      // refused sources still go through normal queued-input failure handling.
+      // The queue reader already excludes replaced transcripts. Only a freshly
+      // recovered cohort retains its input; orphaned or refused sources still fail.
       return runs.some(
         (entry) =>
           recovered.some((owner) => isSameSubagentRunOwner(entry, owner)) &&
