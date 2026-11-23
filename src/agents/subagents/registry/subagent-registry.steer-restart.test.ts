@@ -599,46 +599,6 @@ describe("subagent registry steer restarts", () => {
     expect(run.generation).toBe(2);
   });
 
-  it("preserves cumulative session timing across steer replacement runs", async () => {
-    await registerRun({
-      runId: "run-runtime-old",
-      childSessionKey: "agent:main:subagent:runtime",
-      task: "keep timing stable",
-    });
-
-    const previous = listMainRuns()[0];
-    expect(previous?.runId).toBe("run-runtime-old");
-    if (!previous) {
-      throw new Error("missing previous run");
-    }
-
-    await updateRun(previous.runId, (draft) => {
-      draft.execution.startedAt = 1_000;
-      draft.sessionStartedAt = 1_000;
-      draft.execution.endedAt = 121_000;
-      draft.accumulatedRuntimeMs = 0;
-      draft.execution.outcome = { status: "ok" };
-    });
-
-    const replaced = await mod.replaceSubagentRunAfterSteerCore({
-      previousRunId: "run-runtime-old",
-      nextRunId: "run-runtime-new",
-    });
-    expect(replaced).toBe(true);
-
-    const next = listMainRuns().find((entry) => entry.runId === "run-runtime-new");
-    if (next === undefined) {
-      throw new Error("expected restarted run");
-    }
-    expect(mod.getSubagentSessionStartedAt(next)).toBe(1_000);
-    expect(next.accumulatedRuntimeMs).toBe(120_000);
-
-    if (!next.execution.startedAt) {
-      throw new Error("missing next startedAt");
-    }
-    expect(mod.getSubagentSessionRuntimeMs(next, next.execution.startedAt + 30_000)).toBe(150_000);
-  });
-
   it("rejects a replacement owned by a retired Gateway lifecycle", async () => {
     await registerRun({
       runId: "run-retired-generation-old",

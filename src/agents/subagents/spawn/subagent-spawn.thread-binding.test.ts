@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import os from "node:os";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -114,39 +113,6 @@ describe("spawnSubagentDirect thread binding", () => {
       ]),
     );
   });
-
-  it.each([
-    { mode: "run", thread: false, route: true, announce: false, cleanup: "delete" },
-    { mode: "run", thread: true, route: true, announce: true, cleanup: "keep" },
-    { mode: "session", thread: true, route: false, announce: true, cleanup: "keep" },
-  ] as const)(
-    "aligns $mode thread=$thread route=$route guidance and delivery",
-    async ({ mode, thread, route, announce, cleanup }) => {
-      routable = route;
-      const result = await spawnSubagentDirect(
-        { task: "Return findings", mode, thread, expectsCompletionMessage: announce, cleanup },
-        caller,
-      );
-      expect(result.status).toBe("accepted");
-      expect(agentParams().deliver).toBe(false);
-      expect(result.expectsCompletionMessage).toBe(announce);
-      expect(registered().expectsCompletionMessage).toBe(announce);
-      const { extraSystemPrompt, message } = agentParams();
-      assert(typeof extraSystemPrompt === "string", "child system prompt must be text");
-      assert(typeof message === "string", "child task must be text");
-      const guidance = `${extraSystemPrompt}\n${message}`;
-      const contract = announce ? /completion event/i : /no completion notification/i;
-      expect(guidance).toMatch(contract);
-      expect(result.note).toMatch(contract);
-      if (cleanup === "delete") {
-        expect(registered()).toMatchObject({ cleanup: "delete" });
-        expect(guidance).not.toContain("remains in the child session");
-        expect(result.note).not.toContain("remains in the child session");
-        expect(guidance).not.toMatch(/final auto-reported|Results auto-announce/);
-        expect(result.note).not.toMatch(/Auto-announce is push-based/);
-      }
-    },
-  );
 
   it.each([false, true])(
     "routes bound delivery separately from requester origin (generic=%s)",

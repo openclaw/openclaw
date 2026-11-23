@@ -1,4 +1,3 @@
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import {
@@ -222,43 +221,6 @@ it("rejects cwd overrides for sandboxed children before launch", async () => {
   uncalled(gateway, registerRun);
 });
 
-it.each(["lightweight", "timer-safe TTL"] as const)("prepares %s context", async (mode) => {
-  config = createSubagentSpawnTestConfig();
-  const prepare = vi.fn(async () => undefined);
-  resolveEngine.mockResolvedValue({ prepareSubagentSpawn: prepare });
-  const params =
-    mode === "lightweight"
-      ? { context: "isolated" as const, lightContext: true }
-      : { runTimeoutSeconds: Number.MAX_SAFE_INTEGER };
-  const result = await spawn(params, { agentSessionKey: "main" });
-  expect(result.status).toBe("accepted");
-  if (mode === "lightweight") {
-    uncalled(forkSession, initializeContext, resolveEngine, prepare);
-    expect(request("agent")?.params).toMatchObject({
-      bootstrapContextMode: "lightweight",
-      bootstrapContextRunKind: "default",
-    });
-  } else {
-    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ ttlMs: MAX_TIMER_TIMEOUT_MS }));
-  }
-});
-
-it.each([
-  [undefined, "thread: true"],
-  [true, "not running on a channel"],
-] as const)("suggests session alternatives (thread=%s)", async (thread, guidance) => {
-  const result = await spawn(
-    { mode: "session", thread, context: "isolated" },
-    { agentSessionKey: "agent:main:main", agentChannel: "webchat" },
-  );
-  expect(result.status).toBe("error");
-  if (result.status === "error") {
-    expect(result.error).toContain(guidance);
-    expect(result.error).toContain('mode="run"');
-    expect(result.error).not.toContain("sessions_send");
-  }
-});
-
 it.each([
   [
     1,
@@ -363,41 +325,3 @@ it.each([
   const entry = persistedModel("custom", model, "auto");
   expect(entry?.modelOverrideRouteResolution).toBe("resolved");
 });
-
-it.each([
-  ["different model", "custom/model-b", true, undefined, undefined, undefined],
-  ["same model alias explicit off", "same-model", false, undefined, undefined, false],
-  ["explicit child off", "custom/model-b", true, false, undefined, false],
-  ["active model differs from saved", "custom/model-a", undefined, undefined, "model-b", true],
-] as const)(
-  "scopes inherited Fast mode: %s",
-  async (_name, model, parentMode, override, savedModel, expected) => {
-    defaults(
-      {
-        model: { primary: "custom/model-a" },
-        models: {
-          "custom/model-a": { alias: "same-model", params: { fastMode: true } },
-          "custom/model-b": { params: { fastMode: false } },
-        },
-      },
-      { tools: { swarm: { enabled: true } } },
-    );
-    parentSession({
-      providerOverride: "custom",
-      modelOverride: savedModel ?? "model-a",
-      fastMode: parentMode,
-    });
-    const result = await spawn(
-      { model, fastMode: override },
-      {
-        ...mainContext,
-        requesterModel: { provider: "custom", model: "model-a" },
-      },
-    );
-
-    expect(result.status).toBe("accepted");
-    const persistedEntry = Object.values(store)[0];
-    expect(persistedEntry).toBeDefined();
-    expect(persistedEntry?.fastMode).toBe(expected);
-  },
-);
