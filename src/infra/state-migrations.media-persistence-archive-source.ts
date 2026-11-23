@@ -41,6 +41,7 @@ export function migrateTranscriptArchive(filePath: string): boolean {
   const codec = compressed ? "zstd" : "identity";
   const encoded = encodeArchiveContent(transformed.content, codec, filePath);
   replaceFileAtomicSync({
+    allowDrvfsRenameRecovery: true,
     filePath,
     content: encoded,
     preserveExistingMode: true,
